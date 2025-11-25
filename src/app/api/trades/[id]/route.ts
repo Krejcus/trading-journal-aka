@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 
 export async function GET(
     request: Request,
-    { params }: { params: Promise<{ id: string }> }
+    { params }: { params: any }
 ) {
     try {
         const { id: idString } = await params;
@@ -29,7 +29,7 @@ export async function GET(
 
 export async function DELETE(
     request: Request,
-    { params }: { params: Promise<{ id: string }> }
+    { params }: { params: any }
 ) {
     try {
         const { id: idString } = await params;
