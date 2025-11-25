@@ -5,9 +5,12 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Prevent build failure if DATABASE_URL is missing (e.g. during static generation)
+const connectionString = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/postgres';
+
 if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is missing');
+    console.warn('⚠️ DATABASE_URL is missing. Using dummy connection string for build.');
 }
 
-const client = postgres(process.env.DATABASE_URL);
+const client = postgres(connectionString);
 export const db = drizzle(client, { schema });
