@@ -7,6 +7,8 @@ export const trades = pgTable('trades', {
     side: text('side').notNull(), // LONG or SHORT
     entryPrice: real('entry_price').notNull(),
     exitPrice: real('exit_price'),
+    slPrice: real('sl_price'), // Stop Loss
+    tpPrice: real('tp_price'), // Take Profit
     size: real('size').notNull(),
     pnl: real('pnl'),
     status: text('status').notNull(), // OPEN, CLOSED, WIN, LOSS

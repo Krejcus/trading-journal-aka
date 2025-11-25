@@ -9,27 +9,42 @@ import { useParams, useSearchParams } from "next/navigation";
 
 export default function ReplayPage() {
     const params = useParams();
-    const searchParams = useSearchParams();
-
-    // Trade Details from URL
-    const tradeEntry = parseFloat(searchParams.get("entry") || "0");
-    const tradeExit = parseFloat(searchParams.get("exit") || "0");
-    const tradeSide = searchParams.get("side") || "LONG";
-    const tradeTime = parseInt(searchParams.get("time") || "0"); // UNIX timestamp in seconds
+    // const searchParams = useSearchParams(); // No longer needed for details
 
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<any>(null);
     const seriesRef = useRef<any>(null);
 
+    const [trade, setTrade] = useState<any>(null);
     const [historyData, setHistoryData] = useState<any[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isPlaying, setIsPlaying] = useState(false);
     const [loading, setLoading] = useState(true);
     const [timeframe, setTimeframe] = useState("15m");
 
-    // Fetch Data
+    // Fetch Trade Details
+    useEffect(() => {
+        const fetchTrade = async () => {
+            try {
+                const res = await fetch(`/api/trades/${params.id}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setTrade(data);
+                } else {
+                    console.error("Trade not found");
+                }
+            } catch (e) {
+                console.error("Failed to fetch trade", e);
+            }
+        };
+        if (params.id) fetchTrade();
+    }, [params.id]);
+
+    // Fetch History Data (Dependent on Trade)
     useEffect(() => {
         const fetchData = async () => {
+            if (!trade) return; // Wait for trade data
+
             setLoading(true);
             try {
                 // Fetch data for NQ=F from a recent time (e.g., last 2 days)
@@ -40,7 +55,9 @@ export default function ReplayPage() {
                 if (timeframe === "1m") lookbackDays = 1; // 1m data is limited
                 if (timeframe === "1d") lookbackDays = 365; // Daily data goes further back
 
-                const startTime = endTime - (86400 * lookbackDays);
+                // Ensure we cover the trade time
+                const tradeTime = trade.entryTime;
+                const startTime = tradeTime - (86400 * lookbackDays); // Start before trade
 
                 const res = await fetch(`/api/history?symbol=NQ=F&from=${startTime}&to=${endTime}&interval=${timeframe}`);
                 const data = await res.json();
@@ -69,7 +86,15 @@ export default function ReplayPage() {
             }
         };
         fetchData();
-    }, [timeframe]); // Re-fetch when timeframe changes
+    }, [timeframe, trade]); // Re-fetch when timeframe or trade changes
+
+    // Derived Trade Details
+    const tradeEntry = trade?.entryPrice || 0;
+    const tradeExit = trade?.exitPrice || 0;
+    const tradeSide = trade?.side || "LONG";
+    const tradeTime = trade?.entryTime || 0;
+    const tradeSL = trade?.slPrice || 0;
+    const tradeTP = trade?.tpPrice || 0;
 
     // Initialize Chart
     useEffect(() => {
@@ -126,11 +151,31 @@ export default function ReplayPage() {
         if (tradeExit > 0) {
             series.createPriceLine({
                 price: tradeExit,
-                color: tradeSide === "LONG" ? '#ef4444' : '#10b981', // TP is opposite color usually, or just Green for TP
+                color: '#3b82f6', // Blue for Exit
                 lineWidth: 2,
                 lineStyle: 2, // Dashed
                 axisLabelVisible: true,
                 title: 'EXIT',
+            });
+        }
+        if (tradeSL > 0) {
+            series.createPriceLine({
+                price: tradeSL,
+                color: '#ef4444', // Red for SL
+                lineWidth: 1,
+                lineStyle: 0, // Solid
+                axisLabelVisible: true,
+                title: 'SL',
+            });
+        }
+        if (tradeTP > 0) {
+            series.createPriceLine({
+                price: tradeTP,
+                color: '#10b981', // Green for TP
+                lineWidth: 1,
+                lineStyle: 0, // Solid
+                axisLabelVisible: true,
+                title: 'TP',
             });
         }
 
@@ -151,7 +196,7 @@ export default function ReplayPage() {
                 chartRef.current = null;
             }
         };
-    }, [historyData]); // Re-run when data loads
+    }, [historyData, tradeEntry, tradeExit, tradeSL, tradeTP, tradeSide]); // Re-run when data or trade details load
 
     // Playback Logic
     useEffect(() => {
@@ -245,13 +290,13 @@ export default function ReplayPage() {
 
                 // Check for Exit (TP/SL)
                 if (tradeSide === "LONG") {
-                    if (high >= tradeExit) {
+                    if (tradeExit > 0 && high >= tradeExit) {
                         tradeStatus = "CLOSED (TP)";
                         exitIndex = i;
                         break; // Stop checking once closed
                     }
                 } else { // SHORT
-                    if (low <= tradeExit) {
+                    if (tradeExit > 0 && low <= tradeExit) {
                         tradeStatus = "CLOSED (TP)";
                         exitIndex = i;
                         break;

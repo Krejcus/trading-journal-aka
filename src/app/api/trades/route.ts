@@ -48,6 +48,8 @@ export async function POST(request: Request) {
             side: body.side,
             entryPrice: parseFloat(body.entryPrice),
             exitPrice: body.exitPrice ? parseFloat(body.exitPrice) : null,
+            slPrice: body.slPrice ? parseFloat(body.slPrice) : null,
+            tpPrice: body.tpPrice ? parseFloat(body.tpPrice) : null,
             size: parseFloat(body.size) || 1,
             status: status,
             entryTime: Math.floor(new Date(body.entryTime).getTime() / 1000),

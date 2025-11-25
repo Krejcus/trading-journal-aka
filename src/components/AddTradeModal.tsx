@@ -15,6 +15,8 @@ export default function AddTradeModal({ isOpen, onClose, onTradeAdded }: AddTrad
         side: "LONG",
         entryPrice: "",
         exitPrice: "",
+        slPrice: "",
+        tpPrice: "",
         size: "1",
         entryTime: new Date().toISOString().slice(0, 16), // Current time for datetime-local
         exitTime: "",
@@ -39,7 +41,7 @@ export default function AddTradeModal({ isOpen, onClose, onTradeAdded }: AddTrad
                 onTradeAdded();
                 onClose();
                 // Reset form (optional, or keep values for next trade)
-                setFormData(prev => ({ ...prev, entryPrice: "", exitPrice: "", notes: "" }));
+                setFormData(prev => ({ ...prev, entryPrice: "", exitPrice: "", slPrice: "", tpPrice: "", notes: "" }));
             } else {
                 alert("Failed to add trade");
             }
@@ -105,6 +107,29 @@ export default function AddTradeModal({ isOpen, onClose, onTradeAdded }: AddTrad
                                 step="0.25"
                                 value={formData.exitPrice}
                                 onChange={e => setFormData({ ...formData, exitPrice: e.target.value })}
+                                className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:border-emerald-500 outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Stop Loss (Volitelné)</label>
+                            <input
+                                type="number"
+                                step="0.25"
+                                value={formData.slPrice}
+                                onChange={e => setFormData({ ...formData, slPrice: e.target.value })}
+                                className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:border-emerald-500 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm text-slate-400 mb-1">Take Profit (Volitelné)</label>
+                            <input
+                                type="number"
+                                step="0.25"
+                                value={formData.tpPrice}
+                                onChange={e => setFormData({ ...formData, tpPrice: e.target.value })}
                                 className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:border-emerald-500 outline-none"
                             />
                         </div>
