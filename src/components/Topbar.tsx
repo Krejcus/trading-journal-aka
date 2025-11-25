@@ -1,13 +1,15 @@
 "use client";
 
-import { Bell, Search } from "lucide-react";
+import { Bell, Search, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Trade } from "@/db/schema";
+import AddTradeModal from "./AddTradeModal";
 
 export default function Topbar() {
     const [balance, setBalance] = useState(100000);
     const [notifications, setNotifications] = useState<Trade[]>([]);
     const [showNotifications, setShowNotifications] = useState(false);
+    const [isAddTradeOpen, setIsAddTradeOpen] = useState(false);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -56,6 +58,14 @@ export default function Topbar() {
                 </div>
                 <div className="relative">
                     <button
+                        onClick={() => setIsAddTradeOpen(true)}
+                        className="rounded-full bg-emerald-600 p-2 text-white hover:bg-emerald-500 transition-colors mr-2"
+                        title="Přidat Obchod"
+                    >
+                        <Plus className="h-5 w-5" />
+                    </button>
+
+                    <button
                         onClick={() => setShowNotifications(!showNotifications)}
                         className="rounded-full bg-slate-800 p-2 text-slate-400 hover:text-white relative"
                     >
@@ -91,6 +101,11 @@ export default function Topbar() {
                     )}
                 </div>
             </div>
+            <AddTradeModal
+                isOpen={isAddTradeOpen}
+                onClose={() => setIsAddTradeOpen(false)}
+                onTradeAdded={() => window.location.reload()}
+            />
         </div>
     );
 }
