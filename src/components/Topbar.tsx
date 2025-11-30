@@ -1,11 +1,15 @@
 "use client";
 
-import { Bell, Search, Plus } from "lucide-react";
+import { Bell, Search, Plus, Menu } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Trade } from "@/db/schema";
 import AddTradeModal from "./AddTradeModal";
 
-export default function Topbar() {
+interface TopbarProps {
+    onMenuClick?: () => void;
+}
+
+export default function Topbar({ onMenuClick }: TopbarProps) {
     const [balance, setBalance] = useState(100000);
     const [notifications, setNotifications] = useState<Trade[]>([]);
     const [showNotifications, setShowNotifications] = useState(false);
@@ -36,27 +40,35 @@ export default function Topbar() {
     }, []);
 
     return (
-        <div className="flex h-16 items-center justify-between border-b border-slate-800 bg-slate-900 px-6 relative z-20">
-            <div className="flex items-center">
-                <div className="relative">
+        <div className="flex h-16 items-center justify-between border-b border-slate-800 bg-slate-900 px-4 lg:px-6 relative z-20">
+            <div className="flex items-center gap-4">
+                {/* Mobile Menu Button */}
+                <button
+                    onClick={onMenuClick}
+                    className="p-2 -ml-2 text-slate-400 hover:text-white lg:hidden"
+                >
+                    <Menu className="w-6 h-6" />
+                </button>
+
+                <div className="relative hidden md:block">
                     <span className="absolute inset-y-0 left-0 flex items-center pl-3">
                         <Search className="h-4 w-4 text-slate-500" />
                     </span>
                     <input
                         type="text"
                         placeholder="Hledat symbol..."
-                        className="rounded-md border border-slate-700 bg-slate-800 py-1.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        className="rounded-md border border-slate-700 bg-slate-800 py-1.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-64"
                     />
                 </div>
             </div>
-            <div className="flex items-center space-x-6">
+            <div className="flex items-center space-x-4 lg:space-x-6">
                 <div className="flex flex-col items-end">
-                    <span className="text-xs text-slate-400">Stav účtu</span>
-                    <span className={`text-lg font-bold ${balance >= 100000 ? "text-emerald-400" : "text-rose-400"}`}>
+                    <span className="text-xs text-slate-400 hidden sm:inline">Stav účtu</span>
+                    <span className={`text-base lg:text-lg font-bold ${balance >= 100000 ? "text-emerald-400" : "text-rose-400"}`}>
                         ${balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </span>
                 </div>
-                <div className="relative">
+                <div className="relative flex items-center">
                     <button
                         onClick={() => setIsAddTradeOpen(true)}
                         className="rounded-full bg-emerald-600 p-2 text-white hover:bg-emerald-500 transition-colors mr-2"
@@ -76,7 +88,7 @@ export default function Topbar() {
                     </button>
 
                     {showNotifications && (
-                        <div className="absolute right-0 top-12 w-80 bg-slate-900 border border-slate-800 rounded-lg shadow-xl overflow-hidden">
+                        <div className="absolute right-0 top-12 w-80 bg-slate-900 border border-slate-800 rounded-lg shadow-xl overflow-hidden z-50">
                             <div className="p-3 border-b border-slate-800 font-semibold text-sm text-slate-300">
                                 Poslední aktivita
                             </div>

@@ -1,3 +1,5 @@
+"use client";
+
 import Sidebar from "@/components/Sidebar";
 import Topbar from "@/components/Topbar";
 import ActivePosition from "@/components/ActivePosition";
@@ -8,13 +10,16 @@ import { BalanceWidget, PnlWidget, WinRateWidget } from "@/components/StatsCards
 import RecentTrades from "@/components/RecentTrades";
 import QuickStats from "@/components/QuickStats";
 import DashboardWidget from "@/components/DashboardWidget";
+import { useState } from "react";
 
 export default function Home() {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
   return (
     <div className="flex h-screen bg-slate-950 text-slate-200 font-sans">
-      <Sidebar />
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Topbar />
+        <Topbar onMenuClick={() => setIsSidebarOpen(true)} />
         <main className="flex-1 overflow-y-auto bg-slate-950">
           <div className="p-8 pb-0">
             <h1 className="text-3xl font-bold text-white">Vítej zpět, Filipe! 👋</h1>

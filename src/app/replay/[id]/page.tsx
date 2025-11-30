@@ -21,6 +21,7 @@ export default function ReplayPage() {
     const [isPlaying, setIsPlaying] = useState(false);
     const [loading, setLoading] = useState(true);
     const [timeframe, setTimeframe] = useState("15m");
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
     // Fetch Trade Details
     useEffect(() => {
@@ -332,9 +333,9 @@ export default function ReplayPage() {
 
     return (
         <div className="flex h-screen bg-slate-950 text-slate-200 font-sans">
-            <Sidebar />
+            <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
             <div className="flex flex-1 flex-col overflow-hidden">
-                <Topbar />
+                <Topbar onMenuClick={() => setIsSidebarOpen(true)} />
                 <main className="flex-1 overflow-y-auto p-6">
                     <div className="flex items-center justify-between mb-6">
                         <div>

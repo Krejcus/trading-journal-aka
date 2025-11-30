@@ -23,6 +23,16 @@ const defaultLayouts = {
         { i: "active-position", x: 9, y: 4, w: 3, h: 14 },
         { i: "trades", x: 0, y: 12, w: 9, h: 6 },
     ],
+    xxs: [
+        { i: "balance", x: 0, y: 0, w: 1, h: 4 },
+        { i: "pnl", x: 0, y: 4, w: 1, h: 4 },
+        { i: "winrate", x: 0, y: 8, w: 1, h: 4 },
+        { i: "quick-stats", x: 0, y: 12, w: 1, h: 4 },
+        { i: "equity", x: 0, y: 16, w: 1, h: 8 },
+        { i: "active-position", x: 0, y: 24, w: 1, h: 10 },
+        { i: "calendar", x: 0, y: 34, w: 1, h: 8 },
+        { i: "trades", x: 0, y: 42, w: 1, h: 8 },
+    ]
 };
 
 export default function DashboardGrid({ children }: DashboardGridProps) {
@@ -34,7 +44,10 @@ export default function DashboardGrid({ children }: DashboardGridProps) {
         const savedLayouts = localStorage.getItem("dashboardLayouts");
         if (savedLayouts) {
             try {
-                setLayouts(JSON.parse(savedLayouts));
+                // Merge saved layouts with default mobile layouts if missing
+                const parsed = JSON.parse(savedLayouts);
+                if (!parsed.xxs) parsed.xxs = defaultLayouts.xxs;
+                setLayouts(parsed);
             } catch (e) {
                 console.error("Failed to parse layouts", e);
             }
@@ -57,7 +70,7 @@ export default function DashboardGrid({ children }: DashboardGridProps) {
             className="layout"
             layouts={layouts}
             breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
-            cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 }}
+            cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 1 }}
             rowHeight={30}
             draggableHandle=".drag-handle"
             onLayoutChange={handleLayoutChange}
