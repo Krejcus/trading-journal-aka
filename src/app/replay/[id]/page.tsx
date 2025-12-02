@@ -4,7 +4,9 @@ import Sidebar from "@/components/Sidebar";
 import Topbar from "@/components/Topbar";
 import { createChart, ColorType, CandlestickSeries } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
-import { Play, Pause, SkipForward, SkipBack } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Target } from "lucide-react";
+import Link from "next/link";
+import DashboardLayout from "@/components/DashboardLayout";
 import { useParams, useSearchParams } from "next/navigation";
 
 export default function ReplayPage() {
@@ -331,99 +333,118 @@ export default function ReplayPage() {
 
     if (loading) return <div className="flex h-screen items-center justify-center bg-slate-950 text-white">Načítám data z trhu...</div>;
 
+    if (loading) return <div className="flex h-screen items-center justify-center bg-slate-950 text-white">Načítám data z trhu...</div>;
+
     return (
-        <div className="flex h-screen bg-slate-950 text-slate-200 font-sans">
-            <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
-            <div className="flex flex-1 flex-col overflow-hidden">
-                <Topbar onMenuClick={() => setIsSidebarOpen(true)} />
-                <main className="flex-1 overflow-y-auto p-6">
-                    <div className="flex items-center justify-between mb-6">
-                        <div>
-                            <h1 className="text-2xl font-bold text-white">Replay Obchodu (Live Data)</h1>
-                            <div className="flex items-center space-x-2 mt-1">
-                                <p className="text-slate-400 text-sm">NQ=F • Yahoo Finance</p>
-                                <div className="flex bg-slate-900 rounded border border-slate-800 p-1">
-                                    {["1m", "2m", "5m", "15m", "1h", "1d"].map((tf) => (
-                                        <button
-                                            key={tf}
-                                            onClick={() => setTimeframe(tf)}
-                                            className={`px-2 py-0.5 text-xs rounded ${timeframe === tf ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white"}`}
-                                        >
-                                            {tf}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-                        <div className="flex space-x-2 bg-slate-900 p-2 rounded-lg border border-slate-800">
-                            <button onClick={handleFocusTrade} className="p-2 hover:bg-slate-800 rounded text-blue-400 hover:text-blue-300" title="Zaostřit na obchod">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="22" y1="12" x2="18" y2="12"></line><line x1="6" y1="12" x2="2" y2="12"></line><line x1="12" y1="6" x2="12" y2="2"></line><line x1="12" y1="22" x2="12" y2="18"></line></svg>
-                            </button>
-                            <div className="w-px bg-slate-800 mx-2"></div>
-                            <button onClick={handleStepBack} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white"><SkipBack className="w-5 h-5" /></button>
-                            <button onClick={() => setIsPlaying(!isPlaying)} className="p-2 hover:bg-slate-800 rounded text-emerald-400 hover:text-emerald-300">
-                                {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                            </button>
-                            <button onClick={handleStepForward} className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white"><SkipForward className="w-5 h-5" /></button>
-                        </div>
+        <DashboardLayout>
+            <div className="p-6">
+                <div className="flex items-center justify-between mb-6">
+                    <div>
+                        <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+                            {trade?.symbol} <span className={`text-sm px-2 py-0.5 rounded ${tradeSide === "LONG" ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400"}`}>{tradeSide}</span>
+                        </h1>
+                        <p className="text-slate-400 text-sm">
+                            {new Date(tradeTime * 1000).toLocaleString()}
+                        </p>
                     </div>
+                    <div className="flex items-center gap-4">
+                        <div className="flex bg-slate-800 rounded-lg p-1">
+                            {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
+                                <button
+                                    key={tf}
+                                    onClick={() => setTimeframe(tf)}
+                                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${timeframe === tf ? "bg-slate-700 text-white shadow" : "text-slate-400 hover:text-white"}`}
+                                >
+                                    {tf}
+                                </button>
+                            ))}
+                        </div>
+                        <Link href="/" className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-colors">
+                            Zpět na přehled
+                        </Link>
+                    </div>
+                </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                        {/* Chart Area */}
-                        <div className="lg:col-span-3 rounded-lg border border-slate-800 bg-slate-900 p-4 shadow-sm relative">
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                    {/* Chart Section */}
+                    <div className="lg:col-span-3 space-y-4">
+                        <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg relative group">
+                            {/* Chart Container */}
                             <div ref={chartContainerRef} className="w-full h-[500px]" />
-                            <div className="absolute top-4 left-4 bg-slate-800/80 p-2 rounded text-xs text-slate-300">
-                                Svíčka: {currentIndex + 1} / {historyData.length}
-                            </div>
-                        </div>
 
-                        {/* Trade Details Panel */}
-                        <div className="lg:col-span-1 space-y-4">
-                            <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="text-lg font-semibold text-white">Detaily Obchodu</h3>
-                                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${tradeStatus === "OPEN" ? "bg-blue-500/20 text-blue-400 animate-pulse" : tradeStatus.includes("CLOSED") ? "bg-emerald-500/20 text-emerald-400" : "bg-slate-700 text-slate-400"}`}>
-                                        {tradeStatus}
-                                    </span>
-                                </div>
-
-                                <div className="space-y-3">
-                                    <div className="flex justify-between">
-                                        <span className="text-slate-400">Vstup</span>
-                                        <span className="font-mono text-white">{tradeEntry > 0 ? tradeEntry.toFixed(2) : "---"}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span className="text-slate-400">Cíl (TP)</span>
-                                        <span className="font-mono text-white">{tradeExit > 0 ? tradeExit.toFixed(2) : "---"}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span className="text-slate-400">Aktuální Cena</span>
-                                        <span className="font-mono text-blue-300">{currentPriceDisplay.toFixed(2)}</span>
-                                    </div>
-
-                                    <div className="border-t border-slate-800 my-2"></div>
-
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-slate-400">P&L (Live)</span>
-                                        <span className={`text-2xl font-bold ${currentPnL > 0 ? "text-emerald-400" : currentPnL < 0 ? "text-rose-400" : "text-slate-400"}`}>
-                                            {currentPnL > 0 ? "+" : ""}{currentPnL.toFixed(2)}
-                                        </span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span className="text-slate-400">Trvání</span>
-                                        <span className="text-white">{duration}</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
-                                <h3 className="text-sm font-semibold text-slate-400 mb-2">Poznámka</h3>
-                                <p className="text-sm text-slate-300 italic">"Breakout nad VWAP, silný volume. Výstup na TP1."</p>
+                            {/* Playback Controls Overlay */}
+                            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-800/90 backdrop-blur px-4 py-2 rounded-full border border-slate-700 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={handleStepBack} className="p-2 hover:bg-slate-700 rounded-full text-slate-300 hover:text-white"><SkipBack className="w-5 h-5" /></button>
+                                <button onClick={() => setIsPlaying(!isPlaying)} className="p-2 hover:bg-emerald-600 bg-emerald-500 rounded-full text-white shadow-lg transition-colors">
+                                    {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                                </button>
+                                <button onClick={handleStepForward} className="p-2 hover:bg-slate-700 rounded-full text-slate-300 hover:text-white"><SkipForward className="w-5 h-5" /></button>
+                                <div className="w-px h-6 bg-slate-700 mx-2" />
+                                <button onClick={handleFocusTrade} className="p-2 hover:bg-slate-700 rounded-full text-slate-300 hover:text-white" title="Centrovat na obchod"><Target className="w-5 h-5" /></button>
                             </div>
                         </div>
                     </div>
-                </main>
+
+                    {/* Trade Details Sidebar */}
+                    <div className="space-y-6">
+                        {/* PnL Card */}
+                        <div className={`bg-slate-900 border border-slate-800 rounded-xl p-6 ${tradeStatus.includes("CLOSED") ? (currentPnL > 0 ? "border-emerald-500/50 bg-emerald-500/5" : "border-rose-500/50 bg-rose-500/5") : ""}`}>
+                            <div className="text-sm text-slate-400 mb-1">Aktuální P&L</div>
+                            <div className={`text-4xl font-bold font-mono ${currentPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                {currentPnL >= 0 ? "+" : ""}{currentPnL.toFixed(2)} USD
+                            </div>
+                            <div className="mt-4 flex items-center justify-between text-sm">
+                                <span className="text-slate-400">Stav:</span>
+                                <span className={`font-bold px-2 py-0.5 rounded ${tradeStatus === "OPEN" ? "bg-blue-500/20 text-blue-400" : tradeStatus.includes("WIN") || currentPnL > 0 ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400"}`}>
+                                    {tradeStatus}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Stats Grid */}
+                        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+                            <h3 className="font-semibold text-white border-b border-slate-800 pb-2">Detaily Obchodu</h3>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <div className="text-xs text-slate-500">Vstup</div>
+                                    <div className="font-mono text-slate-200">{tradeEntry}</div>
+                                </div>
+                                <div>
+                                    <div className="text-xs text-slate-500">Výstup</div>
+                                    <div className="font-mono text-slate-200">{tradeExit || "-"}</div>
+                                </div>
+                                <div>
+                                    <div className="text-xs text-slate-500">Stop Loss</div>
+                                    <div className="font-mono text-rose-400">{tradeSL || "-"}</div>
+                                </div>
+                                <div>
+                                    <div className="text-xs text-slate-500">Take Profit</div>
+                                    <div className="font-mono text-emerald-400">{tradeTP || "-"}</div>
+                                </div>
+                                <div>
+                                    <div className="text-xs text-slate-500">Trvání</div>
+                                    <div className="font-mono text-slate-200">{duration}</div>
+                                </div>
+                                <div>
+                                    <div className="text-xs text-slate-500">Velikost</div>
+                                    <div className="font-mono text-slate-200">{trade?.size} Lot</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Notes */}
+                        {trade?.notes && (
+                            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                                <h3 className="font-semibold text-white mb-2">Poznámky</h3>
+                                <p className="text-slate-400 text-sm leading-relaxed">
+                                    {trade.notes}
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
-        </div>
+        </DashboardLayout>
     );
 }

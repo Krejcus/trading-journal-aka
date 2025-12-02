@@ -1,82 +1,136 @@
 "use client";
 
-import { Bell, Search, Plus, Menu } from "lucide-react";
+import { Bell, Search, Plus, Menu, ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Trade } from "@/db/schema";
 import AddTradeModal from "./AddTradeModal";
+import { useDashboard } from "./DashboardContext";
 
 interface TopbarProps {
     onMenuClick?: () => void;
 }
 
 export default function Topbar({ onMenuClick }: TopbarProps) {
-    const [balance, setBalance] = useState(100000);
+    const [balance, setBalance] = useState(0);
     const [notifications, setNotifications] = useState<Trade[]>([]);
     const [showNotifications, setShowNotifications] = useState(false);
     const [isAddTradeOpen, setIsAddTradeOpen] = useState(false);
+    const [accounts, setAccounts] = useState<any[]>([]);
+    const { selectedAccountId, setSelectedAccountId } = useDashboard();
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const res = await fetch('/api/trades');
-                const trades: Trade[] = await res.json();
-                if (Array.isArray(trades)) {
-                    // Calculate Balance
-                    const totalPnL = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-                    setBalance(100000 + totalPnL);
-
-                    // Notifications (Last 5 closed trades)
-                    const closedTrades = trades
-                        .filter(t => t.status === "WIN" || t.status === "LOSS")
-                        .sort((a, b) => b.exitTime! - a.exitTime!)
-                        .slice(0, 5);
-                    setNotifications(closedTrades);
-                }
-            } catch (e) {
-                console.error(e);
-            }
-        };
-        fetchData();
+        fetchAccounts();
     }, []);
 
+    // Re-fetch balance when account changes or generally (simplified for now)
+    useEffect(() => {
+        fetchBalance();
+    }, [selectedAccountId, accounts]); // Dependency on selectedAccountId and accounts
+
+    const fetchAccounts = async () => {
+        try {
+            const res = await fetch('/api/accounts');
+            if (res.ok) {
+                const data = await res.json();
+                setAccounts(data);
+                // Optionally set default account here if none selected
+                if (!selectedAccountId && data.length > 0) {
+                    // setSelectedAccountId(data[0].id.toString()); // Or keep null for "All Accounts"
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch accounts", e);
+        }
+    };
+
+    const fetchBalance = async () => {
+        try {
+            // In a real app, we'd have an endpoint for balance that accepts accountId
+            // For now, let's just fetch trades and sum up (inefficient but works for prototype)
+            // Or better: fetch account details if an account is selected.
+
+            if (accounts.length === 0) { // Ensure accounts are loaded before calculating balance
+                setBalance(0);
+                return;
+            }
+
+            const res = await fetch('/api/trades'); // We should filter by account in API
+            if (res.ok) {
+                const trades = await res.json();
+                const filteredTrades = selectedAccountId
+                    ? trades.filter((t: any) => t.accountId?.toString() === selectedAccountId)
+                    : trades;
+
+                const totalPnL = filteredTrades.reduce((acc: number, t: any) => acc + (t.pnl || 0), 0);
+
+                // Add initial balance(s)
+                let initialTotal = 0;
+                if (selectedAccountId) {
+                    const acc = accounts.find(a => a.id.toString() === selectedAccountId);
+                    initialTotal = acc ? acc.initialBalance : 0;
+                } else {
+                    initialTotal = accounts.reduce((acc, a) => acc + a.initialBalance, 0);
+                }
+
+                setBalance(initialTotal + totalPnL);
+            }
+        } catch (error) {
+            console.error("Failed to fetch balance", error);
+        }
+    };
+
     return (
-        <div className="flex h-16 items-center justify-between border-b border-slate-800 bg-slate-900 px-4 lg:px-6 relative z-20">
+        <header className="flex h-16 items-center justify-between border-b border-slate-800 bg-slate-950 px-6">
             <div className="flex items-center gap-4">
-                {/* Mobile Menu Button */}
-                <button
-                    onClick={onMenuClick}
-                    className="p-2 -ml-2 text-slate-400 hover:text-white lg:hidden"
-                >
+                <button onClick={onMenuClick} className="lg:hidden p-2 text-slate-400 hover:text-white">
                     <Menu className="w-6 h-6" />
                 </button>
 
+                {/* Account Selector */}
+                <div className="relative group">
+                    <button className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-white px-3 py-1.5 rounded-lg hover:bg-slate-800 transition-colors">
+                        {selectedAccountId
+                            ? accounts.find(a => a.id.toString() === selectedAccountId)?.name
+                            : "Všechny Účty"}
+                        <ChevronDown className="w-4 h-4 text-slate-500" />
+                    </button>
+                    {/* Dropdown */}
+                    <div className="absolute top-full left-0 mt-1 w-48 bg-slate-900 border border-slate-800 rounded-xl shadow-xl overflow-hidden hidden group-hover:block z-50">
+                        <button
+                            onClick={() => setSelectedAccountId(null)}
+                            className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-800 ${!selectedAccountId ? "text-emerald-400 font-medium" : "text-slate-300"}`}
+                        >
+                            Všechny Účty
+                        </button>
+                        {accounts.map(acc => (
+                            <button
+                                key={acc.id}
+                                onClick={() => setSelectedAccountId(acc.id.toString())}
+                                className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-800 ${selectedAccountId === acc.id.toString() ? "text-emerald-400 font-medium" : "text-slate-300"}`}
+                            >
+                                {acc.name}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 <div className="relative hidden md:block">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-3">
-                        <Search className="h-4 w-4 text-slate-500" />
-                    </span>
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                     <input
                         type="text"
-                        placeholder="Hledat symbol..."
-                        className="rounded-md border border-slate-700 bg-slate-800 py-1.5 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-64"
+                        placeholder="Hledat..."
+                        className="h-9 w-64 rounded-lg border border-slate-800 bg-slate-900 pl-9 pr-4 text-sm text-slate-200 placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
                     />
                 </div>
             </div>
-            <div className="flex items-center space-x-4 lg:space-x-6">
-                <div className="flex flex-col items-end">
-                    <span className="text-xs text-slate-400 hidden sm:inline">Stav účtu</span>
-                    <span className={`text-base lg:text-lg font-bold ${balance >= 100000 ? "text-emerald-400" : "text-rose-400"}`}>
-                        ${balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                    </span>
-                </div>
-                <div className="relative flex items-center">
-                    <button
-                        onClick={() => setIsAddTradeOpen(true)}
-                        className="rounded-full bg-emerald-600 p-2 text-white hover:bg-emerald-500 transition-colors mr-2"
-                        title="Přidat Obchod"
-                    >
-                        <Plus className="h-5 w-5" />
-                    </button>
 
+            <div className="flex items-center gap-4">
+                <div className="hidden sm:block text-right">
+                    <div className="text-xs text-slate-500">Celkový Zůstatek</div>
+                    <div className="font-mono text-lg font-bold text-white">${balance.toFixed(2)}</div>
+                </div>
+
+                <div className="relative">
                     <button
                         onClick={() => setShowNotifications(!showNotifications)}
                         className="rounded-full bg-slate-800 p-2 text-slate-400 hover:text-white relative"
@@ -112,12 +166,17 @@ export default function Topbar({ onMenuClick }: TopbarProps) {
                         </div>
                     )}
                 </div>
+
+                <button
+                    onClick={() => setIsAddTradeOpen(true)}
+                    className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 transition-colors shadow-lg shadow-emerald-900/20"
+                >
+                    <Plus className="h-4 w-4" />
+                    <span className="hidden sm:inline">Přidat Obchod</span>
+                </button>
             </div>
-            <AddTradeModal
-                isOpen={isAddTradeOpen}
-                onClose={() => setIsAddTradeOpen(false)}
-                onTradeAdded={() => window.location.reload()}
-            />
-        </div>
+
+            <AddTradeModal isOpen={isAddTradeOpen} onClose={() => setIsAddTradeOpen(false)} onTradeAdded={fetchBalance} />
+        </header>
     );
 }

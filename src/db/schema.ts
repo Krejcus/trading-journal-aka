@@ -1,8 +1,18 @@
-import { pgTable, serial, text, real, integer, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, real, integer, timestamp, boolean } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+
+export const accounts = pgTable('accounts', {
+    id: serial('id').primaryKey(),
+    name: text('name').notNull(),
+    initialBalance: real('initial_balance').notNull().default(0),
+    currency: text('currency').notNull().default('USD'),
+    isDefault: boolean('is_default').default(false),
+    createdAt: timestamp('created_at').default(sql`now()`),
+});
 
 export const trades = pgTable('trades', {
     id: serial('id').primaryKey(),
+    accountId: integer('account_id').references(() => accounts.id), // Foreign Key
     symbol: text('symbol').notNull(),
     side: text('side').notNull(), // LONG or SHORT
     entryPrice: real('entry_price').notNull(),
@@ -19,5 +29,7 @@ export const trades = pgTable('trades', {
     createdAt: timestamp('created_at').default(sql`now()`),
 });
 
+export type Account = typeof accounts.$inferSelect;
+export type NewAccount = typeof accounts.$inferInsert;
 export type Trade = typeof trades.$inferSelect;
 export type NewTrade = typeof trades.$inferInsert;

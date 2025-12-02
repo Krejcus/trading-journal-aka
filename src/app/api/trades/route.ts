@@ -16,49 +16,48 @@ export async function GET() {
 export async function POST(request: Request) {
     try {
         const body = await request.json();
+        const { symbol, side, entryPrice, exitPrice, slPrice, tpPrice, size, entryTime, exitTime, notes, accountId } = body;
 
-        // Basic validation
-        if (!body.symbol || !body.side || !body.entryPrice || !body.entryTime) {
+        if (!symbol || !side || !entryPrice || !size || !entryTime) {
             return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
         }
 
-        // Calculate PnL if closed
+        // Calculate PnL if exit price exists
         let pnl = null;
-        let status = body.status || 'OPEN';
+        let status = "OPEN";
+        if (exitPrice) {
+            const entry = parseFloat(entryPrice);
+            const exit = parseFloat(exitPrice);
+            const s = parseFloat(size);
 
-        if (body.exitPrice) {
-            const entry = parseFloat(body.entryPrice);
-            const exit = parseFloat(body.exitPrice);
-            const size = parseFloat(body.size) || 1;
-
-            if (body.side === 'LONG') {
-                pnl = (exit - entry) * size;
+            // Simple PnL calculation (needs refinement for contract value)
+            // Assuming NQ $20/point for now as per user context
+            const multiplier = 20;
+            if (side === "LONG") {
+                pnl = (exit - entry) * multiplier * s;
             } else {
-                pnl = (entry - exit) * size;
+                pnl = (entry - exit) * multiplier * s;
             }
-
-            // Auto-detect status if not provided
-            if (!body.status || body.status === 'OPEN') {
-                status = pnl > 0 ? 'WIN' : 'LOSS';
-            }
+            status = pnl > 0 ? "WIN" : "LOSS";
         }
 
-        const result = await db.insert(trades).values({
-            symbol: body.symbol,
-            side: body.side,
-            entryPrice: parseFloat(body.entryPrice),
-            exitPrice: body.exitPrice ? parseFloat(body.exitPrice) : null,
-            slPrice: body.slPrice ? parseFloat(body.slPrice) : null,
-            tpPrice: body.tpPrice ? parseFloat(body.tpPrice) : null,
-            size: parseFloat(body.size) || 1,
-            status: status,
-            entryTime: Math.floor(new Date(body.entryTime).getTime() / 1000),
-            exitTime: body.exitTime ? Math.floor(new Date(body.exitTime).getTime() / 1000) : null,
-            pnl: pnl,
-            notes: body.notes || '',
+        const newTrade = await db.insert(trades).values({
+            symbol,
+            side,
+            entryPrice: parseFloat(entryPrice),
+            exitPrice: exitPrice ? parseFloat(exitPrice) : null,
+            slPrice: slPrice ? parseFloat(slPrice) : null,
+            tpPrice: tpPrice ? parseFloat(tpPrice) : null,
+            size: parseFloat(size),
+            pnl,
+            status,
+            entryTime: Math.floor(new Date(entryTime).getTime() / 1000),
+            exitTime: exitTime ? Math.floor(new Date(exitTime).getTime() / 1000) : null,
+            notes,
+            accountId: accountId ? parseInt(accountId) : null, // Save accountId
         }).returning();
 
-        return NextResponse.json({ success: true, trade: result[0] });
+        return NextResponse.json({ success: true, trade: newTrade[0] });
     } catch (error) {
         console.error('Create Trade Error:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X } from "lucide-react";
 
 interface AddTradeModalProps {
@@ -20,9 +20,33 @@ export default function AddTradeModal({ isOpen, onClose, onTradeAdded }: AddTrad
         size: "1",
         entryTime: new Date().toISOString().slice(0, 16), // Current time for datetime-local
         exitTime: "",
-        notes: ""
+        notes: "",
+        accountId: "" // New field
     });
     const [loading, setLoading] = useState(false);
+    const [accounts, setAccounts] = useState<any[]>([]);
+
+    useEffect(() => {
+        if (isOpen) {
+            fetchAccounts();
+        }
+    }, [isOpen]);
+
+    const fetchAccounts = async () => {
+        try {
+            const res = await fetch('/api/accounts');
+            if (res.ok) {
+                const data = await res.json();
+                setAccounts(data);
+                // Set default account if available and not set
+                if (data.length > 0 && !formData.accountId) {
+                    setFormData(prev => ({ ...prev, accountId: data[0].id.toString() }));
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch accounts", e);
+        }
+    };
 
     if (!isOpen) return null;
 
@@ -34,14 +58,28 @@ export default function AddTradeModal({ isOpen, onClose, onTradeAdded }: AddTrad
             const res = await fetch('/api/trades', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData)
+                body: JSON.stringify({
+                    ...formData,
+                    accountId: formData.accountId ? parseInt(formData.accountId) : null
+                })
             });
 
             if (res.ok) {
                 onTradeAdded();
                 onClose();
-                // Reset form (optional, or keep values for next trade)
-                setFormData(prev => ({ ...prev, entryPrice: "", exitPrice: "", slPrice: "", tpPrice: "", notes: "" }));
+                setFormData({
+                    symbol: "NQ",
+                    side: "LONG",
+                    entryPrice: "",
+                    exitPrice: "",
+                    slPrice: "",
+                    tpPrice: "",
+                    size: "1",
+                    entryTime: new Date().toISOString().slice(0, 16),
+                    exitTime: "",
+                    notes: "",
+                    accountId: accounts.length > 0 ? accounts[0].id.toString() : ""
+                });
             } else {
                 alert("Failed to add trade");
             }
@@ -55,15 +93,33 @@ export default function AddTradeModal({ isOpen, onClose, onTradeAdded }: AddTrad
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-            <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-md p-6 shadow-2xl">
-                <div className="flex justify-between items-center mb-6">
+            <div className="w-full max-w-md rounded-xl bg-slate-900 border border-slate-800 p-6 shadow-xl">
+                <div className="flex items-center justify-between mb-6">
                     <h2 className="text-xl font-bold text-white">Přidat Obchod</h2>
                     <button onClick={onClose} className="text-slate-400 hover:text-white">
-                        <X className="w-6 h-6" />
+                        <X className="h-5 w-5" />
                     </button>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
+                    {/* Account Selection */}
+                    <div>
+                        <label className="block text-sm font-medium text-slate-400 mb-1">Účet</label>
+                        <select
+                            value={formData.accountId}
+                            onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
+                            className="w-full rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+                        >
+                            <option value="">-- Vyberte účet --</option>
+                            {accounts.map(acc => (
+                                <option key={acc.id} value={acc.id}>{acc.name}</option>
+                            ))}
+                        </select>
+                        {accounts.length === 0 && (
+                            <p className="text-xs text-amber-500 mt-1">Nemáte žádné účty. Vytvořte je v Nastavení.</p>
+                        )}
+                    </div>
+
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm text-slate-400 mb-1">Symbol</label>

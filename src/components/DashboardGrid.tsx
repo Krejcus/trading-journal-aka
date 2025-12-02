@@ -18,10 +18,9 @@ const defaultLayouts = {
         { i: "pnl", x: 3, y: 0, w: 3, h: 4 },
         { i: "winrate", x: 6, y: 0, w: 3, h: 4 },
         { i: "quick-stats", x: 9, y: 0, w: 3, h: 4 },
-        { i: "equity", x: 0, y: 4, w: 6, h: 8 },
-        { i: "calendar", x: 6, y: 4, w: 3, h: 8 },
-        { i: "active-position", x: 9, y: 4, w: 3, h: 14 },
-        { i: "trades", x: 0, y: 12, w: 9, h: 6 },
+        { i: "equity", x: 0, y: 4, w: 8, h: 8 },
+        { i: "calendar", x: 8, y: 4, w: 4, h: 8 },
+        { i: "trades", x: 0, y: 12, w: 12, h: 6 },
     ],
     xxs: [
         { i: "balance", x: 0, y: 0, w: 1, h: 4 },
@@ -29,9 +28,8 @@ const defaultLayouts = {
         { i: "winrate", x: 0, y: 8, w: 1, h: 4 },
         { i: "quick-stats", x: 0, y: 12, w: 1, h: 4 },
         { i: "equity", x: 0, y: 16, w: 1, h: 8 },
-        { i: "active-position", x: 0, y: 24, w: 1, h: 10 },
-        { i: "calendar", x: 0, y: 34, w: 1, h: 8 },
-        { i: "trades", x: 0, y: 42, w: 1, h: 8 },
+        { i: "calendar", x: 0, y: 24, w: 1, h: 8 },
+        { i: "trades", x: 0, y: 32, w: 1, h: 8 },
     ]
 };
 

@@ -1,7 +1,6 @@
 "use client";
 
-import Sidebar from "@/components/Sidebar";
-import Topbar from "@/components/Topbar";
+import DashboardLayout from "@/components/DashboardLayout";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie, Legend } from "recharts";
 import { useEffect, useState } from "react";
 import { Trade } from "@/db/schema";
@@ -82,136 +81,132 @@ export default function AnalyticsPage() {
 
 
     return (
-        <div className="flex h-screen bg-slate-950 text-slate-200 font-sans">
-            <Sidebar />
-            <div className="flex flex-1 flex-col overflow-hidden">
-                <Topbar />
-                <main className="flex-1 overflow-y-auto p-6">
-                    <h1 className="text-2xl font-bold text-white mb-6">Analytický Dashboard</h1>
+        <DashboardLayout>
+            <div className="p-6">
+                <h1 className="text-2xl font-bold text-white mb-6">Analytický Dashboard</h1>
 
-                    {/* Key Metrics */}
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-                        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-                            <p className="text-sm text-slate-400">Celkový P&L</p>
-                            <p className={`text-2xl font-bold ${totalPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                                {totalPnL >= 0 ? "+" : ""}${totalPnL.toFixed(2)}
-                            </p>
-                        </div>
-                        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-                            <p className="text-sm text-slate-400">Win Rate</p>
-                            <p className="text-2xl font-bold text-blue-400">{winRate}%</p>
-                        </div>
-                        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-                            <p className="text-sm text-slate-400">Profit Factor</p>
-                            <p className="text-2xl font-bold text-white">{profitFactor.toFixed(2)}</p>
-                        </div>
-                        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-                            <p className="text-sm text-slate-400">Počet Obchodů</p>
-                            <p className="text-2xl font-bold text-white">{totalTrades}</p>
+                {/* Key Metrics */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+                        <p className="text-sm text-slate-400">Celkový P&L</p>
+                        <p className={`text-2xl font-bold ${totalPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                            {totalPnL >= 0 ? "+" : ""}${totalPnL.toFixed(2)}
+                        </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+                        <p className="text-sm text-slate-400">Win Rate</p>
+                        <p className="text-2xl font-bold text-blue-400">{winRate}%</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+                        <p className="text-sm text-slate-400">Profit Factor</p>
+                        <p className="text-2xl font-bold text-white">{profitFactor.toFixed(2)}</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+                        <p className="text-sm text-slate-400">Počet Obchodů</p>
+                        <p className="text-2xl font-bold text-white">{totalTrades}</p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                    {/* Equity Curve */}
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
+                        <h3 className="text-lg font-semibold text-white mb-4">Vývoj Účtu (Equity)</h3>
+                        <div className="h-[300px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={equityData}>
+                                    <defs>
+                                        <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                                    <XAxis dataKey="name" stroke="#64748b" />
+                                    <YAxis stroke="#64748b" />
+                                    <Tooltip
+                                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff' }}
+                                    />
+                                    <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorValue)" />
+                                </AreaChart>
+                            </ResponsiveContainer>
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-                        {/* Equity Curve */}
-                        <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
-                            <h3 className="text-lg font-semibold text-white mb-4">Vývoj Účtu (Equity)</h3>
-                            <div className="h-[300px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={equityData}>
-                                        <defs>
-                                            <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                                                <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                                        <XAxis dataKey="name" stroke="#64748b" />
-                                        <YAxis stroke="#64748b" />
-                                        <Tooltip
-                                            contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff' }}
-                                        />
-                                        <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorValue)" />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
+                    {/* Win/Loss Ratio */}
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
+                        <h3 className="text-lg font-semibold text-white mb-4">Poměr Výher/Ztrát</h3>
+                        <div className="h-[300px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                    <Pie
+                                        data={winRateData}
+                                        cx="50%"
+                                        cy="50%"
+                                        innerRadius={60}
+                                        outerRadius={80}
+                                        paddingAngle={5}
+                                        dataKey="value"
+                                    >
+                                        {winRateData.map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={entry.name === "Wins" ? "#10b981" : "#ef4444"} />
+                                        ))}
+                                    </Pie>
+                                    <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff' }} />
+                                    <Legend />
+                                </PieChart>
+                            </ResponsiveContainer>
                         </div>
+                    </div>
+                </div>
 
-                        {/* Win/Loss Ratio */}
-                        <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
-                            <h3 className="text-lg font-semibold text-white mb-4">Poměr Výher/Ztrát</h3>
-                            <div className="h-[300px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <PieChart>
-                                        <Pie
-                                            data={winRateData}
-                                            cx="50%"
-                                            cy="50%"
-                                            innerRadius={60}
-                                            outerRadius={80}
-                                            paddingAngle={5}
-                                            dataKey="value"
-                                        >
-                                            {winRateData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={entry.name === "Wins" ? "#10b981" : "#ef4444"} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff' }} />
-                                        <Legend />
-                                    </PieChart>
-                                </ResponsiveContainer>
-                            </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* PnL by Day */}
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
+                        <h3 className="text-lg font-semibold text-white mb-4">P&L podle Dne v Týdnu</h3>
+                        <div className="h-[300px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={pnlByDayData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                                    <XAxis dataKey="name" stroke="#64748b" />
+                                    <YAxis stroke="#64748b" />
+                                    <Tooltip
+                                        cursor={{ fill: '#1e293b' }}
+                                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff' }}
+                                    />
+                                    <Bar dataKey="value">
+                                        {pnlByDayData.map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={entry.value >= 0 ? "#10b981" : "#ef4444"} />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        {/* PnL by Day */}
-                        <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
-                            <h3 className="text-lg font-semibold text-white mb-4">P&L podle Dne v Týdnu</h3>
-                            <div className="h-[300px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={pnlByDayData}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                                        <XAxis dataKey="name" stroke="#64748b" />
-                                        <YAxis stroke="#64748b" />
-                                        <Tooltip
-                                            cursor={{ fill: '#1e293b' }}
-                                            contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff' }}
-                                        />
-                                        <Bar dataKey="value">
-                                            {pnlByDayData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={entry.value >= 0 ? "#10b981" : "#ef4444"} />
-                                            ))}
-                                        </Bar>
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-
-                        {/* PnL by Hour */}
-                        <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
-                            <h3 className="text-lg font-semibold text-white mb-4">P&L podle Hodiny</h3>
-                            <div className="h-[300px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={pnlByHourData}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                                        <XAxis dataKey="name" stroke="#64748b" />
-                                        <YAxis stroke="#64748b" />
-                                        <Tooltip
-                                            cursor={{ fill: '#1e293b' }}
-                                            contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff' }}
-                                        />
-                                        <Bar dataKey="value">
-                                            {pnlByHourData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={entry.value >= 0 ? "#10b981" : "#ef4444"} />
-                                            ))}
-                                        </Bar>
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            </div>
+                    {/* PnL by Hour */}
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
+                        <h3 className="text-lg font-semibold text-white mb-4">P&L podle Hodiny</h3>
+                        <div className="h-[300px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={pnlByHourData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                                    <XAxis dataKey="name" stroke="#64748b" />
+                                    <YAxis stroke="#64748b" />
+                                    <Tooltip
+                                        cursor={{ fill: '#1e293b' }}
+                                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff' }}
+                                    />
+                                    <Bar dataKey="value">
+                                        {pnlByHourData.map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={entry.value >= 0 ? "#10b981" : "#ef4444"} />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
                         </div>
                     </div>
-                </main>
+                </div>
             </div>
-        </div>
+        </DashboardLayout>
     );
 }
