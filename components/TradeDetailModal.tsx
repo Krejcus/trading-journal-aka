@@ -8,6 +8,7 @@ import {
     Share2, Check, ChevronLeft, ChevronRight, Zap, Brain, FileText, Monitor
 } from 'lucide-react';
 import TradeReplay from './TradeReplay';
+import { ErrorBoundary } from './ErrorBoundary';
 
 interface TradeDetailModalProps {
     trade: Trade;
