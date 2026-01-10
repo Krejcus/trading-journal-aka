@@ -1,5 +1,5 @@
 import React from 'react';
-import { MousePointer2, Minus, PenTool, Type, Eraser, Square } from 'lucide-react';
+import { MousePointer2, Minus, PenTool, Type, Eraser, Square, Magnet } from 'lucide-react';
 
 export type DrawingTool = 'cursor' | 'line' | 'rect' | 'text' | 'eraser';
 
@@ -8,51 +8,72 @@ interface ChartToolbarProps {
     onToolChange: (tool: DrawingTool) => void;
     onClearAll: () => void;
     theme: 'dark' | 'light' | 'oled';
+    magnetMode?: boolean;
+    onToggleMagnet?: () => void;
 }
 
-const ChartToolbar: React.FC<ChartToolbarProps> = ({ activeTool, onToolChange, onClearAll, theme }) => {
+const ChartToolbar: React.FC<ChartToolbarProps> = ({ activeTool, onToolChange, onClearAll, theme, magnetMode, onToggleMagnet }) => {
     const isDark = theme !== 'light';
 
-    const tools: { id: DrawingTool; icon: React.ReactNode; label: string }[] = [
-        { id: 'cursor', icon: <MousePointer2 size={18} />, label: 'Kurzor' },
-        { id: 'line', icon: <Minus size={18} className="rotate-45" />, label: 'Trendová čára' },
-        { id: 'rect', icon: <Square size={18} />, label: 'Obdélník' },
-        { id: 'text', icon: <Type size={18} />, label: 'Text' },
-        { id: 'eraser', icon: <Eraser size={18} />, label: 'Guma' },
+    const tools: { id: DrawingTool; icon: React.ReactNode; label: string; shortcut: string }[] = [
+        { id: 'cursor', icon: <MousePointer2 size={18} />, label: 'Kurzor', shortcut: 'Esc' },
+        { id: 'line', icon: <Minus size={18} className="rotate-45" />, label: 'Trendová čára', shortcut: 'T' },
+        { id: 'rect', icon: <Square size={18} />, label: 'Obdélník', shortcut: 'R' },
+        { id: 'text', icon: <Type size={18} />, label: 'Text', shortcut: 'Shift+T' },
+        { id: 'eraser', icon: <Eraser size={18} />, label: 'Guma', shortcut: 'Del' },
     ];
 
     return (
-        <div className={`flex flex-col gap-2 p-2 w-12 border-r ${isDark ? 'border-slate-800 bg-slate-900/50' : 'border-slate-200 bg-white/50'} backdrop-blur-md`}>
+        <div className={`
+            flex flex-col gap-1 p-1.5 rounded-xl border shadow-2xl backdrop-blur-xl z-[50]
+            ${isDark ? 'bg-[#1e293b]/90 border-slate-700/50' : 'bg-white/90 border-slate-200'}
+        `}>
             {tools.map(tool => (
                 <button
                     key={tool.id}
                     onClick={() => onToolChange(tool.id)}
                     className={`
-            w-8 h-8 flex items-center justify-center rounded-lg transition-all relative group
-            ${activeTool === tool.id
+                        w-8 h-8 flex items-center justify-center rounded-lg transition-all relative group
+                        ${activeTool === tool.id
                             ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
                             : `text-slate-500 hover:bg-slate-500/10 hover:text-slate-300`
                         }
-          `}
-                    title={tool.label}
+                    `}
                 >
                     {tool.icon}
 
-                    {/* Tooltip */}
-                    <div className="absolute left-full ml-3 px-2 py-1 bg-black text-white text-[10px] font-bold uppercase rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 transition-opacity">
-                        {tool.label}
+                    {/* Tooltip (TradingView Style) */}
+                    <div className="absolute left-full ml-3 px-2 py-1.5 bg-slate-900 text-white text-[10px] font-bold rounded shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-[100] transition-opacity flex items-center gap-2 border border-slate-700">
+                        <span>{tool.label}</span>
+                        <span className="opacity-50 font-mono tracking-tighter">[{tool.shortcut}]</span>
                     </div>
                 </button>
             ))}
 
-            <div className="my-1 h-px bg-slate-700/50" />
+            <div className="my-1 h-px bg-slate-700/20" />
+
+            {/* Magnet Toggle */}
+            <button
+                onClick={onToggleMagnet}
+                className={`
+                    w-8 h-8 flex items-center justify-center rounded-lg transition-all relative group
+                    ${magnetMode ? 'text-blue-400 bg-blue-500/10' : 'text-slate-500 hover:bg-slate-500/10 hover:text-slate-300'}
+                `}
+            >
+                <Magnet size={18} className={magnetMode ? "fill-current" : ""} />
+                <div className="absolute left-full ml-3 px-2 py-1.5 bg-slate-900 text-white text-[10px] font-bold rounded shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-[100] transition-opacity border border-slate-700">
+                    Magnet Mode
+                </div>
+            </button>
 
             <button
                 onClick={onClearAll}
-                className="w-8 h-8 flex items-center justify-center rounded-lg text-rose-500 hover:bg-rose-500/10 transition-all"
-                title="Smazat vše"
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-rose-500 hover:bg-rose-500/10 transition-all relative group"
             >
                 <Eraser size={16} />
+                <div className="absolute left-full ml-3 px-2 py-1.5 bg-slate-900 text-white text-[10px] font-bold rounded shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-[100] transition-opacity border border-slate-700">
+                    Smazat vše
+                </div>
             </button>
         </div>
     );

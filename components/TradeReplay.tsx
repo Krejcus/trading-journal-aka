@@ -62,6 +62,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     // Force re-render overlay when chart moves
 
 
+    const [magnetMode, setMagnetMode] = useState(false);
+
     // Drawing Handlers
     const getChartCoordinates = (e: React.MouseEvent) => {
         if (!chartRef.current || !seriesRef.current || !chartContainerRef.current) return null;
@@ -77,6 +79,52 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         const price = series.coordinateToPrice(y);
 
         if (time === null || price === null) return null;
+
+        // Magnet Mode Logic
+        if (magnetMode && allData.length > 0) {
+            // Find closest candle in time
+            // Assuming time is a timestamp (seconds)
+            const t = time as number;
+
+            // Simple linear search or binary search (linear is fine for < 5000 candles usually)
+            // Ideally binary search for performance
+            // For now, let's just find closest in viewed range? 
+            // Or just iterate. 
+            let closest = null;
+            let minDiff = Infinity;
+
+            // Optimization: Only search if mouse is somewhat close to a candle?
+            // Actually, we can just find the closest candle by time index if we had it.
+            // Let's just iterate allData for now, or a subset if possible.
+            // Since allData is the source, let's iterate.
+
+            // To make it fast:
+            // 1. Bisect to find index of `time`.
+            // 2. Check neighbours.
+
+            let bestCandle = null;
+            // Simple loop for now.
+            // If array large, this might lag. But replay data is usually one day (~1440 mins).
+            for (const d of allData) {
+                const diff = Math.abs((d.time as number) - t);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    bestCandle = d;
+                }
+            }
+
+            if (bestCandle && minDiff < (trade.instrument?.includes('Crypto') ? 300 : 300)) { // Snap if within 5 mins?
+                // Snap Price to O/H/L/C closest to mouse price
+                const prices = [bestCandle.open, bestCandle.high, bestCandle.low, bestCandle.close];
+                const closestPrice = prices.reduce((prev, curr) =>
+                    Math.abs(curr - price) < Math.abs(prev - price) ? curr : prev
+                );
+
+                // Snap Time to candle time
+                return { time: bestCandle.time, price: closestPrice };
+            }
+        }
+
         return { time, price };
     };
 
@@ -129,6 +177,24 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         // Optional: Reset to cursor? Or keep tool active for multiple lines?
         // Let's keep tool active for multiple lines/rects.
     };
+
+    // Shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+            if (e.key === 'Escape') setActiveTool('cursor');
+            if (e.key.toLowerCase() === 't') setActiveTool(e.shiftKey ? 'text' : 'line');
+            if (e.key.toLowerCase() === 'r') setActiveTool('rect');
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                // Remove last drawing for now
+                setDrawings(prev => prev.slice(0, -1));
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [playbackSpeed, setPlaybackSpeed] = useState(1);
@@ -641,16 +707,22 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             </div>
 
             {/* Main Content Area: Toolbar + Chart */}
-            <div className="flex-1 flex relative overflow-hidden">
-                <ChartToolbar
-                    activeTool={activeTool}
-                    onToolChange={setActiveTool}
-                    onClearAll={() => setDrawings([])}
-                    theme={theme}
-                />
+            <div className="flex-1 relative overflow-hidden bg-[#0f172a]">
+
+                {/* Floating Toolbar */}
+                <div className="absolute top-4 left-4 z-[40]">
+                    <ChartToolbar
+                        activeTool={activeTool}
+                        onToolChange={setActiveTool}
+                        onClearAll={() => setDrawings([])}
+                        theme={theme}
+                        magnetMode={magnetMode}
+                        onToggleMagnet={() => setMagnetMode(m => !m)}
+                    />
+                </div>
 
                 {/* Chart Container Wrapper */}
-                <div className="flex-1 relative overflow-hidden" style={{ cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}>
+                <div className="absolute inset-0 z-0" style={{ cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}>
                     <div className="absolute inset-0" ref={chartContainerRef} />
 
                     {/* SVG Drawing Overlay */}
