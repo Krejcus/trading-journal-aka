@@ -1,7 +1,7 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, BaselineSeries } from 'lightweight-charts';
 import { Trade } from '../types';
+import ChartToolbar, { DrawingTool } from './ChartToolbar';
 import { X, Play, Pause, RotateCcw, FastForward, Settings2 } from 'lucide-react';
 
 interface TradeReplayProps {
@@ -17,6 +17,91 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     const tpSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
     const slSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
 
+    const [activeTool, setActiveTool] = useState<DrawingTool>('cursor');
+
+    // Drawing State
+    interface DrawingObject {
+        id: string;
+        type: 'line' | 'rect' | 'text';
+        p1: { time: number | Time; price: number };
+        p2?: { time: number | Time; price: number }; // Optional for text
+        text?: string;
+    }
+    const [drawings, setDrawings] = useState<DrawingObject[]>([]);
+    const [currentDrawing, setCurrentDrawing] = useState<Partial<DrawingObject> | null>(null);
+    const [chartRevision, setChartRevision] = useState(0); // Tick to force re-render on scroll
+
+    // Force re-render overlay when chart moves
+
+
+    // Drawing Handlers
+    const getChartCoordinates = (e: React.MouseEvent) => {
+        if (!chartRef.current || !seriesRef.current || !chartContainerRef.current) return null;
+
+        const rect = chartContainerRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        const timeScale = chartRef.current.timeScale();
+        const series = seriesRef.current;
+
+        const time = timeScale.coordinateToTime(x);
+        const price = series.coordinateToPrice(y);
+
+        if (time === null || price === null) return null;
+        return { time, price };
+    };
+
+    const handleMouseDown = (e: React.MouseEvent) => {
+        if (activeTool === 'cursor' || activeTool === 'eraser') return;
+
+        const coords = getChartCoordinates(e);
+        if (!coords) return;
+
+        if (activeTool === 'text') {
+            const text = prompt("Zadejte text poznámky:");
+            if (text) {
+                setDrawings(prev => [...prev, {
+                    id: crypto.randomUUID(),
+                    type: 'text',
+                    p1: coords,
+                    text
+                }]);
+                setActiveTool('cursor'); // Reset to cursor after text
+            }
+            return;
+        }
+
+        // Start Line/Rect
+        setCurrentDrawing({
+            id: crypto.randomUUID(),
+            type: activeTool,
+            p1: coords,
+            p2: coords
+        });
+    };
+
+    const handleMouseMove = (e: React.MouseEvent) => {
+        if (!currentDrawing) return;
+
+        const coords = getChartCoordinates(e);
+        if (!coords) return;
+
+        setCurrentDrawing(prev => prev ? ({ ...prev, p2: coords }) : null);
+    };
+
+    const handleMouseUp = () => {
+        if (!currentDrawing) return;
+
+        if (currentDrawing.p1 && currentDrawing.p2) {
+            // Validate minimal size?
+            setDrawings(prev => [...prev, currentDrawing as DrawingObject]);
+        }
+        setCurrentDrawing(null);
+        // Optional: Reset to cursor? Or keep tool active for multiple lines?
+        // Let's keep tool active for multiple lines/rects.
+    };
+
     const [isPlaying, setIsPlaying] = useState(false);
     const [playbackSpeed, setPlaybackSpeed] = useState(1);
     const [progress, setProgress] = useState(0);
@@ -27,7 +112,20 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [containerReady, setContainerReady] = useState(false);
-    const [chartReady, setChartReady] = useState(false); // New state to track if chart is init
+    const [chartReady, setChartReady] = useState(false);
+
+    // Force re-render overlay when chart moves
+    useEffect(() => {
+        if (!chartRef.current) return;
+        const timeScale = chartRef.current.timeScale();
+
+        const handleTimeRangeChange = () => {
+            setChartRevision(r => r + 1);
+        };
+
+        timeScale.subscribeVisibleTimeRangeChange(handleTimeRangeChange);
+        return () => timeScale.unsubscribeVisibleTimeRangeChange(handleTimeRangeChange);
+    }, [chartReady]);
 
     // Monitor container size
     useEffect(() => {
@@ -514,30 +612,126 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 </button>
             </div>
 
-            {/* Chart */}
-            <div className="flex-1 relative overflow-hidden" ref={chartContainerRef}>
-                {isLoading && (
-                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-                        <div className="flex flex-col items-center gap-2">
-                            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                            <span className="text-[10px] font-black uppercase text-blue-400">Loading Data...</span>
+            {/* Main Content Area: Toolbar + Chart */}
+            <div className="flex-1 flex relative overflow-hidden">
+                <ChartToolbar
+                    activeTool={activeTool}
+                    onToolChange={setActiveTool}
+                    onClearAll={() => setDrawings([])}
+                    theme={theme}
+                />
+
+                {/* Chart Container Wrapper */}
+                <div className="flex-1 relative overflow-hidden" style={{ cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}>
+                    <div className="absolute inset-0" ref={chartContainerRef} />
+
+                    {/* SVG Drawing Overlay */}
+                    <svg
+                        className="absolute inset-0 z-10 w-full h-full pointer-events-none"
+                        style={{ pointerEvents: activeTool !== 'cursor' ? 'auto' : 'none' }}
+                        onMouseDown={handleMouseDown}
+                        onMouseMove={handleMouseMove}
+                        onMouseUp={handleMouseUp}
+                    >
+                        {/* Render Saved Drawings */}
+                        {drawings.map(d => {
+                            if (!chartRef.current || !seriesRef.current) return null;
+                            const timeScale = chartRef.current.timeScale();
+                            const series = seriesRef.current;
+
+                            const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
+                            const y1 = series.priceToCoordinate(d.p1.price);
+
+                            // If p2 exists (line/rect)
+                            if (d.p2) {
+                                const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
+                                const y2 = series.priceToCoordinate(d.p2.price);
+
+                                if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
+
+                                if (d.type === 'line') {
+                                    return <line key={d.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" />;
+                                } else if (d.type === 'rect') {
+                                    const width = x2 - x1;
+                                    const height = y2 - y1;
+                                    return (
+                                        <rect
+                                            key={d.id}
+                                            x={Math.min(x1, x2)}
+                                            y={Math.min(y1, y2)}
+                                            width={Math.abs(width)}
+                                            height={Math.abs(height)}
+                                            fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
+                                            stroke={isDark ? '#3b82f6' : '#2563eb'}
+                                            strokeWidth="2"
+                                        />
+                                    );
+                                }
+                            } else if (d.type === 'text') {
+                                if (x1 === null || y1 === null) return null;
+                                return (
+                                    <text key={d.id} x={x1} y={y1} fill={isDark ? '#fff' : '#000'} fontSize="12" fontWeight="bold">
+                                        {d.text || 'Text'}
+                                    </text>
+                                );
+                            }
+                            return null;
+                        })}
+
+                        {/* Render Current (In-Progress) Drawing */}
+                        {currentDrawing && (() => {
+                            if (!chartRef.current || !seriesRef.current) return null;
+                            const timeScale = chartRef.current.timeScale();
+                            const series = seriesRef.current;
+
+                            const start = currentDrawing.p1;
+                            const end = currentDrawing.p2 || start; // If p2 not set yet (click), use start
+
+                            const x1 = timeScale.timeToCoordinate(start.time as Time);
+                            const y1 = series.priceToCoordinate(start.price);
+                            const x2 = timeScale.timeToCoordinate(end.time as Time);
+                            const y2 = series.priceToCoordinate(end.price);
+
+                            if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
+
+                            if (currentDrawing.type === 'line') {
+                                return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" strokeDasharray="5,5" />;
+                            } else if (currentDrawing.type === 'rect') {
+                                return (
+                                    <rect
+                                        x={Math.min(x1, x2)}
+                                        y={Math.min(y1, y2)}
+                                        width={Math.abs(x2 - x1)}
+                                        height={Math.abs(y2 - y1)}
+                                        fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
+                                        stroke={isDark ? '#3b82f6' : '#2563eb'}
+                                        strokeWidth="2"
+                                        strokeDasharray="5,5"
+                                    />
+                                );
+                            }
+                            return null;
+                        })()}
+                    </svg>
+
+                    {/* Overlays (Loading, Error) */}
+                    {isLoading && (
+                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
+                            <div className="flex flex-col items-center gap-2">
+                                <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                <span className="text-[10px] font-black uppercase text-blue-400">Loading Data...</span>
+                            </div>
                         </div>
-                    </div>
-                )}
-                {error && (
-                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-                        <div className="flex flex-col items-center gap-2 text-rose-500">
-                            <span className="text-xl">⚠️</span>
-                            <span className="text-[10px] font-black uppercase">{error}</span>
+                    )}
+                    {error && (
+                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
+                            <div className="flex flex-col items-center gap-2 text-rose-500">
+                                <span className="text-xl">⚠️</span>
+                                <span className="text-[10px] font-black uppercase">{error}</span>
+                            </div>
                         </div>
-                    </div>
-                )}
-                {/* Overlay for "Under Construction" */}
-                {/* <div className="absolute top-4 left-4 z-10">
-                    <span className="px-3 py-1 bg-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-widest rounded-full border border-blue-500/30 backdrop-blur-md">
-                        Beta Replay
-                    </span>
-                </div> */}
+                    )}
+                </div>
             </div>
 
             {/* Footer - Optional for embedded if too cramped */}
