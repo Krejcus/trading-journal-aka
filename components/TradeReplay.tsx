@@ -63,15 +63,38 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                     throw new Error(errData.details || 'Failed to fetch candle data');
                 }
 
-                const data = await response.json();
+                const rawData = await response.json();
 
-                if (Array.isArray(data) && data.length > 0) {
-                    const validData = data.map((d: any) => ({
+                if (Array.isArray(rawData) && rawData.length > 0) {
+                    // 1. Calculate Offset for Futures vs Spot correction
+                    let offset = 0;
+                    const entryTime = new Date(trade.date).getTime() / 1000;
+                    const entryPrice = parseFloat(String(trade.entryPrice || 0));
+
+                    // Find candle closest to entry time to calculate offset
+                    // We look for a candle that starts within 60s of entry (M1 candle)
+                    const matchingCandle = rawData.find((d: any) => {
+                        const candleTime = d.time; // API returns seconds
+                        return Math.abs(candleTime - entryTime) < 60;
+                    });
+
+                    if (matchingCandle && entryPrice) {
+                        // If we found the candle where trade happened, the offset is difference
+                        // betwen Real Entry Price and Spot Price
+                        // We align it so that the candle's close (or open?) matches roughly context. 
+                        // Actually, just align based on Close price of that candle vs Market price?
+                        // Better: Align so that chart structure matches.
+                        // offset = Real_Entry - Spot_Price_At_Entry_Time
+                        offset = entryPrice - matchingCandle.close;
+                        console.log(`Auto-calibrating chart. Offset: ${offset}`);
+                    }
+
+                    const validData = rawData.map((d: any) => ({
                         time: d.time as Time,
-                        open: d.open,
-                        high: d.high,
-                        low: d.low,
-                        close: d.close
+                        open: d.open + offset,
+                        high: d.high + offset,
+                        low: d.low + offset,
+                        close: d.close + offset
                     }));
                     setAllData(validData);
                 } else {
