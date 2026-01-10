@@ -1074,6 +1074,12 @@ const App: React.FC = () => {
           onClose={() => { setIsManualEntryOpen(false); setEditTrade(null); }}
           theme={theme}
           editTrade={editTrade || undefined}
+          // Pass all trades that belong to the same group as the edited trade
+          existingGroupTrades={editTrade ? trades.filter(t =>
+            (t.groupId && t.groupId === editTrade.groupId) ||
+            (t.masterTradeId === editTrade.id) ||
+            (editTrade.masterTradeId && t.id === editTrade.masterTradeId)
+          ) : undefined}
           accounts={accounts}
           activeAccountId={activeAccountId}
           availableEmotions={userEmotions}

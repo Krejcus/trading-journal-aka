@@ -269,7 +269,15 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       // ONLY set masterTradeId if this account is actually a child of the selected master
       const isChildOfMaster = acc?.parentAccountId && acc.parentAccountId === masterAccount?.id;
 
-      const tradeId = isThisMaster && masterTradeId ? masterTradeId : (editTrade && editTrade.accountId === accId ? editTrade.id : generateUUID());
+      // FIX: Check if we have an existing trade for this account in the group being edited
+      const existingTradeForAcc = existingGroupTrades?.find(t => t.accountId === accId);
+
+      // If we found an existing trade for this account, reuse its ID.
+      // Fallback to editTrade (if it's the one we clicked on).
+      // Finally fallback to new UUID.
+      const tradeId = existingTradeForAcc ? existingTradeForAcc.id :
+        (editTrade && editTrade.accountId === accId ? editTrade.id :
+          (isThisMaster && masterTradeId ? masterTradeId : generateUUID()));
 
       return {
         id: tradeId,
