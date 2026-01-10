@@ -159,20 +159,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 <Trash2 size={16} />
                             </button>
                             <div className="h-6 md:h-8 w-px bg-slate-800 mx-0.5 md:mx-1"></div>
-                            <div className="h-6 md:h-8 w-px bg-slate-800 mx-0.5 md:mx-1"></div>
-                            <button
-                                onClick={() => setShowReplay(true)}
-                                className="px-3 md:px-4 py-2 md:py-2.5 rounded-xl bg-blue-500/10 text-blue-400 hover:bg-blue-600 hover:text-white transition-all flex items-center gap-2 font-black uppercase text-[10px] tracking-widest border border-blue-500/20"
-                            >
-                                <PlayCircle size={16} />
-                                <span className="hidden sm:inline">Launch Replay</span>
-                            </button>
-                            <div className="h-6 md:h-8 w-px bg-slate-800 mx-0.5 md:mx-1"></div>
                             <button onClick={onClose} className="p-2 md:p-2.5 hover:bg-white/10 rounded-full transition-all text-slate-500 hover:text-white"><X size={20} /></button>
                         </div>
                     </div>
 
-                    <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                    <div className={`flex-1 flex flex-col md:flex-row overflow-hidden`}>
 
                         <div className={`w-full md:w-[35%] xl:w-[30%] flex flex-col overflow-y-auto custom-scrollbar border-b md:border-b-0 md:border-r ${isDark ? 'bg-[var(--bg-card)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
 
@@ -216,57 +207,66 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
                         </div>
 
-                        <div className={`flex-1 relative flex flex-col ${isDark ? 'bg-[var(--bg-page)]' : 'bg-slate-100'}`}>
-                            <div className="flex-1 relative flex items-center justify-center overflow-hidden group">
-                                {images.length > 0 ? (
-                                    <>
-                                        <img src={images[activeImageIndex]} className="w-full h-full object-contain" />
-                                        <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button onClick={() => setIsZoomed(true)} className="p-2 md:p-3 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-colors shadow-xl">
-                                                <Maximize2 size={18} />
-                                            </button>
+                        {/* Right Panel: Split Chart / Screenshot */}
+                        <div className={`flex-1 relative flex flex-col border-l ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-slate-200 bg-slate-100'}`}>
+
+                            {/* Top: Chart */}
+                            <div className="h-1/2 min-h-[300px] border-b border-inherit relative">
+                                <TradeReplay
+                                    trade={trade}
+                                    theme={theme}
+                                    onClose={() => { }}
+                                    embedded={true}
+                                />
+                            </div>
+
+                            {/* Bottom: Screenshots */}
+                            <div className="flex-1 relative flex flex-col min-h-[300px]">
+                                <div className="flex-1 relative flex items-center justify-center overflow-hidden group">
+                                    {images.length > 0 ? (
+                                        <>
+                                            <img src={images[activeImageIndex]} className="w-full h-full object-contain" />
+                                            <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button onClick={() => setIsZoomed(true)} className="p-2 md:p-3 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-colors shadow-xl">
+                                                    <Maximize2 size={18} />
+                                                </button>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <div className="text-center opacity-30">
+                                            <ImageIcon size={64} className="mx-auto mb-4 text-slate-500" />
+                                            <p className="text-[10px] md:text-xs font-black uppercase tracking-[0.2em] text-slate-500">Chybí vizuální data</p>
                                         </div>
-                                    </>
-                                ) : (
-                                    <div className="text-center opacity-30">
-                                        <ImageIcon size={64} className="mx-auto mb-4 text-slate-500" />
-                                        <p className="text-[10px] md:text-xs font-black uppercase tracking-[0.2em] text-slate-500">Chybí vizuální data</p>
+                                    )}
+                                </div>
+
+                                {images.length > 1 && (
+                                    <div className={`h-20 md:h-24 border-t shrink-0 flex items-center gap-2 md:gap-3 px-3 md:px-4 overflow-x-auto no-scrollbar ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                                        {images.map((src, i) => (
+                                            <div
+                                                key={i}
+                                                onClick={() => setActiveImageIndex(i)}
+                                                className={`h-12 md:h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all flex-shrink-0 ${activeImageIndex === i ? 'ring-2 ring-blue-500 opacity-100' : 'opacity-50 hover:opacity-100'}`}
+                                            >
+                                                <img src={src} className="w-full h-full object-cover" />
+                                            </div>
+                                        ))}
                                     </div>
                                 )}
                             </div>
-
-                            {images.length > 1 && (
-                                <div className={`h-20 md:h-24 border-t shrink-0 flex items-center gap-2 md:gap-3 px-3 md:px-4 overflow-x-auto no-scrollbar ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                                    {images.map((src, i) => (
-                                        <div
-                                            key={i}
-                                            onClick={() => setActiveImageIndex(i)}
-                                            className={`h-12 md:h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all flex-shrink-0 ${activeImageIndex === i ? 'ring-2 ring-blue-500 opacity-100' : 'opacity-50 hover:opacity-100'}`}
-                                        >
-                                            <img src={src} className="w-full h-full object-cover" />
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
                         </div>
 
                     </div>
                 </div>
-            </div>
+            </div >
 
             {isZoomed && images.length > 0 && (
                 <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/98 backdrop-blur-3xl p-4 md:p-6 animate-in fade-in duration-300" onClick={() => setIsZoomed(false)}>
                     <button className="absolute top-4 md:top-10 right-4 md:right-10 p-3 md:p-5 bg-white/10 hover:bg-white/10 rounded-full transition-all border border-white/10 text-white"><X size={32} /></button>
                     <img src={images[activeImageIndex]} className="max-w-full max-h-full object-contain rounded-[16px] md:rounded-[32px] shadow-[0_0_100px_rgba(59,130,246,0.15)] border border-white/10" onClick={e => e.stopPropagation()} />
                 </div>
-            )}
-            {showReplay && (
-                <TradeReplay
-                    trade={trade}
-                    theme={theme}
-                    onClose={() => setShowReplay(false)}
-                />
-            )}
+            )
+            }
         </>
     );
 };
