@@ -58,6 +58,9 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
             try {
                 // Determine instrument for API
+                // Fetch data around EXIT time (trade.date)
+                // We might need to fetch a wider range if trade is long?
+                // Currently fetching data for the day of exit.
                 const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&date=${encodeURIComponent(trade.date)}`);
 
                 if (!response.ok) {
@@ -70,7 +73,13 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 if (Array.isArray(rawData) && rawData.length > 0) {
                     // 1. Calculate Offset for Futures vs Spot correction
                     let priceOffset = 0;
-                    const entryTime = new Date(trade.date).getTime() / 1000;
+
+                    // CRITICAL FIX: trade.date is EXIT time.
+                    // Calculate Entry Time: Exit Time - Duration
+                    const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                    const durationSeconds = (trade.durationMinutes || 0) * 60;
+                    const entryTime = exitTimeRaw - durationSeconds;
+
                     const entryPrice = parseFloat(String(trade.entryPrice || 0));
 
                     // Timezone correction: Shift chart time to match user's local wall clock
@@ -241,11 +250,15 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             seriesRef.current.setData(allData);
 
             // Calculate and set RRR Box Data
-            const entryTime = new Date(trade.date).getTime() / 1000;
+            // Fix: Entry Time = Exit Time - Duration
+            const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+            const durationSeconds = (trade.durationMinutes || 0) * 60;
+
+            const entryTime = exitTimeRaw - durationSeconds; // True Entry UTC
             const timeOffset = -new Date().getTimezoneOffset() * 60;
-            const shiftedEntryTime = entryTime + timeOffset;
-            const durationMinutes = trade.durationMinutes || 0;
-            const shiftedExitTime = shiftedEntryTime + (durationMinutes * 60);
+
+            const shiftedEntryTime = entryTime + timeOffset; // Visual Entry
+            const shiftedExitTime = exitTimeRaw + timeOffset; // Visual Exit
 
             const tpPrice = parseFloat(String(trade.takeProfit || 0));
             const slPrice = parseFloat(String(trade.stopLoss || 0));
