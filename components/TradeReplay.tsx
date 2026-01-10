@@ -76,16 +76,23 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                     // So we invert sign and multiply by 60.
                     const timeOffset = -new Date().getTimezoneOffset() * 60;
 
-                    // Find candle closest to entry time to calculate offset
-                    // We look for a candle that starts within 60s of entry BEFORE time shifting
-                    const matchingCandle = rawData.find((d: any) => {
-                        const candleTime = d.time; // API returns seconds (UTC)
-                        return Math.abs(candleTime - entryTime) < 60;
+                    // Robust Candle Search:
+                    // Find the ABSOLUTE CLOSEST candle in time.
+                    let bestCandle = null;
+                    let minDiff = Infinity;
+
+                    rawData.forEach((d: any) => {
+                        const diff = Math.abs(d.time - entryTime);
+                        if (diff < minDiff) {
+                            minDiff = diff;
+                            bestCandle = d;
+                        }
                     });
 
-                    if (matchingCandle && entryPrice) {
-                        priceOffset = entryPrice - matchingCandle.close;
-                        console.log(`Auto-calibrating chart. Price Offset: ${priceOffset}, Time Offset: ${timeOffset}s`);
+                    // Accept matches within 4 hours (to safely handle timezone shifts)
+                    if (bestCandle && minDiff < 4 * 3600 && entryPrice) {
+                        priceOffset = entryPrice - (bestCandle as any).close;
+                        console.log(`Auto-calibrating chart. Found candle with time diff ${minDiff}s. Price Offset: ${priceOffset}`);
                     }
 
                     const validData = rawData.map((d: any) => ({
