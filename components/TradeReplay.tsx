@@ -131,60 +131,209 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         return { time, price };
     };
 
+    // --- Advanced Interaction Logic ---
+
+    // Interaction Handlers
     const handleMouseDown = (e: React.MouseEvent) => {
-        if (activeTool === 'cursor' || activeTool === 'eraser') return;
+        // If context menu is open, don't interact
+        if (contextMenu) {
+            setContextMenu(null);
+            return;
+        }
 
-        const coords = getChartCoordinates(e);
-        if (!coords) return;
+        const rect = chartContainerRef.current?.getBoundingClientRect();
+        if (!rect || !chartRef.current || !seriesRef.current) return;
 
-        if (activeTool === 'text') {
-            const text = prompt("Zadejte text poznámky:");
-            if (text) {
-                setDrawings(prev => [...prev, {
-                    id: crypto.randomUUID(),
-                    type: 'text',
-                    p1: coords,
-                    text
-                }]);
-                setActiveTool('cursor'); // Reset to cursor after text
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        const timeScale = chartRef.current.timeScale();
+        const series = seriesRef.current;
+        const time = timeScale.coordinateToTime(x) as number;
+        const price = series.coordinateToPrice(y);
+
+        if (!time || !price) return;
+
+        // 1. Check for Drag/Resize (only if cursor tool)
+        if (activeTool === 'cursor') {
+            // Check for Resize Anchors first (if something is selected)
+            if (selectedDrawingId) {
+                const selected = drawings.find(d => d.id === selectedDrawingId);
+                if (selected) {
+                    const checkAnchor = (p: { time: number | Time, price: number }) => {
+                        const ax = timeScale.timeToCoordinate(p.time as Time);
+                        const ay = series.priceToCoordinate(p.price);
+                        if (ax === null || ay === null) return false;
+                        return Math.abs(x - ax) < 8 && Math.abs(y - ay) < 8; // 8px hit radius
+                    };
+
+                    if (checkAnchor(selected.p1)) {
+                        setDragMode('resize-p1');
+                        setDragStart({ time, price });
+                        setInitialDrawingState({ ...selected });
+                        return;
+                    }
+                    if (selected.p2 && checkAnchor(selected.p2)) {
+                        setDragMode('resize-p2');
+                        setDragStart({ time, price });
+                        setInitialDrawingState({ ...selected });
+                        return;
+                    }
+                }
+            }
+
+            // Check for Selection / Move
+            // Simple hit test for lines/rects
+            const hitDrawing = drawings.slice().reverse().find(d => {
+                const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
+                const y1 = series.priceToCoordinate(d.p1.price);
+                if (x1 === null || y1 === null) return false;
+
+                if (d.p2) {
+                    const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
+                    const y2 = series.priceToCoordinate(d.p2.price);
+                    if (x2 === null || y2 === null) return false;
+
+                    // Rect/Image Hit Test
+                    if (d.type === 'rect') {
+                        return x >= Math.min(x1, x2) && x <= Math.max(x1, x2) &&
+                            y >= Math.min(y1, y2) && y <= Math.max(y1, y2);
+                    }
+                    // Line/Fib Hit Test (Distance to segment)
+                    if (d.type === 'line' || d.type === 'fib') {
+                        const dist = Math.abs((y2 - y1) * x - (x2 - x1) * y + x2 * y1 - y2 * x1) / Math.sqrt(Math.pow(y2 - y1, 2) + Math.pow(x2 - x1, 2));
+                        return dist < 5;
+                    }
+                } else if (d.type === 'horizontal') {
+                    // Horizontal Line Hit Test
+                    return Math.abs(y - y1) < 5;
+                } else if (d.type === 'text') {
+                    // Text Hit Test (Approximate box)
+                    return Math.abs(x - x1) < 20 && Math.abs(y - y1) < 10;
+                }
+                return false;
+            });
+
+            if (hitDrawing) {
+                setSelectedDrawingId(hitDrawing.id);
+                setDragMode('move');
+                setDragStart({ time, price });
+                setInitialDrawingState({ ...hitDrawing });
+            } else {
+                setSelectedDrawingId(null);
             }
             return;
         }
 
+        // 2. Start New Drawing
+        // Use getChartCoordinates for snapping if needed, but for now raw is fine or we call it
+        // Re-using getChartCoordinates to keep snapping logic
+        const coords = getChartCoordinates(e);
+        if (!coords) return;
+
+        const id = crypto.randomUUID();
+
+        // For Horizontal Ray, we create immediately on click
         if (activeTool === 'horizontal') {
-            setDrawings(prev => [...prev, {
-                id: crypto.randomUUID(),
+            const newDrawing: DrawingObject = {
+                id,
                 type: 'horizontal',
                 p1: coords,
-            }]);
-            setActiveTool('cursor');
+                color: isDark ? '#3b82f6' : '#2563eb',
+                lineWidth: 2
+            };
+            setDrawings(prev => [...prev, newDrawing]);
+            setActiveTool('cursor'); // Auto-reset
             return;
         }
 
-        // Line, Rect, Fib start drawing
         setCurrentDrawing({
-            id: crypto.randomUUID(),
-            type: activeTool,
-            p1: coords,
+            id,
+            type: activeTool as DrawingObject['type'],
+            p1: coords
         });
     };
 
     const handleMouseMove = (e: React.MouseEvent) => {
-        if (!currentDrawing) return;
+        const rect = chartContainerRef.current?.getBoundingClientRect();
+        if (!rect || !chartRef.current || !seriesRef.current) return;
 
-        const coords = getChartCoordinates(e);
-        if (!coords) return;
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
 
-        setCurrentDrawing(prev => prev ? ({ ...prev, p2: coords }) : null);
+        const timeScale = chartRef.current.timeScale();
+        const series = seriesRef.current;
+        const time = timeScale.coordinateToTime(x) as number;
+        const price = series.coordinateToPrice(y);
+
+        if (!time || !price) return;
+
+        // Handle Dragging / Resizing
+        if (dragMode && dragStart && initialDrawingState && selectedDrawingId) {
+            const timeDiff = time - dragStart.time;
+            const priceDiff = price - dragStart.price;
+
+            setDrawings(prev => prev.map(d => {
+                if (d.id !== selectedDrawingId) return d;
+
+                if (dragMode === 'move') {
+                    return {
+                        ...d,
+                        p1: {
+                            time: ((initialDrawingState.p1.time as number) + timeDiff) as Time,
+                            price: initialDrawingState.p1.price + priceDiff
+                        },
+                        p2: d.p2 ? {
+                            time: ((initialDrawingState.p2?.time as number) + timeDiff) as Time,
+                            price: (initialDrawingState.p2?.price || 0) + priceDiff
+                        } : undefined
+                    };
+                } else if (dragMode === 'resize-p1') {
+                    return {
+                        ...d,
+                        p1: { time, price }
+                    };
+                } else if (dragMode === 'resize-p2') {
+                    return {
+                        ...d,
+                        p2: { time, price }
+                    };
+                }
+                return d;
+            }));
+            return;
+        }
+
+        // Handle New Drawing Creation
+        if (currentDrawing) {
+            // Reuse coords with snap
+            const coords = getChartCoordinates(e);
+            if (!coords) return;
+
+            setCurrentDrawing(prev => prev ? {
+                ...prev,
+                p2: coords // Update end point
+            } : null);
+        }
     };
 
     const handleMouseUp = () => {
-        if (!currentDrawing) return;
-
-        if (currentDrawing.p1 && currentDrawing.p2) {
-            setDrawings(prev => [...prev, currentDrawing as DrawingObject]);
+        // End Dragging
+        if (dragMode) {
+            setDragMode(null);
+            setDragStart(null);
+            setInitialDrawingState(null);
+            return;
         }
-        setCurrentDrawing(null);
+
+        // End New Drawing
+        if (currentDrawing) {
+            if (currentDrawing.p2) { // Only save if moved
+                setDrawings(prev => [...prev, currentDrawing as DrawingObject]);
+            }
+            setCurrentDrawing(null);
+            setActiveTool('cursor'); // Auto-reset tool
+        }
     };
 
     // Shortcuts
@@ -192,13 +341,11 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-            if (e.key === 'Escape') setActiveTool('cursor');
+            // Tools Shortcuts
             if (e.key.toLowerCase() === 't') setActiveTool(e.shiftKey ? 'text' : 'line');
             if (e.key.toLowerCase() === 'r') setActiveTool('rect');
-            if (e.key === 'Delete' || e.key === 'Backspace') {
-                // Remove last drawing for now
-                setDrawings(prev => prev.slice(0, -1));
-            }
+
+            // Delete / Esc are handled in the other effect above
         };
 
         window.addEventListener('keydown', handleKeyDown);
@@ -238,6 +385,33 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         window.addEventListener('click', closeMenu);
         return () => window.removeEventListener('click', closeMenu);
     }, []);
+
+    // Interactive Drawing State
+    const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+    const [dragMode, setDragMode] = useState<'move' | 'resize-p1' | 'resize-p2' | null>(null);
+    const [dragStart, setDragStart] = useState<{ time: number; price: number } | null>(null);
+    const [initialDrawingState, setInitialDrawingState] = useState<DrawingObject | null>(null);
+
+    // Keyboard Handling (Delete / Escape)
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (selectedDrawingId) {
+                    setDrawings(prev => prev.filter(d => d.id !== selectedDrawingId));
+                    setSelectedDrawingId(null);
+                }
+            } else if (e.key === 'Escape') {
+                if (selectedDrawingId) {
+                    setSelectedDrawingId(null);
+                } else if (activeTool !== 'cursor') {
+                    setActiveTool('cursor');
+                }
+                setDragMode(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [selectedDrawingId, activeTool]);
 
     // Crosshair Legend State
     const [crosshairValues, setCrosshairValues] = useState<{ open: string, high: string, low: string, close: string, date: string } | null>(null);
@@ -1031,6 +1205,33 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                             </g>
                                         );
                                     }
+                                    {/* Selection Anchors */ }
+                                    {
+                                        selectedDrawingId === d.id && (() => {
+                                            const anchors = [];
+                                            if (x1 !== null && y1 !== null) anchors.push({ x: x1, y: y1 });
+
+                                            if (d.p2) {
+                                                const ax2 = timeScale.timeToCoordinate(d.p2.time as Time);
+                                                const ay2 = series.priceToCoordinate(d.p2.price);
+                                                if (ax2 !== null && ay2 !== null) anchors.push({ x: ax2, y: ay2 });
+                                            }
+
+                                            return anchors.map((a, i) => (
+                                                <circle
+                                                    key={i}
+                                                    cx={a.x}
+                                                    cy={a.y}
+                                                    r="4"
+                                                    fill="white"
+                                                    stroke="#3b82f6"
+                                                    strokeWidth="2"
+                                                    className="cursor-pointer hover:scale-125 transition-transform"
+                                                />
+                                            ));
+                                        })()
+                                    }
+
                                     return null;
                                 })}
 
