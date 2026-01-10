@@ -87,23 +87,65 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                     // So we invert sign and multiply by 60.
                     const timeOffset = -new Date().getTimezoneOffset() * 60;
 
-                    // Robust Candle Search:
-                    // Find the ABSOLUTE CLOSEST candle in time.
+                    // Robust Candle Search & Timezone Auto-Detection:
+                    // We need to decide if `entryTime` is UTC or Local-as-UTC.
+                    // We check which assumption aligns better with the fetched (UTC) candles.
+
                     let bestCandle = null;
                     let minDiff = Infinity;
+                    let detectedIsLocal = false; // Flag to determine format
+
+                    // Case A: Assume Stored Time is UTC
+                    // We look for candle matching `entryTime` directly.
+                    let minDiffUtc = Infinity;
+                    let bestCandleUtc = null;
 
                     rawData.forEach((d: any) => {
                         const diff = Math.abs(d.time - entryTime);
-                        if (diff < minDiff) {
-                            minDiff = diff;
-                            bestCandle = d;
+                        if (diff < minDiffUtc) {
+                            minDiffUtc = diff;
+                            bestCandleUtc = d;
                         }
                     });
 
-                    // Accept matches within 4 hours (to safely handle timezone shifts)
+                    // Case B: Assume Stored Time is Local-as-UTC
+                    // To match a UTC candle, we must UNSHIFT the entryTime (subtract offset)
+                    // Or compare `entryTime` (Local) vs `d.time + offset` (Local).
+                    // Let's compare in UTC space: `entryTime - timeOffset` vs `d.time`.
+                    const entryTimeAsLocalDesc = entryTime; // It technically "looks" like local time
+                    const entryTimeTrueUtc = entryTimeAsLocalDesc - timeOffset;
+
+                    let minDiffLocal = Infinity;
+                    let bestCandleLocal = null;
+
+                    rawData.forEach((d: any) => {
+                        const diff = Math.abs(d.time - entryTimeTrueUtc);
+                        if (diff < minDiffLocal) {
+                            minDiffLocal = diff;
+                            bestCandleLocal = d;
+                        }
+                    });
+
+                    // Decision: Which error is smaller?
+                    // We assume valid trades will be reasonably close.
+                    if (minDiffLocal < minDiffUtc) {
+                        // It's Local-as-UTC
+                        bestCandle = bestCandleLocal;
+                        minDiff = minDiffLocal;
+                        detectedIsLocal = true;
+                        // console.log("Detected Local-as-UTC storage");
+                    } else {
+                        // It's UTC
+                        bestCandle = bestCandleUtc;
+                        minDiff = minDiffUtc;
+                        detectedIsLocal = false;
+                        // console.log("Detected UTC storage");
+                    }
+
+                    // Accept matches within 4 hours
                     if (bestCandle && minDiff < 4 * 3600 && entryPrice) {
                         priceOffset = entryPrice - (bestCandle as any).close;
-                        console.log(`Auto-calibrating chart. Found candle with time diff ${minDiff}s. Price Offset: ${priceOffset}`);
+                        console.log(`Auto-calibration: Found candle (Diff: ${minDiff}s). Offset: ${priceOffset}. Format: ${detectedIsLocal ? 'Local' : 'UTC'}`);
                     }
 
                     const validData = rawData.map((d: any) => ({
@@ -249,16 +291,64 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         if (chartReady && seriesRef.current && allData.length > 0) {
             seriesRef.current.setData(allData);
 
-            // Calculate and set RRR Box Data
-            // Fix: Entry Time = Exit Time - Duration
+            // Re-calculate Visual Times based on the heuristic determined during fetch
+            // We need to pass the determined 'isLocalStored' flag from fetch to here.
+            // Since we can't easily pass state between decoupled effects without another state ref, 
+            // we'll re-run the simple heuristic logic or store it in a ref.
+
+            // Re-running heuristic for display sync (fast enough)
             const exitTimeRaw = new Date(trade.date).getTime() / 1000;
             const durationSeconds = (trade.durationMinutes || 0) * 60;
+            const entryTimeRaw = exitTimeRaw - durationSeconds;
 
-            const entryTime = exitTimeRaw - durationSeconds; // True Entry UTC
             const timeOffset = -new Date().getTimezoneOffset() * 60;
 
-            const shiftedEntryTime = entryTime + timeOffset; // Visual Entry
-            const shiftedExitTime = exitTimeRaw + timeOffset; // Visual Exit
+            // Quick check: matches candles better with or without offset?
+            // (Simulated check using the first data point if available, or just use a ref)
+            // Better: Store the detected offset in a State/Ref from the fetch effect.
+            // For now, let's use the `visualOffset` stored in the `priceOffset` variable or similar? No.
+            // Let's rely on validData's time alignment.
+
+            // Actually, we can just use the START and END of the RRR box relative to the chart's time scale.
+            // We determined 'shift' during fetch.
+            // Let's assume we need to verify again or just standard logic:
+
+            // HACK: We can't easily share the "decision" from the async fetch 
+            // without a new state variable. Let's add `isLocalTime` state.
+
+            // Fallback for now: Check logic again.
+            // If we assume the chart data `d.time` is ALREADY shifted to Local Correctly (it is).
+            // Then we just need to know if `entryTimeRaw` is ALREADY Local.
+
+            // Heuristic:
+            // If entryTimeRaw is close to d.time (which is Local), then entryTimeRaw is Local.
+            // If entryTimeRaw + OFFSET is close to d.time, then entryTimeRaw is UTC.
+
+            let isLocalStored = false;
+            if (allData.length > 0) {
+                const midCandle = allData[Math.floor(allData.length / 2)];
+                const candleTime = midCandle.time as number;
+
+                // Compare distance to a candle (any candle in range)? No.
+                // We fetched data for the specific day.
+                // Finding closest candle again.
+                let minDiffLocal = Infinity;
+                let minDiffUtc = Infinity;
+
+                allData.forEach(d => {
+                    const t = d.time as number; // This is Visual Local Time
+                    const diffLocal = Math.abs(t - entryTimeRaw); // Assume stored is Local
+                    const diffUtc = Math.abs(t - (entryTimeRaw + timeOffset)); // Assume stored is UTC (so we add offset to match visual)
+
+                    if (diffLocal < minDiffLocal) minDiffLocal = diffLocal;
+                    if (diffUtc < minDiffUtc) minDiffUtc = diffUtc;
+                });
+
+                if (minDiffLocal < minDiffUtc) isLocalStored = true;
+            }
+
+            const shiftedEntryTime = isLocalStored ? entryTimeRaw : (entryTimeRaw + timeOffset);
+            const shiftedExitTime = isLocalStored ? exitTimeRaw : (exitTimeRaw + timeOffset);
 
             const tpPrice = parseFloat(String(trade.takeProfit || 0));
             const slPrice = parseFloat(String(trade.stopLoss || 0));
