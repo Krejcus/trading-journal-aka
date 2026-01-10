@@ -22,6 +22,7 @@ interface ManualTradeFormProps {
   availableHtfOptions: string[];
   availableLtfOptions: string[];
   instrumentFees?: Record<string, number>; // Deprecated global prop, will use accounts instead
+  existingGroupTrades?: Trade[];
 }
 
 const INSTRUMENTS = [
@@ -37,7 +38,7 @@ const INSTRUMENTS = [
 const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   onAdd, onClose, theme, editTrade, accounts, activeAccountId,
   availableEmotions, availableMistakes, availableHtfOptions, availableLtfOptions,
-  instrumentFees
+  instrumentFees, existingGroupTrades
 }) => {
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isInstrumentOpen, setIsInstrumentOpen] = useState(false);
