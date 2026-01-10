@@ -60,26 +60,32 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         return data;
     };
 
+    const [containerReady, setContainerReady] = useState(false);
+
+    // Monitor container size
     useEffect(() => {
         if (!chartContainerRef.current) return;
+        const container = chartContainerRef.current;
+
+        const checkSize = () => {
+            if (container.clientWidth > 0 && container.clientHeight > 0) {
+                setContainerReady(true);
+            }
+        };
+
+        checkSize();
+        const observer = new ResizeObserver(checkSize);
+        observer.observe(container);
+
+        return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => {
+        if (!containerReady || !chartContainerRef.current) return;
 
         const container = chartContainerRef.current;
         const width = container.clientWidth;
         const height = container.clientHeight;
-
-        // CRITICAL: Prevent crash if dimensions are invalid (common in modern modals on mount)
-        if (width <= 0 || height <= 0) {
-            console.warn('TradeReplay: Invalid container dimensions', { width, height });
-            // Retry once after a short delay if this happens on initial mount
-            const timer = setTimeout(() => {
-                if (container.clientWidth > 0 && container.clientHeight > 0) {
-                    // This will trigger a re-run if we add dimensions to the dependency array or force update
-                    // But for now let's just use window resize or manual trigger
-                    window.dispatchEvent(new Event('resize'));
-                }
-            }, 100);
-            return () => clearTimeout(timer);
-        }
 
         const chart = createChart(container, {
             layout: {
@@ -166,16 +172,13 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
         window.addEventListener('resize', handleResize);
 
-        // Use a ResizeObserver for more reliable layout tracking in dynamic containers
-        const observer = new ResizeObserver(handleResize);
-        observer.observe(container);
-
         return () => {
             window.removeEventListener('resize', handleResize);
-            observer.disconnect();
             chart.remove();
+            chartRef.current = null;
+            seriesRef.current = null;
         };
-    }, [trade, isDark]);
+    }, [trade, isDark, containerReady]);
 
     // Handle replay logic
     useEffect(() => {
