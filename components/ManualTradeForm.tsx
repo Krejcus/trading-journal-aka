@@ -259,7 +259,8 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       }
     };
 
-    const masterTradeId = masterAccount ? (editTrade && editTrade.isMaster ? editTrade.id : generateUUID()) : undefined;
+    // Fix: Check by Account ID match to prevent duplicates if 'isMaster' flag is missing
+    const masterTradeId = masterAccount ? (editTrade && editTrade.accountId === masterAccount.id ? editTrade.id : generateUUID()) : undefined;
 
     localStorage.removeItem('alphatrade_trade_draft');
     const tradesToCreate: Trade[] = formData.accountIds.map(accId => {
