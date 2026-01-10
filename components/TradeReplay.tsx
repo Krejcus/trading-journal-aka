@@ -3,7 +3,7 @@ import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickS
 import { Trade } from '../types';
 import ChartToolbar, { DrawingTool } from './ChartToolbar';
 import { storageService } from '../services/storageService';
-import { X, Play, Pause, RotateCcw, FastForward, Settings2, Square, ArrowRight, Maximize2 } from 'lucide-react';
+import { X, Play, Pause, RotateCcw, FastForward, Settings2, Square, ArrowRight, Maximize2, Eraser } from 'lucide-react';
 import { aggregateCandles } from '../utils/candleUtils';
 
 interface TradeReplayProps {
@@ -24,10 +24,12 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     // Drawing State
     interface DrawingObject {
         id: string;
-        type: 'line' | 'rect' | 'text';
+        type: 'line' | 'rect' | 'text' | 'fib' | 'horizontal';
         p1: { time: number | Time; price: number };
         p2?: { time: number | Time; price: number }; // Optional for text
         text?: string;
+        color?: string;
+        lineWidth?: number;
     }
 
 
@@ -149,12 +151,21 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             return;
         }
 
-        // Start Line/Rect
+        if (activeTool === 'horizontal') {
+            setDrawings(prev => [...prev, {
+                id: crypto.randomUUID(),
+                type: 'horizontal',
+                p1: coords,
+            }]);
+            setActiveTool('cursor');
+            return;
+        }
+
+        // Line, Rect, Fib start drawing
         setCurrentDrawing({
             id: crypto.randomUUID(),
             type: activeTool,
             p1: coords,
-            p2: coords
         });
     };
 
@@ -171,12 +182,9 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         if (!currentDrawing) return;
 
         if (currentDrawing.p1 && currentDrawing.p2) {
-            // Validate minimal size?
             setDrawings(prev => [...prev, currentDrawing as DrawingObject]);
         }
         setCurrentDrawing(null);
-        // Optional: Reset to cursor? Or keep tool active for multiple lines?
-        // Let's keep tool active for multiple lines/rects.
     };
 
     // Shortcuts
@@ -208,6 +216,33 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     const [error, setError] = useState<string | null>(null);
     const [containerReady, setContainerReady] = useState(false);
     const [chartReady, setChartReady] = useState(false);
+
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, drawingId: string } | null>(null);
+
+    const handleContextMenu = (e: React.MouseEvent, drawingId: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = chartContainerRef.current?.getBoundingClientRect();
+        if (rect) {
+            setContextMenu({
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top,
+                drawingId
+            });
+        }
+    };
+
+    // Close menu on click anywhere
+    useEffect(() => {
+        const closeMenu = () => setContextMenu(null);
+        window.addEventListener('click', closeMenu);
+        return () => window.removeEventListener('click', closeMenu);
+    }, []);
+
+    // Crosshair Legend State
+    const [crosshairValues, setCrosshairValues] = useState<{ open: string, high: string, low: string, close: string, date: string } | null>(null);
+
+
 
     // Multi-Chart State
     const [activeLayout, setActiveLayout] = useState<'single' | 'split'>('single');
@@ -566,8 +601,29 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
         window.addEventListener('resize', handleResize);
 
+        // Crosshair Legend Handler
+        const handleCrosshairMove = (param: any) => {
+            if (!param.time || param.point.x < 0 || param.point.x > container.clientWidth || param.point.y < 0 || param.point.y > container.clientHeight) {
+                setCrosshairValues(null);
+                return;
+            }
+
+            const data = param.seriesData.get(series);
+            if (data) {
+                const open = data.open !== undefined ? data.open.toFixed(2) : '';
+                const high = data.high !== undefined ? data.high.toFixed(2) : '';
+                const low = data.low !== undefined ? data.low.toFixed(2) : '';
+                const close = data.close !== undefined ? data.close.toFixed(2) : '';
+                // Date formatting
+                const dateStr = new Date((data.time as number) * 1000).toLocaleString();
+                setCrosshairValues({ open, high, low, close, date: dateStr });
+            }
+        };
+        chart.subscribeCrosshairMove(handleCrosshairMove);
+
         return () => {
             window.removeEventListener('resize', handleResize);
+            chart.unsubscribeCrosshairMove(handleCrosshairMove);
             chart.remove();
             chartRef.current = null;
             seriesRef.current = null;
@@ -861,7 +917,21 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
                     {/* Chart 1 Wrapper */}
                     <div className="relative w-full h-full" style={{ cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}>
-                        {/* Removed Floating Toolbar */}
+                        {/* OHLC Legend Overlay */}
+                        <div className={`absolute top-2 left-4 z-[30] flex gap-3 text-[10px] font-mono pointer-events-none select-none ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                            <span className={isDark ? 'text-white font-bold' : 'text-black font-bold'}>{trade.instrument}</span>
+                            <span className="opacity-50">•</span>
+                            <span className="opacity-50">15m</span>
+                            {crosshairValues && (
+                                <>
+                                    <span className="opacity-50">|</span>
+                                    <span className="text-emerald-500">O<span className={isDark ? 'text-slate-200' : 'text-slate-800'}> {crosshairValues.open}</span></span>
+                                    <span className="text-rose-500">H<span className={isDark ? 'text-slate-200' : 'text-slate-800'}> {crosshairValues.high}</span></span>
+                                    <span className="text-rose-500">L<span className={isDark ? 'text-slate-200' : 'text-slate-800'}> {crosshairValues.low}</span></span>
+                                    <span className="text-blue-500">C<span className={isDark ? 'text-slate-200' : 'text-slate-800'}> {crosshairValues.close}</span></span>
+                                </>
+                            )}
+                        </div>
 
                         <div className="absolute inset-0 z-0">
                             <div className="absolute inset-0" ref={chartContainerRef} />
@@ -883,7 +953,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                     const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
                                     const y1 = series.priceToCoordinate(d.p1.price);
 
-                                    // If p2 exists (line/rect)
+                                    // If p2 exists (line/rect/fib)
                                     if (d.p2) {
                                         const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
                                         const y2 = series.priceToCoordinate(d.p2.price);
@@ -891,7 +961,14 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                         if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
 
                                         if (d.type === 'line') {
-                                            return <line key={d.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" />;
+                                            return <line
+                                                key={d.id}
+                                                x1={x1} y1={y1} x2={x2} y2={y2}
+                                                stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')}
+                                                strokeWidth={d.lineWidth || 2}
+                                                onContextMenu={(e) => handleContextMenu(e, d.id)}
+                                                className="hover:stroke-blue-400 cursor-pointer"
+                                            />;
                                         } else if (d.type === 'rect') {
                                             const width = x2 - x1;
                                             const height = y2 - y1;
@@ -902,18 +979,56 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                                     y={Math.min(y1, y2)}
                                                     width={Math.abs(width)}
                                                     height={Math.abs(height)}
-                                                    fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
-                                                    stroke={isDark ? '#3b82f6' : '#2563eb'}
-                                                    strokeWidth="2"
+                                                    fill={d.color ? `${d.color}20` : (isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)')}
+                                                    stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')}
+                                                    strokeWidth={d.lineWidth || 2}
+                                                    onContextMenu={(e) => handleContextMenu(e, d.id)}
+                                                    className="hover:stroke-blue-400 cursor-pointer"
                                                 />
+                                            );
+                                        } else if (d.type === 'fib') {
+                                            const yDiff = y2 - y1;
+                                            const levels = [0, 0.5, 0.618, 1];
+                                            return (
+                                                <g key={d.id} onContextMenu={(e) => handleContextMenu(e, d.id)} className="cursor-pointer">
+                                                    <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={d.color || (isDark ? '#94a3b8' : '#64748b')} strokeWidth="1" strokeDasharray="2,2" />
+                                                    {levels.map(level => {
+                                                        const y = y1 + (yDiff * level);
+                                                        const color = level === 0.618 ? '#eab308' : (d.color || (isDark ? '#3b82f6' : '#2563eb'));
+                                                        return (
+                                                            <g key={level}>
+                                                                <line x1={Math.min(x1, x2)} y1={y} x2={Math.max(x1, x2)} y2={y} stroke={color} strokeWidth={d.lineWidth || 1} className="opacity-80 hover:stroke-white" />
+                                                                <text x={Math.min(x1, x2)} y={y - 2} fill={color} fontSize="9">{level}</text>
+                                                            </g>
+                                                        )
+                                                    })}
+                                                </g>
                                             );
                                         }
                                     } else if (d.type === 'text') {
                                         if (x1 === null || y1 === null) return null;
                                         return (
-                                            <text key={d.id} x={x1} y={y1} fill={isDark ? '#fff' : '#000'} fontSize="12" fontWeight="bold">
+                                            <text
+                                                key={d.id}
+                                                x={x1} y={y1}
+                                                fill={d.color || (isDark ? '#fff' : '#000')}
+                                                fontSize="12"
+                                                fontWeight="bold"
+                                                onContextMenu={(e) => handleContextMenu(e, d.id)}
+                                                className="cursor-pointer hover:opacity-80"
+                                            >
                                                 {d.text || 'Text'}
                                             </text>
+                                        );
+                                    } else if (d.type === 'horizontal') {
+                                        if (x1 === null || y1 === null) return null;
+                                        return (
+                                            <g key={d.id} onContextMenu={(e) => handleContextMenu(e, d.id)} className="cursor-pointer group">
+                                                <line x1={0} y1={y1} x2="100%" y2={y1} stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')} strokeWidth={d.lineWidth || 1} className="group-hover:stroke-blue-400" />
+                                                <text x={x1 + 5} y={y1 - 5} fill={d.color || (isDark ? '#3b82f6' : '#2563eb')} fontSize="10" fontWeight="bold">
+                                                    {d.p1.price.toFixed(2)}
+                                                </text>
+                                            </g>
                                         );
                                     }
                                     return null;
@@ -950,10 +1065,85 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                                 strokeDasharray="5,5"
                                             />
                                         );
+                                    } else if (currentDrawing.type === 'fib') {
+                                        // Preview Fib
+                                        const yDiff = y2 - y1;
+                                        const levels = [0, 0.5, 0.618, 1];
+
+                                        return (
+                                            <g>
+                                                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#94a3b8' : '#64748b'} strokeWidth="1" strokeDasharray="2,2" />
+                                                {levels.map(level => {
+                                                    const y = y1 + (yDiff * level);
+                                                    const color = level === 0.618 ? '#eab308' : (isDark ? '#3b82f6' : '#2563eb');
+                                                    return <line key={level} x1={Math.min(x1, x2)} y1={y} x2={Math.max(x1, x2)} y2={y} stroke={color} strokeWidth="1" className="opacity-80" />
+                                                })}
+                                            </g>
+                                        );
                                     }
                                     return null;
                                 })()}
                             </svg>
+
+                            {/* Context Menu */}
+                            {contextMenu && (
+                                <div
+                                    className={`absolute z-50 p-2 rounded-lg shadow-xl border flex flex-col gap-1 min-w-[150px] ${isDark ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-700'}`}
+                                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <div className="text-[10px] bg-slate-500/10 px-2 py-1 rounded">
+                                        Color
+                                    </div>
+                                    <div className="flex gap-1 px-1">
+                                        {['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ffffff', '#000000'].map(c => (
+                                            <button
+                                                key={c}
+                                                className="w-4 h-4 rounded-full border border-slate-500/20 hover:scale-110 transition-transform"
+                                                style={{ backgroundColor: c }}
+                                                onClick={() => {
+                                                    setDrawings(prev => prev.map(d => d.id === contextMenu.drawingId ? { ...d, color: c } : d));
+                                                    setContextMenu(null);
+                                                }}
+                                            />
+                                        ))}
+                                    </div>
+
+                                    <div className="h-px bg-slate-500/20 my-1" />
+
+                                    <div className="text-[10px] bg-slate-500/10 px-2 py-1 rounded">
+                                        Line Width
+                                    </div>
+                                    <div className="flex gap-1 px-1">
+                                        {[1, 2, 4].map(w => (
+                                            <button
+                                                key={w}
+                                                className={`flex-1 h-6 flex items-center justify-center rounded hover:bg-slate-500/10 text-xs font-bold`}
+                                                onClick={() => {
+                                                    setDrawings(prev => prev.map(d => d.id === contextMenu.drawingId ? { ...d, lineWidth: w } : d));
+                                                    setContextMenu(null);
+                                                }}
+                                            >
+                                                {w}px
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className="h-px bg-slate-500/20 my-1" />
+
+                                    <button
+                                        className="text-left px-2 py-1.5 rounded text-xs text-red-500 hover:bg-red-500/10 flex items-center gap-2"
+                                        onClick={() => {
+                                            setDrawings(prev => prev.filter(d => d.id !== contextMenu.drawingId));
+                                            setContextMenu(null);
+                                        }}
+                                    >
+                                        <Eraser size={12} />
+                                        Delete
+                                    </button>
+                                </div>
+                            )}
+
 
                             {/* Overlays (Loading, Error) */}
                             {isLoading && (
@@ -1018,7 +1208,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                     <span className="font-bold uppercase tracking-wider text-[8px] md:text-[9px]">{isLoading ? 'Fetching Data...' : (allData.length > 0 ? 'Dukascopy Data' : 'No Data')}</span>
                 </div>
             </div>
-        </div>
+        </div >
     );
 
     if (embedded) {

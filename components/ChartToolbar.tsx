@@ -1,7 +1,6 @@
-import React from 'react';
-import { MousePointer2, Minus, PenTool, Type, Eraser, Square, Magnet } from 'lucide-react';
+import { MousePointer2, Minus, PenTool, Type, Eraser, Square, Magnet, SlidersHorizontal, ArrowRight } from 'lucide-react';
 
-export type DrawingTool = 'cursor' | 'line' | 'rect' | 'text' | 'eraser';
+export type DrawingTool = 'cursor' | 'line' | 'rect' | 'text' | 'eraser' | 'fib' | 'horizontal';
 
 interface ChartToolbarProps {
     activeTool: DrawingTool;
@@ -18,6 +17,8 @@ const ChartToolbar: React.FC<ChartToolbarProps> = ({ activeTool, onToolChange, o
     const tools: { id: DrawingTool; icon: React.ReactNode; label: string; shortcut: string }[] = [
         { id: 'cursor', icon: <MousePointer2 size={18} />, label: 'Kurzor', shortcut: 'Esc' },
         { id: 'line', icon: <Minus size={18} className="rotate-45" />, label: 'Trendová čára', shortcut: 'T' },
+        { id: 'horizontal', icon: <Minus size={18} />, label: 'Horizontální čára', shortcut: 'H' },
+        { id: 'fib', icon: <SlidersHorizontal size={18} />, label: 'Fibonacci Retracement', shortcut: 'F' },
         { id: 'rect', icon: <Square size={18} />, label: 'Obdélník', shortcut: 'R' },
         { id: 'text', icon: <Type size={18} />, label: 'Text', shortcut: 'Shift+T' },
         { id: 'eraser', icon: <Eraser size={18} />, label: 'Guma', shortcut: 'Del' },
