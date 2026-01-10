@@ -21,123 +21,6 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
     const [activeTool, setActiveTool] = useState<DrawingTool>('cursor');
 
-    // ... (inside component)
-
-    const [activeLayout, setActiveLayout] = useState<'single' | 'split'>('single');
-    const [secondaryTimeframe, setSecondaryTimeframe] = useState<'5m' | '15m' | '1h'>('15m');
-
-    const chartContainer2Ref = useRef<HTMLDivElement>(null);
-    const chart2Ref = useRef<IChartApi | null>(null);
-    const series2Ref = useRef<ISeriesApi<"Candlestick"> | null>(null);
-
-    // Derived Data
-    const secondaryData = useMemo(() => {
-        if (allData.length === 0) return [];
-        return aggregateCandles(allData, secondaryTimeframe);
-    }, [allData, secondaryTimeframe]);
-
-    // Init Chart 2
-    useEffect(() => {
-        if (activeLayout === 'single' || !chartContainer2Ref.current) {
-            if (chart2Ref.current) {
-                chart2Ref.current.remove();
-                chart2Ref.current = null;
-                series2Ref.current = null;
-            }
-            return;
-        }
-
-        if (chart2Ref.current) return; // Already init
-
-        const container = chartContainer2Ref.current;
-        const width = container.clientWidth;
-        const height = container.clientHeight;
-
-        const chart = createChart(container, {
-            layout: { background: { color: 'transparent' }, textColor: isDark ? '#94a3b8' : '#475569' },
-            grid: {
-                vertLines: { color: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)' },
-                horzLines: { color: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)' },
-            },
-            timeScale: {
-                borderColor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)',
-                timeVisible: true,
-                secondsVisible: false,
-            },
-            width,
-            height
-        });
-
-        const series = chart.addSeries(CandlestickSeries, {
-            upColor: '#10b981', downColor: '#f43f5e', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#f43f5e'
-        });
-
-        chart2Ref.current = chart;
-        series2Ref.current = series;
-
-        // Sync Logic (One-way or Two-way?)
-        // Let's do simple: When Chart 1 moves, Chart 2 moves.
-        if (chartRef.current) {
-            const mainTimeScale = chartRef.current.timeScale();
-            const subTimeScale = chart.timeScale();
-
-            // Sync Handler
-            const syncHandler = () => {
-                const range = mainTimeScale.getVisibleLogicalRange();
-                if (range) {
-                    // Logical range doesn't map 1:1 between timeframes.
-                    // We must use Time Range.
-                    const timeRange = mainTimeScale.getVisibleRange();
-                    if (timeRange) {
-                        subTimeScale.setVisibleRange(timeRange);
-                    }
-                }
-            };
-
-            mainTimeScale.subscribeVisibleTimeRangeChange(syncHandler);
-        }
-
-    }, [activeLayout, isDark, containerReady]); // Re-run if layout switches
-
-    // Update Chart 2 Data
-    useEffect(() => {
-        if (chart2Ref.current && series2Ref.current && secondaryData.length > 0) {
-            series2Ref.current.setData(secondaryData);
-
-            // Fit if first load
-            // chart2Ref.current.timeScale().fitContent();
-        }
-    }, [secondaryData, activeLayout]);
-
-    // Handle Resize for Chart 2
-    useEffect(() => {
-        const handleResize = () => {
-            if (chartContainer2Ref.current && chart2Ref.current) {
-                chart2Ref.current.applyOptions({
-                    width: chartContainer2Ref.current.clientWidth,
-                    height: chartContainer2Ref.current.clientHeight
-                });
-            }
-        };
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    // ... (Existing Render)
-
-    // Add Layout Toggle to Header
-    // <div className="flex bg-slate-800 ...">
-    //    <button onClick={() => setActiveLayout('single')}>Single</button>
-    //    <button onClick={() => setActiveLayout('split')}>Split</button>
-    // </div>
-
-    // Add Layout Rendering
-    // <div className={`flex flex-1 relative ${activeLayout === 'split' ? 'grid grid-cols-2 gap-1' : ''}`}>
-    //    <div className="relative"> ... Chart 1 ... </div>
-    //    {activeLayout === 'split' && <div className="relative" ref={chartContainer2Ref}> ... Chart 2 ... </div>}
-    // </div>
-
-
     // Drawing State
     interface DrawingObject {
         id: string;
@@ -325,6 +208,95 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     const [error, setError] = useState<string | null>(null);
     const [containerReady, setContainerReady] = useState(false);
     const [chartReady, setChartReady] = useState(false);
+
+    // Multi-Chart State
+    const [activeLayout, setActiveLayout] = useState<'single' | 'split'>('single');
+    const [secondaryTimeframe, setSecondaryTimeframe] = useState<'5m' | '15m' | '1h'>('15m');
+
+    const chartContainer2Ref = useRef<HTMLDivElement>(null);
+    const chart2Ref = useRef<IChartApi | null>(null);
+    const series2Ref = useRef<ISeriesApi<"Candlestick"> | null>(null);
+
+    // Derived Data
+    const secondaryData = useMemo(() => {
+        if (allData.length === 0) return [];
+        return aggregateCandles(allData, secondaryTimeframe);
+    }, [allData, secondaryTimeframe]);
+
+    // Init Chart 2
+    useEffect(() => {
+        if (activeLayout === 'single' || !chartContainer2Ref.current) {
+            if (chart2Ref.current) {
+                chart2Ref.current.remove();
+                chart2Ref.current = null;
+                series2Ref.current = null;
+            }
+            return;
+        }
+
+        if (chart2Ref.current) return; // Already init
+
+        const container = chartContainer2Ref.current;
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+
+        const chart = createChart(container, {
+            layout: { background: { color: 'transparent' }, textColor: isDark ? '#94a3b8' : '#475569' },
+            grid: {
+                vertLines: { color: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)' },
+                horzLines: { color: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)' },
+            },
+            timeScale: {
+                borderColor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)',
+                timeVisible: true,
+                secondsVisible: false,
+            },
+            width,
+            height
+        });
+
+        const series = chart.addSeries(CandlestickSeries, {
+            upColor: '#10b981', downColor: '#f43f5e', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#f43f5e'
+        });
+
+        chart2Ref.current = chart;
+        series2Ref.current = series;
+
+        // Sync Logic
+        if (chartRef.current) {
+            const mainTimeScale = chartRef.current.timeScale();
+            const subTimeScale = chart.timeScale();
+
+            const syncHandler = () => {
+                const timeRange = mainTimeScale.getVisibleRange();
+                if (timeRange) {
+                    subTimeScale.setVisibleRange(timeRange);
+                }
+            };
+            mainTimeScale.subscribeVisibleTimeRangeChange(syncHandler);
+        }
+    }, [activeLayout, isDark, containerReady]);
+
+    // Update Chart 2 Data
+    useEffect(() => {
+        if (chart2Ref.current && series2Ref.current && secondaryData.length > 0) {
+            series2Ref.current.setData(secondaryData);
+        }
+    }, [secondaryData, activeLayout]);
+
+    // Handle Resize for Chart 2
+    useEffect(() => {
+        const handleResize = () => {
+            if (chartContainer2Ref.current && chart2Ref.current) {
+                chart2Ref.current.applyOptions({
+                    width: chartContainer2Ref.current.clientWidth,
+                    height: chartContainer2Ref.current.clientHeight
+                });
+            }
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     // Force re-render overlay when chart moves
     useEffect(() => {
