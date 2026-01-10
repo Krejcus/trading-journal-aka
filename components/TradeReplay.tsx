@@ -812,132 +812,158 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 </button>
             </div>
 
-            {/* Main Content Area: Toolbar + Chart */}
-            <div className="flex-1 relative overflow-hidden bg-[#0f172a]">
+            {/* Main Content Area: Toolbar + Charts */}
+            <div className={`flex-1 relative overflow-hidden bg-[#0f172a] ${activeLayout === 'split' ? 'grid grid-cols-2 gap-1' : ''}`}>
 
-                {/* Floating Toolbar */}
-                <div className="absolute top-4 left-4 z-[40]">
-                    <ChartToolbar
-                        activeTool={activeTool}
-                        onToolChange={setActiveTool}
-                        onClearAll={() => setDrawings([])}
-                        theme={theme}
-                        magnetMode={magnetMode}
-                        onToggleMagnet={() => setMagnetMode(m => !m)}
-                    />
-                </div>
+                {/* Chart 1 Wrapper */}
+                <div className="relative w-full h-full" style={{ cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}>
+                    {/* Floating Toolbar (Attached to Chart 1) */}
+                    <div className="absolute top-4 left-4 z-[40]">
+                        <ChartToolbar
+                            activeTool={activeTool}
+                            onToolChange={setActiveTool}
+                            onClearAll={() => setDrawings([])}
+                            theme={theme}
+                            magnetMode={magnetMode}
+                            onToggleMagnet={() => setMagnetMode(m => !m)}
+                        />
+                    </div>
 
-                {/* Chart Container Wrapper */}
-                <div className="absolute inset-0 z-0" style={{ cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}>
-                    <div className="absolute inset-0" ref={chartContainerRef} />
+                    <div className="absolute inset-0 z-0">
+                        <div className="absolute inset-0" ref={chartContainerRef} />
 
-                    {/* SVG Drawing Overlay */}
-                    <svg
-                        className="absolute inset-0 z-10 w-full h-full pointer-events-none"
-                        style={{ pointerEvents: activeTool !== 'cursor' ? 'auto' : 'none' }}
-                        onMouseDown={handleMouseDown}
-                        onMouseMove={handleMouseMove}
-                        onMouseUp={handleMouseUp}
-                    >
-                        {/* Render Saved Drawings */}
-                        {drawings.map(d => {
-                            if (!chartRef.current || !seriesRef.current) return null;
-                            const timeScale = chartRef.current.timeScale();
-                            const series = seriesRef.current;
+                        {/* SVG Drawing Overlay */}
+                        <svg
+                            className="absolute inset-0 z-10 w-full h-full pointer-events-none"
+                            style={{ pointerEvents: activeTool !== 'cursor' ? 'auto' : 'none' }}
+                            onMouseDown={handleMouseDown}
+                            onMouseMove={handleMouseMove}
+                            onMouseUp={handleMouseUp}
+                        >
+                            {/* Render Saved Drawings */}
+                            {drawings.map(d => {
+                                if (!chartRef.current || !seriesRef.current) return null;
+                                const timeScale = chartRef.current.timeScale();
+                                const series = seriesRef.current;
 
-                            const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
-                            const y1 = series.priceToCoordinate(d.p1.price);
+                                const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
+                                const y1 = series.priceToCoordinate(d.p1.price);
 
-                            // If p2 exists (line/rect)
-                            if (d.p2) {
-                                const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
-                                const y2 = series.priceToCoordinate(d.p2.price);
+                                // If p2 exists (line/rect)
+                                if (d.p2) {
+                                    const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
+                                    const y2 = series.priceToCoordinate(d.p2.price);
+
+                                    if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
+
+                                    if (d.type === 'line') {
+                                        return <line key={d.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" />;
+                                    } else if (d.type === 'rect') {
+                                        const width = x2 - x1;
+                                        const height = y2 - y1;
+                                        return (
+                                            <rect
+                                                key={d.id}
+                                                x={Math.min(x1, x2)}
+                                                y={Math.min(y1, y2)}
+                                                width={Math.abs(width)}
+                                                height={Math.abs(height)}
+                                                fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
+                                                stroke={isDark ? '#3b82f6' : '#2563eb'}
+                                                strokeWidth="2"
+                                            />
+                                        );
+                                    }
+                                } else if (d.type === 'text') {
+                                    if (x1 === null || y1 === null) return null;
+                                    return (
+                                        <text key={d.id} x={x1} y={y1} fill={isDark ? '#fff' : '#000'} fontSize="12" fontWeight="bold">
+                                            {d.text || 'Text'}
+                                        </text>
+                                    );
+                                }
+                                return null;
+                            })}
+
+                            {/* Render Current (In-Progress) Drawing */}
+                            {currentDrawing && (() => {
+                                if (!chartRef.current || !seriesRef.current) return null;
+                                const timeScale = chartRef.current.timeScale();
+                                const series = seriesRef.current;
+
+                                const start = currentDrawing.p1;
+                                const end = currentDrawing.p2 || start; // If p2 not set yet (click), use start
+
+                                const x1 = timeScale.timeToCoordinate(start.time as Time);
+                                const y1 = series.priceToCoordinate(start.price);
+                                const x2 = timeScale.timeToCoordinate(end.time as Time);
+                                const y2 = series.priceToCoordinate(end.price);
 
                                 if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
 
-                                if (d.type === 'line') {
-                                    return <line key={d.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" />;
-                                } else if (d.type === 'rect') {
-                                    const width = x2 - x1;
-                                    const height = y2 - y1;
+                                if (currentDrawing.type === 'line') {
+                                    return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" strokeDasharray="5,5" />;
+                                } else if (currentDrawing.type === 'rect') {
                                     return (
                                         <rect
-                                            key={d.id}
                                             x={Math.min(x1, x2)}
                                             y={Math.min(y1, y2)}
-                                            width={Math.abs(width)}
-                                            height={Math.abs(height)}
+                                            width={Math.abs(x2 - x1)}
+                                            height={Math.abs(y2 - y1)}
                                             fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
                                             stroke={isDark ? '#3b82f6' : '#2563eb'}
                                             strokeWidth="2"
+                                            strokeDasharray="5,5"
                                         />
                                     );
                                 }
-                            } else if (d.type === 'text') {
-                                if (x1 === null || y1 === null) return null;
-                                return (
-                                    <text key={d.id} x={x1} y={y1} fill={isDark ? '#fff' : '#000'} fontSize="12" fontWeight="bold">
-                                        {d.text || 'Text'}
-                                    </text>
-                                );
-                            }
-                            return null;
-                        })}
+                                return null;
+                            })()}
+                        </svg>
 
-                        {/* Render Current (In-Progress) Drawing */}
-                        {currentDrawing && (() => {
-                            if (!chartRef.current || !seriesRef.current) return null;
-                            const timeScale = chartRef.current.timeScale();
-                            const series = seriesRef.current;
-
-                            const start = currentDrawing.p1;
-                            const end = currentDrawing.p2 || start; // If p2 not set yet (click), use start
-
-                            const x1 = timeScale.timeToCoordinate(start.time as Time);
-                            const y1 = series.priceToCoordinate(start.price);
-                            const x2 = timeScale.timeToCoordinate(end.time as Time);
-                            const y2 = series.priceToCoordinate(end.price);
-
-                            if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
-
-                            if (currentDrawing.type === 'line') {
-                                return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" strokeDasharray="5,5" />;
-                            } else if (currentDrawing.type === 'rect') {
-                                return (
-                                    <rect
-                                        x={Math.min(x1, x2)}
-                                        y={Math.min(y1, y2)}
-                                        width={Math.abs(x2 - x1)}
-                                        height={Math.abs(y2 - y1)}
-                                        fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
-                                        stroke={isDark ? '#3b82f6' : '#2563eb'}
-                                        strokeWidth="2"
-                                        strokeDasharray="5,5"
-                                    />
-                                );
-                            }
-                            return null;
-                        })()}
-                    </svg>
-
-                    {/* Overlays (Loading, Error) */}
-                    {isLoading && (
-                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
-                            <div className="flex flex-col items-center gap-2">
-                                <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                                <span className="text-[10px] font-black uppercase text-blue-400">Loading Data...</span>
+                        {/* Overlays (Loading, Error) */}
+                        {isLoading && (
+                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
+                                <div className="flex flex-col items-center gap-2">
+                                    <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                    <span className="text-[10px] font-black uppercase text-blue-400">Loading Data...</span>
+                                </div>
                             </div>
-                        </div>
-                    )}
-                    {error && (
-                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
-                            <div className="flex flex-col items-center gap-2 text-rose-500">
-                                <span className="text-xl">⚠️</span>
-                                <span className="text-[10px] font-black uppercase">{error}</span>
+                        )}
+                        {error && (
+                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
+                                <div className="flex flex-col items-center gap-2 text-rose-500">
+                                    <span className="text-xl">⚠️</span>
+                                    <span className="text-[10px] font-black uppercase">{error}</span>
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </div>
+
+                {/* Chart 2 Container */}
+                {activeLayout === 'split' && (
+                    <div className="relative w-full h-full border-l border-slate-700/50 bg-[#0f172a]">
+                        <div className="absolute top-4 right-4 z-[40] flex gap-1 bg-slate-900/80 p-1 rounded-lg border border-slate-700/50 backdrop-blur-md">
+                            {(['5m', '15m', '1h'] as const).map(tf => (
+                                <button
+                                    key={tf}
+                                    onClick={() => setSecondaryTimeframe(tf)}
+                                    className={`px-2 py-1 text-[9px] font-black uppercase rounded ${secondaryTimeframe === tf ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white hover:bg-white/5'}`}
+                                >
+                                    {tf}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="absolute inset-0 z-0" ref={chartContainer2Ref} />
+
+                        {isLoading && (
+                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 pointer-events-none">
+                                <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"></div>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {/* Footer - Optional for embedded if too cramped */}
