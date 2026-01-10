@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, BaselineSeries } from 'lightweight-charts';
 import { Trade } from '../types';
 import ChartToolbar, { DrawingTool } from './ChartToolbar';
+import { storageService } from '../services/storageService';
 import { X, Play, Pause, RotateCcw, FastForward, Settings2 } from 'lucide-react';
 
 interface TradeReplayProps {
@@ -27,9 +28,36 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         p2?: { time: number | Time; price: number }; // Optional for text
         text?: string;
     }
-    const [drawings, setDrawings] = useState<DrawingObject[]>([]);
+
+
+    const [drawings, setDrawings] = useState<DrawingObject[]>(trade.drawings || []);
     const [currentDrawing, setCurrentDrawing] = useState<Partial<DrawingObject> | null>(null);
-    const [chartRevision, setChartRevision] = useState(0); // Tick to force re-render on scroll
+    const [chartRevision, setChartRevision] = useState(0);
+    const [isSaving, setIsSaving] = useState(false);
+
+    // Auto-save drawings
+    useEffect(() => {
+        // Skip first render if matches initial prop
+        if (JSON.stringify(drawings) === JSON.stringify(trade.drawings)) return;
+
+        const timer = setTimeout(async () => {
+            setIsSaving(true);
+            try {
+                await storageService.updateTradeDrawings(trade.id, drawings);
+                // console.log("Drawings saved");
+            } catch (err) {
+                console.error("Failed to save drawings", err);
+            } finally {
+                setIsSaving(false);
+            }
+        }, 1000); // 1s debounce
+
+        return () => clearTimeout(timer);
+    }, [drawings, trade.id]);
+
+    // Force re-render overlay when chart moves
+    // ... existing effect for chartRevision
+
 
     // Force re-render overlay when chart moves
 

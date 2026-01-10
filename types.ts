@@ -107,6 +107,7 @@ export interface Trade {
   screenshot?: string;
   screenshots?: string[];
   notes?: string;
+  drawings?: any[]; // Stores array of drawing objects (lines, rects, text)
   entryPrice?: number;
   exitPrice?: number;
   stopLoss?: number;

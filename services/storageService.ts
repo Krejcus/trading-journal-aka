@@ -89,8 +89,33 @@ export const storageService = {
       pnl: t.pnl,
       direction: t.direction,
       date: t.date,
-      timestamp: t.timestamp
+      timestamp: t.timestamp,
+      drawings: t.drawings || []
     }));
+  },
+
+  async updateTradeDrawings(tradeId: string | number, drawings: any[]): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) return;
+
+    // We update both the JSONB column AND the data jsonb column to allow migration/fallback
+    // Ideally we just update the root column `drawings`
+
+    const { error } = await supabase
+      .from('trades')
+      .update({
+        drawings: drawings,
+        // We also update the 'data' blob to keep it in sync if architecture relies on it
+        // detailed update might be complex without fetching first. 
+        // For now, let's just update the root column which is the source of truth for drawings.
+      })
+      .eq('id', tradeId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error("Failed to update drawings:", error);
+      throw error;
+    }
   },
 
   async saveTrades(trades: Trade[]): Promise<Trade[]> {
@@ -124,7 +149,8 @@ export const storageService = {
         direction: t.direction || 'Long',
         date: t.date || new Date().toISOString(),
         timestamp: t.timestamp || Date.now(),
-        data: { ...t, accountId: realAccId }
+        drawings: t.drawings || [],
+        data: { ...t, accountId: realAccId, drawings: t.drawings || [] }
       };
 
       if (isUUID(t.id)) {
@@ -145,7 +171,8 @@ export const storageService = {
       pnl: d.pnl,
       direction: d.direction,
       date: d.date,
-      timestamp: d.timestamp
+      timestamp: d.timestamp,
+      drawings: d.drawings
     }));
   },
 
