@@ -163,9 +163,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         </div>
                     </div>
 
-                    <div className={`flex-1 flex flex-col md:flex-row overflow-hidden`}>
+                    {/* Main Split Content Area */}
+                    <div className="flex-1 grid grid-cols-1 md:grid-cols-[320px_1fr] xl:grid-cols-[400px_1fr] overflow-hidden">
 
-                        <div className={`w-full md:w-[35%] xl:w-[30%] flex flex-col overflow-y-auto custom-scrollbar border-b md:border-b-0 md:border-r ${isDark ? 'bg-[var(--bg-card)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
+                        {/* Left Sidebar: Metrics + Screenshots */}
+                        <div className={`flex flex-col overflow-y-auto custom-scrollbar border-r ${isDark ? 'bg-[var(--bg-card)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
 
                             <div className={`grid grid-cols-2 border-b ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)]' : 'border-slate-200 bg-white'}`}>
                                 <MetricCell label="Vstupní cena" value={entryPrice || '-'} />
@@ -241,11 +243,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 )}
                             </div>
                         </div>
-                    </div>
-
-                    {/* Right Panel: Chart Only (Full Height) */}
-                    <div className={`flex-1 relative flex flex-col border-l ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-slate-200 bg-slate-100'}`}>
-                        <div className="h-full w-full relative">
+                        {/* Right Panel: Interactive Chart */}
+                        <div className={`relative h-full w-full overflow-hidden ${isDark ? 'bg-[var(--bg-page)]' : 'bg-slate-100'}`}>
                             <ErrorBoundary name="TradeReplay">
                                 <TradeReplay
                                     trade={trade}
@@ -256,7 +255,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </ErrorBoundary>
                         </div>
                     </div>
-
                 </div>
             </div>
 
