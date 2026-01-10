@@ -4,7 +4,7 @@ import { getHistoricRates } from 'dukascopy-node';
 async function testFetch() {
     try {
         const instrument = 'usatechidxusd';
-        const dateStr = '2025-01-08T15:30:00.000Z'; // Example recent date
+        const dateStr = '2025-01-09T15:00:00.000Z'; // Jan 9th, 2025
         const tradeDate = new Date(dateStr);
 
         const fromDate = new Date(tradeDate.getTime() - 2 * 60 * 60 * 1000);

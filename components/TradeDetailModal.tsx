@@ -210,9 +210,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         {/* Right Panel: Split Chart / Screenshot */}
                         <div className={`flex-1 relative flex flex-col border-l ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-slate-200 bg-slate-100'}`}>
 
-                            import {ErrorBoundary} from './ErrorBoundary';
-
-                            // ... (inside the component return)
 
                             {/* Top: Chart */}
                             <div className="h-1/2 min-h-[300px] border-b border-inherit relative">
