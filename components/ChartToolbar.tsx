@@ -25,8 +25,8 @@ const ChartToolbar: React.FC<ChartToolbarProps> = ({ activeTool, onToolChange, o
 
     return (
         <div className={`
-            flex flex-col gap-1 p-1.5 rounded-xl border shadow-2xl backdrop-blur-xl z-[50]
-            ${isDark ? 'bg-[#1e293b]/90 border-slate-700/50' : 'bg-white/90 border-slate-200'}
+            flex flex-col gap-0.5 p-1 border-r h-full z-[50] w-[50px]
+            ${isDark ? 'bg-[#1e293b] border-[#2a2e39]' : 'bg-white border-slate-200'}
         `}>
             {tools.map(tool => (
                 <button

@@ -3,7 +3,7 @@ import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickS
 import { Trade } from '../types';
 import ChartToolbar, { DrawingTool } from './ChartToolbar';
 import { storageService } from '../services/storageService';
-import { X, Play, Pause, RotateCcw, FastForward, Settings2 } from 'lucide-react';
+import { X, Play, Pause, RotateCcw, FastForward, Settings2, Square, ArrowRight, Maximize2 } from 'lucide-react';
 import { aggregateCandles } from '../utils/candleUtils';
 
 interface TradeReplayProps {
@@ -241,13 +241,16 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         const height = container.clientHeight;
 
         const chart = createChart(container, {
-            layout: { background: { color: 'transparent' }, textColor: isDark ? '#94a3b8' : '#475569' },
+            layout: {
+                background: { color: isDark ? '#131722' : '#ffffff' },
+                textColor: isDark ? '#d1d4dc' : '#131722',
+            },
             grid: {
-                vertLines: { color: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)' },
-                horzLines: { color: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)' },
+                vertLines: { color: isDark ? '#2a2e39' : '#e0e3eb' },
+                horzLines: { color: isDark ? '#2a2e39' : '#e0e3eb' },
             },
             timeScale: {
-                borderColor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)',
+                borderColor: isDark ? '#2a2e39' : '#e0e3eb',
                 timeVisible: true,
                 secondsVisible: false,
             },
@@ -256,7 +259,12 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         });
 
         const series = chart.addSeries(CandlestickSeries, {
-            upColor: '#10b981', downColor: '#f43f5e', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#f43f5e'
+            upColor: '#cfd8dc', // Grey for Bullish
+            downColor: '#2962ff', // Blue for Bearish
+            borderVisible: true,
+            borderColor: '#cfd8dc',
+            wickUpColor: '#cfd8dc',
+            wickDownColor: '#2962ff',
         });
 
         chart2Ref.current = chart;
@@ -467,18 +475,18 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
         const chart = createChart(container, {
             layout: {
-                background: { color: 'transparent' },
-                textColor: isDark ? '#94a3b8' : '#475569',
+                background: { color: isDark ? '#131722' : '#ffffff' },
+                textColor: isDark ? '#d1d4dc' : '#131722',
             },
             grid: {
-                vertLines: { color: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)' },
-                horzLines: { color: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)' },
+                vertLines: { color: isDark ? '#2a2e39' : '#e0e3eb' },
+                horzLines: { color: isDark ? '#2a2e39' : '#e0e3eb' },
             },
             crosshair: {
                 mode: 0,
             },
             timeScale: {
-                borderColor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(226, 232, 240, 0.5)',
+                borderColor: isDark ? '#2a2e39' : '#e0e3eb',
                 timeVisible: true,
                 secondsVisible: false,
             },
@@ -487,11 +495,12 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         });
 
         const series = chart.addSeries(CandlestickSeries, {
-            upColor: '#10b981',
-            downColor: '#f43f5e',
-            borderVisible: false,
-            wickUpColor: '#10b981',
-            wickDownColor: '#f43f5e',
+            upColor: '#cfd8dc', // Grey for Bullish
+            downColor: '#2962ff', // Blue for Bearish
+            borderVisible: true,
+            borderColor: '#cfd8dc',
+            wickUpColor: '#cfd8dc',
+            wickDownColor: '#2962ff',
         });
 
         // Initialize Baseline Series for RRR Boxes
@@ -692,278 +701,304 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     const content = (
         <div className={containerClasses}>
             {/* Header */}
-            <div className="h-12 md:h-16 shrink-0 border-b border-slate-700/30 flex items-center justify-between px-4 md:px-6">
-                <div className="flex items-center gap-2 md:gap-4">
-                    <div className="p-1.5 md:p-2 rounded-xl bg-blue-500/10 text-blue-500">
-                        <FastForward size={16} className="md:w-5 md:h-5" />
+            <div className={`h-12 md:h-14 shrink-0 border-b flex items-center justify-between px-2 md:px-4 z-50 ${isDark ? 'border-slate-800 bg-[#131722]' : 'border-slate-200 bg-white'}`}>
+                {/* Left: Symbol & Timeframes */}
+                <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                        <div className={`p-1.5 rounded-lg ${isDark ? 'bg-blue-500/10 text-blue-500' : 'bg-blue-100 text-blue-600'}`}>
+                            <FastForward size={16} />
+                        </div>
+                        <div className="flex flex-col">
+                            <h3 className={`font-bold tracking-tight uppercase text-xs sm:text-sm ${isDark ? 'text-[#d1d4dc]' : 'text-slate-900'}`}>
+                                {trade.instrument}
+                            </h3>
+                            <span className="text-[10px] text-slate-500 font-mono">{new Date(trade.date).toLocaleDateString()}</span>
+                        </div>
                     </div>
-                    <div>
-                        <h3 className="font-black tracking-tight text-white uppercase text-xs md:text-sm">{trade.instrument} - REPLAY</h3>
-                        <p className="text-[8px] md:text-[10px] text-slate-500 font-bold uppercase tracking-widest">{new Date(trade.date).toLocaleDateString()}</p>
+
+                    <div className="w-px h-6 bg-slate-700/20 hidden sm:block"></div>
+
+                    {/* Timeframes */}
+                    <div className="hidden md:flex items-center gap-1">
+                        {['1m', '5m', '15m', '1h', '4h', 'D'].map((tf) => (
+                            <button
+                                key={tf}
+                                onClick={() => activeLayout === 'split' && setSecondaryTimeframe(tf as any)}
+                                className={`
+                                    px-2 py-1 rounded text-xs font-medium transition-colors
+                                    ${(activeLayout === 'split' && secondaryTimeframe === tf)
+                                        ? (isDark ? 'text-blue-400 bg-blue-500/10' : 'text-blue-600 bg-blue-50')
+                                        : (isDark ? 'text-slate-500 hover:text-slate-300 hover:bg-white/5' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100')}
+                                `}
+                            >
+                                {tf}
+                            </button>
+                        ))}
                     </div>
                 </div>
 
+                {/* Center/Right: Actions */}
                 <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1 bg-slate-800/50 p-1 rounded-xl border border-white/5">
-                        {/* Layout Toggle - NEW */}
-                        <div className="flex items-center bg-slate-900/50 rounded-lg p-0.5 border border-white/5 mr-2">
-                            <button
-                                onClick={() => setActiveLayout('single')}
-                                className={`px-2 py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayout === 'single' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-500 hover:text-white'}`}
-                            >
-                                SINGLE
-                            </button>
-                            <button
-                                onClick={() => setActiveLayout('split')}
-                                className={`px-2 py-1 text-[9px] font-black uppercase rounded transition-all ${activeLayout === 'split' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-500 hover:text-white'}`}
-                            >
-                                SPLIT
-                            </button>
-                        </div>
 
+                    {/* Jump Buttons (Compact) */}
+                    <div className="flex items-center gap-1 mr-2">
+                        <button
+                            onClick={() => {
+                                if (!chartRef.current || allData.length === 0) return;
+                                const timeOffset = -new Date().getTimezoneOffset() * 60;
+                                const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                                const durationSeconds = (trade.durationMinutes || 0) * 60;
+                                const entryTimeRaw = exitTimeRaw - durationSeconds;
+                                const rangeStart = (entryTimeRaw + timeOffset - 3600) as Time;
+                                const rangeEnd = (entryTimeRaw + timeOffset + 3600) as Time;
+                                chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
+                            }}
+                            className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
+                            title="Jump to Entry"
+                        >
+                            <ArrowRight size={16} className="rotate-180" />
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (!chartRef.current || allData.length === 0) return;
+                                const timeOffset = -new Date().getTimezoneOffset() * 60;
+                                const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                                const rangeStart = (exitTimeRaw + timeOffset - 3600) as Time;
+                                const rangeEnd = (exitTimeRaw + timeOffset + 3600) as Time;
+                                chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
+                            }}
+                            className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
+                            title="Jump to Exit"
+                        >
+                            <ArrowRight size={16} />
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (!chartRef.current) return;
+                                chartRef.current.timeScale().fitContent();
+                            }}
+                            className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
+                            title="Fit Trade"
+                        >
+                            <Maximize2 size={16} />
+                        </button>
+                    </div>
+
+                    <div className="w-px h-5 bg-slate-700/20"></div>
+
+                    {/* Layout Toggle */}
+                    <div className={`flex items-center rounded p-0.5 border ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+                        <button
+                            onClick={() => setActiveLayout('single')}
+                            className={`p-1 rounded ${activeLayout === 'single' ? (isDark ? 'bg-slate-600 text-white' : 'bg-white shadow text-black') : 'text-slate-400'}`}
+                            title="Single View"
+                        >
+                            <Square size={14} />
+                        </button>
+                        <button
+                            onClick={() => setActiveLayout('split')}
+                            className={`p-1 rounded ${activeLayout === 'split' ? (isDark ? 'bg-slate-600 text-white' : 'bg-white shadow text-black') : 'text-slate-400'}`}
+                            title="Split View"
+                        >
+                            <div className="flex gap-0.5">
+                                <div className="w-1.5 h-3 border border-current rounded-[1px]"></div>
+                                <div className="w-1.5 h-3 border border-current rounded-[1px]"></div>
+                            </div>
+                        </button>
+                    </div>
+
+                    <div className="w-px h-5 bg-slate-700/20"></div>
+
+                    {/* Play Controls */}
+                    <div className="flex items-center gap-1">
                         <button
                             onClick={handleReset}
-                            className="p-1.5 md:p-2 text-slate-400 hover:text-white transition-colors"
-                            title="Reset"
+                            className={`p-1.5 rounded hover:bg-slate-500/10 ${isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-black'}`}
                         >
-                            <RotateCcw size={14} className="md:w-4 md:h-4" />
+                            <RotateCcw size={16} />
                         </button>
-                        <div className="w-px h-3 md:h-4 bg-slate-700 mx-0.5 md:mx-1"></div>
                         <button
                             onClick={() => setIsPlaying(!isPlaying)}
-                            className={`p-1.5 md:p-2 rounded-lg transition-all ${isPlaying ? 'bg-amber-500 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`p-1.5 rounded transition-all ${isPlaying ? 'bg-blue-600 text-white' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-black')}`}
                         >
-                            {isPlaying ? <Pause size={16} className="md:w-[18px] md:h-[18px]" /> : <Play size={16} className="md:w-[18px] md:h-[18px]" />}
+                            {isPlaying ? <Pause size={18} /> : <Play size={18} />}
                         </button>
-                        <div className="w-px h-3 md:h-4 bg-slate-700 mx-0.5 md:mx-1"></div>
                         <button
                             onClick={() => setPlaybackSpeed(s => s === 1 ? 5 : (s === 5 ? 10 : 1))}
-                            className="text-[9px] md:text-[10px] font-black text-slate-500 px-1 md:px-2 min-w-[30px] md:min-w-[40px] text-center hover:text-white cursor-pointer"
+                            className={`text-xs font-bold w-6 text-center ${isDark ? 'text-slate-500 hover:text-white' : 'text-slate-500 hover:text-black'}`}
                         >
                             {playbackSpeed}x
                         </button>
                     </div>
+
                     {!embedded && (
-                        <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-all text-slate-500 hover:text-white ml-2">
-                            <X size={24} />
+                        <button onClick={onClose} className={`p-2 rounded-full transition-all ml-2 ${isDark ? 'hover:bg-white/10 text-slate-500 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-black'}`}>
+                            <X size={20} />
                         </button>
                     )}
                 </div>
             </div>
 
-            {/* Quick Navigation Toolbar */}
-            <div className={`h-8 border-b ${isDark ? 'border-slate-700/30' : 'border-slate-200'} flex items-center justify-center gap-2 bg-black/10`}>
-                <button
-                    onClick={() => {
-                        if (!chartRef.current || allData.length === 0) return;
-                        // Recalculate times (logic duplicated - should refactor, but kept inline for safety)
-                        const timeOffset = -new Date().getTimezoneOffset() * 60;
-                        // Approximate check if stored as Local or UTC (simplified: if trade.entry matches candle => Local)
-                        // Ideally we'd store the 'detectedIsLocal' in a ref to reuse here. 
-                        // For "Jump To" features, getting close is usually enough.
-                        // Let's assume we use the SHIFTED entry time we calculated for the box.
 
-                        const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-                        const durationSeconds = (trade.durationMinutes || 0) * 60;
-                        const entryTimeRaw = exitTimeRaw - durationSeconds;
-
-                        // Best guess without robust check again: Apply offset
-                        // If it lands on empty space, scrollToTime handles it gracefully usually.
-                        const targetTime = (entryTimeRaw + timeOffset) as Time;
-
-                        // Use scrollToTime or setVisibleRange
-                        // Create a range of e.g. 2 hours around entry
-                        const rangeStart = (entryTimeRaw + timeOffset - 3600) as Time;
-                        const rangeEnd = (entryTimeRaw + timeOffset + 3600) as Time;
-
-                        chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
-                    }}
-                    className="px-3 py-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 text-[9px] font-black uppercase rounded-lg transition-colors"
-                >
-                    Jump to Entry
-                </button>
-                <div className="w-px h-3 bg-slate-700/50"></div>
-                <button
-                    onClick={() => {
-                        if (!chartRef.current || allData.length === 0) return;
-                        const timeOffset = -new Date().getTimezoneOffset() * 60;
-
-                        const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-                        const targetTime = (exitTimeRaw + timeOffset) as Time;
-
-                        const rangeStart = (exitTimeRaw + timeOffset - 3600) as Time;
-                        const rangeEnd = (exitTimeRaw + timeOffset + 3600) as Time;
-
-                        chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
-                    }}
-                    className="px-3 py-1 bg-purple-500/10 hover:bg-purple-500/20 text-purple-500 text-[9px] font-black uppercase rounded-lg transition-colors"
-                >
-                    Jump to Exit
-                </button>
-                <div className="w-px h-3 bg-slate-700/50"></div>
-                <button
-                    onClick={() => {
-                        if (!chartRef.current) return;
-                        chartRef.current.timeScale().fitContent();
-                    }}
-                    className="px-3 py-1 bg-slate-500/10 hover:bg-slate-500/20 text-slate-500 hover:text-slate-300 text-[9px] font-black uppercase rounded-lg transition-colors"
-                >
-                    Fit Trade
-                </button>
-            </div>
 
             {/* Main Content Area: Toolbar + Charts */}
-            <div className={`flex-1 relative overflow-hidden bg-[#0f172a] ${activeLayout === 'split' ? 'grid grid-cols-2 gap-1' : ''}`}>
+            <div className={`flex-1 flex flex-row overflow-hidden ${isDark ? 'bg-[#0f172a]' : 'bg-white'}`}>
 
-                {/* Chart 1 Wrapper */}
-                <div className="relative w-full h-full" style={{ cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}>
-                    {/* Floating Toolbar (Attached to Chart 1) */}
-                    <div className="absolute top-4 left-4 z-[40]">
-                        <ChartToolbar
-                            activeTool={activeTool}
-                            onToolChange={setActiveTool}
-                            onClearAll={() => setDrawings([])}
-                            theme={theme}
-                            magnetMode={magnetMode}
-                            onToggleMagnet={() => setMagnetMode(m => !m)}
-                        />
-                    </div>
+                {/* Fixed Left Toolbar */}
+                <div className="shrink-0 z-[40]">
+                    <ChartToolbar
+                        activeTool={activeTool}
+                        onToolChange={setActiveTool}
+                        onClearAll={() => setDrawings([])}
+                        theme={theme}
+                        magnetMode={magnetMode}
+                        onToggleMagnet={() => setMagnetMode(m => !m)}
+                    />
+                </div>
 
-                    <div className="absolute inset-0 z-0">
-                        <div className="absolute inset-0" ref={chartContainerRef} />
+                {/* Charts Grid */}
+                <div className={`flex-1 relative ${activeLayout === 'split' ? 'grid grid-cols-2 gap-1' : ''}`}>
 
-                        {/* SVG Drawing Overlay */}
-                        <svg
-                            className="absolute inset-0 z-10 w-full h-full pointer-events-none"
-                            style={{ pointerEvents: activeTool !== 'cursor' ? 'auto' : 'none' }}
-                            onMouseDown={handleMouseDown}
-                            onMouseMove={handleMouseMove}
-                            onMouseUp={handleMouseUp}
-                        >
-                            {/* Render Saved Drawings */}
-                            {drawings.map(d => {
-                                if (!chartRef.current || !seriesRef.current) return null;
-                                const timeScale = chartRef.current.timeScale();
-                                const series = seriesRef.current;
+                    {/* Chart 1 Wrapper */}
+                    <div className="relative w-full h-full" style={{ cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}>
+                        {/* Removed Floating Toolbar */}
 
-                                const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
-                                const y1 = series.priceToCoordinate(d.p1.price);
+                        <div className="absolute inset-0 z-0">
+                            <div className="absolute inset-0" ref={chartContainerRef} />
 
-                                // If p2 exists (line/rect)
-                                if (d.p2) {
-                                    const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
-                                    const y2 = series.priceToCoordinate(d.p2.price);
+                            {/* SVG Drawing Overlay */}
+                            <svg
+                                className="absolute inset-0 z-10 w-full h-full pointer-events-none"
+                                style={{ pointerEvents: activeTool !== 'cursor' ? 'auto' : 'none' }}
+                                onMouseDown={handleMouseDown}
+                                onMouseMove={handleMouseMove}
+                                onMouseUp={handleMouseUp}
+                            >
+                                {/* Render Saved Drawings */}
+                                {drawings.map(d => {
+                                    if (!chartRef.current || !seriesRef.current) return null;
+                                    const timeScale = chartRef.current.timeScale();
+                                    const series = seriesRef.current;
+
+                                    const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
+                                    const y1 = series.priceToCoordinate(d.p1.price);
+
+                                    // If p2 exists (line/rect)
+                                    if (d.p2) {
+                                        const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
+                                        const y2 = series.priceToCoordinate(d.p2.price);
+
+                                        if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
+
+                                        if (d.type === 'line') {
+                                            return <line key={d.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" />;
+                                        } else if (d.type === 'rect') {
+                                            const width = x2 - x1;
+                                            const height = y2 - y1;
+                                            return (
+                                                <rect
+                                                    key={d.id}
+                                                    x={Math.min(x1, x2)}
+                                                    y={Math.min(y1, y2)}
+                                                    width={Math.abs(width)}
+                                                    height={Math.abs(height)}
+                                                    fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
+                                                    stroke={isDark ? '#3b82f6' : '#2563eb'}
+                                                    strokeWidth="2"
+                                                />
+                                            );
+                                        }
+                                    } else if (d.type === 'text') {
+                                        if (x1 === null || y1 === null) return null;
+                                        return (
+                                            <text key={d.id} x={x1} y={y1} fill={isDark ? '#fff' : '#000'} fontSize="12" fontWeight="bold">
+                                                {d.text || 'Text'}
+                                            </text>
+                                        );
+                                    }
+                                    return null;
+                                })}
+
+                                {/* Render Current (In-Progress) Drawing */}
+                                {currentDrawing && (() => {
+                                    if (!chartRef.current || !seriesRef.current) return null;
+                                    const timeScale = chartRef.current.timeScale();
+                                    const series = seriesRef.current;
+
+                                    const start = currentDrawing.p1;
+                                    const end = currentDrawing.p2 || start; // If p2 not set yet (click), use start
+
+                                    const x1 = timeScale.timeToCoordinate(start.time as Time);
+                                    const y1 = series.priceToCoordinate(start.price);
+                                    const x2 = timeScale.timeToCoordinate(end.time as Time);
+                                    const y2 = series.priceToCoordinate(end.price);
 
                                     if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
 
-                                    if (d.type === 'line') {
-                                        return <line key={d.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" />;
-                                    } else if (d.type === 'rect') {
-                                        const width = x2 - x1;
-                                        const height = y2 - y1;
+                                    if (currentDrawing.type === 'line') {
+                                        return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" strokeDasharray="5,5" />;
+                                    } else if (currentDrawing.type === 'rect') {
                                         return (
                                             <rect
-                                                key={d.id}
                                                 x={Math.min(x1, x2)}
                                                 y={Math.min(y1, y2)}
-                                                width={Math.abs(width)}
-                                                height={Math.abs(height)}
+                                                width={Math.abs(x2 - x1)}
+                                                height={Math.abs(y2 - y1)}
                                                 fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
                                                 stroke={isDark ? '#3b82f6' : '#2563eb'}
                                                 strokeWidth="2"
+                                                strokeDasharray="5,5"
                                             />
                                         );
                                     }
-                                } else if (d.type === 'text') {
-                                    if (x1 === null || y1 === null) return null;
-                                    return (
-                                        <text key={d.id} x={x1} y={y1} fill={isDark ? '#fff' : '#000'} fontSize="12" fontWeight="bold">
-                                            {d.text || 'Text'}
-                                        </text>
-                                    );
-                                }
-                                return null;
-                            })}
+                                    return null;
+                                })()}
+                            </svg>
 
-                            {/* Render Current (In-Progress) Drawing */}
-                            {currentDrawing && (() => {
-                                if (!chartRef.current || !seriesRef.current) return null;
-                                const timeScale = chartRef.current.timeScale();
-                                const series = seriesRef.current;
-
-                                const start = currentDrawing.p1;
-                                const end = currentDrawing.p2 || start; // If p2 not set yet (click), use start
-
-                                const x1 = timeScale.timeToCoordinate(start.time as Time);
-                                const y1 = series.priceToCoordinate(start.price);
-                                const x2 = timeScale.timeToCoordinate(end.time as Time);
-                                const y2 = series.priceToCoordinate(end.price);
-
-                                if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
-
-                                if (currentDrawing.type === 'line') {
-                                    return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" strokeDasharray="5,5" />;
-                                } else if (currentDrawing.type === 'rect') {
-                                    return (
-                                        <rect
-                                            x={Math.min(x1, x2)}
-                                            y={Math.min(y1, y2)}
-                                            width={Math.abs(x2 - x1)}
-                                            height={Math.abs(y2 - y1)}
-                                            fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
-                                            stroke={isDark ? '#3b82f6' : '#2563eb'}
-                                            strokeWidth="2"
-                                            strokeDasharray="5,5"
-                                        />
-                                    );
-                                }
-                                return null;
-                            })()}
-                        </svg>
-
-                        {/* Overlays (Loading, Error) */}
-                        {isLoading && (
-                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
-                                <div className="flex flex-col items-center gap-2">
-                                    <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                                    <span className="text-[10px] font-black uppercase text-blue-400">Loading Data...</span>
+                            {/* Overlays (Loading, Error) */}
+                            {isLoading && (
+                                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
+                                    <div className="flex flex-col items-center gap-2">
+                                        <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                        <span className="text-[10px] font-black uppercase text-blue-400">Loading Data...</span>
+                                    </div>
                                 </div>
-                            </div>
-                        )}
-                        {error && (
-                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
-                                <div className="flex flex-col items-center gap-2 text-rose-500">
-                                    <span className="text-xl">⚠️</span>
-                                    <span className="text-[10px] font-black uppercase">{error}</span>
+                            )}
+                            {error && (
+                                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
+                                    <div className="flex flex-col items-center gap-2 text-rose-500">
+                                        <span className="text-xl">⚠️</span>
+                                        <span className="text-[10px] font-black uppercase">{error}</span>
+                                    </div>
                                 </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Chart 2 Container */}
-                {activeLayout === 'split' && (
-                    <div className="relative w-full h-full border-l border-slate-700/50 bg-[#0f172a]">
-                        <div className="absolute top-4 right-4 z-[40] flex gap-1 bg-slate-900/80 p-1 rounded-lg border border-slate-700/50 backdrop-blur-md">
-                            {(['5m', '15m', '1h'] as const).map(tf => (
-                                <button
-                                    key={tf}
-                                    onClick={() => setSecondaryTimeframe(tf)}
-                                    className={`px-2 py-1 text-[9px] font-black uppercase rounded ${secondaryTimeframe === tf ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white hover:bg-white/5'}`}
-                                >
-                                    {tf}
-                                </button>
-                            ))}
+                            )}
                         </div>
-                        <div className="absolute inset-0 z-0" ref={chartContainer2Ref} />
-
-                        {isLoading && (
-                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 pointer-events-none">
-                                <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"></div>
-                            </div>
-                        )}
                     </div>
-                )}
+
+                    {/* Chart 2 Container */}
+                    {activeLayout === 'split' && (
+                        <div className="relative w-full h-full border-l border-slate-700/50 bg-[#0f172a]">
+                            <div className="absolute top-4 right-4 z-[40] flex gap-1 bg-slate-900/80 p-1 rounded-lg border border-slate-700/50 backdrop-blur-md">
+                                {(['5m', '15m', '1h'] as const).map(tf => (
+                                    <button
+                                        key={tf}
+                                        onClick={() => setSecondaryTimeframe(tf)}
+                                        className={`px-2 py-1 text-[9px] font-black uppercase rounded ${secondaryTimeframe === tf ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white hover:bg-white/5'}`}
+                                    >
+                                        {tf}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="absolute inset-0 z-0" ref={chartContainer2Ref} />
+
+                            {isLoading && (
+                                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 pointer-events-none">
+                                    <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"></div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* Footer - Optional for embedded if too cramped */}
