@@ -22,43 +22,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
     const isDark = theme !== 'light';
 
-    // Mock data generator for NQ-like price action
-    const generateMockData = (trade: Trade) => {
-        const data: CandlestickData[] = [];
-        const startTime = new Date(trade.date).getTime() / 1000 - 3600; // 1h before trade
-        let currentPrice = parseFloat(String(trade.entryPrice || 15000));
-        const isWin = trade.pnl >= 0;
-        const targetPrice = isWin ? parseFloat(String(trade.takeProfit || currentPrice + 100)) : parseFloat(String(trade.stopLoss || currentPrice - 100));
-
-        // 1. Pre-trade consolidation (60 mins)
-        for (let i = 0; i < 60; i++) {
-            const time = (startTime + i * 60) as Time;
-            const open = currentPrice;
-            const range = 5;
-            const high = open + Math.random() * range;
-            const low = open - Math.random() * range;
-            const close = open + (Math.random() - 0.5) * range;
-            data.push({ time, open, high, low, close });
-            currentPrice = close;
-        }
-
-        // 2. The Trade (variable length)
-        const tradeSteps = 120;
-        for (let i = 0; i < tradeSteps; i++) {
-            const time = (startTime + (60 + i) * 60) as Time;
-            const open = currentPrice;
-            // Bias towards target
-            const bias = (targetPrice - currentPrice) / (tradeSteps - i);
-            const noise = 15;
-            const close = open + bias + (Math.random() * noise) - (noise / 2); // Simple random walk with bias
-            const high = Math.max(open, close) + Math.random() * 5;
-            const low = Math.min(open, close) - Math.random() * 5;
-            data.push({ time, open, high, low, close });
-            currentPrice = close;
-        }
-
-        return data;
-    };
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const [containerReady, setContainerReady] = useState(false);
 
@@ -80,6 +45,60 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         return () => observer.disconnect();
     }, []);
 
+    // Fetch real data from Dukascopy via our API route
+    useEffect(() => {
+        const fetchData = async () => {
+            if (!trade.date || !trade.instrument) return;
+
+            setIsLoading(true);
+            setError(null);
+
+            try {
+                // Determine instrument for API
+                // NQ/MNQ -> nqusd, etc mapping provided by backend, just pass instrument
+                const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&date=${encodeURIComponent(trade.date)}`);
+
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.details || 'Failed to fetch candle data');
+                }
+
+                const data = await response.json();
+
+                if (Array.isArray(data) && data.length > 0) {
+                    // Check if chart is still mounted before setting state
+                    if (chartRef.current && seriesRef.current) {
+                        const validData = data.map((d: any) => ({
+                            time: d.time as Time,
+                            open: d.open,
+                            high: d.high,
+                            low: d.low,
+                            close: d.close
+                        }));
+
+                        setAllData(validData);
+                        seriesRef.current.setData(validData);
+
+                        // Fit content
+                        chartRef.current.timeScale().fitContent();
+                    }
+                } else {
+                    setError('No data found for this period');
+                }
+            } catch (err: any) {
+                console.error("Replay data fetch error:", err);
+                setError(err.message || "Failed to load historical data");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        if (containerReady && chartRef.current && seriesRef.current) {
+            fetchData();
+        }
+    }, [trade, containerReady]);
+
+    // Keep the chart initialization logic, but don't set data immediately
     useEffect(() => {
         if (!containerReady || !chartContainerRef.current) return;
 
@@ -116,9 +135,9 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             wickDownColor: '#f43f5e',
         });
 
-        const initialData = generateMockData(trade);
-        setAllData(initialData);
-        series.setData(initialData);
+        // Data will be set by the fetch effect
+        // setAllData([]);
+        // series.setData([]);
 
         // Add Entry, SL, TP Lines
         const entryPrice = parseFloat(String(trade.entryPrice || 0));
@@ -264,6 +283,22 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
             {/* Chart */}
             <div className="flex-1 relative overflow-hidden" ref={chartContainerRef}>
+                {isLoading && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                        <div className="flex flex-col items-center gap-2">
+                            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                            <span className="text-[10px] font-black uppercase text-blue-400">Loading Data...</span>
+                        </div>
+                    </div>
+                )}
+                {error && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                        <div className="flex flex-col items-center gap-2 text-rose-500">
+                            <span className="text-xl">⚠️</span>
+                            <span className="text-[10px] font-black uppercase">{error}</span>
+                        </div>
+                    </div>
+                )}
                 {/* Overlay for "Under Construction" */}
                 {/* <div className="absolute top-4 left-4 z-10">
                     <span className="px-3 py-1 bg-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-widest rounded-full border border-blue-500/30 backdrop-blur-md">
@@ -285,8 +320,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                     </div>
                 </div>
                 <div className="flex items-center gap-2 opacity-50">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                    <span className="font-bold uppercase tracking-wider text-[8px] md:text-[9px]">Simulated Data</span>
+                    <div className={`w-2 h-2 rounded-full ${isLoading ? 'bg-amber-500 animate-pulse' : (allData.length > 0 ? 'bg-emerald-500' : 'bg-slate-500')}`}></div>
+                    <span className="font-bold uppercase tracking-wider text-[8px] md:text-[9px]">{isLoading ? 'Fetching Data...' : (allData.length > 0 ? 'Dukascopy Data' : 'No Data')}</span>
                 </div>
             </div>
         </div>
