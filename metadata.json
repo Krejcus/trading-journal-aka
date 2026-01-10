@@ -1,0 +1,12 @@
+{
+  "name": "AlphaTrade Mentor",
+  "short_name": "AlphaTrade",
+  "description": "Elitní tradingový deník a AI mentor pro profesionály.",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
