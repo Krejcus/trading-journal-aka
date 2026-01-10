@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { createChart, IChartApi, ISeriesApi, CandlestickData, Time } from 'lightweight-charts';
+import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries } from 'lightweight-charts';
 import { Trade } from '../types';
 import { X, Play, Pause, RotateCcw, FastForward, Settings2 } from 'lucide-react';
 
@@ -127,7 +127,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             height: height,
         });
 
-        const series = (chart as any).addCandlestickSeries({
+        const series = chart.addSeries(CandlestickSeries, {
             upColor: '#10b981',
             downColor: '#f43f5e',
             borderVisible: false,
