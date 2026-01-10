@@ -5,7 +5,7 @@ import { storageService } from '../services/storageService';
 import {
     X, Edit3, Trash2, Clock, Image as ImageIcon,
     Maximize2, ArrowRight, Timer, Terminal, ArrowUpRight, ArrowDownRight,
-    Share2, Check, ChevronLeft, ChevronRight, Zap, Brain, FileText, Monitor, PlayCircle
+    Share2, Check, ChevronLeft, ChevronRight, Zap, Brain, FileText, Monitor
 } from 'lucide-react';
 import TradeReplay from './TradeReplay';
 
@@ -30,7 +30,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [isZoomed, setIsZoomed] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [shareCopied, setShareCopied] = useState(false);
-    const [showReplay, setShowReplay] = useState(false);
 
     const images = trade.screenshots && trade.screenshots.length > 0
         ? trade.screenshots
@@ -258,7 +257,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
                     </div>
                 </div>
-            </div >
+            </div>
 
             {isZoomed && images.length > 0 && (
                 <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/98 backdrop-blur-3xl p-4 md:p-6 animate-in fade-in duration-300" onClick={() => setIsZoomed(false)}>

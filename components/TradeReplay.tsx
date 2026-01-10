@@ -63,7 +63,25 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     useEffect(() => {
         if (!chartContainerRef.current) return;
 
-        const chart = createChart(chartContainerRef.current, {
+        const container = chartContainerRef.current;
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+
+        // CRITICAL: Prevent crash if dimensions are invalid (common in modern modals on mount)
+        if (width <= 0 || height <= 0) {
+            console.warn('TradeReplay: Invalid container dimensions', { width, height });
+            // Retry once after a short delay if this happens on initial mount
+            const timer = setTimeout(() => {
+                if (container.clientWidth > 0 && container.clientHeight > 0) {
+                    // This will trigger a re-run if we add dimensions to the dependency array or force update
+                    // But for now let's just use window resize or manual trigger
+                    window.dispatchEvent(new Event('resize'));
+                }
+            }, 100);
+            return () => clearTimeout(timer);
+        }
+
+        const chart = createChart(container, {
             layout: {
                 background: { color: 'transparent' },
                 textColor: isDark ? '#94a3b8' : '#475569',
@@ -80,8 +98,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 timeVisible: true,
                 secondsVisible: false,
             },
-            width: chartContainerRef.current.clientWidth,
-            height: chartContainerRef.current.clientHeight,
+            width: width,
+            height: height,
         });
 
         const series = (chart as any).addCandlestickSeries({
@@ -138,8 +156,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         seriesRef.current = series;
 
         const handleResize = () => {
-            if (chartContainerRef.current) {
-                chart.applyOptions({
+            if (chartContainerRef.current && chartRef.current) {
+                chartRef.current.applyOptions({
                     width: chartContainerRef.current.clientWidth,
                     height: chartContainerRef.current.clientHeight
                 });
@@ -147,11 +165,14 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         };
 
         window.addEventListener('resize', handleResize);
-        // Initial resize to ensure fit
-        setTimeout(handleResize, 0);
+
+        // Use a ResizeObserver for more reliable layout tracking in dynamic containers
+        const observer = new ResizeObserver(handleResize);
+        observer.observe(container);
 
         return () => {
             window.removeEventListener('resize', handleResize);
+            observer.disconnect();
             chart.remove();
         };
     }, [trade, isDark]);
