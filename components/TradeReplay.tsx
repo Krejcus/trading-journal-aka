@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries } from 'lightweight-charts';
+import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, BaselineSeries } from 'lightweight-charts';
 import { Trade } from '../types';
 import { X, Play, Pause, RotateCcw, FastForward, Settings2 } from 'lucide-react';
 
@@ -14,6 +14,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+    const tpSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+    const slSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [playbackSpeed, setPlaybackSpeed] = useState(1);
@@ -159,6 +161,31 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             wickDownColor: '#f43f5e',
         });
 
+        // Initialize Baseline Series for RRR Boxes
+        const tpSeries = chart.addSeries(BaselineSeries, {
+            baseValue: { type: 'price', price: parseFloat(String(trade.entryPrice || 0)) },
+            topLineColor: 'rgba(16, 185, 129, 1)',
+            topFillColor1: 'rgba(16, 185, 129, 0.2)',
+            topFillColor2: 'rgba(16, 185, 129, 0.2)',
+            bottomLineColor: 'rgba(16, 185, 129, 1)',
+            bottomFillColor1: 'rgba(16, 185, 129, 0.2)',
+            bottomFillColor2: 'rgba(16, 185, 129, 0.2)',
+            lastValueVisible: false,
+            priceLineVisible: false,
+        });
+
+        const slSeries = chart.addSeries(BaselineSeries, {
+            baseValue: { type: 'price', price: parseFloat(String(trade.entryPrice || 0)) },
+            topLineColor: 'rgba(244, 63, 94, 1)',
+            topFillColor1: 'rgba(244, 63, 94, 0.2)',
+            topFillColor2: 'rgba(244, 63, 94, 0.2)',
+            bottomLineColor: 'rgba(244, 63, 94, 1)',
+            bottomFillColor1: 'rgba(244, 63, 94, 0.2)',
+            bottomFillColor2: 'rgba(244, 63, 94, 0.2)',
+            lastValueVisible: false,
+            priceLineVisible: false,
+        });
+
         // Add lines...
         const entryPrice = parseFloat(String(trade.entryPrice || 0));
         const slPrice = parseFloat(String(trade.stopLoss || 0));
@@ -182,6 +209,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
         chartRef.current = chart;
         seriesRef.current = series;
+        tpSeriesRef.current = tpSeries;
+        slSeriesRef.current = slSeries;
         setChartReady(true); // Signal ready
 
         const handleResize = () => {
@@ -200,6 +229,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             chart.remove();
             chartRef.current = null;
             seriesRef.current = null;
+            tpSeriesRef.current = null;
+            slSeriesRef.current = null;
             setChartReady(false);
         };
     }, [trade, isDark, containerReady]);
@@ -208,6 +239,31 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     useEffect(() => {
         if (chartReady && seriesRef.current && allData.length > 0) {
             seriesRef.current.setData(allData);
+
+            // Calculate and set RRR Box Data
+            const entryTime = new Date(trade.date).getTime() / 1000;
+            const timeOffset = -new Date().getTimezoneOffset() * 60;
+            const shiftedEntryTime = entryTime + timeOffset;
+            const durationMinutes = trade.durationMinutes || 0;
+            const shiftedExitTime = shiftedEntryTime + (durationMinutes * 60);
+
+            const tpPrice = parseFloat(String(trade.takeProfit || 0));
+            const slPrice = parseFloat(String(trade.stopLoss || 0));
+
+            const tpData: any[] = [];
+            const slData: any[] = [];
+
+            allData.forEach(d => {
+                const t = d.time as number;
+                if (t >= shiftedEntryTime && t <= shiftedExitTime) {
+                    if (tpPrice) tpData.push({ time: t, value: tpPrice });
+                    if (slPrice) slData.push({ time: t, value: slPrice });
+                }
+            });
+
+            if (tpSeriesRef.current && tpData.length > 0) tpSeriesRef.current.setData(tpData);
+            if (slSeriesRef.current && slData.length > 0) slSeriesRef.current.setData(slData);
+
             chartRef.current?.timeScale().fitContent();
         }
     }, [chartReady, allData]);
