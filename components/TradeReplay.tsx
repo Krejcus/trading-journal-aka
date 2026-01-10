@@ -24,8 +24,8 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-
     const [containerReady, setContainerReady] = useState(false);
+    const [chartReady, setChartReady] = useState(false); // New state to track if chart is init
 
     // Monitor container size
     useEffect(() => {
@@ -45,17 +45,17 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         return () => observer.disconnect();
     }, []);
 
-    // Fetch real data from Dukascopy via our API route
+    // 1. Fetch Data Effect (Independent of Chart)
     useEffect(() => {
         const fetchData = async () => {
             if (!trade.date || !trade.instrument) return;
 
             setIsLoading(true);
             setError(null);
+            setAllData([]); // Reset data
 
             try {
                 // Determine instrument for API
-                // NQ/MNQ -> nqusd, etc mapping provided by backend, just pass instrument
                 const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&date=${encodeURIComponent(trade.date)}`);
 
                 if (!response.ok) {
@@ -66,22 +66,14 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 const data = await response.json();
 
                 if (Array.isArray(data) && data.length > 0) {
-                    // Check if chart is still mounted before setting state
-                    if (chartRef.current && seriesRef.current) {
-                        const validData = data.map((d: any) => ({
-                            time: d.time as Time,
-                            open: d.open,
-                            high: d.high,
-                            low: d.low,
-                            close: d.close
-                        }));
-
-                        setAllData(validData);
-                        seriesRef.current.setData(validData);
-
-                        // Fit content
-                        chartRef.current.timeScale().fitContent();
-                    }
+                    const validData = data.map((d: any) => ({
+                        time: d.time as Time,
+                        open: d.open,
+                        high: d.high,
+                        low: d.low,
+                        close: d.close
+                    }));
+                    setAllData(validData);
                 } else {
                     setError('No data found for this period');
                 }
@@ -93,14 +85,17 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             }
         };
 
-        if (containerReady && chartRef.current && seriesRef.current) {
-            fetchData();
-        }
-    }, [trade, containerReady]);
+        fetchData();
+    }, [trade]); // Only depends on trade
 
-    // Keep the chart initialization logic, but don't set data immediately
+    // 2. Initialize Chart Effect
     useEffect(() => {
         if (!containerReady || !chartContainerRef.current) return;
+
+        // Prevent double init
+        if (chartRef.current) {
+            chartRef.current.remove();
+        }
 
         const container = chartContainerRef.current;
         const width = container.clientWidth;
@@ -135,50 +130,30 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             wickDownColor: '#f43f5e',
         });
 
-        // Data will be set by the fetch effect
-        // setAllData([]);
-        // series.setData([]);
-
-        // Add Entry, SL, TP Lines
+        // Add lines...
         const entryPrice = parseFloat(String(trade.entryPrice || 0));
         const slPrice = parseFloat(String(trade.stopLoss || 0));
         const tpPrice = parseFloat(String(trade.takeProfit || 0));
 
         if (entryPrice) {
             series.createPriceLine({
-                price: entryPrice,
-                color: '#3b82f6',
-                lineWidth: 2,
-                lineStyle: 0,
-                axisLabelVisible: true,
-                title: 'ENTRY',
+                price: entryPrice, color: '#3b82f6', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'ENTRY',
             });
         }
-
         if (slPrice) {
             series.createPriceLine({
-                price: slPrice,
-                color: '#f43f5e',
-                lineWidth: 1,
-                lineStyle: 1,
-                axisLabelVisible: true,
-                title: 'SL',
+                price: slPrice, color: '#f43f5e', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SL',
             });
         }
-
         if (tpPrice) {
             series.createPriceLine({
-                price: tpPrice,
-                color: '#10b981',
-                lineWidth: 1,
-                lineStyle: 1,
-                axisLabelVisible: true,
-                title: 'TP',
+                price: tpPrice, color: '#10b981', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'TP',
             });
         }
 
         chartRef.current = chart;
         seriesRef.current = series;
+        setChartReady(true); // Signal ready
 
         const handleResize = () => {
             if (chartContainerRef.current && chartRef.current) {
@@ -196,8 +171,17 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             chart.remove();
             chartRef.current = null;
             seriesRef.current = null;
+            setChartReady(false);
         };
     }, [trade, isDark, containerReady]);
+
+    // 3. Sync Data Effect
+    useEffect(() => {
+        if (chartReady && seriesRef.current && allData.length > 0) {
+            seriesRef.current.setData(allData);
+            chartRef.current?.timeScale().fitContent();
+        }
+    }, [chartReady, allData]);
 
     // Handle replay logic
     useEffect(() => {
