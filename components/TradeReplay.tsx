@@ -67,34 +67,33 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
                 if (Array.isArray(rawData) && rawData.length > 0) {
                     // 1. Calculate Offset for Futures vs Spot correction
-                    let offset = 0;
+                    let priceOffset = 0;
                     const entryTime = new Date(trade.date).getTime() / 1000;
                     const entryPrice = parseFloat(String(trade.entryPrice || 0));
 
+                    // Timezone correction: Shift chart time to match user's local wall clock
+                    // getTimezoneOffset returns minutes (e.g. -60 for GMT+1). We want seconds to ADD.
+                    // So we invert sign and multiply by 60.
+                    const timeOffset = -new Date().getTimezoneOffset() * 60;
+
                     // Find candle closest to entry time to calculate offset
-                    // We look for a candle that starts within 60s of entry (M1 candle)
+                    // We look for a candle that starts within 60s of entry BEFORE time shifting
                     const matchingCandle = rawData.find((d: any) => {
-                        const candleTime = d.time; // API returns seconds
+                        const candleTime = d.time; // API returns seconds (UTC)
                         return Math.abs(candleTime - entryTime) < 60;
                     });
 
                     if (matchingCandle && entryPrice) {
-                        // If we found the candle where trade happened, the offset is difference
-                        // betwen Real Entry Price and Spot Price
-                        // We align it so that the candle's close (or open?) matches roughly context. 
-                        // Actually, just align based on Close price of that candle vs Market price?
-                        // Better: Align so that chart structure matches.
-                        // offset = Real_Entry - Spot_Price_At_Entry_Time
-                        offset = entryPrice - matchingCandle.close;
-                        console.log(`Auto-calibrating chart. Offset: ${offset}`);
+                        priceOffset = entryPrice - matchingCandle.close;
+                        console.log(`Auto-calibrating chart. Price Offset: ${priceOffset}, Time Offset: ${timeOffset}s`);
                     }
 
                     const validData = rawData.map((d: any) => ({
-                        time: d.time as Time,
-                        open: d.open + offset,
-                        high: d.high + offset,
-                        low: d.low + offset,
-                        close: d.close + offset
+                        time: (d.time + timeOffset) as Time, // Shift to visual local time
+                        open: d.open + priceOffset,
+                        high: d.high + priceOffset,
+                        low: d.low + priceOffset,
+                        close: d.close + priceOffset
                     }));
                     setAllData(validData);
                 } else {
