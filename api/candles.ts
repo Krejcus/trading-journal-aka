@@ -27,10 +27,10 @@ export default async function handler(
 
         // Explicit mapping for common instruments in the app
         const map: Record<string, string> = {
-            'nq': 'nqusd',
-            'mnq': 'nqusd', // MNQ uses NQ data usually
-            'es': 'esusd',
-            'mes': 'esusd',
+            'nq': 'usatechidxusd',
+            'mnq': 'usatechidxusd',
+            'es': 'usa500idxusd',
+            'mes': 'usa500idxusd',
             'eurusd': 'eurusd',
             'gbpusd': 'gbpusd',
             'xauusd': 'xauusd',
