@@ -1141,7 +1141,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                                 stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')}
                                                 strokeWidth={d.lineWidth || 2}
                                                 onContextMenu={(e) => handleContextMenu(e, d.id)}
-                                                className="hover:stroke-blue-400 cursor-pointer"
+                                                className="hover:stroke-blue-400 cursor-pointer pointer-events-auto"
                                             />;
                                         } else if (d.type === 'rect') {
                                             const width = x2 - x1;
@@ -1157,14 +1157,14 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                                     stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')}
                                                     strokeWidth={d.lineWidth || 2}
                                                     onContextMenu={(e) => handleContextMenu(e, d.id)}
-                                                    className="hover:stroke-blue-400 cursor-pointer"
+                                                    className="hover:stroke-blue-400 cursor-pointer pointer-events-auto"
                                                 />
                                             );
                                         } else if (d.type === 'fib') {
                                             const yDiff = y2 - y1;
                                             const levels = [0, 0.5, 0.618, 1];
                                             return (
-                                                <g key={d.id} onContextMenu={(e) => handleContextMenu(e, d.id)} className="cursor-pointer">
+                                                <g key={d.id} onContextMenu={(e) => handleContextMenu(e, d.id)} className="cursor-pointer pointer-events-auto">
                                                     <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={d.color || (isDark ? '#94a3b8' : '#64748b')} strokeWidth="1" strokeDasharray="2,2" />
                                                     {levels.map(level => {
                                                         const y = y1 + (yDiff * level);
@@ -1189,7 +1189,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                                 fontSize="12"
                                                 fontWeight="bold"
                                                 onContextMenu={(e) => handleContextMenu(e, d.id)}
-                                                className="cursor-pointer hover:opacity-80"
+                                                className="cursor-pointer hover:opacity-80 pointer-events-auto"
                                             >
                                                 {d.text || 'Text'}
                                             </text>
@@ -1197,7 +1197,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                     } else if (d.type === 'horizontal') {
                                         if (x1 === null || y1 === null) return null;
                                         return (
-                                            <g key={d.id} onContextMenu={(e) => handleContextMenu(e, d.id)} className="cursor-pointer group">
+                                            <g key={d.id} onContextMenu={(e) => handleContextMenu(e, d.id)} className="cursor-pointer group pointer-events-auto">
                                                 <line x1={0} y1={y1} x2="100%" y2={y1} stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')} strokeWidth={d.lineWidth || 1} className="group-hover:stroke-blue-400" />
                                                 <text x={x1 + 5} y={y1 - 5} fill={d.color || (isDark ? '#3b82f6' : '#2563eb')} fontSize="10" fontWeight="bold">
                                                     {d.p1.price.toFixed(2)}
@@ -1226,7 +1226,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                                     fill="white"
                                                     stroke="#3b82f6"
                                                     strokeWidth="2"
-                                                    className="cursor-pointer hover:scale-125 transition-transform"
+                                                    className="cursor-pointer hover:scale-125 transition-transform pointer-events-auto"
                                                 />
                                             ));
                                         })()
