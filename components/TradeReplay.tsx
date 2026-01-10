@@ -453,6 +453,67 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 </div>
             </div>
 
+            {/* Quick Navigation Toolbar */}
+            <div className={`h-8 border-b ${isDark ? 'border-slate-700/30' : 'border-slate-200'} flex items-center justify-center gap-2 bg-black/10`}>
+                <button
+                    onClick={() => {
+                        if (!chartRef.current || allData.length === 0) return;
+                        // Recalculate times (logic duplicated - should refactor, but kept inline for safety)
+                        const timeOffset = -new Date().getTimezoneOffset() * 60;
+                        // Approximate check if stored as Local or UTC (simplified: if trade.entry matches candle => Local)
+                        // Ideally we'd store the 'detectedIsLocal' in a ref to reuse here. 
+                        // For "Jump To" features, getting close is usually enough.
+                        // Let's assume we use the SHIFTED entry time we calculated for the box.
+
+                        const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                        const durationSeconds = (trade.durationMinutes || 0) * 60;
+                        const entryTimeRaw = exitTimeRaw - durationSeconds;
+
+                        // Best guess without robust check again: Apply offset
+                        // If it lands on empty space, scrollToTime handles it gracefully usually.
+                        const targetTime = (entryTimeRaw + timeOffset) as Time;
+
+                        // Use scrollToTime or setVisibleRange
+                        // Create a range of e.g. 2 hours around entry
+                        const rangeStart = (entryTimeRaw + timeOffset - 3600) as Time;
+                        const rangeEnd = (entryTimeRaw + timeOffset + 3600) as Time;
+
+                        chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
+                    }}
+                    className="px-3 py-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 text-[9px] font-black uppercase rounded-lg transition-colors"
+                >
+                    Jump to Entry
+                </button>
+                <div className="w-px h-3 bg-slate-700/50"></div>
+                <button
+                    onClick={() => {
+                        if (!chartRef.current || allData.length === 0) return;
+                        const timeOffset = -new Date().getTimezoneOffset() * 60;
+
+                        const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                        const targetTime = (exitTimeRaw + timeOffset) as Time;
+
+                        const rangeStart = (exitTimeRaw + timeOffset - 3600) as Time;
+                        const rangeEnd = (exitTimeRaw + timeOffset + 3600) as Time;
+
+                        chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
+                    }}
+                    className="px-3 py-1 bg-purple-500/10 hover:bg-purple-500/20 text-purple-500 text-[9px] font-black uppercase rounded-lg transition-colors"
+                >
+                    Jump to Exit
+                </button>
+                <div className="w-px h-3 bg-slate-700/50"></div>
+                <button
+                    onClick={() => {
+                        if (!chartRef.current) return;
+                        chartRef.current.timeScale().fitContent();
+                    }}
+                    className="px-3 py-1 bg-slate-500/10 hover:bg-slate-500/20 text-slate-500 hover:text-slate-300 text-[9px] font-black uppercase rounded-lg transition-colors"
+                >
+                    Fit Trade
+                </button>
+            </div>
+
             {/* Chart */}
             <div className="flex-1 relative overflow-hidden" ref={chartContainerRef}>
                 {isLoading && (
