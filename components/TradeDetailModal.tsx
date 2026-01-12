@@ -54,10 +54,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     const getEmotionDetails = (emoId: string) => emotions.find(e => e.id === emoId) || { label: emoId };
 
-    const MetricCell = ({ label, value, color = 'text-white' }: { label: string, value: string | number, color?: string }) => (
+    const MetricCell = ({ label, value, color }: { label: string, value: string | number, color?: string }) => (
         <div className={`p-3 md:p-4 border-r border-b ${isDark ? 'border-white/5' : 'border-slate-100'} flex flex-col justify-center`}>
             <span className="text-[8px] md:text-[9px] font-black uppercase text-slate-500 tracking-wider mb-0.5 md:mb-1">{label}</span>
-            <span className={`text-xs md:text-sm font-black font-mono tracking-tight ${color}`}>{value}</span>
+            <span className={`text-xs md:text-sm font-black font-mono tracking-tight ${color || (isDark ? 'text-white' : 'text-slate-900')}`}>{value}</span>
         </div>
     );
 

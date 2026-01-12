@@ -31,6 +31,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const isDark = theme !== 'light';
 
   const availableTags = useMemo(() => {
     const htf = new Set<string>();
@@ -92,18 +93,28 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
     filters.mistakes.length
   );
 
-  const sectionLabelClass = "flex items-center gap-2 text-[9px] font-black uppercase text-slate-500 tracking-widest mb-3";
+  const sectionLabelClass = `flex items-center gap-2 text-[9px] font-black uppercase tracking-widest mb-3 ${isDark ? 'text-slate-500' : 'text-slate-400'}`;
 
   const getGlassBtnClass = (isActive: boolean, type: 'neutral' | 'win' | 'loss' | 'status-valid' | 'status-invalid' | 'status-missed' = 'neutral') => {
     const base = "transition-all duration-300 border backdrop-blur-md relative overflow-hidden text-[10px] font-black uppercase tracking-wider h-11 flex items-center justify-center";
-    if (!isActive) return `${base} bg-white/5 border-white/5 text-slate-500 hover:bg-white/10 hover:text-slate-300`;
+    if (!isActive) {
+      return isDark
+        ? `${base} bg-white/5 border-white/5 text-slate-500 hover:bg-white/10 hover:text-slate-300`
+        : `${base} bg-slate-100/50 border-slate-200/50 text-slate-400 hover:bg-slate-200/50 hover:text-slate-600`;
+    }
     switch (type) {
-      case 'win': return `${base} bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.15)]`;
-      case 'loss': return `${base} bg-rose-500/10 border-rose-500/30 text-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.15)]`;
+      case 'win': return isDark
+        ? `${base} bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.15)]`
+        : `${base} bg-emerald-50 border-emerald-200 text-emerald-600 shadow-sm`;
+      case 'loss': return isDark
+        ? `${base} bg-rose-500/10 border-rose-500/30 text-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.15)]`
+        : `${base} bg-rose-50 border-rose-200 text-rose-600 shadow-sm`;
       case 'status-valid': return `${base} bg-emerald-600 text-white border-emerald-500 shadow-lg`;
       case 'status-invalid': return `${base} bg-rose-600 text-white border-rose-500 shadow-lg`;
       case 'status-missed': return `${base} bg-blue-600 text-white border-blue-500 shadow-lg`;
-      default: return `${base} bg-white/10 border-white/20 text-white shadow-[0_0_10px_rgba(255,255,255,0.05)]`;
+      default: return isDark
+        ? `${base} bg-white/10 border-white/20 text-white shadow-[0_0_10px_rgba(255,255,255,0.05)]`
+        : `${base} bg-slate-900 text-white border-slate-800 shadow-md`;
     }
   };
 
@@ -112,14 +123,14 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={`flex items-center gap-2 p-2.5 rounded-xl text-sm font-bold transition-all relative border ${isOpen
-          ? 'bg-white/10 border-white/20 text-white backdrop-blur-md'
-          : 'bg-transparent border-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200'
+          ? (isDark ? 'bg-white/10 border-white/20 text-white backdrop-blur-md' : 'bg-slate-900 border-slate-800 text-white shadow-lg')
+          : (isDark ? 'bg-transparent border-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200' : 'bg-transparent border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-900')
           }`}
         title="Filtrovat data & Nástroje"
       >
         <Filter size={18} />
         {activeFilterCount > 0 && (
-          <span className="absolute -top-1 -right-0.5 text-[10px] font-black text-indigo-500 drop-shadow-sm animate-in fade-in zoom-in duration-300">
+          <span className={`absolute -top-1 -right-0.5 text-[10px] font-black drop-shadow-sm animate-in fade-in zoom-in duration-300 ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>
             {activeFilterCount}
           </span>
         )}
@@ -128,18 +139,18 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
       {isOpen && (
         <>
           {/* Overlay pro mobilní zařízení pro snazší zavření klepnutím mimo */}
-          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[90] sm:hidden" onClick={() => setIsOpen(false)} />
+          <div className={`fixed inset-0 backdrop-blur-sm z-[90] sm:hidden ${isDark ? 'bg-black/40' : 'bg-slate-900/20'}`} onClick={() => setIsOpen(false)} />
 
-          <div className="fixed inset-x-4 top-20 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-3 w-auto sm:w-[340px] md:w-[500px] max-w-[500px] rounded-[32px] overflow-hidden shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)] border border-white/10 animate-in zoom-in-95 fade-in duration-200 z-[100] backdrop-blur-2xl bg-[#020617]/90 sm:origin-top-right">
-            <div className="p-5 border-b border-white/5 bg-white/5 flex justify-between items-center">
-              <h4 className="font-black text-[10px] uppercase tracking-[0.2em] flex items-center gap-2 text-slate-300">
+          <div className={`fixed inset-x-4 top-20 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-3 w-auto sm:w-[340px] md:w-[500px] max-w-[500px] rounded-[32px] overflow-hidden border animate-in zoom-in-95 fade-in duration-200 z-[100] backdrop-blur-2xl sm:origin-top-right ${isDark ? 'bg-[#020617]/95 border-white/10 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.8)]' : 'bg-white/95 border-slate-200 shadow-[0_20px_60px_-10px_rgba(0,0,0,0.15)]'}`}>
+            <div className={`p-5 border-b flex justify-between items-center ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50/50'}`}>
+              <h4 className={`font-black text-[10px] uppercase tracking-[0.2em] flex items-center gap-2 ${isDark ? 'text-slate-300' : 'text-slate-900'}`}>
                 <Filter size={12} className="text-indigo-500" /> Analytický Filtr
               </h4>
               <div className="flex gap-2">
-                <button onClick={resetFilters} className="p-2.5 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-colors">
+                <button onClick={resetFilters} className={`p-2.5 rounded-xl transition-colors ${isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-900'}`}>
                   <RotateCcw size={16} />
                 </button>
-                <button onClick={() => setIsOpen(false)} className="p-2.5 hover:bg-white/10 rounded-xl text-slate-400 hover:text-white transition-colors">
+                <button onClick={() => setIsOpen(false)} className={`p-2.5 rounded-xl transition-colors ${isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-900'}`}>
                   <X size={18} />
                 </button>
               </div>
@@ -148,28 +159,28 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
               {dashboardMode && setDashboardMode && (
                 <div>
                   <div className={sectionLabelClass}><Monitor size={12} /> Režim Zobrazení</div>
-                  <div className="flex p-1 rounded-2xl bg-white/5 border border-white/5 relative">
+                  <div className={`flex p-1 rounded-2xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
                     {/* Sliding Highlight */}
-                    <div className={`absolute inset-y-1 w-1/3 rounded-xl transition-all duration-300 ${dashboardMode === 'funded' ? 'translate-x-0 bg-emerald-500/20 border border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)]' :
-                      dashboardMode === 'combined' ? 'translate-x-[100%] bg-orange-500/20 border border-orange-500/50 shadow-[0_0_15px_rgba(249,115,22,0.2)]' :
-                        'translate-x-[200%] bg-blue-500/20 border border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.2)]'
+                    <div className={`absolute inset-y-1 w-1/3 rounded-xl transition-all duration-300 ${dashboardMode === 'funded' ? `translate-x-0 ${isDark ? 'bg-emerald-500/20 border border-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20'}` :
+                      dashboardMode === 'combined' ? `translate-x-[100%] ${isDark ? 'bg-orange-500/20 border border-orange-500/50 shadow-[0_0_15px_rgba(249,115,22,0.2)]' : 'bg-orange-500 text-white shadow-lg shadow-orange-500/20'}` :
+                        `translate-x-[200%] ${isDark ? 'bg-blue-500/20 border border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.2)]' : 'bg-blue-500 text-white shadow-lg shadow-blue-500/20'}`
                       }`} />
 
                     <button
                       onClick={() => setDashboardMode('funded')}
-                      className={`flex-1 relative z-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${dashboardMode === 'funded' ? 'text-emerald-400' : 'text-slate-500 hover:text-slate-300'}`}
+                      className={`flex-1 relative z-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${dashboardMode === 'funded' ? (isDark ? 'text-emerald-400' : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
                     >
                       Funded
                     </button>
                     <button
                       onClick={() => setDashboardMode('combined')}
-                      className={`flex-1 relative z-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${dashboardMode === 'combined' ? 'text-orange-400' : 'text-slate-500 hover:text-slate-300'}`}
+                      className={`flex-1 relative z-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${dashboardMode === 'combined' ? (isDark ? 'text-orange-400' : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
                     >
                       Vše
                     </button>
                     <button
                       onClick={() => setDashboardMode('challenge')}
-                      className={`flex-1 relative z-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${dashboardMode === 'challenge' ? 'text-blue-400' : 'text-slate-500 hover:text-slate-300'}`}
+                      className={`flex-1 relative z-10 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${dashboardMode === 'challenge' ? (isDark ? 'text-blue-400' : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
                     >
                       Challenge
                     </button>
@@ -177,9 +188,9 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 </div>
               )}
               {setIsDashboardEditing && (
-                <div className="p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/20">
+                <div className={`p-4 rounded-2xl border ${isDark ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-indigo-50 border-indigo-100'}`}>
                   <div className={sectionLabelClass}><Zap size={12} className="text-indigo-500" /> Tactical Tools</div>
-                  <button onClick={() => { setIsDashboardEditing(!isDashboardEditing); setIsOpen(false); }} className={`w-full py-4 rounded-xl flex items-center justify-center gap-3 transition-all ${isDashboardEditing ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-white/5 text-slate-300 border border-white/5 hover:bg-white/10'}`}>
+                  <button onClick={() => { setIsDashboardEditing(!isDashboardEditing); setIsOpen(false); }} className={`w-full py-4 rounded-xl flex items-center justify-center gap-3 transition-all ${isDashboardEditing ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : (isDark ? 'bg-white/5 text-slate-300 border border-white/5 hover:bg-white/10' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 shadow-sm')}`}>
                     {isDashboardEditing ? <Check size={16} /> : <LayoutGrid size={16} />}
                     <span className="text-[10px] font-black uppercase tracking-widest">{isDashboardEditing ? 'Uložit rozložení' : 'Upravit dashboard'}</span>
                   </button>
@@ -227,7 +238,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   <div className={sectionLabelClass}><Monitor size={12} /> HTF Kontext</div>
                   <div className="flex flex-wrap gap-2">
                     {availableTags.htf.map(tag => (
-                      <button key={tag} onClick={() => setFilters(f => ({ ...f, htfConfluences: toggleItem(f.htfConfluences, tag) }))} className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase transition-all ${filters.htfConfluences.includes(tag) ? 'bg-blue-600 border-blue-500 text-white shadow-lg' : 'bg-white/5 border-white/5 text-slate-500'}`}>{tag}</button>
+                      <button key={tag} onClick={() => setFilters(f => ({ ...f, htfConfluences: toggleItem(f.htfConfluences, tag) }))} className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase transition-all ${filters.htfConfluences.includes(tag) ? 'bg-blue-600 border-blue-500 text-white shadow-lg' : (isDark ? 'bg-white/5 border-white/5 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-500 hover:bg-slate-200')}`}>{tag}</button>
                     ))}
                   </div>
                 </div>
@@ -237,7 +248,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   <div className={sectionLabelClass}><Zap size={12} /> LTF Triggery</div>
                   <div className="flex flex-wrap gap-2">
                     {availableTags.ltf.map(tag => (
-                      <button key={tag} onClick={() => setFilters(f => ({ ...f, ltfConfluences: toggleItem(f.ltfConfluences, tag) }))} className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase transition-all ${filters.ltfConfluences.includes(tag) ? 'bg-amber-600 border-amber-500 text-white shadow-lg' : 'bg-white/5 border-white/5 text-slate-500'}`}>{tag}</button>
+                      <button key={tag} onClick={() => setFilters(f => ({ ...f, ltfConfluences: toggleItem(f.ltfConfluences, tag) }))} className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase transition-all ${filters.ltfConfluences.includes(tag) ? 'bg-amber-600 border-amber-500 text-white shadow-lg' : (isDark ? 'bg-white/5 border-white/5 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-500 hover:bg-slate-200')}`}>{tag}</button>
                     ))}
                   </div>
                 </div>
@@ -269,7 +280,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 </div>
               </div>
             </div>
-            <div className="p-5 border-t border-white/5 bg-white/5 text-center backdrop-blur-md flex flex-col gap-2">
+            <div className={`p-5 border-t text-center backdrop-blur-md flex flex-col gap-2 ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50/50'}`}>
               <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Live View Updated • {activeFilterCount} aktivních filtrů</p>
               <button onClick={() => setIsOpen(false)} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest sm:hidden">Použít filtry</button>
             </div>

@@ -194,23 +194,23 @@ const InfoIcon: React.FC<{ text: string; theme: 'dark' | 'light' | 'oled' }> = (
 );
 
 const MASTER_WIDGET_LIST = [
-  { id: 'challenge_target', label: 'Challenge Cíl', category: 'KPIs', icon: <Flag size={18} />, description: 'Sleduje postup k profit targetu (10%).', preview: <div className="text-blue-500 font-black text-xs">Progress: 45%</div> },
-  { id: 'kpi_pnl', label: 'Net P&L', category: 'KPIs', icon: <Trophy size={18} />, description: 'Čistý zisk nebo ztráta účtu.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$215,873</div> },
-  { id: 'kpi_winrate', label: 'Trade win %', category: 'KPIs', icon: <Activity size={18} />, description: 'Procento vítězných obchodů.', preview: <div className="text-blue-500 font-black text-xl">57.97%</div> },
-  { id: 'kpi_execution_rate', label: 'Execution %', category: 'KPIs', icon: <Target size={18} />, description: 'Procento signálů, které jsi reálně vzal.', preview: <div className="text-orange-500 font-black text-xl">92%</div> },
-  { id: 'kpi_profit_factor', label: 'Profit factor', category: 'KPIs', icon: <BarChart3 size={18} />, description: 'Poměr hrubých zisků a ztrát.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>19.89</div> },
-  { id: 'kpi_day_winrate', label: 'Day win %', category: 'KPIs', icon: <CalendarIcon size={18} />, description: 'Procento ziskových obchodních dnů.', preview: <div className="text-purple-500 font-black text-xl">62.15%</div> },
-  { id: 'kpi_avg_win', label: 'Average Win', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Průměrný zisk na vítězný trade.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$450</div> },
-  { id: 'kpi_avg_loss', label: 'Average Loss', category: 'KPIs', icon: <ArrowDown size={18} />, description: 'Průměrná ztráta na trade.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>$320</div> },
-  { id: 'kpi_max_drawdown', label: 'Max Drawdown', category: 'KPIs', icon: <TrendingDown size={18} />, description: 'Největší propad kapitálu.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>12.4%</div> },
-  { id: 'discipline', label: 'Rituály & Disciplína', category: 'Chování', icon: <Brain size={18} />, description: 'Sleduje tvé ranní a večerní rituály.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div> },
-  { id: 'winners_losers', label: 'Výhry a Prohry', category: 'Analýza', icon: <TrendingUp size={18} />, description: 'Statistické srovnání zisků a ztrát.', preview: <div className="flex gap-1"><div className={`w-4 h-4 ${COLORS.bgProfit} ${COLORS.borderProfit} border rounded`} /><div className={`w-4 h-4 ${COLORS.bgLoss} ${COLORS.borderLoss} border rounded`} /></div> },
-  { id: 'monthly_performance', label: 'Měsíční Výkonnost', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Měsíční přehled ziskovosti s heatmapou.', preview: <div className="grid grid-cols-4 gap-0.5"><div className="w-2 h-2 bg-emerald-500/40" /><div className="w-2 h-2 bg-emerald-500/80" /><div className="w-2 h-2 bg-emerald-500/20" /><div className="w-2 h-2 bg-rose-500/40" /></div> },
-  { id: 'equity', label: 'Equity Curve', category: 'Analýza', icon: <Activity size={20} />, description: 'Vizuální cesta tvého kapitálu.', preview: <div className="h-12 w-full px-2 flex items-center"><svg viewBox="0 0 100 40" className="w-full h-full stroke-blue-500 fill-none stroke-[3] opacity-60"><path d="M0,35 Q20,30 40,32 T70,10 T100,5" strokeLinecap="round" /></svg></div> },
-  { id: 'session_performance', label: 'Výkon Sessions', category: 'Analýza', icon: <Globe size={18} />, description: 'Výkon rozdělený podle seancí.', preview: <div className="text-orange-500 font-black text-xs">NY Peak</div> },
-  { id: 'hourly_edge', label: 'Hodinový Výkon', category: 'Analýza', icon: <Clock size={18} />, description: 'Výkonnost podle hodin.', preview: <div className="text-blue-500 font-black text-xs">NY Open</div> },
-  { id: 'daily_edge', label: 'Denní Výkon', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Výkonnost podle dnů v týdnu.', preview: <div className="text-blue-500 font-black text-xs">Tue/Thu Focus</div> },
-  { id: 'calendar', label: 'Obchodní Kalendář', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Denní zisky v kalendáři.', preview: <div className={`${COLORS.textProfit} font-black text-xs`}>Green Month</div> },
+  { id: 'challenge_target', label: 'Challenge Cíl', category: 'KPIs', icon: <Flag size={18} />, description: 'Sleduje postup k profit targetu (10%).', preview: <div className="text-blue-500 font-black text-xs">Progress: 45%</div>, defaultRowSpan: 1 },
+  { id: 'kpi_pnl', label: 'Net P&L', category: 'KPIs', icon: <Trophy size={18} />, description: 'Čistý zisk nebo ztráta účtu.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$215,873</div>, defaultRowSpan: 1 },
+  { id: 'kpi_winrate', label: 'Trade win %', category: 'KPIs', icon: <Activity size={18} />, description: 'Procento vítězných obchodů.', preview: <div className="text-blue-500 font-black text-xl">57.97%</div>, defaultRowSpan: 1 },
+  { id: 'kpi_execution_rate', label: 'Execution %', category: 'KPIs', icon: <Target size={18} />, description: 'Procento signálů, které jsi reálně vzal.', preview: <div className="text-orange-500 font-black text-xl">92%</div>, defaultRowSpan: 1 },
+  { id: 'kpi_profit_factor', label: 'Profit factor', category: 'KPIs', icon: <BarChart3 size={18} />, description: 'Poměr hrubých zisků a ztrát.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>19.89</div>, defaultRowSpan: 1 },
+  { id: 'kpi_day_winrate', label: 'Day win %', category: 'KPIs', icon: <CalendarIcon size={18} />, description: 'Procento ziskových obchodních dnů.', preview: <div className="text-purple-500 font-black text-xl">62.15%</div>, defaultRowSpan: 1 },
+  { id: 'kpi_avg_win', label: 'Average Win', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Průměrný zisk na vítězný trade.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$450</div>, defaultRowSpan: 1 },
+  { id: 'kpi_avg_loss', label: 'Average Loss', category: 'KPIs', icon: <ArrowDown size={18} />, description: 'Průměrná ztráta na trade.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>$320</div>, defaultRowSpan: 1 },
+  { id: 'kpi_max_drawdown', label: 'Max Drawdown', category: 'KPIs', icon: <TrendingDown size={18} />, description: 'Největší propad kapitálu.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>12.4%</div>, defaultRowSpan: 1 },
+  { id: 'discipline', label: 'Rituály & Disciplína', category: 'Chování', icon: <Brain size={18} />, description: 'Sleduje tvé ranní a večerní rituály.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 2 },
+  { id: 'winners_losers', label: 'Výhry a Prohry', category: 'Analýza', icon: <TrendingUp size={18} />, description: 'Statistické srovnání zisků a ztrát.', preview: <div className="flex gap-1"><div className={`w-4 h-4 ${COLORS.bgProfit} ${COLORS.borderProfit} border rounded`} /><div className={`w-4 h-4 ${COLORS.bgLoss} ${COLORS.borderLoss} border rounded`} /></div>, defaultRowSpan: 2 },
+  { id: 'monthly_performance', label: 'Měsíční Výkonnost', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Měsíční přehled ziskovosti s heatmapou.', preview: <div className="grid grid-cols-4 gap-0.5"><div className="w-2 h-2 bg-emerald-500/40" /><div className="w-2 h-2 bg-emerald-500/80" /><div className="w-2 h-2 bg-emerald-500/20" /><div className="w-2 h-2 bg-rose-500/40" /></div>, defaultRowSpan: 2 },
+  { id: 'equity', label: 'Equity Curve', category: 'Analýza', icon: <Activity size={20} />, description: 'Vizuální cesta tvého kapitálu.', preview: <div className="h-12 w-full px-2 flex items-center"><svg viewBox="0 0 100 40" className="w-full h-full stroke-blue-500 fill-none stroke-[3] opacity-60"><path d="M0,35 Q20,30 40,32 T70,10 T100,5" strokeLinecap="round" /></svg></div>, defaultRowSpan: 2 },
+  { id: 'session_performance', label: 'Výkon Sessions', category: 'Analýza', icon: <Globe size={18} />, description: 'Výkon rozdělený podle seancí.', preview: <div className="text-orange-500 font-black text-xs">NY Peak</div>, defaultRowSpan: 2 },
+  { id: 'hourly_edge', label: 'Hodinový Výkon', category: 'Analýza', icon: <Clock size={18} />, description: 'Výkonnost podle hodin.', preview: <div className="text-blue-500 font-black text-xs">NY Open</div>, defaultRowSpan: 2 },
+  { id: 'daily_edge', label: 'Denní Výkon', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Výkonnost podle dnů v týdnu.', preview: <div className="text-blue-500 font-black text-xs">Tue/Thu Focus</div>, defaultRowSpan: 2 },
+  { id: 'calendar', label: 'Obchodní Kalendář', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Denní zisky v kalendáři.', preview: <div className={`${COLORS.textProfit} font-black text-xs`}>Green Month</div>, defaultRowSpan: 3 },
 ];
 
 const CustomKpiTooltip = (props: any) => {
@@ -368,6 +368,24 @@ const ProKpiCard: React.FC<{
   const onPieEnter = (_: any, index: number) => setActiveIndex(index);
   const onPieLeave = () => setActiveIndex(-1);
 
+  // Helper to remove unnecessary .00 decimals
+  const displayValue = useMemo(() => {
+    if (!value.includes('.')) return value;
+    // Handle percentage
+    if (value.endsWith('%')) {
+      const num = parseFloat(value.replace('%', ''));
+      return `${num}%`;
+    }
+    // Handle other numbers (if they don't have currency symbols mixed in complex ways)
+    if (value.startsWith('$')) {
+      const num = parseFloat(value.replace('$', '').replace(/,/g, ''));
+      if (isNaN(num)) return value;
+      return `$${num.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    }
+    const num = parseFloat(value);
+    return isNaN(num) ? value : num.toString();
+  }, [value]);
+
   const renderVisual = () => {
     if (type === 'gauge') {
       const isDays = label.toLowerCase().includes('day');
@@ -384,7 +402,7 @@ const ProKpiCard: React.FC<{
         <div className="flex items-center justify-between w-full h-full pl-2 gap-6">
           <div className="flex flex-col items-start justify-center h-full min-w-0">
             <span className="text-3xl lg:text-4xl font-black tracking-tighter leading-none">
-              {value}
+              {displayValue}
             </span>
           </div>
           <div className="flex flex-col items-center justify-end">
@@ -488,7 +506,7 @@ const ProKpiCard: React.FC<{
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className={`text-xs font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{value}</span>
+              <span className={`text-xs font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayValue}</span>
             </div>
           </div>
           <div className="flex gap-1 mt-2">
@@ -521,7 +539,7 @@ const ProKpiCard: React.FC<{
       <div className="flex-1 flex flex-col items-center justify-center min-h-[60px]">
         {type === 'text' && (
           <div className="text-center">
-            <p className="text-2xl lg:text-3xl font-black tracking-tighter">{value}</p>
+            <p className="text-2xl lg:text-3xl font-black tracking-tighter">{displayValue}</p>
             {subValue && <p className="text-xs font-bold theme-text-secondary mt-1">{subValue}</p>}
           </div>
         )}
@@ -609,11 +627,11 @@ const PerformanceByMonthWidget: React.FC<{ monthlyData: MonthlyData[], theme: 'd
           <InfoIcon text="Měsíční přehled vaší ziskovosti. Intenzita barvy odpovídá velikosti zisku nebo ztráty." theme={theme} />
         </h3>
         <div className="flex gap-4 items-center">
-          <div className="flex bg-slate-950/50 p-1 rounded-lg border border-white/5 text-[9px] font-black uppercase">
+          <div className={`flex ${isDark ? 'bg-slate-950/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[9px] font-black uppercase`}>
             <button onClick={() => setView('individual')} className={`px-2 py-1 rounded ${view === 'individual' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>Individual</button>
             <button onClick={() => setView('accum')} className={`px-2 py-1 rounded ${view === 'accum' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>Accum</button>
           </div>
-          <div className="flex bg-slate-950/50 p-1 rounded-lg border border-white/5 text-[9px] font-black uppercase">
+          <div className={`flex ${isDark ? 'bg-slate-950/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[9px] font-black uppercase`}>
             <button onClick={() => setUnit('pct')} className={`px-2 py-1 rounded ${unit === 'pct' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>% Gain</button>
             <button onClick={() => setUnit('val')} className={`px-2 py-1 rounded ${unit === 'val' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>$ Value</button>
           </div>
@@ -814,7 +832,11 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
     else if (!isEditing) setIsArmoryOpen(false);
   }, [isEditing]);
   const currentLayout = useMemo(() => {
-    return [...layout].filter(w => w.visible).sort((a, b) => (a.order || 0) - (b.order || 0));
+    return [...layout].filter(w => w.visible).map(w => {
+      if (w.rowSpan) return w;
+      const master = MASTER_WIDGET_LIST.find(m => m.id === w.id);
+      return { ...w, rowSpan: (master as any)?.defaultRowSpan || 1 };
+    }).sort((a, b) => (a.order || 0) - (b.order || 0));
   }, [layout]);
   const categories = useMemo(() => {
     const cats: Record<string, any[]> = {};
@@ -831,7 +853,14 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
     } else {
       const template = MASTER_WIDGET_LIST.find(m => m.id === id);
       if (template) {
-        onUpdateLayout([...layout, { id: template.id, label: template.label, visible: true, size: template.id.startsWith('kpi_') ? 'small' : 'large', order: layout.length }]);
+        onUpdateLayout([...layout, {
+          id: template.id,
+          label: template.label,
+          visible: true,
+          size: template.id.startsWith('kpi_') || template.id === 'challenge_target' ? 'small' : 'large',
+          rowSpan: (template as any).defaultRowSpan || 1,
+          order: layout.length
+        }]);
       }
     }
     if (visible && window.innerWidth < 1024) setIsArmoryOpen(false);
@@ -844,6 +873,16 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
         else if (w.size === 'large') nextSize = 'full';
         else if (w.size === 'full') nextSize = 'small';
         return { ...w, size: nextSize };
+      }
+      return w;
+    }));
+  };
+  const toggleWidgetHeight = (id: string) => {
+    onUpdateLayout(layout.map(w => {
+      if (w.id === id) {
+        let nextSpan = (w.rowSpan || 1) + 1;
+        if (nextSpan > 4) nextSpan = 1;
+        return { ...w, rowSpan: nextSpan };
       }
       return w;
     }));
@@ -924,26 +963,35 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
           )}
         </div>
 
-        <div className={`grid grid-cols-4 gap-3 lg:gap-6 items-stretch transition-all duration-700 w-full overflow-x-hidden`}>
+        <div className={`grid grid-cols-4 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] grid-flow-dense transition-all duration-700 w-full overflow-x-hidden`}>
           {currentLayout.map((widget, idx) => {
             const gridClass = widget.size === 'small' ? 'col-span-2 lg:col-span-1' : (widget.size === 'large' ? 'col-span-4 lg:col-span-2' : 'col-span-4');
+            const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
+
             return (
-              <div key={widget.id} className={`${gridClass} relative transition-all duration-500 h-full overflow-visible hover:z-[50]`}>
+              <div key={widget.id} className={`${gridClass} ${rowSpanClass} relative transition-all duration-500 h-full overflow-visible hover:z-[50]`}>
                 {isEditing && (
                   <div className="absolute -top-1 -left-1 -right-1 -bottom-1 z-30 rounded-[28px] border-2 border-dashed border-blue-500 flex flex-col items-center justify-center pointer-events-none bg-blue-500/10 backdrop-blur-[2px]">
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[8px] font-black px-3 py-1 rounded-full uppercase tracking-widest flex items-center gap-2 pointer-events-auto shadow-2xl">
                       <GripVertical size={10} /> {widget.label}
                     </div>
-                    <div className="absolute bottom-4 flex items-center gap-3 pointer-events-auto">
-                      <button onClick={(e) => { e.stopPropagation(); moveWidget(widget.id, 'prev'); }} disabled={idx === 0} className="p-3 bg-slate-900 text-white border border-slate-700 rounded-xl hover:bg-slate-800 disabled:opacity-30 shadow-xl transition-all"><ArrowLeft size={16} /></button>
+                    <div className="absolute bottom-4 flex items-center gap-2 pointer-events-auto">
+                      <button onClick={(e) => { e.stopPropagation(); moveWidget(widget.id, 'prev'); }} disabled={idx === 0} className="p-2 bg-slate-900 text-white border border-slate-700 rounded-lg hover:bg-slate-800 disabled:opacity-30 shadow-xl transition-all"><ArrowLeft size={14} /></button>
                       {widget.id === 'equity' && (
-                        <button onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }} className={`p-3 border rounded-xl shadow-xl transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-900 text-slate-500 border-slate-700'}`} title="Zlatá křivka"><ShieldCheck size={16} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }} className={`p-2 border rounded-lg shadow-xl transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-900 text-slate-500 border-slate-700'}`} title="Zlatá křivka"><ShieldCheck size={14} /></button>
                       )}
-                      <button onClick={(e) => { e.stopPropagation(); toggleWidgetSize(widget.id); }} className="p-3 bg-blue-600 text-white border border-blue-500 rounded-xl hover:bg-blue-500 shadow-xl transition-all" title="Změnit velikost">
-                        {widget.size === 'small' ? <Maximize2 size={16} /> : (widget.size === 'large' ? <ChevronUp size={16} /> : <Minimize2 size={16} />)}
+                      <button onClick={(e) => { e.stopPropagation(); toggleWidgetHeight(widget.id); }} className="p-2 bg-indigo-600 text-white border border-indigo-500 rounded-lg hover:bg-indigo-500 shadow-xl transition-all flex flex-col items-center gap-0.5" title="Změnit výšku">
+                        <div className="flex gap-0.5">
+                          {[...Array(4)].map((_, i) => (
+                            <div key={i} className={`w-1 h-3 rounded-full ${i < (widget.rowSpan || 1) ? 'bg-white' : 'bg-white/20'}`} />
+                          ))}
+                        </div>
                       </button>
-                      <button onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }} className="p-3 bg-rose-600 text-white border border-rose-500 rounded-xl hover:bg-rose-500 shadow-xl transition-all"><Trash2 size={16} /></button>
-                      <button onClick={(e) => { e.stopPropagation(); moveWidget(widget.id, 'next'); }} disabled={idx === currentLayout.length - 1} className="p-3 bg-slate-900 text-white border border-slate-700 rounded-xl hover:bg-slate-800 disabled:opacity-30 shadow-xl transition-all"><ArrowRight size={16} /></button>
+                      <button onClick={(e) => { e.stopPropagation(); toggleWidgetSize(widget.id); }} className="p-2 bg-blue-600 text-white border border-blue-500 rounded-lg hover:bg-blue-500 shadow-xl transition-all" title="Změnit šířku">
+                        {widget.size === 'small' ? <Maximize2 size={14} /> : (widget.size === 'large' ? <ChevronUp size={14} /> : <Minimize2 size={14} />)}
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }} className="p-2 bg-rose-600 text-white border border-rose-500 rounded-lg hover:bg-rose-500 shadow-xl transition-all"><Trash2 size={14} /></button>
+                      <button onClick={(e) => { e.stopPropagation(); moveWidget(widget.id, 'next'); }} disabled={idx === currentLayout.length - 1} className="p-2 bg-slate-900 text-white border border-slate-700 rounded-lg hover:bg-slate-800 disabled:opacity-30 shadow-xl transition-all"><ArrowRight size={14} /></button>
                     </div>
                   </div>
                 )}

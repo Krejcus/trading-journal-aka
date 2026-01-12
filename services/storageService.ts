@@ -1,5 +1,5 @@
 
-import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings } from '../types';
+import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus } from '../types';
 import { supabase } from './supabase';
 
 // Helper to validate UUID
@@ -401,6 +401,47 @@ export const storageService = {
   async saveWeeklyReviews(_reviews: WeeklyReview[]): Promise<void> { },
   async getMonthlyReviews(): Promise<MonthlyReview[]> { return []; },
   async saveMonthlyReviews(_reviews: MonthlyReview[]): Promise<void> { },
+
+  // Weekly Focus
+  async getWeeklyFocus(weekISO: string): Promise<WeeklyFocus | null> {
+    const userId = await getUserId();
+    if (!userId) return null;
+    const { data, error } = await supabase
+      .from('weekly_focus')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('week_iso', weekISO)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return { id: data.id, weekISO: data.week_iso, goals: data.goals };
+  },
+
+  async getWeeklyFocusList(): Promise<WeeklyFocus[]> {
+    const userId = await getUserId();
+    if (!userId) return [];
+    const { data, error } = await supabase
+      .from('weekly_focus')
+      .select('*')
+      .eq('user_id', userId);
+
+    if (error) return [];
+    return data.map(d => ({ id: d.id, weekISO: d.week_iso, goals: d.goals }));
+  },
+
+  async saveWeeklyFocus(focus: WeeklyFocus): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) return;
+    const { error } = await supabase
+      .from('weekly_focus')
+      .upsert({
+        user_id: userId,
+        week_iso: focus.weekISO,
+        goals: focus.goals
+      }, { onConflict: 'user_id,week_iso' });
+
+    if (error) throw error;
+  },
 
   // Business Hub
   async getBusinessExpenses(): Promise<BusinessExpense[]> {

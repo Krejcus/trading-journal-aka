@@ -1,3 +1,20 @@
+import { Time } from 'lightweight-charts';
+
+export interface DrawingObject {
+  id: string;
+  type: 'line' | 'rect' | 'text' | 'fib' | 'horizontal';
+  p1: { time: number | Time; price: number };
+  p2?: { time: number | Time; price: number };
+  text?: string;
+  color?: string;
+  lineWidth?: number;
+  lineStyle?: 'solid' | 'dashed' | 'dotted';
+  fibLevels?: { value: number; active: boolean; color?: string }[];
+  extendLines?: boolean;
+  showPrices?: boolean;
+  showTrendline?: boolean;
+  visibleTimeframes?: string[];
+}
 
 export interface User {
   id: string;
@@ -273,7 +290,14 @@ export interface DailyReview {
   goalResults?: GoalResult[];
   scenarioResult?: 'Bullish' | 'Bearish' | 'Range' | 'Unpredicted';
   ruleAdherence?: RuleCompletion[];
+  weeklyGoalAdherence?: RuleCompletion[];
   psycho?: PsychoState;
+}
+
+export interface WeeklyFocus {
+  id: string;
+  weekISO: string; // e.g. "2026-W02"
+  goals: string[];
 }
 
 export interface WeeklyReview {
@@ -366,6 +390,7 @@ export interface DashboardWidgetConfig {
   label: string;
   visible: boolean;
   size: 'small' | 'large' | 'full';
+  rowSpan?: number;
   order: number;
   showDisciplinedCurve?: boolean;
 }

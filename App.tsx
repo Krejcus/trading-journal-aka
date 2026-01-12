@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
-import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode } from './types';
+import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus } from './types';
 import FileUpload from './components/FileUpload';
 import Dashboard from './components/Dashboard';
 import ManualTradeForm from './components/ManualTradeForm';
@@ -173,6 +173,8 @@ const App: React.FC = () => {
     { id: 'energy', label: 'Energie', color: '#f59e0b' }
   ]);
 
+  const [weeklyFocusList, setWeeklyFocusList] = useState<WeeklyFocus[]>([]);
+
 
   const [activePage, setActivePage] = useState('dashboard');
   const [theme, setTheme] = useState<'dark' | 'light' | 'oled'>(() => {
@@ -309,12 +311,14 @@ const App: React.FC = () => {
         const prefs = await storageService.getPreferences();
         const storedUser = await storageService.getUser();
         const activeId = storageService.getActiveAccountId();
+        const storedWeeklyFocus = await storageService.getWeeklyFocusList();
 
         if (storedUser) setCurrentUser(storedUser);
         setActiveAccountId(activeId || (finalAccounts[0]?.id || ''));
 
         setDailyPreps(storedPreps || []);
         setDailyReviews(storedReviews || []);
+        setWeeklyFocusList(storedWeeklyFocus || []);
 
         if (prefs) {
           if (prefs.emotions) setUserEmotions(prefs.emotions);
@@ -455,6 +459,18 @@ const App: React.FC = () => {
   }, [dailyReviews, sharedTrade, session, isInitialLoadDone]);
 
   useEffect(() => { if (!sharedTrade && session && isInitialLoadDone) storageService.setActiveAccountId(activeAccountId); }, [activeAccountId, sharedTrade, session, isInitialLoadDone]);
+
+  useEffect(() => {
+    if (!sharedTrade && session && isInitialLoadDone && weeklyFocusList.length > 0) {
+      const timer = setTimeout(() => {
+        // We only save the one that might have changed if we wanted to be efficient, 
+        // but for now, we'll just handle it in the save function if we use a specific trigger.
+        // Or just save all (upsert).
+        weeklyFocusList.forEach(wf => storageService.saveWeeklyFocus(wf));
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [weeklyFocusList, sharedTrade, session, isInitialLoadDone]);
 
   // Handle theme persistence independently of session
   useEffect(() => {
@@ -1003,6 +1019,7 @@ const App: React.FC = () => {
                   ironRules={ironRules}
                   psychoMetrics={psychoMetrics}
                   viewMode={viewMode}
+                  weeklyFocusList={weeklyFocusList}
                 />
               )}
 
@@ -1039,7 +1056,8 @@ const App: React.FC = () => {
                   setIronRules={setIronRules}
                   psychoMetrics={psychoMetrics}
                   setPsychoMetrics={setPsychoMetrics}
-
+                  weeklyFocusList={weeklyFocusList}
+                  setWeeklyFocusList={setWeeklyFocusList}
                 />
               )}
 

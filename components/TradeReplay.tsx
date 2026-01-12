@@ -1,11 +1,15 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, BaselineSeries } from 'lightweight-charts';
 import { Trade } from '../types';
 import ChartToolbar, { DrawingTool } from './ChartToolbar';
+import { InteractiveOverlay } from './InteractiveOverlay';
+import { DrawingObject } from '../types';
 import { storageService } from '../services/storageService';
 import { X, Play, Pause, RotateCcw, FastForward, Settings2, Square, ArrowRight, Maximize2, Eraser } from 'lucide-react';
 import { aggregateCandles } from '../utils/candleUtils';
+import { PlaybackWidget } from './PlaybackWidget';
 
+// Cache bust 2026-01-11
 interface TradeReplayProps {
     trade: Trade;
     theme: 'dark' | 'light' | 'oled';
@@ -18,54 +22,91 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
     const tpSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
     const slSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+    const chartContainer2Ref = useRef<HTMLDivElement>(null);
+    const chart2Ref = useRef<IChartApi | null>(null);
+    const series2Ref = useRef<ISeriesApi<"Candlestick"> | null>(null);
+    const cleanupRef = useRef<(() => void) | null>(null);
+    const subDurationRef = useRef<number>(240 * 60); // Default 4 hours
+    const isSyncingRef = useRef<boolean>(false);
+    const priceOffsetRef = useRef<number>(0);
 
     const [activeTool, setActiveTool] = useState<DrawingTool>('cursor');
-
-    // Drawing State
-    interface DrawingObject {
-        id: string;
-        type: 'line' | 'rect' | 'text' | 'fib' | 'horizontal';
-        p1: { time: number | Time; price: number };
-        p2?: { time: number | Time; price: number }; // Optional for text
-        text?: string;
-        color?: string;
-        lineWidth?: number;
-    }
-
-
     const [drawings, setDrawings] = useState<DrawingObject[]>(trade.drawings || []);
-    const [currentDrawing, setCurrentDrawing] = useState<Partial<DrawingObject> | null>(null);
+    const [past, setPast] = useState<DrawingObject[][]>([]);
+    const [future, setFuture] = useState<DrawingObject[][]>([]);
+    const [magnetMode, setMagnetMode] = useState(false);
+    const [hoverPrice, setHoverPrice] = useState<number | null>(null);
+    const [hoverTime, setHoverTime] = useState<number | null>(null);
     const [chartRevision, setChartRevision] = useState(0);
     const [isSaving, setIsSaving] = useState(false);
 
-    // Auto-save drawings
+    // Replay & Basic State
+    const [allData, setAllData] = useState<CandlestickData[]>([]);
+    const [isReplayMode, setIsReplayMode] = useState(false);
+    const [playbackTime, setPlaybackTime] = useState<number | null>(null);
+    const [isReplayPlaying, setIsReplayPlaying] = useState(false);
+    const [replaySpeed, setReplaySpeed] = useState(1000); // Default 1s
+    const [isCutToolActive, setIsCutToolActive] = useState(false);
+    const isDark = theme !== 'light';
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [containerReady, setContainerReady] = useState(false);
+    const [chartReady, setChartReady] = useState(false);
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, drawingId: string } | null>(null);
+    const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+    const [dragMode, setDragMode] = useState<'move' | 'resize-p1' | 'resize-p2' | null>(null);
+    const [dragStart, setDragStart] = useState<{ time: number; price: number } | null>(null);
+    const [initialDrawingState, setInitialDrawingState] = useState<DrawingObject | null>(null);
+    const [crosshairValues, setCrosshairValues] = useState<{ open: string, high: string, low: string, close: string, date: string } | null>(null);
+    const [activeLayout, setActiveLayout] = useState<'single' | 'split'>('single');
+    const [mainTimeframe, setMainTimeframe] = useState<'1m' | '5m' | '15m' | '1h' | '4h' | 'D'>('15m');
+    const [secondaryTimeframe, setSecondaryTimeframe] = useState<'5m' | '15m' | '1h'>('15m');
+    const [isFetchingMore, setIsFetchingMore] = useState(false);
+
+    // Ref for latest drawings to use in cleanup
+    const drawingsRef = useRef<DrawingObject[]>(drawings);
+    useEffect(() => {
+        drawingsRef.current = drawings;
+    }, [drawings]);
+
+    const saveDrawingsImmediately = useCallback(async (toSave: DrawingObject[]) => {
+        setIsSaving(true);
+        try {
+            await storageService.updateTradeDrawings(trade.id, toSave);
+            // Also update the trade object in memory if possible (though it's a prop)
+            // trade.drawings = toSave; 
+        } catch (err) {
+            console.error("Failed to save drawings immediately", err);
+        } finally {
+            setIsSaving(false);
+        }
+    }, [trade.id]);
+
+    // Auto-save drawings (Debounced for dragging)
     useEffect(() => {
         // Skip first render if matches initial prop
         if (JSON.stringify(drawings) === JSON.stringify(trade.drawings)) return;
 
         const timer = setTimeout(async () => {
-            setIsSaving(true);
-            try {
-                await storageService.updateTradeDrawings(trade.id, drawings);
-                // console.log("Drawings saved");
-            } catch (err) {
-                console.error("Failed to save drawings", err);
-            } finally {
-                setIsSaving(false);
-            }
+            saveDrawingsImmediately(drawings);
         }, 1000); // 1s debounce
 
-        return () => clearTimeout(timer);
-    }, [drawings, trade.id]);
+        return () => {
+            clearTimeout(timer);
+        };
+    }, [drawings, saveDrawingsImmediately, trade.drawings]);
+
+    // Save on unmount if changed
+    useEffect(() => {
+        return () => {
+            if (JSON.stringify(drawingsRef.current) !== JSON.stringify(trade.drawings)) {
+                storageService.updateTradeDrawings(trade.id, drawingsRef.current).catch(console.error);
+            }
+        };
+    }, [trade.id, trade.drawings]);
 
     // Force re-render overlay when chart moves
     // ... existing effect for chartRevision
-
-
-    // Force re-render overlay when chart moves
-
-
-    const [magnetMode, setMagnetMode] = useState(false);
 
     // Drawing Handlers
     const getChartCoordinates = (e: React.MouseEvent) => {
@@ -84,7 +125,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         if (time === null || price === null) return null;
 
         // Magnet Mode Logic
-        if (magnetMode && allData.length > 0) {
+        if (magnetMode && Array.isArray(allData) && allData.length > 0) {
             // Find closest candle in time
             // Assuming time is a timestamp (seconds)
             const t = time as number;
@@ -131,240 +172,37 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         return { time, price };
     };
 
-    // --- Advanced Interaction Logic ---
+    // --- Undo/Redo Logic ---
+    const recordAction = useCallback((newDrawings: DrawingObject[]) => {
+        setPast(prev => [...prev, drawings]);
+        setFuture([]);
+        setDrawings(newDrawings);
+    }, [drawings]);
 
-    // Interaction Handlers
-    const handleMouseDown = (e: React.MouseEvent) => {
-        // If context menu is open, don't interact
-        if (contextMenu) {
-            setContextMenu(null);
-            return;
-        }
+    const handleUndo = useCallback(() => {
+        if (past.length === 0) return;
+        const previous = past[past.length - 1];
+        const newPast = past.slice(0, past.length - 1);
+        setPast(newPast);
+        setFuture(prev => [drawings, ...prev]);
+        setDrawings(previous);
+    }, [past, drawings]);
 
-        const rect = chartContainerRef.current?.getBoundingClientRect();
-        if (!rect || !chartRef.current || !seriesRef.current) return;
+    const handleRedo = useCallback(() => {
+        if (future.length === 0) return;
+        const next = future[0];
+        const newFuture = future.slice(1);
+        setPast(prev => [...prev, drawings]);
+        setFuture(newFuture);
+        setDrawings(next);
+    }, [future, drawings]);
 
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-
-        const timeScale = chartRef.current.timeScale();
-        const series = seriesRef.current;
-        const time = timeScale.coordinateToTime(x) as number;
-        const price = series.coordinateToPrice(y);
-
-        if (!time || !price) return;
-
-        // 1. Check for Drag/Resize (only if cursor tool)
-        if (activeTool === 'cursor') {
-            // Check for Resize Anchors first (if something is selected)
-            if (selectedDrawingId) {
-                const selected = drawings.find(d => d.id === selectedDrawingId);
-                if (selected) {
-                    const checkAnchor = (p: { time: number | Time, price: number }) => {
-                        const ax = timeScale.timeToCoordinate(p.time as Time);
-                        const ay = series.priceToCoordinate(p.price);
-                        if (ax === null || ay === null) return false;
-                        return Math.abs(x - ax) < 8 && Math.abs(y - ay) < 8; // 8px hit radius
-                    };
-
-                    if (checkAnchor(selected.p1)) {
-                        setDragMode('resize-p1');
-                        setDragStart({ time, price });
-                        setInitialDrawingState({ ...selected });
-                        return;
-                    }
-                    if (selected.p2 && checkAnchor(selected.p2)) {
-                        setDragMode('resize-p2');
-                        setDragStart({ time, price });
-                        setInitialDrawingState({ ...selected });
-                        return;
-                    }
-                }
-            }
-
-            // Check for Selection / Move
-            // Simple hit test for lines/rects
-            const hitDrawing = drawings.slice().reverse().find(d => {
-                const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
-                const y1 = series.priceToCoordinate(d.p1.price);
-                if (x1 === null || y1 === null) return false;
-
-                if (d.p2) {
-                    const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
-                    const y2 = series.priceToCoordinate(d.p2.price);
-                    if (x2 === null || y2 === null) return false;
-
-                    // Rect/Image Hit Test
-                    if (d.type === 'rect') {
-                        return x >= Math.min(x1, x2) && x <= Math.max(x1, x2) &&
-                            y >= Math.min(y1, y2) && y <= Math.max(y1, y2);
-                    }
-                    // Line/Fib Hit Test (Distance to segment)
-                    if (d.type === 'line' || d.type === 'fib') {
-                        const dist = Math.abs((y2 - y1) * x - (x2 - x1) * y + x2 * y1 - y2 * x1) / Math.sqrt(Math.pow(y2 - y1, 2) + Math.pow(x2 - x1, 2));
-                        return dist < 5;
-                    }
-                } else if (d.type === 'horizontal') {
-                    // Horizontal Line Hit Test
-                    return Math.abs(y - y1) < 5;
-                } else if (d.type === 'text') {
-                    // Text Hit Test (Approximate box)
-                    return Math.abs(x - x1) < 20 && Math.abs(y - y1) < 10;
-                }
-                return false;
-            });
-
-            if (hitDrawing) {
-                setSelectedDrawingId(hitDrawing.id);
-                setDragMode('move');
-                setDragStart({ time, price });
-                setInitialDrawingState({ ...hitDrawing });
-            } else {
-                setSelectedDrawingId(null);
-            }
-            return;
-        }
-
-        // 2. Start New Drawing
-        // Use getChartCoordinates for snapping if needed, but for now raw is fine or we call it
-        // Re-using getChartCoordinates to keep snapping logic
-        const coords = getChartCoordinates(e);
-        if (!coords) return;
-
-        const id = crypto.randomUUID();
-
-        // For Horizontal Ray, we create immediately on click
-        if (activeTool === 'horizontal') {
-            const newDrawing: DrawingObject = {
-                id,
-                type: 'horizontal',
-                p1: coords,
-                color: isDark ? '#3b82f6' : '#2563eb',
-                lineWidth: 2
-            };
-            setDrawings(prev => [...prev, newDrawing]);
-            setActiveTool('cursor'); // Auto-reset
-            return;
-        }
-
-        setCurrentDrawing({
-            id,
-            type: activeTool as DrawingObject['type'],
-            p1: coords
-        });
-    };
-
-    const handleMouseMove = (e: React.MouseEvent) => {
-        const rect = chartContainerRef.current?.getBoundingClientRect();
-        if (!rect || !chartRef.current || !seriesRef.current) return;
-
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-
-        const timeScale = chartRef.current.timeScale();
-        const series = seriesRef.current;
-        const time = timeScale.coordinateToTime(x) as number;
-        const price = series.coordinateToPrice(y);
-
-        if (!time || !price) return;
-
-        // Handle Dragging / Resizing
-        if (dragMode && dragStart && initialDrawingState && selectedDrawingId) {
-            const timeDiff = time - dragStart.time;
-            const priceDiff = price - dragStart.price;
-
-            setDrawings(prev => prev.map(d => {
-                if (d.id !== selectedDrawingId) return d;
-
-                if (dragMode === 'move') {
-                    return {
-                        ...d,
-                        p1: {
-                            time: ((initialDrawingState.p1.time as number) + timeDiff) as Time,
-                            price: initialDrawingState.p1.price + priceDiff
-                        },
-                        p2: d.p2 ? {
-                            time: ((initialDrawingState.p2?.time as number) + timeDiff) as Time,
-                            price: (initialDrawingState.p2?.price || 0) + priceDiff
-                        } : undefined
-                    };
-                } else if (dragMode === 'resize-p1') {
-                    return {
-                        ...d,
-                        p1: { time, price }
-                    };
-                } else if (dragMode === 'resize-p2') {
-                    return {
-                        ...d,
-                        p2: { time, price }
-                    };
-                }
-                return d;
-            }));
-            return;
-        }
-
-        // Handle New Drawing Creation
-        if (currentDrawing) {
-            // Reuse coords with snap
-            const coords = getChartCoordinates(e);
-            if (!coords) return;
-
-            setCurrentDrawing(prev => prev ? {
-                ...prev,
-                p2: coords // Update end point
-            } : null);
-        }
-    };
-
-    const handleMouseUp = () => {
-        // End Dragging
-        if (dragMode) {
-            setDragMode(null);
-            setDragStart(null);
-            setInitialDrawingState(null);
-            return;
-        }
-
-        // End New Drawing
-        if (currentDrawing) {
-            if (currentDrawing.p2) { // Only save if moved
-                setDrawings(prev => [...prev, currentDrawing as DrawingObject]);
-            }
-            setCurrentDrawing(null);
-            setActiveTool('cursor'); // Auto-reset tool
-        }
-    };
-
-    // Shortcuts
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
-            // Tools Shortcuts
-            if (e.key.toLowerCase() === 't') setActiveTool(e.shiftKey ? 'text' : 'line');
-            if (e.key.toLowerCase() === 'r') setActiveTool('rect');
-
-            // Delete / Esc are handled in the other effect above
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, []);
-
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [playbackSpeed, setPlaybackSpeed] = useState(1);
-    const [progress, setProgress] = useState(0);
-    const [allData, setAllData] = useState<CandlestickData[]>([]);
-
-    const isDark = theme !== 'light';
-
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [containerReady, setContainerReady] = useState(false);
-    const [chartReady, setChartReady] = useState(false);
-
-    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, drawingId: string } | null>(null);
+    // Update setDrawings usage to record history when appropriate
+    const updateDrawingsWithHistory = useCallback((updated: DrawingObject[]) => {
+        recordAction(updated);
+        // Save immediately for actions that are considered "complete" (like deletion or context menu changes)
+        saveDrawingsImmediately(updated);
+    }, [recordAction, saveDrawingsImmediately]);
 
     const handleContextMenu = (e: React.MouseEvent, drawingId: string) => {
         e.preventDefault();
@@ -386,18 +224,20 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         return () => window.removeEventListener('click', closeMenu);
     }, []);
 
-    // Interactive Drawing State
-    const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
-    const [dragMode, setDragMode] = useState<'move' | 'resize-p1' | 'resize-p2' | null>(null);
-    const [dragStart, setDragStart] = useState<{ time: number; price: number } | null>(null);
-    const [initialDrawingState, setInitialDrawingState] = useState<DrawingObject | null>(null);
+    // --- Advanced Interaction Logic ---
+
+    // Interaction Handlers
+
+    // Shortcuts
+
+
 
     // Keyboard Handling (Delete / Escape)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 if (selectedDrawingId) {
-                    setDrawings(prev => prev.filter(d => d.id !== selectedDrawingId));
+                    updateDrawingsWithHistory(drawings.filter(d => d.id !== selectedDrawingId));
                     setSelectedDrawingId(null);
                 }
             } else if (e.key === 'Escape') {
@@ -414,23 +254,17 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
     }, [selectedDrawingId, activeTool]);
 
     // Crosshair Legend State
-    const [crosshairValues, setCrosshairValues] = useState<{ open: string, high: string, low: string, close: string, date: string } | null>(null);
 
+    // Derived Data (Filtered for Replay)
+    const filteredData = useMemo(() => {
+        if (!isReplayMode || playbackTime === null) return allData;
+        return allData.filter(d => (d.time as number) <= playbackTime);
+    }, [allData, isReplayMode, playbackTime]);
 
-
-    // Multi-Chart State
-    const [activeLayout, setActiveLayout] = useState<'single' | 'split'>('single');
-    const [secondaryTimeframe, setSecondaryTimeframe] = useState<'5m' | '15m' | '1h'>('15m');
-
-    const chartContainer2Ref = useRef<HTMLDivElement>(null);
-    const chart2Ref = useRef<IChartApi | null>(null);
-    const series2Ref = useRef<ISeriesApi<"Candlestick"> | null>(null);
-
-    // Derived Data
     const secondaryData = useMemo(() => {
-        if (allData.length === 0) return [];
-        return aggregateCandles(allData, secondaryTimeframe);
-    }, [allData, secondaryTimeframe]);
+        if (!Array.isArray(filteredData) || filteredData.length === 0) return [];
+        return aggregateCandles(filteredData, secondaryTimeframe);
+    }, [filteredData, secondaryTimeframe]);
 
     // Init Chart 2
     useEffect(() => {
@@ -440,63 +274,98 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 chart2Ref.current = null;
                 series2Ref.current = null;
             }
+            // Ensure main chart resizes when back to single
+            setTimeout(() => {
+                if (chartRef.current && chartContainerRef.current) {
+                    chartRef.current.applyOptions({
+                        width: chartContainerRef.current.clientWidth,
+                        height: chartContainerRef.current.clientHeight
+                    });
+                }
+            }, 50);
             return;
         }
 
-        if (chart2Ref.current) return; // Already init
+        if (chart2Ref.current) return;
 
-        const container = chartContainer2Ref.current;
-        const width = container.clientWidth;
-        const height = container.clientHeight;
+        let timer: any = null;
 
-        const chart = createChart(container, {
-            layout: {
-                background: { color: isDark ? '#131722' : '#ffffff' },
-                textColor: isDark ? '#d1d4dc' : '#131722',
-            },
-            grid: {
-                vertLines: { color: isDark ? '#2a2e39' : '#e0e3eb' },
-                horzLines: { color: isDark ? '#2a2e39' : '#e0e3eb' },
-            },
-            timeScale: {
-                borderColor: isDark ? '#2a2e39' : '#e0e3eb',
-                timeVisible: true,
-                secondsVisible: false,
-            },
-            width,
-            height
-        });
+        timer = setTimeout(() => {
+            if (!chartContainer2Ref.current) return;
+            const container = chartContainer2Ref.current;
+            const width = container.clientWidth;
+            const height = container.clientHeight;
 
-        const series = chart.addSeries(CandlestickSeries, {
-            upColor: '#cfd8dc', // Grey for Bullish
-            downColor: '#2962ff', // Blue for Bearish
-            borderVisible: true,
-            borderColor: '#cfd8dc',
-            wickUpColor: '#cfd8dc',
-            wickDownColor: '#2962ff',
-        });
+            if (width === 0 || height === 0) return;
 
-        chart2Ref.current = chart;
-        series2Ref.current = series;
+            const chart = createChart(container, {
+                layout: {
+                    background: { color: isDark ? '#131722' : '#ffffff' },
+                    textColor: isDark ? '#d1d4dc' : '#131722',
+                },
+                grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+                timeScale: {
+                    borderColor: isDark ? '#2a2e39' : '#e0e3eb',
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+                width,
+                height
+            });
 
-        // Sync Logic
-        if (chartRef.current) {
-            const mainTimeScale = chartRef.current.timeScale();
-            const subTimeScale = chart.timeScale();
+            if (chartRef.current && chartContainerRef.current) {
+                chartRef.current.applyOptions({
+                    width: chartContainerRef.current.clientWidth,
+                    height: chartContainerRef.current.clientHeight
+                });
+            }
 
-            const syncHandler = () => {
-                const timeRange = mainTimeScale.getVisibleRange();
-                if (timeRange) {
-                    subTimeScale.setVisibleRange(timeRange);
+            const series = chart.addSeries(CandlestickSeries, {
+                upColor: '#cfd8dc', downColor: '#2962ff',
+                borderVisible: true, borderColor: '#cfd8dc',
+                wickUpColor: '#cfd8dc', wickDownColor: '#2962ff',
+            });
+
+            chart2Ref.current = chart;
+            series2Ref.current = series;
+
+            if (Array.isArray(secondaryData) && secondaryData.length > 0) {
+                try { series.setData(secondaryData); } catch (e) { }
+            }
+
+            if (chartRef.current) {
+                const mainTimeScale = chartRef.current.timeScale();
+                const subTimeScale = chart.timeScale();
+
+                // 1. Initial Sync Alignment
+                const mainRange = mainTimeScale.getVisibleRange();
+                if (mainRange?.to) {
+                    const to = mainRange.to as number;
+                    subTimeScale.setVisibleRange({
+                        from: (to - subDurationRef.current) as Time,
+                        to: to as Time
+                    });
                 }
-            };
-            mainTimeScale.subscribeVisibleTimeRangeChange(syncHandler);
-        }
+            }
+        }, 50);
+
+        return () => {
+            if (timer) clearTimeout(timer);
+            if (cleanupRef.current) {
+                cleanupRef.current();
+                cleanupRef.current = null;
+            }
+            if (chart2Ref.current) {
+                chart2Ref.current.remove();
+                chart2Ref.current = null;
+                series2Ref.current = null;
+            }
+        };
     }, [activeLayout, isDark, containerReady]);
 
     // Update Chart 2 Data
     useEffect(() => {
-        if (chart2Ref.current && series2Ref.current && secondaryData.length > 0) {
+        if (chart2Ref.current && series2Ref.current && Array.isArray(secondaryData) && secondaryData.length > 0) {
             series2Ref.current.setData(secondaryData);
         }
     }, [secondaryData, activeLayout]);
@@ -553,14 +422,15 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
             setIsLoading(true);
             setError(null);
-            setAllData([]); // Reset data
 
             try {
-                // Determine instrument for API
-                // Fetch data around EXIT time (trade.date)
-                // We might need to fetch a wider range if trade is long?
-                // Currently fetching data for the day of exit.
-                const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&date=${encodeURIComponent(trade.date)}`);
+                const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                // Initial range: much smaller for fast load
+                const daysToFetch = (mainTimeframe === '1m' || mainTimeframe === '5m') ? 1 : 3;
+                const from = new Date((exitTimeRaw - daysToFetch * 24 * 3600) * 1000).toISOString();
+                const to = new Date((exitTimeRaw + 1 * 24 * 3600) * 1000).toISOString();
+
+                const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}`);
 
                 if (!response.ok) {
                     const errData = await response.json();
@@ -570,90 +440,43 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 const rawData = await response.json();
 
                 if (Array.isArray(rawData) && rawData.length > 0) {
-                    // 1. Calculate Offset for Futures vs Spot correction
                     let priceOffset = 0;
-
-                    // CRITICAL FIX: trade.date is EXIT time.
-                    // Calculate Entry Time: Exit Time - Duration
-                    const exitTimeRaw = new Date(trade.date).getTime() / 1000;
                     const durationSeconds = (trade.durationMinutes || 0) * 60;
-                    const entryTime = exitTimeRaw - durationSeconds;
-
+                    const entryTimeRaw = exitTimeRaw - durationSeconds;
                     const entryPrice = parseFloat(String(trade.entryPrice || 0));
 
-                    // Timezone correction: Shift chart time to match user's local wall clock
-                    // getTimezoneOffset returns minutes (e.g. -60 for GMT+1). We want seconds to ADD.
-                    // So we invert sign and multiply by 60.
                     const timeOffset = -new Date().getTimezoneOffset() * 60;
-
-                    // Robust Candle Search & Timezone Auto-Detection:
-                    // We need to decide if `entryTime` is UTC or Local-as-UTC.
-                    // We check which assumption aligns better with the fetched (UTC) candles.
 
                     let bestCandle = null;
                     let minDiff = Infinity;
-                    let detectedIsLocal = false; // Flag to determine format
+                    let detectedIsLocal = false;
 
-                    // Case A: Assume Stored Time is UTC
-                    // We look for candle matching `entryTime` directly.
-                    let minDiffUtc = Infinity;
-                    let bestCandleUtc = null;
+                    for (const d of rawData) {
+                        const t = d.time;
+                        const diffLocal = Math.abs(t - entryTimeRaw);
+                        const diffUtc = Math.abs(t - (entryTimeRaw + timeOffset));
 
-                    rawData.forEach((d: any) => {
-                        const diff = Math.abs(d.time - entryTime);
-                        if (diff < minDiffUtc) {
-                            minDiffUtc = diff;
-                            bestCandleUtc = d;
+                        if (diffLocal < minDiff) {
+                            minDiff = diffLocal; bestCandle = d; detectedIsLocal = true;
                         }
-                    });
-
-                    // Case B: Assume Stored Time is Local-as-UTC
-                    // To match a UTC candle, we must UNSHIFT the entryTime (subtract offset)
-                    // Or compare `entryTime` (Local) vs `d.time + offset` (Local).
-                    // Let's compare in UTC space: `entryTime - timeOffset` vs `d.time`.
-                    const entryTimeAsLocalDesc = entryTime; // It technically "looks" like local time
-                    const entryTimeTrueUtc = entryTimeAsLocalDesc - timeOffset;
-
-                    let minDiffLocal = Infinity;
-                    let bestCandleLocal = null;
-
-                    rawData.forEach((d: any) => {
-                        const diff = Math.abs(d.time - entryTimeTrueUtc);
-                        if (diff < minDiffLocal) {
-                            minDiffLocal = diff;
-                            bestCandleLocal = d;
+                        if (diffUtc < minDiff) {
+                            minDiff = diffUtc; bestCandle = d; detectedIsLocal = false;
                         }
-                    });
-
-                    // Decision: Which error is smaller?
-                    // We assume valid trades will be reasonably close.
-                    if (minDiffLocal < minDiffUtc) {
-                        // It's Local-as-UTC
-                        bestCandle = bestCandleLocal;
-                        minDiff = minDiffLocal;
-                        detectedIsLocal = true;
-                        // console.log("Detected Local-as-UTC storage");
-                    } else {
-                        // It's UTC
-                        bestCandle = bestCandleUtc;
-                        minDiff = minDiffUtc;
-                        detectedIsLocal = false;
-                        // console.log("Detected UTC storage");
                     }
 
-                    // Accept matches within 4 hours
                     if (bestCandle && minDiff < 4 * 3600 && entryPrice) {
                         priceOffset = entryPrice - (bestCandle as any).close;
-                        console.log(`Auto-calibration: Found candle (Diff: ${minDiff}s). Offset: ${priceOffset}. Format: ${detectedIsLocal ? 'Local' : 'UTC'}`);
+                        priceOffsetRef.current = priceOffset;
                     }
 
                     const validData = rawData.map((d: any) => ({
-                        time: (d.time + timeOffset) as Time, // Shift to visual local time
+                        time: (d.time + timeOffset) as Time,
                         open: d.open + priceOffset,
                         high: d.high + priceOffset,
                         low: d.low + priceOffset,
                         close: d.close + priceOffset
                     }));
+
                     setAllData(validData);
                 } else {
                     setError('No data found for this period');
@@ -667,7 +490,49 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
         };
 
         fetchData();
-    }, [trade]); // Only depends on trade
+    }, [trade.id, trade.instrument, trade.date, trade.durationMinutes, trade.entryPrice, mainTimeframe]);
+
+    const loadMorePast = useCallback(async () => {
+        if (isFetchingMore || allData.length === 0 || !trade.instrument) return;
+
+        setIsFetchingMore(true);
+        try {
+            const firstTime = allData[0].time as number;
+            const timeOffset = -new Date().getTimezoneOffset() * 60;
+            // Fetch in chunks of 7 days for 1m/5m, or 30 days for higher TF
+            const daysToFetch = (mainTimeframe === '1m' || mainTimeframe === '5m') ? 7 : 30;
+
+            const to = new Date((firstTime - timeOffset - 1) * 1000).toISOString();
+            const from = new Date((firstTime - timeOffset - daysToFetch * 24 * 3600) * 1000).toISOString();
+
+            const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}`);
+            if (response.ok) {
+                const rawData = await response.json();
+                if (Array.isArray(rawData) && rawData.length > 0) {
+                    const priceOffset = priceOffsetRef.current;
+                    const validData = rawData.map((d: any) => ({
+                        time: (d.time + timeOffset) as Time,
+                        open: d.open + priceOffset,
+                        high: d.high + priceOffset,
+                        low: d.low + priceOffset,
+                        close: d.close + priceOffset
+                    }));
+
+                    setAllData(prev => {
+                        // Use a Map for O(N) deduplication by time
+                        const map = new Map();
+                        [...validData, ...prev].forEach(d => map.set(d.time, d));
+                        return Array.from(map.values()).sort((a, b) => (a.time as number) - (b.time as number));
+                    });
+                }
+            }
+        } catch (err) {
+            console.error("Failed to load more data:", err);
+        } finally {
+            // Artificial delay to prevent spamming
+            setTimeout(() => setIsFetchingMore(false), 500);
+        }
+    }, [isFetchingMore, allData, trade.instrument, mainTimeframe]);
 
     // 2. Initialize Chart Effect
     useEffect(() => {
@@ -688,11 +553,13 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 textColor: isDark ? '#d1d4dc' : '#131722',
             },
             grid: {
-                vertLines: { color: isDark ? '#2a2e39' : '#e0e3eb' },
-                horzLines: { color: isDark ? '#2a2e39' : '#e0e3eb' },
+                vertLines: { visible: false },
+                horzLines: { visible: false },
             },
             crosshair: {
                 mode: 0,
+                vertLine: { visible: false, labelVisible: true },
+                horzLine: { visible: false, labelVisible: true },
             },
             timeScale: {
                 borderColor: isDark ? '#2a2e39' : '#e0e3eb',
@@ -777,7 +644,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
         // Crosshair Legend Handler
         const handleCrosshairMove = (param: any) => {
-            if (!param.time || param.point.x < 0 || param.point.x > container.clientWidth || param.point.y < 0 || param.point.y > container.clientHeight) {
+            if (!param.point || !seriesRef.current) {
                 setCrosshairValues(null);
                 return;
             }
@@ -793,11 +660,25 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                 setCrosshairValues({ open, high, low, close, date: dateStr });
             }
         };
+
+        const handleVisibleRangeChange = () => {
+            const range = chart.timeScale().getVisibleRange();
+            if (!range || isFetchingMore || allData.length === 0) return;
+
+            const firstTime = allData[0].time as number;
+            // Trigger when visible range is within 25% of the start of available data
+            if ((range.from as number) < firstTime + (allData[allData.length - 1].time as number - firstTime) * 0.25) {
+                loadMorePast();
+            }
+        };
+
         chart.subscribeCrosshairMove(handleCrosshairMove);
+        chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleRangeChange);
 
         return () => {
             window.removeEventListener('resize', handleResize);
             chart.unsubscribeCrosshairMove(handleCrosshairMove);
+            chart.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleRangeChange);
             chart.remove();
             chartRef.current = null;
             seriesRef.current = null;
@@ -805,12 +686,12 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             slSeriesRef.current = null;
             setChartReady(false);
         };
-    }, [trade, isDark, containerReady]);
+    }, [trade, isDark, containerReady, loadMorePast, allData, isFetchingMore]);
 
     // 3. Sync Data Effect
     useEffect(() => {
-        if (chartReady && seriesRef.current && allData.length > 0) {
-            seriesRef.current.setData(allData);
+        if (chartReady && seriesRef.current && filteredData.length > 0) {
+            seriesRef.current.setData(filteredData);
 
             // Re-calculate Visual Times based on the heuristic determined during fetch
             // We need to pass the determined 'isLocalStored' flag from fetch to here.
@@ -846,7 +727,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             // If entryTimeRaw + OFFSET is close to d.time, then entryTimeRaw is UTC.
 
             let isLocalStored = false;
-            if (allData.length > 0) {
+            if (Array.isArray(allData) && allData.length > 0) {
                 const midCandle = allData[Math.floor(allData.length / 2)];
                 const candleTime = midCandle.time as number;
 
@@ -888,36 +769,125 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             if (tpSeriesRef.current && tpData.length > 0) tpSeriesRef.current.setData(tpData);
             if (slSeriesRef.current && slData.length > 0) slSeriesRef.current.setData(slData);
 
-            chartRef.current?.timeScale().fitContent();
-        }
-    }, [chartReady, allData]);
 
-    // Handle replay logic
+            // chartRef.current?.timeScale().fitContent(); // Removed to prevent auto-centering
+        }
+    }, [chartReady, allData, filteredData]);
+
+    // 4. Vertical Resize Sync Loop (Fix for Y-axis lag)
     useEffect(() => {
-        if (!isPlaying || !seriesRef.current || allData.length === 0) return;
+        if (!chartReady || !seriesRef.current || !trade.entryPrice) return;
+
+        let lastY: number | null = null;
+        let rafId: number;
+
+        const syncLoop = () => {
+            if (seriesRef.current) {
+                const currentY = seriesRef.current.priceToCoordinate(parseFloat(String(trade.entryPrice)));
+                if (currentY !== null && lastY !== null && Math.abs(currentY - lastY) > 0.5) {
+                    setChartRevision(r => r + 1);
+                }
+                lastY = currentY;
+            }
+            rafId = requestAnimationFrame(syncLoop);
+        };
+
+        rafId = requestAnimationFrame(syncLoop);
+        return () => cancelAnimationFrame(rafId);
+    }, [chartReady, trade.entryPrice]);
+
+    // Bar-by-Bar Replay Loop
+    useEffect(() => {
+        if (!isReplayMode || playbackTime === null || !isReplayPlaying) return;
 
         const interval = setInterval(() => {
-            setProgress(prev => {
-                const next = prev + 1;
-                if (next >= allData.length) {
-                    setIsPlaying(false);
-                    return prev;
+            setPlaybackTime(prev => {
+                if (prev === null) return null;
+                const currentIndex = allData.findIndex(d => (d.time as number) === prev);
+                if (currentIndex !== -1 && currentIndex < allData.length - 1) {
+                    return allData[currentIndex + 1].time as number;
                 }
-                seriesRef.current?.update(allData[next]);
-                return next;
+                setIsReplayPlaying(false);
+                return prev;
             });
-        }, 1000 / playbackSpeed);
+        }, replaySpeed);
 
         return () => clearInterval(interval);
-    }, [isPlaying, playbackSpeed, allData]);
+    }, [isReplayPlaying, isReplayMode, playbackTime, allData, replaySpeed]);
 
-    const handleReset = () => {
-        setIsPlaying(false);
-        setProgress(0);
-        if (seriesRef.current && allData.length > 0) {
-            seriesRef.current.setData([allData[0]]);
-        }
+    const stepForward = () => {
+        setPlaybackTime(prev => {
+            if (prev === null && allData.length > 0) return allData[0].time as number;
+            const idx = allData.findIndex(d => (d.time as number) === prev);
+            if (idx !== -1 && idx < allData.length - 1) return allData[idx + 1].time as number;
+            return prev;
+        });
     };
+
+    const stepBackward = () => {
+        setPlaybackTime(prev => {
+            if (prev === null) return null;
+            const idx = allData.findIndex(d => (d.time as number) === prev);
+            if (idx > 0) return allData[idx - 1].time as number;
+            return prev;
+        });
+    };
+
+    const handleCut = (time: number) => {
+        setPlaybackTime(time);
+        setIsReplayMode(true);
+        setIsCutToolActive(false);
+        setActiveTool('cursor');
+    };
+
+    // Keyboard Shortcuts (Moved here to avoid "Cannot access before initialization" for replay state/hooks)
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+            // Replay Shortcuts (Priority)
+            if (isReplayMode) {
+                if (e.key === ' ') {
+                    e.preventDefault();
+                    setIsReplayPlaying(prev => !prev);
+                    return;
+                }
+                if (e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    stepForward();
+                    return;
+                }
+                if (e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    stepBackward();
+                    return;
+                }
+            }
+
+            // Undo/Redo Shortcuts
+            if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    handleRedo();
+                } else {
+                    handleUndo();
+                }
+                return;
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
+                e.preventDefault();
+                handleRedo();
+                return;
+            }
+
+            // Tools Shortcuts
+            if (e.key.toLowerCase() === 't') setActiveTool(e.shiftKey ? 'text' : 'line');
+            if (e.key.toLowerCase() === 'r') setActiveTool('rect');
+        };
+
+        window.addEventListener('keydown', handleKeyDown, true); // Use capture to intercept early
+        return () => window.removeEventListener('keydown', handleKeyDown, true);
+    }, [handleUndo, handleRedo, isReplayMode, isReplayPlaying, stepForward, stepBackward]);
 
     // Render logic
     const containerClasses = embedded
@@ -953,10 +923,16 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                         {['1m', '5m', '15m', '1h', '4h', 'D'].map((tf) => (
                             <button
                                 key={tf}
-                                onClick={() => activeLayout === 'split' && setSecondaryTimeframe(tf as any)}
+                                onClick={() => {
+                                    if (activeLayout === 'split') {
+                                        setSecondaryTimeframe(tf as any);
+                                    } else {
+                                        setMainTimeframe(tf as any);
+                                    }
+                                }}
                                 className={`
                                     px-2 py-1 rounded text-xs font-medium transition-colors
-                                    ${(activeLayout === 'split' && secondaryTimeframe === tf)
+                                    ${((activeLayout === 'split' ? secondaryTimeframe : mainTimeframe) === tf)
                                         ? (isDark ? 'text-blue-400 bg-blue-500/10' : 'text-blue-600 bg-blue-50')
                                         : (isDark ? 'text-slate-500 hover:text-slate-300 hover:bg-white/5' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100')}
                                 `}
@@ -974,7 +950,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                     <div className="flex items-center gap-1 mr-2">
                         <button
                             onClick={() => {
-                                if (!chartRef.current || allData.length === 0) return;
+                                if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
                                 const timeOffset = -new Date().getTimezoneOffset() * 60;
                                 const exitTimeRaw = new Date(trade.date).getTime() / 1000;
                                 const durationSeconds = (trade.durationMinutes || 0) * 60;
@@ -990,7 +966,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                         </button>
                         <button
                             onClick={() => {
-                                if (!chartRef.current || allData.length === 0) return;
+                                if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
                                 const timeOffset = -new Date().getTimezoneOffset() * 60;
                                 const exitTimeRaw = new Date(trade.date).getTime() / 1000;
                                 const rangeStart = (exitTimeRaw + timeOffset - 3600) as Time;
@@ -1039,27 +1015,6 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
                     <div className="w-px h-5 bg-slate-700/20"></div>
 
-                    {/* Play Controls */}
-                    <div className="flex items-center gap-1">
-                        <button
-                            onClick={handleReset}
-                            className={`p-1.5 rounded hover:bg-slate-500/10 ${isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-black'}`}
-                        >
-                            <RotateCcw size={16} />
-                        </button>
-                        <button
-                            onClick={() => setIsPlaying(!isPlaying)}
-                            className={`p-1.5 rounded transition-all ${isPlaying ? 'bg-blue-600 text-white' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-black')}`}
-                        >
-                            {isPlaying ? <Pause size={18} /> : <Play size={18} />}
-                        </button>
-                        <button
-                            onClick={() => setPlaybackSpeed(s => s === 1 ? 5 : (s === 5 ? 10 : 1))}
-                            className={`text-xs font-bold w-6 text-center ${isDark ? 'text-slate-500 hover:text-white' : 'text-slate-500 hover:text-black'}`}
-                        >
-                            {playbackSpeed}x
-                        </button>
-                    </div>
 
                     {!embedded && (
                         <button onClick={onClose} className={`p-2 rounded-full transition-all ml-2 ${isDark ? 'hover:bg-white/10 text-slate-500 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-black'}`}>
@@ -1072,17 +1027,23 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
 
             {/* Main Content Area: Toolbar + Charts */}
-            <div className={`flex-1 flex flex-row overflow-hidden ${isDark ? 'bg-[#0f172a]' : 'bg-white'}`}>
+            <div
+                className={`flex-1 flex flex-row overflow-hidden ${isDark ? 'bg-[#0f172a]' : 'bg-white'}`}
+            >
 
                 {/* Fixed Left Toolbar */}
                 <div className="shrink-0 z-[40]">
                     <ChartToolbar
                         activeTool={activeTool}
                         onToolChange={setActiveTool}
-                        onClearAll={() => setDrawings([])}
+                        onClearAll={() => updateDrawingsWithHistory([])}
                         theme={theme}
                         magnetMode={magnetMode}
                         onToggleMagnet={() => setMagnetMode(m => !m)}
+                        onUndo={handleUndo}
+                        onRedo={handleRedo}
+                        canUndo={past.length > 0}
+                        canRedo={future.length > 0}
                     />
                 </div>
 
@@ -1095,7 +1056,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                         <div className={`absolute top-2 left-4 z-[30] flex gap-3 text-[10px] font-mono pointer-events-none select-none ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                             <span className={isDark ? 'text-white font-bold' : 'text-black font-bold'}>{trade.instrument}</span>
                             <span className="opacity-50">•</span>
-                            <span className="opacity-50">15m</span>
+                            <span className="opacity-50">{mainTimeframe}</span>
                             {crosshairValues && (
                                 <>
                                     <span className="opacity-50">|</span>
@@ -1105,186 +1066,39 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                     <span className="text-blue-500">C<span className={isDark ? 'text-slate-200' : 'text-slate-800'}> {crosshairValues.close}</span></span>
                                 </>
                             )}
+                            {isFetchingMore && (
+                                <div className="ml-4 flex items-center gap-2 animate-pulse text-blue-500 font-bold uppercase tracking-widest">
+                                    <div className="w-2 h-2 rounded-full bg-blue-500" />
+                                    Loading more...
+                                </div>
+                            )}
                         </div>
 
                         <div className="absolute inset-0 z-0">
-                            <div className="absolute inset-0" ref={chartContainerRef} />
+                            <div className="absolute inset-0 outline-none" ref={chartContainerRef} tabIndex={0} />
 
-                            {/* SVG Drawing Overlay */}
-                            <svg
-                                className="absolute inset-0 z-10 w-full h-full pointer-events-none"
-                                style={{ pointerEvents: activeTool !== 'cursor' ? 'auto' : 'none' }}
-                                onMouseDown={handleMouseDown}
-                                onMouseMove={handleMouseMove}
-                                onMouseUp={handleMouseUp}
-                            >
-                                {/* Render Saved Drawings */}
-                                {drawings.map(d => {
-                                    if (!chartRef.current || !seriesRef.current) return null;
-                                    const timeScale = chartRef.current.timeScale();
-                                    const series = seriesRef.current;
-
-                                    const x1 = timeScale.timeToCoordinate(d.p1.time as Time);
-                                    const y1 = series.priceToCoordinate(d.p1.price);
-
-                                    // If p2 exists (line/rect/fib)
-                                    if (d.p2) {
-                                        const x2 = timeScale.timeToCoordinate(d.p2.time as Time);
-                                        const y2 = series.priceToCoordinate(d.p2.price);
-
-                                        if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
-
-                                        if (d.type === 'line') {
-                                            return <line
-                                                key={d.id}
-                                                x1={x1} y1={y1} x2={x2} y2={y2}
-                                                stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')}
-                                                strokeWidth={d.lineWidth || 2}
-                                                onContextMenu={(e) => handleContextMenu(e, d.id)}
-                                                className="hover:stroke-blue-400 cursor-pointer pointer-events-auto"
-                                            />;
-                                        } else if (d.type === 'rect') {
-                                            const width = x2 - x1;
-                                            const height = y2 - y1;
-                                            return (
-                                                <rect
-                                                    key={d.id}
-                                                    x={Math.min(x1, x2)}
-                                                    y={Math.min(y1, y2)}
-                                                    width={Math.abs(width)}
-                                                    height={Math.abs(height)}
-                                                    fill={d.color ? `${d.color}20` : (isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)')}
-                                                    stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')}
-                                                    strokeWidth={d.lineWidth || 2}
-                                                    onContextMenu={(e) => handleContextMenu(e, d.id)}
-                                                    className="hover:stroke-blue-400 cursor-pointer pointer-events-auto"
-                                                />
-                                            );
-                                        } else if (d.type === 'fib') {
-                                            const yDiff = y2 - y1;
-                                            const levels = [0, 0.5, 0.618, 1];
-                                            return (
-                                                <g key={d.id} onContextMenu={(e) => handleContextMenu(e, d.id)} className="cursor-pointer pointer-events-auto">
-                                                    <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={d.color || (isDark ? '#94a3b8' : '#64748b')} strokeWidth="1" strokeDasharray="2,2" />
-                                                    {levels.map(level => {
-                                                        const y = y1 + (yDiff * level);
-                                                        const color = level === 0.618 ? '#eab308' : (d.color || (isDark ? '#3b82f6' : '#2563eb'));
-                                                        return (
-                                                            <g key={level}>
-                                                                <line x1={Math.min(x1, x2)} y1={y} x2={Math.max(x1, x2)} y2={y} stroke={color} strokeWidth={d.lineWidth || 1} className="opacity-80 hover:stroke-white" />
-                                                                <text x={Math.min(x1, x2)} y={y - 2} fill={color} fontSize="9">{level}</text>
-                                                            </g>
-                                                        )
-                                                    })}
-                                                </g>
-                                            );
-                                        }
-                                    } else if (d.type === 'text') {
-                                        if (x1 === null || y1 === null) return null;
-                                        return (
-                                            <text
-                                                key={d.id}
-                                                x={x1} y={y1}
-                                                fill={d.color || (isDark ? '#fff' : '#000')}
-                                                fontSize="12"
-                                                fontWeight="bold"
-                                                onContextMenu={(e) => handleContextMenu(e, d.id)}
-                                                className="cursor-pointer hover:opacity-80 pointer-events-auto"
-                                            >
-                                                {d.text || 'Text'}
-                                            </text>
-                                        );
-                                    } else if (d.type === 'horizontal') {
-                                        if (x1 === null || y1 === null) return null;
-                                        return (
-                                            <g key={d.id} onContextMenu={(e) => handleContextMenu(e, d.id)} className="cursor-pointer group pointer-events-auto">
-                                                <line x1={0} y1={y1} x2="100%" y2={y1} stroke={d.color || (isDark ? '#3b82f6' : '#2563eb')} strokeWidth={d.lineWidth || 1} className="group-hover:stroke-blue-400" />
-                                                <text x={x1 + 5} y={y1 - 5} fill={d.color || (isDark ? '#3b82f6' : '#2563eb')} fontSize="10" fontWeight="bold">
-                                                    {d.p1.price.toFixed(2)}
-                                                </text>
-                                            </g>
-                                        );
-                                    }
-                                    {/* Selection Anchors */ }
-                                    {
-                                        selectedDrawingId === d.id && (() => {
-                                            const anchors = [];
-                                            if (x1 !== null && y1 !== null) anchors.push({ x: x1, y: y1 });
-
-                                            if (d.p2) {
-                                                const ax2 = timeScale.timeToCoordinate(d.p2.time as Time);
-                                                const ay2 = series.priceToCoordinate(d.p2.price);
-                                                if (ax2 !== null && ay2 !== null) anchors.push({ x: ax2, y: ay2 });
-                                            }
-
-                                            return anchors.map((a, i) => (
-                                                <circle
-                                                    key={i}
-                                                    cx={a.x}
-                                                    cy={a.y}
-                                                    r="4"
-                                                    fill="white"
-                                                    stroke="#3b82f6"
-                                                    strokeWidth="2"
-                                                    className="cursor-pointer hover:scale-125 transition-transform pointer-events-auto"
-                                                />
-                                            ));
-                                        })()
-                                    }
-
-                                    return null;
-                                })}
-
-                                {/* Render Current (In-Progress) Drawing */}
-                                {currentDrawing && (() => {
-                                    if (!chartRef.current || !seriesRef.current) return null;
-                                    const timeScale = chartRef.current.timeScale();
-                                    const series = seriesRef.current;
-
-                                    const start = currentDrawing.p1;
-                                    const end = currentDrawing.p2 || start; // If p2 not set yet (click), use start
-
-                                    const x1 = timeScale.timeToCoordinate(start.time as Time);
-                                    const y1 = series.priceToCoordinate(start.price);
-                                    const x2 = timeScale.timeToCoordinate(end.time as Time);
-                                    const y2 = series.priceToCoordinate(end.price);
-
-                                    if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
-
-                                    if (currentDrawing.type === 'line') {
-                                        return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#3b82f6' : '#2563eb'} strokeWidth="2" strokeDasharray="5,5" />;
-                                    } else if (currentDrawing.type === 'rect') {
-                                        return (
-                                            <rect
-                                                x={Math.min(x1, x2)}
-                                                y={Math.min(y1, y2)}
-                                                width={Math.abs(x2 - x1)}
-                                                height={Math.abs(y2 - y1)}
-                                                fill={isDark ? 'rgba(59, 130, 246, 0.1)' : 'rgba(37, 99, 235, 0.1)'}
-                                                stroke={isDark ? '#3b82f6' : '#2563eb'}
-                                                strokeWidth="2"
-                                                strokeDasharray="5,5"
-                                            />
-                                        );
-                                    } else if (currentDrawing.type === 'fib') {
-                                        // Preview Fib
-                                        const yDiff = y2 - y1;
-                                        const levels = [0, 0.5, 0.618, 1];
-
-                                        return (
-                                            <g>
-                                                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={isDark ? '#94a3b8' : '#64748b'} strokeWidth="1" strokeDasharray="2,2" />
-                                                {levels.map(level => {
-                                                    const y = y1 + (yDiff * level);
-                                                    const color = level === 0.618 ? '#eab308' : (isDark ? '#3b82f6' : '#2563eb');
-                                                    return <line key={level} x1={Math.min(x1, x2)} y1={y} x2={Math.max(x1, x2)} y2={y} stroke={color} strokeWidth="1" className="opacity-80" />
-                                                })}
-                                            </g>
-                                        );
-                                    }
-                                    return null;
-                                })()}
-                            </svg>
+                            {/* Interactive Drawing Overlay */}
+                            <InteractiveOverlay
+                                drawings={drawings}
+                                onUpdateDrawings={updateDrawingsWithHistory}
+                                activeTool={activeTool}
+                                onToolComplete={() => setActiveTool('cursor')}
+                                chart={chartRef.current}
+                                series={seriesRef.current}
+                                theme={theme}
+                                magnetMode={magnetMode}
+                                allData={allData || []}
+                                onContextMenu={handleContextMenu}
+                                hoverPrice={hoverPrice}
+                                hoverTime={hoverTime}
+                                timeframe={mainTimeframe}
+                                onCut={handleCut}
+                                isReplayMode={isReplayMode}
+                                onHoverUpdate={(p, t) => {
+                                    setHoverPrice(p);
+                                    setHoverTime(t);
+                                }}
+                            />
 
                             {/* Context Menu */}
                             {contextMenu && (
@@ -1303,7 +1117,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                                 className="w-4 h-4 rounded-full border border-slate-500/20 hover:scale-110 transition-transform"
                                                 style={{ backgroundColor: c }}
                                                 onClick={() => {
-                                                    setDrawings(prev => prev.map(d => d.id === contextMenu.drawingId ? { ...d, color: c } : d));
+                                                    updateDrawingsWithHistory(drawings.map(d => d.id === contextMenu.drawingId ? { ...d, color: c } : d));
                                                     setContextMenu(null);
                                                 }}
                                             />
@@ -1321,7 +1135,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                                 key={w}
                                                 className={`flex-1 h-6 flex items-center justify-center rounded hover:bg-slate-500/10 text-xs font-bold`}
                                                 onClick={() => {
-                                                    setDrawings(prev => prev.map(d => d.id === contextMenu.drawingId ? { ...d, lineWidth: w } : d));
+                                                    updateDrawingsWithHistory(drawings.map(d => d.id === contextMenu.drawingId ? { ...d, lineWidth: w } : d));
                                                     setContextMenu(null);
                                                 }}
                                             >
@@ -1335,7 +1149,7 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                                     <button
                                         className="text-left px-2 py-1.5 rounded text-xs text-red-500 hover:bg-red-500/10 flex items-center gap-2"
                                         onClick={() => {
-                                            setDrawings(prev => prev.filter(d => d.id !== contextMenu.drawingId));
+                                            updateDrawingsWithHistory(drawings.filter(d => d.id !== contextMenu.drawingId));
                                             setContextMenu(null);
                                         }}
                                     >
@@ -1382,6 +1196,28 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                             </div>
                             <div className="absolute inset-0 z-0" ref={chartContainer2Ref} />
 
+                            {/* Chart 2 Drawing Overlay */}
+                            <InteractiveOverlay
+                                drawings={drawings}
+                                onUpdateDrawings={updateDrawingsWithHistory}
+                                activeTool={activeTool}
+                                onToolComplete={() => setActiveTool('cursor')}
+                                chart={chart2Ref.current}
+                                series={series2Ref.current}
+                                theme={theme}
+                                magnetMode={magnetMode}
+                                allData={secondaryData || []}
+                                onContextMenu={handleContextMenu}
+                                hoverPrice={null}
+                                hoverTime={null}
+                                timeframe={secondaryTimeframe}
+                                isReplayMode={isReplayMode}
+                                onHoverUpdate={(p, t) => {
+                                    setHoverPrice(p);
+                                    setHoverTime(t);
+                                }}
+                            />
+
                             {isLoading && (
                                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 pointer-events-none">
                                     <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"></div>
@@ -1405,11 +1241,30 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
                     </div>
                 </div>
                 <div className="flex items-center gap-2 opacity-50">
-                    <div className={`w-2 h-2 rounded-full ${isLoading ? 'bg-amber-500 animate-pulse' : (allData.length > 0 ? 'bg-emerald-500' : 'bg-slate-500')}`}></div>
-                    <span className="font-bold uppercase tracking-wider text-[8px] md:text-[9px]">{isLoading ? 'Fetching Data...' : (allData.length > 0 ? 'Dukascopy Data' : 'No Data')}</span>
+                    <div className={`w-2 h-2 rounded-full ${isLoading ? 'bg-amber-500 animate-pulse' : (Array.isArray(allData) && allData.length > 0 ? 'bg-emerald-500' : 'bg-slate-500')}`}></div>
+                    <span className="font-bold uppercase tracking-wider text-[8px] md:text-[9px]">{isLoading ? 'Fetching Data...' : (Array.isArray(allData) && allData.length > 0 ? 'Dukascopy Data' : 'No Data')}</span>
                 </div>
             </div>
-        </div >
+
+            {/* Replay Widget */}
+            <PlaybackWidget
+                isReplayMode={isReplayMode}
+                onToggleReplay={setIsReplayMode}
+                isPlaying={isReplayPlaying}
+                onPlayPause={() => setIsReplayPlaying(!isReplayPlaying)}
+                onStepBack={stepBackward}
+                onStepForward={stepForward}
+                speed={replaySpeed}
+                onSpeedChange={setReplaySpeed}
+                onActivateCutTool={() => {
+                    setIsCutToolActive(true);
+                    setActiveTool('scissors' as any);
+                }}
+                currentTimeframe="1m"
+                onTimeframeChange={() => { }}
+                isCutToolActive={isCutToolActive}
+            />
+        </div>
     );
 
     if (embedded) {

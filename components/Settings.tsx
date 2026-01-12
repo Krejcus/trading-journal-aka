@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
-import { Save, Shield, Trash2, Database, Key, Plus, Brain, Tag, X, Target, ListChecks, Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck, ShieldAlert, DollarSign, Activity, Check, Loader2 } from 'lucide-react';
-import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig } from '../types';
+import { Save, Shield, Trash2, Database, Key, Plus, Brain, Tag, X, Target, ListChecks, Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck, ShieldAlert, DollarSign, Activity, Check, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus } from '../types';
 
 interface SettingsProps {
   theme: 'dark' | 'light' | 'oled';
@@ -19,6 +19,8 @@ interface SettingsProps {
   setIronRules: React.Dispatch<React.SetStateAction<IronRule[]>>;
   psychoMetrics: PsychoMetricConfig[];
   setPsychoMetrics: React.Dispatch<React.SetStateAction<PsychoMetricConfig[]>>;
+  weeklyFocusList: WeeklyFocus[];
+  setWeeklyFocusList: React.Dispatch<React.SetStateAction<WeeklyFocus[]>>;
 }
 
 const INSTRUMENT_LIST = ['MNQ', 'NQ', 'MES', 'ES', 'CL', 'GC', 'CUSTOM'];
@@ -30,7 +32,8 @@ const Settings: React.FC<SettingsProps> = ({
   htfOptions, setHtfOptions, ltfOptions, setLtfOptions,
   sessions, setSessions,
   ironRules, setIronRules,
-  psychoMetrics, setPsychoMetrics
+  psychoMetrics, setPsychoMetrics,
+  weeklyFocusList, setWeeklyFocusList
 }) => {
   const [activeTab, setActiveTab] = useState<'psychology' | 'strategy' | 'market'>('psychology');
 
@@ -43,6 +46,76 @@ const Settings: React.FC<SettingsProps> = ({
 
   const [newMetricLabel, setNewMetricLabel] = useState('');
   const [newMetricColor, setNewMetricColor] = useState('#6366f1');
+
+  // Weekly Focus State
+  const [selectedWeek, setSelectedWeek] = useState(() => {
+    const now = new Date();
+    const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+  });
+
+  const getWeekRange = (weekISO: string) => {
+    if (!weekISO) return '';
+    const [year, week] = weekISO.split('-W').map(Number);
+    const d = new Date(Date.UTC(year, 0, 1));
+    const dayNum = d.getUTCDay() || 7;
+    // Align to the Monday of the requested week
+    d.setUTCDate(d.getUTCDate() + (week - 1) * 7 - dayNum + 1);
+
+    const monday = new Date(d);
+    const sunday = new Date(d);
+    sunday.setUTCDate(sunday.getUTCDate() + 6);
+
+    return `${monday.getUTCDate()}.${monday.getUTCMonth() + 1}. - ${sunday.getUTCDate()}.${sunday.getUTCMonth() + 1}.`;
+  };
+
+  const handleWeekChange = (direction: number) => {
+    const [year, week] = selectedWeek.split('-W').map(Number);
+    const d = new Date(Date.UTC(year, 0, 1));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + (week - 1) * 7 - dayNum + 1 + (direction * 7));
+
+    // Recalculate ISO week for the new date
+    const target = new Date(d.getTime());
+    const day = target.getUTCDay() || 7;
+    target.setUTCDate(target.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((target.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    setSelectedWeek(`${target.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`);
+  };
+
+  const currentWeeklyFocus = weeklyFocusList.find(wf => wf.weekISO === selectedWeek) || { id: '', weekISO: selectedWeek, goals: [] };
+
+  const updateWeeklyGoal = (index: number, text: string) => {
+    const newList = [...weeklyFocusList];
+    const existingIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
+
+    if (existingIdx !== -1) {
+      const updatedGoals = [...newList[existingIdx].goals];
+      updatedGoals[index] = text;
+      newList[existingIdx] = { ...newList[existingIdx], goals: updatedGoals.filter(g => g.trim() !== '' || index === updatedGoals.length - 1) };
+    } else {
+      newList.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [text] });
+    }
+    setWeeklyFocusList(newList);
+  };
+
+  const addWeeklyGoal = () => {
+    const newList = [...weeklyFocusList];
+    const existingIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
+    if (existingIdx !== -1) {
+      if (newList[existingIdx].goals.length < 5) {
+        newList[existingIdx] = { ...newList[existingIdx], goals: [...newList[existingIdx].goals, ''] };
+      }
+    } else {
+      newList.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [''] });
+    }
+    setWeeklyFocusList(newList);
+  };
 
   const addHtf = () => { if (newHtf && !htfOptions.includes(newHtf)) { setHtfOptions([...htfOptions, newHtf]); setNewHtf(''); } };
   const addLtf = () => { if (newLtf && !ltfOptions.includes(newLtf)) { setLtfOptions([...ltfOptions, newLtf]); setNewLtf(''); } };
@@ -285,6 +358,85 @@ const Settings: React.FC<SettingsProps> = ({
                     </div>
                   </section>
                 </div>
+
+                {/* Weekly Focus Section */}
+                <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[#0a0f1d]/80 border-blue-500/10' : 'bg-white border-slate-200 shadow-sm'}`}>
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3 rounded-xl bg-emerald-500 text-white shadow-lg shadow-emerald-500/10"><ListChecks size={20} /></div>
+                      <div>
+                        <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>TÝDENNÍ CÍLE</h3>
+                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Specifické focus pointy pro vybraný týden</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className={`flex items-center gap-2 p-1.5 rounded-2xl border transition-all ${isDark ? 'bg-slate-900/50 border-white/5' : 'bg-slate-50 border-slate-200 shadow-inner'}`}>
+                        <button
+                          onClick={() => handleWeekChange(-1)}
+                          className={`p-2 rounded-xl transition-all active:scale-90 ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-black/5 text-slate-600'}`}
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <div className="px-4 py-1 text-center min-w-[120px]">
+                          <p className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-emerald-500' : 'text-emerald-600'}`}>{selectedWeek}</p>
+                          <p className="text-[8px] font-black text-slate-500 uppercase tracking-tighter">{getWeekRange(selectedWeek)}</p>
+                        </div>
+                        <button
+                          onClick={() => handleWeekChange(1)}
+                          className={`p-2 rounded-xl transition-all active:scale-90 ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-black/5 text-slate-600'}`}
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 mb-6">
+                    {currentWeeklyFocus.goals.map((goal, idx) => (
+                      <div key={idx} className={`flex items-center gap-3 p-3 rounded-2xl border ${isDark ? 'bg-[var(--bg-input)]/30 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
+                        <span className="text-[10px] font-black text-emerald-500 w-4">{idx + 1}.</span>
+                        <input
+                          value={goal}
+                          onChange={(e) => updateWeeklyGoal(idx, e.target.value)}
+                          className="flex-1 bg-transparent border-0 outline-none text-xs font-bold"
+                          placeholder="Zadej týdenní cíl..."
+                        />
+                        <button
+                          onClick={() => {
+                            const newList = [...weeklyFocusList];
+                            const existingIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
+                            if (existingIdx !== -1) {
+                              const updatedGoals = newList[existingIdx].goals.filter((_, i) => i !== idx);
+                              newList[existingIdx] = { ...newList[existingIdx], goals: updatedGoals };
+                              setWeeklyFocusList(newList);
+                            }
+                          }}
+                          className="p-2 text-slate-500 hover:text-rose-500 transition-colors"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+
+                    {currentWeeklyFocus.goals.length < 5 && (
+                      <button
+                        onClick={addWeeklyGoal}
+                        className={`w-full py-4 rounded-2xl border border-dashed flex items-center justify-center gap-2 group transition-all ${isDark ? 'border-[var(--border-subtle)] hover:border-emerald-500/40 hover:bg-emerald-500/5' : 'border-slate-200 hover:border-emerald-500/40 hover:bg-emerald-50'}`}
+                      >
+                        <Plus size={16} className="text-slate-500 group-hover:text-emerald-500" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-emerald-500">Přidat týdenní cíl</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className={`p-4 rounded-2xl ${isDark ? 'bg-blue-500/5 text-blue-400' : 'bg-blue-50 text-blue-600'} border border-blue-500/10`}>
+                    <p className="text-[9px] font-bold leading-relaxed">
+                      <Zap size={10} className="inline mr-1 pb-0.5" />
+                      Tyto cíle se ti automaticky zobrazí v každodenním večerním auditu pro daný týden. Pomohou ti soustředit se na konkrétní zlepšení nad rámec tvých železných pravidel.
+                    </p>
+                  </div>
+                </section>
               </div>
             )
           }

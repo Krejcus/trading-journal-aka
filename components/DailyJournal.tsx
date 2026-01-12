@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { DailyPrep, DailyReview, WeeklyReview, Trade, GoalResult, IronRule, RuleCompletion, PsychoMetricConfig } from '../types';
+import { DailyPrep, DailyReview, WeeklyReview, Trade, GoalResult, IronRule, RuleCompletion, PsychoMetricConfig, WeeklyFocus } from '../types';
 import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimeline from './TacticalTimeline';
 import { storageService } from '../services/storageService';
@@ -73,10 +73,11 @@ interface DailyJournalProps {
   ironRules: IronRule[];
   psychoMetrics?: PsychoMetricConfig[];
   viewMode: 'individual' | 'combined';
+  weeklyFocusList: WeeklyFocus[];
 }
 
 const DailyJournal: React.FC<DailyJournalProps> = ({
-  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode
+  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList
 }) => {
   const getToday = () => new Date().toLocaleDateString('en-CA');
   const [selectedDate, setSelectedDate] = useState(getToday());
@@ -176,8 +177,24 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     goalResults: [],
     scenarioResult: 'Range',
     ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending' })),
+    weeklyGoalAdherence: [],
     psycho: { metrics: (psychoMetrics || []).reduce((acc, m) => ({ ...acc, [m.id]: 5 }), {}), stressors: '', gratitude: '', notes: '' }
   });
+
+  // Current Week Focus Helper
+  const getSelectedWeekISO = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+  };
+
+  const currentWeekFocus = useMemo(() => {
+    const weekISO = getSelectedWeekISO(selectedDate);
+    return weeklyFocusList.find(wf => wf.weekISO === weekISO);
+  }, [selectedDate, weeklyFocusList]);
 
   // Auto-save Logic for Prep
   useEffect(() => {
@@ -309,7 +326,13 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
         if (exportFields.mistakes) {
           mdContent += `### Performance\n`;
-          mdContent += `- Mistakes: ${(r.mistakes || []).join(', ') || 'None'}\n\n`;
+          mdContent += `- Mistakes: ${(r.mistakes || []).join(', ') || 'None'}\n`;
+          const weekISO = getSelectedWeekISO(r.date);
+          const wf = weeklyFocusList.find(focus => focus.weekISO === weekISO);
+          if (wf && wf.goals.length > 0) {
+            mdContent += `- Weekly Focus: ${wf.goals.map((g, i) => `${g} (${r.weeklyGoalAdherence?.[i]?.status === 'Pass' ? 'PASS' : 'FAIL'})`).join(', ')}\n`;
+          }
+          mdContent += `\n`;
         }
         if (exportFields.notes) {
           mdContent += `### Reflections\n`;
@@ -545,9 +568,17 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       worstSession,
       ritualCompliance,
       prepCount,
-      auditCount
+      auditCount,
+      weeklyGoalStats: currentWeekFocus?.goals.map((goal, idx) => {
+        let passCount = 0;
+        currentWeekInfo.days.forEach(day => {
+          const rev = reviews.find(r => r.date === day);
+          if (rev?.weeklyGoalAdherence?.[idx]?.status === 'Pass') passCount++;
+        });
+        return { label: goal, count: passCount };
+      }) || []
     };
-  }, [trades, reviews, preps, currentWeekInfo, ironRules]);
+  }, [trades, reviews, preps, currentWeekInfo, ironRules, weeklyFocusList, currentWeekFocus]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
     const d = new Date(selectedDate);
@@ -804,6 +835,27 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   ))}
                 </div>
 
+                {/* Weekly Focus Adherence List */}
+                {weeklyStats.weeklyGoalStats && weeklyStats.weeklyGoalStats.length > 0 && (
+                  <div className="space-y-6">
+                    <p className="text-[10px] font-black uppercase text-emerald-500 tracking-[0.2em] flex items-center gap-2"><ClipboardCheck size={14} /> Weekly Focus Adherence</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {weeklyStats.weeklyGoalStats.map((goal: any, idx: number) => (
+                        <div key={idx} className={`p-4 rounded-[24px] border transition-all ${theme !== 'light' ? 'bg-[var(--bg-input)]/20 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
+                          <div className="flex justify-between items-center mb-3">
+                            <span className="text-[10px] font-black uppercase tracking-tight text-slate-400 truncate pr-4">{goal.label}</span>
+                            <span className={`text-[10px] font-bold ${goal.count >= 4 ? 'text-emerald-500' : 'text-blue-500'}`}>{goal.count}/5</span>
+                          </div>
+                          <div className={`h-1.5 w-full rounded-full overflow-hidden flex gap-0.5 p-0.5 ${theme !== 'light' ? 'bg-[var(--bg-page)]/50' : 'bg-slate-200/50'}`}>
+                            {[...Array(5)].map((_, i) => (
+                              <div key={i} className={`flex-1 rounded-full ${i < goal.count ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : (theme !== 'light' ? 'bg-[var(--border-subtle)]' : 'bg-slate-300')}`} />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className={`pt-6 border-t grid grid-cols-2 gap-4 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
                   <div>
                     <p className="text-[9px] font-black uppercase text-rose-500 mb-1">Errors</p>
@@ -998,6 +1050,50 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   </div>
                 </div>
                 <div className="space-y-3 md:space-y-4">{tradeRules.map(rule => { const comp = reviewForm.ruleAdherence?.find(a => a.ruleId === rule.id); const status = comp?.status || 'Pending'; return (<div key={rule.id} className={`p-4 md:p-5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'} `}><div className="flex-1"><h4 className="text-[11px] font-black uppercase tracking-widest">{rule.label}</h4></div><div className="flex gap-2"><button onClick={() => handleSetRuleStatus(rule.id, 'Pass')} className={`flex-1 sm:flex-none px-6 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all ${status === 'Pass' ? 'bg-emerald-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500' : 'bg-slate-900 text-slate-600')} `}>Pass</button><button onClick={() => handleSetRuleStatus(rule.id, 'Fail')} className={`flex-1 sm:flex-none px-6 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all ${status === 'Fail' ? 'bg-rose-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500' : 'bg-slate-900 text-slate-600')} `}>Fail</button></div></div>); })}</div>
+
+                {/* Weekly Focus Adherence Checklist */}
+                {
+                  currentWeekFocus && (
+                    <div className={`mt-8 p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
+                      <div className="flex items-center gap-3 mb-6">
+                        <div className="p-2.5 rounded-xl bg-emerald-500 text-white"><ClipboardCheck size={18} /></div>
+                        <div>
+                          <h4 className="text-sm font-black uppercase tracking-widest text-emerald-500">Weekly Focus Adherence</h4>
+                          <p className="text-[8px] font-bold uppercase tracking-widest opacity-60">Dodržování týdenních cílů</p>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        {currentWeekFocus.goals.map((goal, idx) => {
+                          const adherence = reviewForm.weeklyGoalAdherence?.[idx]?.status === 'Pass';
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => {
+                                setReviewForm(prev => {
+                                  const newList = [...(prev.weeklyGoalAdherence || [])];
+                                  while (newList.length <= idx) newList.push({ ruleId: `wf_${idx}`, status: 'Pending' });
+                                  newList[idx] = { ruleId: `wf_${idx}`, status: adherence ? 'Pending' : 'Pass' };
+                                  return { ...prev, weeklyGoalAdherence: newList };
+                                });
+                              }}
+                              className={`w-full p-4 rounded-2xl border flex items-center justify-between transition-all group ${adherence
+                                ? 'bg-emerald-500 text-white border-emerald-400 shadow-lg shadow-emerald-500/20'
+                                : (theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] hover:border-emerald-500/30' : 'bg-white border-slate-100 hover:border-emerald-500/30 shadow-sm')
+                                }`}
+                            >
+                              <div className="flex items-center gap-4">
+                                <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${adherence ? 'bg-white border-white text-emerald-600' : 'border-slate-700 text-transparent group-hover:border-emerald-500'}`}>
+                                  <Check size={14} strokeWidth={4} />
+                                </div>
+                                <span className={`text-xs font-black uppercase tracking-tight text-left ${adherence ? 'text-white' : 'text-slate-400'}`}>{goal}</span>
+                              </div>
+                              {adherence && <Sparkles size={14} className="animate-pulse" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
               </section>
 
               <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border relative overflow-hidden ${theme !== 'light' ? 'bg-indigo-950/10 border-indigo-500/20' : 'bg-indigo-50 border-indigo-200 shadow-sm'}`}>
@@ -1093,129 +1189,131 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 <div className="flex items-center gap-4 mb-6 md:mb-8"><div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-500"><ShieldCheck size={20} /></div><div><h3 className="text-xl md:text-2xl font-black italic uppercase">AUDIT HUB</h3><p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Reflexe dne</p></div></div>
                 <div className="space-y-6">
                   <div className={`p-5 md:p-6 rounded-[28px] border ${theme !== 'light' ? 'bg-rose-500/5 border-rose-500/10' : 'bg-rose-50 border-rose-100'}`}><p className="text-[10px] font-black uppercase text-rose-500 mb-4 flex items-center gap-2"><AlertOctagon size={14} /> Chyby dne</p><div className="flex flex-wrap gap-2">{reviewForm.mistakes.map((m, i) => (<div key={i} className={`flex items-center gap-2 px-3 py-1.5 border rounded-xl ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200'} `}><span className="text-[10px] font-black uppercase text-slate-300">{m}</span><button onClick={() => setReviewForm({ ...reviewForm, mistakes: reviewForm.mistakes.filter((_, idx) => idx !== i) })} className="text-slate-600 hover:text-rose-500"><X size={12} /></button></div>))}<button onClick={() => setReviewForm({ ...reviewForm, mistakes: [...reviewForm.mistakes, ''] })} className={`p-2 border border-dashed rounded-xl text-slate-500 hover:text-blue-500 active:scale-95 transition-all ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-300'} `}><Plus size={14} /></button></div></div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><div className={`p-5 rounded-2xl border text-center ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'} `}><p className={labelClass}>Rating Disciplíny</p><div className="flex justify-center gap-2 mt-2">{[1, 2, 3, 4, 5].map(s => (<button key={s} onClick={() => setReviewForm({ ...reviewForm, rating: s })} className="active:scale-125 transition-transform"><Star key={s} size={20} className={s <= reviewForm.rating ? 'text-yellow-500 fill-yellow-500' : 'text-slate-700'} /></button>))}</div></div><div className={`p-5 rounded-2xl border text-center ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'} `}><p className={labelClass}>PnL Dne</p><p className={`text-xl font-black ${currentTrades.reduce((s, t) => s + t.pnl, 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>${currentTrades.reduce((s, t) => s + t.pnl, 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</p></div></div><button onClick={() => { onSaveReview(reviewForm); setView('timeline'); window.scrollTo(0, 0); }} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">UZAVŘÍT AUDIT</button></div>
+                  <button onClick={() => { onSaveReview(reviewForm); setView('timeline'); window.scrollTo(0, 0); }} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">UZAVŘÍT AUDIT</button></div>
               </section>
             </div>
           )}
         </div>
       )}
       {/* Export Modal */}
-      {isExportModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className={`w-full max-w-md p-8 rounded-[40px] border shadow-2xl ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-            <div className="flex justify-between items-center mb-8">
-              <div>
-                <h3 className={`text-2xl font-black italic tracking-tighter uppercase ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>Export Deníku</h3>
-                <p className="text-[10px] font-black uppercase text-blue-500 tracking-widest">Vyberte parametry exportu</p>
-              </div>
-              <button
-                onClick={() => setIsExportModalOpen(false)}
-                className={`p-2 rounded-xl transition-colors ${theme !== 'light' ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-black/5 text-slate-500'}`}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="space-y-8">
-              {/* Range Selection */}
-              <div className="space-y-4">
-                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Časové období</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { id: '7', label: '7 dní' },
-                    { id: '30', label: '30 dní' },
-                    { id: '90', label: '90 dní' },
-                    { id: 'all', label: 'Vše' }
-                  ].map(r => (
-                    <button
-                      key={r.id}
-                      onClick={() => setExportRange(r.id as any)}
-                      className={`px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${exportRange === r.id
-                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 scale-[1.02]'
-                        : `${theme !== 'light' ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`
-                        }`}
-                    >
-                      {r.label}
-                    </button>
-                  ))}
+      {
+        isExportModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className={`w-full max-w-md p-8 rounded-[40px] border shadow-2xl ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+              <div className="flex justify-between items-center mb-8">
+                <div>
+                  <h3 className={`text-2xl font-black italic tracking-tighter uppercase ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>Export Deníku</h3>
+                  <p className="text-[10px] font-black uppercase text-blue-500 tracking-widest">Vyberte parametry exportu</p>
                 </div>
+                <button
+                  onClick={() => setIsExportModalOpen(false)}
+                  className={`p-2 rounded-xl transition-colors ${theme !== 'light' ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-black/5 text-slate-500'}`}
+                >
+                  <X size={20} />
+                </button>
               </div>
 
-              {/* Field Selection */}
-              <div className="space-y-4">
-                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Data k exportu</p>
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { id: 'notes', label: 'Reflexe' },
-                    { id: 'mistakes', label: 'Chyby' },
-                    { id: 'stressors', label: 'Stresory' },
-                    { id: 'gratitude', label: 'Vděčnost' },
-                    { id: 'pnl', label: 'PnL' },
-                    { id: 'rating', label: 'Rating' },
-                    { id: 'analysisScreenshots', label: 'Analýza (Screeny)' },
-                    { id: 'tradeScreenshots', label: 'Obchody (Screeny)' },
-                    { id: 'showTimestamps', label: 'Časy v pozn.' }
-                  ].map(field => (
-                    <button
-                      key={field.id}
-                      onClick={() => setExportFields(prev => ({ ...prev, [field.id]: !prev[field.id as keyof typeof prev] }))}
-                      className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-between ${exportFields[field.id as keyof typeof exportFields]
-                        ? 'bg-blue-600/10 border-blue-600/50 text-blue-500'
-                        : `${theme !== 'light' ? 'bg-white/5 border-white/5 text-slate-500 hover:bg-white/10' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`
-                        }`}
-                    >
-                      {field.label}
-                      <div className={`w-3.5 h-3.5 rounded-md border flex items-center justify-center transition-all ${exportFields[field.id as keyof typeof exportFields]
-                        ? 'bg-blue-600 border-blue-600'
-                        : 'border-slate-600'
-                        }`}>
-                        {exportFields[field.id as keyof typeof exportFields] && <Check size={10} className="text-white" />}
-                      </div>
-                    </button>
-                  ))}
+              <div className="space-y-8">
+                {/* Range Selection */}
+                <div className="space-y-4">
+                  <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Časové období</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { id: '7', label: '7 dní' },
+                      { id: '30', label: '30 dní' },
+                      { id: '90', label: '90 dní' },
+                      { id: 'all', label: 'Vše' }
+                    ].map(r => (
+                      <button
+                        key={r.id}
+                        onClick={() => setExportRange(r.id as any)}
+                        className={`px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${exportRange === r.id
+                          ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 scale-[1.02]'
+                          : `${theme !== 'light' ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`
+                          }`}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              {/* Format Selection */}
-              <div className="space-y-4">
-                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Formát exportu</p>
-                <div className="space-y-2">
-                  {[
-                    { id: 'pdf', label: 'Vizuální PDF Report', sub: 'Ideální pro čtení a tisk', icon: FileText },
-                    { id: 'csv', label: 'Data pro Excel (CSV)', sub: 'Ideální pro vlastní analýzu', icon: List },
-                    { id: 'ai', label: 'AI Optimized (MD)', sub: 'Nejlepší pro Gemini / ChatGPT', icon: Brain }
-                  ].map(f => (
-                    <button
-                      key={f.id}
-                      onClick={() => setExportFormat(f.id as any)}
-                      className={`w-full p-4 rounded-3xl flex items-center gap-4 transition-all text-left group ${exportFormat === f.id
-                        ? 'bg-blue-600/10 border-2 border-blue-600'
-                        : `${theme !== 'light' ? 'bg-[var(--bg-input)] border-2 border-transparent hover:bg-white/10' : 'bg-slate-50 border-2 border-transparent hover:bg-slate-100'}`
-                        }`}
-                    >
-                      <div className={`p-2.5 rounded-xl ${exportFormat === f.id ? 'bg-blue-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-400' : 'bg-slate-800 text-slate-400')}`}>
-                        <f.icon size={18} />
-                      </div>
-                      <div className="flex-1">
-                        <p className={`text-[10px] font-black uppercase tracking-widest ${exportFormat === f.id ? 'text-blue-500' : 'text-slate-400'}`}>{f.label}</p>
-                        <p className="text-[9px] text-slate-500 font-bold uppercase">{f.sub}</p>
-                      </div>
-                    </button>
-                  ))}
+                {/* Field Selection */}
+                <div className="space-y-4">
+                  <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Data k exportu</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { id: 'notes', label: 'Reflexe' },
+                      { id: 'mistakes', label: 'Chyby' },
+                      { id: 'stressors', label: 'Stresory' },
+                      { id: 'gratitude', label: 'Vděčnost' },
+                      { id: 'pnl', label: 'PnL' },
+                      { id: 'rating', label: 'Rating' },
+                      { id: 'analysisScreenshots', label: 'Analýza (Screeny)' },
+                      { id: 'tradeScreenshots', label: 'Obchody (Screeny)' },
+                      { id: 'showTimestamps', label: 'Časy v pozn.' }
+                    ].map(field => (
+                      <button
+                        key={field.id}
+                        onClick={() => setExportFields(prev => ({ ...prev, [field.id]: !prev[field.id as keyof typeof prev] }))}
+                        className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-between ${exportFields[field.id as keyof typeof exportFields]
+                          ? 'bg-blue-600/10 border-blue-600/50 text-blue-500'
+                          : `${theme !== 'light' ? 'bg-white/5 border-white/5 text-slate-500 hover:bg-white/10' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`
+                          }`}
+                      >
+                        {field.label}
+                        <div className={`w-3.5 h-3.5 rounded-md border flex items-center justify-center transition-all ${exportFields[field.id as keyof typeof exportFields]
+                          ? 'bg-blue-600 border-blue-600'
+                          : 'border-slate-600'
+                          }`}>
+                          {exportFields[field.id as keyof typeof exportFields] && <Check size={10} className="text-white" />}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              <button
-                onClick={handleExport}
-                className="w-full py-5 rounded-[28px] bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-black uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98] shadow-xl shadow-blue-600/30 flex items-center justify-center gap-3 mt-4"
-              >
-                Stáhnout Export <Download size={18} />
-              </button>
+                {/* Format Selection */}
+                <div className="space-y-4">
+                  <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Formát exportu</p>
+                  <div className="space-y-2">
+                    {[
+                      { id: 'pdf', label: 'Vizuální PDF Report', sub: 'Ideální pro čtení a tisk', icon: FileText },
+                      { id: 'csv', label: 'Data pro Excel (CSV)', sub: 'Ideální pro vlastní analýzu', icon: List },
+                      { id: 'ai', label: 'AI Optimized (MD)', sub: 'Nejlepší pro Gemini / ChatGPT', icon: Brain }
+                    ].map(f => (
+                      <button
+                        key={f.id}
+                        onClick={() => setExportFormat(f.id as any)}
+                        className={`w-full p-4 rounded-3xl flex items-center gap-4 transition-all text-left group ${exportFormat === f.id
+                          ? 'bg-blue-600/10 border-2 border-blue-600'
+                          : `${theme !== 'light' ? 'bg-[var(--bg-input)] border-2 border-transparent hover:bg-white/10' : 'bg-slate-50 border-2 border-transparent hover:bg-slate-100'}`
+                          }`}
+                      >
+                        <div className={`p-2.5 rounded-xl ${exportFormat === f.id ? 'bg-blue-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-400' : 'bg-slate-800 text-slate-400')}`}>
+                          <f.icon size={18} />
+                        </div>
+                        <div className="flex-1">
+                          <p className={`text-[10px] font-black uppercase tracking-widest ${exportFormat === f.id ? 'text-blue-500' : 'text-slate-400'}`}>{f.label}</p>
+                          <p className="text-[9px] text-slate-500 font-bold uppercase">{f.sub}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleExport}
+                  className="w-full py-5 rounded-[28px] bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-black uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98] shadow-xl shadow-blue-600/30 flex items-center justify-center gap-3 mt-4"
+                >
+                  Stáhnout Export <Download size={18} />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 };
 

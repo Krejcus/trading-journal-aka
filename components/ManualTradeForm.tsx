@@ -45,6 +45,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   const [expandedSection, setExpandedSection] = useState<'emotions' | 'htf' | 'ltf' | 'mistakes' | null>('emotions');
   const [isZoomed, setIsZoomed] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const isDark = theme !== 'light';
 
   const getLocalISOString = (date?: Date) => {
     const d = date || new Date();
@@ -341,7 +342,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
             <div className="flex items-center gap-3 md:gap-4">
               <div className={`p-2.5 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/20`}><Plus size={18} className="text-white" /></div>
               <div>
-                <h2 className="text-sm md:text-lg font-black tracking-tighter text-white uppercase">{editTrade ? 'UPRAVIT OBCHOD' : 'NOVÝ OBCHOD'}</h2>
+                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{editTrade ? 'UPRAVIT OBCHOD' : 'NOVÝ OBCHOD'}</h2>
               </div>
               {!editTrade && localStorage.getItem('alphatrade_trade_draft') && (
                 <button
@@ -370,7 +371,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                 <div className="hidden md:block w-px h-8 bg-white/5"></div>
                 <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">R:R Ratio</span><span className="text-sm font-mono font-black text-blue-400">{calculations.rr} R</span></div>
                 <div className="hidden md:block w-px h-8 bg-white/5"></div>
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">Seance</span><span className="text-[10px] font-black text-white uppercase">{calculations.session}</span></div>
+                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">Seance</span><span className={`text-[10px] font-black uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{calculations.session}</span></div>
                 <div className="ml-auto flex items-center">
                   <div className={`px-2 py-1 rounded text-[9px] font-black uppercase flex items-center gap-1 ${calculations.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'}`}>
                     {calculations.direction === 'Long' ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />} {calculations.direction}
@@ -394,7 +395,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                   <div className="relative group">
                     <div className={inputContainerClass}>
                       <div className={inlineLabelClass}><Wallet size={10} className="mr-1" /> Terminal</div>
-                      <button type="button" onClick={() => setIsAccountOpen(!isAccountOpen)} className="w-full h-full flex items-center justify-between px-3 text-xs font-black text-white hover:bg-white/5">
+                      <button type="button" onClick={() => setIsAccountOpen(!isAccountOpen)} className={`w-full h-full flex items-center justify-between px-3 text-xs font-black hover:bg-white/5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
                         {selectedAccCount === 0 ? 'Vyberte účet' : selectedAccCount === 1 ? firstSelectedAcc?.name : `Hromadné (${selectedAccCount})`} <ChevronDown size={12} className="text-slate-600" />
                       </button>
                     </div>
@@ -491,7 +492,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                   <div className="relative group">
                     <div className={inputContainerClass}>
                       <div className={inlineLabelClass}><Layers size={10} className="mr-1" /> Aktivum</div>
-                      <button type="button" onClick={() => setIsInstrumentOpen(!isInstrumentOpen)} className="w-full h-full flex items-center justify-between px-3 text-xs font-black text-white hover:bg-white/5">
+                      <button type="button" onClick={() => setIsInstrumentOpen(!isInstrumentOpen)} className={`w-full h-full flex items-center justify-between px-3 text-xs font-black hover:bg-white/5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
                         {currentInst?.name} <ChevronDown size={12} className="text-slate-600" />
                       </button>
                     </div>
@@ -515,21 +516,21 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                 <div className="space-y-4">
                   <h3 className={pilarHeaderClass}><Brain size={12} /> 03 Tactical Engine</h3>
                   <div className="space-y-2">
-                    <div className={`rounded-2xl border overflow-hidden ${theme !== 'light' ? 'border-white/5 bg-white/5' : 'border-slate-200'}`}>
-                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'emotions' ? null : 'emotions')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${theme !== 'light' ? 'bg-white/5' : 'bg-slate-50'}`}><span className="flex items-center gap-2"><Brain size={12} className="text-purple-500" /> Emoce</span>{expandedSection === 'emotions' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
-                      {expandedSection === 'emotions' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableEmotions.map(emo => (<button key={emo.id} type="button" onClick={() => { setFormData(p => ({ ...p, emotions: p.emotions.includes(emo.id) ? p.emotions.filter(e => e !== emo.id) : [...p.emotions, emo.id] })) }} className={`py-2 px-2 rounded-lg border text-[9px] font-black uppercase transition-all ${formData.emotions.includes(emo.id) ? 'bg-purple-600 text-white border-purple-500' : 'bg-slate-950/50 text-slate-500 border-slate-800'}`}>{emo.label}</button>))}</div>)}
+                    <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'emotions' ? null : 'emotions')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><Brain size={12} className="text-purple-500" /> Emoce</span>{expandedSection === 'emotions' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+                      {expandedSection === 'emotions' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableEmotions.map(emo => (<button key={emo.id} type="button" onClick={() => { setFormData(p => ({ ...p, emotions: p.emotions.includes(emo.id) ? p.emotions.filter(e => e !== emo.id) : [...p.emotions, emo.id] })) }} className={`py-2 px-2 rounded-lg border text-[9px] font-black uppercase transition-all ${formData.emotions.includes(emo.id) ? 'bg-purple-600 text-white border-purple-500' : (isDark ? 'bg-slate-950/50 text-slate-500 border-slate-800' : 'bg-white text-slate-400 border-slate-200')}`}>{emo.label}</button>))}</div>)}
                     </div>
-                    <div className={`rounded-2xl border overflow-hidden ${theme !== 'light' ? 'border-white/5 bg-white/5' : 'border-slate-200'}`}>
-                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'htf' ? null : 'htf')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${theme !== 'light' ? 'bg-white/5' : 'bg-slate-50'}`}><span className="flex items-center gap-2"><Monitor size={12} className="text-blue-500" /> HTF Kontext</span>{expandedSection === 'htf' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
-                      {expandedSection === 'htf' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableHtfOptions.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('htf', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black uppercase transition-all ${formData.htfConfluence.includes(opt) ? 'bg-blue-600 text-white border-blue-500' : 'bg-slate-950/50 text-slate-500 border-slate-800'}`}>{opt}</button>))}</div>)}
+                    <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'htf' ? null : 'htf')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><Monitor size={12} className="text-blue-500" /> HTF Kontext</span>{expandedSection === 'htf' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+                      {expandedSection === 'htf' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableHtfOptions.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('htf', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black uppercase transition-all ${formData.htfConfluence.includes(opt) ? 'bg-blue-600 text-white border-blue-500' : (isDark ? 'bg-slate-950/50 text-slate-500 border-slate-800' : 'bg-white text-slate-400 border-slate-200')}`}>{opt}</button>))}</div>)}
                     </div>
-                    <div className={`rounded-2xl border overflow-hidden ${theme !== 'light' ? 'border-white/5 bg-white/5' : 'border-slate-200'}`}>
-                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'ltf' ? null : 'ltf')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${theme !== 'light' ? 'bg-white/5' : 'bg-slate-50'}`}><span className="flex items-center gap-2"><Zap size={12} className="text-amber-500" /> LTF Trigger</span>{expandedSection === 'ltf' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
-                      {expandedSection === 'ltf' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableLtfOptions.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('ltf', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black uppercase transition-all ${formData.ltfConfluence.includes(opt) ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-950/50 text-slate-500 border-slate-800'}`}>{opt}</button>))}</div>)}
+                    <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'ltf' ? null : 'ltf')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><Zap size={12} className="text-amber-500" /> LTF Trigger</span>{expandedSection === 'ltf' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+                      {expandedSection === 'ltf' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableLtfOptions.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('ltf', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black uppercase transition-all ${formData.ltfConfluence.includes(opt) ? 'bg-amber-600 text-white border-amber-500' : (isDark ? 'bg-slate-950/50 text-slate-500 border-slate-800' : 'bg-white text-slate-400 border-slate-200')}`}>{opt}</button>))}</div>)}
                     </div>
-                    <div className={`rounded-2xl border overflow-hidden ${theme !== 'light' ? 'border-white/5 bg-white/5' : 'border-slate-200'}`}>
-                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'mistakes' ? null : 'mistakes')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${theme !== 'light' ? 'bg-white/5' : 'bg-slate-50'}`}><span className="flex items-center gap-2"><AlertOctagon size={12} className="text-rose-500" /> Chyby Exekuce</span>{expandedSection === 'mistakes' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
-                      {expandedSection === 'mistakes' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableMistakes.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('mistake', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black uppercase transition-all ${formData.mistakes.includes(opt) ? 'bg-rose-600 text-white border-rose-500 shadow-lg shadow-rose-500/20' : 'bg-slate-950/50 text-slate-500 border-slate-800'}`}>{opt}</button>))}</div>)}
+                    <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'mistakes' ? null : 'mistakes')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><AlertOctagon size={12} className="text-rose-500" /> Chyby Exekuce</span>{expandedSection === 'mistakes' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+                      {expandedSection === 'mistakes' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableMistakes.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('mistake', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black uppercase transition-all ${formData.mistakes.includes(opt) ? 'bg-rose-600 text-white border-rose-500 shadow-lg shadow-rose-500/20' : (isDark ? 'bg-slate-950/50 text-slate-500 border-slate-800' : 'bg-white text-slate-400 border-slate-200')}`}>{opt}</button>))}</div>)}
                     </div>
                   </div>
                 </div>
@@ -549,7 +550,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                   ) : (
                     <div className={`relative group rounded-2xl border-2 border-dashed h-[140px] overflow-hidden transition-all ${formData.screenshots.length > 0 ? 'border-blue-500/50 cursor-pointer' : 'border-white/10 hover:border-blue-500/50 bg-white/5'}`}><label className="flex flex-col items-center justify-center h-full cursor-pointer p-4 text-center"><ImageIcon size={24} className="text-slate-700 mb-1" /><span className="text-[9px] font-black uppercase text-slate-600 tracking-tighter">Vložit graf (CTRL+V)</span><input type="file" className="hidden" accept="image/*" onChange={handleAddScreenshot} /></label></div>
                   )}
-                  <textarea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })} className={`w-full h-[120px] px-4 py-3 rounded-2xl border bg-white/5 border-white/5 text-[11px] font-black text-slate-300 resize-none placeholder-slate-800 outline-none focus:border-blue-500/50 transition-all`} placeholder="Poznámky k chybám nebo mindsetu..." />
+                  <textarea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })} className={`w-full h-[120px] px-4 py-3 rounded-2xl border transition-all resize-none placeholder-slate-700 outline-none focus:border-blue-500/50 text-[11px] font-black ${isDark ? 'bg-white/5 border-white/5 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`} placeholder="Poznámky k chybám nebo mindsetu..." />
                 </div>
               </div>
             </form>
