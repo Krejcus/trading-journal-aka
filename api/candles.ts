@@ -88,11 +88,12 @@ export default async function handler(
         const isForce = request.query.force === 'true';
         const isLikelyWeekend = expectedCount > 500 && cachedData && (cachedData.length < 50);
 
-        // Lenient threshold for normal usage: 40% coverage is enough to avoid a slow MISS.
+        // Lenient threshold for normal usage: 40% coverage OR >50 candles (original logic).
+        // This ensures that even sparse historical data loads instantly without triggering slow fetches.
         // Strict threshold for maintenance: only if it's explicitly NOT force.
         const threshold = 0.4;
         const isCompleteEnough = !cacheError && cachedData &&
-            (cachedData.length >= expectedCount * threshold || cachedData.length > (expectedCount - 10));
+            (cachedData.length >= expectedCount * threshold || cachedData.length > 50);
 
         if (!isForce && (isCompleteEnough || isLikelyWeekend)) {
             const coverage = expectedCount > 0 ? Math.round((cachedData.length / expectedCount) * 100) : 100;
