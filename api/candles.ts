@@ -73,8 +73,13 @@ export default async function handler(
         const expectedSeconds = (toDate.getTime() - fromDate.getTime()) / 1000;
         const expectedCount = Math.floor(expectedSeconds / 60);
 
-        // If we have data and it looks somewhat complete (>80%), return it.
-        if (!cacheError && cachedData && cachedData.length >= expectedCount * 0.8 && expectedCount > 0) {
+        // Improved Cache Heuristic: 
+        // If we have > 10 candles and it's > 50% of expected, 
+        // OR if it's a weekend (detected by low count but data exists), return it.
+        const isLikelyWeekend = expectedCount > 300 && cachedData && cachedData.length < 50 && cachedData.length > 5;
+        const isCompleteEnough = !cacheError && cachedData && cachedData.length >= expectedCount * 0.7 && expectedCount > 0;
+
+        if (isCompleteEnough || isLikelyWeekend) {
             const transformed = cachedData.map(d => ({
                 time: new Date(d.time).getTime() / 1000,
                 open: d.open,
@@ -83,10 +88,12 @@ export default async function handler(
                 close: d.close,
                 volume: d.volume
             }));
+            response.setHeader('X-Cache-Status', 'HIT');
             return response.status(200).json(transformed);
         }
 
         // 2. Fetch from Dukascopy
+        response.setHeader('X-Cache-Status', 'MISS');
         const config: Config = {
             instrument: dukaInstrument as any,
             dates: {
