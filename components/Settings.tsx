@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Save, Shield, Trash2, Database, Key, Plus, Brain, Tag, X, Target, ListChecks, Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck, ShieldAlert, DollarSign, Activity, Check, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus } from '../types';
+import { supabase } from '../services/supabase';
 
 interface SettingsProps {
   theme: 'dark' | 'light' | 'oled';
@@ -149,6 +150,7 @@ const Settings: React.FC<SettingsProps> = ({
     { id: 'psychology', label: 'Psychologie', icon: Brain, description: 'Emoce a katalog chyb' },
     { id: 'strategy', label: 'Strategie', icon: Target, description: 'Pravidla a konfluence' },
     { id: 'market', label: 'Trh', icon: Clock, description: 'Seance a časový plán' },
+    { id: 'debug', label: 'Cache & Data', icon: Database, description: 'Správa paměti a diagnostika' },
   ] as const;
 
   return (
@@ -524,11 +526,164 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
             )
           }
+
+          {
+            activeTab === 'debug' && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
+                <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[var(--bg-card)]/80 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="p-3 rounded-xl bg-orange-500 text-white shadow-lg shadow-orange-500/10"><Database size={20} /></div>
+                    <div>
+                      <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>CACHE MANAGER</h3>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Správa a kontrola stavu databáze</p>
+                    </div>
+                  </div>
+
+                  <CacheManager isDark={isDark} />
+                </section>
+              </div>
+            )
+          }
         </div>
       </main>
+    </div>
+  );
+};
 
+// --- Embedded Cache Manager Component ---
+const CacheManager = ({ isDark }: { isDark: boolean }) => {
+  const [stats, setStats] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
 
+  const checkStats = async () => {
+    setLoading(true);
+    try {
+      const instruments = ['usatechidxusd', 'usa500idxusd'];
+      const newStats: Record<string, number> = {};
 
+      for (const inst of instruments) {
+        const { count, error } = await supabase
+          .from('candle_cache')
+          .select('*', { count: 'exact', head: true })
+          .eq('instrument', inst);
+
+        if (!error) {
+          newStats[inst] = count || 0;
+        }
+      }
+      setStats(newStats);
+    } catch (error) {
+      console.error("Failed to check stats:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Auto-check on mount
+  useEffect(() => {
+    checkStats();
+  }, []);
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setDownloadProgress(0);
+
+    try {
+      const instrument = 'usatechidxusd'; // NQ
+      // Download last 30 days in 2 day chunks
+      const daysBack = 30;
+      const chunkSize = 2;
+      const now = new Date();
+
+      const totalChunks = Math.ceil(daysBack / chunkSize);
+
+      for (let i = 0; i < totalChunks; i++) {
+        const endDay = i * chunkSize;
+        const startDay = (i + 1) * chunkSize;
+
+        const to = new Date(now.getTime() - endDay * 24 * 60 * 60 * 1000);
+        const from = new Date(now.getTime() - startDay * 24 * 60 * 60 * 1000);
+
+        // Round to minutes for consistency
+        const toIso = to.toISOString();
+        const fromIso = from.toISOString();
+
+        console.log(`Downloading chunk ${i + 1}/${totalChunks}: ${fromIso} - ${toIso}`);
+        setDownloadProgress(Math.round(((i) / totalChunks) * 100));
+
+        try {
+          // Call our own API which handles the Dukascopy fetch + DB Cache save
+          await fetch(`/api/candles?instrument=${instrument}&from=${fromIso}&to=${toIso}&timeframe=m1`);
+        } catch (e) {
+          console.error("Chunk failed", e);
+        }
+
+        // Small delay to be polite to API/Vercel
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      setDownloadProgress(100);
+      await checkStats(); // Refresh stats
+      alert("Staženo! Data jsou v paměti.");
+
+    } catch (error) {
+      alert("Chyba při stahování. Zkus to znovu.");
+      console.error(error);
+    } finally {
+      setDownloading(false);
+      setDownloadProgress(0);
+    }
+  };
+
+  return (
+    <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-page)]/20 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h4 className={`text-sm font-bold uppercase tracking-widest ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>Stav Paměti (Svíčky)</h4>
+        <div className="flex gap-4">
+          {loading && <Loader2 size={16} className="animate-spin text-slate-500" />}
+          <button onClick={checkStats} className="text-xs text-blue-500 hover:underline">Obnovit</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        {[
+          { id: 'usatechidxusd', label: 'Nasdaq (NQ)' },
+          { id: 'usa500idxusd', label: 'S&P 500 (ES)' }
+        ].map(inst => (
+          <div key={inst.id} className={`p-4 rounded-xl border ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+            <p className="text-[10px] font-black uppercase text-slate-500 mb-1">{inst.label}</p>
+            <div className="flex items-baseline gap-2">
+              <p className={`text-2xl font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                {stats[inst.id] !== undefined ? stats[inst.id].toLocaleString() : '---'}
+              </p>
+              <span className="text-[10px] text-slate-500 font-bold uppercase">rows</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className={`p-4 rounded-xl border ${isDark ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
+        <p className={`text-xs mb-3 ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>
+          Pokud se grafy načítají pomalu, databáze je pravděpodobně prázdná.
+          Tlačítkem níže stáhneš posledních 30 dní historie pro Nasdaq.
+        </p>
+        <div className="flex items-center gap-4">
+          <button
+            disabled={downloading}
+            onClick={handleDownload}
+            className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all shadow-lg active:scale-95 disabled:opacity-50 flex items-center gap-2
+                            ${downloading ? 'bg-slate-700 text-slate-300' : 'bg-blue-600 hover:bg-blue-500 text-white'}
+                        `}
+          >
+            {downloading ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+            {downloading ? `Stahuji... ${downloadProgress}%` : 'Stáhnout NQ (30 dní)'}
+          </button>
+          {downloading && <span className="text-[10px] font-mono opacity-50">Prosím nezavírej okno...</span>}
+        </div>
+      </div>
     </div>
   );
 };
