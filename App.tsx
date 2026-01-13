@@ -310,7 +310,8 @@ const App: React.FC = () => {
 
         // Prefetch recent trades for quick access
         if (cleanedTrades.length > 0) {
-          prefetchService.prefetchMultiple(cleanedTrades.slice(0, 10)).catch(err => console.debug("Initial prefetch skipped:", err));
+          const recentTrades = [...cleanedTrades].sort((a, b) => b.timestamp - a.timestamp).slice(0, 10);
+          prefetchService.prefetchMultiple(recentTrades).catch(err => console.debug("Initial prefetch skipped:", err));
         }
 
         const storedAccounts = await storageService.getAccounts();

@@ -42,12 +42,17 @@ export default async function handler(
         }
 
         // Map instrument to Dukascopy format
-        let dukaInstrument = String(instrument).toLowerCase().replace(/[\/\-_]/g, '');
+        // Handle names like "NQ 12-25" or "EUR/USD" by taking the lead part
+        const raw = String(instrument).toLowerCase();
+        let basePart = raw.split(/[ \/\-_]/)[0];
+
         const map: Record<string, string> = {
             'nq': 'usatechidxusd',
             'mnq': 'usatechidxusd',
+            'nasdaq': 'usatechidxusd',
             'es': 'usa500idxusd',
             'mes': 'usa500idxusd',
+            'sp500': 'usa500idxusd',
             'eurusd': 'eurusd',
             'gbpusd': 'gbpusd',
             'xauusd': 'xauusd',
@@ -56,8 +61,12 @@ export default async function handler(
             'btcusd': 'btcusd',
         };
 
-        if (map[dukaInstrument]) {
-            dukaInstrument = map[dukaInstrument];
+        let dukaInstrument = map[basePart] || basePart;
+
+        // Final cleanup for symbols not in map (e.g. eurusd becomes eurusd anyway)
+        if (!map[basePart]) {
+            dukaInstrument = raw.replace(/[\/\-_ ]/g, '');
+            if (map[dukaInstrument]) dukaInstrument = map[dukaInstrument];
         }
 
         // 1. Check Cache First
