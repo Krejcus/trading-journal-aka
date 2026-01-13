@@ -31,6 +31,12 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
     const subDurationRef = useRef<number>(240 * 60); // Default 4 hours
     const isSyncingRef = useRef<boolean>(false);
     const priceOffsetRef = useRef<number>(0);
+    const allDataRef = useRef<any[]>([]);
+
+    // Sync ref when state changes
+    useEffect(() => {
+        allDataRef.current = allData;
+    }, [allData]);
 
     const [activeTool, setActiveTool] = useState<DrawingTool>('cursor');
     const [drawings, setDrawings] = useState<DrawingObject[]>(trade.drawings || []);
@@ -500,11 +506,12 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
     }, [trade.id, trade.instrument, trade.date, trade.durationMinutes, trade.entryPrice, mainTimeframe]);
 
     const loadMorePast = useCallback(async () => {
-        if (isFetchingMore || allData.length === 0 || !trade.instrument) return;
+        if (isFetchingMore || allDataRef.current.length === 0 || !trade.instrument) return;
 
         setIsFetchingMore(true);
         try {
-            const firstTime = allData[0].time as number;
+            const currentData = allDataRef.current;
+            const firstTime = currentData[0].time as number;
             const timeOffset = -new Date().getTimezoneOffset() * 60;
             // Fetch in chunks of 2 days for 1m/5m (prevents timeouts and improves cache hits)
             const daysToFetch = (mainTimeframe === '1m' || mainTimeframe === '5m') ? 2 : 30;
@@ -542,7 +549,7 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
             // Artificial delay to prevent spamming
             setTimeout(() => setIsFetchingMore(false), 500);
         }
-    }, [isFetchingMore, allData, trade.instrument, mainTimeframe]);
+    }, [trade.instrument, mainTimeframe, isFetchingMore]); // Removed allData dependency
 
     // 2. Initialize Chart Effect
     useEffect(() => {
@@ -671,24 +678,11 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
             }
         };
 
-        const handleVisibleRangeChange = () => {
-            const range = chart.timeScale().getVisibleRange();
-            if (!range || isFetchingMore || allData.length === 0) return;
-
-            const firstTime = allData[0].time as number;
-            // Trigger when visible range is within 25% of the start of available data
-            if ((range.from as number) < firstTime + (allData[allData.length - 1].time as number - firstTime) * 0.25) {
-                loadMorePast();
-            }
-        };
-
         chart.subscribeCrosshairMove(handleCrosshairMove);
-        chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleRangeChange);
 
         return () => {
             window.removeEventListener('resize', handleResize);
             chart.unsubscribeCrosshairMove(handleCrosshairMove);
-            chart.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleRangeChange);
             chart.remove();
             chartRef.current = null;
             seriesRef.current = null;
@@ -696,7 +690,31 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
             slSeriesRef.current = null;
             setChartReady(false);
         };
-    }, [trade, isDark, containerReady, loadMorePast, allData, isFetchingMore]);
+    }, [trade.id, trade.instrument, trade.entryPrice, trade.stopLoss, trade.takeProfit, isDark, containerReady]); // Stabilized dependencies
+
+    // 2.5 Separate TimeRange Subscription to avoid chart recreation
+    useEffect(() => {
+        if (!chartReady || !chartRef.current) return;
+
+        const handleVisibleRangeChange = () => {
+            const chart = chartRef.current;
+            if (!chart) return;
+            const range = chart.timeScale().getVisibleRange();
+            const currentData = allDataRef.current;
+            if (!range || isFetchingMore || currentData.length === 0) return;
+
+            const firstTime = currentData[0].time as number;
+            // Trigger when visible range is within 25% of the start of available data
+            if ((range.from as number) < firstTime + (currentData[currentData.length - 1].time as number - firstTime) * 0.25) {
+                loadMorePast();
+            }
+        };
+
+        chartRef.current.timeScale().subscribeVisibleTimeRangeChange(handleVisibleRangeChange);
+        return () => {
+            chartRef.current?.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleRangeChange);
+        };
+    }, [chartReady, loadMorePast, isFetchingMore]);
 
     // 3. Sync Data Effect
     useEffect(() => {
