@@ -650,8 +650,8 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
 
       <div className="grid grid-cols-2 gap-4 mb-6">
         {[
-          { id: 'usatechidxusd', label: 'Nasdaq (NQ)' },
-          { id: 'usa500idxusd', label: 'S&P 500 (ES)' }
+          { id: 'usatechidxusd', label: 'Nasdaq (NQ / MNQ)' },
+          { id: 'usa500idxusd', label: 'S&P 500 (ES / MES)' }
         ].map(inst => (
           <div key={inst.id} className={`p-4 rounded-xl border ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
             <p className="text-[10px] font-black uppercase text-slate-500 mb-1">{inst.label}</p>
