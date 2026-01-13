@@ -556,7 +556,7 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
-  const [statusLog, setStatusLog] = useState<string>('');
+  const [statusLog, setStatusLog] = useState<string>('Systém připraven k diagnostice.');
 
   const checkStats = async () => {
     setLoading(true);
