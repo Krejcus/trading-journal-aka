@@ -556,6 +556,7 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [statusLog, setStatusLog] = useState<string>('');
 
   const checkStats = async () => {
     setLoading(true);
@@ -569,13 +570,17 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
           .select('*', { count: 'exact', head: true })
           .eq('instrument', inst);
 
-        if (!error) {
+        if (error) {
+          console.error(`Error for ${inst}:`, error);
+          setStatusLog(`Chyba čtení: ${error.message}`);
+        } else {
           newStats[inst] = count || 0;
         }
       }
       setStats(newStats);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to check stats:", error);
+      setStatusLog(`Výjimka při čtení: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -590,10 +595,11 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
     if (downloading) return;
     setDownloading(true);
     setDownloadProgress(0);
+    setStatusLog('Zahajuji stahování...');
 
     try {
       const instrument = 'usatechidxusd'; // NQ
-      // Download last 30 days in 2 day chunks
+      // Download last 30 days in 2 day chunks (safer for Vercel timeouts)
       const daysBack = 30;
       const chunkSize = 2;
       const now = new Date();
@@ -607,31 +613,33 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
         const to = new Date(now.getTime() - endDay * 24 * 60 * 60 * 1000);
         const from = new Date(now.getTime() - startDay * 24 * 60 * 60 * 1000);
 
-        // Round to minutes for consistency
         const toIso = to.toISOString();
         const fromIso = from.toISOString();
 
-        console.log(`Downloading chunk ${i + 1}/${totalChunks}: ${fromIso} - ${toIso}`);
+        setStatusLog(`Chunk ${i + 1}/${totalChunks}: ${new Date(from).toLocaleDateString()} - ${new Date(to).toLocaleDateString()}`);
         setDownloadProgress(Math.round(((i) / totalChunks) * 100));
 
         try {
-          // Call our own API which handles the Dukascopy fetch + DB Cache save
-          await fetch(`/api/candles?instrument=${instrument}&from=${fromIso}&to=${toIso}&timeframe=m1`);
-        } catch (e) {
+          const res = await fetch(`/api/candles?instrument=${instrument}&from=${fromIso}&to=${toIso}&timeframe=m1`);
+          if (!res.ok) {
+            const errText = await res.text();
+            setStatusLog(`Chyba API v kroku ${i + 1}: ${res.status} - ${errText.substring(0, 50)}`);
+          }
+        } catch (e: any) {
+          setStatusLog(`Chyba sítě v kroku ${i + 1}: ${e.message}`);
           console.error("Chunk failed", e);
         }
 
-        // Small delay to be polite to API/Vercel
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 800));
       }
 
       setDownloadProgress(100);
-      await checkStats(); // Refresh stats
-      alert("Staženo! Data jsou v paměti.");
+      setStatusLog('Hotovo. Aktualizuji počítadlo...');
+      await checkStats();
 
-    } catch (error) {
-      alert("Chyba při stahování. Zkus to znovu.");
-      console.error(error);
+    } catch (error: any) {
+      setStatusLog(`KRITICKÁ CHYBA: ${error.message}`);
+      alert("Chyba při stahování.");
     } finally {
       setDownloading(false);
       setDownloadProgress(0);
@@ -664,6 +672,16 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
           </div>
         ))}
       </div>
+
+      {statusLog && (
+        <div className={`mb-6 p-3 rounded-xl font-mono text-[10px] border ${isDark ? 'bg-black/40 border-white/5 text-blue-400' : 'bg-slate-100 border-slate-200 text-blue-600'}`}>
+          <div className="flex items-center gap-2 mb-1">
+            <Activity size={10} className="animate-pulse" />
+            <span className="uppercase font-black">System Log</span>
+          </div>
+          {statusLog}
+        </div>
+      )}
 
       <div className={`p-4 rounded-xl border ${isDark ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
         <p className={`text-xs mb-3 ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>
