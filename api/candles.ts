@@ -82,16 +82,18 @@ export default async function handler(
         const expectedSeconds = (toDate.getTime() - fromDate.getTime()) / 1000;
         const expectedCount = Math.floor(expectedSeconds / 60);
 
-        // Improved Cache Heuristic: 
-        // If we have any significant amount of data (>20 candles), it's likely a previous successful fetch.
-        // For 1m data, even 20 minutes is enough to justify a HIT for sub-hour trades.
-        // We also check if it's at least 30% of expected to avoid tiny fragmented hits.
-        const isLikelyWeekend = expectedCount > 300 && cachedData && cachedData.length < 50 && cachedData.length > 5;
+        // Improved Cache Heuristic:
+        // We need high coverage (e.g. 90%) to consider it a HIT, 
+        // OR it must be a weekend (where we expect 0-20 candles but get almost none).
+        const isLikelyWeekend = expectedCount > 500 && cachedData && cachedData.length < 50;
+
+        // Threshold: 90% for small ranges, 80% for very large ranges
+        const threshold = expectedCount > 1000 ? 0.8 : 0.9;
         const isCompleteEnough = !cacheError && cachedData &&
-            (cachedData.length >= expectedCount * 0.2 || cachedData.length > 50);
+            (cachedData.length >= expectedCount * threshold || cachedData.length > (expectedCount - 5));
 
         if (isCompleteEnough || isLikelyWeekend) {
-            console.log(`[Cache] HIT for ${dukaInstrument} (${cachedData.length} candles)`);
+            console.log(`[Cache] HIT for ${dukaInstrument} (${cachedData.length}/${expectedCount})`);
             const transformed = cachedData.map(d => ({
                 time: new Date(d.time).getTime() / 1000,
                 open: d.open,
