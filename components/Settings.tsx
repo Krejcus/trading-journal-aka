@@ -599,8 +599,8 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
 
     try {
       const instrument = 'usatechidxusd'; // NQ
-      // Download last 30 days in 2 day chunks (safer for Vercel timeouts)
-      const daysBack = 30;
+      // Download last 90 days in 2 day chunks (safer for Vercel timeouts)
+      const daysBack = 90;
       const chunkSize = 2;
       const now = new Date();
 

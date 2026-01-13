@@ -88,14 +88,19 @@ export default async function handler(
         const isForce = request.query.force === 'true';
         const isLikelyWeekend = expectedCount > 500 && cachedData && (cachedData.length < 50);
 
-        // Lenient threshold for normal usage: 40% coverage OR >50 candles (original logic).
-        // This ensures that even sparse historical data loads instantly without triggering slow fetches.
-        // Strict threshold for maintenance: only if it's explicitly NOT force.
-        const threshold = 0.4;
-        const isCompleteEnough = !cacheError && cachedData &&
-            (cachedData.length >= expectedCount * threshold || cachedData.length > 50);
+        // Lenient threshold for normal usage:
+        // 1. Small request (e.g. init view ~6h): >50 candles is enough.
+        // 2. Large request (e.g. scrollback 2d): >20% coverage required to avoid massive gaps.
+        const isMiddleOfGap = expectedCount > 1000 && cachedData && (cachedData.length < expectedCount * 0.2);
 
-        if (!isForce && (isCompleteEnough || isLikelyWeekend)) {
+        // Final decision:
+        // - Force: always fetch.
+        // - Middle of Gap: always fetch (unless cache is perfect > 90%).
+        // - Otherwise: Trust cache if > 50 candles (fast mode).
+
+        const isFastHit = cachedData && cachedData.length > 50 && !isMiddleOfGap;
+
+        if (!isForce && (isFastHit || isLikelyWeekend)) {
             const coverage = expectedCount > 0 ? Math.round((cachedData.length / expectedCount) * 100) : 100;
             console.log(`[Cache] HIT for ${dukaInstrument} (${cachedData.length}/${expectedCount}, ${coverage}%)`);
             const transformed = cachedData.map(d => ({
