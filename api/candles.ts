@@ -83,12 +83,15 @@ export default async function handler(
         const expectedCount = Math.floor(expectedSeconds / 60);
 
         // Improved Cache Heuristic: 
-        // If we have > 10 candles and it's > 50% of expected, 
-        // OR if it's a weekend (detected by low count but data exists), return it.
+        // If we have any significant amount of data (>20 candles), it's likely a previous successful fetch.
+        // For 1m data, even 20 minutes is enough to justify a HIT for sub-hour trades.
+        // We also check if it's at least 30% of expected to avoid tiny fragmented hits.
         const isLikelyWeekend = expectedCount > 300 && cachedData && cachedData.length < 50 && cachedData.length > 5;
-        const isCompleteEnough = !cacheError && cachedData && cachedData.length >= expectedCount * 0.7 && expectedCount > 0;
+        const isCompleteEnough = !cacheError && cachedData &&
+            (cachedData.length >= expectedCount * 0.4 || cachedData.length > 100);
 
         if (isCompleteEnough || isLikelyWeekend) {
+            console.log(`[Cache] HIT for ${dukaInstrument} (${cachedData.length} candles)`);
             const transformed = cachedData.map(d => ({
                 time: new Date(d.time).getTime() / 1000,
                 open: d.open,
@@ -102,6 +105,7 @@ export default async function handler(
         }
 
         // 2. Fetch from Dukascopy
+        console.log(`[Cache] MISS for ${dukaInstrument} (Expected ${expectedCount}, got ${cachedData?.length || 0})`);
         response.setHeader('X-Cache-Status', 'MISS');
         const config: Config = {
             instrument: dukaInstrument as any,
@@ -131,7 +135,7 @@ export default async function handler(
             return response.status(200).json([]);
         }
 
-        // 3. Save to Cache (Async Background)
+        // 3. Save to Cache
         const candlesToCache = data.map((d: any) => ({
             instrument: dukaInstrument,
             time: new Date(d.timestamp).toISOString(),
@@ -142,12 +146,12 @@ export default async function handler(
             volume: d.tickVolume
         }));
 
-        // Limit batch size to avoid payload limits
+        // Limit batch size and AWAIT to ensure writes happen in serverless environment
         const batchSize = 1000;
         for (let i = 0; i < candlesToCache.length; i += batchSize) {
             const batch = candlesToCache.slice(i, i + batchSize);
-            supabase.from('candle_cache').upsert(batch, { onConflict: 'instrument,time' })
-                .then(({ error }) => { if (error) console.error('Cache sync error:', error); });
+            const { error } = await supabase.from('candle_cache').upsert(batch, { onConflict: 'instrument,time' });
+            if (error) console.error(`[Cache] Sync error for ${dukaInstrument}:`, error);
         }
 
         const candles = data.map((d: any) => ({
