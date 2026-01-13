@@ -82,19 +82,21 @@ export default async function handler(
         const expectedSeconds = (toDate.getTime() - fromDate.getTime()) / 1000;
         const expectedCount = Math.floor(expectedSeconds / 60);
 
-        // Improved Cache Heuristic: 
-        // We need high coverage (e.g. 90%) to consider it a HIT, 
-        // OR it must be a weekend (where we expect 0-20 candles but get almost none).
+        // Heuristic:
+        // 1. Force Sync (Repair Tool): Skip cache, go to Dukascopy.
+        // 2. Normal Usage (Speed): If we have > 40% of data, trust the cache to keep it fast.
         const isForce = request.query.force === 'true';
-        const isLikelyWeekend = expectedCount > 500 && cachedData && cachedData.length < 50;
+        const isLikelyWeekend = expectedCount > 500 && cachedData && (cachedData.length < 50);
 
-        // Threshold: 90% for small ranges, 80% for very large ranges
-        const threshold = expectedCount > 1000 ? 0.8 : 0.9;
+        // Lenient threshold for normal usage: 40% coverage is enough to avoid a slow MISS.
+        // Strict threshold for maintenance: only if it's explicitly NOT force.
+        const threshold = 0.4;
         const isCompleteEnough = !cacheError && cachedData &&
-            (cachedData.length >= expectedCount * threshold || cachedData.length > (expectedCount - 5));
+            (cachedData.length >= expectedCount * threshold || cachedData.length > (expectedCount - 10));
 
         if (!isForce && (isCompleteEnough || isLikelyWeekend)) {
-            console.log(`[Cache] HIT for ${dukaInstrument} (${cachedData.length}/${expectedCount})`);
+            const coverage = expectedCount > 0 ? Math.round((cachedData.length / expectedCount) * 100) : 100;
+            console.log(`[Cache] HIT for ${dukaInstrument} (${cachedData.length}/${expectedCount}, ${coverage}%)`);
             const transformed = cachedData.map(d => ({
                 time: new Date(d.time).getTime() / 1000,
                 open: d.open,
