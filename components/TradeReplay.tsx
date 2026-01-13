@@ -427,10 +427,15 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
 
             try {
                 const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                // Round to nearest minute to ensure cache consistency
+                const exitTimeRounded = Math.floor(exitTimeRaw / 60) * 60;
+
                 // Initial range: much smaller for fast load
                 const daysToFetch = (mainTimeframe === '1m' || mainTimeframe === '5m') ? 1 : 3;
-                const from = new Date((exitTimeRaw - daysToFetch * 24 * 3600) * 1000).toISOString();
-                const to = new Date((exitTimeRaw + 1 * 24 * 3600) * 1000).toISOString();
+
+                // Use rounded times for API requests
+                const from = new Date((exitTimeRounded - daysToFetch * 24 * 3600) * 1000).toISOString();
+                const to = new Date((exitTimeRounded + 1 * 24 * 3600) * 1000).toISOString();
 
                 const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}`);
 
@@ -504,8 +509,11 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
             // Fetch in chunks of 7 days for 1m/5m, or 30 days for higher TF
             const daysToFetch = (mainTimeframe === '1m' || mainTimeframe === '5m') ? 7 : 30;
 
-            const to = new Date((firstTime - timeOffset - 1) * 1000).toISOString();
-            const from = new Date((firstTime - timeOffset - daysToFetch * 24 * 3600) * 1000).toISOString();
+            // Round to nearest minute for cache consistency
+            const firstTimeRounded = Math.floor(firstTime / 60) * 60;
+
+            const to = new Date((firstTimeRounded - timeOffset - 1) * 1000).toISOString();
+            const from = new Date((firstTimeRounded - timeOffset - daysToFetch * 24 * 3600) * 1000).toISOString();
 
             const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}`);
             if (response.ok) {

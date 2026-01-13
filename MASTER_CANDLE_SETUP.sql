@@ -26,13 +26,18 @@ DROP POLICY IF EXISTS "Allow authenticated read access" ON public.candle_cache;
 DROP POLICY IF EXISTS "Allow server-side service role full access" ON public.candle_cache;
 DROP POLICY IF EXISTS "Service role can do everything" ON public.candle_cache;
 
--- Pravidlo pro čtení (všichni přihlášení uživatelé)
-CREATE POLICY "Allow authenticated read access" ON public.candle_cache 
-    FOR SELECT USING (auth.role() = 'authenticated');
+-- Pravidlo pro čtení (kdokoliv)
+CREATE POLICY "Allow public read access" ON public.candle_cache 
+    FOR SELECT USING (true);
 
--- Pravidlo pro zápis (pouze service_role / backend)
+-- Pravidlo pro zápis (Service Role má plný přístup)
 CREATE POLICY "Service role can do everything" ON public.candle_cache
     FOR ALL USING (true) WITH CHECK (true);
+
+-- Pravidlo pro zápis pro ANONYMNÍ (Vercel bez Service Role Key)
+-- POZOR: Povolujeme to pouze pro tuto tabulku mezipaměti.
+CREATE POLICY "Allow anon to upsert candles" ON public.candle_cache
+    FOR ALL TO anon USING (true) WITH CHECK (true);
 
 -- 4. Přidělení práv pro různé role
 GRANT ALL ON public.candle_cache TO postgres, service_role;
