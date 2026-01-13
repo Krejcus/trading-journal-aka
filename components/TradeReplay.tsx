@@ -894,11 +894,11 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
     // Render logic
     const containerClasses = embedded
         ? `w-full h-full flex flex-col ${isDark ? 'bg-[#0f172a]' : 'bg-white'}`
-        : `w-full max-w-6xl aspect-video rounded-[32px] overflow-hidden flex flex-col border ${isDark ? 'bg-[#0f172a] border-slate-700/50' : 'bg-white border-slate-200'} shadow-2xl`;
+        : `w-full h-full flex flex-col ${isDark ? 'bg-[#0f172a]' : 'bg-white'}`; // Removed max-w-6xl, aspect-video, and shadow-2xl
 
     const wrapperClasses = embedded
         ? "w-full h-full"
-        : "fixed inset-0 z-[200] bg-black/90 backdrop-blur-2xl flex items-center justify-center p-4 animate-in fade-in duration-300";
+        : "fixed inset-0 z-[200] bg-black/95 backdrop-blur-3xl flex items-center justify-center animate-in fade-in duration-300"; // Removed p-4
 
     const content = (
         <div className={containerClasses}>
