@@ -30,7 +30,7 @@ export default async function handler(
             if (isNaN(tradeDate.getTime())) {
                 return response.status(400).json({ error: 'Invalid date format' });
             }
-            // Fallback: 2 hours before, 4 hours after (preserve existing behavior for single trade view)
+            // Standard window for single trade view
             fromDate = new Date(tradeDate.getTime() - 2 * 60 * 60 * 1000);
             toDate = new Date(tradeDate.getTime() + 4 * 60 * 60 * 1000);
         } else {
@@ -42,7 +42,7 @@ export default async function handler(
         }
 
         // Map instrument to Dukascopy format
-        let dukaInstrument = String(instrument).toLowerCase().replace('/', '').replace('-', '');
+        let dukaInstrument = String(instrument).toLowerCase().replace(/[\/\-_]/g, '');
         const map: Record<string, string> = {
             'nq': 'usatechidxusd',
             'mnq': 'usatechidxusd',
@@ -69,15 +69,12 @@ export default async function handler(
             .lte('time', toDate.toISOString())
             .order('time', { ascending: true });
 
-        // Heuristic for cache completeness:
-        // m1 = 60s per candle.
-        // We allow some missing candles (holidays, gaps) but if we have > 75% of expected, use cache.
-        // For larger ranges, this is more efficient.
+        // Calculate expected count based on timeframe (m1 = 1 candle per 60s)
         const expectedSeconds = (toDate.getTime() - fromDate.getTime()) / 1000;
         const expectedCount = Math.floor(expectedSeconds / 60);
 
-        if (!cacheError && cachedData && cachedData.length >= expectedCount * 0.75 && expectedCount > 0) {
-            // console.log(`Cache hit for ${dukaInstrument}: ${cachedData.length} / ${expectedCount} expected candles`);
+        // If we have data and it looks somewhat complete (>80%), return it.
+        if (!cacheError && cachedData && cachedData.length >= expectedCount * 0.8 && expectedCount > 0) {
             const transformed = cachedData.map(d => ({
                 time: new Date(d.time).getTime() / 1000,
                 open: d.open,
@@ -89,7 +86,7 @@ export default async function handler(
             return response.status(200).json(transformed);
         }
 
-        // 2. Fetch from Dukascopy if cache miss or too small
+        // 2. Fetch from Dukascopy
         const config: Config = {
             instrument: dukaInstrument as any,
             dates: {
@@ -104,10 +101,21 @@ export default async function handler(
         const data = await getHistoricRates(config);
 
         if (!data || data.length === 0) {
+            if (cachedData && cachedData.length > 0) {
+                const transformed = cachedData.map(d => ({
+                    time: new Date(d.time).getTime() / 1000,
+                    open: d.open,
+                    high: d.high,
+                    low: d.low,
+                    close: d.close,
+                    volume: d.volume
+                }));
+                return response.status(200).json(transformed);
+            }
             return response.status(200).json([]);
         }
 
-        // 3. Save to Cache
+        // 3. Save to Cache (Async Background)
         const candlesToCache = data.map((d: any) => ({
             instrument: dukaInstrument,
             time: new Date(d.timestamp).toISOString(),
@@ -118,10 +126,12 @@ export default async function handler(
             volume: d.tickVolume
         }));
 
-        // Use upsert to avoid duplicate keys error
-        const { error: upsertError } = await supabase.from('candle_cache').upsert(candlesToCache, { onConflict: 'instrument,time' });
-        if (upsertError) {
-            console.error('Failed to update candle cache:', upsertError);
+        // Limit batch size to avoid payload limits
+        const batchSize = 1000;
+        for (let i = 0; i < candlesToCache.length; i += batchSize) {
+            const batch = candlesToCache.slice(i, i + batchSize);
+            supabase.from('candle_cache').upsert(batch, { onConflict: 'instrument,time' })
+                .then(({ error }) => { if (error) console.error('Cache sync error:', error); });
         }
 
         const candles = data.map((d: any) => ({
@@ -136,10 +146,7 @@ export default async function handler(
         return response.status(200).json(candles);
 
     } catch (error: any) {
-        console.error('Dukascopy range fetch error:', error);
-        return response.status(500).json({
-            error: 'Failed to fetch data',
-            details: error.message
-        });
+        console.error('Dukascopy fetch error:', error);
+        return response.status(500).json({ error: 'Failed to fetch data', details: error.message });
     }
 }

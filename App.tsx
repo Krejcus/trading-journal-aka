@@ -2,6 +2,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
+import { prefetchService } from './services/prefetchService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus } from './types';
 import FileUpload from './components/FileUpload';
 import Dashboard from './components/Dashboard';
@@ -306,6 +307,12 @@ const App: React.FC = () => {
         }
 
         setTrades(cleanedTrades);
+
+        // Prefetch recent trades for quick access
+        if (cleanedTrades.length > 0) {
+          prefetchService.prefetchMultiple(cleanedTrades.slice(0, 10)).catch(err => console.debug("Initial prefetch skipped:", err));
+        }
+
         const storedAccounts = await storageService.getAccounts();
 
         let finalAccounts = storedAccounts;
