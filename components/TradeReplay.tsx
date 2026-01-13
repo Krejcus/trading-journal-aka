@@ -506,8 +506,8 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
         try {
             const firstTime = allData[0].time as number;
             const timeOffset = -new Date().getTimezoneOffset() * 60;
-            // Fetch in chunks of 7 days for 1m/5m, or 30 days for higher TF
-            const daysToFetch = (mainTimeframe === '1m' || mainTimeframe === '5m') ? 7 : 30;
+            // Fetch in chunks of 2 days for 1m/5m (prevents timeouts and improves cache hits)
+            const daysToFetch = (mainTimeframe === '1m' || mainTimeframe === '5m') ? 2 : 30;
 
             // Round to nearest minute for cache consistency
             const firstTimeRounded = Math.floor(firstTime / 60) * 60;

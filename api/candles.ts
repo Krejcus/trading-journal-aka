@@ -88,7 +88,7 @@ export default async function handler(
         // We also check if it's at least 30% of expected to avoid tiny fragmented hits.
         const isLikelyWeekend = expectedCount > 300 && cachedData && cachedData.length < 50 && cachedData.length > 5;
         const isCompleteEnough = !cacheError && cachedData &&
-            (cachedData.length >= expectedCount * 0.4 || cachedData.length > 100);
+            (cachedData.length >= expectedCount * 0.2 || cachedData.length > 50);
 
         if (isCompleteEnough || isLikelyWeekend) {
             console.log(`[Cache] HIT for ${dukaInstrument} (${cachedData.length} candles)`);
