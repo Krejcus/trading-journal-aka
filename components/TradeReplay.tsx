@@ -31,13 +31,6 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
     const subDurationRef = useRef<number>(240 * 60); // Default 4 hours
     const isSyncingRef = useRef<boolean>(false);
     const priceOffsetRef = useRef<number>(0);
-    const allDataRef = useRef<any[]>([]);
-
-    // Sync ref when state changes
-    useEffect(() => {
-        allDataRef.current = allData;
-    }, [allData]);
-
     const [activeTool, setActiveTool] = useState<DrawingTool>('cursor');
     const [drawings, setDrawings] = useState<DrawingObject[]>(trade.drawings || []);
     const [past, setPast] = useState<DrawingObject[][]>([]);
@@ -70,6 +63,13 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
     const [mainTimeframe, setMainTimeframe] = useState<'1m' | '5m' | '15m' | '1h' | '4h' | 'D'>('15m');
     const [secondaryTimeframe, setSecondaryTimeframe] = useState<'5m' | '15m' | '1h'>('15m');
     const [isFetchingMore, setIsFetchingMore] = useState(false);
+
+    const allDataRef = useRef<any[]>([]);
+
+    // Sync ref when state changes
+    useEffect(() => {
+        allDataRef.current = allData;
+    }, [allData]);
 
     // Ref for latest drawings to use in cleanup
     const drawingsRef = useRef<DrawingObject[]>(drawings);
