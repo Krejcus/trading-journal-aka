@@ -620,7 +620,7 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
         setDownloadProgress(Math.round(((i) / totalChunks) * 100));
 
         try {
-          const res = await fetch(`/api/candles?instrument=${instrument}&from=${fromIso}&to=${toIso}&timeframe=m1`);
+          const res = await fetch(`/api/candles?instrument=${instrument}&from=${fromIso}&to=${toIso}&timeframe=m1&force=true`);
           const dbErr = res.headers.get('X-DB-Error');
 
           if (!res.ok) {

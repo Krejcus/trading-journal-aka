@@ -82,9 +82,10 @@ export default async function handler(
         const expectedSeconds = (toDate.getTime() - fromDate.getTime()) / 1000;
         const expectedCount = Math.floor(expectedSeconds / 60);
 
-        // Improved Cache Heuristic:
+        // Improved Cache Heuristic: 
         // We need high coverage (e.g. 90%) to consider it a HIT, 
         // OR it must be a weekend (where we expect 0-20 candles but get almost none).
+        const isForce = request.query.force === 'true';
         const isLikelyWeekend = expectedCount > 500 && cachedData && cachedData.length < 50;
 
         // Threshold: 90% for small ranges, 80% for very large ranges
@@ -92,7 +93,7 @@ export default async function handler(
         const isCompleteEnough = !cacheError && cachedData &&
             (cachedData.length >= expectedCount * threshold || cachedData.length > (expectedCount - 5));
 
-        if (isCompleteEnough || isLikelyWeekend) {
+        if (!isForce && (isCompleteEnough || isLikelyWeekend)) {
             console.log(`[Cache] HIT for ${dukaInstrument} (${cachedData.length}/${expectedCount})`);
             const transformed = cachedData.map(d => ({
                 time: new Date(d.time).getTime() / 1000,
