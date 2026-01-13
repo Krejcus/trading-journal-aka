@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus } from './types';
@@ -244,6 +244,14 @@ const App: React.FC = () => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const lastLoadedSessionId = React.useRef<string | null>(null);
 
+  const handleSavePrep = useCallback((prep: DailyPrep) => {
+    setDailyPreps(prev => [...prev.filter(p => p.date !== prep.date), prep]);
+  }, []);
+
+  const handleSaveReview = useCallback((rev: DailyReview) => {
+    setDailyReviews(prev => [...prev.filter(r => r.date !== rev.date), rev]);
+  }, []);
+
   const [filters, setFilters] = useState<TradeFilters>({
     days: ['Po', 'Út', 'St', 'Čt', 'Pá'],
     hours: Array.from({ length: 24 }, (_, i) => i),
@@ -444,7 +452,7 @@ const App: React.FC = () => {
     if (!sharedTrade && session && isInitialLoadDone) {
       const timer = setTimeout(() => {
         storageService.saveDailyPreps(dailyPreps);
-      }, 5000); // 5s debounce for journal
+      }, 2000); // 2s debounce for journal
       return () => clearTimeout(timer);
     }
   }, [dailyPreps, sharedTrade, session, isInitialLoadDone]);
@@ -453,7 +461,7 @@ const App: React.FC = () => {
     if (!sharedTrade && session && isInitialLoadDone) {
       const timer = setTimeout(() => {
         storageService.saveDailyReviews(dailyReviews);
-      }, 5000); // 5s debounce for journal
+      }, 2000); // 2s debounce for journal
       return () => clearTimeout(timer);
     }
   }, [dailyReviews, sharedTrade, session, isInitialLoadDone]);
@@ -916,6 +924,8 @@ const App: React.FC = () => {
                 setIsDashboardEditing={activePage === 'dashboard' ? setIsDashboardEditing : undefined}
                 dashboardMode={dashboardMode}
                 setDashboardMode={setDashboardMode}
+                viewMode={viewMode}
+                setViewMode={setViewMode}
               />
 
               <button
@@ -1011,8 +1021,8 @@ const App: React.FC = () => {
                   trades={filteredDisplayTrades}
                   preps={dailyPreps}
                   reviews={dailyReviews}
-                  onSavePrep={(prep) => setDailyPreps(prev => [...prev.filter(p => p.date !== prep.date), prep])}
-                  onSaveReview={(rev) => setDailyReviews(prev => [...prev.filter(r => r.date !== rev.date), rev])}
+                  onSavePrep={handleSavePrep}
+                  onSaveReview={handleSaveReview}
                   onDeletePrep={handleDeletePrep}
                   onDeleteReview={handleDeleteReview}
                   standardGoals={standardGoals}

@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Filter, RotateCcw, Calendar, Clock, Wallet, TrendingUp, Target, ShieldCheck, Monitor, Zap, AlertOctagon, LayoutGrid, Check, X } from 'lucide-react';
+import { Filter, RotateCcw, Calendar, Clock, Wallet, TrendingUp, Target, ShieldCheck, Monitor, Zap, AlertOctagon, LayoutGrid, Check, X, Layers } from 'lucide-react';
 import { TradeFilters, Account, Trade, DashboardMode } from '../types';
 
 interface FilterDropdownProps {
@@ -13,6 +13,8 @@ interface FilterDropdownProps {
   setIsDashboardEditing?: (val: boolean) => void;
   dashboardMode?: DashboardMode;
   setDashboardMode?: (mode: DashboardMode) => void;
+  viewMode: 'individual' | 'combined';
+  setViewMode: (mode: 'individual' | 'combined') => void;
 }
 
 const TRADING_DAYS = ['Po', 'Út', 'St', 'Čt', 'Pá'];
@@ -27,7 +29,9 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   isDashboardEditing,
   setIsDashboardEditing,
   dashboardMode,
-  setDashboardMode
+  setDashboardMode,
+  viewMode,
+  setViewMode
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -187,6 +191,29 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   </div>
                 </div>
               )}
+
+              <div>
+                <div className={sectionLabelClass}><Layers size={12} /> Seskupování</div>
+                <div className={`flex p-1 rounded-xl border relative max-w-[240px] ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                  {/* Sliding Highlight */}
+                  <div className={`absolute inset-y-1 w-1/2 rounded-lg transition-all duration-300 ${viewMode === 'individual' ? `translate-x-0 ${isDark ? 'bg-white/10 border border-white/20' : 'bg-white shadow-sm'}` :
+                    `translate-x-[100%] ${isDark ? 'bg-white/10 border border-white/20' : 'bg-white shadow-sm'}`
+                    }`} />
+
+                  <button
+                    onClick={() => setViewMode('individual')}
+                    className={`flex-1 relative z-10 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-colors ${viewMode === 'individual' ? (isDark ? 'text-white' : 'text-slate-900') : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Indiv.
+                  </button>
+                  <button
+                    onClick={() => setViewMode('combined')}
+                    className={`flex-1 relative z-10 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-colors ${viewMode === 'combined' ? (isDark ? 'text-white' : 'text-slate-900') : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Kombin.
+                  </button>
+                </div>
+              </div>
               {setIsDashboardEditing && (
                 <div className={`p-4 rounded-2xl border ${isDark ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-indigo-50 border-indigo-100'}`}>
                   <div className={sectionLabelClass}><Zap size={12} className="text-indigo-500" /> Tactical Tools</div>

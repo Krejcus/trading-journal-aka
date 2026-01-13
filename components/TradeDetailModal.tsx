@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import { Play } from 'lucide-react';
 import { Trade, Account, CustomEmotion } from '../types';
 import { storageService } from '../services/storageService';
 import {
@@ -31,6 +32,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [isZoomed, setIsZoomed] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [shareCopied, setShareCopied] = useState(false);
+    const [showReplayFullscreen, setShowReplayFullscreen] = useState(false);
 
     const images = trade.screenshots && trade.screenshots.length > 0
         ? trade.screenshots
@@ -144,6 +146,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
                         <div className="flex items-center gap-2 md:gap-3 ml-auto md:ml-0 mt-2 md:mt-0">
                             <button
+                                onClick={() => setShowReplayFullscreen(true)}
+                                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20 active:scale-95 group"
+                                title="Vstoupit do hloubkové analýzy"
+                            >
+                                <Play size={16} fill="currentColor" className="group-hover:translate-x-0.5 transition-transform" />
+                                <span className="font-black text-[10px] uppercase tracking-widest hidden sm:inline">Replay</span>
+                            </button>
+                            <div className="h-6 md:h-8 w-px bg-slate-800 mx-0.5 md:mx-1"></div>
+                            <button
                                 onClick={handleShare}
                                 className={`p-2 md:p-2.5 rounded-xl transition-all flex items-center gap-1 md:gap-2 ${shareCopied ? 'bg-emerald-500/20 text-emerald-500' : 'bg-blue-500/10 text-blue-500 hover:bg-blue-600 hover:text-white'}`}
                                 title="Sdílet"
@@ -251,6 +262,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     theme={theme}
                                     onClose={() => { }}
                                     embedded={true}
+                                    minimal={true}
                                 />
                             </ErrorBoundary>
                         </div>
@@ -264,8 +276,20 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     <button className="absolute top-4 md:top-10 right-4 md:right-10 p-3 md:p-5 bg-white/10 hover:bg-white/10 rounded-full transition-all border border-white/10 text-white"><X size={32} /></button>
                     <img src={images[activeImageIndex]} className="max-w-full max-h-full object-contain rounded-[16px] md:rounded-[32px] shadow-[0_0_100px_rgba(59,130,246,0.15)] border border-white/10" onClick={e => e.stopPropagation()} />
                 </div>
-            )
-            }
+            )}
+
+            {showReplayFullscreen && (
+                <div className="fixed inset-0 z-[300] bg-black/95 backdrop-blur-3xl animate-in fade-in duration-500">
+                    <TradeReplay
+                        trade={trade}
+                        theme={theme}
+                        onClose={() => setShowReplayFullscreen(false)}
+                        minimal={false}
+                        embedded={false}
+                    />
+                </div>
+            )}
+
         </>
     );
 };

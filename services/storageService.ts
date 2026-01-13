@@ -356,17 +356,49 @@ export const storageService = {
   // Daily Journal
   async getDailyPreps(targetUserId?: string): Promise<DailyPrep[]> {
     const userId = targetUserId || await getUserId();
-    if (!userId) return [];
+
+    // 1. Try to load from Local Storage first as a fast fallback
+    const localData = localStorage.getItem('alphatrade_daily_preps');
+    let localPreps: DailyPrep[] = [];
+    if (localData) {
+      try {
+        localPreps = JSON.parse(localData);
+      } catch (e) {
+        console.error("Failed to parse local preps", e);
+      }
+    }
+
+    if (!userId) return localPreps;
+
+    // 2. Fetch from Supabase
     const { data, error } = await supabase.from('daily_preps').select('*').eq('user_id', userId);
-    if (error) return [];
-    return data.map(d => ({ ...d.data, id: d.id, date: d.date }));
+
+    if (error) {
+      console.error("Supabase getDailyPreps error:", error);
+      return localPreps; // Fallback to local
+    }
+
+    const dbPreps = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
+
+    // 3. Merge Local and DB (DB wins, but local might have newer entries if they weren't synced)
+    // For now, let's just use DB if available, and update local storage
+    localStorage.setItem('alphatrade_daily_preps', JSON.stringify(dbPreps));
+
+    return dbPreps;
   },
 
   async saveDailyPreps(preps: DailyPrep[]): Promise<void> {
+    // Always save to local storage immediately
+    localStorage.setItem('alphatrade_daily_preps', JSON.stringify(preps));
+
     const userId = await getUserId();
     if (!userId) return;
     const prepsToUpsert = preps.map(p => ({ user_id: userId, date: p.date, data: p }));
-    await supabase.from('daily_preps').upsert(prepsToUpsert, { onConflict: 'user_id,date' });
+    const { error } = await supabase.from('daily_preps').upsert(prepsToUpsert, { onConflict: 'user_id,date' });
+    if (error) {
+      console.error("Failed to sync preps to Supabase:", error);
+      throw error;
+    }
   },
 
   async deleteDailyPrep(date: string): Promise<void> {
@@ -377,17 +409,48 @@ export const storageService = {
 
   async getDailyReviews(targetUserId?: string): Promise<DailyReview[]> {
     const userId = targetUserId || await getUserId();
-    if (!userId) return [];
+
+    // 1. Try Local Storage fallback
+    const localData = localStorage.getItem('alphatrade_daily_reviews');
+    let localReviews: DailyReview[] = [];
+    if (localData) {
+      try {
+        localReviews = JSON.parse(localData);
+      } catch (e) {
+        console.error("Failed to parse local reviews", e);
+      }
+    }
+
+    if (!userId) return localReviews;
+
+    // 2. Fetch from Supabase
     const { data, error } = await supabase.from('daily_reviews').select('*').eq('user_id', userId);
-    if (error) return [];
-    return data.map(d => ({ ...d.data, id: d.id, date: d.date }));
+
+    if (error) {
+      console.error("Supabase getDailyReviews error:", error);
+      return localReviews;
+    }
+
+    const dbReviews = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
+
+    // 3. Sync local storage
+    localStorage.setItem('alphatrade_daily_reviews', JSON.stringify(dbReviews));
+
+    return dbReviews;
   },
 
   async saveDailyReviews(reviews: DailyReview[]): Promise<void> {
+    // Always save to local storage immediately
+    localStorage.setItem('alphatrade_daily_reviews', JSON.stringify(reviews));
+
     const userId = await getUserId();
     if (!userId) return;
     const reviewsToUpsert = reviews.map(r => ({ user_id: userId, date: r.date, data: r }));
-    await supabase.from('daily_reviews').upsert(reviewsToUpsert, { onConflict: 'user_id,date' });
+    const { error } = await supabase.from('daily_reviews').upsert(reviewsToUpsert, { onConflict: 'user_id,date' });
+    if (error) {
+      console.error("Failed to sync reviews to Supabase:", error);
+      throw error;
+    }
   },
 
   async deleteDailyReview(date: string): Promise<void> {

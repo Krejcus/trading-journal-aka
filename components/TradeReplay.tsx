@@ -14,9 +14,11 @@ interface TradeReplayProps {
     trade: Trade;
     theme: 'dark' | 'light' | 'oled';
     onClose: () => void;
+    embedded?: boolean;
+    minimal?: boolean;
 }
 
-const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trade, theme, onClose, embedded = false }) => {
+const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedded = false, minimal = false }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -945,76 +947,78 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
 
                 {/* Center/Right: Actions */}
                 <div className="flex items-center gap-2">
-
-                    {/* Jump Buttons (Compact) */}
-                    <div className="flex items-center gap-1 mr-2">
-                        <button
-                            onClick={() => {
-                                if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
-                                const timeOffset = -new Date().getTimezoneOffset() * 60;
-                                const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-                                const durationSeconds = (trade.durationMinutes || 0) * 60;
-                                const entryTimeRaw = exitTimeRaw - durationSeconds;
-                                const rangeStart = (entryTimeRaw + timeOffset - 3600) as Time;
-                                const rangeEnd = (entryTimeRaw + timeOffset + 3600) as Time;
-                                chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
-                            }}
-                            className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
-                            title="Jump to Entry"
-                        >
-                            <ArrowRight size={16} className="rotate-180" />
-                        </button>
-                        <button
-                            onClick={() => {
-                                if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
-                                const timeOffset = -new Date().getTimezoneOffset() * 60;
-                                const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-                                const rangeStart = (exitTimeRaw + timeOffset - 3600) as Time;
-                                const rangeEnd = (exitTimeRaw + timeOffset + 3600) as Time;
-                                chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
-                            }}
-                            className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
-                            title="Jump to Exit"
-                        >
-                            <ArrowRight size={16} />
-                        </button>
-                        <button
-                            onClick={() => {
-                                if (!chartRef.current) return;
-                                chartRef.current.timeScale().fitContent();
-                            }}
-                            className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
-                            title="Fit Trade"
-                        >
-                            <Maximize2 size={16} />
-                        </button>
-                    </div>
-
-                    <div className="w-px h-5 bg-slate-700/20"></div>
-
-                    {/* Layout Toggle */}
-                    <div className={`flex items-center rounded p-0.5 border ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
-                        <button
-                            onClick={() => setActiveLayout('single')}
-                            className={`p-1 rounded ${activeLayout === 'single' ? (isDark ? 'bg-slate-600 text-white' : 'bg-white shadow text-black') : 'text-slate-400'}`}
-                            title="Single View"
-                        >
-                            <Square size={14} />
-                        </button>
-                        <button
-                            onClick={() => setActiveLayout('split')}
-                            className={`p-1 rounded ${activeLayout === 'split' ? (isDark ? 'bg-slate-600 text-white' : 'bg-white shadow text-black') : 'text-slate-400'}`}
-                            title="Split View"
-                        >
-                            <div className="flex gap-0.5">
-                                <div className="w-1.5 h-3 border border-current rounded-[1px]"></div>
-                                <div className="w-1.5 h-3 border border-current rounded-[1px]"></div>
+                    {!minimal && (
+                        <>
+                            {/* Jump Buttons (Compact) */}
+                            <div className="flex items-center gap-1 mr-2">
+                                <button
+                                    onClick={() => {
+                                        if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
+                                        const timeOffset = -new Date().getTimezoneOffset() * 60;
+                                        const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                                        const durationSeconds = (trade.durationMinutes || 0) * 60;
+                                        const entryTimeRaw = exitTimeRaw - durationSeconds;
+                                        const rangeStart = (entryTimeRaw + timeOffset - 3600) as Time;
+                                        const rangeEnd = (entryTimeRaw + timeOffset + 3600) as Time;
+                                        chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
+                                    }}
+                                    className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
+                                    title="Jump to Entry"
+                                >
+                                    <ArrowRight size={16} className="rotate-180" />
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
+                                        const timeOffset = -new Date().getTimezoneOffset() * 60;
+                                        const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                                        const rangeStart = (exitTimeRaw + timeOffset - 3600) as Time;
+                                        const rangeEnd = (exitTimeRaw + timeOffset + 3600) as Time;
+                                        chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
+                                    }}
+                                    className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
+                                    title="Jump to Exit"
+                                >
+                                    <ArrowRight size={16} />
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        if (!chartRef.current) return;
+                                        chartRef.current.timeScale().fitContent();
+                                    }}
+                                    className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
+                                    title="Fit Trade"
+                                >
+                                    <Maximize2 size={16} />
+                                </button>
                             </div>
-                        </button>
-                    </div>
 
-                    <div className="w-px h-5 bg-slate-700/20"></div>
+                            <div className="w-px h-5 bg-slate-700/20"></div>
 
+                            {/* Layout Toggle */}
+                            <div className={`flex items-center rounded p-0.5 border ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+                                <button
+                                    onClick={() => setActiveLayout('single')}
+                                    className={`p-1 rounded ${activeLayout === 'single' ? (isDark ? 'bg-slate-600 text-white' : 'bg-white shadow text-black') : 'text-slate-400'}`}
+                                    title="Single View"
+                                >
+                                    <Square size={14} />
+                                </button>
+                                <button
+                                    onClick={() => setActiveLayout('split')}
+                                    className={`p-1 rounded ${activeLayout === 'split' ? (isDark ? 'bg-slate-600 text-white' : 'bg-white shadow text-black') : 'text-slate-400'}`}
+                                    title="Split View"
+                                >
+                                    <div className="flex gap-0.5">
+                                        <div className="w-1.5 h-3 border border-current rounded-[1px]"></div>
+                                        <div className="w-1.5 h-3 border border-current rounded-[1px]"></div>
+                                    </div>
+                                </button>
+                            </div>
+
+                            <div className="w-px h-5 bg-slate-700/20"></div>
+                        </>
+                    )}
 
                     {!embedded && (
                         <button onClick={onClose} className={`p-2 rounded-full transition-all ml-2 ${isDark ? 'hover:bg-white/10 text-slate-500 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-black'}`}>
@@ -1032,20 +1036,22 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             >
 
                 {/* Fixed Left Toolbar */}
-                <div className="shrink-0 z-[40]">
-                    <ChartToolbar
-                        activeTool={activeTool}
-                        onToolChange={setActiveTool}
-                        onClearAll={() => updateDrawingsWithHistory([])}
-                        theme={theme}
-                        magnetMode={magnetMode}
-                        onToggleMagnet={() => setMagnetMode(m => !m)}
-                        onUndo={handleUndo}
-                        onRedo={handleRedo}
-                        canUndo={past.length > 0}
-                        canRedo={future.length > 0}
-                    />
-                </div>
+                {!minimal && (
+                    <div className="shrink-0 z-[40]">
+                        <ChartToolbar
+                            activeTool={activeTool}
+                            onToolChange={setActiveTool}
+                            onClearAll={() => updateDrawingsWithHistory([])}
+                            theme={theme}
+                            magnetMode={magnetMode}
+                            onToggleMagnet={() => setMagnetMode(m => !m)}
+                            onUndo={handleUndo}
+                            onRedo={handleRedo}
+                            canUndo={past.length > 0}
+                            canRedo={future.length > 0}
+                        />
+                    </div>
+                )}
 
                 {/* Charts Grid */}
                 <div className={`flex-1 relative ${activeLayout === 'split' ? 'grid grid-cols-2 gap-1' : ''}`}>
@@ -1247,23 +1253,25 @@ const TradeReplay: React.FC<TradeReplayProps & { embedded?: boolean }> = ({ trad
             </div>
 
             {/* Replay Widget */}
-            <PlaybackWidget
-                isReplayMode={isReplayMode}
-                onToggleReplay={setIsReplayMode}
-                isPlaying={isReplayPlaying}
-                onPlayPause={() => setIsReplayPlaying(!isReplayPlaying)}
-                onStepBack={stepBackward}
-                onStepForward={stepForward}
-                speed={replaySpeed}
-                onSpeedChange={setReplaySpeed}
-                onActivateCutTool={() => {
-                    setIsCutToolActive(true);
-                    setActiveTool('scissors' as any);
-                }}
-                currentTimeframe="1m"
-                onTimeframeChange={() => { }}
-                isCutToolActive={isCutToolActive}
-            />
+            {!minimal && (
+                <PlaybackWidget
+                    isReplayMode={isReplayMode}
+                    onToggleReplay={setIsReplayMode}
+                    isPlaying={isReplayPlaying}
+                    onPlayPause={() => setIsReplayPlaying(!isReplayPlaying)}
+                    onStepBack={stepBackward}
+                    onStepForward={stepForward}
+                    speed={replaySpeed}
+                    onSpeedChange={setReplaySpeed}
+                    onActivateCutTool={() => {
+                        setIsCutToolActive(true);
+                        setActiveTool('scissors' as any);
+                    }}
+                    currentTimeframe="1m"
+                    onTimeframeChange={() => { }}
+                    isCutToolActive={isCutToolActive}
+                />
+            )}
         </div>
     );
 

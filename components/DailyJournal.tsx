@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { DailyPrep, DailyReview, WeeklyReview, Trade, GoalResult, IronRule, RuleCompletion, PsychoMetricConfig, WeeklyFocus } from '../types';
 import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimeline from './TacticalTimeline';
@@ -181,6 +181,21 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     psycho: { metrics: (psychoMetrics || []).reduce((acc, m) => ({ ...acc, [m.id]: 5 }), {}), stressors: '', gratitude: '', notes: '' }
   });
 
+  // Track the most recent form state to save on switch/unmount
+  const lastPrepForm = useRef(prepForm);
+  const lastReviewForm = useRef(reviewForm);
+
+  useEffect(() => { lastPrepForm.current = prepForm; }, [prepForm]);
+  useEffect(() => { lastReviewForm.current = reviewForm; }, [reviewForm]);
+
+  // Force save on unmount
+  useEffect(() => {
+    return () => {
+      onSavePrep(lastPrepForm.current);
+      onSaveReview(lastReviewForm.current);
+    };
+  }, []);
+
   // Current Week Focus Helper
   const getSelectedWeekISO = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -202,17 +217,17 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     if (!prepForm || !prepForm.date) return;
 
     // Check if form is actually different from saved prop to avoid loops/unnecessary saves
-    const saved = preps.find(p => p.id === prepForm.id);
-    if (JSON.stringify(prepForm) === JSON.stringify(saved)) return;
+    const saved = preps.find(p => p.date === prepForm.date);
+    if (!saved || JSON.stringify(prepForm) !== JSON.stringify(saved)) {
+      setIsSaving(true);
+      const timer = setTimeout(() => {
+        onSavePrep(prepForm);
+        setLastSaved(new Date());
+        setIsSaving(false);
+      }, 1000);
 
-    setIsSaving(true);
-    const timer = setTimeout(() => {
-      onSavePrep(prepForm);
-      setLastSaved(new Date());
-      setIsSaving(false);
-    }, 2000);
-
-    return () => clearTimeout(timer);
+      return () => clearTimeout(timer);
+    }
   }, [prepForm, onSavePrep, preps]);
 
   // Auto-save Logic for Review
@@ -221,17 +236,17 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     if (!reviewForm || !reviewForm.date) return;
 
     // Check if form is actually different from saved prop
-    const saved = reviews.find(r => r.id === reviewForm.id);
-    if (JSON.stringify(reviewForm) === JSON.stringify(saved)) return;
+    const saved = reviews.find(r => r.date === reviewForm.date);
+    if (!saved || JSON.stringify(reviewForm) !== JSON.stringify(saved)) {
+      setIsSaving(true);
+      const timer = setTimeout(() => {
+        onSaveReview(reviewForm);
+        setLastSaved(new Date());
+        setIsSaving(false);
+      }, 1000);
 
-    setIsSaving(true);
-    const timer = setTimeout(() => {
-      onSaveReview(reviewForm);
-      setLastSaved(new Date());
-      setIsSaving(false);
-    }, 2000);
-
-    return () => clearTimeout(timer);
+      return () => clearTimeout(timer);
+    }
   }, [reviewForm, onSaveReview, reviews]);
 
   const addQuickNote = () => {
@@ -591,9 +606,14 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const currentReview = useMemo(() => reviews.find(r => r.date === selectedDate), [reviews, selectedDate]);
 
   useEffect(() => {
+    // 1. Force save the PREVIOUS date's form if it changed
+    if (lastPrepForm.current.date && lastPrepForm.current.date !== selectedDate) {
+      onSavePrep(lastPrepForm.current);
+    }
+
+    // 2. Load the new date's form
     if (currentPrep) {
-      // Pouze pokud se datum liší od aktuálního stavu nebo se změnil obsah v props
-      if (prepForm.date !== selectedDate || prepForm.id !== currentPrep.id) {
+      if (prepForm.date !== selectedDate || (currentPrep.id && prepForm.id !== currentPrep.id)) {
         setPrepForm(currentPrep);
       }
     } else {
@@ -611,13 +631,19 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   }, [currentPrep, selectedDate]); // Omezení závislostí
 
   useEffect(() => {
+    // 1. Force save the PREVIOUS date's review if it changed
+    if (lastReviewForm.current.date && lastReviewForm.current.date !== selectedDate) {
+      onSaveReview(lastReviewForm.current);
+    }
+
+    // 2. Load the new date's review
     if (currentReview) {
-      // Pouze pokud se datum liší od aktuálního stavu nebo se změnil obsah v props
-      if (reviewForm.date !== selectedDate || reviewForm.id !== currentReview.id) {
+      if (reviewForm.date !== selectedDate || (currentReview.id && reviewForm.id !== currentReview.id)) {
         setReviewForm(currentReview);
       }
     } else {
-      const initialResults: GoalResult[] = currentPrep ? currentPrep.goals.filter(g => g.trim() !== '').map(g => ({ text: g, achieved: true })) : [];
+      const initialPrep = currentPrep || (lastPrepForm.current.date === selectedDate ? lastPrepForm.current : undefined);
+      const initialResults: GoalResult[] = initialPrep?.goals?.filter(g => g && g.trim() !== '').map(g => ({ text: g, achieved: true })) || [];
       setReviewForm({
         id: `review_${selectedDate}`,
         date: selectedDate,
