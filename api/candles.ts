@@ -143,7 +143,7 @@ export default async function handler(
             high: d.high,
             low: d.low,
             close: d.close,
-            volume: d.tickVolume
+            volume: d.volume || d.tickVolume || 0
         }));
 
         // Limit batch size and AWAIT to ensure writes happen in serverless environment
