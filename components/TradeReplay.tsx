@@ -950,48 +950,21 @@ const TradeReplay: React.FC<TradeReplayProps> = ({ trade, theme, onClose, embedd
                     {!minimal && (
                         <>
                             {/* Jump Buttons (Compact) */}
-                            <div className="flex items-center gap-1 mr-2">
-                                <button
-                                    onClick={() => {
-                                        if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
-                                        const timeOffset = -new Date().getTimezoneOffset() * 60;
-                                        const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-                                        const durationSeconds = (trade.durationMinutes || 0) * 60;
-                                        const entryTimeRaw = exitTimeRaw - durationSeconds;
-                                        const rangeStart = (entryTimeRaw + timeOffset - 3600) as Time;
-                                        const rangeEnd = (entryTimeRaw + timeOffset + 3600) as Time;
-                                        chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
-                                    }}
-                                    className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
-                                    title="Jump to Entry"
-                                >
-                                    <ArrowRight size={16} className="rotate-180" />
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
-                                        const timeOffset = -new Date().getTimezoneOffset() * 60;
-                                        const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-                                        const rangeStart = (exitTimeRaw + timeOffset - 3600) as Time;
-                                        const rangeEnd = (exitTimeRaw + timeOffset + 3600) as Time;
-                                        chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
-                                    }}
-                                    className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
-                                    title="Jump to Exit"
-                                >
-                                    <ArrowRight size={16} />
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        if (!chartRef.current) return;
-                                        chartRef.current.timeScale().fitContent();
-                                    }}
-                                    className={`p-1.5 rounded hover:bg-slate-500/10 text-slate-500 ${isDark ? 'hover:text-white' : 'hover:text-black'}`}
-                                    title="Fit Trade"
-                                >
-                                    <Maximize2 size={16} />
-                                </button>
-                            </div>
+                            <button
+                                onClick={() => {
+                                    if (!chartRef.current || !Array.isArray(allData) || allData.length === 0) return;
+                                    const timeOffset = -new Date().getTimezoneOffset() * 60;
+                                    const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                                    const durationSeconds = (trade.durationMinutes || 0) * 60;
+                                    const entryTimeRaw = exitTimeRaw - durationSeconds;
+                                    const rangeStart = (entryTimeRaw + timeOffset - 3600) as Time;
+                                    const rangeEnd = (entryTimeRaw + timeOffset + 3600) as Time;
+                                    chartRef.current.timeScale().setVisibleRange({ from: rangeStart, to: rangeEnd });
+                                }}
+                                className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isDark ? 'text-slate-400 hover:text-white hover:bg-white/5 border border-white/10' : 'text-slate-600 hover:text-black hover:bg-slate-50 border border-slate-200 shadow-sm'}`}
+                            >
+                                Trade
+                            </button>
 
                             <div className="w-px h-5 bg-slate-700/20"></div>
 
