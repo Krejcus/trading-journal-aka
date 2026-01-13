@@ -148,10 +148,18 @@ export default async function handler(
 
         // Limit batch size and AWAIT to ensure writes happen in serverless environment
         const batchSize = 1000;
+        let dbError = null;
         for (let i = 0; i < candlesToCache.length; i += batchSize) {
             const batch = candlesToCache.slice(i, i + batchSize);
             const { error } = await supabase.from('candle_cache').upsert(batch, { onConflict: 'instrument,time' });
-            if (error) console.error(`[Cache] Sync error for ${dukaInstrument}:`, error);
+            if (error) {
+                console.error(`[Cache] Sync error for ${dukaInstrument}:`, error);
+                dbError = error.message;
+            }
+        }
+
+        if (dbError) {
+            response.setHeader('X-DB-Error', dbError);
         }
 
         const candles = data.map((d: any) => ({

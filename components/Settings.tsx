@@ -621,9 +621,13 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
 
         try {
           const res = await fetch(`/api/candles?instrument=${instrument}&from=${fromIso}&to=${toIso}&timeframe=m1`);
+          const dbErr = res.headers.get('X-DB-Error');
+
           if (!res.ok) {
             const errText = await res.text();
             setStatusLog(`Chyba API v kroku ${i + 1}: ${res.status} - ${errText.substring(0, 50)}`);
+          } else if (dbErr) {
+            setStatusLog(`VAROVÁNÍ: API OK, ale DB selhala: ${dbErr}`);
           }
         } catch (e: any) {
           setStatusLog(`Chyba sítě v kroku ${i + 1}: ${e.message}`);
