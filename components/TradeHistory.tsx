@@ -22,9 +22,10 @@ interface TradeHistoryProps {
   onClear: () => void;
   theme: 'dark' | 'light' | 'oled';
   emotions: CustomEmotion[];
+  onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
 }
 
-const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete, onEdit, onClear, theme, emotions }) => {
+const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete, onEdit, onClear, theme, emotions, onUpdateTrade }) => {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
 
@@ -177,6 +178,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
           onEdit={() => { onEdit(selectedTrade); setSelectedTrade(null); }}
           onDelete={() => { onDelete(selectedTrade.id); setSelectedTrade(null); }}
           emotions={emotions}
+          onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
           onPrev={() => {
             const sorted = trades.slice();
             const idx = sorted.findIndex(t => t.id === selectedTrade.id);

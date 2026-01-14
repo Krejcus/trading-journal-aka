@@ -62,7 +62,7 @@ export const PlaybackWidget: React.FC<PlaybackWidgetProps> = ({
     return (
         <div
             style={{ left: position.x, top: position.y }}
-            className="fixed z-50 flex items-center gap-4 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border border-gray-200 dark:border-gray-700 rounded-full shadow-2xl px-4 py-2 select-none transition-shadow hover:shadow-[0_0_20px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_0_20px_rgba(0,0,0,0.4)]"
+            className="fixed z-50 flex items-center gap-2 bg-white/90 dark:bg-gray-900/90 backdrop-blur-md border border-gray-200 dark:border-gray-700 rounded-full shadow-2xl px-3 py-1.5 select-none transition-shadow hover:shadow-[0_0_20px_rgba(0,0,0,0.1)] dark:hover:shadow-[0_0_20px_rgba(0,0,0,0.4)] scale-90 origin-bottom"
         >
             {/* Drag Handle */}
             <div
@@ -74,11 +74,11 @@ export const PlaybackWidget: React.FC<PlaybackWidgetProps> = ({
 
             {/* Cut Tool */}
             <button
-                className={`p-2 rounded-full transition-colors ${isCutToolActive ? 'bg-blue-500 text-white' : 'hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500'}`}
+                className={`p-1.5 rounded-full transition-colors ${isCutToolActive ? 'bg-blue-500 text-white' : 'hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500'}`}
                 onClick={onActivateCutTool}
                 title="Cut at this point (Scissors)"
             >
-                <Scissors size={18} />
+                <Scissors size={14} />
             </button>
 
             {/* Speed Slider */}
@@ -99,38 +99,38 @@ export const PlaybackWidget: React.FC<PlaybackWidgetProps> = ({
             {/* Playback Controls */}
             <div className="flex items-center gap-1">
                 <button
-                    className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300 transition-colors"
+                    className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300 transition-colors"
                     onClick={onStepBack}
                     title="Step Back"
                 >
-                    <SkipBack size={18} fill="currentColor" />
+                    <SkipBack size={14} fill="currentColor" />
                 </button>
                 <button
-                    className="p-3 bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg shadow-blue-500/30 transition-all active:scale-95"
+                    className="p-2 bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg shadow-blue-500/30 transition-all active:scale-95"
                     onClick={onPlayPause}
                 >
-                    {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
+                    {isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
                 </button>
                 <button
-                    className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300 transition-colors"
+                    className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300 transition-colors"
                     onClick={onStepForward}
                     title="Step Forward"
                 >
-                    <SkipForward size={18} fill="currentColor" />
+                    <SkipForward size={14} fill="currentColor" />
                 </button>
             </div>
 
             {/* Timeframe Selector */}
             <div className="relative group">
-                <button className="flex items-center gap-1 px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-sm font-semibold text-gray-700 dark:text-gray-200 transition-colors">
+                <button className="flex items-center gap-1 px-1.5 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-xs font-semibold text-gray-700 dark:text-gray-200 transition-colors">
                     {currentTimeframe}
-                    <ChevronDown size={14} />
+                    <ChevronDown size={12} />
                 </button>
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden min-w-[80px]">
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden min-w-[60px]">
                     {['1m', '5m', '15m', '1h'].map(tf => (
                         <button
                             key={tf}
-                            className={`w-full px-4 py-2 text-sm text-left hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors ${currentTimeframe === tf ? 'text-blue-500 font-bold' : 'text-gray-600 dark:text-gray-300'}`}
+                            className={`w-full px-3 py-1.5 text-xs text-left hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors ${currentTimeframe === tf ? 'text-blue-500 font-bold' : 'text-gray-600 dark:text-gray-300'}`}
                             onClick={() => onTimeframeChange(tf)}
                         >
                             {tf}
@@ -140,12 +140,15 @@ export const PlaybackWidget: React.FC<PlaybackWidgetProps> = ({
             </div>
 
             {/* Master Toggle */}
-            <button
-                onClick={() => onToggleReplay(!isReplayMode)}
-                className={`flex items-center justify-center w-12 h-6 rounded-full transition-colors relative ${isReplayMode ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-            >
-                <div className={`absolute w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${isReplayMode ? 'translate-x-3' : '-translate-x-3'}`} />
-            </button>
+            <div className="flex items-center gap-2">
+
+                <button
+                    onClick={() => onToggleReplay(!isReplayMode)}
+                    className={`flex items-center justify-center w-8 h-4 rounded-full transition-colors relative ${isReplayMode ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                >
+                    <div className={`absolute w-3 h-3 bg-white rounded-full shadow-sm transition-transform ${isReplayMode ? 'translate-x-2' : '-translate-x-2'}`} />
+                </button>
+            </div>
         </div>
     );
 };

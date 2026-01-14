@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
+import { DataService } from './services/DataService';
 
 const DEFAULT_USER: User = {
   id: 'default_user',
@@ -77,30 +78,54 @@ const App: React.FC = () => {
   const [appError, setAppError] = useState<string | null>(null);
   const [isInitialLoadDone, setIsInitialLoadDone] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [initStatus, setInitStatus] = useState<string>("Inicializace...");
+  const [showRetry, setShowRetry] = useState(false);
 
   useEffect(() => {
+    console.log("[Auth] Starting initialization...");
+    const start = Date.now();
+
     // Top-level safety timeout to always clear loading screen
     const safetyTimer = setTimeout(() => {
       if (loading) {
-        console.warn("Auth initialization safety timeout reached");
+        console.warn(`[Auth] Safety timeout reached after ${Date.now() - start}ms. Force clearing loading state.`);
+        setLoading(false);
+        setShowRetry(true);
+      }
+    }, 10000); // 10s is safer for Vercel cold starts
+
+    setInitStatus("Kontrola přihlášení...");
+    console.log("[Auth] Calling getSession()...");
+    supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
+      console.log(`[Auth] getSession result: ${activeSession ? 'Logged in' : 'No session'} (${Date.now() - start}ms)`);
+      if (activeSession) {
+        setSession(activeSession);
+        setInitStatus("Načítám data...");
+      } else {
         setLoading(false);
       }
-    }, 15000);
-
-    supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
-      setSession(activeSession);
-      setLoading(false);
     }).catch(err => {
-      console.error("Auth session check failed:", err);
-      setLoading(false); // Clear loading even on error
+      console.error("[Auth] Session check failed:", err);
+      setLoading(false);
+      setAppError("Nepodařilo se ověřit přihlášení. Zkus obnovit stránku.");
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, activeSession) => {
-      setSession(activeSession);
-      setLoading(false);
+    console.log("[Auth] Setting up onAuthStateChange...");
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, activeSession) => {
+      console.log(`[Auth] Auth state change: ${event}, Session: ${activeSession ? 'Yes' : 'No'} (${Date.now() - start}ms)`);
+      if (activeSession) {
+        setSession(activeSession);
+        if (!isInitialLoadDone) setInitStatus("Přihlašuji...");
+      }
+
+      if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setLoading(false);
+      }
     });
 
     return () => {
+      console.log("[Auth] Cleaning up subscription");
       subscription.unsubscribe();
       clearTimeout(safetyTimer);
     };
@@ -284,8 +309,10 @@ const App: React.FC = () => {
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
-      if (!isInitialLoadDone) setLoading(true);
+      // Removed setLoading(true) here to prevent flickering and deadlocks on refresh if auth is slow.
+      // The app will just render the dashboard with empty data until load() finishes.
       try {
+        setInitStatus("Ověřuji uživatele...");
         // Clear state before loading ONLY if it's the first time OR user changed
         // This prevents the "blank screen" effect when just switching back to the tab
         if (!isInitialLoadDone || (lastUserId && lastUserId !== session.user.id)) {
@@ -293,6 +320,7 @@ const App: React.FC = () => {
           setAccounts([]);
         }
 
+        setInitStatus("Načítám obchody...");
         const storedTrades = await storageService.getTrades();
 
         // Clean up weekend trades (Safety: remove any trades entered on Sat/Sun)
@@ -314,6 +342,7 @@ const App: React.FC = () => {
           prefetchService.prefetchMultiple(recentTrades).catch(err => console.debug("Initial prefetch skipped:", err));
         }
 
+        setInitStatus("Načítám účty...");
         const storedAccounts = await storageService.getAccounts();
 
         let finalAccounts = storedAccounts;
@@ -322,6 +351,7 @@ const App: React.FC = () => {
         }
         setAccounts(finalAccounts);
 
+        setInitStatus("Načítám nastavení...");
         const storedPreps = await storageService.getDailyPreps();
         const storedReviews = await storageService.getDailyReviews();
         const prefs = await storageService.getPreferences();
@@ -372,10 +402,8 @@ const App: React.FC = () => {
         console.error("Error loading data:", error);
         setAppError(error.message || "Nepodařilo se načíst data z databáze. Zkontroluj připojení.");
       } finally {
-        if (!isInitialLoadDone) {
-          setLoading(false);
-          setIsInitialLoadDone(true);
-        }
+        setLoading(false);
+        setIsInitialLoadDone(true);
       }
     };
 
@@ -391,6 +419,28 @@ const App: React.FC = () => {
       setLoading(false); // Ensure loading is off if no session
     }
   }, [sharedTrade, session]);
+
+  // Phase B: Startup Global Sync (Incremental)
+  useEffect(() => {
+    if (session && isInitialLoadDone) {
+      const syncData = async () => {
+        console.log("[Sync] Starting global incremental bridge...");
+        const instruments = ['usatechidxusd', 'usa500idxusd'];
+        for (const inst of instruments) {
+          try {
+            await DataService.syncIncremental(inst, (msg) => console.log(`[Sync] ${inst}: ${msg}`));
+          } catch (e) {
+            console.error(`[Sync] Failed for ${inst}:`, e);
+          }
+        }
+        console.log("[Sync] Background bridge complete.");
+      };
+
+      // Delay slightly to not compete with initial load resources
+      const timer = setTimeout(syncData, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [session, isInitialLoadDone]);
 
   useEffect(() => {
     if (accounts.length > 0 && filters.accounts.length === 0) {
@@ -713,9 +763,39 @@ const App: React.FC = () => {
   if (loading && !sharedTrade) {
     return (
       <div className="min-h-screen bg-[var(--bg-page)] flex items-center justify-center transition-colors duration-300">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-[var(--text-primary)] font-bold uppercase tracking-widest text-xs">Načítám terminál...</p>
+        <div className="flex flex-col items-center gap-6 p-8 text-center max-w-sm">
+          <div className="relative">
+            <div className="w-16 h-16 border-4 border-blue-600/20 border-t-blue-600 rounded-full animate-spin"></div>
+            <LayoutGrid className="absolute inset-0 m-auto w-6 h-6 text-blue-600 animate-pulse" />
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-[var(--text-primary)] font-bold uppercase tracking-[0.2em] text-xs">AlphaTrade Mentor</p>
+            <p className="text-[var(--text-secondary)] text-sm animate-pulse">{initStatus}</p>
+          </div>
+
+          {(showRetry || isInitialLoadDone) && (
+            <div className="pt-4 space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <p className="text-xs text-amber-500 bg-amber-500/10 px-3 py-2 rounded-lg">
+                {showRetry ? "Načítání trvá déle než obvykle. Vercel se možná probouzí." : "Data jsou připravena."}
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => setLoading(false)}
+                  className="flex items-center justify-center gap-2 px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full text-sm font-medium transition-all transform hover:scale-105 active:scale-95 shadow-lg shadow-emerald-600/20"
+                >
+                  <Zap className="w-4 h-4" />
+                  Vstoupit (Offline režim)
+                </button>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="flex items-center justify-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-sm font-medium transition-all transform hover:scale-105 active:scale-95 shadow-lg shadow-blue-600/20"
+                >
+                  Zkusit znovu
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -786,6 +866,10 @@ const App: React.FC = () => {
       console.error("Failed to force-save trades", err);
       setSyncError("Nepodařilo se uložit změny obchodů.");
     });
+  };
+
+  const handleUpdateTrade = (tradeId: string | number, updates: Partial<Trade>) => {
+    setTrades(prev => prev.map(t => t.id === tradeId ? { ...t, ...updates } : t));
   };
 
   const handleDeletePrep = async (date: string) => {
@@ -991,6 +1075,7 @@ const App: React.FC = () => {
                   viewMode={viewMode}
                   onDeleteTrade={handleDeleteTrade}
                   onEditTrade={(t) => { setEditTrade(t); setIsManualEntryOpen(true); }}
+                  onUpdateTrade={handleUpdateTrade}
                   user={currentUser}
                 />
               )}
@@ -1016,6 +1101,7 @@ const App: React.FC = () => {
                     accounts={accounts}
                     onDelete={handleDeleteTrade}
                     onEdit={(t) => { setEditTrade(t); setIsManualEntryOpen(true); }}
+                    onUpdateTrade={handleUpdateTrade}
                     onClear={handleClearTrades}
                     theme={theme}
                     emotions={userEmotions}

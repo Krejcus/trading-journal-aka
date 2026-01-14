@@ -19,6 +19,8 @@ interface InteractiveOverlayProps {
     onCut?: (time: number) => void;
     isReplayMode?: boolean;
     onHoverUpdate?: (price: number | null, time: number | null) => void;
+    liveDrawing?: DrawingObject | null;
+    onLiveDrawingChange?: (drawing: DrawingObject | null) => void;
 }
 
 export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
@@ -37,7 +39,9 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
     timeframe,
     onCut,
     isReplayMode,
-    onHoverUpdate
+    onHoverUpdate,
+    liveDrawing,
+    onLiveDrawingChange
 }) => {
     const isDark = theme !== 'light';
     // ...
@@ -366,6 +370,7 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
             if (dragState.mode === 'create' && dragState.currentDrawing) {
                 const updated = { ...dragState.currentDrawing, p2: { time, price } };
                 setDragState(prev => prev ? ({ ...prev, currentDrawing: updated }) : null);
+                if (onLiveDrawingChange) onLiveDrawingChange(updated as DrawingObject);
             } else if (dragState.mode === 'move' && dragState.startInfo) {
                 if (dragState.startMouse) {
                     const timeDiff = (time as any) - (dragState.startMouse.time as any);
@@ -377,12 +382,14 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                         p2: dragState.startInfo.p2 ? { time: ((dragState.startInfo.p2.time as any) + timeDiff) as Time, price: (dragState.startInfo.p2.price as any) + priceDiff } : undefined
                     };
                     setDragState(prev => prev ? ({ ...prev, currentDrawing: updated }) : null);
+                    if (onLiveDrawingChange) onLiveDrawingChange(updated as DrawingObject);
                 }
             } else if ((dragState.mode === 'resize-p1' || dragState.mode === 'resize-p2') && dragState.startInfo) {
                 const updated = { ...dragState.startInfo };
                 if (dragState.mode === 'resize-p1') updated.p1 = { time, price };
                 if (dragState.mode === 'resize-p2') updated.p2 = { time, price };
                 setDragState(prev => prev ? ({ ...prev, currentDrawing: updated }) : null);
+                if (onLiveDrawingChange) onLiveDrawingChange(updated as DrawingObject);
             }
         };
 
@@ -396,6 +403,7 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                 onUpdateDrawings(safeDrawings.map(d => d.id === dragState.currentDrawing!.id ? dragState.currentDrawing! as DrawingObject : d));
             }
             setDragState(null);
+            if (onLiveDrawingChange) onLiveDrawingChange(null);
         };
 
         if (dragState) {
@@ -476,9 +484,15 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
             return d.visibleTimeframes.includes(timeframe);
         })
         .map(d => {
+            // Priority 1: Current local drag
             if (dragState?.currentDrawing?.id === d.id) return dragState.currentDrawing;
+            // Priority 2: Remote live update of this existing drawing
+            if (liveDrawing && liveDrawing.id === d.id && !dragState) return liveDrawing;
             return d;
         });
+
+    // Handle new remote drawing (not yet in 'drawings' list)
+    const remoteLiveDrawing = liveDrawing && !safeDrawings.find(d => d.id === liveDrawing.id) && !dragState ? liveDrawing : null;
 
     const handleClick = (e: React.MouseEvent) => {
         if (dragState) return;
@@ -543,6 +557,14 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                         </React.Fragment>
                     )
                 })}
+
+                {/* Remote Live Creation Render */}
+                {remoteLiveDrawing && (() => {
+                    const s1 = toScreen(remoteLiveDrawing.p1);
+                    const s2 = remoteLiveDrawing.p2 ? toScreen(remoteLiveDrawing.p2) : s1;
+                    if (!s1) return null;
+                    return renderShape(remoteLiveDrawing as DrawingObject, s1, s2, false, isDark, false);
+                })()}
 
                 {/* Create Tool Render */}
                 {dragState?.mode === 'create' && dragState.currentDrawing && (() => {

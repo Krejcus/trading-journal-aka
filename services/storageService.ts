@@ -6,10 +6,20 @@ import { prefetchService } from './prefetchService';
 // Helper to validate UUID
 const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
-// Helper to get current user ID
+// Helper to get current user ID with caching
+let cachedUserId: string | null = null;
+let lastSessionCheck = 0;
+
 export const getUserId = async () => {
+  // Use cache if it's less than 30 seconds old
+  if (cachedUserId && Date.now() - lastSessionCheck < 30000) {
+    return cachedUserId;
+  }
+
   const { data: { session } } = await supabase.auth.getSession();
-  return session?.user?.id;
+  cachedUserId = session?.user?.id || null;
+  lastSessionCheck = Date.now();
+  return cachedUserId;
 };
 
 export const storageService = {
@@ -70,7 +80,20 @@ export const storageService = {
   // Trades
   async getTrades(targetUserId?: string): Promise<Trade[]> {
     const userId = targetUserId || await getUserId();
-    if (!userId) return [];
+
+    // Fast local storage fallback
+    const localKey = targetUserId ? `alphatrade_trades_${targetUserId}` : 'alphatrade_trades';
+    const localData = localStorage.getItem(localKey);
+    let localTrades: Trade[] = [];
+    if (localData) {
+      try {
+        localTrades = JSON.parse(localData);
+      } catch (e) {
+        console.error("Failed to parse local trades", e);
+      }
+    }
+
+    if (!userId) return localTrades;
 
     const { data, error } = await supabase
       .from('trades')
@@ -80,9 +103,10 @@ export const storageService = {
 
     if (error) {
       console.error("Supabase getTrades error:", error);
-      return [];
+      return localTrades; // Fallback to local on error
     }
-    return data.map(t => ({
+
+    const trades = data.map(t => ({
       ...t.data,
       id: t.id,
       accountId: t.account_id,
@@ -93,6 +117,10 @@ export const storageService = {
       timestamp: t.timestamp,
       drawings: t.drawings || []
     }));
+
+    // Cache the result
+    localStorage.setItem(localKey, JSON.stringify(trades));
+    return trades;
   },
 
   async updateTradeDrawings(tradeId: string | number, drawings: any[]): Promise<void> {
@@ -119,7 +147,75 @@ export const storageService = {
     }
   },
 
+  async updateTrade(tradeId: string | number, updates: Partial<Trade>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId || !tradeId) return;
+
+    // Fetch the current trade to merge the 'data' blob correctly
+    const { data: current, error: getErr } = await supabase
+      .from('trades')
+      .select('*')
+      .eq('id', tradeId)
+      .eq('user_id', userId)
+      .single();
+
+    if (getErr || !current) {
+      console.error("Failed to fetch trade for update:", getErr);
+      return;
+    }
+
+    const updatedData = {
+      ...current.data,
+      ...updates
+    };
+
+    // Update the trade record
+    // List of known columns in 'trades' table (to avoid sending unknown keys which causes Supabase error 400)
+    const knownColumns = ['id', 'user_id', 'account_id', 'instrument', 'pnl', 'direction', 'date', 'timestamp', 'drawings', 'data', 'is_public', 'created_at', 'setup', 'mistake', 'run_up', 'drawdown', 'risk_amount', 'entry_price', 'exit_price', 'quantity', 'notes', 'tags', 'screenshots', 'signal'];
+
+    // Filter updates to only include known columns for the root level update
+    const rootUpdates: any = {};
+    Object.keys(updates).forEach(key => {
+      // Simple heuristic: camelCase keys usually belong to JSON 'data', snake_case to columns.
+      // But our Trade type mixes them. Let's explicitly check or just save everything to 'data' and only specific ones to root.
+      // Actually, safer approach: ONLY update 'data' with everything, and root with minimal set if needed.
+      // But existing code does sync some fields.
+      if (knownColumns.includes(key) || knownColumns.includes(key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`))) {
+        // Try to map or just pass if matches exact column name.
+        // Since we don't have exact schema introspection here, let's be conservative.
+        // miniViewRange is definitely NOT a column.
+        // So we should NOT include ...updates in the root update if it contains miniViewRange.
+      }
+    });
+
+    // Better strategy: explicitly exclude known non-columns from root spread
+    const { miniViewRange, miniViewLayout, miniViewSecondaryRange, miniViewSecondaryTimeframe, ...safeRootUpdates } = updates as any;
+
+    // Be even safer: 'data' is the source of truth for these new UI fields.
+    // So we update 'data' column with ALL updates merged.
+    // And for the root row update, we only include the 'data' field itself (and maybe essential columns if they changed like pnl/instrument).
+    // The previous code `...updates` was dangerous.
+
+    const { error } = await supabase
+      .from('trades')
+      .update({
+        // We only spread safe known columns or exclude the new UI ones.
+        ...safeRootUpdates,
+        data: updatedData
+      })
+      .eq('id', tradeId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error("Failed to update trade:", error);
+      throw error;
+    }
+  },
+
   async saveTrades(trades: Trade[]): Promise<Trade[]> {
+    // Save to local storage immediately
+    localStorage.setItem('alphatrade_trades', JSON.stringify(trades));
+
     const userId = await getUserId();
     if (!userId || trades.length === 0) return [];
 
@@ -221,15 +317,29 @@ export const storageService = {
   // Accounts
   async getAccounts(targetUserId?: string): Promise<Account[]> {
     const userId = targetUserId || await getUserId();
-    if (!userId) return [];
+
+    // Fast local storage fallback
+    const localKey = targetUserId ? `alphatrade_accounts_${targetUserId}` : 'alphatrade_accounts';
+    const localData = localStorage.getItem(localKey);
+    let localAccounts: Account[] = [];
+    if (localData) {
+      try {
+        localAccounts = JSON.parse(localData);
+      } catch (e) {
+        console.error("Failed to parse local accounts", e);
+      }
+    }
+
+    if (!userId) return localAccounts;
 
     const { data, error } = await supabase
       .from('accounts')
       .select('*')
       .eq('user_id', userId);
 
-    if (error) return [];
-    return data.map(a => ({
+    if (error) return localAccounts;
+
+    const accounts = data.map(a => ({
       ...a.meta,
       id: a.id,
       name: a.name,
@@ -243,9 +353,16 @@ export const storageService = {
       result: a.meta?.result,
       phase: a.meta?.phase
     }));
+
+    // Cache result
+    localStorage.setItem(localKey, JSON.stringify(accounts));
+    return accounts;
   },
 
   async saveAccounts(accounts: Account[]): Promise<Account[]> {
+    // Save to local storage immediately
+    localStorage.setItem('alphatrade_accounts', JSON.stringify(accounts));
+
     const userId = await getUserId();
     if (!userId || accounts.length === 0) return accounts;
 
@@ -314,7 +431,10 @@ export const storageService = {
         }
       }
 
-      return results.length > 0 ? results : accounts;
+      const finalResults = results.length > 0 ? results : accounts;
+      // Update cache with server results (which have real IDs)
+      localStorage.setItem('alphatrade_accounts', JSON.stringify(finalResults));
+      return finalResults;
 
     } catch (err: any) {
       console.error("Critical error in saveAccounts split-sync:", {

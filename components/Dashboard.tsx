@@ -66,6 +66,7 @@ interface DashboardProps {
   setDashboardMode?: (mode: DashboardMode) => void;
   onDeleteTrade?: (id: number | string) => void;
   onEditTrade?: (trade: Trade) => void;
+  onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
   user?: User;
 }
 
@@ -811,7 +812,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
   );
 };
 
-const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout, isEditing, onCloseEdit, accounts, emotions, onDeleteTrade, onEditTrade, dashboardMode, setDashboardMode, user }) => {
+const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout, isEditing, onCloseEdit, accounts, emotions, onDeleteTrade, onEditTrade, onUpdateTrade, dashboardMode, setDashboardMode, user }) => {
   // Check if we need to auto-inject the Challenge widget when in Challenge mode
   useEffect(() => {
     if (dashboardMode === 'challenge' && !layout.some(w => w.id === 'challenge_target')) {
@@ -1065,6 +1066,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
           onEdit={() => { if (onEditTrade) onEditTrade(selectedTrade); setSelectedTradeId(null); }}
           onDelete={() => { if (onDeleteTrade) onDeleteTrade(selectedTrade.id); setSelectedTradeId(null); }}
           emotions={emotions}
+          onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
         />
       )}
     </div>

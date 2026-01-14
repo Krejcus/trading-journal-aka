@@ -12,6 +12,7 @@
     "@google/genai": "^1.30.0",
     "@supabase/supabase-js": "^2.89.0",
     "@vercel/node": "^5.5.16",
+    "dotenv": "^17.2.3",
     "dukascopy-node": "^1.46.3",
     "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.555.0",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vite-plugin-pwa": "^1.2.0"

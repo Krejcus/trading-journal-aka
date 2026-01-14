@@ -551,160 +551,166 @@ const Settings: React.FC<SettingsProps> = ({
 };
 
 // --- Embedded Cache Manager Component ---
+import { DataService, SyncStats } from '../services/DataService';
+
 const CacheManager = ({ isDark }: { isDark: boolean }) => {
-  const [stats, setStats] = useState<Record<string, number>>({});
+  const [stats, setStats] = useState<Record<string, SyncStats>>({});
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
-  const [statusLog, setStatusLog] = useState<string>('Systém připraven k diagnostice.');
+  const [statusLog, setStatusLog] = useState<string>('Systém připraven.');
+  const [selectedInst, setSelectedInst] = useState('usatechidxusd');
 
   const checkStats = async () => {
     setLoading(true);
+    setStatusLog('Kontrola integrity dat...');
     try {
       const instruments = ['usatechidxusd', 'usa500idxusd'];
-      const newStats: Record<string, number> = {};
+      const newStats: Record<string, SyncStats> = {};
 
       for (const inst of instruments) {
-        const { count, error } = await supabase
-          .from('candle_cache')
-          .select('*', { count: 'exact', head: true })
-          .eq('instrument', inst);
-
-        if (error) {
-          console.error(`Error for ${inst}:`, error);
-          setStatusLog(`Chyba čtení: ${error.message}`);
-        } else {
-          newStats[inst] = count || 0;
-        }
+        newStats[inst] = await DataService.getInstrumentStats(inst);
       }
       setStats(newStats);
+      setStatusLog('Data Health: OK');
     } catch (error: any) {
       console.error("Failed to check stats:", error);
-      setStatusLog(`Výjimka při čtení: ${error.message}`);
+      setStatusLog(`Chyba: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Auto-check on mount
   useEffect(() => {
     checkStats();
   }, []);
 
-  const handleDownload = async () => {
+  const handleDeepSync = async (months: number) => {
     if (downloading) return;
     setDownloading(true);
     setDownloadProgress(0);
-    setStatusLog('Zahajuji stahování...');
 
     try {
-      const instrument = 'usatechidxusd'; // NQ
-      // Download last 90 days in 2 day chunks (safer for Vercel timeouts)
-      const daysBack = 90;
-      const chunkSize = 2;
       const now = new Date();
+      const from = new Date(now.getTime() - months * 30 * 24 * 60 * 60 * 1000);
 
-      const totalChunks = Math.ceil(daysBack / chunkSize);
+      setStatusLog(`Zahajuji hloubkovou synchronizaci (${months} měsíců)...`);
 
-      for (let i = 0; i < totalChunks; i++) {
-        const endDay = i * chunkSize;
-        const startDay = (i + 1) * chunkSize;
+      await DataService.importHistory(
+        selectedInst,
+        from,
+        now,
+        1, // 1 day chunks for stability
+        (msg) => setStatusLog(msg),
+        (progress) => setDownloadProgress(progress)
+      );
 
-        const to = new Date(now.getTime() - endDay * 24 * 60 * 60 * 1000);
-        const from = new Date(now.getTime() - startDay * 24 * 60 * 60 * 1000);
-
-        const toIso = to.toISOString();
-        const fromIso = from.toISOString();
-
-        setStatusLog(`Chunk ${i + 1}/${totalChunks}: ${new Date(from).toLocaleDateString()} - ${new Date(to).toLocaleDateString()}`);
-        setDownloadProgress(Math.round(((i) / totalChunks) * 100));
-
-        try {
-          const res = await fetch(`/api/candles?instrument=${instrument}&from=${fromIso}&to=${toIso}&timeframe=m1&force=true`);
-          const dbErr = res.headers.get('X-DB-Error');
-
-          if (!res.ok) {
-            const errText = await res.text();
-            setStatusLog(`Chyba API v kroku ${i + 1}: ${res.status} - ${errText.substring(0, 50)}`);
-          } else if (dbErr) {
-            setStatusLog(`VAROVÁNÍ: API OK, ale DB selhala: ${dbErr}`);
-          }
-        } catch (e: any) {
-          setStatusLog(`Chyba sítě v kroku ${i + 1}: ${e.message}`);
-          console.error("Chunk failed", e);
-        }
-
-        await new Promise(r => setTimeout(r, 800));
-      }
-
-      setDownloadProgress(100);
-      setStatusLog('Hotovo. Aktualizuji počítadlo...');
+      setStatusLog('Synchronizace dokončena úspěšně.');
       await checkStats();
-
     } catch (error: any) {
-      setStatusLog(`KRITICKÁ CHYBA: ${error.message}`);
-      alert("Chyba při stahování.");
+      setStatusLog(`CHYBA: ${error.message}`);
     } finally {
       setDownloading(false);
-      setDownloadProgress(0);
     }
   };
+
+  const menuInsts = [
+    { id: 'usatechidxusd', label: 'Nasdaq (NQ / MNQ)' },
+    { id: 'usa500idxusd', label: 'S&P 500 (ES / MES)' }
+  ];
 
   return (
     <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-page)]/20 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
       <div className="flex items-center justify-between mb-4">
-        <h4 className={`text-sm font-bold uppercase tracking-widest ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>Stav Paměti (Svíčky)</h4>
+        <h4 className={`text-sm font-bold uppercase tracking-widest ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>Data Health Dashboard</h4>
         <div className="flex gap-4">
           {loading && <Loader2 size={16} className="animate-spin text-slate-500" />}
-          <button onClick={checkStats} className="text-xs text-blue-500 hover:underline">Obnovit</button>
+          <button onClick={checkStats} className="text-xs text-blue-500 hover:underline">Obnovit stav</button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        {[
-          { id: 'usatechidxusd', label: 'Nasdaq (NQ / MNQ)' },
-          { id: 'usa500idxusd', label: 'S&P 500 (ES / MES)' }
-        ].map(inst => (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        {menuInsts.map(inst => (
           <div key={inst.id} className={`p-4 rounded-xl border ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-            <p className="text-[10px] font-black uppercase text-slate-500 mb-1">{inst.label}</p>
-            <div className="flex items-baseline gap-2">
-              <p className={`text-2xl font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                {stats[inst.id] !== undefined ? stats[inst.id].toLocaleString() : '---'}
-              </p>
-              <span className="text-[10px] text-slate-500 font-bold uppercase">rows</span>
+            <div className="flex justify-between items-start mb-2">
+              <p className="text-[10px] font-black uppercase text-slate-500">{inst.label}</p>
+              <div className={`w-2 h-2 rounded-full ${stats[inst.id]?.count ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-700'}`} />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-baseline gap-2">
+                <p className={`text-xl font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                  {stats[inst.id]?.count ? stats[inst.id].count.toLocaleString() : '0'}
+                </p>
+                <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Svíček</span>
+              </div>
+              {stats[inst.id]?.minDate && (
+                <p className="text-[9px] font-mono text-slate-500">
+                  {new Date(stats[inst.id].minDate!).toLocaleDateString()} - {new Date(stats[inst.id].maxDate!).toLocaleDateString()}
+                </p>
+              )}
             </div>
           </div>
         ))}
       </div>
 
       {statusLog && (
-        <div className={`mb-6 p-3 rounded-xl font-mono text-[10px] border ${isDark ? 'bg-black/40 border-white/5 text-blue-400' : 'bg-slate-100 border-slate-200 text-blue-600'}`}>
+        <div className={`mb-6 p-3 rounded-xl font-mono text-[9px] border leading-relaxed ${isDark ? 'bg-black/40 border-white/5 text-blue-400' : 'bg-slate-100 border-slate-200 text-blue-600'}`}>
           <div className="flex items-center gap-2 mb-1">
-            <Activity size={10} className="animate-pulse" />
-            <span className="uppercase font-black">System Log</span>
+            <Activity size={10} className={downloading ? "animate-pulse" : ""} />
+            <span className="uppercase font-black">Sync Engine Active</span>
           </div>
           {statusLog}
+          {downloading && (
+            <div className="mt-2 h-1 w-full bg-blue-900/30 rounded-full overflow-hidden">
+              <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${downloadProgress}%` }} />
+            </div>
+          )}
         </div>
       )}
 
-      <div className={`p-4 rounded-xl border ${isDark ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
-        <p className={`text-xs mb-3 ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>
-          Pokud se grafy načítají pomalu, databáze je pravděpodobně prázdná.
-          Tlačítkem níže stáhneš posledních 30 dní historie pro Nasdaq.
-        </p>
-        <div className="flex items-center gap-4">
-          <button
+      <div className={`p-5 rounded-xl border ${isDark ? 'bg-blue-500/5 border-blue-500/10' : 'bg-blue-50 border-blue-100'}`}>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h5 className={`text-xs font-black uppercase tracking-widest ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>Deep History Sync</h5>
+            <p className="text-[10px] opacity-70">Zvolte rozsah pro manuální doplnění historie. Data budou stažena bit-po-bitu.</p>
+          </div>
+
+          <select
+            value={selectedInst}
+            onChange={(e) => setSelectedInst(e.target.value)}
             disabled={downloading}
-            onClick={handleDownload}
-            className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all shadow-lg active:scale-95 disabled:opacity-50 flex items-center gap-2
-                            ${downloading ? 'bg-slate-700 text-slate-300' : 'bg-blue-600 hover:bg-blue-500 text-white'}
-                        `}
+            className={`${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'} px-3 py-2 rounded-lg text-[10px] font-black uppercase outline-none focus:ring-1 focus:ring-blue-500`}
           >
-            {downloading ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-            {downloading ? `Stahuji... ${downloadProgress}%` : 'Stáhnout NQ (30 dní)'}
-          </button>
-          {downloading && <span className="text-[10px] font-mono opacity-50">Prosím nezavírej okno...</span>}
+            {menuInsts.map(i => <option key={i.id} value={i.id}>{i.label.split(' (')[0]}</option>)}
+          </select>
         </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
+          {[
+            { label: '30 Dní', val: 1 },
+            { label: '6 Měsíců', val: 6 },
+            { label: '1 Rok', val: 12 },
+            { label: '2 Roky', val: 24 }
+          ].map(preset => (
+            <button
+              key={preset.val}
+              disabled={downloading}
+              onClick={() => handleDeepSync(preset.val)}
+              className={`py-2.5 rounded-xl text-[9px] font-black uppercase tracking-tighter transition-all active:scale-95 disabled:opacity-30
+                ${isDark ? 'bg-slate-800 hover:bg-slate-700 text-white border border-white/5' : 'bg-white hover:bg-slate-50 text-slate-900 border border-slate-200 shadow-sm'}
+              `}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+
+        {downloading && (
+          <div className="mt-3 flex items-center justify-center gap-2">
+            <Loader2 size={12} className="animate-spin text-blue-500" />
+            <span className="text-[9px] font-black uppercase tracking-widest text-blue-500">Syncing... Prosím nezavírejte aplikaci</span>
+          </div>
+        )}
       </div>
     </div>
   );
