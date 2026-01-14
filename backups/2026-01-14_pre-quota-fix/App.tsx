@@ -297,10 +297,11 @@ const App: React.FC = () => {
     if (!session) return;
 
     const load = async () => {
-      // Avoid redundant loads if the session is the same
+      // Avoid redundant loads if the session is the same (Supabase often refreshes tokens which triggers onAuthStateChange)
       if (session?.user?.id === lastLoadedSessionId.current && isInitialLoadDone) return;
       lastLoadedSessionId.current = session?.user?.id || null;
 
+      // 1. Session safety: If current user doesn't match last stored user, wipe local storage
       const lastUserId = localStorage.getItem('alphatrade_last_session_user');
       if (lastUserId && lastUserId !== session.user.id) {
         console.warn("User mismatch detected. Purging local storage for safety.");
@@ -308,166 +309,102 @@ const App: React.FC = () => {
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
-      // --- PHASE 1: CHECK CACHE ---
-      console.log("[Load] Phase 1: Checking cache...");
-      const cachedTrades = storageService.getCachedTrades();
-      const cachedAccounts = storageService.getCachedAccounts();
-      const cachedPrefs = storageService.getCachedPreferences();
-      const activeId = storageService.getActiveAccountId();
-
-      const hasCachedData = cachedTrades.length > 0 || cachedAccounts.length > 0;
-
-      if (hasCachedData) {
-        // --- FAST PATH: Cache has data, show immediately ---
-        console.log("[Load] Cache HIT! Showing data instantly.");
-        if (cachedTrades.length > 0) setTrades(cachedTrades);
-        if (cachedAccounts.length > 0) {
-          setAccounts(cachedAccounts);
-          setActiveAccountId(activeId || cachedAccounts[0].id);
-        }
-        if (cachedPrefs) applyPreferences(cachedPrefs);
-
-        // Clear loading screen immediately
-        setLoading(false);
-        setIsInitialLoadDone(true);
-
-        // Background sync (non-blocking)
-        syncFromServer(activeId);
-      } else {
-        // --- SLOW PATH: Cache is empty, must wait for server ---
-        console.log("[Load] Cache MISS. Waiting for server data...");
-        setInitStatus("Načítám data ze serveru...");
-
-        try {
-          // Fetch critical data first (trades + accounts) - this is what we need for UI
-          const [dbTrades, dbAccounts] = await Promise.all([
-            storageService.getTrades(),
-            storageService.getAccounts()
-          ]);
-
-          console.log("[Load] Critical data received.");
-
-          const cleanedTrades = (dbTrades || []).filter(t => {
-            const d = new Date(t.date);
-            const day = d.getDay();
-            return day !== 0 && day !== 6;
-          });
-          setTrades(cleanedTrades);
-
-          if (dbAccounts && dbAccounts.length > 0) {
-            setAccounts(dbAccounts);
-            setActiveAccountId(dbAccounts[0].id);
-          } else {
-            setAccounts([DEFAULT_ACCOUNT]);
-            setActiveAccountId(DEFAULT_ACCOUNT.id);
-          }
-
-          // Now we can show the dashboard
-          setLoading(false);
-          setIsInitialLoadDone(true);
-
-          // Fetch remaining data in background (non-critical)
-          fetchSecondaryData();
-
-        } catch (error: any) {
-          console.error("[Load] Server fetch error:", error);
-          setAppError(error.message || "Nepodařilo se načíst data ze serveru.");
-          setLoading(false);
-          setIsInitialLoadDone(true);
-        }
-      }
-    };
-
-    // Background sync when we had cache data
-    const syncFromServer = async (activeId: string | null) => {
+      // Removed setLoading(true) here to prevent flickering and deadlocks on refresh if auth is slow.
+      // The app will just render the dashboard with empty data until load() finishes.
       try {
-        console.log("[Sync] Background sync starting...");
-        const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-          storageService.getTrades(),
-          storageService.getAccounts(),
-          storageService.getDailyPreps(),
-          storageService.getDailyReviews(),
-          storageService.getPreferences(),
-          storageService.getUser(),
-          storageService.getWeeklyFocusList()
-        ]);
+        setInitStatus("Ověřuji uživatele...");
+        // Clear state before loading ONLY if it's the first time OR user changed
+        // This prevents the "blank screen" effect when just switching back to the tab
+        if (!isInitialLoadDone || (lastUserId && lastUserId !== session.user.id)) {
+          setTrades([]);
+          setAccounts([]);
+        }
 
-        console.log("[Sync] Background sync complete.");
+        setInitStatus("Načítám obchody...");
+        const storedTrades = await storageService.getTrades();
 
-        if (dbUser) setCurrentUser(dbUser);
-
-        const cleanedTrades = (dbTrades || []).filter(t => {
+        // Clean up weekend trades (Safety: remove any trades entered on Sat/Sun)
+        const cleanedTrades = (storedTrades || []).filter(t => {
           const d = new Date(t.date);
           const day = d.getDay();
           return day !== 0 && day !== 6;
         });
-        setTrades(cleanedTrades);
 
-        if (dbAccounts && dbAccounts.length > 0) {
-          setAccounts(dbAccounts);
-          if (!activeId) setActiveAccountId(dbAccounts[0].id);
+        if (cleanedTrades.length !== (storedTrades || []).length) {
+          console.warn(`System logic: Cleaned up ${(storedTrades || []).length - cleanedTrades.length} invalid weekend trades.`);
         }
 
-        setDailyPreps(dbPreps || []);
-        setDailyReviews(dbReviews || []);
-        setWeeklyFocusList(dbWeeklyFocus || []);
+        setTrades(cleanedTrades);
 
-        if (dbPrefs) applyPreferences(dbPrefs);
-        setSyncError(null);
+        // Prefetch recent trades for quick access
+        if (cleanedTrades.length > 0) {
+          const recentTrades = [...cleanedTrades].sort((a, b) => b.timestamp - a.timestamp).slice(0, 10);
+          prefetchService.prefetchMultiple(recentTrades).catch(err => console.debug("Initial prefetch skipped:", err));
+        }
+
+        setInitStatus("Načítám účty...");
+        const storedAccounts = await storageService.getAccounts();
+
+        let finalAccounts = storedAccounts;
+        if (!finalAccounts || finalAccounts.length === 0) {
+          finalAccounts = [DEFAULT_ACCOUNT];
+        }
+        setAccounts(finalAccounts);
+
+        setInitStatus("Načítám nastavení...");
+        const storedPreps = await storageService.getDailyPreps();
+        const storedReviews = await storageService.getDailyReviews();
+        const prefs = await storageService.getPreferences();
+        const storedUser = await storageService.getUser();
+        const activeId = storageService.getActiveAccountId();
+        const storedWeeklyFocus = await storageService.getWeeklyFocusList();
+
+        if (storedUser) setCurrentUser(storedUser);
+        setActiveAccountId(activeId || (finalAccounts[0]?.id || ''));
+
+        setDailyPreps(storedPreps || []);
+        setDailyReviews(storedReviews || []);
+        setWeeklyFocusList(storedWeeklyFocus || []);
+
+        if (prefs) {
+          if (prefs.emotions) setUserEmotions(prefs.emotions);
+          if (prefs.standardMistakes) setUserMistakes(prefs.standardMistakes);
+          if (prefs.standardGoals) setStandardGoals(prefs.standardGoals);
+          if (prefs.dashboardLayout) setDashboardLayout(prefs.dashboardLayout);
+          if (prefs.sessions) {
+            const migratedSessions = (prefs.sessions as any[]).map(s => {
+              if (s.startTime && s.endTime) return s;
+              return {
+                ...s,
+                startTime: `${String(s.startHour ?? 9).padStart(2, '0')}:00`,
+                endTime: `${String(s.endHour ?? 17).padStart(2, '0')}:00`,
+                color: s.color || '#3b82f6'
+              };
+            });
+            setSessions(migratedSessions);
+          }
+          if (prefs.htfOptions) setHtfOptions(prefs.htfOptions);
+          if (prefs.ltfOptions) setLtfOptions(prefs.ltfOptions);
+          if (prefs.ironRules) setIronRules(prefs.ironRules);
+          if (prefs.businessExpenses) setBusinessExpenses(prefs.businessExpenses);
+          if (prefs.businessPayouts) setBusinessPayouts(prefs.businessPayouts);
+          if (prefs.playbookItems) setPlaybookItems(prefs.playbookItems);
+          if (prefs.businessGoals) setBusinessGoals(prefs.businessGoals);
+          if (prefs.businessResources) setBusinessResources(prefs.businessResources);
+          if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
+          if (prefs.psychoMetricsConfig) setPsychoMetrics(prefs.psychoMetricsConfig);
+          if (prefs.theme) setTheme(prefs.theme);
+          if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
+
+          setDashboardMode(prefs.dashboardMode || 'combined');
+        }
       } catch (error: any) {
-        console.error("[Sync] Background sync error:", error);
-        // Don't show error - we already have cache data visible
+        console.error("Error loading data:", error);
+        setAppError(error.message || "Nepodařilo se načíst data z databáze. Zkontroluj připojení.");
+      } finally {
+        setLoading(false);
+        setIsInitialLoadDone(true);
       }
-    };
-
-    // Fetch secondary data after critical data is loaded (for cache-miss path)
-    const fetchSecondaryData = async () => {
-      try {
-        const [dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-          storageService.getDailyPreps(),
-          storageService.getDailyReviews(),
-          storageService.getPreferences(),
-          storageService.getUser(),
-          storageService.getWeeklyFocusList()
-        ]);
-
-        if (dbUser) setCurrentUser(dbUser);
-        setDailyPreps(dbPreps || []);
-        setDailyReviews(dbReviews || []);
-        setWeeklyFocusList(dbWeeklyFocus || []);
-        if (dbPrefs) applyPreferences(dbPrefs);
-      } catch (e) {
-        console.error("[Load] Secondary data fetch error:", e);
-      }
-    };
-
-    // Helper to apply preferences to state
-    const applyPreferences = (prefs: UserPreferences) => {
-      if (prefs.emotions) setUserEmotions(prefs.emotions);
-      if (prefs.standardMistakes) setUserMistakes(prefs.standardMistakes);
-      if (prefs.standardGoals) setStandardGoals(prefs.standardGoals);
-      if (prefs.dashboardLayout) setDashboardLayout(prefs.dashboardLayout);
-      if (prefs.sessions) {
-        const migratedSessions = (prefs.sessions as any[]).map(s => ({
-          ...s,
-          startTime: s.startTime || `${String(s.startHour ?? 9).padStart(2, '0')}:00`,
-          endTime: s.endTime || `${String(s.endHour ?? 17).padStart(2, '0')}:00`,
-          color: s.color || '#3b82f6'
-        }));
-        setSessions(migratedSessions);
-      }
-      if (prefs.htfOptions) setHtfOptions(prefs.htfOptions);
-      if (prefs.ltfOptions) setLtfOptions(prefs.ltfOptions);
-      if (prefs.ironRules) setIronRules(prefs.ironRules);
-      if (prefs.businessExpenses) setBusinessExpenses(prefs.businessExpenses);
-      if (prefs.businessPayouts) setBusinessPayouts(prefs.businessPayouts);
-      if (prefs.playbookItems) setPlaybookItems(prefs.playbookItems);
-      if (prefs.businessGoals) setBusinessGoals(prefs.businessGoals);
-      if (prefs.businessResources) setBusinessResources(prefs.businessResources);
-      if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
-      if (prefs.psychoMetricsConfig) setPsychoMetrics(prefs.psychoMetricsConfig);
-      if (prefs.theme) setTheme(prefs.theme);
-      if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
     };
 
     if (session) {

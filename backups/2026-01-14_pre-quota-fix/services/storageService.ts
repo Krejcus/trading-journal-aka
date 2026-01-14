@@ -22,25 +22,6 @@ export const getUserId = async () => {
   return cachedUserId;
 };
 
-// Safe LocalStorage helper to prevent QuotaExceededError from crashing the app
-const safeSetItem = (key: string, value: any) => {
-  try {
-    const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-    localStorage.setItem(key, stringValue);
-  } catch (e: any) {
-    if (e.name === 'QuotaExceededError' || e.code === 22) {
-      console.warn(`[Storage] LocalStorage quota exceeded for key: ${key}. Background data will still load from server.`);
-      // Optional: Clear some specific large keys to make room for critical data
-      if (key.includes('trades')) {
-        // If we can't even save limited trades, maybe clear all trades cache to be safe
-        // but only if it's not the current key we are trying to save
-      }
-    } else {
-      console.error(`[Storage] Failed to save to LocalStorage:`, e);
-    }
-  }
-};
-
 export const storageService = {
   // User Profile
   async getUser(): Promise<User | null> {
@@ -97,18 +78,6 @@ export const storageService = {
   },
 
   // Trades
-  getCachedTrades(targetUserId?: string): Trade[] {
-    const localKey = targetUserId ? `alphatrade_trades_${targetUserId}` : 'alphatrade_trades';
-    const localData = localStorage.getItem(localKey);
-    if (!localData) return [];
-    try {
-      return JSON.parse(localData);
-    } catch (e) {
-      console.error("Failed to parse local trades", e);
-      return [];
-    }
-  },
-
   async getTrades(targetUserId?: string): Promise<Trade[]> {
     const userId = targetUserId || await getUserId();
 
@@ -126,48 +95,9 @@ export const storageService = {
 
     if (!userId) return localTrades;
 
-    // Optimized select to avoid fetching heavy 'screenshot'/'screenshots' from 'data' JSON blob
-    // We explicitly select the fields we need.
-    const { data: rawData, error } = await supabase
+    const { data, error } = await supabase
       .from('trades')
-      .select(`
-        id,
-        user_id,
-        account_id,
-        instrument,
-        pnl,
-        direction,
-        date,
-        timestamp,
-        drawings,
-        is_public,
-        is_public,
-        created_at,
-        setup:data->>setup,
-        mistake:data->>mistake,
-        notes:data->>notes,
-        tags:data->tags,
-        runUp:data->>runUp,
-        drawdown:data->>drawdown,
-        riskAmount:data->>riskAmount,
-        targetAmount:data->>targetAmount,
-        entryPrice:data->>entryPrice,
-        exitPrice:data->>exitPrice,
-        quantity:data->>quantity,
-        signal:data->>signal,
-        session:data->>session,
-        confidence:data->>confidence,
-        rr:data->>rr,
-        duration:data->>duration,
-        isValid:data->>isValid,
-        groupId:data->>groupId,
-        htfConfluence:data->htfConfluence,
-        ltfConfluence:data->ltfConfluence,
-        mistakes:data->mistakes,
-        emotions:data->emotions,
-        planAdherence:data->>planAdherence,
-        executionStatus:data->>executionStatus
-      `)
+      .select('*')
       .eq('user_id', userId)
       .order('timestamp', { ascending: false });
 
@@ -176,54 +106,20 @@ export const storageService = {
       return localTrades; // Fallback to local on error
     }
 
-    const trades = rawData.map((t: any) => ({
+    const trades = data.map(t => ({
+      ...t.data,
       id: t.id,
-      userId: t.user_id,
       accountId: t.account_id,
       instrument: t.instrument,
       pnl: t.pnl,
       direction: t.direction,
       date: t.date,
       timestamp: t.timestamp,
-      drawings: t.drawings || [],
-      isPublic: t.is_public,
-      createdAt: t.created_at,
+      drawings: t.drawings || []
+    }));
 
-      // Mapped JSON fields
-      setup: t.setup,
-      mistake: t.mistake,
-      notes: t.notes,
-      tags: t.tags,
-      runUp: t.runUp ? Number(t.runUp) : undefined,
-      drawdown: t.drawdown ? Number(t.drawdown) : undefined,
-      riskAmount: t.riskAmount ? Number(t.riskAmount) : undefined,
-      targetAmount: t.targetAmount ? Number(t.targetAmount) : undefined,
-      entryPrice: t.entryPrice ? Number(t.entryPrice) : undefined,
-      exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
-      quantity: t.quantity ? Number(t.quantity) : undefined,
-      signal: t.signal,
-      session: t.session,
-      confidence: t.confidence ? Number(t.confidence) : undefined,
-      rr: t.rr ? Number(t.rr) : undefined,
-      duration: t.duration,
-      durationMinutes: 0,
-      isValid: t.isValid === 'true' || t.isValid === true,
-      groupId: t.groupId,
-      htfConfluence: t.htfConfluence,
-      ltfConfluence: t.ltfConfluence,
-      mistakes: t.mistakes,
-      emotions: t.emotions,
-      planAdherence: t.planAdherence,
-      executionStatus: t.executionStatus,
-
-      // Explicitly missing heavy fields (screenshots)
-      screenshots: [],
-      data: {} // We don't carry the full blob anymore to save memory
-    })) as Trade[];
-
-    // Cache only a limited number of most recent trades (e.g. 300) to respect LocalStorage quota
-    const tradesToCache = trades.slice(0, 300);
-    safeSetItem(localKey, tradesToCache);
+    // Cache the result
+    localStorage.setItem(localKey, JSON.stringify(trades));
     return trades;
   },
 
@@ -317,8 +213,8 @@ export const storageService = {
   },
 
   async saveTrades(trades: Trade[]): Promise<Trade[]> {
-    // Save only most recent to local storage immediately
-    safeSetItem('alphatrade_trades', trades.slice(0, 300));
+    // Save to local storage immediately
+    localStorage.setItem('alphatrade_trades', JSON.stringify(trades));
 
     const userId = await getUserId();
     if (!userId || trades.length === 0) return [];
@@ -419,18 +315,6 @@ export const storageService = {
   },
 
   // Accounts
-  getCachedAccounts(targetUserId?: string): Account[] {
-    const localKey = targetUserId ? `alphatrade_accounts_${targetUserId}` : 'alphatrade_accounts';
-    const localData = localStorage.getItem(localKey);
-    if (!localData) return [];
-    try {
-      return JSON.parse(localData);
-    } catch (e) {
-      console.error("Failed to parse local accounts", e);
-      return [];
-    }
-  },
-
   async getAccounts(targetUserId?: string): Promise<Account[]> {
     const userId = targetUserId || await getUserId();
 
@@ -471,13 +355,13 @@ export const storageService = {
     }));
 
     // Cache result
-    safeSetItem(localKey, accounts);
+    localStorage.setItem(localKey, JSON.stringify(accounts));
     return accounts;
   },
 
   async saveAccounts(accounts: Account[]): Promise<Account[]> {
     // Save to local storage immediately
-    safeSetItem('alphatrade_accounts', accounts);
+    localStorage.setItem('alphatrade_accounts', JSON.stringify(accounts));
 
     const userId = await getUserId();
     if (!userId || accounts.length === 0) return accounts;
@@ -549,7 +433,7 @@ export const storageService = {
 
       const finalResults = results.length > 0 ? results : accounts;
       // Update cache with server results (which have real IDs)
-      safeSetItem('alphatrade_accounts', finalResults);
+      localStorage.setItem('alphatrade_accounts', JSON.stringify(finalResults));
       return finalResults;
 
     } catch (err: any) {
@@ -572,16 +456,6 @@ export const storageService = {
   },
 
   // Preferences
-  getCachedPreferences(): UserPreferences | null {
-    const stored = localStorage.getItem('alphatrade_preferences');
-    if (!stored) return null;
-    try {
-      return JSON.parse(stored);
-    } catch (e) {
-      return null;
-    }
-  },
-
   async getPreferences(targetUserId?: string): Promise<UserPreferences | null> {
     const userId = targetUserId || await getUserId();
     if (!userId) return null;
@@ -600,10 +474,10 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) {
       // Still save locally even if not logged in (e.g. login page theme)
-      safeSetItem('alphatrade_preferences', prefs);
+      localStorage.setItem('alphatrade_preferences', JSON.stringify(prefs));
       return;
     }
-    safeSetItem('alphatrade_preferences', prefs);
+    localStorage.setItem('alphatrade_preferences', JSON.stringify(prefs));
     await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
   },
 
@@ -636,15 +510,14 @@ export const storageService = {
 
     // 3. Merge Local and DB (DB wins, but local might have newer entries if they weren't synced)
     // For now, let's just use DB if available, and update local storage
-    // Limit journal preps as well
-    safeSetItem('alphatrade_daily_preps', dbPreps.slice(0, 100));
+    localStorage.setItem('alphatrade_daily_preps', JSON.stringify(dbPreps));
 
     return dbPreps;
   },
 
   async saveDailyPreps(preps: DailyPrep[]): Promise<void> {
-    // Always save to local storage immediately (limited)
-    safeSetItem('alphatrade_daily_preps', preps.slice(0, 100));
+    // Always save to local storage immediately
+    localStorage.setItem('alphatrade_daily_preps', JSON.stringify(preps));
 
     const userId = await getUserId();
     if (!userId) return;
@@ -688,15 +561,15 @@ export const storageService = {
 
     const dbReviews = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
-    // 3. Sync local storage (limited)
-    safeSetItem('alphatrade_daily_reviews', dbReviews.slice(0, 100));
+    // 3. Sync local storage
+    localStorage.setItem('alphatrade_daily_reviews', JSON.stringify(dbReviews));
 
     return dbReviews;
   },
 
   async saveDailyReviews(reviews: DailyReview[]): Promise<void> {
-    // Always save to local storage immediately (limited)
-    safeSetItem('alphatrade_daily_reviews', reviews.slice(0, 100));
+    // Always save to local storage immediately
+    localStorage.setItem('alphatrade_daily_reviews', JSON.stringify(reviews));
 
     const userId = await getUserId();
     if (!userId) return;

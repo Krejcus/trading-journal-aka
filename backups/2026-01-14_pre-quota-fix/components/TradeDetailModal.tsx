@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { Play } from 'lucide-react';
 import { Trade, Account, CustomEmotion } from '../types';
 import { storageService } from '../services/storageService';
@@ -30,65 +30,33 @@ interface TradeDetailModalProps {
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     trade, accountName, theme, onClose, onEdit, onDelete, emotions, onPrev, onNext, hasPrev, hasNext, onUpdateTrade
 }) => {
-    const [fullTrade, setFullTrade] = useState<Trade>(trade);
-    const [isLoadingDetails, setIsLoadingDetails] = useState(false);
-
-    // Fetch full detail if this is a "light" trade (missing screenshots or data)
-    useEffect(() => {
-        // Simple heuristic: if we have NO screenshots but we suspect we might have them (or just always fetch to be safe)
-        // Since getTrades now intentionally returns empty screenshots, we should always fetch detailed view.
-        // But to avoid flicker, we use prop first.
-        const loadFull = async () => {
-            if (isLoadingDetails) return;
-            setIsLoadingDetails(true);
-            try {
-                // If it's a real trade (ID is UUID/Number), fetch it
-                if (trade.id) {
-                    const detailed = await storageService.getTradeById(String(trade.id));
-                    if (detailed) {
-                        // Merge props with detailed data (props might have some UI specific state? Unlikely)
-                        setFullTrade(detailed);
-                    }
-                }
-            } catch (e) {
-                console.error("Failed to load full trade details", e);
-            } finally {
-                setIsLoadingDetails(false);
-            }
-        };
-
-        loadFull();
-    }, [trade.id]);
-
-    const activeTrade = fullTrade || trade;
-
     const replayRef = useRef<any>(null);
     const isDark = theme !== 'light';
     const [isZoomed, setIsZoomed] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [shareCopied, setShareCopied] = useState(false);
     const [showReplayFullscreen, setShowReplayFullscreen] = useState(false);
-    const [layout, setLayout] = useState<'single' | 'split'>(activeTrade.miniViewLayout || 'single');
+    const [layout, setLayout] = useState<'single' | 'split'>(trade.miniViewLayout || 'single');
 
-    const images = activeTrade.screenshots && activeTrade.screenshots.length > 0
-        ? activeTrade.screenshots
-        : (activeTrade.screenshot ? [activeTrade.screenshot] : []);
+    const images = trade.screenshots && trade.screenshots.length > 0
+        ? trade.screenshots
+        : (trade.screenshot ? [trade.screenshot] : []);
 
-    const entryPrice = parseFloat(String(activeTrade.entryPrice || 0));
-    const exitPrice = parseFloat(String(activeTrade.exitPrice || 0));
-    const stopLoss = parseFloat(String(activeTrade.stopLoss || 0));
-    const takeProfit = parseFloat(String(activeTrade.takeProfit || 0));
-    const riskAmount = parseFloat(String(activeTrade.riskAmount || 0));
+    const entryPrice = parseFloat(String(trade.entryPrice || 0));
+    const exitPrice = parseFloat(String(trade.exitPrice || 0));
+    const stopLoss = parseFloat(String(trade.stopLoss || 0));
+    const takeProfit = parseFloat(String(trade.takeProfit || 0));
+    const riskAmount = parseFloat(String(trade.riskAmount || 0));
 
-    const realRRR = (riskAmount !== 0 && riskAmount !== undefined) ? (activeTrade.pnl / riskAmount).toFixed(2) : 'N/A';
-    const holdTime = activeTrade.duration || (Math.round(activeTrade.durationMinutes || 0) + 'm');
+    const realRRR = (riskAmount !== 0 && riskAmount !== undefined) ? (trade.pnl / riskAmount).toFixed(2) : 'N/A';
+    const holdTime = trade.duration || (Math.round(trade.durationMinutes || 0) + 'm');
 
-    const status = activeTrade.executionStatus || (activeTrade.isValid === false ? 'Invalid' : 'Valid');
+    const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
     const isMissed = status === 'Missed';
-    const isWin = activeTrade.pnl >= 0;
+    const isWin = trade.pnl >= 0;
 
     const pnlColor = isMissed ? 'text-blue-400' : (isWin ? 'text-emerald-500' : 'text-rose-500');
-    const directionColor = isMissed ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' : (activeTrade.direction === 'Long' ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' : 'text-rose-500 bg-rose-500/10 border-rose-500/20');
+    const directionColor = isMissed ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' : (trade.direction === 'Long' ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' : 'text-rose-500 bg-rose-500/10 border-rose-500/20');
 
     const getEmotionDetails = (emoId: string) => emotions.find(e => e.id === emoId) || { label: emoId };
 
@@ -237,7 +205,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 <MetricCell label="Výstupní cena" value={exitPrice || '-'} />
                                 <MetricCell label="Stop Loss" value={stopLoss || '-'} color="text-rose-500" />
                                 <MetricCell label="Take Profit" value={takeProfit || '-'} color="text-emerald-500" />
-                                <MetricCell label="Velikost (Jednotky)" value={activeTrade.positionSize || 1} />
+                                <MetricCell label="Velikost (Jednotky)" value={trade.positionSize || 1} />
                                 <MetricCell label="Doba držení" value={holdTime} color="text-blue-400" />
                                 <MetricCell label="Riziko ($)" value={`$${riskAmount}`} color="text-slate-400" />
                                 <MetricCell label="Realizované RRR" value={`${realRRR}R`} color={isWin ? (parseFloat(realRRR) > 1 ? 'text-emerald-500' : 'text-slate-400') : 'text-rose-500'} />
