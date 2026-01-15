@@ -5,7 +5,7 @@ import ChartToolbar, { DrawingTool } from './ChartToolbar';
 import { InteractiveOverlay } from './InteractiveOverlay';
 import { DrawingObject } from '../types';
 import { storageService } from '../services/storageService';
-import { X, Play, Pause, RotateCcw, FastForward, Settings2, Square, Columns, ArrowRight, Maximize2, Eraser, Database, Pin, PinOff, Target, Star, ChevronDown } from 'lucide-react';
+import { X, Play, Pause, RotateCcw, FastForward, Settings2, Square, Columns, ArrowRight, Maximize2, Eraser, Database, Pin, PinOff, Target, Star, ChevronDown, Settings } from 'lucide-react';
 import { aggregateCandles } from '../utils/candleUtils';
 import { PlaybackWidget } from './PlaybackWidget';
 
@@ -43,6 +43,9 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
     const entryLineRef = useRef<any>(null);
     const slLineRef = useRef<any>(null);
     const tpLineRef = useRef<any>(null);
+    const entryLine2Ref = useRef<any>(null);
+    const slLine2Ref = useRef<any>(null);
+    const tpLine2Ref = useRef<any>(null);
     const cleanupRef = useRef<(() => void) | null>(null);
     const subDurationRef = useRef<number>(240 * 60); // Default 4 hours
     const isSyncingRef = useRef<boolean>(false);
@@ -83,6 +86,11 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
     const [activeLayout, setActiveLayout] = useState<'single' | 'split'>(trade.miniViewLayout || initialLayout);
     const [mainTimeframe, setMainTimeframe] = useState<'1m' | '5m' | '15m' | '1h' | '4h' | 'D' | 'W'>(initialMainTimeframe as any);
     const [secondaryTimeframe, setSecondaryTimeframe] = useState<'1m' | '5m' | '15m' | '1h' | '4h' | 'D' | 'W'>((trade.miniViewSecondaryTimeframe || initialSecondaryTimeframe) as any);
+
+    // Visualization Settings
+    const [showVizSettings, setShowVizSettings] = useState(false);
+    const [showRRRBoxes, setShowRRRBoxes] = useState(true);
+    const [showPriceLines, setShowPriceLines] = useState(true);
 
     useEffect(() => {
         // Preference: if user just toggled in modal (prop changed), follow that.
@@ -449,26 +457,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             tpSeries2Ref.current = tpSeries2;
             slSeries2Ref.current = slSeries2;
 
-            // Price Lines for Chart 2
-            const entryPrice = parseFloat(String(trade.entryPrice || 0));
-            const slPrice = parseFloat(String(trade.stopLoss || 0));
-            const tpPrice = parseFloat(String(trade.takeProfit || 0));
-
-            if (entryPrice) {
-                series.createPriceLine({
-                    price: entryPrice, color: '#3b82f6', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'ENTRY',
-                });
-            }
-            if (slPrice) {
-                series.createPriceLine({
-                    price: slPrice, color: '#f43f5e', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SL',
-                });
-            }
-            if (tpPrice) {
-                series.createPriceLine({
-                    price: tpPrice, color: '#10b981', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'TP',
-                });
-            }
+            // Price lines for Chart 2 will be managed by the showPriceLines effect
 
             if (Array.isArray(secondaryData) && secondaryData.length > 0) {
                 try { series.setData(secondaryData); } catch (e) { }
@@ -580,11 +569,13 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 }
 
                 if (Array.isArray(rawData) && rawData.length > 0) {
+                    // Calculate timezone offset to convert UTC to local time
                     const timeOffset = -new Date().getTimezoneOffset() * 60;
+                    console.log(`[TradeReplay/Secondary] Applying timezone offset: ${timeOffset}s for local display`);
 
                     // Always apply timeOffset for local time display (data is UTC)
                     const valid = rawData.map((d: any) => ({
-                        time: (d.time + timeOffset) as Time,
+                        time: (d.time + timeOffset) as Time, // Convert UTC to local time
                         open: d.open + priceOffset,
                         high: d.high + priceOffset,
                         low: d.low + priceOffset,
@@ -897,10 +888,14 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                     const entryTimeRaw = exitTimeRaw - durationSeconds;
                     const entryPrice = parseFloat(String(trade.entryPrice || 0));
 
+                    // Calculate timezone offset to convert UTC to local time
+                    // getTimezoneOffset returns difference in minutes (e.g., -60 for UTC+1)
+                    // We negate it and multiply by 60 to get seconds to add
                     const timeOffset = -new Date().getTimezoneOffset() * 60;
+                    console.log(`[TradeReplay] Timezone offset: ${timeOffset}s (${timeOffset / 3600}h)`);
 
                     // Dukascopy data is ALWAYS in UTC. trade.date is ALWAYS ISO/UTC.
-                    // So we ALWAYS apply timeOffset to display candles in local time.
+                    // We ALWAYS apply timeOffset to display candles in local time.
 
                     // Find the candle closest to entry time (in UTC) for price offset calculation
                     let bestCandle = null;
@@ -920,6 +915,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                         priceOffset = entryPrice - (bestCandle as any).close;
                         setPriceOffset(priceOffset);
                         priceOffsetRef.current = priceOffset; // Sync ref
+                        console.log(`[TradeReplay] Price offset: ${priceOffset.toFixed(2)}`);
                     }
 
                     // Always convert to local time for display
@@ -927,13 +923,15 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                     isLocalTimeRef.current = false;
 
                     const validData = rawData.map((d: any) => ({
-                        time: (d.time + timeOffset) as Time, // Always add offset for local display
+                        time: (d.time + timeOffset) as Time, // Convert UTC to local time
                         open: d.open + priceOffset,
                         high: d.high + priceOffset,
                         low: d.low + priceOffset,
                         close: d.close + priceOffset
                     }));
 
+                    console.log(`[TradeReplay] Converted ${validData.length} candles from UTC to local time`);
+                    console.log(`[TradeReplay] First candle time: ${new Date(validData[0].time * 1000).toLocaleString()}`);
                     setAllData(validData);
                 } else {
                     setError('No data found for this period');
@@ -1295,11 +1293,12 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
         if (!chartReady || !seriesRef.current || allData.length === 0) return;
 
         const series = seriesRef.current;
+        const series2 = series2Ref.current;
         const entryPrice = parseFloat(String(trade.entryPrice || 0));
         const slPrice = parseFloat(String(trade.stopLoss || 0));
         const tpPrice = parseFloat(String(trade.takeProfit || 0));
 
-        // Remove existing lines if they exist
+        // Remove existing lines from main chart if they exist
         if (entryLineRef.current) {
             try { series.removePriceLine(entryLineRef.current); } catch (e) { }
             entryLineRef.current = null;
@@ -1313,25 +1312,64 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             tpLineRef.current = null;
         }
 
-        // Create new lines with correct prices (data already has offset applied)
-        if (entryPrice) {
-            entryLineRef.current = series.createPriceLine({
-                price: entryPrice, color: '#3b82f6', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'ENTRY',
-            });
-        }
-        if (slPrice) {
-            slLineRef.current = series.createPriceLine({
-                price: slPrice, color: '#f43f5e', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SL',
-            });
-        }
-        if (tpPrice) {
-            tpLineRef.current = series.createPriceLine({
-                price: tpPrice, color: '#10b981', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'TP',
-            });
+        // Remove existing lines from chart2 if they exist
+        if (series2) {
+            if (entryLine2Ref.current) {
+                try { series2.removePriceLine(entryLine2Ref.current); } catch (e) { }
+                entryLine2Ref.current = null;
+            }
+            if (slLine2Ref.current) {
+                try { series2.removePriceLine(slLine2Ref.current); } catch (e) { }
+                slLine2Ref.current = null;
+            }
+            if (tpLine2Ref.current) {
+                try { series2.removePriceLine(tpLine2Ref.current); } catch (e) { }
+                tpLine2Ref.current = null;
+            }
         }
 
-        console.log('[TradeReplay] Price lines created - Entry:', entryPrice, 'SL:', slPrice, 'TP:', tpPrice, 'Offset:', priceOffset);
-    }, [chartReady, allData.length, trade.entryPrice, trade.stopLoss, trade.takeProfit, priceOffset]);
+        // Create new lines with correct prices (data already has offset applied)
+        // Only show if showPriceLines is true
+        if (showPriceLines) {
+            // Main chart price lines
+            if (entryPrice) {
+                entryLineRef.current = series.createPriceLine({
+                    price: entryPrice, color: '#3b82f6', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'ENTRY',
+                });
+            }
+            if (slPrice) {
+                slLineRef.current = series.createPriceLine({
+                    price: slPrice, color: '#f43f5e', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SL',
+                });
+            }
+            if (tpPrice) {
+                tpLineRef.current = series.createPriceLine({
+                    price: tpPrice, color: '#10b981', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'TP',
+                });
+            }
+
+            // Chart2 price lines (if exists)
+            if (series2) {
+                if (entryPrice) {
+                    entryLine2Ref.current = series2.createPriceLine({
+                        price: entryPrice, color: '#3b82f6', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'ENTRY',
+                    });
+                }
+                if (slPrice) {
+                    slLine2Ref.current = series2.createPriceLine({
+                        price: slPrice, color: '#f43f5e', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SL',
+                    });
+                }
+                if (tpPrice) {
+                    tpLine2Ref.current = series2.createPriceLine({
+                        price: tpPrice, color: '#10b981', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'TP',
+                    });
+                }
+            }
+        }
+
+        console.log('[TradeReplay] Price lines created - Entry:', entryPrice, 'SL:', slPrice, 'TP:', tpPrice, 'showPriceLines:', showPriceLines, 'chart2Ready:', chart2Ready);
+    }, [chartReady, allData.length, trade.entryPrice, trade.stopLoss, trade.takeProfit, priceOffset, showPriceLines, chart2Ready]);
 
     // 2.5 Separate TimeRange Subscription for BOTH charts
     useEffect(() => {
@@ -1423,8 +1461,13 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 }
             });
 
-            if (tpSeriesRef.current && tpData.length > 0) tpSeriesRef.current.setData(tpData);
-            if (slSeriesRef.current && slData.length > 0) slSeriesRef.current.setData(slData);
+            if (showRRRBoxes) {
+                if (tpSeriesRef.current && tpData.length > 0) tpSeriesRef.current.setData(tpData);
+                if (slSeriesRef.current && slData.length > 0) slSeriesRef.current.setData(slData);
+            } else {
+                if (tpSeriesRef.current) tpSeriesRef.current.setData([]);
+                if (slSeriesRef.current) slSeriesRef.current.setData([]);
+            }
 
             // Sync with Chart 2 as well
             if (chart2Ready) {
@@ -1440,14 +1483,19 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                     }
                 });
 
-                if (tpSeries2Ref.current && secondaryTpData.length > 0) tpSeries2Ref.current.setData(secondaryTpData);
-                if (slSeries2Ref.current && secondarySlData.length > 0) slSeries2Ref.current.setData(secondarySlData);
+                if (showRRRBoxes) {
+                    if (tpSeries2Ref.current && secondaryTpData.length > 0) tpSeries2Ref.current.setData(secondaryTpData);
+                    if (slSeries2Ref.current && secondarySlData.length > 0) slSeries2Ref.current.setData(secondarySlData);
+                } else {
+                    if (tpSeries2Ref.current) tpSeries2Ref.current.setData([]);
+                    if (slSeries2Ref.current) slSeries2Ref.current.setData([]);
+                }
             }
 
 
             // chartRef.current?.timeScale().fitContent(); // Removed to prevent auto-centering
         }
-    }, [chartReady, allData, filteredData, chart2Ready, allSecondaryData]);
+    }, [chartReady, allData, filteredData, chart2Ready, allSecondaryData, showRRRBoxes]);
 
     // 4. Vertical Resize Sync Loop (Fix for Y-axis lag)
     useEffect(() => {
@@ -1955,23 +2003,145 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 {content}
                 {minimal && (
                     <div className="absolute top-4 right-4 flex gap-2 z-[60]">
+                        {/* TRADE button - always centers on trade */}
                         <button
-                            onClick={handleGoToTrade}
-                            className={`p-2 rounded-xl border backdrop-blur-md transition-all active:scale-95 flex items-center gap-2 group ${isDark ? 'bg-blue-600/20 border-blue-500/20 text-blue-400 hover:bg-blue-600 hover:text-white' : 'bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-600 hover:text-white'}`}
+                            onClick={() => {
+                                // Always center on trade, ignoring saved view
+                                const chart = chartRef.current;
+                                const currentData = allDataRef.current;
+                                if (!chart || !currentData.length) return;
+
+                                const exitTimeRaw = new Date(trade.date).getTime() / 1000;
+                                const durationMinutes = trade.durationMinutes || 0;
+                                const durationSeconds = durationMinutes * 60;
+                                const entryTimeRaw = exitTimeRaw - durationSeconds;
+                                const timeOffset = -new Date().getTimezoneOffset() * 60;
+
+                                const visualEntry = entryTimeRaw + timeOffset;
+                                const visualExit = exitTimeRaw + timeOffset;
+                                const buffer = Math.max(7200, durationSeconds * 3);
+
+                                chart.timeScale().setVisibleRange({
+                                    from: (visualEntry - 3600) as any,
+                                    to: (visualExit + buffer) as any,
+                                });
+
+                                // Also center Chart 2 if in split view
+                                if (chart2Ref.current) {
+                                    chart2Ref.current.timeScale().setVisibleRange({
+                                        from: (visualEntry - 3600) as any,
+                                        to: (visualExit + buffer) as any,
+                                    });
+                                }
+
+                                // Force vertical autoscale for main chart
+                                setTimeout(() => {
+                                    const entryPrice = parseFloat(String(trade.entryPrice || 0));
+                                    const slPrice = parseFloat(String(trade.stopLoss || 0));
+                                    const tpPrice = parseFloat(String(trade.takeProfit || 0));
+
+                                    const prices = [entryPrice, slPrice, tpPrice].filter(p => p > 0);
+                                    if (prices.length > 0) {
+                                        const minPrice = Math.min(...prices);
+                                        const maxPrice = Math.max(...prices);
+                                        const padding = (maxPrice - minPrice) * 0.5 || 50;
+
+                                        // Main chart autoscale
+                                        if (seriesRef.current) {
+                                            seriesRef.current.applyOptions({
+                                                autoscaleInfoProvider: () => ({
+                                                    priceRange: {
+                                                        minValue: minPrice - padding,
+                                                        maxValue: maxPrice + padding,
+                                                    },
+                                                }),
+                                            });
+                                        }
+
+                                        // Secondary chart autoscale
+                                        if (series2Ref.current) {
+                                            series2Ref.current.applyOptions({
+                                                autoscaleInfoProvider: () => ({
+                                                    priceRange: {
+                                                        minValue: minPrice - padding,
+                                                        maxValue: maxPrice + padding,
+                                                    },
+                                                }),
+                                            });
+                                        }
+                                    }
+                                }, 50);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl border backdrop-blur-md transition-all active:scale-95 flex items-center gap-1.5 font-bold text-[10px] uppercase tracking-wider ${isDark ? 'bg-blue-600/20 border-blue-500/20 text-blue-400 hover:bg-blue-600 hover:text-white' : 'bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-600 hover:text-white'}`}
                             title="Vycentrovat na obchod"
                         >
-                            <Target size={14} />
+                            <Target size={12} />
+                            Trade
                         </button>
-                        <button
-                            onClick={hasSavedView ? handleClearView : handleSaveView}
-                            disabled={isFixingView}
-                            className={`p-2 rounded-xl border backdrop-blur-md transition-all active:scale-95 flex items-center gap-2 group ${hasSavedView
-                                ? (isDark ? 'bg-amber-600/20 border-amber-500/20 text-amber-400' : 'bg-amber-50 border-amber-200 text-amber-600')
-                                : (isDark ? 'bg-blue-500/10 border-blue-500/20 text-blue-400 hover:bg-blue-600 hover:text-white' : 'bg-white/80 border-slate-200 text-slate-600 hover:text-slate-900')}`}
-                            title={hasSavedView ? "Zrušit fixaci pozice" : "Zafixovat aktuální pozici"}
-                        >
-                            {hasSavedView ? <PinOff size={14} /> : <Pin size={14} />}
-                        </button>
+
+                        {/* Settings dropdown */}
+                        <div className="relative">
+                            <button
+                                onClick={() => setShowVizSettings(!showVizSettings)}
+                                className={`p-2 rounded-xl border backdrop-blur-md transition-all active:scale-95 ${showVizSettings
+                                    ? (isDark ? 'bg-slate-700 border-slate-600 text-white' : 'bg-slate-200 border-slate-300 text-slate-900')
+                                    : (isDark ? 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:text-white hover:bg-slate-700' : 'bg-white/80 border-slate-200 text-slate-500 hover:text-slate-900 hover:bg-slate-100')}`}
+                                title="Nastavení vizualizace"
+                            >
+                                <Settings size={14} />
+                            </button>
+
+                            {showVizSettings && (
+                                <div className={`absolute top-full right-0 mt-2 w-48 py-2 rounded-xl shadow-2xl border z-[100] animate-in fade-in slide-in-from-top-2 duration-200 ${isDark ? 'bg-[#1e222d] border-slate-700' : 'bg-white border-slate-200'}`}>
+                                    {/* Toggle RRR Boxes */}
+                                    <button
+                                        onClick={() => setShowRRRBoxes(!showRRRBoxes)}
+                                        className={`w-full flex items-center justify-between px-3 py-2 hover:bg-blue-500/10 transition-colors`}
+                                    >
+                                        <span className={`text-xs font-medium ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>RRR boxy</span>
+                                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${showRRRBoxes
+                                            ? 'bg-blue-500 border-blue-500 text-white'
+                                            : (isDark ? 'border-slate-600' : 'border-slate-300')}`}>
+                                            {showRRRBoxes && <span className="text-[10px]">✓</span>}
+                                        </div>
+                                    </button>
+
+                                    {/* Toggle Price Lines */}
+                                    <button
+                                        onClick={() => setShowPriceLines(!showPriceLines)}
+                                        className={`w-full flex items-center justify-between px-3 py-2 hover:bg-blue-500/10 transition-colors`}
+                                    >
+                                        <span className={`text-xs font-medium ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>Úrovně (linky)</span>
+                                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${showPriceLines
+                                            ? 'bg-blue-500 border-blue-500 text-white'
+                                            : (isDark ? 'border-slate-600' : 'border-slate-300')}`}>
+                                            {showPriceLines && <span className="text-[10px]">✓</span>}
+                                        </div>
+                                    </button>
+
+                                    <div className={`my-2 h-px ${isDark ? 'bg-slate-700' : 'bg-slate-200'}`} />
+
+                                    {/* Pin/Unpin View */}
+                                    <button
+                                        onClick={() => {
+                                            if (hasSavedView) {
+                                                handleClearView();
+                                            } else {
+                                                handleSaveView();
+                                            }
+                                            setShowVizSettings(false);
+                                        }}
+                                        disabled={isFixingView}
+                                        className={`w-full flex items-center gap-2 px-3 py-2 hover:bg-blue-500/10 transition-colors ${isFixingView ? 'opacity-50' : ''}`}
+                                    >
+                                        {hasSavedView ? <PinOff size={14} className="text-amber-500" /> : <Pin size={14} className={isDark ? 'text-slate-400' : 'text-slate-500'} />}
+                                        <span className={`text-xs font-medium ${hasSavedView ? 'text-amber-500' : (isDark ? 'text-slate-300' : 'text-slate-700')}`}>
+                                            {hasSavedView ? 'Zrušit fixaci' : 'Zafixovat pohled'}
+                                        </span>
+                                    </button>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
                 {/* Save Toast Feedback */}

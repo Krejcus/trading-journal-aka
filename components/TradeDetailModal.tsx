@@ -183,14 +183,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         </div>
 
                         <div className="flex items-center gap-2 md:gap-3 ml-auto md:ml-0 mt-2 md:mt-0">
-                            <button
-                                onClick={() => replayRef.current?.goToTrade()}
-                                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/20 hover:bg-blue-600 hover:text-white transition-all shadow-lg active:scale-95 group"
-                                title="Vycentrovat na obchod"
-                            >
-                                <Target size={16} className="group-hover:scale-110 transition-transform" />
-                                <span className="font-black text-[10px] uppercase tracking-widest hidden sm:inline">Trade</span>
-                            </button>
+
                             <button
                                 onClick={() => setShowReplayFullscreen(true)}
                                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20 active:scale-95 group"

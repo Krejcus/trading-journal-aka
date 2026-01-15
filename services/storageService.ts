@@ -166,7 +166,8 @@ export const storageService = {
         miniViewRange:data->>miniViewRange,
         miniViewLayout:data->>miniViewLayout,
         miniViewSecondaryRange:data->>miniViewSecondaryRange,
-        miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe
+        miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe,
+        durationMinutes:data->>durationMinutes
       `)
       .eq('user_id', userId)
       .order('timestamp', { ascending: false });
@@ -208,7 +209,7 @@ export const storageService = {
       confidence: t.confidence ? Number(t.confidence) : undefined,
       rr: t.rr ? Number(t.rr) : undefined,
       duration: t.duration,
-      durationMinutes: 0,
+      durationMinutes: t.durationMinutes ? Number(t.durationMinutes) : 0,
       isValid: t.isValid === 'true' || t.isValid === true,
       groupId: t.groupId,
       htfConfluence: t.htfConfluence,

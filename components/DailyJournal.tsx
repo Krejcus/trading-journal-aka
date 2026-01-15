@@ -57,7 +57,8 @@ import {
   CircleCheck,
   CircleAlert,
   Sun,
-  ClipboardCheck
+  ClipboardCheck,
+  Loader2
 } from 'lucide-react';
 
 interface DailyJournalProps {
@@ -118,6 +119,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   // Auto-save State
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  // Unsaved changes warning
+  const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
   const rituals = useMemo(() => ironRules.filter(r => r.type === 'ritual'), [ironRules]);
   const tradeRules = useMemo(() => ironRules.filter(r => r.type === 'trading'), [ironRules]);
@@ -219,12 +226,18 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     // Check if form is actually different from saved prop to avoid loops/unnecessary saves
     const saved = preps.find(p => p.date === prepForm.date);
     if (!saved || JSON.stringify(prepForm) !== JSON.stringify(saved)) {
+      setHasUnsavedChanges(true);
+      setSaveStatus('saving');
       setIsSaving(true);
       const timer = setTimeout(() => {
         onSavePrep(prepForm);
         setLastSaved(new Date());
         setIsSaving(false);
-      }, 1000);
+        setHasUnsavedChanges(false);
+        setSaveStatus('saved');
+        // Reset to idle after 2s
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      }, 500); // Reduced from 1000ms to 500ms
 
       return () => clearTimeout(timer);
     }
@@ -238,12 +251,18 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     // Check if form is actually different from saved prop
     const saved = reviews.find(r => r.date === reviewForm.date);
     if (!saved || JSON.stringify(reviewForm) !== JSON.stringify(saved)) {
+      setHasUnsavedChanges(true);
+      setSaveStatus('saving');
       setIsSaving(true);
       const timer = setTimeout(() => {
         onSaveReview(reviewForm);
         setLastSaved(new Date());
         setIsSaving(false);
-      }, 1000);
+        setHasUnsavedChanges(false);
+        setSaveStatus('saved');
+        // Reset to idle after 2s
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      }, 500); // Reduced from 1000ms to 500ms
 
       return () => clearTimeout(timer);
     }
@@ -263,6 +282,52 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     }));
     setQuickNote('');
   };
+
+  // Manual immediate save (bypasses debounce)
+  const handleManualSave = useCallback(() => {
+    setSaveStatus('saving');
+    setIsSaving(true);
+
+    // Save both prep and review immediately
+    onSavePrep(prepForm);
+    onSaveReview(reviewForm);
+
+    setLastSaved(new Date());
+    setIsSaving(false);
+    setHasUnsavedChanges(false);
+    setSaveStatus('saved');
+    setTimeout(() => setSaveStatus('idle'), 2000);
+  }, [prepForm, reviewForm, onSavePrep, onSaveReview]);
+
+  // Handle navigation with unsaved changes check
+  const handleNavigateWithCheck = useCallback((action: () => void) => {
+    if (hasUnsavedChanges) {
+      setPendingAction(() => action);
+      setShowUnsavedWarning(true);
+    } else {
+      action();
+    }
+  }, [hasUnsavedChanges]);
+
+  // Handle warning dialog actions
+  const handleSaveAndProceed = useCallback(() => {
+    handleManualSave();
+    if (pendingAction) pendingAction();
+    setShowUnsavedWarning(false);
+    setPendingAction(null);
+  }, [handleManualSave, pendingAction]);
+
+  const handleDiscardAndProceed = useCallback(() => {
+    setHasUnsavedChanges(false);
+    if (pendingAction) pendingAction();
+    setShowUnsavedWarning(false);
+    setPendingAction(null);
+  }, [pendingAction]);
+
+  const handleCancelNavigation = useCallback(() => {
+    setShowUnsavedWarning(false);
+    setPendingAction(null);
+  }, []);
 
   useEffect(() => {
     const loadExtra = async () => {
@@ -596,11 +661,14 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   }, [trades, reviews, preps, currentWeekInfo, ironRules, weeklyFocusList, currentWeekFocus]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
-    const d = new Date(selectedDate);
-    if (direction === 'prev') d.setDate(d.getDate() - 1);
-    else d.setDate(d.getDate() + 1);
-    const newDateStr = d.toLocaleDateString('en-CA');
-    if (newDateStr <= today) { setSelectedDate(newDateStr); setView('timeline'); }
+    const doNavigate = () => {
+      const d = new Date(selectedDate);
+      if (direction === 'prev') d.setDate(d.getDate() - 1);
+      else d.setDate(d.getDate() + 1);
+      const newDateStr = d.toLocaleDateString('en-CA');
+      if (newDateStr <= today) { setSelectedDate(newDateStr); setView('timeline'); }
+    };
+    handleNavigateWithCheck(doNavigate);
   };
 
   const currentReview = useMemo(() => reviews.find(r => r.date === selectedDate), [reviews, selectedDate]);
@@ -764,11 +832,37 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             {activeTab === 'daily' ? `Chronological Feed • Trace Engine` : (activeTab === 'weekly' ? `Weekly Debrief • Týden ${currentWeekInfo.weekNumber} ` : `Psycho Archives • Emoční Historie`)}
           </p>
         </div>
-        <div className="flex gap-2 w-full sm:w-auto">
+        <div className="flex gap-2 w-full sm:w-auto items-center">
           {view === 'timeline' && activeTab === 'daily' && (
             <><button onClick={() => setView('edit-prep')} className="flex-1 sm:flex-none px-4 py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Ranní</button><button onClick={() => setView('edit-review')} className="flex-1 sm:flex-none px-4 py-3 bg-indigo-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Večerní</button></>
           )}
-          {view !== 'timeline' && (<button onClick={() => setView('timeline')} className={`w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-slate-800 text-white hover:bg-slate-700'}`}><LayoutGrid size={14} /> Feed</button>)}
+          {view !== 'timeline' && (
+            <>
+              <button onClick={() => handleNavigateWithCheck(() => setView('timeline'))} className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-slate-800 text-white hover:bg-slate-700'}`}><LayoutGrid size={14} /> Feed</button>
+
+              {/* Save Button with Status */}
+              <button
+                onClick={handleManualSave}
+                disabled={!hasUnsavedChanges && saveStatus !== 'saving'}
+                className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${saveStatus === 'saving'
+                  ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                  : saveStatus === 'saved'
+                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                    : hasUnsavedChanges
+                      ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-400'
+                      : 'bg-[var(--bg-card)] text-slate-500 border border-[var(--border-subtle)] opacity-50 cursor-not-allowed'
+                  }`}
+              >
+                {saveStatus === 'saving' ? (
+                  <><Loader2 size={14} className="animate-spin" /> Ukládám...</>
+                ) : saveStatus === 'saved' ? (
+                  <><Check size={14} /> Uloženo</>
+                ) : (
+                  <><Save size={14} /> Uložit</>
+                )}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -1339,6 +1433,48 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           </div>
         )
       }
+
+      {/* Unsaved Changes Warning Modal */}
+      {showUnsavedWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className={`w-full max-w-md rounded-3xl shadow-2xl p-6 ${theme !== 'light' ? 'bg-[var(--bg-card)] border border-[var(--border-subtle)]' : 'bg-white border border-slate-200'}`}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-3 rounded-2xl bg-orange-500/20">
+                <AlertTriangle size={24} className="text-orange-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black">Neuložené změny</h3>
+                <p className="text-sm text-slate-500">Tvoje poznámky ještě nejsou uložené.</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-400 mb-6">
+              Co chceš udělat s neuloženými změnami?
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleSaveAndProceed}
+                className="flex-1 py-3 rounded-2xl bg-green-600 hover:bg-green-500 text-white font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"
+              >
+                <Check size={16} /> Uložit
+              </button>
+              <button
+                onClick={handleDiscardAndProceed}
+                className="flex-1 py-3 rounded-2xl bg-red-600/20 hover:bg-red-600/30 text-red-400 font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 border border-red-500/30"
+              >
+                <X size={16} /> Zahodit
+              </button>
+              <button
+                onClick={handleCancelNavigation}
+                className={`flex-1 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-page)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-input)]' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+              >
+                Zrušit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div >
   );
 };
