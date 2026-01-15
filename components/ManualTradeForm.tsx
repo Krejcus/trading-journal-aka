@@ -14,16 +14,14 @@ interface ManualTradeFormProps {
   onAdd: (trades: Trade | Trade[]) => void;
   onClose: () => void;
   theme: 'dark' | 'light' | 'oled';
-  editTrade?: Trade;
   accounts: Account[];
   activeAccountId: string;
   availableEmotions: CustomEmotion[];
   availableMistakes: string[];
   availableHtfOptions: string[];
   availableLtfOptions: string[];
-  instrumentFees?: Record<string, number>; // Deprecated global prop, will use accounts instead
-  existingGroupTrades?: Trade[];
-  viewMode?: 'individual' | 'combined'; // View mode to determine edit behavior
+  instrumentFees?: Record<string, number>;
+  viewMode?: 'individual' | 'combined';
 }
 
 const INSTRUMENTS = [
@@ -37,9 +35,9 @@ const INSTRUMENTS = [
 ];
 
 const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
-  onAdd, onClose, theme, editTrade, accounts, activeAccountId,
+  onAdd, onClose, theme, accounts, activeAccountId,
   availableEmotions, availableMistakes, availableHtfOptions, availableLtfOptions,
-  instrumentFees, existingGroupTrades, viewMode = 'individual'
+  instrumentFees, viewMode = 'individual'
 }) => {
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isInstrumentOpen, setIsInstrumentOpen] = useState(false);
@@ -55,10 +53,10 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   };
 
   const [formData, setFormData] = useState({
-    accountIds: editTrade ? [editTrade.accountId] : [activeAccountId],
-    instrument: editTrade?.instrument || 'MNQ',
+    accountIds: [activeAccountId],
+    instrument: 'MNQ',
     customMultiplier: '1',
-    entryDate: editTrade ? getLocalISOString(new Date(editTrade.timestamp - (editTrade.durationMinutes * 60000))) : getLocalISOString(),
+    entryDate: getLocalISOString(),
     exitDate: getLocalISOString(new Date(Date.now() + 15 * 60000)),
     entryPrice: '',
     exitPrice: '',
@@ -103,49 +101,10 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     return () => window.removeEventListener('paste', handlePaste);
   }, [handlePaste]);
 
+  // Save draft whenever formData changes
   useEffect(() => {
-    if (editTrade) {
-      setFormData({
-        accountIds: [editTrade.accountId],
-        instrument: editTrade.instrument || 'MNQ',
-        customMultiplier: '1',
-        entryDate: getLocalISOString(new Date(editTrade.timestamp - (editTrade.durationMinutes * 60000))),
-        exitDate: getLocalISOString(new Date(editTrade.timestamp)),
-        entryPrice: editTrade.entryPrice?.toString() || '',
-        exitPrice: editTrade.exitPrice?.toString() || '',
-        stopLoss: editTrade.stopLoss?.toString() || '',
-        takeProfit: editTrade.takeProfit?.toString() || '',
-        positionSize: editTrade.positionSize?.toString() || '1',
-        pnl: editTrade.pnl.toString(),
-        notes: editTrade.notes || '',
-        htfConfluence: editTrade.htfConfluence || [],
-        ltfConfluence: editTrade.ltfConfluence || [],
-        mistakes: editTrade.mistakes || [],
-        screenshots: editTrade.screenshots || (editTrade.screenshot ? [editTrade.screenshot] : []),
-        emotions: editTrade.emotions || [],
-        planAdherence: editTrade.planAdherence || 'Yes',
-        executionStatus: editTrade.executionStatus || (editTrade.isValid === false ? 'Invalid' : 'Valid')
-      });
-    } else {
-      // Check for draft in localStorage
-      const draft = localStorage.getItem('alphatrade_trade_draft');
-      if (draft) {
-        try {
-          const parsedDraft = JSON.parse(draft);
-          setFormData(prev => ({ ...prev, ...parsedDraft }));
-        } catch (e) {
-          console.error("Draft load error", e);
-        }
-      }
-    }
-  }, [editTrade]);
-
-  // Save draft whenever formData changes (only if not editing)
-  useEffect(() => {
-    if (!editTrade) {
-      localStorage.setItem('alphatrade_trade_draft', JSON.stringify(formData));
-    }
-  }, [formData, editTrade]);
+    localStorage.setItem('alphatrade_trade_draft', JSON.stringify(formData));
+  }, [formData]);
 
   const calculations = useMemo(() => {
     const entry = parseFloat(formData.entryPrice);
@@ -243,10 +202,10 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     }
 
     const pnlNum = parseFloat(formData.pnl || calculations.pnl.toString());
-    const groupId = formData.accountIds.length > 1 ? (editTrade ? editTrade.groupId : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const groupId = formData.accountIds.length > 1 ? 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
       var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
       return v.toString(16);
-    })) : undefined;
+    }) : undefined;
 
     const masterAccount = accounts.find(a => formData.accountIds.includes(a.id) && !a.parentAccountId && accounts.some(other => other.parentAccountId === a.id));
 
@@ -262,117 +221,56 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       }
     };
 
-    // Fix: Check by Account ID match to prevent duplicates if 'isMaster' flag is missing
-    const masterTradeId = masterAccount ? (editTrade && editTrade.accountId === masterAccount.id ? editTrade.id : generateUUID()) : undefined;
+    const masterTradeId = masterAccount ? generateUUID() : undefined;
 
     localStorage.removeItem('alphatrade_trade_draft');
 
-    // When EDITING a trade:
-    if (editTrade) {
-      // FIX: If editing a master or copy trade, ALWAYS update the entire group
-      // to prevent duplication. Check if trade is part of a group.
-      const isPartOfGroup = editTrade.isMaster || editTrade.masterTradeId || editTrade.groupId;
+    // Create new trade(s):
+    const tradesToCreate: Trade[] = formData.accountIds.map(accId => {
+      const acc = accounts.find(a => a.id === accId);
+      const isThisMaster = accId === masterAccount?.id;
+      const isChildOfMaster = acc?.parentAccountId && acc.parentAccountId === masterAccount?.id;
 
-      // Prevent account changes during edit
-      const editAccountIds = isPartOfGroup && existingGroupTrades
-        ? existingGroupTrades.map(t => t.accountId)  // Update entire master/copy group
-        : [editTrade.accountId];  // Update only single independent trade
+      return {
+        id: (isThisMaster && masterTradeId ? masterTradeId : generateUUID()),
+        accountId: accId,
+        groupId: groupId,
+        isMaster: isThisMaster,
+        masterTradeId: isChildOfMaster ? masterTradeId : undefined,
+        instrument: formData.instrument,
+        date: new Date(formData.exitDate).toISOString(),
+        timestamp: new Date(formData.exitDate).getTime(),
+        signal: 'Manuální obchod',
+        direction: calculations.direction,
+        pnl: pnlNum,
+        riskAmount: calculations.risk,
+        targetAmount: Math.abs(pnlNum),
+        riskPercent: 0,
+        runUp: 0,
+        drawdown: 0,
+        durationMinutes: calculations.durationMinutes,
+        duration: `${Math.floor(calculations.durationMinutes)}m`,
+        notes: formData.notes,
+        htfConfluence: formData.htfConfluence,
+        ltfConfluence: formData.ltfConfluence,
+        mistakes: formData.mistakes,
+        screenshot: formData.screenshots[0],
+        screenshots: formData.screenshots,
+        emotions: formData.emotions,
+        planAdherence: formData.executionStatus === 'Valid' ? 'Yes' : 'No',
+        isValid: formData.executionStatus === 'Valid',
+        executionStatus: formData.executionStatus,
+        session: calculations.session,
+        entryPrice: parseFloat(formData.entryPrice) || 0,
+        exitPrice: parseFloat(formData.exitPrice) || 0,
+        stopLoss: parseFloat(formData.stopLoss) || 0,
+        takeProfit: parseFloat(formData.takeProfit) || 0,
+        positionSize: parseFloat(formData.positionSize) || 1,
+        phase: acc?.phase || 'Challenge'
+      };
+    });
 
-      const tradesToUpdate: Trade[] = editAccountIds.map(accId => {
-        const acc = accounts.find(a => a.id === accId);
-
-        // Find the existing trade for this account to preserve its ID and metadata
-        const existingTradeForAcc = existingGroupTrades?.find(t => t.accountId === accId) ||
-          (editTrade.accountId === accId ? editTrade : null);
-
-        if (!existingTradeForAcc) {
-          console.error(`No existing trade found for account ${accId}`);
-          return null as any;
-        }
-
-        // Update only the changed fields, preserve ID and account relationships
-        return {
-          ...existingTradeForAcc,  // Keep ALL existing data
-          // Update only the fields from the form:
-          instrument: formData.instrument,
-          date: new Date(formData.exitDate).toISOString(),
-          timestamp: new Date(formData.exitDate).getTime(),
-          direction: calculations.direction,
-          pnl: pnlNum,
-          riskAmount: calculations.risk,
-          targetAmount: Math.abs(pnlNum),
-          durationMinutes: calculations.durationMinutes,
-          duration: `${Math.floor(calculations.durationMinutes)}m`,
-          notes: formData.notes,
-          htfConfluence: formData.htfConfluence,
-          ltfConfluence: formData.ltfConfluence,
-          mistakes: formData.mistakes,
-          screenshot: formData.screenshots[0],
-          screenshots: formData.screenshots,
-          emotions: formData.emotions,
-          planAdherence: formData.executionStatus === 'Valid' ? 'Yes' : 'No',
-          isValid: formData.executionStatus === 'Valid',
-          executionStatus: formData.executionStatus,
-          session: calculations.session,
-          entryPrice: parseFloat(formData.entryPrice) || 0,
-          exitPrice: parseFloat(formData.exitPrice) || 0,
-          stopLoss: parseFloat(formData.stopLoss) || 0,
-          takeProfit: parseFloat(formData.takeProfit) || 0,
-          positionSize: parseFloat(formData.positionSize) || 1,
-          phase: acc?.phase || existingTradeForAcc.phase || 'Challenge'
-        };
-      }).filter(Boolean);
-
-      // Send all trades to update (either 1 in individual mode, or all in combined mode)
-      onAdd(tradesToUpdate);
-    } else {
-      // When CREATING new trade(s):
-      const tradesToCreate: Trade[] = formData.accountIds.map(accId => {
-        const acc = accounts.find(a => a.id === accId);
-        const isThisMaster = accId === masterAccount?.id;
-        const isChildOfMaster = acc?.parentAccountId && acc.parentAccountId === masterAccount?.id;
-
-        return {
-          id: (isThisMaster && masterTradeId ? masterTradeId : generateUUID()),
-          accountId: accId,
-          groupId: groupId,
-          isMaster: isThisMaster,
-          masterTradeId: isChildOfMaster ? masterTradeId : undefined,
-          instrument: formData.instrument,
-          date: new Date(formData.exitDate).toISOString(),
-          timestamp: new Date(formData.exitDate).getTime(),
-          signal: 'Manuální obchod',
-          direction: calculations.direction,
-          pnl: pnlNum,
-          riskAmount: calculations.risk,
-          targetAmount: Math.abs(pnlNum),
-          riskPercent: 0,
-          runUp: 0,
-          drawdown: 0,
-          durationMinutes: calculations.durationMinutes,
-          duration: `${Math.floor(calculations.durationMinutes)}m`,
-          notes: formData.notes,
-          htfConfluence: formData.htfConfluence,
-          ltfConfluence: formData.ltfConfluence,
-          mistakes: formData.mistakes,
-          screenshot: formData.screenshots[0],
-          screenshots: formData.screenshots,
-          emotions: formData.emotions,
-          planAdherence: formData.executionStatus === 'Valid' ? 'Yes' : 'No',
-          isValid: formData.executionStatus === 'Valid',
-          executionStatus: formData.executionStatus,
-          session: calculations.session,
-          entryPrice: parseFloat(formData.entryPrice) || 0,
-          exitPrice: parseFloat(formData.exitPrice) || 0,
-          stopLoss: parseFloat(formData.stopLoss) || 0,
-          takeProfit: parseFloat(formData.takeProfit) || 0,
-          positionSize: parseFloat(formData.positionSize) || 1,
-          phase: acc?.phase || 'Challenge'
-        };
-      });
-
-      onAdd(tradesToCreate);
-    }
+    onAdd(tradesToCreate);
   };
 
   const inputContainerClass = `relative h-[42px] rounded-xl border transition-all flex items-center overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-blue-500/50' : 'bg-white/80 border-slate-200 focus-within:border-blue-500'}`;
@@ -394,9 +292,9 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
             <div className="flex items-center gap-3 md:gap-4">
               <div className={`p-2.5 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/20`}><Plus size={18} className="text-white" /></div>
               <div>
-                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{editTrade ? 'UPRAVIT OBCHOD' : 'NOVÝ OBCHOD'}</h2>
+                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>NOVÝ OBCHOD</h2>
               </div>
-              {!editTrade && localStorage.getItem('alphatrade_trade_draft') && (
+              {localStorage.getItem('alphatrade_trade_draft') && (
                 <button
                   type="button"
                   onClick={() => {
@@ -449,66 +347,53 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                       <div className={inlineLabelClass}><Wallet size={10} className="mr-1" /> Terminal</div>
                       <button
                         type="button"
-                        onClick={() => !editTrade && setIsAccountOpen(!isAccountOpen)}
-                        disabled={!!editTrade}
-                        className={`w-full h-full flex items-center justify-between px-3 text-xs font-black ${editTrade ? 'cursor-not-allowed opacity-60' : 'hover:bg-white/5'} ${isDark ? 'text-white' : 'text-slate-900'}`}
+                        onClick={() => setIsAccountOpen(!isAccountOpen)}
+                        className={`w-full h-full flex items-center justify-between px-3 text-xs font-black hover:bg-white/5 ${isDark ? 'text-white' : 'text-slate-900'}`}
                       >
                         {selectedAccCount === 0 ? 'Vyberte účet' : selectedAccCount === 1 ? firstSelectedAcc?.name : `Hromadné (${selectedAccCount})`} <ChevronDown size={12} className="text-slate-600" />
                       </button>
                     </div>
                     {isAccountOpen && (
                       <div className={`absolute top-full left-0 right-0 mt-2 z-[200] rounded-xl border shadow-2xl overflow-hidden animate-in fade-in duration-200 ${theme !== 'light' ? 'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-white border-slate-200'}`}>
-                        {!editTrade && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const allIds = activeAccounts.map(a => a.id);
-                              setFormData(prev => ({ ...prev, accountIds: prev.accountIds.length === allIds.length ? [] : allIds }));
-                            }}
-                            className={`w-full px-4 py-2 text-[9px] font-black text-left hover:bg-blue-600/20 text-blue-500 uppercase border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'}`}
-                          >
-                            {formData.accountIds.length === accounts.length ? 'Zrušit vše' : 'Vybrat vše'}
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const allIds = activeAccounts.map(a => a.id);
+                            setFormData(prev => ({ ...prev, accountIds: prev.accountIds.length === allIds.length ? [] : allIds }));
+                          }}
+                          className={`w-full px-4 py-2 text-[9px] font-black text-left hover:bg-blue-600/20 text-blue-500 uppercase border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'}`}
+                        >
+                          {formData.accountIds.length === accounts.length ? 'Zrušit vše' : 'Vybrat vše'}
+                        </button>
                         {activeAccounts.map(acc => (
                           <button
                             key={acc.id}
                             type="button"
                             onClick={() => {
-                              if (editTrade) {
-                                setFormData({ ...formData, accountIds: [acc.id] });
-                                setIsAccountOpen(false);
-                              } else {
-                                const isAdding = !formData.accountIds.includes(acc.id);
-                                let newSelection = isAdding
-                                  ? [...formData.accountIds, acc.id]
-                                  : formData.accountIds.filter(id => id !== acc.id);
+                              const isAdding = !formData.accountIds.includes(acc.id);
+                              let newSelection = isAdding
+                                ? [...formData.accountIds, acc.id]
+                                : formData.accountIds.filter(id => id !== acc.id);
 
-                                // Special Master-Copy logic
-                                if (isAdding) {
-                                  // If adding a master, add all its copies
-                                  const copies = accounts.filter(a => a.parentAccountId === acc.id).map(a => a.id);
-                                  if (copies.length > 0) {
-                                    newSelection = Array.from(new Set([...newSelection, ...copies]));
-                                  }
-                                  // If adding a copy, add its master too (optional but logical?)
-                                  // REMOVED: User reported this as "bad selection". We want to allow selecting Copy independently.
-                                  // if (acc.parentAccountId && !newSelection.includes(acc.parentAccountId)) {
-                                  //   newSelection.push(acc.parentAccountId);
-                                  // }
-                                } else {
-                                  // If removing a master, remove all its copies
-                                  const copies = accounts.filter(a => a.parentAccountId === acc.id).map(a => a.id);
-                                  if (copies.length > 0) {
-                                    newSelection = newSelection.filter(id => !copies.includes(id));
-                                  }
+                              // Special Master-Copy logic
+                              if (isAdding) {
+                                // If adding a master, add all its copies
+                                const copies = accounts.filter(a => a.parentAccountId === acc.id).map(a => a.id);
+                                if (copies.length > 0) {
+                                  newSelection = Array.from(new Set([...newSelection, ...copies]));
                                 }
-
-                                setFormData(p => ({
-                                  ...p,
-                                  accountIds: newSelection
-                                }));
+                              } else {
+                                // If removing a master, remove all its copies
+                                const copies = accounts.filter(a => a.parentAccountId === acc.id).map(a => a.id);
+                                if (copies.length > 0) {
+                                  newSelection = newSelection.filter(id => !copies.includes(id));
+                                }
                               }
+
+                              setFormData(p => ({
+                                ...p,
+                                accountIds: newSelection
+                              }));
                             }}
                             className={`w-full px-4 py-3 text-[10px] font-black text-left hover:bg-blue-600 ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'} hover:text-white uppercase border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'} last:border-0 flex items-center justify-between`}
                           >

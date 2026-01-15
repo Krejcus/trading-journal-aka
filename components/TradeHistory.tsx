@@ -18,14 +18,13 @@ interface TradeHistoryProps {
   trades: Trade[];
   accounts: Account[];
   onDelete: (id: number | string) => void;
-  onEdit: (trade: Trade) => void;
   onClear: () => void;
   theme: 'dark' | 'light' | 'oled';
   emotions: CustomEmotion[];
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
 }
 
-const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete, onEdit, onClear, theme, emotions, onUpdateTrade }) => {
+const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade }) => {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
 
@@ -175,7 +174,6 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
           accountName={getAccountName(selectedTrade.accountId)}
           theme={theme}
           onClose={() => setSelectedTrade(null)}
-          onEdit={() => { onEdit(selectedTrade); setSelectedTrade(null); }}
           onDelete={() => { onDelete(selectedTrade.id); setSelectedTrade(null); }}
           emotions={emotions}
           onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}

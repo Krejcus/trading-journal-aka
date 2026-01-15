@@ -17,7 +17,6 @@ interface TradeDetailModalProps {
     accountName: string;
     theme: 'dark' | 'light' | 'oled';
     onClose: () => void;
-    onEdit: () => void;
     onDelete: () => void;
     emotions: CustomEmotion[];
     onPrev?: () => void;
@@ -28,7 +27,7 @@ interface TradeDetailModalProps {
 }
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
-    trade, accountName, theme, onClose, onEdit, onDelete, emotions, onPrev, onNext, hasPrev, hasNext, onUpdateTrade
+    trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, hasPrev, hasNext, onUpdateTrade
 }) => {
     const [fullTrade, setFullTrade] = useState<Trade>(trade);
     const [isLoadingDetails, setIsLoadingDetails] = useState(false);
@@ -209,7 +208,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 {shareCopied ? <Check size={14} /> : <Share2 size={14} />}
                                 {shareCopied && <span className="text-[8px] font-black uppercase hidden sm:inline">Zkopírováno</span>}
                             </button>
-                            <button onClick={onEdit} className="p-2 md:p-2.5 rounded-xl bg-slate-500/10 text-slate-500 hover:bg-slate-600 hover:text-white transition-all"><Edit3 size={16} /></button>
                             <button
                                 onClick={(e) => { e.stopPropagation(); if (window.confirm("Smazat?")) onDelete(); }}
                                 className="p-2 md:p-2.5 rounded-xl bg-rose-500/10 text-rose-500 hover:bg-rose-600 hover:text-white transition-all"
@@ -306,7 +304,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             <ErrorBoundary name="TradeReplay">
                                 <TradeReplay
                                     ref={replayRef}
-                                    trade={trade}
+                                    trade={activeTrade}
                                     theme={theme}
                                     onClose={() => { }}
                                     minimal={true}
@@ -331,7 +329,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             {showReplayFullscreen && (
                 <div className="fixed inset-0 z-[300] bg-black/95 backdrop-blur-3xl animate-in fade-in duration-500">
                     <TradeReplay
-                        trade={trade}
+                        trade={activeTrade}
                         theme={theme}
                         onClose={() => setShowReplayFullscreen(false)}
                         minimal={false}

@@ -267,7 +267,6 @@ const App: React.FC = () => {
   };
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
-  const [editTrade, setEditTrade] = useState<Trade | null>(null);
   const [isDashboardEditing, setIsDashboardEditing] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const lastLoadedSessionId = React.useRef<string | null>(null);
@@ -939,7 +938,6 @@ const App: React.FC = () => {
     });
 
     setIsManualEntryOpen(false);
-    setEditTrade(null);
   };
 
   const handleUpdateTrades = (updatedTrades: Trade[]) => {
@@ -1159,7 +1157,6 @@ const App: React.FC = () => {
                   emotions={userEmotions}
                   viewMode={viewMode}
                   onDeleteTrade={handleDeleteTrade}
-                  onEditTrade={(t) => { setEditTrade(t); setIsManualEntryOpen(true); }}
                   onUpdateTrade={handleUpdateTrade}
                   user={currentUser}
                 />
@@ -1185,7 +1182,6 @@ const App: React.FC = () => {
                     trades={filteredDisplayTrades}
                     accounts={accounts}
                     onDelete={handleDeleteTrade}
-                    onEdit={(t) => { setEditTrade(t); setIsManualEntryOpen(true); }}
                     onUpdateTrade={handleUpdateTrade}
                     onClear={handleClearTrades}
                     theme={theme}
@@ -1278,27 +1274,8 @@ const App: React.FC = () => {
       {isManualEntryOpen && (
         <ManualTradeForm
           onAdd={handleManualTrade}
-          onClose={() => { setIsManualEntryOpen(false); setEditTrade(null); }}
+          onClose={() => setIsManualEntryOpen(false)}
           theme={theme}
-          editTrade={editTrade || undefined}
-          // Pass all trades that belong to the same group as the edited trade
-          existingGroupTrades={editTrade ? trades.filter(t => {
-            // If editing a master, include the master and all its copies
-            if (editTrade.isMaster) {
-              return t.id === editTrade.id || t.masterTradeId === editTrade.id;
-            }
-            // If editing a copy, find the master first, then include master and all siblings
-            if (editTrade.masterTradeId) {
-              const masterId = editTrade.masterTradeId;
-              return t.id === masterId || t.masterTradeId === masterId;
-            }
-            // If part of a groupId (bulk entry), include all with same groupId
-            if (editTrade.groupId) {
-              return t.groupId === editTrade.groupId;
-            }
-            // Otherwise, just this single trade
-            return t.id === editTrade.id;
-          }) : undefined}
           accounts={accounts}
           activeAccountId={activeAccountId}
           availableEmotions={userEmotions}
