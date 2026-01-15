@@ -899,6 +899,31 @@ const App: React.FC = () => {
 
     setTrades(prev => {
       let updated = [...prev];
+
+      // CRITICAL FIX: Detect if we're editing a grouped trade
+      // If so, FIRST remove ALL old trades from that group to prevent duplicates
+      const firstNewTrade = newTradesArray[0];
+      if (firstNewTrade) {
+        // Check for master/copy group
+        if (firstNewTrade.isMaster || firstNewTrade.masterTradeId) {
+          const groupKey = firstNewTrade.isMaster ? firstNewTrade.id : firstNewTrade.masterTradeId;
+          // Remove all trades that are part of this master/copy group
+          updated = updated.filter(t => {
+            const isPartOfGroup = t.id === groupKey || t.masterTradeId === groupKey;
+            return !isPartOfGroup;
+          });
+          console.log(`[Dedup] Removed master/copy group with key: ${groupKey}`);
+        }
+        // Check for bulk-entry group
+        else if (firstNewTrade.groupId) {
+          const groupId = firstNewTrade.groupId;
+          // Remove all trades with this groupId
+          updated = updated.filter(t => t.groupId !== groupId);
+          console.log(`[Dedup] Removed bulk group: ${groupId}`);
+        }
+      }
+
+      // Now add/update all new trades
       newTradesArray.forEach(t => {
         const idx = updated.findIndex(existing => existing.id === t.id);
         if (idx !== -1) {
@@ -907,6 +932,7 @@ const App: React.FC = () => {
           updated.push({ ...t, id: t.id || crypto.randomUUID() }); // Add new
         }
       });
+
       // Force save immediately for manual entry to be safe
       storageService.saveTrades(updated).catch(err => console.error("Manual trade save failed", err));
       return updated;
