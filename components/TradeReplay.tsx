@@ -931,7 +931,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                     }));
 
                     console.log(`[TradeReplay] Converted ${validData.length} candles from UTC to local time`);
-                    console.log(`[TradeReplay] First candle time: ${new Date(validData[0].time * 1000).toLocaleString()}`);
+                    console.log(`[TradeReplay] First candle time: ${new Date((validData[0].time as number) * 1000).toLocaleString()}`);
                     setAllData(validData);
                 } else {
                     setError('No data found for this period');
@@ -1453,13 +1453,32 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             const tpData: any[] = [];
             const slData: any[] = [];
 
+            // CRITICAL FIX: Add explicit entry and exit points first
+            // This ensures baseline series renders the full trade duration
+            if (tpPrice) {
+                tpData.push({ time: shiftedEntryTime as Time, value: tpPrice });
+            }
+            if (slPrice) {
+                slData.push({ time: shiftedEntryTime as Time, value: slPrice });
+            }
+
+            // Add all candles within the trade duration
             allData.forEach(d => {
                 const t = d.time as number;
-                if (t >= shiftedEntryTime && t <= shiftedExitTime) {
+                // Only add candles that are strictly within the range (not at endpoints)
+                if (t > shiftedEntryTime && t < shiftedExitTime) {
                     if (tpPrice) tpData.push({ time: t, value: tpPrice });
                     if (slPrice) slData.push({ time: t, value: slPrice });
                 }
             });
+
+            // Add explicit exit point
+            if (tpPrice) {
+                tpData.push({ time: shiftedExitTime as Time, value: tpPrice });
+            }
+            if (slPrice) {
+                slData.push({ time: shiftedExitTime as Time, value: slPrice });
+            }
 
             if (showRRRBoxes) {
                 if (tpSeriesRef.current && tpData.length > 0) tpSeriesRef.current.setData(tpData);
@@ -1475,13 +1494,31 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 const secondaryTpData: any[] = [];
                 const secondarySlData: any[] = [];
 
+                // CRITICAL FIX: Add explicit entry and exit points for secondary chart
+                if (tpPrice) {
+                    secondaryTpData.push({ time: shiftedEntryTime as Time, value: tpPrice });
+                }
+                if (slPrice) {
+                    secondarySlData.push({ time: shiftedEntryTime as Time, value: slPrice });
+                }
+
+                // Add all candles within the trade duration
                 allSecondaryData.forEach(d => {
                     const t = d.time as number;
-                    if (t >= shiftedEntryTime && t <= shiftedExitTime) {
+                    // Only add candles that are strictly within the range (not at endpoints)
+                    if (t > shiftedEntryTime && t < shiftedExitTime) {
                         if (tpPrice) secondaryTpData.push({ time: t, value: tpPrice });
                         if (slPrice) secondarySlData.push({ time: t, value: slPrice });
                     }
                 });
+
+                // Add explicit exit point
+                if (tpPrice) {
+                    secondaryTpData.push({ time: shiftedExitTime as Time, value: tpPrice });
+                }
+                if (slPrice) {
+                    secondarySlData.push({ time: shiftedExitTime as Time, value: slPrice });
+                }
 
                 if (showRRRBoxes) {
                     if (tpSeries2Ref.current && secondaryTpData.length > 0) tpSeries2Ref.current.setData(secondaryTpData);
