@@ -269,10 +269,14 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
     // When EDITING a trade:
     if (editTrade) {
+      // FIX: If editing a master or copy trade, ALWAYS update the entire group
+      // to prevent duplication. Check if trade is part of a group.
+      const isPartOfGroup = editTrade.isMaster || editTrade.masterTradeId || editTrade.groupId;
+
       // Prevent account changes during edit
-      const editAccountIds = viewMode === 'combined' && existingGroupTrades
-        ? existingGroupTrades.map(t => t.accountId)  // Use all accounts from the group
-        : [editTrade.accountId];  // Use only the edited trade's account
+      const editAccountIds = isPartOfGroup && existingGroupTrades
+        ? existingGroupTrades.map(t => t.accountId)  // Update entire master/copy group
+        : [editTrade.accountId];  // Update only single independent trade
 
       const tradesToUpdate: Trade[] = editAccountIds.map(accId => {
         const acc = accounts.find(a => a.id === accId);
