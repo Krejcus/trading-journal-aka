@@ -1267,6 +1267,7 @@ const App: React.FC = () => {
           availableMistakes={userMistakes}
           availableHtfOptions={htfOptions}
           availableLtfOptions={ltfOptions}
+          viewMode={viewMode}
         />
       )}
 
