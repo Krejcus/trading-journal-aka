@@ -1256,11 +1256,23 @@ const App: React.FC = () => {
           theme={theme}
           editTrade={editTrade || undefined}
           // Pass all trades that belong to the same group as the edited trade
-          existingGroupTrades={editTrade ? trades.filter(t =>
-            (t.groupId && t.groupId === editTrade.groupId) ||
-            (t.masterTradeId === editTrade.id) ||
-            (editTrade.masterTradeId && t.id === editTrade.masterTradeId)
-          ) : undefined}
+          existingGroupTrades={editTrade ? trades.filter(t => {
+            // If editing a master, include the master and all its copies
+            if (editTrade.isMaster) {
+              return t.id === editTrade.id || t.masterTradeId === editTrade.id;
+            }
+            // If editing a copy, find the master first, then include master and all siblings
+            if (editTrade.masterTradeId) {
+              const masterId = editTrade.masterTradeId;
+              return t.id === masterId || t.masterTradeId === masterId;
+            }
+            // If part of a groupId (bulk entry), include all with same groupId
+            if (editTrade.groupId) {
+              return t.groupId === editTrade.groupId;
+            }
+            // Otherwise, just this single trade
+            return t.id === editTrade.id;
+          }) : undefined}
           accounts={accounts}
           activeAccountId={activeAccountId}
           availableEmotions={userEmotions}
