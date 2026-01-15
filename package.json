@@ -11,9 +11,11 @@
   "dependencies": {
     "@google/genai": "^1.30.0",
     "@supabase/supabase-js": "^2.89.0",
+    "@types/uuid": "^10.0.0",
     "@vercel/node": "^5.5.16",
     "dotenv": "^17.2.3",
     "dukascopy-node": "^1.46.3",
+    "idb-keyval": "^6.2.2",
     "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.555.0",
     "papaparse": "^5.5.3",
@@ -22,6 +24,7 @@
     "react-markdown": "^10.1.0",
     "recharts": "^3.5.1",
     "remark-gfm": "^4.0.1",
+    "uuid": "^13.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

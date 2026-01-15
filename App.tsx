@@ -132,6 +132,8 @@ const App: React.FC = () => {
   }, []);
 
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
+  const isPreferencesDirty = useRef(false);
+  const isJournalDirty = useRef(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -271,10 +273,12 @@ const App: React.FC = () => {
   const lastLoadedSessionId = React.useRef<string | null>(null);
 
   const handleSavePrep = useCallback((prep: DailyPrep) => {
+    isJournalDirty.current = true;
     setDailyPreps(prev => [...prev.filter(p => p.date !== prep.date), prep]);
   }, []);
 
   const handleSaveReview = useCallback((rev: DailyReview) => {
+    isJournalDirty.current = true;
     setDailyReviews(prev => [...prev.filter(r => r.date !== rev.date), rev]);
   }, []);
 
@@ -308,9 +312,12 @@ const App: React.FC = () => {
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
+      // Cleanup legacy localStorage trades (now using IndexedDB)
+      localStorage.removeItem('alphatrade_trades');
+
       // --- PHASE 1: CHECK CACHE ---
       console.log("[Load] Phase 1: Checking cache...");
-      const cachedTrades = storageService.getCachedTrades();
+      const cachedTrades = await storageService.getTradesCheckCacheFirst();
       const cachedAccounts = storageService.getCachedAccounts();
       const cachedPrefs = storageService.getCachedPreferences();
       const activeId = storageService.getActiveAccountId();
@@ -408,8 +415,12 @@ const App: React.FC = () => {
           if (!activeId) setActiveAccountId(dbAccounts[0].id);
         }
 
-        setDailyPreps(dbPreps || []);
-        setDailyReviews(dbReviews || []);
+        if (!isJournalDirty.current) {
+          setDailyPreps(dbPreps || []);
+          setDailyReviews(dbReviews || []);
+        } else {
+          console.log("[Sync] Skipping journal sync (dirty state)");
+        }
         setWeeklyFocusList(dbWeeklyFocus || []);
 
         if (dbPrefs) applyPreferences(dbPrefs);
@@ -432,8 +443,10 @@ const App: React.FC = () => {
         ]);
 
         if (dbUser) setCurrentUser(dbUser);
-        setDailyPreps(dbPreps || []);
-        setDailyReviews(dbReviews || []);
+        if (!isJournalDirty.current) {
+          setDailyPreps(dbPreps || []);
+          setDailyReviews(dbReviews || []);
+        }
         setWeeklyFocusList(dbWeeklyFocus || []);
         if (dbPrefs) applyPreferences(dbPrefs);
       } catch (e) {
@@ -443,6 +456,11 @@ const App: React.FC = () => {
 
     // Helper to apply preferences to state
     const applyPreferences = (prefs: UserPreferences) => {
+      if (isPreferencesDirty.current) {
+        console.log("[Sync] Skipping preferences sync (dirty state)");
+        return;
+      }
+
       if (prefs.emotions) setUserEmotions(prefs.emotions);
       if (prefs.standardMistakes) setUserMistakes(prefs.standardMistakes);
       if (prefs.standardGoals) setStandardGoals(prefs.standardGoals);
@@ -511,30 +529,8 @@ const App: React.FC = () => {
     }
   }, [accounts]);
 
-  useEffect(() => {
-    if (!sharedTrade && session && isInitialLoadDone) {
-      const timer = setTimeout(() => {
-        storageService.saveTrades(trades).then(updatedTrades => {
-          if (updatedTrades && updatedTrades.length > 0) {
-            // ONLY update if we have new UUIDs for temp IDs
-            // We check if any ID in our current state is NOT a UUID, and if the server gave us a UUID for it
-            const hasTempIds = trades.some(t => !String(t.id).match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i));
-
-            if (hasTempIds) {
-              setTrades(updatedTrades);
-            }
-            setSyncError(null);
-          }
-        }).catch(err => {
-          console.error("Trade sync failed", err);
-          // Don't show error immediately on auto-save, it's annoying
-          // setSyncError("Chyba při ukládání obchodů."); 
-        });
-      }, 2000); // 2s debounce
-
-      return () => clearTimeout(timer);
-    }
-  }, [trades, sharedTrade, session, isInitialLoadDone]);
+  // Removed dangerous auto-save effect that was overwriting data.
+  // Trades should only be saved explicitly via handlers.
 
   const isSyncingAccounts = React.useRef(false);
   useEffect(() => {
@@ -1200,7 +1196,7 @@ const App: React.FC = () => {
                   theme={theme}
                   trades={trades}
                   onUpdateTrades={handleUpdateTrades}
-                  onAddExpense={(exp) => setBusinessExpenses(prev => [...prev, exp])}
+                  onAddExpense={(exp) => { setBusinessExpenses(prev => [...prev, exp]); isPreferencesDirty.current = true; }}
                 />
               )}
 
@@ -1214,17 +1210,17 @@ const App: React.FC = () => {
               {activePage === 'settings' && (
                 <Settings
                   theme={theme}
-                  userEmotions={userEmotions} setUserEmotions={setUserEmotions}
-                  userMistakes={userMistakes} setUserMistakes={setUserMistakes}
-                  htfOptions={htfOptions} setHtfOptions={setHtfOptions}
-                  ltfOptions={ltfOptions} setLtfOptions={setLtfOptions}
-                  sessions={sessions} setSessions={setSessions}
+                  userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); isPreferencesDirty.current = true; }}
+                  userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); isPreferencesDirty.current = true; }}
+                  htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); isPreferencesDirty.current = true; }}
+                  ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); isPreferencesDirty.current = true; }}
+                  sessions={sessions} setSessions={(v) => { setSessions(v); isPreferencesDirty.current = true; }}
                   ironRules={ironRules}
-                  setIronRules={setIronRules}
+                  setIronRules={(v) => { setIronRules(v); isPreferencesDirty.current = true; }}
                   psychoMetrics={psychoMetrics}
-                  setPsychoMetrics={setPsychoMetrics}
+                  setPsychoMetrics={(v) => { setPsychoMetrics(v); isPreferencesDirty.current = true; }}
                   weeklyFocusList={weeklyFocusList}
-                  setWeeklyFocusList={setWeeklyFocusList}
+                  setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isJournalDirty.current = true; }}
                 />
               )}
 
@@ -1239,12 +1235,12 @@ const App: React.FC = () => {
                   goals={businessGoals}
                   resources={businessResources}
                   settings={businessSettings}
-                  onUpdateExpenses={setBusinessExpenses}
-                  onUpdatePayouts={setBusinessPayouts}
-                  onUpdatePlaybook={setPlaybookItems}
-                  onUpdateGoals={setBusinessGoals}
-                  onUpdateResources={setBusinessResources}
-                  onUpdateSettings={setBusinessSettings}
+                  onUpdateExpenses={(v) => { setBusinessExpenses(v); isPreferencesDirty.current = true; }}
+                  onUpdatePayouts={(v) => { setBusinessPayouts(v); isPreferencesDirty.current = true; }}
+                  onUpdatePlaybook={(v) => { setPlaybookItems(v); isPreferencesDirty.current = true; }}
+                  onUpdateGoals={(v) => { setBusinessGoals(v); isPreferencesDirty.current = true; }}
+                  onUpdateResources={(v) => { setBusinessResources(v); isPreferencesDirty.current = true; }}
+                  onUpdateSettings={(v) => { setBusinessSettings(v); isPreferencesDirty.current = true; }}
                   onUpdateAccounts={setAccounts}
                 />
               )}

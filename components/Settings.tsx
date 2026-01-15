@@ -712,6 +712,146 @@ const CacheManager = ({ isDark }: { isDark: boolean }) => {
           </div>
         )}
       </div>
+
+      {/* Local Cache Section (IndexedDB) */}
+      <LocalCacheSection isDark={isDark} selectedInst={selectedInst} />
+    </div>
+  );
+};
+
+// --- Local Cache Section for Instant Replay ---
+const LocalCacheSection = ({ isDark, selectedInst }: { isDark: boolean; selectedInst: string }) => {
+  const [localCacheInfo, setLocalCacheInfo] = useState<any[]>([]);
+  const [localCacheSize, setLocalCacheSize] = useState<number>(0);
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState('Připraveno');
+
+  const refreshLocalCache = async () => {
+    try {
+      const { getCacheInfo, getCacheSizeBytes } = await import('../services/candleCache');
+      const info = await getCacheInfo();
+      const size = await getCacheSizeBytes();
+      setLocalCacheInfo(info);
+      setLocalCacheSize(size);
+    } catch (err) {
+      console.error('Failed to get local cache info:', err);
+    }
+  };
+
+  useEffect(() => {
+    refreshLocalCache();
+  }, []);
+
+  const handleLocalDownload = async (days: number) => {
+    if (downloading) return;
+    setDownloading(true);
+    setProgress(0);
+
+    try {
+      const now = new Date();
+      const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+
+      setStatus(`Stahuji ${days} dní dat do lokální cache...`);
+
+      const { DataService } = await import('../services/DataService');
+      await DataService.downloadToLocalCache(
+        selectedInst,
+        from,
+        now,
+        ['1m', '1h'],
+        (msg) => setStatus(msg),
+        (p) => setProgress(p)
+      );
+
+      setStatus('Hotovo! Data jsou připravena pro instant replay.');
+      await refreshLocalCache();
+    } catch (err: any) {
+      setStatus(`Chyba: ${err.message}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleClearLocalCache = async () => {
+    if (!confirm('Opravdu smazat lokální cache? Replay bude pomalejší.')) return;
+    try {
+      const { clearCandleCache } = await import('../services/candleCache');
+      await clearCandleCache();
+      setStatus('Lokální cache vymazána.');
+      await refreshLocalCache();
+    } catch (err: any) {
+      setStatus(`Chyba: ${err.message}`);
+    }
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+
+  return (
+    <div className={`mt-6 p-5 rounded-xl border ${isDark ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+        <div className="space-y-1">
+          <h5 className={`text-xs font-black uppercase tracking-widest ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>⚡ Instant Replay Cache (Lokální)</h5>
+          <p className="text-[10px] opacity-70">Stáhni data do prohlížeče pro okamžité načítání replay bez čekání.</p>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className={`px-3 py-1.5 rounded-lg text-[10px] font-black ${isDark ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'}`}>
+            {formatSize(localCacheSize)}
+          </div>
+          <button
+            onClick={handleClearLocalCache}
+            className="text-[10px] text-rose-500 hover:underline"
+          >
+            Smazat cache
+          </button>
+        </div>
+      </div>
+
+      {localCacheInfo.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+          {localCacheInfo.map((info, idx) => (
+            <div key={idx} className={`p-2 rounded-lg text-[9px] ${isDark ? 'bg-black/20' : 'bg-white'}`}>
+              <p className="font-black uppercase text-slate-500">{info.instrument}:{info.timeframe}</p>
+              <p className={isDark ? 'text-white' : 'text-slate-900'}>{info.count.toLocaleString()} svíček</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {status && (
+        <div className={`mb-4 p-2 rounded-lg text-[9px] ${isDark ? 'bg-black/30 text-emerald-400' : 'bg-emerald-100 text-emerald-700'}`}>
+          {status}
+          {downloading && (
+            <div className="mt-2 h-1 w-full bg-emerald-900/30 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${progress}%` }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          { label: '7 Dní', val: 7 },
+          { label: '30 Dní', val: 30 },
+          { label: '90 Dní', val: 90 },
+          { label: '1 Rok', val: 365 }
+        ].map(preset => (
+          <button
+            key={preset.val}
+            disabled={downloading}
+            onClick={() => handleLocalDownload(preset.val)}
+            className={`py-2.5 rounded-xl text-[9px] font-black uppercase tracking-tighter transition-all active:scale-95 disabled:opacity-30
+              ${isDark ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'}
+            `}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 };

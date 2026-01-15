@@ -136,5 +136,80 @@ export const DataService = {
 
         onStatus?.("Sync complete.");
         onProgress?.(100);
+    },
+
+    /**
+     * Download candle data and store directly in IndexedDB (local cache)
+     * This enables instant replay without network requests
+     */
+    async downloadToLocalCache(
+        instrument: string,
+        from: Date,
+        to: Date,
+        timeframes: string[] = ['1m', '1h'],
+        onStatus?: (msg: string) => void,
+        onProgress?: (progress: number) => void
+    ): Promise<void> {
+        // Dynamic import to avoid circular dependencies
+        const { setCandlesToLocal } = await import('./candleCache');
+
+        const totalSteps = timeframes.length;
+        let completedSteps = 0;
+
+        for (const tf of timeframes) {
+            onStatus?.(`Stahování ${tf} dat pro ${instrument}...`);
+
+            // Determine chunk size based on timeframe
+            let chunkDays = 1;
+            if (tf === '1m') chunkDays = 1;  // 1 day at a time for 1m
+            if (tf === '5m' || tf === '15m') chunkDays = 7;
+            if (tf === '1h' || tf === '4h') chunkDays = 30;
+            if (tf === 'd' || tf === 'D') chunkDays = 365;
+
+            let currentFrom = new Date(from);
+            const allCandles: any[] = [];
+
+            while (currentFrom < to) {
+                let currentTo = new Date(currentFrom.getTime() + chunkDays * 24 * 60 * 60 * 1000);
+                if (currentTo > to) currentTo = new Date(to);
+
+                const fromIso = currentFrom.toISOString();
+                const toIso = currentTo.toISOString();
+
+                try {
+                    const res = await fetch(`/api/candles?instrument=${instrument}&from=${fromIso}&to=${toIso}&timeframe=${tf}`);
+
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (Array.isArray(data)) {
+                            allCandles.push(...data);
+                        }
+                    }
+                } catch (err) {
+                    console.error(`[DataService] Chunk failed for ${tf}:`, err);
+                }
+
+                // Update progress within timeframe
+                const tfProgress = (currentTo.getTime() - from.getTime()) / (to.getTime() - from.getTime());
+                const overallProgress = (completedSteps + tfProgress) / totalSteps * 100;
+                onProgress?.(Math.min(99, Math.round(overallProgress)));
+
+                currentFrom = new Date(currentTo.getTime() + 1000);
+
+                // Throttle to avoid rate limits
+                await new Promise(r => setTimeout(r, 500));
+            }
+
+            // Store all candles for this timeframe
+            if (allCandles.length > 0) {
+                await setCandlesToLocal(instrument, tf, allCandles);
+                onStatus?.(`Uloženo ${allCandles.length} ${tf} svíček`);
+            }
+
+            completedSteps++;
+        }
+
+        onStatus?.("Stahování dokončeno!");
+        onProgress?.(100);
     }
 };

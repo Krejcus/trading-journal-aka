@@ -35,9 +35,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     // Fetch full detail if this is a "light" trade (missing screenshots or data)
     useEffect(() => {
-        // Simple heuristic: if we have NO screenshots but we suspect we might have them (or just always fetch to be safe)
-        // Since getTrades now intentionally returns empty screenshots, we should always fetch detailed view.
-        // But to avoid flicker, we use prop first.
+        // Check if we already have the heavy data (screenshots)
+        if (trade.screenshot || (trade.screenshots && trade.screenshots.length > 0)) {
+            return;
+        }
+
         const loadFull = async () => {
             if (isLoadingDetails) return;
             setIsLoadingDetails(true);

@@ -40,9 +40,6 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
     const series2Ref = useRef<ISeriesApi<"Candlestick"> | null>(null);
     const tpSeries2Ref = useRef<ISeriesApi<"Baseline"> | null>(null);
     const slSeries2Ref = useRef<ISeriesApi<"Baseline"> | null>(null);
-    const entryLineRef = useRef<any>(null);
-    const slLineRef = useRef<any>(null);
-    const tpLineRef = useRef<any>(null);
     const cleanupRef = useRef<(() => void) | null>(null);
     const subDurationRef = useRef<number>(240 * 60); // Default 4 hours
     const isSyncingRef = useRef<boolean>(false);
@@ -516,17 +513,13 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
         }
     }, [secondaryData, chart2Ready]);
 
-    // Fetch Secondary Data - Now with cache-first + aggregation
+    // Fetch Secondary Data
     useEffect(() => {
         const fetchSecondary = async () => {
             if (activeLayout !== 'split' || !trade.date || !trade.instrument || secondaryTimeframe === mainTimeframe) return;
 
             setIsSecondaryLoading(true);
             try {
-                // Dynamic imports
-                const { getCandlesFromLocal, setCandlesToLocal } = await import('../services/candleCache');
-                const { aggregateCandles } = await import('../utils/candleUtils');
-
                 const exitTimeRaw = new Date(trade.date).getTime() / 1000;
                 const exitTimeRounded = Math.floor(exitTimeRaw / 60) * 60;
 
@@ -537,60 +530,27 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 if (secondaryTimeframe === '1h') daysToFetch = 60;
                 if (secondaryTimeframe === '4h' || secondaryTimeframe === 'D' || secondaryTimeframe === 'W') daysToFetch = 500;
 
-                const fromSeconds = exitTimeRounded - daysToFetch * 24 * 3600;
-                const toSeconds = exitTimeRounded + 1 * 24 * 3600;
+                const from = new Date((exitTimeRounded - daysToFetch * 24 * 3600) * 1000).toISOString();
+                const to = new Date((exitTimeRounded + 1 * 24 * 3600) * 1000).toISOString();
 
-                const tfMap: Record<string, string> = {
-                    '1m': '1m', '5m': '5m', '15m': '15m',
-                    '1h': '1h', '4h': '4h', 'D': 'd', 'W': 'w'
-                };
-                const cacheTf = tfMap[secondaryTimeframe] || secondaryTimeframe;
+                const url = `/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}&timeframe=${secondaryTimeframe}`;
+                const res = await fetch(url);
+                if (res.ok) {
+                    const rawData = await res.json();
+                    if (Array.isArray(rawData)) {
+                        const timeOffset = -new Date().getTimezoneOffset() * 60;
+                        const currentPriceOffset = priceOffset;
+                        const isLocal = detectedIsLocal;
 
-                let rawData: any[] | null = null;
-                let cacheHit = false;
-
-                // 1. Try to aggregate from 1m cache (fastest)
-                if (secondaryTimeframe !== '1m') {
-                    const cached1m = await getCandlesFromLocal(trade.instrument, '1m', fromSeconds, toSeconds);
-                    if (cached1m && cached1m.length > 50) {
-                        console.log(`[TradeReplay/Secondary] Aggregating ${cached1m.length} 1m candles to ${secondaryTimeframe}`);
-                        rawData = aggregateCandles(cached1m as any, secondaryTimeframe as any);
-                        cacheHit = true;
+                        const valid = rawData.map((d: any) => ({
+                            time: (d.time + (isLocal ? 0 : timeOffset)) as Time,
+                            open: d.open + priceOffset,
+                            high: d.high + priceOffset,
+                            low: d.low + priceOffset,
+                            close: d.close + priceOffset
+                        }));
+                        setAllSecondaryData(valid);
                     }
-                }
-
-                // 2. Check direct cache
-                if (!cacheHit) {
-                    rawData = await getCandlesFromLocal(trade.instrument, cacheTf, fromSeconds, toSeconds);
-                    cacheHit = rawData && rawData.length > 0;
-                }
-
-                // 3. Fall back to API
-                if (!cacheHit || !rawData || rawData.length === 0) {
-                    const from = new Date(fromSeconds * 1000).toISOString();
-                    const to = new Date(toSeconds * 1000).toISOString();
-                    const url = `/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}&timeframe=${secondaryTimeframe}`;
-                    const res = await fetch(url);
-                    if (res.ok) {
-                        rawData = await res.json();
-                        if (Array.isArray(rawData) && rawData.length > 0) {
-                            setCandlesToLocal(trade.instrument, cacheTf, rawData).catch(console.error);
-                        }
-                    }
-                }
-
-                if (Array.isArray(rawData) && rawData.length > 0) {
-                    const timeOffset = -new Date().getTimezoneOffset() * 60;
-
-                    // Always apply timeOffset for local time display (data is UTC)
-                    const valid = rawData.map((d: any) => ({
-                        time: (d.time + timeOffset) as Time,
-                        open: d.open + priceOffset,
-                        high: d.high + priceOffset,
-                        low: d.low + priceOffset,
-                        close: d.close + priceOffset
-                    }));
-                    setAllSecondaryData(valid);
                 }
             } finally {
                 setIsSecondaryLoading(false);
@@ -758,7 +718,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
         return () => container.removeEventListener('wheel', handleWheel, { capture: true });
     }, [activeLayout, chart2Ready, trade.id]);
 
-    // 1. Fetch Data Effect (Independent of Chart) - Now with IndexedDB cache-first
+    // 1. Fetch Data Effect (Independent of Chart)
     useEffect(() => {
         const fetchData = async () => {
             if (!trade.date || !trade.instrument) return;
@@ -767,129 +727,25 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             setError(null);
 
             try {
-                // Dynamic import for cache
-                const { getCandlesFromLocal, setCandlesToLocal } = await import('../services/candleCache');
-
                 const exitTimeRaw = new Date(trade.date).getTime() / 1000;
                 // Round to nearest minute to ensure cache consistency
                 const exitTimeRounded = Math.floor(exitTimeRaw / 60) * 60;
 
                 // Initial range: much smaller for fast load
                 const daysToFetch = (mainTimeframe === '1m' || mainTimeframe === '5m') ? 1 : 3;
-                const fromSeconds = exitTimeRounded - daysToFetch * 24 * 3600;
-                const toSeconds = exitTimeRounded + 1 * 24 * 3600;
 
-                // Map frontend timeframe to cache key
-                const tfMap: Record<string, string> = {
-                    '1m': '1m', '5m': '5m', '15m': '15m',
-                    '1h': '1h', '4h': '4h', 'D': 'd', 'W': 'w'
-                };
-                const cacheTf = tfMap[mainTimeframe] || mainTimeframe;
+                // Use rounded times for API requests
+                const from = new Date((exitTimeRounded - daysToFetch * 24 * 3600) * 1000).toISOString();
+                const to = new Date((exitTimeRounded + 1 * 24 * 3600) * 1000).toISOString();
 
-                // Strategy: Try 1m cache first and aggregate, then fall back to API
-                let rawData: any[] | null = null;
-                let cacheHit = false;
+                const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}&timeframe=${mainTimeframe}`);
 
-                // 1. If requesting higher TF, try to aggregate from 1m cache (fastest)
-                if (mainTimeframe !== '1m') {
-                    const cached1m = await getCandlesFromLocal(trade.instrument, '1m', fromSeconds, toSeconds);
-                    if (cached1m && cached1m.length > 50) {
-                        console.log(`[TradeReplay] Aggregating ${cached1m.length} 1m candles to ${mainTimeframe}`);
-                        const { aggregateCandles } = await import('../utils/candleUtils');
-                        rawData = aggregateCandles(cached1m as any, mainTimeframe as any);
-                        cacheHit = true;
-                    }
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.details || 'Failed to fetch candle data');
                 }
 
-                // 2. If not aggregated, check direct cache for this TF
-                if (!cacheHit) {
-                    rawData = await getCandlesFromLocal(trade.instrument, cacheTf, fromSeconds, toSeconds);
-                    cacheHit = rawData && rawData.length > 0;
-                    if (cacheHit) {
-                        console.log(`[TradeReplay] Direct cache HIT! ${rawData!.length} ${cacheTf} candles`);
-                    }
-                }
-
-                // 3. If still no data, fetch from API
-                if (!cacheHit || !rawData || rawData.length === 0) {
-                    console.log(`[TradeReplay] Cache miss for ${trade.instrument}:${cacheTf}, fetching...`);
-                    const from = new Date(fromSeconds * 1000).toISOString();
-                    const to = new Date(toSeconds * 1000).toISOString();
-
-                    const response = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}&timeframe=${mainTimeframe}`);
-
-                    if (!response.ok) {
-                        const errData = await response.json();
-                        throw new Error(errData.details || 'Failed to fetch candle data');
-                    }
-
-                    rawData = await response.json();
-
-                    // Store 1m data in cache for future aggregation
-                    if (Array.isArray(rawData) && rawData.length > 0) {
-                        // Store in the timeframe-specific cache
-                        setCandlesToLocal(trade.instrument, cacheTf, rawData).catch(console.error);
-
-                        // Also fetch and cache 1m if we requested a higher TF
-                        if (mainTimeframe !== '1m') {
-                            // Background fetch 1m for future use (non-blocking)
-                            fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${from}&to=${to}&timeframe=1m`)
-                                .then(r => r.json())
-                                .then(m1Data => {
-                                    if (Array.isArray(m1Data) && m1Data.length > 0) {
-                                        setCandlesToLocal(trade.instrument, '1m', m1Data).catch(console.error);
-                                    }
-                                })
-                                .catch(console.error);
-                        }
-                    }
-                } else {
-                    console.log(`[TradeReplay] Cache HIT! ${rawData.length} candles loaded instantly`);
-
-                    // 4. CACHE FRESHNESS CHECK: If cache doesn't cover the trade exit time, fetch missing portion
-                    const lastCachedTime = rawData[rawData.length - 1]?.time || 0;
-                    const exitTimeWithBuffer = exitTimeRounded + 3600; // Add 1 hour buffer after exit
-
-                    if (lastCachedTime < exitTimeWithBuffer) {
-                        console.log(`[TradeReplay] Cache is stale! Last candle: ${new Date(lastCachedTime * 1000).toISOString()}, need up to: ${new Date(exitTimeWithBuffer * 1000).toISOString()}`);
-
-                        // Fetch the missing portion from API (from last cached candle to now)
-                        const gapStart = new Date((lastCachedTime + 60) * 1000).toISOString(); // Start 1 minute after last cached
-                        const gapEnd = new Date(toSeconds * 1000).toISOString();
-
-                        try {
-                            const gapResponse = await fetch(`/api/candles?instrument=${encodeURIComponent(trade.instrument)}&from=${gapStart}&to=${gapEnd}&timeframe=${mainTimeframe === '1m' ? '1m' : '1m'}`);
-
-                            if (gapResponse.ok) {
-                                let gapData = await gapResponse.json();
-
-                                if (Array.isArray(gapData) && gapData.length > 0) {
-                                    console.log(`[TradeReplay] Fetched ${gapData.length} fresh candles to fill gap`);
-
-                                    // If we need aggregation, aggregate the gap data
-                                    if (mainTimeframe !== '1m') {
-                                        const { aggregateCandles } = await import('../utils/candleUtils');
-                                        gapData = aggregateCandles(gapData as any, mainTimeframe as any);
-                                    }
-
-                                    // Filter out any duplicates and append
-                                    const existingTimes = new Set(rawData!.map((c: any) => c.time));
-                                    const newCandles = gapData.filter((c: any) => !existingTimes.has(c.time));
-
-                                    if (newCandles.length > 0) {
-                                        rawData = [...rawData!, ...newCandles].sort((a: any, b: any) => a.time - b.time);
-                                        console.log(`[TradeReplay] Merged! Total: ${rawData.length} candles`);
-
-                                        // Update cache with merged data (background)
-                                        setCandlesToLocal(trade.instrument, cacheTf, rawData).catch(console.error);
-                                    }
-                                }
-                            }
-                        } catch (gapError) {
-                            console.warn('[TradeReplay] Failed to fetch gap data, using cached data as-is:', gapError);
-                        }
-                    }
-                }
+                const rawData = await response.json();
 
                 if (Array.isArray(rawData) && rawData.length > 0) {
                     let priceOffset = 0;
@@ -899,20 +755,20 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
 
                     const timeOffset = -new Date().getTimezoneOffset() * 60;
 
-                    // Dukascopy data is ALWAYS in UTC. trade.date is ALWAYS ISO/UTC.
-                    // So we ALWAYS apply timeOffset to display candles in local time.
-
-                    // Find the candle closest to entry time (in UTC) for price offset calculation
                     let bestCandle = null;
                     let minDiff = Infinity;
+                    let detectedIsLocal = false;
 
                     for (const d of rawData) {
-                        const t = d.time; // UTC timestamp
-                        const diffToEntry = Math.abs(t - entryTimeRaw); // Both are UTC
+                        const t = d.time;
+                        const diffLocal = Math.abs(t - entryTimeRaw);
+                        const diffUtc = Math.abs(t - (entryTimeRaw + timeOffset));
 
-                        if (diffToEntry < minDiff) {
-                            minDiff = diffToEntry;
-                            bestCandle = d;
+                        if (diffLocal < minDiff) {
+                            minDiff = diffLocal; bestCandle = d; detectedIsLocal = true;
+                        }
+                        if (diffUtc < minDiff) {
+                            minDiff = diffUtc; bestCandle = d; detectedIsLocal = false;
                         }
                     }
 
@@ -922,12 +778,11 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                         priceOffsetRef.current = priceOffset; // Sync ref
                     }
 
-                    // Always convert to local time for display
-                    setDetectedIsLocal(false); // Data source is always UTC
-                    isLocalTimeRef.current = false;
+                    setDetectedIsLocal(detectedIsLocal);
+                    isLocalTimeRef.current = detectedIsLocal; // Sync ref
 
                     const validData = rawData.map((d: any) => ({
-                        time: (d.time + timeOffset) as Time, // Always add offset for local display
+                        time: (d.time + (detectedIsLocal ? 0 : timeOffset)) as Time,
                         open: d.open + priceOffset,
                         high: d.high + priceOffset,
                         low: d.low + priceOffset,
@@ -949,7 +804,6 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
         fetchData();
     }, [trade.id, trade.instrument, trade.date, trade.durationMinutes, trade.entryPrice, mainTimeframe]);
 
-
     const handleGoToTrade = useCallback(() => {
         const chart = chartRef.current;
         const currentData = allDataRef.current;
@@ -961,9 +815,9 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
         const entryTimeRaw = exitTimeRaw - durationSeconds;
         const timeOffset = -new Date().getTimezoneOffset() * 60;
 
-        // Always apply timeOffset (data is UTC, display is local)
-        const visualEntry = entryTimeRaw + timeOffset;
-        const visualExit = exitTimeRaw + timeOffset;
+        const isLocal = isLocalTimeRef.current;
+        const visualEntry = isLocal ? entryTimeRaw : (entryTimeRaw + timeOffset);
+        const visualExit = isLocal ? exitTimeRaw : (exitTimeRaw + timeOffset);
 
         // Calculate a nice range (1 hour before, 2x duration or at least 2 hours after)
         const buffer = Math.max(7200, durationSeconds * 3);
@@ -977,35 +831,6 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             });
         }
 
-        // Force vertical autoscale to include Entry/SL/TP prices
-        setTimeout(() => {
-            const entryPrice = parseFloat(String(trade.entryPrice || 0));
-            const slPrice = parseFloat(String(trade.stopLoss || 0));
-            const tpPrice = parseFloat(String(trade.takeProfit || 0));
-
-            // Calculate min/max price range to show all trade levels
-            const prices = [entryPrice, slPrice, tpPrice].filter(p => p > 0);
-            if (prices.length > 0) {
-                const minPrice = Math.min(...prices);
-                const maxPrice = Math.max(...prices);
-                const padding = (maxPrice - minPrice) * 0.5 || 50; // 50% padding or at least 50 points
-
-                // Use applyOptions to set visible price range on right price scale
-                if (seriesRef.current) {
-                    seriesRef.current.applyOptions({
-                        autoscaleInfoProvider: () => ({
-                            priceRange: {
-                                minValue: minPrice - padding,
-                                maxValue: maxPrice + padding,
-                            },
-                        }),
-                    });
-                    // Trigger recalculation
-                    chart.timeScale().scrollToPosition(0, false);
-                }
-            }
-        }, 100);
-
         // If split view, center both
         if (chart2Ref.current) {
             if (trade.miniViewSecondaryRange) {
@@ -1017,7 +842,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 });
             }
         }
-    }, [trade.date, trade.durationMinutes, trade.miniViewRange, trade.miniViewSecondaryRange, trade.entryPrice, trade.stopLoss, trade.takeProfit]);
+    }, [trade.date, trade.durationMinutes, trade.miniViewRange, trade.miniViewSecondaryRange]);
 
     const [hasSavedView, setHasSavedView] = useState(!!trade.miniViewRange);
     useEffect(() => { setHasSavedView(!!trade.miniViewRange); }, [trade.miniViewRange]);
@@ -1238,7 +1063,26 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             priceLineVisible: false,
         });
 
-        // Price lines will be added in separate effect after data loads
+        // Add lines...
+        const entryPrice = parseFloat(String(trade.entryPrice || 0));
+        const slPrice = parseFloat(String(trade.stopLoss || 0));
+        const tpPrice = parseFloat(String(trade.takeProfit || 0));
+
+        if (entryPrice) {
+            series.createPriceLine({
+                price: entryPrice, color: '#3b82f6', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'ENTRY',
+            });
+        }
+        if (slPrice) {
+            series.createPriceLine({
+                price: slPrice, color: '#f43f5e', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SL',
+            });
+        }
+        if (tpPrice) {
+            series.createPriceLine({
+                price: tpPrice, color: '#10b981', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'TP',
+            });
+        }
 
         chartRef.current = chart;
         seriesRef.current = series;
@@ -1289,49 +1133,6 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             setChartReady(false);
         };
     }, [trade.id, trade.instrument, trade.entryPrice, trade.stopLoss, trade.takeProfit, isDark, containerReady]); // Stabilized dependencies
-
-    // 2.4 Create/Update Price Lines after data loads (when priceOffset is calculated)
-    useEffect(() => {
-        if (!chartReady || !seriesRef.current || allData.length === 0) return;
-
-        const series = seriesRef.current;
-        const entryPrice = parseFloat(String(trade.entryPrice || 0));
-        const slPrice = parseFloat(String(trade.stopLoss || 0));
-        const tpPrice = parseFloat(String(trade.takeProfit || 0));
-
-        // Remove existing lines if they exist
-        if (entryLineRef.current) {
-            try { series.removePriceLine(entryLineRef.current); } catch (e) { }
-            entryLineRef.current = null;
-        }
-        if (slLineRef.current) {
-            try { series.removePriceLine(slLineRef.current); } catch (e) { }
-            slLineRef.current = null;
-        }
-        if (tpLineRef.current) {
-            try { series.removePriceLine(tpLineRef.current); } catch (e) { }
-            tpLineRef.current = null;
-        }
-
-        // Create new lines with correct prices (data already has offset applied)
-        if (entryPrice) {
-            entryLineRef.current = series.createPriceLine({
-                price: entryPrice, color: '#3b82f6', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'ENTRY',
-            });
-        }
-        if (slPrice) {
-            slLineRef.current = series.createPriceLine({
-                price: slPrice, color: '#f43f5e', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'SL',
-            });
-        }
-        if (tpPrice) {
-            tpLineRef.current = series.createPriceLine({
-                price: tpPrice, color: '#10b981', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'TP',
-            });
-        }
-
-        console.log('[TradeReplay] Price lines created - Entry:', entryPrice, 'SL:', slPrice, 'TP:', tpPrice, 'Offset:', priceOffset);
-    }, [chartReady, allData.length, trade.entryPrice, trade.stopLoss, trade.takeProfit, priceOffset]);
 
     // 2.5 Separate TimeRange Subscription for BOTH charts
     useEffect(() => {
@@ -1402,12 +1203,45 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             // We determined 'shift' during fetch.
             // Let's assume we need to verify again or just standard logic:
 
-            // Chart data is ALWAYS displayed in local time (shifted in fetch).
-            // trade.date is ALWAYS UTC (ISO string).
-            // So we ALWAYS need to add timeOffset to entry/exit times for alignment.
+            // HACK: We can't easily share the "decision" from the async fetch 
+            // without a new state variable. Let's add `isLocalTime` state.
 
-            const shiftedEntryTime = entryTimeRaw + timeOffset;
-            const shiftedExitTime = exitTimeRaw + timeOffset;
+            // Fallback for now: Check logic again.
+            // If we assume the chart data `d.time` is ALREADY shifted to Local Correctly (it is).
+            // Then we just need to know if `entryTimeRaw` is ALREADY Local.
+
+            // Heuristic:
+            // If entryTimeRaw is close to d.time (which is Local), then entryTimeRaw is Local.
+            // If entryTimeRaw + OFFSET is close to d.time, then entryTimeRaw is UTC.
+
+            let isLocalStored = false;
+            if (Array.isArray(allData) && allData.length > 0) {
+                const midCandle = allData[Math.floor(allData.length / 2)];
+                const candleTime = midCandle.time as number;
+
+                // Compare distance to a candle (any candle in range)? No.
+                // We fetched data for the specific day.
+                // Finding closest candle again.
+                let minDiffLocal = Infinity;
+                let minDiffUtc = Infinity;
+
+                allData.forEach(d => {
+                    const t = d.time as number; // This is Visual Local Time
+                    const diffLocal = Math.abs(t - entryTimeRaw); // Assume stored is Local
+                    const diffUtc = Math.abs(t - (entryTimeRaw + timeOffset)); // Assume stored is UTC (so we add offset to match visual)
+
+                    if (diffLocal < minDiffLocal) minDiffLocal = diffLocal;
+                    if (diffUtc < minDiffUtc) minDiffUtc = diffUtc;
+                });
+
+                if (minDiffLocal < minDiffUtc) isLocalStored = true;
+            } else if (detectedIsLocal !== undefined) {
+                // Fallback to detected state if allData not yet available or mapped
+                isLocalStored = detectedIsLocal;
+            }
+
+            const shiftedEntryTime = isLocalStored ? entryTimeRaw : (entryTimeRaw + timeOffset);
+            const shiftedExitTime = isLocalStored ? exitTimeRaw : (exitTimeRaw + timeOffset);
 
             const tpPrice = parseFloat(String(trade.takeProfit || 0));
             const slPrice = parseFloat(String(trade.stopLoss || 0));
