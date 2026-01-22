@@ -336,7 +336,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
                 <div className="flex justify-center mb-4">
                   <div className="w-40 h-40 relative">
                     <img
-                      src="/logos/at_logo_glass_2026_fixed.png"
+                      src="/logos/at_logo_light_clean.png"
                       alt="Alpha Trade Logo"
                       className="w-full h-full object-contain filter drop-shadow-[0_0_25px_rgba(45,212,191,0.7)]"
                     />

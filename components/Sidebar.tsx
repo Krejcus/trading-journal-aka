@@ -114,29 +114,30 @@ const Sidebar: React.FC<SidebarProps> = ({
           {/* BRANDING SECTION - AURORA HALO STYLE */}
           <div className="relative pt-4 pb-6">
             {/* Background Aurora Effect */}
-            {!isCollapsed && (
+            {!isCollapsed && isDark && (
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-cyan-500/10 blur-[60px] rounded-full animate-pulse pointer-events-none"></div>
             )}
 
             <div
               className={`relative flex flex-col items-center gap-2 transition-all duration-500 group cursor-default ${isCollapsed ? 'py-1' : 'py-2'}`}
             >
-              {/* Logo with Aurora Glow */}
+              {/* Logo with Hover Glow */}
               <div className={`
-                relative shrink-0 flex items-center justify-center transition-all duration-700
+                relative shrink-0 flex items-center justify-center transition-all duration-500
                 ${isCollapsed ? 'w-10 h-10' : 'w-24 h-24'}
-                drop-shadow-[0_0_25px_rgba(34,211,238,0.4)]
-                group-hover:drop-shadow-[0_0_35px_rgba(34,211,238,0.6)]
               `}>
                 <img
-                  src="/logos/at_logo_glass_2026_fixed.png"
+                  src="/logos/at_logo_light_clean.png"
                   alt="Alpha Trade Logo"
-                  className="w-full h-full object-contain transition-all duration-500 group-hover:scale-110"
+                  className={`
+                    w-full h-full object-contain transition-all duration-500 
+                    group-hover:scale-110
+                    ${isDark
+                      ? 'drop-shadow-[0_0_20px_rgba(34,211,238,0.3)] group-hover:drop-shadow-[0_0_35px_rgba(34,211,238,0.6)]'
+                      : 'group-hover:drop-shadow-[0_0_25px_rgba(34,211,238,0.4)]'
+                    }
+                  `}
                 />
-                {/* Secondary Halo for Aurora (shows on hover) */}
-                {!isCollapsed && (
-                  <div className="absolute inset-0 bg-cyan-400/10 blur-2xl rounded-full scale-150 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none"></div>
-                )}
               </div>
 
               {/* Typography */}
