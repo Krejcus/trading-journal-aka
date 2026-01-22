@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Trade, DailyPrep, DailyReview, Account, CustomEmotion } from '../types';
+import { Trade, DailyPrep, DailyReview, Account, CustomEmotion, PnLDisplayMode } from '../types';
+import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
 import {
    ChevronLeft,
    ChevronRight,
@@ -60,9 +61,10 @@ interface DashboardCalendarProps {
    reviews: DailyReview[];
    theme: 'dark' | 'light' | 'oled';
    accounts: Account[];
+   initialBalance: number;
    emotions: CustomEmotion[];
    onDayClick?: (dateStr: string) => void;
-   pnlFormat?: string;
+   pnlFormat?: PnLDisplayMode;
 }
 
 interface DayData {
@@ -125,6 +127,7 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
    reviews,
    theme,
    accounts,
+   initialBalance,
    emotions,
    onDayClick,
    pnlFormat
@@ -182,22 +185,24 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
                   else setSelectedDay(day);
                }}
                onWeekClick={setSelectedWeek}
-               pnlFormat={pnlFormat}
+               pnlFormat={pnlFormat as PnLDisplayMode}
+               accounts={accounts}
+               initialBalance={initialBalance}
             />
          </div>
          {selectedDay && createPortal(
-            <DayDeepDiveModal day={selectedDay} theme={theme} onClose={() => setSelectedDay(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat} />,
+            <DayDeepDiveModal day={selectedDay} theme={theme} onClose={() => setSelectedDay(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} />,
             document.body
          )}
          {selectedWeek && createPortal(
-            <WeekDetailModal week={selectedWeek} monthName={new Date(currentData.year, currentData.month - 1, 1).toLocaleString('cs-CZ', { month: 'long' })} theme={theme} onClose={() => setSelectedWeek(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat} />,
+            <WeekDetailModal week={selectedWeek} monthName={new Date(currentData.year, currentData.month - 1, 1).toLocaleString('cs-CZ', { month: 'long' })} theme={theme} onClose={() => setSelectedWeek(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} />,
             document.body
          )}
       </div>
    );
 };
 
-const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, preps, reviews, theme, onPrev, onNext, canPrev, canNext, onDayClick, onWeekClick, pnlFormat }) => {
+const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, preps, reviews, theme, onPrev, onNext, canPrev, canNext, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance }) => {
    const gridRows = useMemo(() => {
       const rows: GridCell[][] = [];
       const daysInMonth = new Date(year, month, 0).getDate();
@@ -249,6 +254,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, 
                const weekPnl = weekDaysData.reduce((acc, d) => acc + d.pnl, 0);
                const weekTradesCount = weekDaysData.reduce((acc, d) => acc + d.trades.filter(t => t.executionStatus !== 'Missed').length, 0);
                const weekWins = weekDaysData.reduce((acc, d) => acc + d.wins, 0);
+               const weekRr = pnlFormat === 'rr' ? calculateTotalRR(weekDaysData.flatMap(d => d.trades)) : undefined;
                currentRow.push({ type: 'summary', summaryData: { weekIndex: rows.length + 1, pnl: weekPnl, days: [...weekDaysData], tradeCount: weekTradesCount, winRate: weekTradesCount > 0 ? (weekWins / weekTradesCount) * 100 : 0 } });
                rows.push(currentRow);
             }
@@ -256,7 +262,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, 
          }
       }
       return rows;
-   }, [year, month, trades, preps, reviews]);
+   }, [year, month, trades, preps, reviews, pnlFormat]);
 
    const monthName = new Date(year, month - 1, 1).toLocaleString('cs-CZ', { month: 'long', year: 'numeric' });
 
@@ -295,7 +301,12 @@ const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, 
                }`}>
                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-500">Měsíční PnL</span>
                <span className={`text-2xl font-mono font-black tracking-tighter ${totalMonthPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                  {totalMonthPnl >= 0 ? '+' : '-'}{pnlFormat === 'rr' ? `${Math.abs(totalMonthPnl).toFixed(2)}R` : `$${Math.abs(totalMonthPnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                  {formatPnL(
+                     totalMonthPnl,
+                     pnlFormat as PnLDisplayMode,
+                     initialBalance,
+                     pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined
+                  )}
                </span>
             </div>
          </div>
@@ -317,7 +328,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, 
             {gridRows.map((row, rIdx) => (
                <div key={rIdx} className="grid grid-cols-6 gap-3">
                   {row.map((cell, cIdx) => (
-                     <CalendarCell key={cIdx} cell={cell} theme={theme} maxPnL={maxDayPnL} onDayClick={onDayClick} onWeekClick={onWeekClick} />
+                     <CalendarCell key={cIdx} cell={cell} theme={theme} maxPnL={maxDayPnL} onDayClick={onDayClick} onWeekClick={onWeekClick} pnlFormat={pnlFormat as PnLDisplayMode} accounts={accounts} initialBalance={initialBalance} />
                   ))}
                </div>
             ))}
@@ -326,7 +337,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, 
    );
 };
 
-const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled'; maxPnL: number; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: string }> = ({ cell, theme, maxPnL, onDayClick, onWeekClick, pnlFormat }) => {
+const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled'; maxPnL: number; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number }> = ({ cell, theme, maxPnL, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance }) => {
    if (cell.type === 'empty') return <div className="aspect-square opacity-0"></div>;
    if (cell.type === 'summary') {
       const week = cell.summaryData!;
@@ -338,7 +349,14 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
             }`}>
             <div className={`absolute top-0 w-full h-1 ${pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
             <span className="text-[8px] font-black uppercase tracking-widest opacity-60 mb-1">T{weekIndex}</span>
-            <span className={`font-bold font-mono text-xs md:text-sm ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{pnl >= 0 ? '+' : '-'}{pnlFormat === 'rr' ? `${Math.abs(pnl).toFixed(2)}R` : `$${Math.abs(pnl) >= 1000 ? (Math.abs(pnl) / 1000).toFixed(1) + 'k' : Math.abs(pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</span>
+            <span className={`font-bold font-mono text-xs md:text-sm ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+               {formatPnL(
+                  pnl,
+                  pnlFormat,
+                  initialBalance,
+                  pnlFormat === 'rr' ? calculateTotalRR(week.days.flatMap(d => d.trades)) : undefined
+               )}
+            </span>
             <div className="absolute inset-0 bg-blue-500/0 group-hover:bg-blue-500/5 transition-colors duration-200" />
          </div>
       );
@@ -363,14 +381,23 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
          </div>
          <div className="flex justify-end items-start"><span className={`font-mono text-xs font-black ${!day.hasTrades && (theme !== 'light' ? 'text-slate-700' : 'text-slate-300')}`}>{day.dayNum}</span></div>
          <div className="flex-1 flex items-center justify-center">
-            {day.hasTrades ? <span className={`font-bold text-sm md:text-base tracking-tighter ${intensity > 0.6 ? 'text-white' : (day.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>{day.pnl >= 0 ? '+' : '-'}{pnlFormat === 'rr' ? `${Math.abs(day.pnl).toFixed(2)}R` : `$${Math.abs(day.pnl) >= 1000 ? (Math.abs(day.pnl) / 1000).toFixed(1) + 'k' : Math.abs(day.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</span> : null}
+            {day.hasTrades ? (
+               <span className={`font-bold text-sm md:text-base tracking-tighter ${intensity > 0.6 ? 'text-white' : (day.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>
+                  {formatPnL(
+                     day.pnl,
+                     pnlFormat,
+                     initialBalance,
+                     pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined
+                  )}
+               </span>
+            ) : null}
          </div>
          <div className="absolute inset-0 bg-white/0 group-hover:bg-white/5 transition-colors duration-200" />
       </div>
    );
 };
 
-const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: string }> = ({ week, monthName, theme, onClose, accounts, emotions, pnlFormat }) => {
+const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number }> = ({ week, monthName, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance }) => {
    const isDark = theme !== 'light';
    const [activeTab, setActiveTab] = useState<'overview' | 'trades'>('overview');
    const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
@@ -442,7 +469,12 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                      <div className="text-right">
                         <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Net Result</p>
                         <p className={`text-3xl font-black font-mono leading-none ${week.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                           {week.pnl >= 0 ? '+' : '-'}{pnlFormat === 'rr' ? `${Math.abs(week.pnl).toFixed(2)}R` : `$${Math.abs(week.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                           {formatPnL(
+                              week.pnl,
+                              pnlFormat,
+                              initialBalance,
+                              pnlFormat === 'rr' ? calculateTotalRR(week.days.flatMap(d => d.trades)) : undefined
+                           )}
                         </p>
                      </div>
                      <button onClick={onClose} className="p-2.5 hover:bg-white/10 rounded-full transition-all text-slate-500 hover:text-white"><X size={24} /></button>
@@ -474,8 +506,8 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                         </div>
                         <StatCard icon={<TrendingUp size={16} />} label="Wins" value={wins} color="text-emerald-500" subValue={`${week.tradeCount > 0 ? ((wins / week.tradeCount) * 100).toFixed(0) : 0}% Rate`} subColor="text-emerald-500/60" />
                         <StatCard icon={<TrendingDown size={16} />} label="Losses" value={losses} color="text-rose-500" subValue={`${week.tradeCount > 0 ? ((losses / week.tradeCount) * 100).toFixed(0) : 0}% Rate`} subColor="text-rose-500/60" />
-                        <StatCard icon={<Trophy size={16} />} label="Max Win" value={maxWin ? (pnlFormat === 'rr' ? `+${maxWin.pnl}R` : `+$${maxWin.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`) : '-'} color="text-emerald-400" subValue={maxWin?.instrument} />
-                        <StatCard icon={<Trophy size={16} />} label="Max Loss" value={maxLoss ? (pnlFormat === 'rr' ? `-${Math.abs(maxLoss.pnl).toFixed(2)}R` : `-$${Math.abs(maxLoss.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`) : '-'} color="text-rose-400" subValue={maxLoss?.instrument} />
+                        <StatCard icon={<Trophy size={16} />} label="Max Win" value={maxWin ? formatPnL(maxWin.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === maxWin.accountId)?.initialBalance : 0, maxWin.riskAmount ? maxWin.pnl / maxWin.riskAmount : undefined) : '-'} color="text-emerald-400" subValue={maxWin?.instrument} />
+                        <StatCard icon={<Trophy size={16} />} label="Max Loss" value={maxLoss ? formatPnL(maxLoss.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === maxLoss.accountId)?.initialBalance : 0, maxLoss.riskAmount ? maxLoss.pnl / maxLoss.riskAmount : undefined) : '-'} color="text-rose-400" subValue={maxLoss?.instrument} />
                      </div>
                   </div>
 
@@ -499,7 +531,9 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                                           <p className="text-[10px] text-slate-500 truncate max-w-[200px] italic">{day.review?.mainTakeaway || (day.prep?.goals[0] ? `Goal: ${day.prep.goals[0]}` : "No notes")}</p>
                                        </div>
                                     </div>
-                                    <div className="text-right"><span className={`text-lg font-black font-mono ${day.hasTrades ? (day.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-slate-500'}`}>{day.hasTrades ? (day.pnl >= 0 ? '+' : '-') : ''}{pnlFormat === 'rr' ? `${Math.abs(day.pnl).toFixed(2)}R` : `$${Math.abs(day.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</span></div>
+                                    <div className="text-right"><span className={`text-lg font-black font-mono ${day.hasTrades ? (day.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-slate-500'}`}>
+                                       {day.hasTrades ? formatPnL(day.pnl, pnlFormat, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined) : ''}
+                                    </span></div>
                                  </div>
                               ))}
                            </div>
@@ -514,7 +548,9 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                                           <div className="flex gap-1 mt-0.5">{trade.executionStatus === 'Missed' && <span className="text-[8px] bg-blue-500/20 text-blue-400 px-1.5 rounded uppercase font-bold">Missed</span>}{trade.mistakes && trade.mistakes.length > 0 && <span className="text-[8px] bg-rose-500/20 text-rose-500 px-1.5 rounded uppercase font-bold">Mistake</span>}</div>
                                        </div>
                                     </div>
-                                    <div className="text-right"><span className={`text-sm font-black font-mono ${trade.executionStatus === 'Missed' ? 'text-blue-400' : (trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>{trade.executionStatus === 'Missed' ? '±' : (trade.pnl >= 0 ? '+' : '-')}{pnlFormat === 'rr' ? `${Math.abs(trade.pnl)}R` : `$${Math.abs(trade.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</span></div>
+                                    <div className="text-right"><span className={`text-sm font-black font-mono ${trade.executionStatus === 'Missed' ? 'text-blue-400' : (trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>
+                                       {trade.executionStatus === 'Missed' ? '±' : formatPnL(trade.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === trade.accountId)?.initialBalance : 0, trade.riskAmount ? trade.pnl / trade.riskAmount : undefined)}
+                                    </span></div>
                                  </div>
                               )) : <div className="text-center py-10 opacity-30"><p className="text-[10px] font-black uppercase">No trades this week</p></div>}
                            </div>
@@ -524,12 +560,12 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                </div>
             </div>
          </div>
-         {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} />}
+         {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat || 'usd'} />}
       </>
    );
 };
 
-const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: string }> = ({ day, theme, onClose, accounts, emotions, pnlFormat }) => {
+const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number }> = ({ day, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance }) => {
    const { dateObj, pnl, trades, prep, review, dominantEmotion, hasTrades } = day;
    const isDark = theme !== 'light';
    const formattedDate = dateObj.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -564,7 +600,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                      <div className="text-right">
                         <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Daily PnL</p>
                         <p className={`text-3xl font-black font-mono leading-none ${hasTrades ? (pnl >= 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-slate-500'}`}>
-                           {hasTrades ? (pnl >= 0 ? '+' : '-') : ''}{pnlFormat === 'rr' ? `${Math.abs(pnl).toFixed(2)}R` : `$${Math.abs(pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                           {hasTrades ? formatPnL(day.pnl, pnlFormat, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined) : ''}
                         </p>
                      </div>
                      <button onClick={onClose} className="p-2.5 hover:bg-white/10 rounded-full transition-all text-slate-500 hover:text-white"><X size={24} /></button>
@@ -593,7 +629,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${t.executionStatus === 'Missed' ? 'bg-blue-500/20 text-blue-400' : (t.direction === 'Long' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-rose-500/20 text-rose-500')}`}>{t.executionStatus === 'Missed' ? 'MISSED' : t.direction}</span>
                                        <div><p className="text-[10px] font-black uppercase">{t.instrument}</p><p className="text-[9px] text-slate-500 font-mono">{t.duration}</p></div>
                                     </div>
-                                    <div className="flex items-center gap-3"><span className={`text-sm font-black font-mono ${t.executionStatus === 'Missed' ? 'text-blue-400' : (t.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>{t.executionStatus === 'Missed' ? '±' : (t.pnl >= 0 ? '+' : '-')}{pnlFormat === 'rr' ? `${Math.abs(t.pnl)}R` : `$${Math.abs(t.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</span><ArrowRight size={12} className="text-slate-600" /></div>
+                                    <div className="flex items-center gap-3"><span className={`text-sm font-black font-mono ${t.executionStatus === 'Missed' ? 'text-blue-400' : (t.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>{t.executionStatus === 'Missed' ? '±' : formatPnL(t.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === t.accountId)?.initialBalance : 0, t.riskAmount ? t.pnl / t.riskAmount : undefined)}</span><ArrowRight size={12} className="text-slate-600" /></div>
                                  </div>
                               ))}
                            </div>
@@ -607,12 +643,12 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                </div>
             </div>
          </div>
-         {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} />}
+         {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat || 'usd'} />}
       </>
    );
 };
 
-const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'oled', onClose: () => void, accounts: Account[], emotions: CustomEmotion[] }> = ({ trade, theme, onClose, accounts, emotions }) => {
+const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'oled', onClose: () => void, accounts: Account[], emotions: CustomEmotion[], pnlFormat: PnLDisplayMode }> = ({ trade, theme, onClose, accounts, emotions, pnlFormat }) => {
    const isDark = theme !== 'light';
    const [isZoomed, setIsZoomed] = useState(false);
    const [activeImageIndex, setActiveImageIndex] = useState(0);
@@ -655,7 +691,7 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{new Date(trade.date).toLocaleString('cs-CZ')}</p>
                   </div>
                </div>
-               <div className={`text-3xl font-black font-mono tracking-tighter ${pnlColor}`}>{isMissed ? '±' : (isWin ? '+' : '-')}${Math.abs(trade.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+               <div className={`text-3xl font-black font-mono tracking-tighter ${pnlColor}`}>{isMissed ? '±' : formatPnL(trade.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === trade.accountId)?.initialBalance : 0, trade.riskAmount ? trade.pnl / trade.riskAmount : undefined)}</div>
                <button onClick={onClose} className="p-2.5 hover:bg-white/10 rounded-full transition-all text-slate-500 hover:text-white"><X size={20} /></button>
             </div>
 
@@ -721,6 +757,6 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
    );
 };
 
-interface SingleMonthViewProps { year: number; month: number; trades: Trade[]; preps: DailyPrep[]; reviews: DailyReview[]; theme: 'dark' | 'light' | 'oled'; onPrev: () => void; onNext: () => void; canPrev: boolean; canNext: boolean; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: string; }
+interface SingleMonthViewProps { year: number; month: number; trades: Trade[]; preps: DailyPrep[]; reviews: DailyReview[]; theme: 'dark' | 'light' | 'oled'; onPrev: () => void; onNext: () => void; canPrev: boolean; canNext: boolean; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number; }
 
 export default DashboardCalendar;

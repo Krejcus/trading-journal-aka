@@ -1,5 +1,5 @@
 
-import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus } from '../types';
+import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate } from '../types';
 import { supabase } from './supabase';
 import { prefetchService } from './prefetchService';
 import { get, set } from 'idb-keyval';
@@ -1227,5 +1227,33 @@ export const storageService = {
         pnlFormat: perms.pnlFormat
       }
     };
+  },
+
+  // Drawing Templates
+  async getDrawingTemplates(): Promise<DrawingTemplate[]> {
+    const prefs = await this.getPreferences();
+    return (prefs as any)?.drawingTemplates || [];
+  },
+
+  async saveDrawingTemplate(template: DrawingTemplate): Promise<void> {
+    const prefs = await this.getPreferences() || {} as UserPreferences;
+    const templates: DrawingTemplate[] = (prefs as any).drawingTemplates || [];
+
+    // Check if template with same ID exists (update) or add new
+    const existingIndex = templates.findIndex(t => t.id === template.id);
+    if (existingIndex >= 0) {
+      templates[existingIndex] = template;
+    } else {
+      templates.push(template);
+    }
+
+    await this.savePreferences({ ...prefs, drawingTemplates: templates } as any);
+  },
+
+  async deleteDrawingTemplate(templateId: string): Promise<void> {
+    const prefs = await this.getPreferences() || {} as UserPreferences;
+    const templates: DrawingTemplate[] = (prefs as any).drawingTemplates || [];
+    const filtered = templates.filter(t => t.id !== templateId);
+    await this.savePreferences({ ...prefs, drawingTemplates: filtered } as any);
   }
 };

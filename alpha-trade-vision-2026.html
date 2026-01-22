@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha Trade - Brand Vision Preview</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-light: #F8FAFC;
+            --bg-dark: #0F172A;
+            --teal-bright: #2DD4BF;
+            --glass-white: rgba(255, 255, 255, 0.7);
+            --glass-dark: rgba(15, 23, 42, 0.7);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            background: #000;
+            color: white;
+            overflow-x: hidden;
+        }
+
+        .container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            position: relative;
+            transition: all 0.5s ease;
+        }
+
+        .panel-light {
+            background-color: var(--bg-light);
+            color: #1e293b;
+        }
+
+        .panel-dark {
+            background-color: var(--bg-dark);
+            color: white;
+        }
+
+        .logo-container {
+            width: 400px;
+            height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+            margin-bottom: 40px;
+            position: relative;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .panel-light .logo-container {
+            background: white;
+            border: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .panel-dark .logo-container {
+            background: #1e293b;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 0 40px rgba(45, 212, 191, 0.1);
+        }
+
+        .logo-img {
+            max-width: 80%;
+            height: auto;
+            transform: scale(1);
+            transition: transform 0.6s cubic-bezier(0.17, 0.67, 0.83, 0.67);
+        }
+
+        .logo-container:hover .logo-img {
+            transform: scale(1.05);
+        }
+
+        .label {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            font-weight: 600;
+            opacity: 0.6;
+            margin-bottom: 12px;
+        }
+
+        .title {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 24px;
+        }
+
+        .description {
+            max-width: 350px;
+            text-align: center;
+            font-size: 16px;
+            line-height: 1.6;
+            opacity: 0.7;
+        }
+
+        .specs {
+            margin-top: 40px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .spec-item {
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 13px;
+            backdrop-filter: blur(10px);
+        }
+
+        .panel-light .spec-item {
+            background: rgba(0, 0, 0, 0.03);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .panel-dark .spec-item {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 99px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .panel-light .badge {
+            background: rgba(45, 212, 191, 0.1);
+            color: #0d9488;
+        }
+
+        .panel-dark .badge {
+            background: rgba(45, 212, 191, 0.2);
+            color: var(--teal-bright);
+        }
+
+        .divider {
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: rgba(255, 255, 255, 0.1);
+            z-index: 10;
+        }
+
+        footer {
+            position: absolute;
+            bottom: 30px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        .concept-text {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 8px 16px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            font-size: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <!-- LIGHT MODE VISION -->
+        <div class="panel panel-light">
+            <div class="badge">CLEAN & PROFESSIONAL</div>
+            <div class="label">Day Experience</div>
+            <h1 class="title">Alpha Trade Light</h1>
+
+            <div class="logo-container">
+                <img src="public/logos/at_logo_glass_light.png" alt="Light Logo" class="logo-img">
+            </div>
+
+            <p class="description">
+                Transparentní sklo s jemnými azurovými odlesky. Ideální pro marketingové materiály a světlý režim
+                aplikace.
+            </p>
+
+            <div class="specs">
+                <div class="spec-item">
+                    <strong>Vizuál:</strong><br>Čisté sklo, soft shadows.
+                </div>
+                <div class="spec-item">
+                    <strong>Využití:</strong><br>Landing page, PDF, Reports.
+                </div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- DARK MODE VISION -->
+        <div class="panel panel-dark">
+            <div class="badge">LIMITLESS & FUTURISTIC</div>
+            <div class="label">Night Experience</div>
+            <h1 class="title">Alpha Trade Dark</h1>
+
+            <div class="logo-container">
+                <img src="public/logos/at_logo_glass_dark_v1.png" alt="Dark Logo" class="logo-img">
+            </div>
+
+            <p class="description">
+                Smoky glass s neonovými hranami a vnitřní hloubkou. Navrženo pro profesionální tradingový terminál.
+            </p>
+
+            <div class="specs">
+                <div class="spec-item">
+                    <strong>Vizuál:</strong><br>Edge glow, dark glass.
+                </div>
+                <div class="spec-item">
+                    <strong>Využití:</strong><br>Platforma, Desktop App.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <span class="concept-text">ALPHA TRADE BRANDING CONCEPT 2026 // VISION TEST</span>
+    </footer>
+
+</body>
+
+</html>

@@ -22,6 +22,26 @@ interface TradeReplayProps {
     initialSecondaryTimeframe?: '1m' | '5m' | '15m' | '1h' | '4h' | 'D' | 'W';
 }
 
+const getTradeDurationSeconds = (trade: Trade): number => {
+    if (trade.durationMinutes && trade.durationMinutes > 0) return trade.durationMinutes * 60;
+
+    if (trade.duration) {
+        let minutes = 0;
+        const h = trade.duration.match(/(\d+)\s*h/i);
+        const m = trade.duration.match(/(\d+)\s*m/i);
+
+        if (h) minutes += parseInt(h[1]) * 60;
+        if (m) minutes += parseInt(m[1]);
+
+        if (minutes > 0) return minutes * 60;
+
+        const val = parseFloat(trade.duration);
+        if (!isNaN(val) && val > 0) return val * 60;
+    }
+
+    return 60; // Minimum 1 minute
+};
+
 export interface TradeReplayRef {
     goToTrade: () => void;
 }
@@ -161,32 +181,27 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
         drawingsRef.current = drawings;
     }, [drawings]);
 
+    // Sync drawings state when trade.drawings prop changes (e.g. component re-mount)
+    useEffect(() => {
+        if (trade.drawings && JSON.stringify(trade.drawings) !== JSON.stringify(drawings)) {
+            setDrawings(trade.drawings);
+        }
+    }, [trade.drawings]);
+
     const saveDrawingsImmediately = useCallback(async (toSave: DrawingObject[]) => {
         setIsSaving(true);
         try {
             await storageService.updateTradeDrawings(trade.id, toSave);
-            // Also update the trade object in memory if possible (though it's a prop)
-            // trade.drawings = toSave; 
+            // Update parent trade object so small chart gets new drawings immediately
+            onUpdateTrade?.({ drawings: toSave });
         } catch (err) {
             console.error("Failed to save drawings immediately", err);
         } finally {
             setIsSaving(false);
         }
-    }, [trade.id]);
+    }, [trade.id, onUpdateTrade]);
 
-    // Auto-save drawings (Debounced for dragging)
-    useEffect(() => {
-        // Skip first render if matches initial prop
-        if (JSON.stringify(drawings) === JSON.stringify(trade.drawings)) return;
-
-        const timer = setTimeout(async () => {
-            saveDrawingsImmediately(drawings);
-        }, 1000); // 1s debounce
-
-        return () => {
-            clearTimeout(timer);
-        };
-    }, [drawings, saveDrawingsImmediately, trade.drawings]);
+    // Note: No debounced auto-save needed - updateDrawingsWithHistory saves immediately on each action
 
     // Save on unmount if changed
     useEffect(() => {
@@ -409,6 +424,11 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                     timeVisible: true,
                     secondsVisible: false,
                 },
+                crosshair: {
+                    mode: 0,
+                    vertLine: { visible: true, labelVisible: true },
+                    horzLine: { visible: true, labelVisible: true },
+                },
                 width,
                 height
             });
@@ -479,6 +499,26 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                     });
                 }
             }
+
+            // Crosshair sync from Chart2 to Chart1
+            const handleChart2CrosshairMove = (param: any) => {
+                if (!param.point || !series2Ref.current) {
+                    if (chartRef.current) {
+                        chartRef.current.clearCrosshairPosition();
+                    }
+                    return;
+                }
+
+                const data = param.seriesData.get(series);
+                if (data && chartRef.current && seriesRef.current && param.time) {
+                    chartRef.current.setCrosshairPosition(data.close, param.time, seriesRef.current);
+                }
+            };
+
+            chart.subscribeCrosshairMove(handleChart2CrosshairMove);
+            cleanupRef.current = () => {
+                chart.unsubscribeCrosshairMove(handleChart2CrosshairMove);
+            };
         }, 50);
 
         return () => {
@@ -635,7 +675,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
 
         timeScale.subscribeVisibleTimeRangeChange(handleTimeRangeChange);
         return () => timeScale.unsubscribeVisibleTimeRangeChange(handleTimeRangeChange);
-    }, [activeLayout]);
+    }, [activeLayout, chart2Ready]);
 
     // Monitor container size
     useEffect(() => {
@@ -884,7 +924,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
 
                 if (Array.isArray(rawData) && rawData.length > 0) {
                     let priceOffset = 0;
-                    const durationSeconds = (trade.durationMinutes || 0) * 60;
+                    const durationSeconds = getTradeDurationSeconds(trade);
                     const entryTimeRaw = exitTimeRaw - durationSeconds;
                     const entryPrice = parseFloat(String(trade.entryPrice || 0));
 
@@ -954,8 +994,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
         if (!chart || !currentData.length) return;
 
         const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-        const durationMinutes = trade.durationMinutes || 0;
-        const durationSeconds = durationMinutes * 60;
+        const durationSeconds = getTradeDurationSeconds(trade);
         const entryTimeRaw = exitTimeRaw - durationSeconds;
         const timeOffset = -new Date().getTimezoneOffset() * 60;
 
@@ -966,14 +1005,11 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
         // Calculate a nice range (1 hour before, 2x duration or at least 2 hours after)
         const buffer = Math.max(7200, durationSeconds * 3);
 
-        if (trade.miniViewRange) {
-            chart.timeScale().setVisibleRange(trade.miniViewRange as any);
-        } else {
-            chart.timeScale().setVisibleRange({
-                from: (visualEntry - 3600) as Time,
-                to: (visualExit + buffer) as Time,
-            });
-        }
+        // Always center on trade (ignore saved view)
+        chart.timeScale().setVisibleRange({
+            from: (visualEntry - 3600) as Time,
+            to: (visualExit + buffer) as Time,
+        });
 
         // Force vertical autoscale to include Entry/SL/TP prices
         setTimeout(() => {
@@ -998,22 +1034,29 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                             },
                         }),
                     });
-                    // Trigger recalculation
-                    chart.timeScale().scrollToPosition(0, false);
+                    // NOTE: Removed scrollToPosition as it was resetting the view
+                }
+
+                // Also set autoscale for chart2
+                if (series2Ref.current) {
+                    series2Ref.current.applyOptions({
+                        autoscaleInfoProvider: () => ({
+                            priceRange: {
+                                minValue: minPrice - padding,
+                                maxValue: maxPrice + padding,
+                            },
+                        }),
+                    });
                 }
             }
         }, 100);
 
-        // If split view, center both
+        // If split view, always center on trade (ignore saved view)
         if (chart2Ref.current) {
-            if (trade.miniViewSecondaryRange) {
-                chart2Ref.current.timeScale().setVisibleRange(trade.miniViewSecondaryRange as any);
-            } else {
-                chart2Ref.current.timeScale().setVisibleRange({
-                    from: (visualEntry - 3600) as Time,
-                    to: (visualExit + buffer) as Time,
-                });
-            }
+            chart2Ref.current.timeScale().setVisibleRange({
+                from: (visualEntry - 3600) as Time,
+                to: (visualExit + buffer) as Time,
+            });
         }
     }, [trade.date, trade.durationMinutes, trade.miniViewRange, trade.miniViewSecondaryRange, trade.entryPrice, trade.stopLoss, trade.takeProfit]);
 
@@ -1190,8 +1233,8 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             },
             crosshair: {
                 mode: 0,
-                vertLine: { visible: false, labelVisible: true },
-                horzLine: { visible: false, labelVisible: true },
+                vertLine: { visible: true, labelVisible: true },
+                horzLine: { visible: true, labelVisible: true },
             },
             timeScale: {
                 borderColor: isDark ? '#2a2e39' : '#e0e3eb',
@@ -1255,10 +1298,14 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
 
         window.addEventListener('resize', handleResize);
 
-        // Crosshair Legend Handler
+        // Crosshair Legend Handler + Sync to Chart2
         const handleCrosshairMove = (param: any) => {
             if (!param.point || !seriesRef.current) {
                 setCrosshairValues(null);
+                // Clear crosshair on chart2 when leaving chart1
+                if (chart2Ref.current) {
+                    chart2Ref.current.clearCrosshairPosition();
+                }
                 return;
             }
 
@@ -1271,6 +1318,11 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 // Date formatting
                 const dateStr = new Date((data.time as number) * 1000).toLocaleString();
                 setCrosshairValues({ open, high, low, close, date: dateStr });
+
+                // Sync crosshair to chart2
+                if (chart2Ref.current && series2Ref.current && param.time) {
+                    chart2Ref.current.setCrosshairPosition(data.close, param.time, series2Ref.current);
+                }
             }
         };
 
@@ -1424,9 +1476,9 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             // we'll re-run the simple heuristic logic or store it in a ref.
 
             // Re-running heuristic for display sync (fast enough)
-            const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-            const durationSeconds = (trade.durationMinutes || 0) * 60;
-            const entryTimeRaw = exitTimeRaw - durationSeconds;
+            const entryTimeRaw = new Date(trade.date).getTime() / 1000;
+            const durationSeconds = getTradeDurationSeconds(trade);
+            const exitTimeRaw = entryTimeRaw + durationSeconds;
 
             const timeOffset = -new Date().getTimezoneOffset() * 60;
 
@@ -1453,32 +1505,13 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
             const tpData: any[] = [];
             const slData: any[] = [];
 
-            // CRITICAL FIX: Add explicit entry and exit points first
-            // This ensures baseline series renders the full trade duration
-            if (tpPrice) {
-                tpData.push({ time: shiftedEntryTime as Time, value: tpPrice });
-            }
-            if (slPrice) {
-                slData.push({ time: shiftedEntryTime as Time, value: slPrice });
-            }
-
-            // Add all candles within the trade duration
             allData.forEach(d => {
                 const t = d.time as number;
-                // Only add candles that are strictly within the range (not at endpoints)
-                if (t > shiftedEntryTime && t < shiftedExitTime) {
+                if (t >= shiftedEntryTime && t <= shiftedExitTime) {
                     if (tpPrice) tpData.push({ time: t, value: tpPrice });
                     if (slPrice) slData.push({ time: t, value: slPrice });
                 }
             });
-
-            // Add explicit exit point
-            if (tpPrice) {
-                tpData.push({ time: shiftedExitTime as Time, value: tpPrice });
-            }
-            if (slPrice) {
-                slData.push({ time: shiftedExitTime as Time, value: slPrice });
-            }
 
             if (showRRRBoxes) {
                 if (tpSeriesRef.current && tpData.length > 0) tpSeriesRef.current.setData(tpData);
@@ -1494,31 +1527,13 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 const secondaryTpData: any[] = [];
                 const secondarySlData: any[] = [];
 
-                // CRITICAL FIX: Add explicit entry and exit points for secondary chart
-                if (tpPrice) {
-                    secondaryTpData.push({ time: shiftedEntryTime as Time, value: tpPrice });
-                }
-                if (slPrice) {
-                    secondarySlData.push({ time: shiftedEntryTime as Time, value: slPrice });
-                }
-
-                // Add all candles within the trade duration
                 allSecondaryData.forEach(d => {
                     const t = d.time as number;
-                    // Only add candles that are strictly within the range (not at endpoints)
-                    if (t > shiftedEntryTime && t < shiftedExitTime) {
+                    if (t >= shiftedEntryTime && t <= shiftedExitTime) {
                         if (tpPrice) secondaryTpData.push({ time: t, value: tpPrice });
                         if (slPrice) secondarySlData.push({ time: t, value: slPrice });
                     }
                 });
-
-                // Add explicit exit point
-                if (tpPrice) {
-                    secondaryTpData.push({ time: shiftedExitTime as Time, value: tpPrice });
-                }
-                if (slPrice) {
-                    secondarySlData.push({ time: shiftedExitTime as Time, value: slPrice });
-                }
 
                 if (showRRRBoxes) {
                     if (tpSeries2Ref.current && secondaryTpData.length > 0) tpSeries2Ref.current.setData(secondaryTpData);
@@ -1656,7 +1671,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
 
     const wrapperClasses = embedded
         ? "w-full h-full"
-        : "fixed inset-0 z-[200] bg-black/95 backdrop-blur-3xl flex items-center justify-center animate-in fade-in duration-300"; // Removed p-4
+        : "fixed inset-0 z-[200] bg-black/95 backdrop-blur-3xl animate-in fade-in duration-300"; // Removed flex centering
 
     const content = (
         <div className={containerClasses}>
@@ -1738,14 +1753,91 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 {/* Center/Right: Actions */}
                 <div className="flex items-center gap-2">
                     {!minimal && (
-                        <button
-                            onClick={() => setActiveLayout(prev => prev === 'single' ? 'split' : 'single')}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all active:scale-95 group ${activeLayout === 'split' ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-500/10 text-slate-500 hover:bg-slate-600 hover:text-white'}`}
-                            title={activeLayout === 'split' ? "Switch to Single View" : "Switch to Split View"}
-                        >
-                            {activeLayout === 'split' ? <Square size={16} /> : <Columns size={16} />}
-                            <span className="font-bold text-[10px] uppercase tracking-wider hidden lg:inline">{activeLayout === 'split' ? 'Single' : 'Split'}</span>
-                        </button>
+                        <>
+                            {/* Trade Button - centers on trade */}
+                            <button
+                                onClick={handleGoToTrade}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all active:scale-95 ${isDark ? 'bg-blue-600/20 border-blue-500/20 text-blue-400 hover:bg-blue-600 hover:text-white' : 'bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-600 hover:text-white'}`}
+                                title="Vycentrovat na obchod"
+                            >
+                                <Target size={16} />
+                                <span className="font-bold text-[10px] uppercase tracking-wider hidden lg:inline">Trade</span>
+                            </button>
+
+                            {/* Settings Dropdown */}
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowVizSettings(!showVizSettings)}
+                                    className={`p-2 rounded-xl border transition-all active:scale-95 ${showVizSettings
+                                        ? (isDark ? 'bg-slate-700 border-slate-600 text-white' : 'bg-slate-200 border-slate-300 text-slate-900')
+                                        : (isDark ? 'bg-slate-500/10 border-slate-700/50 text-slate-400 hover:text-white hover:bg-slate-700' : 'bg-slate-100 border-slate-200 text-slate-500 hover:text-slate-900')}`}
+                                    title="Nastavení vizualizace"
+                                >
+                                    <Settings size={16} />
+                                </button>
+
+                                {showVizSettings && (
+                                    <div className={`absolute top-full right-0 mt-2 w-48 py-2 rounded-xl shadow-2xl border z-[100] animate-in fade-in slide-in-from-top-2 duration-200 ${isDark ? 'bg-[#1e222d] border-slate-700' : 'bg-white border-slate-200'}`}>
+                                        {/* Toggle RRR Boxes */}
+                                        <button
+                                            onClick={() => setShowRRRBoxes(!showRRRBoxes)}
+                                            className={`w-full flex items-center justify-between px-3 py-2 hover:bg-blue-500/10 transition-colors`}
+                                        >
+                                            <span className={`text-xs font-medium ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>RRR boxy</span>
+                                            <div className={`w-4 h-4 rounded border flex items-center justify-center ${showRRRBoxes
+                                                ? 'bg-blue-500 border-blue-500 text-white'
+                                                : (isDark ? 'border-slate-600' : 'border-slate-300')}`}>
+                                                {showRRRBoxes && <span className="text-[10px]">✓</span>}
+                                            </div>
+                                        </button>
+
+                                        {/* Toggle Price Lines */}
+                                        <button
+                                            onClick={() => setShowPriceLines(!showPriceLines)}
+                                            className={`w-full flex items-center justify-between px-3 py-2 hover:bg-blue-500/10 transition-colors`}
+                                        >
+                                            <span className={`text-xs font-medium ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>Úrovně (linky)</span>
+                                            <div className={`w-4 h-4 rounded border flex items-center justify-center ${showPriceLines
+                                                ? 'bg-blue-500 border-blue-500 text-white'
+                                                : (isDark ? 'border-slate-600' : 'border-slate-300')}`}>
+                                                {showPriceLines && <span className="text-[10px]">✓</span>}
+                                            </div>
+                                        </button>
+
+                                        <div className={`my-2 h-px ${isDark ? 'bg-slate-700' : 'bg-slate-200'}`} />
+
+                                        {/* Pin/Unpin View */}
+                                        <button
+                                            onClick={() => {
+                                                if (hasSavedView) {
+                                                    handleClearView();
+                                                } else {
+                                                    handleSaveView();
+                                                }
+                                                setShowVizSettings(false);
+                                            }}
+                                            disabled={isFixingView}
+                                            className={`w-full flex items-center gap-2 px-3 py-2 hover:bg-blue-500/10 transition-colors ${isFixingView ? 'opacity-50' : ''}`}
+                                        >
+                                            {hasSavedView ? <PinOff size={14} className="text-amber-500" /> : <Pin size={14} className={isDark ? 'text-slate-400' : 'text-slate-500'} />}
+                                            <span className={`text-xs font-medium ${hasSavedView ? 'text-amber-500' : (isDark ? 'text-slate-300' : 'text-slate-700')}`}>
+                                                {hasSavedView ? 'Zrušit fixaci' : 'Zafixovat pohled'}
+                                            </span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Single/Split Toggle */}
+                            <button
+                                onClick={() => setActiveLayout(prev => prev === 'single' ? 'split' : 'single')}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-all active:scale-95 group ${activeLayout === 'split' ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-500/10 text-slate-500 hover:bg-slate-600 hover:text-white'}`}
+                                title={activeLayout === 'split' ? "Switch to Single View" : "Switch to Split View"}
+                            >
+                                {activeLayout === 'split' ? <Square size={16} /> : <Columns size={16} />}
+                                <span className="font-bold text-[10px] uppercase tracking-wider hidden lg:inline">{activeLayout === 'split' ? 'Single' : 'Split'}</span>
+                            </button>
+                        </>
                     )}
 
                     {!embedded && (
@@ -1840,6 +1932,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                                     setHoverPrice(p);
                                     setHoverTime(t);
                                 }}
+                                readOnly={minimal}
                             />
 
                             {/* Context Menu */}
@@ -1979,6 +2072,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                                     setHoverPrice(p);
                                     setHoverTime(t);
                                 }}
+                                readOnly={minimal}
                             />
 
                             {isLoading && (
@@ -1991,23 +2085,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                 </div>
             </div >
 
-            {/* Footer - Optional for embedded if too cramped */}
-            < div className="h-10 md:h-14 border-t border-slate-700/30 flex items-center justify-between px-4 md:px-8 bg-black/20 text-[10px]" >
-                <div className="flex gap-4 md:gap-8">
-                    <div className="flex flex-col">
-                        <span className="text-[8px] font-black uppercase text-slate-500">Entry</span>
-                        <span className="font-black font-mono text-blue-400">${trade.entryPrice}</span>
-                    </div>
-                    <div className="flex flex-col">
-                        <span className="text-[8px] font-black uppercase text-slate-500">Close</span>
-                        <span className={`font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>${trade.exitPrice}</span>
-                    </div>
-                </div>
-                <div className="flex items-center gap-2 opacity-50">
-                    <div className={`w-2 h-2 rounded-full ${isLoading ? 'bg-amber-500 animate-pulse' : (Array.isArray(allData) && allData.length > 0 ? 'bg-emerald-500' : 'bg-slate-500')}`}></div>
-                    <span className="font-bold uppercase tracking-wider text-[8px] md:text-[9px]">{isLoading ? 'Fetching Data...' : (Array.isArray(allData) && allData.length > 0 ? 'Dukascopy Data' : 'No Data')}</span>
-                </div>
-            </div >
+            {/* Footer removed for fullscreen mode */}
 
             {/* Replay Widget */}
             {
@@ -2042,73 +2120,7 @@ const TradeReplay = React.forwardRef<TradeReplayRef, TradeReplayProps>(({
                     <div className="absolute top-4 right-4 flex gap-2 z-[60]">
                         {/* TRADE button - always centers on trade */}
                         <button
-                            onClick={() => {
-                                // Always center on trade, ignoring saved view
-                                const chart = chartRef.current;
-                                const currentData = allDataRef.current;
-                                if (!chart || !currentData.length) return;
-
-                                const exitTimeRaw = new Date(trade.date).getTime() / 1000;
-                                const durationMinutes = trade.durationMinutes || 0;
-                                const durationSeconds = durationMinutes * 60;
-                                const entryTimeRaw = exitTimeRaw - durationSeconds;
-                                const timeOffset = -new Date().getTimezoneOffset() * 60;
-
-                                const visualEntry = entryTimeRaw + timeOffset;
-                                const visualExit = exitTimeRaw + timeOffset;
-                                const buffer = Math.max(7200, durationSeconds * 3);
-
-                                chart.timeScale().setVisibleRange({
-                                    from: (visualEntry - 3600) as any,
-                                    to: (visualExit + buffer) as any,
-                                });
-
-                                // Also center Chart 2 if in split view
-                                if (chart2Ref.current) {
-                                    chart2Ref.current.timeScale().setVisibleRange({
-                                        from: (visualEntry - 3600) as any,
-                                        to: (visualExit + buffer) as any,
-                                    });
-                                }
-
-                                // Force vertical autoscale for main chart
-                                setTimeout(() => {
-                                    const entryPrice = parseFloat(String(trade.entryPrice || 0));
-                                    const slPrice = parseFloat(String(trade.stopLoss || 0));
-                                    const tpPrice = parseFloat(String(trade.takeProfit || 0));
-
-                                    const prices = [entryPrice, slPrice, tpPrice].filter(p => p > 0);
-                                    if (prices.length > 0) {
-                                        const minPrice = Math.min(...prices);
-                                        const maxPrice = Math.max(...prices);
-                                        const padding = (maxPrice - minPrice) * 0.5 || 50;
-
-                                        // Main chart autoscale
-                                        if (seriesRef.current) {
-                                            seriesRef.current.applyOptions({
-                                                autoscaleInfoProvider: () => ({
-                                                    priceRange: {
-                                                        minValue: minPrice - padding,
-                                                        maxValue: maxPrice + padding,
-                                                    },
-                                                }),
-                                            });
-                                        }
-
-                                        // Secondary chart autoscale
-                                        if (series2Ref.current) {
-                                            series2Ref.current.applyOptions({
-                                                autoscaleInfoProvider: () => ({
-                                                    priceRange: {
-                                                        minValue: minPrice - padding,
-                                                        maxValue: maxPrice + padding,
-                                                    },
-                                                }),
-                                            });
-                                        }
-                                    }
-                                }, 50);
-                            }}
+                            onClick={handleGoToTrade}
                             className={`px-3 py-1.5 rounded-xl border backdrop-blur-md transition-all active:scale-95 flex items-center gap-1.5 font-bold text-[10px] uppercase tracking-wider ${isDark ? 'bg-blue-600/20 border-blue-500/20 text-blue-400 hover:bg-blue-600 hover:text-white' : 'bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-600 hover:text-white'}`}
                             title="Vycentrovat na obchod"
                         >

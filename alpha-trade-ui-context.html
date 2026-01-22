@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha Trade - Dashboard & Favicon Preview</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #020617;
+            --sidebar-bg: #0f172a;
+            --card-bg: #1e293b;
+            --accent: #2dd4bf;
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: #f8fafc;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* SIDEBAR SIMULATION */
+        .sidebar {
+            width: 260px;
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--glass-border);
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+        }
+
+        .brand-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 48px;
+            padding: 8px;
+        }
+
+        /* LOGO AS IT WOULD APPEAR IN DASHROARD (SIDEBAR) */
+        .logo-box {
+            width: 42px;
+            height: 42px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-box img {
+            width: 100%;
+            height: auto;
+            /* Mocking the transparency effect by removing background from the visual if possible via CSS filters or just using the image */
+            filter: drop-shadow(0 0 8px rgba(45, 212, 191, 0.3));
+        }
+
+        .brand-name {
+            font-family: 'Outfit', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(to right, #fff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-item {
+            padding: 12px 16px;
+            margin-bottom: 4px;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .nav-item.active {
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+            border-left: 3px solid var(--accent);
+        }
+
+        /* MAIN DASHBOARD CONTENT */
+        .main-content {
+            flex: 1;
+            padding: 32px;
+            overflow-y: auto;
+            background: radial-gradient(circle at top right, rgba(45, 212, 191, 0.05), transparent);
+        }
+
+        .mock-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+
+        .mock-chart {
+            width: 100%;
+            height: 400px;
+            background: var(--card-bg);
+            border-radius: 16px;
+            border: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mock-chart::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: repeating-linear-gradient(90deg, transparent, transparent 40px, rgba(255, 255, 255, 0.02) 40px, rgba(255, 255, 255, 0.02) 41px);
+        }
+
+        .floating-logo-bg {
+            position: absolute;
+            width: 600px;
+            opacity: 0.05;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        /* BROWSER TAB SIMULATION (FAVICON) */
+        .browser-mockup {
+            position: fixed;
+            top: 40px;
+            right: 40px;
+            width: 320px;
+            background: #202124;
+            border-radius: 12px 12px 0 0;
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+        }
+
+        .browser-tabs {
+            height: 40px;
+            display: flex;
+            padding: 4px 8px 0;
+            background: #101010;
+        }
+
+        .tab {
+            background: #202124;
+            padding: 8px 16px;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            width: 140px;
+            color: #ccc;
+        }
+
+        .favicon {
+            width: 16px;
+            height: 16px;
+            background: #1e293b;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .favicon img {
+            width: 100%;
+            height: auto;
+            transform: scale(1.2);
+        }
+
+        .browser-address {
+            height: 34px;
+            background: #202124;
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+        }
+
+        .address-bar {
+            background: #2c2d30;
+            height: 24px;
+            flex: 1;
+            border-radius: 12px;
+            font-size: 11px;
+            color: #aaa;
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+        }
+
+        .section-label {
+            position: absolute;
+            background: var(--accent);
+            color: #000;
+            font-weight: 700;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            top: -10px;
+            left: 20px;
+            letter-spacing: 0.05em;
+        }
+
+        .concept-wrapper {
+            position: relative;
+            margin-bottom: 60px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- SIDEBAR DASHBOARD VIEW -->
+    <div class="sidebar">
+        <div class="brand-container">
+            <div class="logo-box">
+                <!-- Using the dark version for the sidebar -->
+                <img src="/Users/filipkrejca/.gemini/antigravity/brain/5eb24a39-35d2-4545-bf31-dceec5a47105/uploaded_image_1768942306566.png"
+                    alt="AT Logo">
+            </div>
+            <div class="brand-name">Alpha Trade</div>
+        </div>
+
+        <div class="nav-item active">Dashboard</div>
+        <div class="nav-item">Trading Journal</div>
+        <div class="nav-item">Performance</div>
+        <div class="nav-item">Strategies</div>
+        <div class="nav-item">Settings</div>
+    </div>
+
+    <!-- MAIN PLATFORM VIEW -->
+    <div class="main-content">
+        <div class="mock-header">
+            <div>
+                <h2 style="margin:0; font-family:'Outfit';">Professional Terminal</h2>
+                <p style="color:#94a3b8; font-size:14px; margin-top:4px;">Welcome back, Trader.</p>
+            </div>
+            <div
+                style="background: rgba(45, 212, 191, 0.1); border: 1px solid var(--accent); padding: 8px 16px; border-radius: 8px; font-size: 13px; color: var(--accent);">
+                LIVE MARKET: CONNECTED
+            </div>
+        </div>
+
+        <div class="concept-wrapper">
+            <div class="section-label">LOGO V SIDEBARU (PROFIL)</div>
+            <div class="mock-chart">
+                <img src="/Users/filipkrejca/.gemini/antigravity/brain/5eb24a39-35d2-4545-bf31-dceec5a47105/uploaded_image_1768942306566.png"
+                    class="floating-logo-bg" alt="Watermark">
+                <div style="z-index: 1; text-align: center;">
+                    <p style="font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.2em;">
+                        Platform Watermark Preview</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BROWSER TAB / FAVICON MOCKUP -->
+    <div class="browser-mockup">
+        <div class="browser-tabs">
+            <div class="tab">
+                <div class="favicon">
+                    <!-- Favicon needs to be very clear, even at 16x16 -->
+                    <img src="/Users/filipkrejca/.gemini/antigravity/brain/5eb24a39-35d2-4545-bf31-dceec5a47105/uploaded_image_1768942306566.png"
+                        alt="Favicon">
+                </div>
+                <div>Alpha Trade | Journal</div>
+            </div>
+            <div style="color: #555; font-size: 18px; margin-left: 8px; margin-top: 4px;">+</div>
+        </div>
+        <div class="browser-address">
+            <div class="address-bar">https://app.alphatrade.co/dashboard</div>
+        </div>
+        <div style="height: 100px; background: #020617; position: relative;">
+            <div class="section-label" style="top: 10px;">TAB / FAVICON DETAIL</div>
+        </div>
+    </div>
+
+    <div
+        style="position: fixed; bottom: 20px; right: 20px; background: rgba(0,0,0,0.8); padding: 12px 20px; border-radius: 30px; border: 1px solid var(--glass-border); font-size: 13px; display: flex; gap: 15px;">
+        <span style="color: #94a3b8;"><span style="color:var(--accent)">●</span> Dashboard Integration</span>
+        <span style="color: #94a3b8;"><span style="color:var(--accent)">●</span> Browser Favicon View</span>
+    </div>
+
+</body>
+
+</html>

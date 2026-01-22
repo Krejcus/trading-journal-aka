@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha Bridge - Logo Concepts & Light Theme</title>
+    <style>
+        :root {
+            --bg-light: #f8fafc;
+            --accent: #0ea5e9;
+            --text-dark: #0f172a;
+            --text-muted: #64748b;
+            --glass-light: rgba(255, 255, 255, 0.8);
+            --border-light: rgba(0, 0, 0, 0.05);
+            --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.1);
+        }
+
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-light);
+            font-family: 'Inter', system-ui, sans-serif;
+            color: var(--text-dark);
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 60px 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 80px;
+        }
+
+        header h1 {
+            font-size: 36px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            margin-bottom: 12px;
+        }
+
+        header p {
+            color: var(--text-muted);
+            font-size: 18px;
+        }
+
+        /* Logo Gallery */
+        .logo-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 32px;
+            margin-bottom: 100px;
+        }
+
+        .logo-card {
+            background: white;
+            border-radius: 24px;
+            padding: 24px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-light);
+            text-align: center;
+            transition: transform 0.3s;
+        }
+
+        .logo-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .logo-image {
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: 12px;
+            object-fit: cover;
+            margin-bottom: 20px;
+            border: 1px solid #f1f5f9;
+        }
+
+        .logo-title {
+            font-weight: 700;
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+
+        .logo-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        /* Light Theme Preview UI */
+        .ui-preview-section {
+            background: white;
+            border-radius: 40px;
+            padding: 60px;
+            position: relative;
+            box-shadow: 0 40px 100px -20px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e2e8f0;
+            overflow: hidden;
+        }
+
+        .tv-mock {
+            width: 100%;
+            height: 400px;
+            background: #f1f5f9 url('https://static.tradingview.com/static/bundles/chart-screenshot-placeholder.7a0f679f.png');
+            background-size: cover;
+            filter: opacity(0.3) grayscale(1);
+            border-radius: 20px;
+        }
+
+        /* Highlighting the Light UI Bridge */
+        .light-bridge-sidebar {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 320px;
+            background: var(--glass-light);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 24px;
+            box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+            z-index: 10;
+        }
+
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+        }
+
+        .sidebar-header h2 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            color: var(--accent);
+        }
+
+        .input-box {
+            background: rgba(0, 0, 0, 0.03);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+            border-radius: 12px;
+            padding: 10px 14px;
+            margin-bottom: 12px;
+        }
+
+        .label {
+            font-size: 9px;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .val {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .btn-action {
+            background: var(--accent);
+            color: white;
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 12px;
+            font-weight: 700;
+            margin-top: 10px;
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3);
+        }
+
+        .trigger-mock {
+            position: absolute;
+            bottom: 30px;
+            right: 360px;
+            width: 50px;
+            height: 50px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+        }
+
+        .trigger-mock img {
+            width: 28px;
+            height: 28px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <header>
+            <h1>Alpha Bridge: Brand Concepts</h1>
+            <p>Moderní loga pro světlý TradingView vzhled</p>
+        </header>
+
+        <div class="logo-grid">
+            <div class="logo-card">
+                <img src="branding/logo1.png" class="logo-image">
+                <div class="logo-title">1. Minimalist Arrow</div>
+                <div class="logo-desc">Čisté 'A' s integrovaným trendem a mostem. Dynamické, lehké a velmi moderní.
+                </div>
+            </div>
+
+            <div class="logo-card">
+                <img src="branding/logo2.png" class="logo-image">
+                <div class="logo-title">2. Geometric Precision</div>
+                <div class="logo-desc">Abstraktní propojení dvou bodů v symbolu Alpha. Působí stabilně a profesionálně.
+                </div>
+            </div>
+
+            <div class="logo-card">
+                <img src="branding/logo3.png" class="logo-image">
+                <div class="logo-title">3. Glass Crystal</div>
+                <div class="logo-desc">3D glassmorphism styl. Vypadá jako luxusní skleněný objekt, skvěle doplňuje
+                    Apple-like estetiku.</div>
+            </div>
+
+            <div class="logo-card">
+                <img src="branding/logo4.png" class="logo-image">
+                <div class="logo-title">4. High-Tech Bridge</div>
+                <div class="logo-desc">Detailní digitální struktura mostu. Zdůrazňuje technickou vyspělost a
+                    konektivitu.</div>
+            </div>
+        </div>
+
+        <section class="ui-preview-section">
+            <div style="margin-bottom: 30px; text-align: center;">
+                <h2 style="font-size: 24px;">Light Theme Integration</h2>
+                <p style="color: var(--text-muted);">Ukázka, jak by zvolené logo a panel vypadaly přímo v TradingView.
+                </p>
+            </div>
+
+            <div class="tv-mock"></div>
+
+            <div class="trigger-mock">
+                <!-- Mocking the first logo as the trigger -->
+                <img src="branding/logo1.png">
+            </div>
+
+            <div class="light-bridge-sidebar">
+                <div class="sidebar-header">
+                    <h2>ALPHA BRIDGE</h2>
+                    <div style="font-size: 18px; cursor: pointer; opacity: 0.3;">&times;</div>
+                </div>
+
+                <div class="input-box">
+                    <div class="label">Trading Symbol</div>
+                    <div class="val">MNQ</div>
+                </div>
+
+                <div class="input-box">
+                    <div class="label">Direction</div>
+                    <div class="val" style="color: #10b981;">LONG</div>
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <div class="input-box" style="flex: 1;">
+                        <div class="label">RR</div>
+                        <div class="val">1 : 4.5</div>
+                    </div>
+                </div>
+
+                <button class="btn-action">SEND TO JOURNAL</button>
+            </div>
+        </section>
+    </div>
+
+</body>
+
+</html>

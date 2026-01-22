@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import { DrawingObject } from '../types';
+import DrawingSettingsModal from './DrawingSettingsModal';
 
 interface InteractiveOverlayProps {
     drawings: DrawingObject[];
@@ -21,6 +22,7 @@ interface InteractiveOverlayProps {
     onHoverUpdate?: (price: number | null, time: number | null) => void;
     liveDrawing?: DrawingObject | null;
     onLiveDrawingChange?: (drawing: DrawingObject | null) => void;
+    readOnly?: boolean; // View-only mode - no interactions allowed
 }
 
 export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
@@ -41,7 +43,8 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
     isReplayMode,
     onHoverUpdate,
     liveDrawing,
-    onLiveDrawingChange
+    onLiveDrawingChange,
+    readOnly = false
 }) => {
     const isDark = theme !== 'light';
     // ...
@@ -61,10 +64,12 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
 
     // Toolbar State
     const [toolbarPos, setToolbarPos] = useState<{ x: number, y: number } | null>(null);
+    const [showColorPicker, setShowColorPicker] = useState(false);
     const isDraggingRef = useRef(false);
     const dragStartRef = useRef<{ x: number, y: number } | null>(null);
 
     const [hoveredId, setHoveredId] = useState<string | null>(null);
+    const [redrawRevision, setRedrawRevision] = useState(0); // Triggers re-render when chart viewport changes
     const svgRef = useRef<SVGSVGElement>(null);
 
     // Helpers
@@ -309,6 +314,20 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
         return () => window.removeEventListener('mousedown', handleWindowMouseDown);
     }, [activeTool]);
 
+    // Force re-render when chart viewport changes (fixes lag on right chart)
+    useEffect(() => {
+        if (!chart || !series) return;
+
+        // Trigger re-render periodically to update drawing positions when viewport changes
+        const interval = setInterval(() => {
+            setRedrawRevision(prev => prev + 1);
+        }, 50); // Check every 50ms for viewport changes
+
+        return () => {
+            clearInterval(interval);
+        };
+    }, [chart, series]);
+
     // Global Drag Handlers
     useEffect(() => {
         // Drawing Drag Logic
@@ -536,24 +555,25 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                 ref={svgRef}
                 className="absolute inset-0 w-full h-full"
                 style={{
-                    pointerEvents: activeTool !== 'cursor' ? 'auto' : 'none',
+                    pointerEvents: readOnly ? 'none' : (activeTool !== 'cursor' ? 'auto' : 'none'),
                     cursor: activeTool === ('scissors' as any) ? 'crosshair' : 'default'
                 }}
-                onClick={handleClick}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseLeave={handleMouseLeave}
+                onClick={readOnly ? undefined : handleClick}
+                onMouseDown={readOnly ? undefined : handleMouseDown}
+                onMouseMove={readOnly ? undefined : handleMouseMove}
+                onMouseLeave={readOnly ? undefined : handleMouseLeave}
             >
                 {displayDrawings.map(d => {
                     const s1 = toScreen(d.p1);
                     const s2 = d.p2 ? toScreen(d.p2) : null;
                     if (!s1) return null;
 
-                    const isSelected = d.id === selectedId;
+                    const isSelected = !readOnly && d.id === selectedId;
+                    const isHovered = !readOnly && hoveredId === d.id;
                     return (
                         <React.Fragment key={d.id}>
-                            {renderShape(d, s1, s2, isSelected, isDark, hoveredId === d.id)}
-                            {(isSelected || hoveredId === d.id) && renderAnchors(s1, s2)}
+                            {renderShape(d, s1, s2, isSelected, isDark, isHovered)}
+                            {!readOnly && (isSelected || isHovered) && renderAnchors(s1, s2)}
                         </React.Fragment>
                     )
                 })}
@@ -627,7 +647,7 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
             </svg>
 
             {/* Floating Toolbar */}
-            {selectedId && toolbarPos && (() => {
+            {selectedId && toolbarPos && !readOnly && (() => {
                 const selectedDrawing = safeDrawings.find(d => d.id === selectedId);
                 if (!selectedDrawing) return null;
 
@@ -635,18 +655,19 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                     onUpdateDrawings(safeDrawings.map(d => d.id === selectedId ? { ...d, ...updates } : d));
                 };
 
+                const COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#000000', '#ffffff'];
+
                 return (
-                    // WRAPPER for toolbar + modal
                     <div className="fixed z-50 pointer-events-auto toolbar-container" style={{ left: toolbarPos.x, top: toolbarPos.y }}>
 
-                        {/* MAIN TOOLBAR */}
+                        {/* MAIN TOOLBAR - Compact */}
                         <div
-                            className="flex items-center gap-2 p-1 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 pointer-events-auto"
+                            className="flex items-center gap-1 p-1.5 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700"
                             onMouseDown={(e) => e.stopPropagation()}
                         >
                             {/* Drag Handle */}
                             <div
-                                className="cursor-move p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                                className="cursor-move p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                                 onMouseDown={(e) => {
                                     e.stopPropagation();
                                     isDraggingRef.current = true;
@@ -656,73 +677,26 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 22a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM16 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM16 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM16 22a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" /></svg>
                             </div>
 
-                            <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"></div>
+                            <div className="w-px h-5 bg-gray-200 dark:bg-gray-600"></div>
 
-                            {/* Color */}
-                            <div className="flex items-center gap-1">
-                                {['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#000000', '#ffffff'].map(c => (
-                                    <button
-                                        key={c}
-                                        className={`w-4 h-4 rounded-full border border-gray-300 ${selectedDrawing.color === c ? 'ring-2 ring-offset-1 ring-blue-500' : ''}`}
-                                        style={{ backgroundColor: c }}
-                                        onClick={() => updateDrawing({ color: c })}
-                                    />
-                                ))}
-                            </div>
-
-                            <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"></div>
-
-                            <select
-                                className="bg-transparent text-sm border-none focus:ring-0 cursor-pointer dark:text-white"
-                                value={selectedDrawing.lineWidth || 2}
-                                onChange={(e) => updateDrawing({ lineWidth: parseInt(e.target.value) })}
+                            {/* Settings Button - Opens full modal */}
+                            <button
+                                className={`p-1.5 rounded-lg transition-colors ${showSettingsId === selectedId ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                                onClick={() => { setShowSettingsId(showSettingsId === selectedId ? null : selectedId); setShowVisibilityId(null); }}
                             >
-                                <option value="1">1px</option>
-                                <option value="2">2px</option>
-                                <option value="3">3px</option>
-                                <option value="4">4px</option>
-                            </select>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" /></svg>
+                            </button>
 
-                            <select
-                                className="bg-transparent text-sm border-none focus:ring-0 cursor-pointer dark:text-white"
-                                value={selectedDrawing.lineStyle || 'solid'}
-                                onChange={(e) => updateDrawing({ lineStyle: e.target.value as any })}
-                            >
-                                <option value="solid">Solid</option>
-                                <option value="dashed">Dashed</option>
-                                <option value="dotted">Dotted</option>
-                            </select>
-
-                            {/* SETTINGS BUTTON (Only for Fib for now) */}
-                            {selectedDrawing.type === 'fib' && (
-                                <>
-                                    <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"></div>
-                                    <button
-                                        className={`p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 ${showSettingsId === selectedId ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600' : 'text-gray-500'}`}
-                                        onClick={() => setShowSettingsId(showSettingsId === selectedId ? null : selectedId)}
-                                    >
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" /></svg>
-                                    </button>
-                                </>
-                            )}
-
-                            <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"></div>
-
+                            {/* Visibility Button */}
                             <div className="relative">
                                 <button
-                                    className={`p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 ${(selectedDrawing.visibleTimeframes && selectedDrawing.visibleTimeframes.length < 4) || showVisibilityId === selectedId ? 'text-blue-500' : 'text-gray-500'}`}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setShowVisibilityId(showVisibilityId === selectedId ? null : selectedId);
-                                        setShowSettingsId(null); // Close other menu
-                                    }}
+                                    className={`p-1.5 rounded-lg transition-colors ${(selectedDrawing.visibleTimeframes && selectedDrawing.visibleTimeframes.length < 6) || showVisibilityId === selectedId ? 'text-blue-500' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                                    onClick={(e) => { e.stopPropagation(); setShowVisibilityId(showVisibilityId === selectedId ? null : selectedId); setShowSettingsId(null); }}
                                 >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0z" /><circle cx="12" cy="12" r="3" /></svg>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
                                 </button>
-
-                                {/* Visibility Mini Menu */}
                                 {showVisibilityId === selectedId && (
-                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded shadow-xl p-2 min-w-[100px] z-[60]" onMouseDown={e => e.stopPropagation()}>
+                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-xl shadow-2xl p-2 min-w-[100px] z-[60]" onMouseDown={e => e.stopPropagation()}>
                                         <div className="text-[10px] font-bold text-gray-500 mb-1 px-1">Visibility</div>
                                         {['1m', '5m', '15m', '1h', '4h', 'D'].map(tf => {
                                             const isVisible = !selectedDrawing.visibleTimeframes || selectedDrawing.visibleTimeframes.includes(tf);
@@ -731,7 +705,7 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                                                     <input
                                                         type="checkbox"
                                                         checked={isVisible}
-                                                        className="w-3 h-3"
+                                                        className="w-3 h-3 rounded"
                                                         onChange={(e) => {
                                                             const allTFs = ['1m', '5m', '15m', '1h', '4h', 'D'];
                                                             const current = selectedDrawing.visibleTimeframes || allTFs;
@@ -741,7 +715,6 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                                                             } else {
                                                                 next = current.filter(t => t !== tf);
                                                             }
-                                                            // If all selected, just clear it to default
                                                             if (next.length === allTFs.length) next = undefined;
                                                             updateDrawing({ visibleTimeframes: next });
                                                         }}
@@ -754,13 +727,12 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                                 )}
                             </div>
 
-                            <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"></div>
+                            <div className="w-px h-5 bg-gray-200 dark:bg-gray-600"></div>
 
                             {/* Delete */}
                             <button
-                                className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                                className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                                 onClick={() => {
-                                    const safeDrawings = Array.isArray(drawings) ? drawings : [];
                                     onUpdateDrawings(safeDrawings.filter(d => d.id !== selectedId));
                                     setSelectedId(null);
                                 }}
@@ -769,78 +741,14 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                             </button>
                         </div>
 
-                        {/* SETTINGS MODAL */}
-                        {showSettingsId === selectedId && selectedDrawing.type === 'fib' && (
-                            <div className="absolute top-full left-0 mt-2 w-64 p-3 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 pointer-events-auto" onMouseDown={e => e.stopPropagation()}>
-                                <h4 className="text-sm font-bold mb-2 dark:text-white">Fibonacci Settings</h4>
-
-                                <div className="space-y-2 max-h-60 overflow-y-auto mb-2 custom-scrollbar">
-                                    {(selectedDrawing.fibLevels || DEFAULT_FIB_LEVELS).map((level, idx) => (
-                                        <div key={idx} className="flex items-center gap-2 text-xs">
-                                            <input
-                                                type="checkbox"
-                                                checked={level.active}
-                                                onChange={(e) => {
-                                                    const levels = [...(selectedDrawing.fibLevels || DEFAULT_FIB_LEVELS)];
-                                                    levels[idx] = { ...levels[idx], active: e.target.checked };
-                                                    updateDrawing({ fibLevels: levels });
-                                                }}
-                                            />
-                                            <input
-                                                type="number"
-                                                className="w-16 p-1 border rounded"
-                                                value={level.value}
-                                                step="0.1"
-                                                onChange={(e) => {
-                                                    const levels = [...(selectedDrawing.fibLevels || DEFAULT_FIB_LEVELS)];
-                                                    levels[idx] = { ...levels[idx], value: parseFloat(e.target.value) };
-                                                    updateDrawing({ fibLevels: levels });
-                                                }}
-                                            />
-                                            <input
-                                                type="color"
-                                                value={level.color || '#000000'}
-                                                onChange={(e) => {
-                                                    const levels = [...(selectedDrawing.fibLevels || DEFAULT_FIB_LEVELS)];
-                                                    levels[idx] = { ...levels[idx], color: e.target.value };
-                                                    updateDrawing({ fibLevels: levels });
-                                                }}
-                                                className="w-6 h-6 border-none p-0 bg-transparent cursor-pointer"
-                                            />
-                                        </div>
-                                    ))}
-                                </div>
-
-                                <div className="border-t dark:border-gray-700 pt-2 space-y-2">
-                                    <div className="flex items-center gap-2">
-                                        <input
-                                            type="checkbox"
-                                            id="extendLines"
-                                            checked={selectedDrawing.extendLines || false}
-                                            onChange={(e) => updateDrawing({ extendLines: e.target.checked })}
-                                        />
-                                        <label htmlFor="extendLines" className="text-xs dark:text-gray-300">Extend Lines Right</label>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <input
-                                            type="checkbox"
-                                            id="showPrices"
-                                            checked={selectedDrawing.showPrices || false}
-                                            onChange={(e) => updateDrawing({ showPrices: e.target.checked })}
-                                        />
-                                        <label htmlFor="showPrices" className="text-xs dark:text-gray-300">Show Prices</label>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <input
-                                            type="checkbox"
-                                            id="showTrendline"
-                                            checked={selectedDrawing.showTrendline !== false}
-                                            onChange={(e) => updateDrawing({ showTrendline: e.target.checked })}
-                                        />
-                                        <label htmlFor="showTrendline" className="text-xs dark:text-gray-300">Trend Line</label>
-                                    </div>
-                                </div>
-                            </div>
+                        {/* FULL SETTINGS MODAL */}
+                        {showSettingsId === selectedId && (
+                            <DrawingSettingsModal
+                                drawing={selectedDrawing}
+                                onUpdate={updateDrawing}
+                                onClose={() => setShowSettingsId(null)}
+                                theme={theme}
+                            />
                         )}
                     </div>
                 );
@@ -850,7 +758,7 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
 
     function renderShape(d: DrawingObject, s1: { x: number, y: number }, s2: { x: number, y: number } | null, selected: boolean, dark: boolean, hovered: boolean) {
         const color = d.color || (dark ? '#3b82f6' : '#2563eb');
-        // REMOVED 'selected' and 'hovered' visual effects completely from the shape style
+        const lineOpacity = (d.opacity ?? 100) / 100;
         const commonClass = `pointer-events-auto cursor-pointer transition-colors hover:stroke-blue-400`;
         const dashArray = d.lineStyle === 'dashed' ? '8,4' : d.lineStyle === 'dotted' ? '2,2' : undefined;
 
@@ -863,12 +771,53 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                 >
                     {/* Only create a wider invisible hit area for easier hover, but NO visual change on hover */}
                     <line x1={s1.x} y1={s1.y} x2={s2.x} y2={s2.y} stroke="transparent" strokeWidth={10} className="pointer-events-auto" />
-                    <line x1={s1.x} y1={s1.y} x2={s2.x} y2={s2.y} stroke={color} strokeWidth={d.lineWidth || 2} strokeDasharray={dashArray} className={commonClass} />
+                    <line x1={s1.x} y1={s1.y} x2={s2.x} y2={s2.y} stroke={color} strokeWidth={d.lineWidth || 2} strokeOpacity={lineOpacity} strokeDasharray={dashArray} className={commonClass} />
+                    {/* Custom text label */}
+                    {d.text && (() => {
+                        const fontSize = d.textSize === 'S' ? 10 : d.textSize === 'L' ? 16 : 12;
+                        const midX = (s1.x + s2.x) / 2;
+                        const midY = (s1.y + s2.y) / 2;
+                        const minX = Math.min(s1.x, s2.x);
+                        const maxX = Math.max(s1.x, s2.x);
+                        const minY = Math.min(s1.y, s2.y);
+                        const maxY = Math.max(s1.y, s2.y);
+
+                        // Horizontal position
+                        let textX = midX;
+                        let anchor: 'start' | 'middle' | 'end' = 'middle';
+                        if (d.textHAlign === 'left') { textX = minX + 4; anchor = 'start'; }
+                        else if (d.textHAlign === 'right') { textX = maxX - 4; anchor = 'end'; }
+
+                        // Vertical position
+                        let textY = midY;
+                        if (d.textVAlign === 'top') textY = minY - 4;
+                        else if (d.textVAlign === 'bottom') textY = maxY + fontSize + 4;
+                        else textY = midY + fontSize / 3;
+
+                        return (
+                            <text
+                                x={textX}
+                                y={textY}
+                                fill={d.textColor || color}
+                                fontSize={fontSize}
+                                fontWeight={d.textBold ? 'bold' : 'normal'}
+                                fontStyle={d.textItalic ? 'italic' : 'normal'}
+                                textAnchor={anchor}
+                                className="pointer-events-none select-none"
+                            >
+                                {d.text}
+                            </text>
+                        );
+                    })()}
                 </g>
             );
         }
 
         if (d.type === 'rect' && s2) {
+            const borderColor = d.borderColor || color;
+            const borderOpacity = (d.borderOpacity ?? 100) / 100;
+            const fillColor = d.fillColor || color;
+            const fillOpacity = (d.fillOpacity ?? 20) / 100;
             return (
                 <g
                     onContextMenu={(e) => onContextMenu(e, d.id)}
@@ -878,9 +827,45 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                     {/* Transparent hit area */}
                     <rect x={Math.min(s1.x, s2.x) - 4} y={Math.min(s1.y, s2.y) - 4} width={Math.abs(s2.x - s1.x) + 8} height={Math.abs(s2.y - s1.y) + 8} fill="transparent" stroke="none" className="pointer-events-auto" />
 
-                    {(hovered) && <rect x={Math.min(s1.x, s2.x) - 2} y={Math.min(s1.y, s2.y) - 2} width={Math.abs(s2.x - s1.x) + 4} height={Math.abs(s2.y - s1.y) + 4} fill="none" stroke={color} strokeWidth={1} strokeDasharray="4,4" className="opacity-50" />}
+                    {(hovered) && <rect x={Math.min(s1.x, s2.x) - 2} y={Math.min(s1.y, s2.y) - 2} width={Math.abs(s2.x - s1.x) + 4} height={Math.abs(s2.y - s1.y) + 4} fill="none" stroke={borderColor} strokeWidth={1} strokeDasharray="4,4" strokeOpacity={0.5} />}
                     <rect x={Math.min(s1.x, s2.x)} y={Math.min(s1.y, s2.y)} width={Math.abs(s2.x - s1.x)} height={Math.abs(s2.y - s1.y)}
-                        fill={color + '20'} stroke={color} strokeWidth={d.lineWidth || 2} strokeDasharray={dashArray} className={commonClass} />
+                        fill={fillColor} fillOpacity={fillOpacity} stroke={borderColor} strokeOpacity={borderOpacity} strokeWidth={d.lineWidth || 2} strokeDasharray={dashArray} className={commonClass} />
+                    {/* Custom text label */}
+                    {d.text && (() => {
+                        const fontSize = d.textSize === 'S' ? 10 : d.textSize === 'L' ? 16 : 12;
+                        const minX = Math.min(s1.x, s2.x);
+                        const maxX = Math.max(s1.x, s2.x);
+                        const minY = Math.min(s1.y, s2.y);
+                        const maxY = Math.max(s1.y, s2.y);
+                        const rectWidth = maxX - minX;
+                        const rectHeight = maxY - minY;
+
+                        // Horizontal position
+                        let textX = minX + rectWidth / 2;
+                        let anchor: 'start' | 'middle' | 'end' = 'middle';
+                        if (d.textHAlign === 'left') { textX = minX + 6; anchor = 'start'; }
+                        else if (d.textHAlign === 'right') { textX = maxX - 6; anchor = 'end'; }
+
+                        // Vertical position
+                        let textY = minY + rectHeight / 2 + fontSize / 3;
+                        if (d.textVAlign === 'top') textY = minY + fontSize + 4;
+                        else if (d.textVAlign === 'bottom') textY = maxY - 4;
+
+                        return (
+                            <text
+                                x={textX}
+                                y={textY}
+                                fill={d.textColor || borderColor}
+                                fontSize={fontSize}
+                                fontWeight={d.textBold ? 'bold' : 'normal'}
+                                fontStyle={d.textItalic ? 'italic' : 'normal'}
+                                textAnchor={anchor}
+                                className="pointer-events-none select-none"
+                            >
+                                {d.text}
+                            </text>
+                        );
+                    })()}
                 </g>
             );
         }
@@ -894,8 +879,8 @@ export const InteractiveOverlay: React.FC<InteractiveOverlayProps> = ({
                     onMouseLeave={() => setHoveredId(null)}
                 >
                     <line x1="0" y1={s1.y} x2="100%" y2={s1.y} stroke="transparent" strokeWidth={10} className="pointer-events-auto" />
-                    <line x1="0" y1={s1.y} x2="100%" y2={s1.y} stroke={color} strokeWidth={d.lineWidth || 2} strokeDasharray={dashArray} className="group-hover:stroke-blue-400" />
-                    <text x={s1.x + 5} y={s1.y - 5} fill={color} fontSize="10" fontWeight="bold">
+                    <line x1="0" y1={s1.y} x2="100%" y2={s1.y} stroke={color} strokeWidth={d.lineWidth || 2} strokeOpacity={lineOpacity} strokeDasharray={dashArray} className="group-hover:stroke-blue-400" />
+                    <text x={s1.x + 5} y={s1.y - 5} fill={color} fillOpacity={lineOpacity} fontSize="10" fontWeight="bold">
                         {d.p1.price.toFixed(2)}
                     </text>
                 </g>

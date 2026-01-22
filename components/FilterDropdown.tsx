@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Filter, RotateCcw, Calendar, Clock, Wallet, TrendingUp, Target, ShieldCheck, Monitor, Zap, AlertOctagon, LayoutGrid, Check, X, Layers } from 'lucide-react';
-import { TradeFilters, Account, Trade, DashboardMode } from '../types';
+import { TradeFilters, Account, Trade, DashboardMode, PnLDisplayMode } from '../types';
 
 interface FilterDropdownProps {
   filters: TradeFilters;
@@ -15,6 +15,8 @@ interface FilterDropdownProps {
   setDashboardMode?: (mode: DashboardMode) => void;
   viewMode: 'individual' | 'combined';
   setViewMode: (mode: 'individual' | 'combined') => void;
+  pnlDisplayMode?: PnLDisplayMode;
+  setPnlDisplayMode?: (mode: PnLDisplayMode) => void;
 }
 
 const TRADING_DAYS = ['Po', 'Út', 'St', 'Čt', 'Pá'];
@@ -31,11 +33,18 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   dashboardMode,
   setDashboardMode,
   viewMode,
-  setViewMode
+  setViewMode,
+  pnlDisplayMode,
+  setPnlDisplayMode
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const isDark = theme !== 'light';
+
+  // Hour range state (derived from filters.hours)
+  const hourMin = Math.min(...filters.hours.filter(h => h >= 0 && h <= 23));
+  const hourMax = Math.max(...filters.hours.filter(h => h >= 0 && h <= 23));
+  const [hourRange, setHourRange] = useState<[number, number]>([isFinite(hourMin) ? hourMin : 8, isFinite(hourMax) ? hourMax : 19]);
 
   const availableTags = useMemo(() => {
     const htf = new Set<string>();
@@ -102,23 +111,27 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   const getGlassBtnClass = (isActive: boolean, type: 'neutral' | 'win' | 'loss' | 'status-valid' | 'status-invalid' | 'status-missed' = 'neutral') => {
     const base = "transition-all duration-300 border backdrop-blur-md relative overflow-hidden text-[10px] font-black uppercase tracking-wider h-11 flex items-center justify-center";
     if (!isActive) {
+      // INACTIVE: Transparent with subtle border
       return isDark
-        ? `${base} bg-white/5 border-white/5 text-slate-500 hover:bg-white/10 hover:text-slate-300`
-        : `${base} bg-slate-100/50 border-slate-200/50 text-slate-400 hover:bg-slate-200/50 hover:text-slate-600`;
+        ? `${base} bg-transparent border-white/10 text-slate-500 hover:bg-white/5 hover:text-slate-300`
+        : `${base} bg-transparent border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-600`;
     }
+    // Special types keep their colors
     switch (type) {
       case 'win': return isDark
-        ? `${base} bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.15)]`
-        : `${base} bg-emerald-50 border-emerald-200 text-emerald-600 shadow-sm`;
+        ? `${base} bg-emerald-500/20 border-emerald-500/50 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)]`
+        : `${base} bg-emerald-500 border-emerald-500 text-white shadow-lg shadow-emerald-500/20`;
       case 'loss': return isDark
-        ? `${base} bg-rose-500/10 border-rose-500/30 text-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.15)]`
-        : `${base} bg-rose-50 border-rose-200 text-rose-600 shadow-sm`;
+        ? `${base} bg-rose-500/20 border-rose-500/50 text-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.2)]`
+        : `${base} bg-rose-500 border-rose-500 text-white shadow-lg shadow-rose-500/20`;
       case 'status-valid': return `${base} bg-emerald-600 text-white border-emerald-500 shadow-lg`;
       case 'status-invalid': return `${base} bg-rose-600 text-white border-rose-500 shadow-lg`;
       case 'status-missed': return `${base} bg-blue-600 text-white border-blue-500 shadow-lg`;
-      default: return isDark
-        ? `${base} bg-white/10 border-white/20 text-white shadow-[0_0_10px_rgba(255,255,255,0.05)]`
-        : `${base} bg-slate-900 text-white border-slate-800 shadow-md`;
+      default:
+        // ACTIVE (neutral): Green
+        return isDark
+          ? `${base} bg-emerald-500/20 border-emerald-500/50 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]`
+          : `${base} bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-500/20`;
     }
   };
 
@@ -214,6 +227,39 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   </button>
                 </div>
               </div>
+
+              {/* PnL Display Mode Switcher */}
+              {pnlDisplayMode && setPnlDisplayMode && (
+                <div>
+                  <div className={sectionLabelClass}><TrendingUp size={12} /> Formát P&L</div>
+                  <div className={`flex p-1 rounded-xl border relative max-w-[280px] ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                    {/* Sliding Highlight */}
+                    <div className={`absolute inset-y-1 w-1/3 rounded-lg transition-all duration-300 ${pnlDisplayMode === 'usd' ? `translate-x-0 ${isDark ? 'bg-emerald-500/20 border border-emerald-500/40' : 'bg-emerald-500 text-white shadow-md'}` :
+                      pnlDisplayMode === 'percent' ? `translate-x-[100%] ${isDark ? 'bg-blue-500/20 border border-blue-500/40' : 'bg-blue-500 text-white shadow-md'}` :
+                        `translate-x-[200%] ${isDark ? 'bg-amber-500/20 border border-amber-500/40' : 'bg-amber-500 text-white shadow-md'}`
+                      }`} />
+
+                    <button
+                      onClick={() => setPnlDisplayMode('usd')}
+                      className={`flex-1 relative z-10 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${pnlDisplayMode === 'usd' ? (isDark ? 'text-emerald-400' : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
+                    >
+                      $ USD
+                    </button>
+                    <button
+                      onClick={() => setPnlDisplayMode('percent')}
+                      className={`flex-1 relative z-10 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${pnlDisplayMode === 'percent' ? (isDark ? 'text-blue-400' : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
+                    >
+                      % Účtu
+                    </button>
+                    <button
+                      onClick={() => setPnlDisplayMode('rr')}
+                      className={`flex-1 relative z-10 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${pnlDisplayMode === 'rr' ? (isDark ? 'text-amber-400' : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
+                    >
+                      R:R
+                    </button>
+                  </div>
+                </div>
+              )}
               {setIsDashboardEditing && (
                 <div className={`p-4 rounded-2xl border ${isDark ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-indigo-50 border-indigo-100'}`}>
                   <div className={sectionLabelClass}><Zap size={12} className="text-indigo-500" /> Tactical Tools</div>
@@ -290,11 +336,62 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   </div>
                 </div>
                 <div>
-                  <div className={sectionLabelClass}><Clock size={12} /> Hodiny (8-19)</div>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(hour => (
-                      <button key={hour} onClick={() => setFilters(f => ({ ...f, hours: toggleItem(f.hours, hour) }))} className={`aspect-square rounded-xl text-[9px] font-black flex items-center justify-center ${getGlassBtnClass(filters.hours.includes(hour))}`}>{hour}</button>
-                    ))}
+                  <div className={sectionLabelClass}><Clock size={12} /> Hodiny</div>
+                  <div className="space-y-4">
+                    <div className="flex justify-between text-xs font-bold">
+                      <span className={isDark ? 'text-emerald-400' : 'text-emerald-600'}>{hourRange[0]}:00</span>
+                      <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>-</span>
+                      <span className={isDark ? 'text-emerald-400' : 'text-emerald-600'}>{hourRange[1]}:00</span>
+                    </div>
+                    <div className="relative h-6 flex items-center">
+                      {/* Track */}
+                      <div className={`absolute inset-x-0 h-1.5 rounded-full ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
+                      {/* Active range */}
+                      <div
+                        className="absolute h-1.5 rounded-full bg-emerald-500"
+                        style={{
+                          left: `${(hourRange[0] / 23) * 100}%`,
+                          right: `${100 - (hourRange[1] / 23) * 100}%`
+                        }}
+                      />
+                      {/* Min thumb */}
+                      <input
+                        type="range"
+                        min={0}
+                        max={23}
+                        value={hourRange[0]}
+                        onChange={(e) => {
+                          const val = Math.min(Number(e.target.value), hourRange[1] - 1);
+                          setHourRange([val, hourRange[1]]);
+                          const newHours = Array.from({ length: hourRange[1] - val + 1 }, (_, i) => val + i);
+                          setFilters(f => ({ ...f, hours: newHours }));
+                        }}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                      />
+                      {/* Max thumb */}
+                      <input
+                        type="range"
+                        min={0}
+                        max={23}
+                        value={hourRange[1]}
+                        onChange={(e) => {
+                          const val = Math.max(Number(e.target.value), hourRange[0] + 1);
+                          setHourRange([hourRange[0], val]);
+                          const newHours = Array.from({ length: val - hourRange[0] + 1 }, (_, i) => hourRange[0] + i);
+                          setFilters(f => ({ ...f, hours: newHours }));
+                        }}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+                      />
+                      {/* Visual thumbs */}
+                      <div
+                        className="absolute w-5 h-5 rounded-full bg-emerald-500 border-2 border-white shadow-lg pointer-events-none"
+                        style={{ left: `calc(${(hourRange[0] / 23) * 100}% - 10px)` }}
+                      />
+                      <div
+                        className="absolute w-5 h-5 rounded-full bg-emerald-500 border-2 border-white shadow-lg pointer-events-none"
+                        style={{ left: `calc(${(hourRange[1] / 23) * 100}% - 10px)` }}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

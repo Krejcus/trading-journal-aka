@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha Bridge - Refined UI Preview</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@700;800&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --alpha-bg: #ffffff;
+            --alpha-accent: #0891b2;
+            --alpha-accent-light: rgba(8, 145, 178, 0.08);
+            --alpha-text: #0f172a;
+            --alpha-text-muted: #64748b;
+            --alpha-border: #e2e8f0;
+            --alpha-success: #059669;
+            --alpha-danger: #e11d48;
+            --alpha-card: #f8fafc;
+        }
+
+        body {
+            background: #f1f5f9;
+            font-family: 'Inter', system-ui, sans-serif;
+            display: flex;
+            justify-content: center;
+            padding: 40px;
+        }
+
+        .sidebar {
+            width: 380px;
+            background: var(--alpha-bg);
+            border-radius: 24px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            padding: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--alpha-border);
+        }
+
+        .header h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 20px;
+            margin: 0;
+            color: var(--alpha-accent);
+            letter-spacing: -0.5px;
+        }
+
+        .content {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        /* --- Section: Accounts --- */
+        .section-title {
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--alpha-text-muted);
+            margin-bottom: 12px;
+        }
+
+        .account-list {
+            background: var(--alpha-card);
+            border-radius: 16px;
+            padding: 8px;
+            border: 1px solid var(--alpha-border);
+        }
+
+        .master-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            background: white;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 13px;
+        }
+
+        .copy-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px 8px 32px;
+            border-left: 2px solid var(--alpha-border);
+            margin-left: 20px;
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--alpha-text-muted);
+        }
+
+        .badge {
+            font-size: 9px;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid currentColor;
+        }
+
+        .badge-master {
+            color: var(--alpha-accent);
+            background: var(--alpha-accent-light);
+        }
+
+        .badge-copy {
+            color: var(--alpha-text-muted);
+        }
+
+        /* --- Row: Symbol, Direction, RR (Subtle) --- */
+        .subtle-info-bar {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            background: var(--alpha-card);
+            padding: 12px;
+            border-radius: 16px;
+            text-align: center;
+        }
+
+        .subtle-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .subtle-val {
+            font-weight: 800;
+            font-size: 15px;
+            color: var(--alpha-text);
+        }
+
+        .subtle-label {
+            font-size: 9px;
+            color: var(--alpha-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* --- Inputs --- */
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .field-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--alpha-text-muted);
+        }
+
+        .alpha-input {
+            width: 100%;
+            background: white;
+            border: 1px solid var(--alpha-border);
+            border-radius: 12px;
+            padding: 12px 14px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            box-sizing: border-box;
+        }
+
+        .alpha-input:focus {
+            border-color: var(--alpha-accent);
+            box-shadow: 0 0 0 4px var(--alpha-accent-light);
+            outline: none;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 12px;
+        }
+
+        .btn-primary {
+            background: var(--alpha-accent);
+            color: white;
+            border: none;
+            border-radius: 16px;
+            padding: 18px;
+            font-weight: 800;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: transform 0.2s, filter 0.2s;
+            margin-top: 10px;
+        }
+
+        .btn-primary:hover {
+            filter: brightness(1.1);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: var(--alpha-bg);
+            border: 1px solid var(--alpha-border);
+            padding: 12px;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="sidebar">
+        <div class="header">
+            <h1>ALPHA BRIDGE</h1>
+            <div style="font-size: 20px; color: var(--alpha-text-muted);">×</div>
+        </div>
+
+        <div class="content">
+            <!-- Account Section -->
+            <div>
+                <div class="section-title">Obchodní účty</div>
+                <div class="account-list">
+                    <div class="master-row">
+                        <input type="checkbox" checked style="accent-color: var(--alpha-accent)">
+                        <span style="flex:1">Alpha Futures 50k - Chall</span>
+                        <span class="badge badge-master">MASTER</span>
+                    </div>
+                    <div class="copy-row">
+                        <input type="checkbox" checked style="accent-color: var(--alpha-accent)">
+                        <span style="flex:1">Alpha Copy 50k 1</span>
+                        <span class="badge badge-copy">COPY</span>
+                    </div>
+                    <div class="copy-row">
+                        <input type="checkbox" checked style="accent-color: var(--alpha-accent)">
+                        <span style="flex:1">Alpha Copy 50k 2</span>
+                        <span class="badge badge-copy">COPY</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Subtle Bar -->
+            <div class="subtle-info-bar">
+                <div class="subtle-item">
+                    <div class="subtle-val" style="color: var(--alpha-accent);">NDX</div>
+                    <div class="subtle-label">Symbol</div>
+                </div>
+                <div class="subtle-item">
+                    <div class="subtle-val">LONG 📈</div>
+                    <div class="subtle-label">Směr</div>
+                </div>
+                <div class="subtle-item">
+                    <div class="subtle-val" style="color: var(--alpha-success);">1:3.24</div>
+                    <div class="subtle-label">RR Ratio</div>
+                </div>
+            </div>
+
+            <!-- Trade Details -->
+            <div class="grid-3">
+                <div class="input-group">
+                    <div class="field-label">Riziko ($)</div>
+                    <input type="text" class="alpha-input" value="250">
+                </div>
+                <div class="input-group">
+                    <div class="field-label">Skutečný Zisk ($)</div>
+                    <input type="text" class="alpha-input" value="810.00"
+                        style="color: var(--alpha-success); background: #f0fdf4;">
+                </div>
+                <div class="input-group">
+                    <div class="field-label">Výsledek</div>
+                    <select class="alpha-input" style="padding: 12px 8px;">
+                        <option>WIN 💰</option>
+                        <option>LOSS 🛑</option>
+                        <option>BE</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid-3">
+                <div class="input-group">
+                    <div class="field-label">Entry</div>
+                    <input type="text" class="alpha-input" value="20450.25">
+                </div>
+                <div class="input-group">
+                    <div class="field-label">Stop Loss</div>
+                    <input type="text" class="alpha-input" value="20420.00" style="color: var(--alpha-danger);">
+                </div>
+                <div class="input-group">
+                    <div class="field-label">Take Profit</div>
+                    <input type="text" class="alpha-input" value="20550.00" style="color: var(--alpha-success);">
+                </div>
+            </div>
+
+            <!-- Timing and Outcome -->
+            <div style="display:grid; grid-template-columns: 1fr 1.5fr; gap:16px; margin-bottom: 12px;">
+                <div class="input-group">
+                    <div class="field-label">Datum</div>
+                    <input type="date" class="alpha-input" value="2024-01-19" style="padding: 10px; font-size: 12px;">
+                </div>
+                <div class="input-group">
+                    <div class="field-label">Časování (Entry → Exit)</div>
+                    <div style="display:flex; gap:4px; align-items:center;">
+                        <input type="time" class="alpha-input" value="14:30" style="padding: 10px; font-size: 12px;">
+                        <span style="color: var(--alpha-text-muted)">→</span>
+                        <input type="time" class="alpha-input" value="16:00" style="padding: 10px; font-size: 12px;">
+                    </div>
+                </div>
+            </div>
+
+            <button class="btn-secondary">👁️ NÁHLED SNÍMKU</button>
+            <button class="btn-primary">ZAPSAT DO DENÍKU 🚀</button>
+
+            <div style="text-align: center; font-size: 10px; color: var(--alpha-text-muted); cursor:pointer;">Odhlásit
+                se</div>
+        </div>
+    </div>
+
+</body>
+
+</html>

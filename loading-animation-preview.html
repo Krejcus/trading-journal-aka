@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loading Animation Preview - AlphaTrade Mentor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 600px;
+            width: 100%;
+            padding: 2rem;
+        }
+
+        .logo {
+            font-size: 0.75rem;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: #64748b;
+            margin-bottom: 2rem;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        p {
+            color: #94a3b8;
+            font-size: 0.875rem;
+            margin-bottom: 3rem;
+        }
+
+        #chartCanvas {
+            width: 100%;
+            height: 250px;
+            border-radius: 12px;
+            background: #000000;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            opacity: 1.0;
+            /* 100% OPACITY PREVIEW */
+        }
+
+        .controls {
+            margin-top: 2rem;
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 0.75rem 1.5rem;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.5);
+            transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .note {
+            margin-top: 2rem;
+            padding: 1rem;
+            background: rgba(59, 130, 246, 0.05);
+            border: 1px solid rgba(59, 130, 246, 0.1);
+            border-radius: 8px;
+            font-size: 0.75rem;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="logo">AlphaTrade Mentor</div>
+        <h1>Vítejte zpět</h1>
+        <p>Přihlášení do vašeho obchodního deníku</p>
+
+        <canvas id="chartCanvas"></canvas>
+
+        <div class="controls">
+            <button onclick="restartAnimation()">🔄 Restart</button>
+            <button onclick="toggleSpeed()">⚡ Rychlost: <span id="speedLabel">Normální</span></button>
+        </div>
+
+        <div class="note">
+            🚀 PREVIEW: Background Chart at 100% Opacity (Full Intensity)
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('chartCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Set canvas size
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Animation state
+        let candles = [];
+        let currentIndex = 0;
+        let animationSpeed = 40; // ms between candles
+        let isAnimating = false;
+        let animationInterval = null;
+
+        // Generate realistic trending candle data
+        function generateCandles() {
+            const numCandles = 70;
+            candles = [];
+            let lastClose = 100;
+            let trend = 0.5; // Start with uptrend
+
+            for (let i = 0; i < numCandles; i++) {
+                // Create realistic market phases
+                if (i === 20) trend = -0.8; // Correction
+                if (i === 35) trend = 0.6; // Recovery
+                if (i === 50) trend = -0.3; // Small pullback
+                if (i === 58) trend = 1.2; // Strong rally
+
+                const volatility = 0.8 + Math.random() * 1.5;
+                const noise = (Math.random() - 0.5) * 1.2;
+
+                const open = lastClose;
+                const close = open + trend + noise;
+                const high = Math.max(open, close) + Math.random() * volatility;
+                const low = Math.min(open, close) - Math.random() * volatility;
+
+                candles.push({
+                    open,
+                    high,
+                    low,
+                    close,
+                    color: close >= open ? '#10b981' : '#ef4444' // green : red
+                });
+
+                lastClose = close;
+            }
+        }
+
+        // Draw a single candle
+        function drawCandle(index) {
+            const candle = candles[index];
+            const width = canvas.width / window.devicePixelRatio;
+            const height = canvas.height / window.devicePixelRatio;
+
+            const candleWidth = Math.max(2, (width - 40) / candles.length);
+            const x = 20 + index * candleWidth;
+
+            // Find min/max for scaling
+            const allPrices = candles.flatMap(c => [c.high, c.low]);
+            const minPrice = Math.min(...allPrices);
+            const maxPrice = Math.max(...allPrices);
+            const priceRange = maxPrice - minPrice;
+
+            // Scale prices to canvas with padding
+            const scaleY = (price) => {
+                const padding = height * 0.1;
+                return height - padding - ((price - minPrice) / priceRange) * (height - padding * 2);
+            };
+
+            const openY = scaleY(candle.open);
+            const closeY = scaleY(candle.close);
+            const highY = scaleY(candle.high);
+            const lowY = scaleY(candle.low);
+
+            const bodyTop = Math.min(openY, closeY);
+            const bodyBottom = Math.max(openY, closeY);
+            const bodyHeight = Math.max(bodyBottom - bodyTop, 1);
+
+            // Draw wick (thin line)
+            ctx.strokeStyle = candle.color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + candleWidth / 2, highY);
+            ctx.lineTo(x + candleWidth / 2, lowY);
+            ctx.stroke();
+
+            // Draw body (thicker)
+            ctx.fillStyle = candle.color;
+            const bodyWidth = Math.max(candleWidth * 0.7, 2);
+            ctx.fillRect(
+                x + (candleWidth - bodyWidth) / 2,
+                bodyTop,
+                bodyWidth,
+                bodyHeight || 1
+            );
+        }
+
+        // Clear and redraw all candles up to current index
+        function render() {
+            const width = canvas.width / window.devicePixelRatio;
+            const height = canvas.height / window.devicePixelRatio;
+
+            // Clear to pure black
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, width, height);
+
+            // Draw all visible candles
+            for (let i = 0; i < currentIndex; i++) {
+                drawCandle(i);
+            }
+        }
+
+        // Animation loop
+        function startAnimation() {
+            if (isAnimating) return;
+            isAnimating = true;
+            currentIndex = 0;
+
+            animationInterval = setInterval(() => {
+                if (currentIndex < candles.length) {
+                    currentIndex++;
+                    render();
+                } else {
+                    // Loop: restart after brief pause
+                    setTimeout(() => {
+                        currentIndex = 0;
+                        render();
+                    }, 800);
+                }
+            }, animationSpeed);
+        }
+
+        function stopAnimation() {
+            isAnimating = false;
+            if (animationInterval) {
+                clearInterval(animationInterval);
+                animationInterval = null;
+            }
+        }
+
+        function restartAnimation() {
+            stopAnimation();
+            generateCandles();
+            currentIndex = 0;
+            render();
+            startAnimation();
+        }
+
+        function toggleSpeed() {
+            const speeds = [80, 40, 20]; // slow, normal, fast
+            const labels = ['Pomalá', 'Normální', 'Rychlá'];
+            const currentSpeedIndex = speeds.indexOf(animationSpeed);
+            const nextSpeedIndex = (currentSpeedIndex + 1) % speeds.length;
+
+            animationSpeed = speeds[nextSpeedIndex];
+            document.getElementById('speedLabel').textContent = labels[nextSpeedIndex];
+
+            // Restart with new speed
+            restartAnimation();
+        }
+
+        // Initialize
+        generateCandles();
+        render();
+        startAnimation();
+    </script>
+</body>
+
+</html>

@@ -271,6 +271,39 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
   const validSignalsCount = winningTrades + losingTrades + breakEvenTrades + missedTrades;
   const takenValidTrades = winningTrades + losingTrades + breakEvenTrades;
 
+  // Calculate Day Streaks
+  const sortedCalendarDays = Array.from(calendarMap.entries())
+    .map(([date, d]) => ({ date, pnl: d.pnl }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  let currentDayStreak = 0;
+  let maxWinningDayStreak = 0;
+  let maxLosingDayStreak = 0;
+  let curWinDayStreak = 0;
+  let curLossDayStreak = 0;
+
+  sortedCalendarDays.forEach(day => {
+    if (day.pnl > 0.01) {
+      curWinDayStreak++;
+      if (curLossDayStreak > 0) curLossDayStreak = 0;
+      maxWinningDayStreak = Math.max(maxWinningDayStreak, curWinDayStreak);
+    } else if (day.pnl < -0.01) {
+      curLossDayStreak++;
+      if (curWinDayStreak > 0) curWinDayStreak = 0;
+      maxLosingDayStreak = Math.max(maxLosingDayStreak, curLossDayStreak);
+    }
+  });
+
+  // Calculate current day streak (scanning from end backwards is safer to capture current state)
+  // Or just use the tracking variables from the loop since we iterated chronologically
+  if (curWinDayStreak > 0) currentDayStreak = curWinDayStreak;
+  else if (curLossDayStreak > 0) currentDayStreak = -curLossDayStreak;
+
+  // Calculate current trade streak
+  let currentTradeStreak = 0;
+  if (currentWinStreak > 0) currentTradeStreak = currentWinStreak;
+  else if (currentLossStreak > 0) currentTradeStreak = -currentLossStreak;
+
   return {
     initialBalance, totalPnL,
     winRate: (winningTrades + losingTrades + breakEvenTrades) > 0 ? (winningTrades / (winningTrades + losingTrades + breakEvenTrades)) * 100 : 0,
@@ -298,6 +331,7 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
     avgConsecutiveWins: avgConsecWins, avgConsecutiveLosses: avgConsecLosses,
     avgDurationWin: winningTrades ? totalWinDuration / winningTrades : 0,
     avgDurationLoss: losingTrades ? totalLossDuration / losingTrades : 0,
+    currentDayStreak, maxWinningDayStreak, maxLosingDayStreak, currentTradeStreak,
     zScore: 0, sharpeRatio: 0, sortinoRatio: 0, sqn: 0, kellyCriterion: 0, profitPerHour: 0,
     signals: Array.from(signalMap.entries()).map(([name, d]) => ({ signalName: name, count: d.count, winRate: (d.wins / d.count) * 100, totalPnL: d.pnl, avgPnL: d.pnl / d.count })),
     equityCurve,

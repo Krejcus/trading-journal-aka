@@ -1,6 +1,6 @@
-
-import React, { useState } from 'react';
-import { Trade, Account, CustomEmotion } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Trade, Account, CustomEmotion, PnLDisplayMode } from '../types';
+import { formatPnL } from '../utils/formatPnL';
 import { storageService } from '../services/storageService';
 import {
   Trash2, TrendingUp, TrendingDown, X, Edit3, Calendar,
@@ -22,11 +22,26 @@ interface TradeHistoryProps {
   theme: 'dark' | 'light' | 'oled';
   emotions: CustomEmotion[];
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
+  pnlDisplayMode?: PnLDisplayMode;
+  initialBalance?: number;
 }
 
-const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade }) => {
+const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, pnlDisplayMode = 'usd', initialBalance }) => {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
+
+  // Sync selectedTrade when trades prop changes (e.g., after drawing update)
+  useEffect(() => {
+    if (selectedTrade) {
+      const updated = trades.find(t => t.id === selectedTrade.id);
+      if (updated && JSON.stringify(updated) !== JSON.stringify(selectedTrade)) {
+        setSelectedTrade(updated);
+      }
+    }
+  }, [trades, selectedTrade]);
+
+  // Ensure trades are always sorted by date (newest first) for consistent display and navigation
+  const sortedTrades = [...trades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   const formatTradeDate = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -45,7 +60,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {trades.slice().map((trade) => {
+        {sortedTrades.map((trade) => {
           const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
           const isMissed = status === 'Missed';
           const isWin = trade.pnl >= 0;
@@ -54,7 +69,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
           if (isMissed) glowClass = 'border-l-4 border-blue-500 opacity-60 grayscale-[0.3]';
 
           const pnlColor = isMissed ? 'text-blue-400' : (isWin ? 'text-emerald-500' : 'text-rose-500');
-          const tradeHex = `0x${Math.abs(Number(trade.id)).toString(16).padStart(6, '0')}`;
+          const tradeHex = !isNaN(Number(trade.id))
+            ? `0x${Math.abs(Number(trade.id)).toString(16).padStart(6, '0')}`
+            : `0xCOMB`;
 
           return (
             <div
@@ -112,7 +129,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
                 <div className="flex items-end justify-between mt-6 md:mt-0">
                   <div className="flex flex-col">
                     <span className={`text-3xl md:text-4xl font-black tracking-tighter leading-none font-mono ${pnlColor}`}>
-                      {isMissed ? '±' : (isWin ? '+' : '-')}${Math.abs(trade.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      {formatPnL(
+                        trade.pnl,
+                        pnlDisplayMode,
+                        initialBalance || accounts.find(a => a.id === trade.accountId)?.initialBalance,
+                        trade.riskAmount ? (trade.pnl / trade.riskAmount) : undefined
+                      )}
                       {trade.isMaster && (
                         <span className="text-[10px] text-slate-500 ml-2 font-black uppercase tracking-widest">
                           + {accounts.filter(a => a.parentAccountId === trade.accountId).length} copies
@@ -177,18 +199,19 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
           onDelete={() => { onDelete(selectedTrade.id); setSelectedTrade(null); }}
           emotions={emotions}
           onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
+          pnlDisplayMode={pnlDisplayMode}
+          accounts={accounts}
+          initialBalance={initialBalance}
           onPrev={() => {
-            const sorted = trades.slice();
-            const idx = sorted.findIndex(t => t.id === selectedTrade.id);
-            if (idx > 0) setSelectedTrade(sorted[idx - 1]);
+            const idx = sortedTrades.findIndex(t => t.id === selectedTrade.id);
+            if (idx > 0) setSelectedTrade(sortedTrades[idx - 1]);
           }}
           onNext={() => {
-            const sorted = trades.slice();
-            const idx = sorted.findIndex(t => t.id === selectedTrade.id);
-            if (idx < sorted.length - 1) setSelectedTrade(sorted[idx + 1]);
+            const idx = sortedTrades.findIndex(t => t.id === selectedTrade.id);
+            if (idx < sortedTrades.length - 1) setSelectedTrade(sortedTrades[idx + 1]);
           }}
-          hasPrev={trades.findIndex(t => t.id === selectedTrade.id) > 0}
-          hasNext={trades.findIndex(t => t.id === selectedTrade.id) < trades.length - 1}
+          hasPrev={sortedTrades.findIndex(t => t.id === selectedTrade.id) > 0}
+          hasNext={sortedTrades.findIndex(t => t.id === selectedTrade.id) < sortedTrades.length - 1}
         />
       )}
     </div>

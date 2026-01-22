@@ -15,6 +15,7 @@ import {
 import { storageService, getUserId } from '../services/storageService';
 import { User, SocialConnection, UserSearch, Trade, DailyPrep, DailyReview, Account, CustomEmotion, UserPreferences } from '../types';
 import DashboardCalendar from './DashboardCalendar';
+import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
 
 interface NetworkHubProps {
    theme: 'dark' | 'light' | 'oled';
@@ -333,10 +334,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                         <div className="text-right">
                            <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-1">Výsledek</p>
                            <div className={`text-2xl font-black font-mono tracking-tighter leading-none ${pnlColor}`}>
-                              {format === 'rr' ?
-                                 `${isWin ? '+' : ''}${Math.abs(selectedTrade.pnl).toFixed(2)}R` :
-                                 `${isWin ? '+' : ''}$${Math.abs(selectedTrade.pnl).toLocaleString()}`
-                              }
+                              {formatPnL(
+                                 selectedTrade.pnl,
+                                 format === 'hidden' ? 'usd' : format as any,
+                                 undefined,
+                                 format === 'rr' ? (selectedTrade.pnl / (selectedTrade.riskAmount || 1)) : undefined
+                              )}
                            </div>
                         </div>
                      </div>
@@ -1057,7 +1060,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                     <span className={`text-xl font-black font-mono tracking-tighter ${dayPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'} ${dayPnL === null ? 'blur-sm select-none opacity-50' : ''}`}>
                                        {dayPnL !== null ? (
                                           spectatorData?.meta?.pnlFormat === 'rr'
-                                             ? `${dayPnL >= 0 ? '+' : ''}${dayPnL.toFixed(2)}R`
+                                             ? formatPnL(dayPnL, 'rr', undefined, calculateTotalRR(filteredRemoteTrades))
                                              : `${dayPnL >= 0 ? '+' : ''}$${dayPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
                                        ) : 'HIDDEN'}
                                     </span>
@@ -1156,7 +1159,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Briefcase size={14} /> Career PnL</p>
                                  <h3 className={`text-3xl font-black italic tracking-tighter ${globalCareerStats.totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                     {spectatorData?.meta?.pnlFormat === 'rr'
-                                       ? `${globalCareerStats.totalPnL.toFixed(2)}R`
+                                       ? formatPnL(globalCareerStats.totalPnL, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined)
                                        : `$${globalCareerStats.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                                  </h3>
                                  <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">Total from {globalCareerStats.accountCount} accounts</p>
@@ -1165,7 +1168,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><DollarSign size={14} className="text-emerald-500" /> Total Payouts</p>
                                  <h3 className="text-3xl font-black italic tracking-tighter text-emerald-500">
                                     {spectatorData?.meta?.pnlFormat === 'rr'
-                                       ? `${globalCareerStats.totalPayouts.toFixed(2)}R`
+                                       ? formatPnL(globalCareerStats.totalPayouts, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined)
                                        : `$${globalCareerStats.totalPayouts.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                                  </h3>
                                  <div className="flex items-center gap-2 mt-2">
@@ -1239,7 +1242,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                        <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-1">Active Portfolio Value</p>
                                        <p className="text-xl font-black text-white font-mono">
                                           {spectatorData?.meta?.pnlFormat === 'rr'
-                                             ? `${spectatorData.accounts.filter(a => a.status === 'Active').reduce((sum, a) => sum + (a.initialBalance || 0), 0).toLocaleString()}R`
+                                             ? `$${spectatorData.accounts.filter(a => a.status === 'Active').reduce((sum, a) => sum + (a.initialBalance || 0), 0).toLocaleString()}`
                                              : `$${spectatorData.accounts.filter(a => a.status === 'Active').reduce((sum, a) => sum + (a.initialBalance || 0), 0).toLocaleString()}`}
                                        </p>
                                     </div>
@@ -1293,7 +1296,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                                       </p>
                                                       <p className={`text-lg font-black italic ${Number(payload[0].value) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                                          {spectatorData?.meta?.pnlFormat === 'rr'
-                                                            ? `${Number(payload[0].value) >= 0 ? '+' : ''}${Number(payload[0].value).toFixed(2)}R`
+                                                            ? formatPnL(Number(payload[0].value), (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined)
                                                             : `$${Number(payload[0].value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                                                       </p>
                                                    </div>

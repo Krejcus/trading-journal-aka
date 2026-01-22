@@ -9,11 +9,52 @@ export interface DrawingObject {
   color?: string;
   lineWidth?: number;
   lineStyle?: 'solid' | 'dashed' | 'dotted';
-  fibLevels?: { value: number; active: boolean; color?: string }[];
+  opacity?: number; // Line opacity (0-100)
+  // Text settings
+  textColor?: string;
+  textSize?: 'S' | 'M' | 'L';
+  textBold?: boolean;
+  textItalic?: boolean;
+  textVAlign?: 'top' | 'middle' | 'bottom';
+  textHAlign?: 'left' | 'center' | 'right';
+  // Border settings (for rect)
+  borderColor?: string;
+  borderOpacity?: number;
+  // Fill settings (for rect)
+  fillColor?: string;
+  fillOpacity?: number;
+  // Fibonacci
+  fibLevels?: { value: number; active: boolean; color?: string; opacity?: number }[];
   extendLines?: boolean;
   showPrices?: boolean;
   showTrendline?: boolean;
   visibleTimeframes?: string[];
+}
+
+export interface DrawingTemplate {
+  id: string;
+  name: string;
+  type: 'line' | 'rect' | 'horizontal' | 'fib';
+  styles: {
+    color?: string;
+    lineWidth?: number;
+    lineStyle?: 'solid' | 'dashed' | 'dotted';
+    opacity?: number;
+    borderColor?: string;
+    borderOpacity?: number;
+    fillColor?: string;
+    fillOpacity?: number;
+    textColor?: string;
+    textSize?: 'S' | 'M' | 'L';
+    textBold?: boolean;
+    textItalic?: boolean;
+    textVAlign?: 'top' | 'middle' | 'bottom';
+    textHAlign?: 'left' | 'center' | 'right';
+    extendLines?: boolean;
+    fibLevels?: { value: number; active: boolean; color?: string; opacity?: number }[];
+    showPrices?: boolean;
+    showTrendline?: boolean;
+  };
 }
 
 export interface User {
@@ -83,6 +124,8 @@ export interface Account {
   result?: 'Passed' | 'Failed';
   instrumentFees?: Record<string, number>;
 }
+
+export type PnLDisplayMode = 'usd' | 'percent' | 'rr';
 
 export type DashboardMode = 'funded' | 'challenge' | 'combined' | 'archive';
 
@@ -227,6 +270,10 @@ export interface TradeStats {
   avgConsecutiveLosses: number;
   avgDurationWin: number;
   avgDurationLoss: number;
+  currentDayStreak: number;
+  maxWinningDayStreak: number;
+  maxLosingDayStreak: number;
+  currentTradeStreak: number;
   zScore: number;
   sharpeRatio: number;
   sortinoRatio: number;

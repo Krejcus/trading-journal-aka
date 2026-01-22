@@ -153,10 +153,50 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
         setNewExpense({ label: '', category: 'Challenges', amount: 0, date: new Date().toISOString().split('T')[0], recurring: 'monthly' });
     };
 
+    const handleTogglePayoutStatus = (payoutId: string) => {
+        const newPayouts = payouts.map(p => {
+            if (p.id === payoutId) {
+                return { ...p, status: p.status === 'Received' ? 'Pending' : 'Received' as any };
+            }
+            return p;
+        });
+        onUpdatePayouts(newPayouts);
+    };
+
     // --- Financial Calculations ---
     const totalPnL = useMemo(() => trades.reduce((sum, t) => sum + t.pnl, 0), [trades]);
     const totalExpenses = useMemo(() => expenses.reduce((sum, e) => sum + e.amount, 0), [expenses]);
-    const totalPayouts = useMemo(() => payouts.reduce((sum, p) => sum + (p.status === 'Received' ? p.amount : 0), 0), [payouts]);
+
+    // Realized income is the sum of ALL withdrawals from ALL accounts
+    const totalPayouts = useMemo(() => accounts.reduce((sum, acc) => sum + (acc.totalWithdrawals || 0), 0), [accounts]);
+
+    // We want to show a unified history. We take the detailed payouts array,
+    // but also for each account, we check if it has "untracked" withdrawals (legacy).
+    const unifiedPayouts = useMemo(() => {
+        const history = [...payouts];
+
+        accounts.forEach(acc => {
+            const accDetailedTotal = payouts
+                .filter(p => p.accountId === acc.id && p.status === 'Received')
+                .reduce((sum, p) => sum + p.amount, 0);
+
+            const untrackedAmount = (acc.totalWithdrawals || 0) - accDetailedTotal;
+
+            if (untrackedAmount > 0.01) {
+                // Add a "virtual" payout row for this account's historical balance
+                history.push({
+                    id: `legacy_${acc.id}`,
+                    accountId: acc.id,
+                    amount: untrackedAmount,
+                    date: "2026-01-20", // Today's sync date
+                    status: 'Received',
+                    notes: 'Historický zůstatek z účtu'
+                } as BusinessPayout);
+            }
+        });
+
+        return history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }, [payouts, accounts]);
 
     // Realized Business Metrics (Based on Payouts, not trade PnL)
     const realizedTaxReserve = useMemo(() => (totalPayouts > 0 ? (totalPayouts * (settings.taxRatePct / 100)) : 0), [totalPayouts, settings.taxRatePct]);
@@ -298,6 +338,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                 <table className="w-full text-left">
                                     <thead>
                                         <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Datum</th>
                                             <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Popis</th>
                                             <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Kategorie</th>
                                             <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Částka</th>
@@ -307,19 +348,77 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     <tbody className={`divide-y ${isDark ? 'divide-[var(--border-subtle)]' : 'divide-slate-50'}`}>
                                         {expenses.length === 0 ? (
                                             <tr>
-                                                <td colSpan={4} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné náklady.</td>
+                                                <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné náklady.</td>
                                             </tr>
                                         ) : (
-                                            expenses.map(exp => (
+                                            [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(exp => (
                                                 <tr key={exp.id}>
+                                                    <td className="py-4 text-[10px] font-bold text-slate-400 font-mono italic">{exp.date}</td>
                                                     <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{exp.label}</td>
                                                     <td className="py-4 text-[10px] font-bold text-slate-500 uppercase">{exp.category}</td>
-                                                    <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>${exp.amount}</td>
+                                                    <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>${exp.amount.toLocaleString()}</td>
                                                     <td className="py-4 text-right">
                                                         <button onClick={() => onUpdateExpenses(expenses.filter(e => e.id !== exp.id))} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>
                                                     </td>
                                                 </tr>
                                             ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* Payouts Tracker */}
+                        <div className={cardClass}>
+                            <div className="flex justify-between items-center mb-8">
+                                <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                                    <DollarSign size={16} className="text-emerald-500" /> Historie výplat
+                                </h3>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left">
+                                    <thead>
+                                        <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Datum</th>
+                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Účet</th>
+                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Částka</th>
+                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Status</th>
+                                            <th className="pb-4"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className={`divide-y ${isDark ? 'divide-[var(--border-subtle)]' : 'divide-slate-50'}`}>
+                                        {unifiedPayouts.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné výplaty.</td>
+                                            </tr>
+                                        ) : (
+                                            unifiedPayouts.map(p => {
+                                                const acc = accounts.find(a => a.id === p.accountId);
+                                                const isLegacy = p.id.toString().startsWith('legacy_');
+                                                return (
+                                                    <tr key={p.id}>
+                                                        <td className="py-4 text-[10px] font-bold text-slate-400 font-mono italic">{p.date}</td>
+                                                        <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý'}</td>
+                                                        <td className={`py-4 text-xs font-mono font-black text-emerald-500`}>${p.amount.toLocaleString()}</td>
+                                                        <td className="py-4">
+                                                            {isLegacy ? (
+                                                                <span className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
+                                                            ) : (
+                                                                <button
+                                                                    onClick={() => handleTogglePayoutStatus(p.id)}
+                                                                    className={`px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all ${p.status === 'Received' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}
+                                                                >
+                                                                    {p.status === 'Received' ? 'OBDRŽENO' : 'ČEKÁ SE'}
+                                                                </button>
+                                                            )}
+                                                        </td>
+                                                        <td className="py-4 text-right">
+                                                            {!isLegacy && <button onClick={() => onUpdatePayouts(payouts.filter(x => x.id !== p.id))} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
                                         )}
                                     </tbody>
                                 </table>

@@ -20,28 +20,43 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
     };
 
     const todayStr = getLocalDate(0);
-    const last30Days = Array.from({ length: 30 }, (_, i) => getLocalDate(29 - i));
+    // Get last 45 days to ensure we have enough weekdays for a good history
+    const lastDates = Array.from({ length: 45 }, (_, i) => getLocalDate(44 - i));
+
+    // Filter out weekends (0 = Sunday, 6 = Saturday)
+    const weekdaysOnly = lastDates.filter(date => {
+      const day = new Date(date).getUTCDay();
+      return day !== 0 && day !== 6;
+    }).slice(-30); // Keep last 30 weekdays
 
     // Celkový streak rituálů
     let currentStreak = 0;
-    const sortedDatesForStreak = [...last30Days].reverse();
+    const sortedDatesForStreak = [...weekdaysOnly].reverse();
 
     for (const date of sortedDatesForStreak) {
       const hasPrep = preps.some(p => p.date === date);
       const hasReview = reviews.some(r => r.date === date);
       const hasTrades = trades.some(t => t.date.startsWith(date));
-      const isWeekend = [0, 6].includes(new Date(date).getDay());
       const isToday = date === todayStr;
 
       if ((hasPrep && hasReview) || (isToday && hasPrep)) {
         currentStreak++;
       } else if (hasTrades) {
         break;
-      } else if (isWeekend) {
-        continue;
-      } else if (!isToday) {
+      } else if (!isToday && new Date(date) < new Date(todayStr)) {
+        // If not today (and in past) and missing prep/review -> break
+        // Unless it's today (handled above) or future (not possible here)
         break;
       } else {
+        // Today but no prep/review yet -> don't break streak from yesterday? 
+        // The logic above: if (isToday && hasPrep) streak++. 
+        // If isToday and NO prep:
+        // We shouldn't break streak if we just haven't done it YET today?
+        // Original logic: "else if (!isToday) break". 
+        // So if it IS today and we fail conditions, we just don't increment, but we continue to check yesterday?
+        // No, "else break" would run.
+        // Let's stick to original logic structure but simplified for weekdays
+        if (isToday) continue; // Don't break on today if missing, just don't count it yet
         break;
       }
     }
@@ -64,7 +79,6 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
         const prep = preps.find(p => p.date === date);
         const review = reviews.find(r => r.date === date);
         const hasTrades = trades.some(t => t.date.startsWith(date));
-        const isWeekend = [0, 6].includes(new Date(date).getDay());
         const isToday = date === todayStr;
 
         const ritualComp = prep?.ritualCompletions?.find(c => c.ruleId === ruleId);
@@ -77,11 +91,7 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
           rStreak++;
         } else if (hasTrades || ritualComp?.status === 'Fail' || ruleAdh?.status === 'Fail') {
           break;
-        } else if (isWeekend) {
-          continue;
-        } else if (!isToday) {
-          break;
-        } else {
+        } else if (!isToday && new Date(date) < new Date(todayStr)) {
           break;
         }
       }
@@ -93,7 +103,7 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
       ruleStreaks[ruleId] = { streak: rStreak, label, type };
     });
 
-    const heatmapData = last30Days.map(date => {
+    const heatmapData = weekdaysOnly.map(date => {
       const hasPrep = preps.some(p => p.date === date);
       const hasReview = reviews.some(r => r.date === date);
       const hasTrades = trades.some(t => t.date.startsWith(date));
@@ -104,7 +114,7 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
       return { date, status };
     });
 
-    return { currentStreak, heatmapData, ruleStreaks, disciplineScore: Math.min(100, Math.round((heatmapData.filter(d => d.status === 'full').length / 22) * 100)) };
+    return { currentStreak, heatmapData, ruleStreaks, disciplineScore: Math.min(100, Math.round((heatmapData.filter(d => d.status === 'full').length / heatmapData.length) * 100)) };
   }, [preps, reviews, trades, ironRules]);
 
   const getStatusColor = (status: string) => {
@@ -118,8 +128,8 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
 
   return (
     <div className={`p-5 rounded-[32px] border transition-all flex flex-col overflow-visible ${theme === 'oled' ? 'bg-black border-white/10' :
-        theme === 'dark' ? 'bg-[var(--bg-card)]/90 border-[var(--border-subtle)] backdrop-blur-xl' :
-          'bg-white border-slate-200 shadow-sm'
+      theme === 'dark' ? 'bg-[var(--bg-card)]/90 border-[var(--border-subtle)] backdrop-blur-xl' :
+        'bg-white border-slate-200 shadow-sm'
       }`}>
 
       {/* Header Widgetu */}

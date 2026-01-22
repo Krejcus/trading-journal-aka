@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha Bridge - Light Mode Concept (Wide)</title>
+    <style>
+        :root {
+            --bg-light: #ffffff;
+            --accent: #0ea5e9;
+            --accent-glow: rgba(14, 165, 233, 0.4);
+            --glass-white: rgba(255, 255, 255, 0.85);
+            --border-light: rgba(0, 0, 0, 0.08);
+            --text-dark: #0f172a;
+            --text-muted: #64748b;
+            --success: #10b981;
+            --warning: #f59e0b;
+        }
+
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: #f8fafc;
+        }
+
+        .tv-mockup {
+            width: 100vw;
+            height: 100vh;
+            background-image: url('https://static.tradingview.com/static/bundles/chart-screenshot-placeholder.7a0f679f.png');
+            background-size: cover;
+            background-position: center;
+            filter: grayscale(1) opacity(0.15);
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        .tv-mockup::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: linear-gradient(rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 0, 0, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+
+        .alpha-trigger {
+            position: absolute;
+            bottom: 40px;
+            right: 40px;
+            width: 70px;
+            height: 70px;
+            background: #fff;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 100;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            border: 1px solid #f1f5f9;
+            overflow: hidden;
+        }
+
+        .alpha-trigger:hover {
+            transform: scale(1.1) rotate(5deg);
+            box-shadow: 0 15px 50px rgba(14, 165, 233, 0.2);
+        }
+
+        .alpha-trigger img {
+            width: 80%;
+            height: 80%;
+            object-fit: contain;
+        }
+
+        .alpha-trigger::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 16px;
+            background: var(--accent);
+            opacity: 0;
+            z-index: -1;
+            animation: pulse-light 3s infinite;
+        }
+
+        @keyframes pulse-light {
+            0% {
+                transform: scale(1);
+                opacity: 0.15;
+            }
+
+            100% {
+                transform: scale(1.8);
+                opacity: 0;
+            }
+        }
+
+        .side-panel {
+            position: absolute;
+            top: 20px;
+            right: -820px;
+            width: 380px;
+            height: calc(100vh - 40px);
+            background: var(--glass-white);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            border-radius: 32px;
+            z-index: 1000;
+            transition: all 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 30px 100px -20px rgba(0, 0, 0, 0.15);
+        }
+
+        .side-panel.open {
+            right: 20px;
+        }
+
+        .side-panel.wide {
+            width: 650px;
+        }
+
+        .panel-header {
+            padding: 24px 28px;
+            background: rgba(255, 255, 255, 0.4);
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .panel-header h1 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 900;
+            letter-spacing: 3px;
+            color: var(--text-dark);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .action-icon {
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.05);
+            transition: all 0.2s;
+            color: var(--text-dark);
+        }
+
+        .action-icon:hover {
+            background: rgba(14, 165, 233, 0.1);
+            color: var(--accent);
+        }
+
+        .panel-content {
+            padding: 28px;
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        /* Two Column Layout for Wide Mode */
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 24px;
+            transition: grid-template-columns 0.4s;
+        }
+
+        .wide .content-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .field-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            margin-bottom: 8px;
+        }
+
+        .light-input {
+            width: 100%;
+            box-sizing: border-box;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 14px;
+            color: var(--text-dark);
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            outline: none;
+            transition: all 0.3s;
+        }
+
+        .light-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 4px var(--accent-glow);
+        }
+
+        .btn-send {
+            width: 100%;
+            padding: 18px;
+            background: var(--text-dark);
+            border: none;
+            border-radius: 18px;
+            color: #fff;
+            font-weight: 800;
+            font-size: 15px;
+            cursor: pointer;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+            transition: all 0.3s;
+            margin-top: 20px;
+        }
+
+        .btn-send:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.2);
+            background: #000;
+        }
+
+        .account-selector {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 20px;
+            min-height: 120px;
+            padding: 8px;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.02);
+            margin-bottom: 20px;
+        }
+
+        .acc-item {
+            padding: 10px 14px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            margin-bottom: 4px;
+            background: #f8fafc;
+            border: 1px solid #f1f5f9;
+        }
+
+        .badge {
+            margin-left: auto;
+            font-size: 9px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: 900;
+            background: #eff6ff;
+            color: var(--accent);
+        }
+
+        /* Overlay */
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(4px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.6s;
+            z-index: 999;
+        }
+
+        .overlay.active {
+            opacity: 1;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .wide .hidden-on-narrow {
+            display: block;
+        }
+
+        .hidden-on-narrow {
+            display: none;
+        }
+
+        .preview-box {
+            width: 100%;
+            height: 120px;
+            background: #f1f5f9;
+            border-radius: 16px;
+            border: 2px dashed #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="tv-mockup"></div>
+    <div class="overlay" id="overlay"></div>
+
+    <div class="alpha-trigger" id="trigger" onclick="togglePanel()">
+        <img src="branding/logo3.png" alt="Alpha Bridge Logo">
+    </div>
+
+    <div class="side-panel" id="panel">
+        <div class="panel-header">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <img src="branding/logo3.png" style="width: 24px;">
+                <h1>ALPHA BRIDGE</h1>
+            </div>
+            <div class="header-actions">
+                <div class="action-icon" title="Toggle Wide Mode" onclick="toggleWide()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M15 3h6v6"></path>
+                        <path d="M9 21H3v-6"></path>
+                        <path d="M21 3l-7 7"></path>
+                        <path d="M3 21l7-7"></path>
+                    </svg>
+                </div>
+                <div class="action-icon" onclick="togglePanel()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel-content">
+            <div class="content-grid">
+                <!-- Left Column (or main column in narrow) -->
+                <div>
+                    <div class="field-label">Aktivní Účty</div>
+                    <div class="account-selector">
+                        <div class="acc-item">
+                            <input type="checkbox" checked>
+                            <span>Alpha Futures 50K</span>
+                            <span class="badge">MASTER</span>
+                        </div>
+                        <div class="acc-item">
+                            <input type="checkbox" checked>
+                            <span style="opacity: 0.6;">Copy #1</span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+                        <div style="flex: 2;">
+                            <div class="field-label">Symbol</div>
+                            <input type="text" class="light-input" value="MNQ" readonly style="color:var(--warning)">
+                        </div>
+                        <div style="flex: 1;">
+                            <div class="field-label">Směr</div>
+                            <input type="text" class="light-input" value="LONG" readonly
+                                style="color:var(--success); text-align:center;">
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 12px;">
+                        <div style="flex: 1;">
+                            <div class="field-label">Entry</div>
+                            <input type="text" class="light-input" value="18452.25">
+                        </div>
+                        <div style="flex: 1;">
+                            <div class="field-label">Risk ($)</div>
+                            <input type="text" class="light-input" value="250">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column (Only in Wide Mode) -->
+                <div class="hidden-on-narrow">
+                    <div class="field-label">Screenshot Preview</div>
+                    <div class="preview-box">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.3;">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                        <span style="margin-left: 10px;">Chart Capture ✨</span>
+                    </div>
+
+                    <div class="field-label">Statistiky Relace</div>
+                    <div style="background: white; border: 1px solid #e2e8f0; border-radius: 20px; padding: 20px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                            <span style="font-size: 13px; color: var(--text-muted);">Dnešní PnL</span>
+                            <span style="font-size: 13px; font-weight: 800; color: var(--success);">+$1,420</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="font-size: 13px; color: var(--text-muted);">Win Rate</span>
+                            <span style="font-size: 13px; font-weight: 800;">68%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <button class="btn-send">ODESLAT DO DENÍKU 🚀</button>
+            <div
+                style="text-align: center; margin-top: 20px; font-size: 10px; color: var(--text-muted); font-weight: 700; letter-spacing: 1px;">
+                PREMIUM ALPHA BRIDGE V2
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function togglePanel() {
+            const panel = document.getElementById('panel');
+            const overlay = document.getElementById('overlay');
+            const trigger = document.getElementById('trigger');
+
+            panel.classList.toggle('open');
+            overlay.classList.toggle('active');
+
+            if (panel.classList.contains('open')) {
+                trigger.style.transform = 'scale(0) rotate(90deg)';
+                trigger.style.opacity = '0';
+            } else {
+                trigger.style.transform = 'scale(1) rotate(0deg)';
+                trigger.style.opacity = '1';
+            }
+        }
+
+        function toggleWide() {
+            const panel = document.getElementById('panel');
+            panel.classList.toggle('wide');
+        }
+    </script>
+</body>
+
+</html>

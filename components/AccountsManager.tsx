@@ -40,6 +40,7 @@ interface AccountsManagerProps {
   trades: Trade[];
   onUpdateTrades: (trades: Trade[]) => void;
   onAddExpense?: (expense: any) => void;
+  onAddPayout?: (payout: any) => void;
 }
 
 // Sparkline Helper Component
@@ -235,6 +236,19 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     );
 
     onUpdate(updated);
+
+    // Sync to Business Hub as received payout
+    if (onAddPayout) {
+      onAddPayout({
+        id: `payout_${Date.now()}`,
+        date: new Date().toISOString().split('T')[0],
+        amount: netAmount,
+        accountId: payoutTarget.id,
+        status: 'Received',
+        notes: `Automatická výplata z účtu: ${payoutTarget.name}`
+      });
+    }
+
     setPayoutTarget(null);
     setPayoutGross('');
   };

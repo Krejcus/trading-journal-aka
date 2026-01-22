@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha Bridge UI Preview</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Inter:wght@300;400;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #07090e;
+            --panel-bg: rgba(15, 23, 42, 0.7);
+            --accent: #38bdf8;
+            --accent-glow: rgba(56, 189, 248, 0.4);
+            --text-primary: #ffffff;
+            --text-secondary: #94a3b8;
+            --border: rgba(51, 65, 85, 0.5);
+            --success: #10b981;
+            --danger: #f43f5e;
+            --warning: #fbbf24;
+            --glass-border: rgba(255, 255, 255, 0.05);
+        }
+
+        body {
+            background: #0f172a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .browser-mock {
+            width: 380px;
+            background: var(--bg-dark);
+            border-radius: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            border: 1px solid var(--border);
+            position: relative;
+        }
+
+        /* Glassmorphism Background */
+        .browser-mock::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 30% 20%, rgba(56, 189, 248, 0.1) 0%, transparent 40%);
+            pointer-events: none;
+        }
+
+        .header {
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            background: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+            font-size: 18px;
+            letter-spacing: 1px;
+            background: linear-gradient(135deg, #fff 0%, #38bdf8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .logo::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 2px;
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .logout-btn {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.2s;
+            background: transparent;
+        }
+
+        .logout-btn:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+            background: rgba(244, 63, 94, 0.1);
+        }
+
+        .content {
+            padding: 16px;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Screenshot Preview */
+        .preview-container {
+            width: 100%;
+            height: 120px;
+            background: #1e293b;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            position: relative;
+            cursor: zoom-in;
+            transition: transform 0.2s;
+        }
+
+        .preview-container:hover {
+            border-color: var(--accent);
+        }
+
+        .preview-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            filter: brightness(0.8);
+        }
+
+        .preview-badge {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(4px);
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--accent);
+            border: 1px solid var(--border);
+        }
+
+        /* Form Controls */
+        .field-group {
+            margin-bottom: 14px;
+        }
+
+        .label {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            padding-left: 4px;
+        }
+
+        .input-box {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: white;
+            font-size: 13px;
+            box-sizing: border-box;
+            transition: all 0.2s;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .input-box:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.1);
+            background: rgba(15, 23, 42, 0.9);
+        }
+
+        .row {
+            display: flex;
+            gap: 12px;
+        }
+
+        .row>div {
+            flex: 1;
+        }
+
+        /* Account Item */
+        .account-selector {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            max-height: 130px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+        }
+
+        .account-item {
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 1px solid var(--glass-border);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .account-item:hover {
+            background: rgba(56, 189, 248, 0.05);
+        }
+
+        .account-item:last-child {
+            border-bottom: none;
+        }
+
+        .check-box {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .checked .check-box {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .check-box::after {
+            content: '✓';
+            color: #000;
+            font-size: 10px;
+            font-weight: 800;
+            display: none;
+        }
+
+        .checked .check-box::after {
+            display: block;
+        }
+
+        .acc-name {
+            font-size: 12px;
+            font-weight: 600;
+            flex: 1;
+        }
+
+        .acc-badge {
+            font-size: 9px;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(56, 189, 248, 0.1);
+            color: var(--accent);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+        }
+
+        .acc-badge.copy {
+            background: rgba(168, 85, 247, 0.1);
+            color: #a855f7;
+            border-color: rgba(168, 85, 247, 0.2);
+        }
+
+        /* R:R Widget */
+        .rr-widget {
+            height: 40px;
+            background: linear-gradient(90deg, rgba(56, 189, 248, 0.15) 0%, transparent 100%);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text-primary);
+        }
+
+        .rr-value {
+            color: var(--accent);
+            font-family: 'Outfit', sans-serif;
+            font-size: 18px;
+        }
+
+        /* Buttons */
+        .primary-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #38bdf8 0%, #0ea5e9 100%);
+            color: #07090e;
+            border: none;
+            padding: 14px;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            box-shadow: 0 10px 20px -5px rgba(56, 189, 248, 0.3);
+            transition: all 0.3s;
+            margin-top: 20px;
+        }
+
+        .primary-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 25px -5px rgba(56, 189, 248, 0.4);
+            filter: brightness(1.1);
+        }
+
+        .secondary-btn {
+            width: 100%;
+            background: var(--panel-bg);
+            color: white;
+            border: 1px solid var(--border);
+            padding: 10px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .secondary-btn:hover {
+            background: rgba(51, 65, 85, 0.5);
+            border-color: var(--text-secondary);
+        }
+
+        /* Status Bar */
+        .status-bar {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--success);
+            font-weight: 500;
+        }
+
+        .pulse {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.5);
+                opacity: 0.5;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="browser-mock">
+        <div class="header">
+            <div class="logo">ALPHA BRIDGE</div>
+            <button class="logout-btn">Odhlásit</button>
+        </div>
+
+        <div class="content">
+            <!-- Account List -->
+            <label class="label">Obchodní účty</label>
+            <div class="account-selector">
+                <div class="account-item checked">
+                    <div class="check-box"></div>
+                    <div class="acc-name">Alpha Futures 50k - Master</div>
+                    <div class="acc-badge">MASTER</div>
+                </div>
+                <div class="account-item checked" style="padding-left: 30px; scale: 0.95; opacity: 0.8;">
+                    <div class="check-box" style="scale: 0.9;"></div>
+                    <div class="acc-name">Copy Account 1</div>
+                    <div class="acc-badge copy">COPY</div>
+                </div>
+                <div class="account-item">
+                    <div class="check-box"></div>
+                    <div class="acc-name">Personal Sim</div>
+                </div>
+            </div>
+
+            <!-- Preview Card -->
+            <div class="preview-container">
+                <img src="https://images.unsplash.com/photo-1611974717482-48cd54386997?auto=format&fit=crop&q=80&w=600"
+                    class="preview-img" alt="Chart Preview">
+                <div class="preview-badge">DETEKCE: NQ1!</div>
+            </div>
+
+            <!-- Symbol & Direction -->
+            <div class="row">
+                <div class="field-group">
+                    <label class="label">Symblo</label>
+                    <input type="text" class="input-box" value="MNQ" style="color: var(--warning); font-weight: 700;">
+                </div>
+                <div class="field-group">
+                    <label class="label">Směr</label>
+                    <input type="text" class="input-box" value="SHORT"
+                        style="color: var(--danger); font-weight: 700; text-align: center;">
+                </div>
+            </div>
+
+            <!-- Price Data -->
+            <div class="row">
+                <div class="field-group">
+                    <label class="label">Entry</label>
+                    <input type="text" class="input-box" value="25681.75">
+                </div>
+                <div class="field-group">
+                    <label class="label">Risk ($)</label>
+                    <input type="text" class="input-box" value="250">
+                </div>
+            </div>
+
+            <!-- SL & TP -->
+            <div class="row">
+                <div class="field-group">
+                    <label class="label">Stop Loss</label>
+                    <input type="text" class="input-box" value="25692.00">
+                </div>
+                <div class="field-group">
+                    <label class="label">Take Profit</label>
+                    <input type="text" class="input-box" value="25671.50">
+                </div>
+            </div>
+
+            <!-- R:R & PnL Estimate -->
+            <div class="row" style="align-items: flex-end;">
+                <div class="field-group">
+                    <label class="label">Předpokládaný PnL</label>
+                    <input type="text" class="input-box" placeholder="Target: ~$250"
+                        style="color: var(--success); font-weight: 600;">
+                </div>
+                <div class="field-group">
+                    <div class="rr-widget">
+                        R:R <span class="rr-value">1 : 1.00</span>
+                    </div>
+                </div>
+            </div>
+
+            <button class="secondary-btn" style="margin-top: 10px;">🔄 PŘESKENOVAT GRAF</button>
+
+            <button class="primary-btn">ZAPSAT DO DENÍKU 🚀</button>
+
+            <div class="status-bar">
+                <div class="pulse"></div>
+                Vše je připraveno k odeslání.
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>

@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User } from '../types';
+import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode } from '../types';
+import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
 import Charts from './Charts';
 import DashboardCalendar from './DashboardCalendar';
 import DisciplineDashboard from './DisciplineDashboard';
@@ -67,6 +68,7 @@ interface DashboardProps {
   onDeleteTrade?: (id: number | string) => void;
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
   user?: User;
+  pnlDisplayMode?: PnLDisplayMode;
 }
 
 // ... existing imports ...
@@ -138,7 +140,9 @@ const SmartTooltip: React.FC<{
   subtext?: string;
   theme: 'dark' | 'light' | 'oled';
   color?: string;
-}> = ({ children, text, subtext, theme, color }) => {
+  className?: string; // Allow custom classes
+  style?: React.CSSProperties; // Allow custom styles
+}> = ({ children, text, subtext, theme, color, className, style }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ isFlipped: false, isRight: false });
@@ -154,7 +158,8 @@ const SmartTooltip: React.FC<{
 
   return (
     <div
-      className="relative inline-block"
+      className={`relative inline-block ${className || ''}`}
+      style={style}
       ref={containerRef}
       onMouseEnter={() => { checkPosition(); setIsOpen(true); }}
       onMouseLeave={() => setIsOpen(false)}
@@ -193,15 +198,132 @@ const InfoIcon: React.FC<{ text: string; theme: 'dark' | 'light' | 'oled' }> = (
   </SmartTooltip>
 );
 
+// --- NEW WIDGET: AVG WIN/LOSS ---
+const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled', pnlDisplayMode: PnLDisplayMode, initialBalance: number }> = ({ stats, theme, pnlDisplayMode, initialBalance }) => {
+  const avgWin = stats.avgWin || 0;
+  const avgLoss = Math.abs(stats.avgLoss || 0);
+  const ratio = avgLoss > 0 ? avgWin / avgLoss : 0;
+
+  // Calculate bar percentages (clamped to avoid layout break)
+  const total = avgWin + avgLoss;
+  const winPct = total > 0 ? (avgWin / total) * 100 : 50;
+
+  return (
+    <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col justify-between">
+      <div className="flex justify-between items-start mb-2">
+        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+          Avg win/loss trade <InfoIcon text="Poměr průměrného zisku a ztráty (Risk:Reward Ratio)." theme={theme} />
+        </h3>
+      </div>
+
+      <div className="flex-1 flex flex-col justify-center gap-4">
+        <div className="w-full">
+          <div className="w-full h-3 bg-slate-800 rounded-full flex items-center">
+            <SmartTooltip
+              text="Průměrný zisk"
+              subtext={`$${Math.round(avgWin).toLocaleString()}`}
+              theme={theme}
+              color={COLORS.profit}
+              style={{ width: `${winPct}%` }}
+              className="h-full"
+            >
+              <div
+                className="bg-emerald-500 w-full h-full rounded-l-full cursor-pointer hover:scale-y-125 transition-transform duration-300 origin-left"
+              />
+            </SmartTooltip>
+            <SmartTooltip
+              text="Průměrná ztráta"
+              subtext={`$${Math.round(avgLoss).toLocaleString()}`}
+              theme={theme}
+              color={COLORS.loss}
+              style={{ width: `${100 - winPct}%` }}
+              className="h-full"
+            >
+              <div
+                className="bg-rose-500 w-full h-full rounded-r-full cursor-pointer hover:scale-y-125 transition-transform duration-300 origin-right"
+              />
+            </SmartTooltip>
+          </div>
+        </div>
+
+        <div className="flex justify-between items-center text-xs font-black">
+          <span className={COLORS.textProfit}>{formatPnL(avgWin, pnlDisplayMode, initialBalance, stats.avgWinPct / (stats.avgRisk || 1))}</span>
+          <span className={COLORS.textLoss}>{formatPnL(-avgLoss, pnlDisplayMode, initialBalance, -stats.avgLossPct / (stats.avgRisk || 1))}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- NEW WIDGET: STREAK ---
+const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled' }> = ({ stats, theme }) => {
+  const dayStreak = stats.currentDayStreak || 0;
+  const tradeStreak = stats.currentTradeStreak || 0;
+
+  const getStreakColor = (val: number) => val > 0 ? 'text-emerald-500 border-emerald-500' : val < 0 ? 'text-rose-500 border-rose-500' : 'text-slate-500 border-slate-700';
+
+  return (
+    <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col justify-between">
+      <div className="flex justify-between items-start mb-4">
+        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+          Current streak <InfoIcon text="Aktuální série ziskových/ztrátových dnů a obchodů." theme={theme} />
+        </h3>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 flex-1">
+        {/* DAYS STREAK */}
+        <div className="flex items-center gap-3">
+          <SmartTooltip text="Denní série" subtext={dayStreak > 0 ? `${dayStreak} ziskových dní v řadě` : `${Math.abs(dayStreak)} ztrátových dní v řadě`} theme={theme}>
+            <div className={`w-14 h-14 rounded-full border-[6px] flex items-center justify-center text-xl font-black ${getStreakColor(dayStreak)} cursor-pointer hover:scale-110 transition-transform duration-300`}>
+              {Math.abs(dayStreak)}
+            </div>
+          </SmartTooltip>
+          <div className="flex flex-col gap-1">
+            <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">DAYS</span>
+            <div className="flex flex-col gap-1 text-[9px] font-bold">
+              <SmartTooltip text="Nejhorší série" subtext="Nejvíce ztrátových dní v řadě" theme={theme} color={COLORS.loss}>
+                <span className="bg-rose-500/20 text-rose-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxLosingDayStreak} days</span>
+              </SmartTooltip>
+              <SmartTooltip text="Nejlepší série" subtext="Nejvíce ziskových dní v řadě" theme={theme} color={COLORS.profit}>
+                <span className="bg-emerald-500/20 text-emerald-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxWinningDayStreak} days</span>
+              </SmartTooltip>
+            </div>
+          </div>
+        </div>
+
+        {/* TRADES STREAK */}
+        <div className="flex items-center gap-3">
+          <SmartTooltip text="Obchodní série" subtext={tradeStreak > 0 ? `${tradeStreak} ziskových obchodů v řadě` : `${Math.abs(tradeStreak)} ztrátových obchodů v řadě`} theme={theme}>
+            <div className={`w-14 h-14 rounded-full border-[6px] flex items-center justify-center text-xl font-black ${getStreakColor(tradeStreak)} cursor-pointer hover:scale-110 transition-transform duration-300`}>
+              {Math.abs(tradeStreak)}
+            </div>
+          </SmartTooltip>
+          <div className="flex flex-col gap-1">
+            <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">TRADES</span>
+            <div className="flex flex-col gap-1 text-[9px] font-bold">
+              <SmartTooltip text="Nejhorší série" subtext="Nejvíce ztrát v řadě" theme={theme} color={COLORS.loss}>
+                <span className="bg-rose-500/20 text-rose-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxConsecutiveLosses} trades</span>
+              </SmartTooltip>
+              <SmartTooltip text="Nejlepší série" subtext="Nejvíce výher v řadě" theme={theme} color={COLORS.profit}>
+                <span className="bg-emerald-500/20 text-emerald-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxConsecutiveWins} trades</span>
+              </SmartTooltip>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const MASTER_WIDGET_LIST = [
+  { id: 'avg_win_loss', label: 'Avg Win/Loss', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Poměr průměrného zisku a ztráty.', preview: <div className="text-emerald-500 font-black text-xl">3.40</div>, defaultRowSpan: 1 },
+  { id: 'streak', label: 'Current Streak', category: 'Psychologie', icon: <Zap size={18} />, description: 'Aktuální série výher/proher.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 1 },
   { id: 'challenge_target', label: 'Challenge Cíl', category: 'KPIs', icon: <Flag size={18} />, description: 'Sleduje postup k profit targetu (10%).', preview: <div className="text-blue-500 font-black text-xs">Progress: 45%</div>, defaultRowSpan: 1 },
   { id: 'kpi_pnl', label: 'Net P&L', category: 'KPIs', icon: <Trophy size={18} />, description: 'Čistý zisk nebo ztráta účtu.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$215,873</div>, defaultRowSpan: 1 },
   { id: 'kpi_winrate', label: 'Trade win %', category: 'KPIs', icon: <Activity size={18} />, description: 'Procento vítězných obchodů.', preview: <div className="text-blue-500 font-black text-xl">57.97%</div>, defaultRowSpan: 1 },
   { id: 'kpi_execution_rate', label: 'Execution %', category: 'KPIs', icon: <Target size={18} />, description: 'Procento signálů, které jsi reálně vzal.', preview: <div className="text-orange-500 font-black text-xl">92%</div>, defaultRowSpan: 1 },
   { id: 'kpi_profit_factor', label: 'Profit factor', category: 'KPIs', icon: <BarChart3 size={18} />, description: 'Poměr hrubých zisků a ztrát.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>19.89</div>, defaultRowSpan: 1 },
   { id: 'kpi_day_winrate', label: 'Day win %', category: 'KPIs', icon: <CalendarIcon size={18} />, description: 'Procento ziskových obchodních dnů.', preview: <div className="text-purple-500 font-black text-xl">62.15%</div>, defaultRowSpan: 1 },
-  { id: 'kpi_avg_win', label: 'Average Win', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Průměrný zisk na vítězný trade.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$450</div>, defaultRowSpan: 1 },
-  { id: 'kpi_avg_loss', label: 'Average Loss', category: 'KPIs', icon: <ArrowDown size={18} />, description: 'Průměrná ztráta na trade.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>$320</div>, defaultRowSpan: 1 },
   { id: 'kpi_max_drawdown', label: 'Max Drawdown', category: 'KPIs', icon: <TrendingDown size={18} />, description: 'Největší propad kapitálu.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>12.4%</div>, defaultRowSpan: 1 },
   { id: 'discipline', label: 'Rituály & Disciplína', category: 'Chování', icon: <Brain size={18} />, description: 'Sleduje tvé ranní a večerní rituály.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 2 },
   { id: 'winners_losers', label: 'Výhry a Prohry', category: 'Analýza', icon: <TrendingUp size={18} />, description: 'Statistické srovnání zisků a ztrát.', preview: <div className="flex gap-1"><div className={`w-4 h-4 ${COLORS.bgProfit} ${COLORS.borderProfit} border rounded`} /><div className={`w-4 h-4 ${COLORS.bgLoss} ${COLORS.borderLoss} border rounded`} /></div>, defaultRowSpan: 2 },
@@ -549,12 +671,14 @@ const ProKpiCard: React.FC<{
   );
 };
 
-const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled' }> = ({ stats, theme }) => {
+const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled', pnlDisplayMode: PnLDisplayMode, initialBalance: number }> = ({ stats, theme, pnlDisplayMode, initialBalance }) => {
   const isDark = theme !== 'light';
   const formatDur = (mins: number) => {
+    if (!mins || mins === 0) return "0m";
+    if (mins < 1) return "< 1m";
     const h = Math.floor(mins / 60);
     const m = Math.round(mins % 60);
-    return `${h}h ${m}m`;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
   const Row = ({ label, value, color, info }: any) => (
     <div className={`flex justify-between items-center py-2 border-b last:border-0 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
@@ -577,21 +701,19 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
         <div className={`p-4 rounded-2xl border ${isDark ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
           <h4 className={`text-[10px] font-black uppercase tracking-widest ${COLORS.textProfit} mb-4 flex items-center gap-2`}><ArrowUp size={12} /> Ziskové Obchody</h4>
           <div className="space-y-1">
-            <Row label="Total winners" value={stats.winningTrades} />
-            <Row label="Best win" value={`${stats.bestWinPct.toFixed(2)}%`} color={COLORS.textProfit} />
-            <Row label="Average win" value={`${stats.avgWinPct.toFixed(2)}%`} color={COLORS.textProfit} />
-            <Row label="Average duration" value={formatDur(stats.avgDurationWin)} />
-            <Row label="Max consecutive" value={stats.maxConsecutiveWins} />
+            <Row label="Nejlepší zisk" value={formatPnL(stats.maxWin, pnlDisplayMode, initialBalance, stats.bestWinPct / (stats.avgRisk || 1))} color={COLORS.textProfit} />
+            <Row label="Průměrný zisk" value={formatPnL(stats.avgWin, pnlDisplayMode, initialBalance, stats.avgWinPct / (stats.avgRisk || 1))} color={COLORS.textProfit} />
+            <Row label="Průměrná doba" value={formatDur(stats.avgDurationWin)} />
+            <Row label="Max v řadě" value={stats.maxConsecutiveWins} />
           </div>
         </div>
         <div className={`p-4 rounded-2xl border ${isDark ? 'bg-rose-500/5 border-rose-500/10' : 'bg-rose-50 border-rose-100'}`}>
           <h4 className={`text-[10px] font-black uppercase tracking-widest ${COLORS.textLoss} mb-4 flex items-center gap-2`}><ArrowDown size={12} /> Ztrátové Obchody</h4>
           <div className="space-y-1">
-            <Row label="Total losers" value={stats.losingTrades} />
-            <Row label="Worst loss" value={`${stats.worstLossPct.toFixed(2)}%`} color={COLORS.textLoss} />
-            <Row label="Average loss" value={`${stats.avgLossPct.toFixed(2)}%`} color={COLORS.textLoss} />
-            <Row label="Average duration" value={formatDur(stats.avgDurationLoss)} />
-            <Row label="Max consecutive" value={stats.maxConsecutiveLosses} />
+            <Row label="Nejhorší ztráta" value={formatPnL(stats.maxLoss, pnlDisplayMode, initialBalance, stats.worstLossPct / (stats.avgRisk || 1))} color={COLORS.textLoss} />
+            <Row label="Průměrná ztráta" value={formatPnL(-stats.avgLoss, pnlDisplayMode, initialBalance, stats.avgLossPct / (stats.avgRisk || 1))} color={COLORS.textLoss} />
+            <Row label="Průměrná doba" value={formatDur(stats.avgDurationLoss)} />
+            <Row label="Max v řadě" value={stats.maxConsecutiveLosses} />
           </div>
         </div>
       </div>
@@ -811,7 +933,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
   );
 };
 
-const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout, isEditing, onCloseEdit, accounts, emotions, onDeleteTrade, onUpdateTrade, dashboardMode, setDashboardMode, user }) => {
+const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout, isEditing, onCloseEdit, accounts, emotions, onDeleteTrade, onUpdateTrade, dashboardMode, setDashboardMode, user, pnlDisplayMode = 'usd' }) => {
   // Check if we need to auto-inject the Challenge widget when in Challenge mode
   useEffect(() => {
     if (dashboardMode === 'challenge' && !layout.some(w => w.id === 'challenge_target')) {
@@ -917,15 +1039,34 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
     switch (id) {
       case 'challenge_target': return <DistanceToTargetWidget stats={stats} accounts={accounts} theme={theme} />;
       case 'discipline': return <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={stats.trades} ironRules={ironRules} />;
-      case 'kpi_pnl': return <ProKpiCard theme={theme} label="Net P&L" value={`$${stats.totalPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sampleSize={stats.totalTrades} info="Čistý zisk nebo ztráta po odečtení všech nákladů a poplatků." icon={<div className="bg-purple-100 text-purple-600 p-1 rounded-lg dark:bg-purple-500/20"><BarChart3 size={14} /></div>} />;
-      case 'kpi_winrate': return <ProKpiCard theme={theme} label="Trade win %" value={`${stats.winRate.toFixed(2)}%`} type="gauge" info="Procento vítězných obchodů z reálně exekuovaných signálů." data={{ wins: stats.winningTrades, be: stats.breakEvenTrades, losses: stats.losingTrades }} />;
-      case 'kpi_execution_rate': return <ProKpiCard theme={theme} label="Execution %" value={`${stats.executionRate.toFixed(0)}%`} type="gauge" info="Kolik procent validních signálů jsi reálně exekuoval. Nízké číslo znamená přílišnou selektivitu nebo váhání." data={{ wins: stats.winningTrades + stats.losingTrades + stats.breakEvenTrades, missed: stats.missedTrades }} />;
-      case 'kpi_profit_factor': return <ProKpiCard theme={theme} label="Profit factor" value={stats.profitFactor.toFixed(2)} type="donut" info="Poměr hrubého zisku ku hrubé ztrátě. Hodnota nad 1.0 znamená profitabilní systém. Elitní tradeři cílí na 1.5 - 2.5." data={{ profit: stats.grossProfit, loss: stats.grossLoss }} />;
-      case 'kpi_day_winrate': return <ProKpiCard theme={theme} label="Day win %" value={`${stats.dayWinRate.toFixed(2)}%`} type="gauge" data={{ wins: stats.winningDays, be: stats.breakEvenDays, losses: stats.losingDays }} info="Procento obchodních dní, které skončily v zisku. Klíčová metrika pro konzistenci." />;
-      case 'kpi_avg_win': return <ProKpiCard theme={theme} label="Average Win" value={`$${stats.avgWin.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} icon={<div className={`${COLORS.bgProfit} ${COLORS.textProfit} p-1 rounded-lg`}><ArrowUp size={14} /></div>} info="Průměrný dolarový zisk na jeden vítězný obchod." />;
-      case 'kpi_avg_loss': return <ProKpiCard theme={theme} label="Average Loss" value={`$${stats.avgLoss.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} icon={<div className={`${COLORS.bgLoss} ${COLORS.textLoss} p-1 rounded-lg`}><ArrowDown size={14} /></div>} info="Průměrná dolarová ztráta na jeden trade." />;
-      case 'kpi_max_drawdown': return <ProKpiCard theme={theme} label="Max Drawdown" value={`$${stats.maxDrawdown.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} icon={<div className={`${COLORS.bgLoss} ${COLORS.textLoss} p-1 rounded-lg`}><AlertTriangle size={14} /></div>} info="Největší propad kapitálu z vrcholu (peak-to-trough). Důležité pro řízení rizika a psychiku." />;
-      case 'winners_losers': return <WinnersLosersWidget stats={stats} theme={theme} />;
+      case 'kpi_pnl': {
+        const totalRr = pnlDisplayMode === 'rr' ? calculateTotalRR(stats.trades) : undefined;
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Net P&L"
+            value={formatPnL(stats.totalPnL, pnlDisplayMode, stats.initialBalance, totalRr)}
+            sampleSize={stats.totalTrades}
+            info="Čistý zisk nebo ztráta po odečtení všech nákladů a poplatků."
+            icon={<div className="bg-purple-100 text-purple-600 p-1 rounded-lg dark:bg-purple-500/20"><BarChart3 size={14} /></div>}
+          />
+        );
+      }
+      case 'kpi_max_drawdown': {
+        const drawdownRr = pnlDisplayMode === 'rr' && (stats.avgRisk || 0) > 0 ? (stats.maxDrawdown / stats.avgRisk) : undefined;
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Max Drawdown"
+            value={formatPnL(stats.maxDrawdown, pnlDisplayMode, stats.initialBalance, drawdownRr, false)}
+            icon={<div className={`${COLORS.bgLoss} ${COLORS.textLoss} p-1 rounded-lg`}><AlertTriangle size={14} /></div>}
+            info="Největší propad kapitálu z vrcholu (peak-to-trough). Důležité pro řízení rizika a psychiku."
+          />
+        );
+      }
+      case 'avg_win_loss': return <AvgWinLossWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} />;
+      case 'streak': return <StreakWidget stats={stats} theme={theme} />;
+      case 'winners_losers': return <WinnersLosersWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} />;
       case 'monthly_performance': return <PerformanceByMonthWidget monthlyData={stats.monthlyBreakdown} theme={theme} />;
       case 'hourly_edge': return <HourlyEdgeWidget data={stats.hourStats} theme={theme} />;
       case 'daily_edge': return <DailyEdgeWidget data={stats.dayStats} theme={theme} />;
@@ -941,7 +1082,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
           onTradeClick={(id) => setSelectedTradeId(id)}
         />
       );
-      case 'calendar': return <div className="h-full flex flex-col overflow-hidden"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} /></div>;
+      case 'calendar': return <div className="h-full flex flex-col overflow-hidden"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} /></div>;
       default: return null;
     }
   };
@@ -1065,6 +1206,9 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
           onDelete={() => { if (onDeleteTrade) onDeleteTrade(selectedTrade.id); setSelectedTradeId(null); }}
           emotions={emotions}
           onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
+          pnlDisplayMode={pnlDisplayMode}
+          accounts={accounts}
+          initialBalance={stats.initialBalance}
         />
       )}
     </div>

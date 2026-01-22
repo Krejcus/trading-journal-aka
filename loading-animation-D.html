@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verze D - Velké Trendy</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 600px;
+            width: 100%;
+            padding: 2rem;
+        }
+
+        .logo {
+            font-size: 0.75rem;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: #64748b;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: #f59e0b;
+        }
+
+        p {
+            color: #94a3b8;
+            font-size: 0.875rem;
+            margin-bottom: 2rem;
+        }
+
+        #chartCanvas {
+            width: 100%;
+            height: 250px;
+            border-radius: 12px;
+            background: #000000;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+        }
+
+        button {
+            margin-top: 2rem;
+            padding: 0.75rem 1.5rem;
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: #fbbf24;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: rgba(245, 158, 11, 0.5);
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="logo">VERZE D</div>
+        <h1>Velké Trendy</h1>
+        <p>Mohutné svíčky s velkými těly - výrazné trendy nahoru/dolů</p>
+
+        <canvas id="chartCanvas"></canvas>
+
+        <button onclick="window.location.reload()">🔄 Restart</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('chartCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+        }
+        resizeCanvas();
+
+        let candles = [];
+        let currentIndex = 0;
+
+        function generateCandles() {
+            const numCandles = 70;
+            candles = [];
+            let lastClose = 95;
+            let trend = 0;
+
+            for (let i = 0; i < numCandles; i++) {
+                // Big trending moves
+                if (i < 15) trend = 2.0;      // Strong up
+                if (i === 15) trend = -2.5;   // Sharp reversal
+                if (i === 25) trend = 1.8;    // Recovery
+                if (i === 38) trend = -2.0;   // Another drop
+                if (i === 48) trend = 2.8;    // Massive rally
+
+                const volatility = 2.5 + Math.random() * 3.0; // BIGGER wicks
+                const noise = (Math.random() - 0.5) * 2.5;
+
+                const open = lastClose;
+                const close = open + trend + noise;
+                const bodySize = Math.abs(close - open);
+
+                // Ensure minimum body size for visibility
+                const minBodySize = 1.5;
+                const adjustedClose = close >= open
+                    ? open + Math.max(bodySize, minBodySize)
+                    : open - Math.max(bodySize, minBodySize);
+
+                const high = Math.max(open, adjustedClose) + volatility * (0.8 + Math.random() * 0.7);
+                const low = Math.min(open, adjustedClose) - volatility * (0.8 + Math.random() * 0.7);
+
+                candles.push({
+                    open,
+                    high,
+                    low,
+                    close: adjustedClose,
+                    color: adjustedClose >= open ? '#10b981' : '#ef4444'
+                });
+
+                lastClose = adjustedClose;
+            }
+        }
+
+        function drawCandle(index) {
+            const candle = candles[index];
+            const width = canvas.width / window.devicePixelRatio;
+            const height = canvas.height / window.devicePixelRatio;
+
+            const candleWidth = Math.max(2, (width - 40) / candles.length);
+            const x = 20 + index * candleWidth;
+
+            const allPrices = candles.flatMap(c => [c.high, c.low]);
+            const minPrice = Math.min(...allPrices);
+            const maxPrice = Math.max(...allPrices);
+            const priceRange = maxPrice - minPrice;
+
+            const scaleY = (price) => {
+                const padding = height * 0.05; // Less padding for taller candles
+                return height - padding - ((price - minPrice) / priceRange) * (height - padding * 2);
+            };
+
+            const openY = scaleY(candle.open);
+            const closeY = scaleY(candle.close);
+            const highY = scaleY(candle.high);
+            const lowY = scaleY(candle.low);
+
+            const bodyTop = Math.min(openY, closeY);
+            const bodyBottom = Math.max(openY, closeY);
+            const bodyHeight = Math.max(bodyBottom - bodyTop, 2);
+
+            ctx.strokeStyle = candle.color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + candleWidth / 2, highY);
+            ctx.lineTo(x + candleWidth / 2, lowY);
+            ctx.stroke();
+
+            ctx.fillStyle = candle.color;
+            const bodyWidth = Math.max(candleWidth * 0.7, 2);
+            ctx.fillRect(
+                x + (candleWidth - bodyWidth) / 2,
+                bodyTop,
+                bodyWidth,
+                bodyHeight
+            );
+        }
+
+        function render() {
+            const width = canvas.width / window.devicePixelRatio;
+            const height = canvas.height / window.devicePixelRatio;
+
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, width, height);
+
+            for (let i = 0; i < currentIndex; i++) {
+                drawCandle(i);
+            }
+        }
+
+        function animate() {
+            if (currentIndex < candles.length) {
+                currentIndex++;
+                render();
+                setTimeout(animate, 40);
+            } else {
+                setTimeout(() => {
+                    currentIndex = 0;
+                    render();
+                    setTimeout(animate, 800);
+                }, 800);
+            }
+        }
+
+        generateCandles();
+        animate();
+    </script>
+</body>
+
+</html>

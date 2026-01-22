@@ -48,11 +48,19 @@ export default async function handler(
 
         const map: Record<string, string> = {
             'nq': 'usatechidxusd',
+            'nq1!': 'usatechidxusd',
             'mnq': 'usatechidxusd',
             'nasdaq': 'usatechidxusd',
             'es': 'usa500idxusd',
+            'es1!': 'usa500idxusd',
             'mes': 'usa500idxusd',
             'sp500': 'usa500idxusd',
+            'rty': 'usa2000idxusd',
+            'rty1!': 'usa2000idxusd',
+            'm2k': 'usa2000idxusd',
+            'ym': 'usa30idxusd',
+            'ym1!': 'usa30idxusd',
+            'mym': 'usa30idxusd',
             'eurusd': 'eurusd',
             'gbpusd': 'gbpusd',
             'xauusd': 'xauusd',
@@ -77,7 +85,6 @@ export default async function handler(
         const cacheKey = tf === 'm1' ? dukaInstrument : `${dukaInstrument}:${tf}`;
 
         // 1. Check Cache First
-        // Increased PAGE_SIZE to 5000 to reduce CPU-heavy loop iterations
         let cachedData: any[] = [];
         let rangeFrom = fromDate.toISOString();
         let hasMore = true;
@@ -112,8 +119,6 @@ export default async function handler(
                     hasMore = false;
                 } else {
                     rangeFrom = page[page.length - 1].time;
-                    // Safety: if we didn't add any new data but page was full, something is wrong (duplicate timestamps)
-                    // Move the cursor slightly forward to break potential infinite loop
                     if (cachedData.length === prevCount) {
                         const nextDt = new Date(rangeFrom);
                         nextDt.setSeconds(nextDt.getSeconds() + 1);
@@ -123,7 +128,6 @@ export default async function handler(
             }
         }
 
-        // Calculate expected count based on timeframe
         const diffMs = (toDate.getTime() - fromDate.getTime());
         let frameMs = 60000; // m1
         if (tf === 'm5') frameMs = 5 * 60000;
@@ -134,28 +138,11 @@ export default async function handler(
         if (tf === 'w1' || tf === 'w') frameMs = 7 * 24 * 60 * 60000;
 
         const expectedCount = Math.floor(diffMs / frameMs);
-
-        // Heuristic:
-        // 1. Force Sync (Repair Tool): Skip cache, go to Dukascopy.
-        // 2. Normal Usage (Speed): If we have > 90% of data (or substantial amount for large range), trust cache.
         const isForce = request.query.force === 'true';
         const isCacheOnly = request.query.cacheOnly === 'true';
-
         const coverage = (cachedData && expectedCount > 0) ? (cachedData.length / expectedCount) : 0;
-
-        // Weekend Detection: Only trigger for short ranges (e.g. < 4 days) and very few candles
         const isShortRange = diffMs < 4 * 24 * 60 * 60 * 1000;
         const isLikelyWeekend = isShortRange && expectedCount > 100 && cachedData && (cachedData.length < 20);
-
-        // Final decision:
-        // - Force: always fetch.
-        // - CacheOnly: always HIT (never fetch).
-        // - Middle of Gap: If it's a huge request (> 1 day) and we have < 10%, it's a real gap.
-        const isLargeGap = expectedCount > 1000 && coverage < 0.1;
-
-        // isFastHit is TRUE if:
-        // - We have > 90% coverage
-        // - OR we have > 1000 candles (substantial block) AND coverage is decent (>70%)
         const isFastHit = cachedData && (coverage > 0.9 || (cachedData.length > 1000 && coverage > 0.7));
 
         if (isCacheOnly || (!isForce && (isFastHit || isLikelyWeekend))) {
@@ -169,9 +156,6 @@ export default async function handler(
                 volume: d.volume
             }));
 
-            // CDN CACHING STRATEGY:
-            // If the data is older than 1 day, it's immutable (Historical). Cache for 1 year in CDN.
-            // If it's fresh data, cache for 1 minute to allow updates.
             const isHistorical = toDate.getTime() < Date.now() - 24 * 60 * 60 * 1000;
             if (isHistorical) {
                 response.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=31536000, immutable');
@@ -183,7 +167,6 @@ export default async function handler(
             return response.status(200).json(transformed);
         }
 
-        // 2. Fetch from Dukascopy
         const startFetch = Date.now();
         console.log(`[Cache] MISS for ${cacheKey} (Expected ${expectedCount}, got ${cachedData?.length || 0}). Fetching from Dukascopy...`);
         response.setHeader('X-Cache-Status', 'MISS');
@@ -218,7 +201,6 @@ export default async function handler(
             return response.status(200).json([]);
         }
 
-        // 3. Save to Cache
         const startDb = Date.now();
         const candlesToCache = data.map((d: any) => ({
             instrument: cacheKey,
@@ -230,7 +212,6 @@ export default async function handler(
             volume: d.volume || d.tickVolume || 0
         }));
 
-        // Single bulk upsert is faster for m1 (1 day = 1440 rows max)
         const { error: upsertError } = await supabase
             .from('candle_cache')
             .upsert(candlesToCache, { onConflict: 'instrument,time' });

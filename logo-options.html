@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALPHA TRADE | Creative Logo Exploration</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@100;200;300;400;500;600&family=Inter:wght@100;200;300;400;700&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: #010103;
+            color: white;
+        }
+
+        .logo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+
+        .card {
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card:hover {
+            border-color: rgba(34, 211, 238, 0.4);
+            background: rgba(255, 255, 255, 0.05);
+            transform: translateY(-8px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 20px rgba(34, 211, 238, 0.1);
+        }
+
+        .glow-cyan {
+            filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.6));
+        }
+
+        .glow-white {
+            filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.4));
+        }
+    </style>
+</head>
+
+<body class="p-8 md:p-16">
+    <div class="max-w-7xl mx-auto">
+        <header class="text-center mb-20">
+            <h1 class="text-5xl font-[200] tracking-[0.2em] uppercase mb-4">Logo Lab <span
+                    class="text-cyan-400 font-[400]">ALPHA TRADE</span></h1>
+            <p class="text-slate-500 tracking-[0.4em] uppercase text-[10px] font-bold">Concept Exploration v3.0</p>
+        </header>
+
+        <div class="logo-grid">
+
+            <!-- 01. THE BRIDGE MASTER -->
+            <div class="card p-12 rounded-[40px] flex flex-col items-center gap-8">
+                <div class="relative">
+                    <svg width="100" height="100" viewBox="0 0 100 100" fill="none" class="glow-cyan">
+                        <!-- Abstract Bridge 'A' crossing into 'T' -->
+                        <path d="M20 80 L50 20 L80 80 M40 55 H85 V65" stroke="#22d3ee" stroke-width="6"
+                            stroke-linecap="square" />
+                        <path d="M20 80 L50 20 L80 80 M40 55 H85 V65" stroke="white" stroke-width="1.5"
+                            stroke-opacity="0.6" stroke-linecap="square" />
+                    </svg>
+                </div>
+                <div class="text-center">
+                    <h3 class="text-xs tracking-widest uppercase font-bold text-cyan-400 mb-2">01. The Connector</h3>
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Architectural synergy</p>
+                </div>
+            </div>
+
+            <!-- 02. HEXAGONAL QUANT -->
+            <div class="card p-12 rounded-[40px] flex flex-col items-center gap-8">
+                <div class="relative">
+                    <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+                        <polygon points="50,15 85,32.5 85,67.5 50,85 15,67.5 15,32.5" stroke="rgba(255,255,255,0.1)"
+                            stroke-width="2" />
+                        <path d="M35 70 L50 25 L65 70 M50 25 H80" stroke="#22d3ee" stroke-width="7"
+                            stroke-linecap="round" class="glow-cyan" />
+                        <path d="M35 70 L50 25 L65 70 M50 25 H80" stroke="white" stroke-width="1.5"
+                            stroke-opacity="0.9" />
+                    </svg>
+                </div>
+                <div class="text-center">
+                    <h3 class="text-xs tracking-widest uppercase font-bold text-cyan-400 mb-2">02. Quant Hex</h3>
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Data-driven precision</p>
+                </div>
+            </div>
+
+            <!-- 03. MONOLITHIC BOLD -->
+            <div class="card p-12 rounded-[40px] flex flex-col items-center gap-8">
+                <div class="relative">
+                    <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+                        <path d="M48 20 L20 80 H35 L48 50 L61 80 H76 L48 20" fill="rgba(34, 211, 238, 0.1)"
+                            stroke="#22d3ee" stroke-width="2" />
+                        <path d="M48 20 H90 V32 H65" stroke="#22d3ee" stroke-width="8" stroke-linecap="square"
+                            class="glow-cyan" />
+                        <path d="M48 20 H90 V32 H65" stroke="white" stroke-width="1.5" stroke-opacity="0.8" />
+                    </svg>
+                </div>
+                <div class="text-center">
+                    <h3 class="text-xs tracking-widest uppercase font-bold text-cyan-400 mb-2">03. Monolith</h3>
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Solid performance</p>
+                </div>
+            </div>
+
+            <!-- 04. CIRCUIT PULSE -->
+            <div class="card p-12 rounded-[40px] flex flex-col items-center gap-8">
+                <div class="relative">
+                    <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+                        <circle cx="50" cy="50" r="45" stroke="rgba(255,255,255,0.05)" stroke-width="1" />
+                        <path d="M30 75 L50 25 V75 M50 25 H80 M80 25 V40" stroke="#22d3ee" stroke-width="6"
+                            stroke-linecap="round" class="glow-cyan" />
+                        <circle cx="30" cy="75" r="3" fill="#22d3ee" />
+                        <circle cx="80" cy="40" r="3" fill="white" />
+                    </svg>
+                </div>
+                <div class="text-center">
+                    <h3 class="text-xs tracking-widest uppercase font-bold text-cyan-400 mb-2">04. Circuit Pulse</h3>
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Electronic trading logic</p>
+                </div>
+            </div>
+
+            <!-- 05. OPTICAL ABSTRACTION -->
+            <div class="card p-12 rounded-[40px] flex flex-col items-center gap-8">
+                <div class="relative">
+                    <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+                        <path d="M20 80 L50 20 M50 20 L80 80" stroke="rgba(255,255,255,0.1)" stroke-width="12"
+                            stroke-linecap="butt" />
+                        <path d="M20 80 L50 20 M50 20 L80 80" stroke="#22d3ee" stroke-width="4" stroke-linecap="butt"
+                            class="glow-cyan" />
+                        <path d="M45 20 H90" stroke="#22d3ee" stroke-width="10" stroke-linecap="butt" />
+                        <path d="M45 20 H90" stroke="white" stroke-width="2" stroke-opacity="0.6" />
+                        <rect x="55" y="55" width="25" height="4" fill="#22d3ee" />
+                    </svg>
+                </div>
+                <div class="text-center">
+                    <h3 class="text-xs tracking-widest uppercase font-bold text-cyan-400 mb-2">05. Deconstructed</h3>
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Minimalist geometry</p>
+                </div>
+            </div>
+
+            <!-- 06. THE ASCENSION -->
+            <div class="card p-12 rounded-[40px] flex flex-col items-center gap-8">
+                <div class="relative">
+                    <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+                        <path d="M15 85 L45 25 L75 85" stroke="#22d3ee" stroke-width="2" stroke-dasharray="2 4" />
+                        <path d="M45 25 V85 M45 25 H85" stroke="#22d3ee" stroke-width="8" stroke-linecap="round"
+                            class="glow-cyan" />
+                        <path d="M30 60 H45" stroke="white" stroke-width="4" stroke-linecap="round" />
+                    </svg>
+                </div>
+                <div class="text-center">
+                    <h3 class="text-xs tracking-widest uppercase font-bold text-cyan-400 mb-2">06. Ascension</h3>
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Growth & Momentum</p>
+                </div>
+            </div>
+
+            <!-- 07. CYBER SHIELD -->
+            <div class="card p-12 rounded-[40px] flex flex-col items-center gap-8">
+                <div class="relative">
+                    <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+                        <path d="M50 15 L85 30 V60 C85 75 50 85 50 85 C50 85 15 75 15 60 V30 L50 15Z"
+                            stroke="rgba(255,255,255,0.05)" stroke-width="2" />
+                        <path d="M35 65 L50 30 L65 65 M50 30 H80" stroke="#22d3ee" stroke-width="6"
+                            stroke-linecap="round" class="glow-cyan" />
+                        <path d="M35 65 L50 30 L65 65 M50 30 H80" stroke="white" stroke-width="1.5"
+                            stroke-opacity="0.8" />
+                    </svg>
+                </div>
+                <div class="text-center">
+                    <h3 class="text-xs tracking-widest uppercase font-bold text-cyan-400 mb-2">07. Cyber Shield</h3>
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Security & Performance</p>
+                </div>
+            </div>
+
+            <!-- 08. THE INFINITE HUB -->
+            <div class="card p-12 rounded-[40px] flex flex-col items-center gap-8"
+                style="border-color: rgba(34, 211, 238, 0.4); background: rgba(34, 211, 238, 0.03);">
+                <div class="relative">
+                    <svg width="100" height="100" viewBox="0 0 100 100" fill="none">
+                        <path d="M50 20 L25 80 H75 L50 20" stroke="white" stroke-width="1" stroke-opacity="0.2" />
+                        <path d="M50 20 L25 80" stroke="#22d3ee" stroke-width="8" stroke-linecap="round"
+                            class="glow-cyan" />
+                        <path d="M50 20 H85 V35" stroke="#22d3ee" stroke-width="8" stroke-linecap="round"
+                            class="glow-cyan" />
+                        <path d="M40 55 H60" stroke="white" stroke-width="3" stroke-linecap="round" />
+                        <circle cx="50" cy="20" r="4" fill="white" />
+                    </svg>
+                </div>
+                <div class="text-center">
+                    <h3
+                        class="text-xs tracking-widest uppercase font-bold text-white mb-2 underline decoration-cyan-500 decoration-2">
+                        08. The Nucleus</h3>
+                    <p class="text-[10px] text-cyan-400 uppercase tracking-widest font-bold">Recommended Concept</p>
+                </div>
+            </div>
+
+        </div>
+
+        <footer class="mt-20 text-center border-t border-white/5 pt-12">
+            <h2 class="text-sm tracking-[0.5em] uppercase text-slate-500 mb-8">Typography Matching</h2>
+            <div class="flex flex-col gap-12 items-center">
+                <div class="group cursor-pointer">
+                    <h1
+                        class="text-5xl font-[100] tracking-[0.6em] text-white transition-all duration-500 group-hover:tracking-[0.8em]">
+                        ALPHA <span class="text-cyan-400 font-[400]">TRADE</span></h1>
+                </div>
+            </div>
+        </footer>
+    </div>
+</body>
+
+</html>

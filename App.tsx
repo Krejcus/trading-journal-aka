@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
 import { prefetchService } from './services/prefetchService';
-import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus } from './types';
+import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode } from './types';
 import FileUpload from './components/FileUpload';
 import Dashboard from './components/Dashboard';
 import ManualTradeForm from './components/ManualTradeForm';
@@ -17,6 +17,7 @@ import UserProfileModal from './components/UserProfileModal';
 import SharedTradeView from './components/SharedTradeView';
 import NetworkHub from './components/NetworkHub';
 import Auth from './components/Auth';
+import QuantumLoader from './components/QuantumLoader';
 import BusinessHub from './components/BusinessHub';
 import {
   Sun,
@@ -71,6 +72,41 @@ const DEFAULT_SESSIONS: SessionConfig[] = [
   { id: 'london', name: 'London', startTime: '09:00', endTime: '16:00', color: '#3b82f6' },
   { id: 'ny', name: 'New York', startTime: '15:30', endTime: '22:00', color: '#f97316' }
 ];
+
+const aggregateTrades = (trades: Trade[]): Trade[] => {
+  const groups = new Map<string, Trade[]>();
+  const independent: Trade[] = [];
+
+  trades.forEach(t => {
+    if (t.groupId) {
+      if (!groups.has(t.groupId)) groups.set(t.groupId, []);
+      groups.get(t.groupId)!.push(t);
+    } else {
+      independent.push(t);
+    }
+  });
+
+  const aggregated: Trade[] = [...independent];
+
+  groups.forEach((groupTrades, groupId) => {
+    // Find master trade or just pick the first one
+    const master = groupTrades.find(t => t.isMaster) || groupTrades[0];
+
+    // Create combined trade Object
+    const combined: Trade = {
+      ...master,
+      id: `combined_${groupId}`,
+      pnl: groupTrades.reduce((sum, t) => sum + t.pnl, 0),
+      riskAmount: groupTrades.reduce((sum, t) => sum + (t.riskAmount || 0), 0),
+      notes: `${master.notes || ''} (Kombinováno z ${groupTrades.length} účtů)`.trim(),
+      // Ensure we mark it so UI can potentially handle it
+      tags: [...(master.tags || []), 'aggregated']
+    };
+    aggregated.push(combined);
+  });
+
+  return aggregated.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+};
 
 const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
@@ -234,6 +270,14 @@ const App: React.FC = () => {
     localStorage.setItem('alphatrade_view_mode', viewMode);
   }, [viewMode]);
 
+  const [pnlDisplayMode, setPnlDisplayMode] = useState<PnLDisplayMode>(
+    (localStorage.getItem('alphatrade_pnl_display_mode') as PnLDisplayMode) || 'usd'
+  );
+
+  useEffect(() => {
+    localStorage.setItem('alphatrade_pnl_display_mode', pnlDisplayMode);
+  }, [pnlDisplayMode]);
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile sidebar toggle
   const touchStart = useRef<number | null>(null);
   const touchEnd = useRef<number | null>(null);
@@ -324,8 +368,9 @@ const App: React.FC = () => {
       const hasCachedData = cachedTrades.length > 0 || cachedAccounts.length > 0;
 
       if (hasCachedData) {
-        // --- FAST PATH: Cache has data, show immediately ---
-        console.log("[Load] Cache HIT! Showing data instantly.");
+
+        // --- FAST PATH: Cache has data ---
+        console.log("[Load] Cache HIT!");
         if (cachedTrades.length > 0) setTrades(cachedTrades);
         if (cachedAccounts.length > 0) {
           setAccounts(cachedAccounts);
@@ -333,22 +378,27 @@ const App: React.FC = () => {
         }
         if (cachedPrefs) applyPreferences(cachedPrefs);
 
-        // Clear loading screen immediately
-        setLoading(false);
-        setIsInitialLoadDone(true);
+        // DO NOT clear loading screen yet. Wait for sync to ensure fresh data and prevent "pop".
+        // setLoading(false);
+        // setIsInitialLoadDone(true);
 
-        // Background sync (non-blocking)
-        syncFromServer(activeId);
+        // Sync from server and THEN clear loading
+        await syncFromServer(activeId);
       } else {
         // --- SLOW PATH: Cache is empty, must wait for server ---
         console.log("[Load] Cache MISS. Waiting for server data...");
         setInitStatus("Načítám data ze serveru...");
 
         try {
-          // Fetch critical data first (trades + accounts) - this is what we need for UI
-          const [dbTrades, dbAccounts] = await Promise.all([
+          // Fetch ALL critical data
+          const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
             storageService.getTrades(),
-            storageService.getAccounts()
+            storageService.getAccounts(),
+            storageService.getDailyPreps(),
+            storageService.getDailyReviews(),
+            storageService.getPreferences(),
+            storageService.getUser(),
+            storageService.getWeeklyFocusList()
           ]);
 
           console.log("[Load] Critical data received.");
@@ -368,12 +418,17 @@ const App: React.FC = () => {
             setActiveAccountId(DEFAULT_ACCOUNT.id);
           }
 
+          if (dbUser) setCurrentUser(dbUser);
+          if (dbPrefs) applyPreferences(dbPrefs);
+          setDailyPreps(dbPreps || []);
+          setDailyReviews(dbReviews || []);
+          setWeeklyFocusList(dbWeeklyFocus || []);
+
           // Now we can show the dashboard
           setLoading(false);
           setIsInitialLoadDone(true);
 
-          // Fetch remaining data in background (non-critical)
-          fetchSecondaryData();
+          // fetchSecondaryData no longer needed for critical items
 
         } catch (error: any) {
           console.error("[Load] Server fetch error:", error);
@@ -424,9 +479,15 @@ const App: React.FC = () => {
 
         if (dbPrefs) applyPreferences(dbPrefs);
         setSyncError(null);
+
+        // Ensure loader is cleared after sync
+        setLoading(false);
+        setIsInitialLoadDone(true);
       } catch (error: any) {
         console.error("[Sync] Background sync error:", error);
-        // Don't show error - we already have cache data visible
+        // Even on error, we must eventually show the dashboard (with cached data)
+        setLoading(false);
+        setIsInitialLoadDone(true);
       }
     };
 
@@ -740,7 +801,7 @@ const App: React.FC = () => {
 
   const filteredDisplayTrades = useMemo(() => {
     const now = new Date();
-    return displayTrades.filter(t => {
+    const filtered = displayTrades.filter(t => {
       // Filter by phase based on dashboardMode
       if (dashboardMode === 'challenge') {
         const isChallenge = t.phase === 'Challenge' || (!t.phase && accounts.find(a => a.id === t.accountId)?.phase === 'Challenge');
@@ -805,7 +866,9 @@ const App: React.FC = () => {
       return matchDay && matchHour && matchAcc && matchDir && matchRes && matchPeriod &&
         matchStatus && matchHtf && matchLtf && matchMistake;
     });
-  }, [displayTrades, filters, viewMode]);
+
+    return viewMode === 'combined' ? aggregateTrades(filtered) : filtered;
+  }, [displayTrades, filters, viewMode, accounts]);
 
   const filteredStats = useMemo(() => {
     try {
@@ -818,45 +881,9 @@ const App: React.FC = () => {
 
   const badExits = useMemo(() => findBadExits(filteredDisplayTrades), [filteredDisplayTrades]);
 
-  if (loading && !sharedTrade) {
-    return (
-      <div className="min-h-screen bg-[var(--bg-page)] flex items-center justify-center transition-colors duration-300">
-        <div className="flex flex-col items-center gap-6 p-8 text-center max-w-sm">
-          <div className="relative">
-            <div className="w-16 h-16 border-4 border-blue-600/20 border-t-blue-600 rounded-full animate-spin"></div>
-            <LayoutGrid className="absolute inset-0 m-auto w-6 h-6 text-blue-600 animate-pulse" />
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-[var(--text-primary)] font-bold uppercase tracking-[0.2em] text-xs">AlphaTrade Mentor</p>
-            <p className="text-[var(--text-secondary)] text-sm animate-pulse">{initStatus}</p>
-          </div>
-
-          {(showRetry || isInitialLoadDone) && (
-            <div className="pt-4 space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <p className="text-xs text-amber-500 bg-amber-500/10 px-3 py-2 rounded-lg">
-                {showRetry ? "Načítání trvá déle než obvykle. Vercel se možná probouzí." : "Data jsou připravena."}
-              </p>
-              <div className="flex flex-col gap-2">
-                <button
-                  onClick={() => setLoading(false)}
-                  className="flex items-center justify-center gap-2 px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full text-sm font-medium transition-all transform hover:scale-105 active:scale-95 shadow-lg shadow-emerald-600/20"
-                >
-                  <Zap className="w-4 h-4" />
-                  Vstoupit (Offline režim)
-                </button>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="flex items-center justify-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-sm font-medium transition-all transform hover:scale-105 active:scale-95 shadow-lg shadow-blue-600/20"
-                >
-                  Zkusit znovu
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
+  // Show loader during initial auth check OR when logged in but data not yet loaded
+  if ((loading || (session && !isInitialLoadDone)) && !sharedTrade) {
+    return <QuantumLoader theme={theme} />;
   }
 
   if (sharedTrade) {
@@ -952,7 +979,15 @@ const App: React.FC = () => {
   };
 
   const handleUpdateTrade = (tradeId: string | number, updates: Partial<Trade>) => {
-    setTrades(prev => prev.map(t => t.id === tradeId ? { ...t, ...updates } : t));
+    setTrades(prev => {
+      const updated = prev.map(t => t.id === tradeId ? { ...t, ...updates } : t);
+      // Persist to DB
+      storageService.saveTrades(updated).catch(err => {
+        console.error("Failed to persist trade update", err);
+        setSyncError("Nepodařilo se uložit změny obchodu.");
+      });
+      return updated;
+    });
   };
 
   const handleDeletePrep = async (date: string) => {
@@ -996,15 +1031,25 @@ const App: React.FC = () => {
 
   const handleDeleteTrade = async (id: number | string) => {
     try {
-      const tradeToDelete = trades.find(t => t.id === id);
-      if (!tradeToDelete) return;
+      const idsToDelete: (string | number)[] = [];
 
-      const idsToDelete = [id];
-      // If it's a master, delete all copies too
-      if (tradeToDelete.isMaster) {
-        const copies = trades.filter(t => t.masterTradeId === id).map(t => t.id);
-        idsToDelete.push(...copies);
+      if (typeof id === 'string' && id.startsWith('combined_')) {
+        const groupId = id.replace('combined_', '');
+        const groupTrades = trades.filter(t => t.groupId === groupId);
+        idsToDelete.push(...groupTrades.map(t => t.id));
+      } else {
+        const tradeToDelete = trades.find(t => t.id === id);
+        if (!tradeToDelete) return;
+        idsToDelete.push(id);
+
+        // If it's a master, delete all copies too
+        if (tradeToDelete.isMaster) {
+          const copies = trades.filter(t => t.masterTradeId === id).map(t => t.id);
+          idsToDelete.push(...copies);
+        }
       }
+
+      if (idsToDelete.length === 0) return;
 
       // 1. Update local state
       setTrades(prev => prev.filter(t => !idsToDelete.includes(t.id)));
@@ -1015,7 +1060,6 @@ const App: React.FC = () => {
       }
     } catch (err) {
       console.error("Failed to delete trade:", err);
-      // In case of error, maybe reload?
     }
   };
 
@@ -1101,6 +1145,8 @@ const App: React.FC = () => {
                 setDashboardMode={setDashboardMode}
                 viewMode={viewMode}
                 setViewMode={setViewMode}
+                pnlDisplayMode={pnlDisplayMode}
+                setPnlDisplayMode={setPnlDisplayMode}
               />
 
               <button
@@ -1159,6 +1205,7 @@ const App: React.FC = () => {
                   onDeleteTrade={handleDeleteTrade}
                   onUpdateTrade={handleUpdateTrade}
                   user={currentUser}
+                  pnlDisplayMode={pnlDisplayMode}
                 />
               )}
 
@@ -1186,6 +1233,8 @@ const App: React.FC = () => {
                     onClear={handleClearTrades}
                     theme={theme}
                     emotions={userEmotions}
+                    pnlDisplayMode={pnlDisplayMode}
+                    initialBalance={displayBalance}
                   />
                 )
               )}
@@ -1219,6 +1268,7 @@ const App: React.FC = () => {
                   trades={trades}
                   onUpdateTrades={handleUpdateTrades}
                   onAddExpense={(exp) => { setBusinessExpenses(prev => [...prev, exp]); isPreferencesDirty.current = true; }}
+                  onAddPayout={(p) => { setBusinessPayouts(prev => [...prev, p]); isPreferencesDirty.current = true; }}
                 />
               )}
 

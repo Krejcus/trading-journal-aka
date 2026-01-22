@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   LayoutDashboard,
   History,
@@ -70,15 +70,18 @@ const Sidebar: React.FC<SidebarProps> = ({
     ${isOpen ? 'translate-x-0' : '-translate-x-full'} 
     lg:translate-x-0 lg:fixed lg:top-0 lg:h-screen
     ${isCollapsed ? 'lg:w-24' : 'lg:w-72'}
-    bg-[var(--bg-sidebar)] border-r border-[var(--border-subtle)] backdrop-blur-2xl
-    flex flex-col
+    ${isDark ? 'bg-black/40' : 'bg-white/80'} 
+    border-r border-white/5 backdrop-blur-[32px]
+    flex flex-col shadow-[20px_0_50px_rgba(0,0,0,0.1)]
   `;
 
   const navItemClass = (isActive: boolean) => `
-    w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 border relative group
+    w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 border relative group overflow-hidden
     ${isActive
-      ? 'bg-blue-600/10 border-blue-600/30 text-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.05)] backdrop-blur-md'
-      : 'bg-transparent border-transparent theme-text-secondary lg:hover:bg-[var(--text-primary)]/5 lg:hover:text-[var(--text-primary)] active:bg-[var(--text-primary)]/10 active:scale-95'
+      ? (isDark
+        ? 'bg-white/10 border-white/20 text-white shadow-[0_0_20px_rgba(255,255,255,0.1)] shadow-inner'
+        : 'bg-slate-900/10 border-slate-900/20 text-slate-900 shadow-[0_4px_12px_rgba(15,23,42,0.08)]')
+      : 'bg-transparent border-transparent theme-text-secondary lg:hover:bg-white/5 lg:hover:text-[var(--text-primary)] lg:hover:translate-x-1 active:scale-95'
     }
     ${isCollapsed ? 'justify-center px-0 mx-auto w-12 h-12' : 'px-5 mx-2'}
   `;
@@ -108,29 +111,58 @@ const Sidebar: React.FC<SidebarProps> = ({
             {isCollapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
           </button>
 
-          <div className={`p-8 flex items-center justify-between ${isCollapsed ? 'lg:p-6 lg:justify-center' : ''}`}>
-            <div className="flex items-center gap-4 overflow-hidden">
-              <div className="p-2.5 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 shadow-[0_0_15px_rgba(99,102,241,0.1)] flex-shrink-0">
-                <BarChart2 className="text-indigo-400 w-6 h-6" />
+          {/* BRANDING SECTION - AURORA HALO STYLE */}
+          <div className="relative pt-4 pb-6">
+            {/* Background Aurora Effect */}
+            {!isCollapsed && (
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-cyan-500/10 blur-[60px] rounded-full animate-pulse pointer-events-none"></div>
+            )}
+
+            <div
+              className={`relative flex flex-col items-center gap-2 transition-all duration-500 group cursor-default ${isCollapsed ? 'py-1' : 'py-2'}`}
+            >
+              {/* Logo with Aurora Glow */}
+              <div className={`
+                relative shrink-0 flex items-center justify-center transition-all duration-700
+                ${isCollapsed ? 'w-10 h-10' : 'w-24 h-24'}
+                drop-shadow-[0_0_25px_rgba(34,211,238,0.4)]
+                group-hover:drop-shadow-[0_0_35px_rgba(34,211,238,0.6)]
+              `}>
+                <img
+                  src="/logos/at_logo_glass_2026_fixed.png"
+                  alt="Alpha Trade Logo"
+                  className="w-full h-full object-contain transition-all duration-500 group-hover:scale-110"
+                />
+                {/* Secondary Halo for Aurora (shows on hover) */}
+                {!isCollapsed && (
+                  <div className="absolute inset-0 bg-cyan-400/10 blur-2xl rounded-full scale-150 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none"></div>
+                )}
               </div>
+
+              {/* Typography */}
               {!isCollapsed && (
-                <div className="animate-in fade-in slide-in-from-left-4 duration-500">
-                  <h1 className="font-black text-xl tracking-tighter italic uppercase leading-none">AlphaTrade</h1>
-                  <p className="text-[8px] font-black theme-text-secondary uppercase tracking-[0.3em] mt-1">Terminal Hub</p>
+                <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-700">
+                  <h1 className={`
+                    uppercase leading-none whitespace-nowrap transition-all duration-500 font-extralight text-[18px] tracking-[0.5em]
+                    ${isDark ? 'text-white' : 'text-slate-900'}
+                  `}>
+                    ALPHA <span className="text-cyan-500 font-normal">TRADE</span>
+                  </h1>
                 </div>
               )}
             </div>
-            <button onClick={() => setIsOpen(false)} className="lg:hidden p-2 hover:bg-[var(--text-primary)]/10 rounded-full text-slate-400"><X size={24} /></button>
+
+            <button onClick={() => setIsOpen(false)} className="lg:hidden absolute top-6 right-6 p-2 hover:bg-white/10 rounded-full text-slate-400"><X size={20} /></button>
           </div>
 
           {/* ZAPSAT OBCHOD - EMERALD GLASS STYLE */}
-          <div className={`px-4 mb-8 transition-all ${isCollapsed ? 'lg:px-0' : ''}`}>
+          <div className={`px-4 mb-4 transition-all ${isCollapsed ? 'lg:px-0' : ''}`}>
             <button
               onClick={onAddTrade}
               title={isCollapsed ? "Zapsat obchod" : ""}
               className={`flex items-center justify-center gap-3 transition-all duration-300 border backdrop-blur-md active:scale-95 group
                 bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.15)] lg:hover:bg-emerald-500/20 lg:hover:border-emerald-500/50
-                ${isCollapsed ? 'w-12 h-12 rounded-2xl mx-auto' : 'w-[calc(100%-16px)] mx-2 py-4 rounded-[20px]'}
+                ${isCollapsed ? 'w-12 h-12 rounded-2xl mx-auto' : 'w-[calc(100%-16px)] mx-2 py-2.5 rounded-[20px]'}
               `}
             >
               <Plus size={isCollapsed ? 22 : 18} strokeWidth={3} className="group-hover:rotate-90 transition-transform duration-500" />
@@ -141,7 +173,13 @@ const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Navigation - Scrollable Area */}
         <nav className="flex-1 px-2 space-y-2 overflow-y-auto custom-scrollbar no-scrollbar py-2">
-          {!isCollapsed && <p className="px-6 text-[9px] font-black uppercase text-slate-500 mb-3 mt-4 tracking-[0.3em] animate-in fade-in duration-500">Analytika</p>}
+          {!isCollapsed && (
+            <p
+              className="px-6 text-[9px] font-black uppercase text-slate-500 mb-3 mt-4 tracking-[0.3em] animate-in fade-in duration-500 cursor-pointer hover:text-white transition-colors"
+            >
+              Analytika
+            </p>
+          )}
           {isCollapsed && <div className="h-px bg-[var(--border-subtle)] mx-6 my-4" />}
 
           {mainItems.map((item) => {
@@ -154,9 +192,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                 className={navItemClass(isActive)}
                 title={isCollapsed ? item.label : ""}
               >
-                <Icon size={isCollapsed ? 20 : 16} className={isActive ? 'text-blue-500' : 'text-current'} />
+                <Icon size={isCollapsed ? 20 : 16} className={isActive ? (isDark ? 'text-white' : 'text-slate-900') : 'text-current'} />
                 {!isCollapsed && <span className="animate-in fade-in duration-500 whitespace-nowrap">{item.label}</span>}
-                {isActive && !isCollapsed && <div className="absolute right-4 w-1.5 h-1.5 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.5)]"></div>}
+                {isActive && !isCollapsed && (
+                  <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-slate-900 shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
+                )}
+                {/* Subtle highlight sheen */}
+                <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 -translate-x-full group-hover:translate-x-full transition-all duration-1000"></div>
               </button>
             );
           })}
@@ -174,9 +216,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                 className={navItemClass(isActive)}
                 title={isCollapsed ? item.label : ""}
               >
-                <Icon size={isCollapsed ? 20 : 16} className={isActive ? 'text-blue-500' : 'text-current'} />
+                <Icon size={isCollapsed ? 20 : 16} className={isActive ? (isDark ? 'text-white' : 'text-slate-900') : 'text-current'} />
                 {!isCollapsed && <span className="animate-in fade-in duration-500 whitespace-nowrap">{item.label}</span>}
-                {isActive && !isCollapsed && <div className="absolute right-4 w-1.5 h-1.5 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.5)]"></div>}
+                {isActive && !isCollapsed && (
+                  <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-slate-900 shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
+                )}
+                {/* Subtle highlight sheen */}
+                <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 -translate-x-full group-hover:translate-x-full transition-all duration-1000"></div>
               </button>
             );
           })}
@@ -186,36 +232,43 @@ const Sidebar: React.FC<SidebarProps> = ({
         <div className={`p-4 mt-auto border-t transition-colors ${isDark ? 'border-white/5' : 'border-slate-200'} ${isCollapsed ? 'lg:p-2' : ''}`}>
           <div
             onClick={onOpenProfile}
-            className="flex items-center justify-between gap-3 p-4 rounded-[24px] transition-all relative overflow-hidden group cursor-pointer theme-card theme-border lg:hover:shadow-lg active:scale-95"
+            className={`
+              flex items-center justify-between gap-3 p-4 rounded-[24px] transition-all relative overflow-hidden group cursor-pointer 
+              ${isDark ? 'bg-white/[0.03] border border-white/10 hover:bg-white/[0.05] hover:border-white/20' : 'bg-slate-50 border border-slate-200 hover:bg-slate-100'} 
+              lg:hover:shadow-2xl active:scale-95
+            `}
           >
             <div className="flex items-center gap-4 min-w-0 relative z-10">
-              <div className="w-10 h-10 rounded-2xl border border-[var(--border-subtle)] overflow-hidden flex-shrink-0 shadow-inner">
+              <div className="w-10 h-10 rounded-2xl border border-white/10 overflow-hidden flex-shrink-0 shadow-[0_8px_16px_rgba(0,0,0,0.2)]">
                 {user.avatar ? (
                   <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
+                  <div className="w-full h-full bg-gradient-to-br from-cyan-500/20 to-blue-500/20 text-cyan-400 flex items-center justify-center">
                     <UserIcon size={18} />
                   </div>
                 )}
               </div>
               {!isCollapsed && (
                 <div className="min-w-0 animate-in fade-in duration-500">
-                  <p className="text-[10px] font-black uppercase truncate">{user.name}</p>
-                  <p className="text-[8px] font-bold uppercase text-emerald-500 tracking-widest mt-0.5">Online • Profile</p>
+                  <p className="text-[10px] font-black uppercase truncate tracking-wider">{user.name}</p>
+                  <p className="text-[8px] font-bold uppercase text-emerald-500 tracking-[0.2em] mt-0.5 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
+                    Online • Profile
+                  </p>
                 </div>
               )}
             </div>
             {!isCollapsed && (
               <button
                 onClick={(e) => { e.stopPropagation(); onLogout(); }}
-                className="p-2 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all animate-in fade-in duration-500 relative z-10"
+                className="p-2 text-slate-500 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all animate-in fade-in duration-500 relative z-10"
                 title="Odhlásit se"
               >
                 <LogOut size={16} />
               </button>
             )}
             {/* Subtle profile glow */}
-            <div className="absolute -bottom-4 -left-4 w-12 h-12 bg-indigo-500/10 rounded-full blur-2xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <div className="absolute -inset-0 bg-gradient-to-br from-cyan-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
           </div>
         </div>
       </aside>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALPHA TRADE | Final Identity Preview</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600&family=Outfit:wght@200;300;400;500&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #000;
+        }
+
+        /* Custom Neon Filters */
+        .neon-filter {
+            filter: drop-shadow(0 0 5px rgba(34, 211, 238, 0.8)) drop-shadow(0 0 15px rgba(34, 211, 238, 0.4));
+        }
+
+        /* Glass Effect */
+        .glass-container {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(10px);
+        }
+    </style>
+</head>
+
+<body class="min-h-screen flex flex-col items-center justify-center py-20 gap-20">
+
+    <!-- DARK MODE RENDER REPLICA -->
+    <div
+        class="w-full max-w-5xl bg-[#050505] p-24 rounded-[3rem] relative overflow-hidden flex flex-col items-center border border-white/5 shadow-2xl">
+        <div class="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,_rgba(34,211,238,0.15),_transparent_70%)]">
+        </div>
+
+        <!-- LOGO ICON -->
+        <div class="relative w-48 h-48 mb-16">
+            <!-- The container mimicking the rounded square icon backdrop -->
+            <div
+                class="absolute inset-0 bg-[#0A0A0A] rounded-[2.5rem] shadow-[0_20px_40px_rgba(0,0,0,0.8)] border border-white/5 flex items-center justify-center">
+                <!-- Radial sheen on the backdrop -->
+                <div
+                    class="absolute inset-0 bg-[radial-gradient(circle_at_30%_30%,_rgba(255,255,255,0.05),_transparent_60%)] rounded-[2.5rem]">
+                </div>
+
+                <!-- THE SVG LOGO -->
+                <svg width="120" height="120" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <!-- Inner Glow Filter -->
+                        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="3" result="blur" />
+                            <feColorMatrix in="blur" type="matrix"
+                                values="0 0 0 0 0.13 0 0 0 0 0.82 0 0 0 0 0.93 0 0 0 0.8 0" result="coloredBlur" />
+                            <feMerge>
+                                <feMergeNode in="coloredBlur" />
+                                <feMergeNode in="SourceGraphic" />
+                            </feMerge>
+                        </filter>
+                    </defs>
+
+                    <!-- LOGO PATHS -->
+                    <!-- The geometry: Right Angled Triangle 'A' + Horizontal 'T' Bar -->
+                    <!-- Coordinates adjusted for wider, stable stance -->
+
+                    <!-- 1. The Glass Body (Dark/Transparent Teal Base) -->
+                    <!-- Vertical Spine (Right of A, Stem of T) at X=58 -->
+                    <!-- Left Leg of A goes from (25, 82) to (58, 20) -->
+                    <!-- T Top Bar goes from (58, 20) to (88, 20) -->
+                    <!-- Crossbar at Y=54 -->
+
+                    <g stroke-linecap="round" stroke-linejoin="round">
+                        <!-- Bottom Shadow/Depth -->
+                        <path d="M25 82 L58 20 V82 M58 20 H88 M36 56 H58" stroke="black" stroke-width="12"
+                            stroke-opacity="0.8" transform="translate(0, 2)" />
+
+                        <!-- Main Neon Body (The thick glowing tube) -->
+                        <path d="M25 82 L58 20 V82 M58 20 H88 M36 56 H58" stroke="#0e7490" stroke-width="10"
+                            stroke-opacity="0.4" />
+
+                        <!-- The Bright Core (Thin crisp line) -->
+                        <path d="M25 82 L58 20 V82 M58 20 H88 M36 56 H58" stroke="#22d3ee" stroke-width="4"
+                            filter="url(#glow)" />
+
+                        <!-- The High-Key Highlight (Simulating glass edge reflection) -->
+                        <!-- Slight offset or just lighter color on top -->
+                        <path d="M25 82 L58 20 V82 M58 20 H88 M36 56 H58" stroke="white" stroke-width="1"
+                            stroke-opacity="0.8" />
+                    </g>
+                </svg>
+            </div>
+        </div>
+
+        <!-- TYPOGRAPHY -->
+        <div class="text-center z-10">
+            <h1 class="font-[200] text-5xl tracking-[0.4em] text-white uppercase antialiased"
+                style="font-family: 'Outfit', sans-serif;">
+                Alpha <span class="font-[400] text-cyan-400 ml-2">Trade</span>
+            </h1>
+            <div class="h-px w-32 bg-gradient-to-r from-transparent via-white/20 to-transparent mx-auto my-6"></div>
+            <p class="text-xs font-bold tracking-[0.8em] text-slate-500 uppercase">Professional Terminal</p>
+        </div>
+
+        <!-- Label -->
+        <div
+            class="absolute bottom-6 left-1/2 -translate-x-1/2 text-[10px] text-white/20 uppercase tracking-widest font-mono">
+            Dark Mode Render Match</div>
+    </div>
+
+
+    <!-- LIGHT MODE RENDER REPLICA -->
+    <div
+        class="w-full max-w-5xl bg-[#F5F7FA] p-24 rounded-[3rem] relative overflow-hidden flex flex-col items-center border border-slate-200 shadow-xl">
+
+        <!-- LOGO ICON -->
+        <div class="relative w-48 h-48 mb-16">
+            <!-- Light mode glass container -->
+            <div
+                class="absolute inset-0 bg-white rounded-[2.5rem] shadow-[0_20px_50px_rgba(34,211,238,0.15)] border border-slate-100 flex items-center justify-center">
+
+                <svg width="120" height="120" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <g stroke-linecap="round" stroke-linejoin="round">
+                        <!-- Soft Shadow for volume on white bg -->
+                        <path d="M25 82 L58 20 V82 M58 20 H88 M36 56 H58" stroke="#0891b2" stroke-width="12"
+                            stroke-opacity="0.08" transform="translate(0, 4)" />
+
+                        <!-- Glass Body -->
+                        <path d="M25 82 L58 20 V82 M58 20 H88 M36 56 H58" stroke="#a5f3fc" stroke-width="10"
+                            stroke-opacity="0.4" />
+
+                        <!-- Inner Refraction Line (Darker Teal for definition) -->
+                        <path d="M25 82 L58 20 V82 M58 20 H88 M36 56 H58" stroke="#0891b2" stroke-width="3"
+                            stroke-opacity="0.4" />
+
+                        <!-- Sharp Glass Edge Highlight -->
+                        <path d="M25 82 L58 20 V82 M58 20 H88 M36 56 H58" stroke="white" stroke-width="1.5"
+                            stroke-opacity="0.9" />
+                    </g>
+                </svg>
+            </div>
+        </div>
+
+        <!-- TYPOGRAPHY -->
+        <div class="text-center z-10">
+            <h1 class="font-[200] text-5xl tracking-[0.4em] text-slate-900 uppercase antialiased"
+                style="font-family: 'Outfit', sans-serif;">
+                Alpha <span class="font-[400] text-cyan-600 ml-2">Trade</span>
+            </h1>
+            <div class="h-px w-32 bg-gradient-to-r from-transparent via-slate-300 to-transparent mx-auto my-6"></div>
+            <p class="text-xs font-bold tracking-[0.8em] text-slate-400 uppercase">Professional Terminal</p>
+        </div>
+
+        <!-- Label -->
+        <div
+            class="absolute bottom-6 left-1/2 -translate-x-1/2 text-[10px] text-slate-300 uppercase tracking-widest font-mono">
+            Light Mode Crystal Match</div>
+    </div>
+
+</body>
+
+</html>

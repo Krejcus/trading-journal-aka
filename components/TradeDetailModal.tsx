@@ -1,7 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Play } from 'lucide-react';
-import { Trade, Account, CustomEmotion } from '../types';
+import { Trade, Account, CustomEmotion, PnLDisplayMode } from '../types';
+import { formatPnL } from '../utils/formatPnL';
 import { storageService } from '../services/storageService';
 import {
     X, Edit3, Trash2, Clock, Image as ImageIcon,
@@ -24,16 +25,22 @@ interface TradeDetailModalProps {
     hasPrev?: boolean;
     hasNext?: boolean;
     onUpdateTrade?: (updates: Partial<Trade>) => void;
+    pnlDisplayMode?: PnLDisplayMode;
+    accounts?: Account[];
+    initialBalance?: number;
 }
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
-    trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, hasPrev, hasNext, onUpdateTrade
+    trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, hasPrev, hasNext, onUpdateTrade, pnlDisplayMode = 'usd', accounts = [], initialBalance
 }) => {
     const [fullTrade, setFullTrade] = useState<Trade>(trade);
     const [isLoadingDetails, setIsLoadingDetails] = useState(false);
 
     // Fetch full detail if this is a "light" trade (missing screenshots or data)
     useEffect(() => {
+        // Always update fullTrade to the current prop trade first to ensure UI reflects the navigation immediately
+        setFullTrade(trade);
+
         // Check if we already have the heavy data (screenshots)
         if (trade.screenshot || (trade.screenshots && trade.screenshots.length > 0)) {
             return;
@@ -178,7 +185,12 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         </div>
 
                         <div className={`text-xl md:text-3xl font-black font-mono tracking-tighter ${pnlColor} mx-2`}>
-                            {isMissed ? '±' : (isWin ? '+' : '-')}${Math.abs(trade.pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            {formatPnL(
+                                activeTrade.pnl,
+                                pnlDisplayMode,
+                                initialBalance || accounts.find(a => a.id === activeTrade.accountId)?.initialBalance,
+                                activeTrade.riskAmount ? (activeTrade.pnl / activeTrade.riskAmount) : undefined
+                            )}
                         </div>
 
                         <div className="flex items-center gap-2 md:gap-3 ml-auto md:ml-0 mt-2 md:mt-0">
@@ -310,7 +322,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     minimal={true}
                                     embedded={true}
                                     initialLayout={layout}
-                                    onUpdateTrade={onUpdateTrade}
+                                    onUpdateTrade={(updates) => {
+                                        setFullTrade(prev => ({ ...prev, ...updates }));
+                                        onUpdateTrade?.(updates);
+                                    }}
                                 />
                             </ErrorBoundary>
                         </div>
@@ -334,7 +349,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         onClose={() => setShowReplayFullscreen(false)}
                         minimal={false}
                         embedded={false}
-                        onUpdateTrade={onUpdateTrade}
+                        onUpdateTrade={(updates) => {
+                            setFullTrade(prev => ({ ...prev, ...updates }));
+                            onUpdateTrade?.(updates);
+                        }}
                     />
                 </div>
             )}

@@ -343,7 +343,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   type="monotone"
                   dataKey="equity"
                   stroke="url(#splitColor)"
-                  strokeWidth={4}
+                  strokeWidth={2.5}
                   fill="url(#splitFill)"
                   activeDot={(props) => <CustomActiveDot {...props} onTradeClick={onTradeClick} />}
                   style={{ cursor: 'pointer' }}

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="cs">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha Trade - Dashboard & Favicon Preview (V2 - Lighter Dark)</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            /* Lighter Dark Mode Palette */
+            --bg-dark: #1a1d23;
+            /* Lighter charcoal background */
+            --sidebar-bg: #242933;
+            /* Distinct sidebar */
+            --card-bg: #2b323b;
+            --accent: #2dd4bf;
+            /* Teal/Cyan */
+            --neon-glow: rgba(45, 212, 191, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.08);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: #f1f5f9;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* SIDEBAR SIMULATION */
+        .sidebar {
+            width: 260px;
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--glass-border);
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            box-shadow: 10px 0 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .brand-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 48px;
+            padding: 8px;
+        }
+
+        .logo-box {
+            width: 48px;
+            height: 48px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-box img {
+            width: 100%;
+            height: auto;
+            filter: drop-shadow(0 0 12px var(--neon-glow));
+            transition: all 0.3s ease;
+        }
+
+        .logo-box:hover img {
+            filter: drop-shadow(0 0 18px var(--accent));
+            transform: scale(1.05);
+        }
+
+        .brand-name {
+            font-family: 'Outfit', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            background: linear-gradient(135deg, #fff 0%, #cbd5e1 100%);
+            : text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-item {
+            padding: 14px 18px;
+            margin-bottom: 6px;
+            border-radius: 12px;
+            font-size: 14px;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .nav-item.active {
+            background: rgba(45, 212, 191, 0.1);
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        /* MAIN CONTENT */
+        .main-content {
+            flex: 1;
+            padding: 32px 48px;
+            overflow-y: auto;
+            background: radial-gradient(circle at top right, rgba(45, 212, 191, 0.08), transparent);
+        }
+
+        .mock-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+        }
+
+        .mock-chart-container {
+            position: relative;
+            width: 100%;
+            height: 450px;
+            background: var(--card-bg);
+            border-radius: 20px;
+            border: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        .neon-logo-large {
+            width: 500px;
+            opacity: 0.15;
+            filter: drop-shadow(0 0 30px var(--accent));
+        }
+
+        /* BROWSER TAB SIMULATION */
+        .browser-mockup {
+            position: fixed;
+            top: 40px;
+            right: 40px;
+            width: 340px;
+            background: #2a2e37;
+            border-radius: 12px 12px 0 0;
+            box-shadow: 0 40px 80px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+            overflow: hidden;
+        }
+
+        .browser-tabs {
+            height: 44px;
+            display: flex;
+            padding: 6px 10px 0;
+            background: #1e2128;
+        }
+
+        .tab {
+            background: #2a2e37;
+            padding: 10px 18px;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            width: 160px;
+            color: #eee;
+        }
+
+        .favicon {
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .favicon img {
+            width: 100%;
+            height: auto;
+            filter: drop-shadow(0 0 5px var(--accent));
+        }
+
+        .section-tag {
+            background: var(--accent);
+            color: #111;
+            font-weight: 800;
+            font-size: 11px;
+            padding: 4px 12px;
+            border-radius: 6px;
+            position: absolute;
+            top: -12px;
+            left: 24px;
+            box-shadow: 0 4px 10px rgba(45, 212, 191, 0.3);
+        }
+
+        .status-badge {
+            background: rgba(45, 212, 191, 0.15);
+            border: 1px solid var(--accent);
+            padding: 6px 14px;
+            border-radius: 99px;
+            font-size: 13px;
+            color: var(--accent);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- SIDEBAR WITH NEW BRIGHTER NEON LOGO -->
+    <div class="sidebar">
+        <div class="brand-container">
+            <div class="logo-box">
+                <!-- NEW BRIGHTER NEON VERSION -->
+                <img src="public/logos/at_logo_glass_dark_neon.png" alt="Brighter Neon AT">
+            </div>
+            <div class="brand-name">Alpha Trade</div>
+        </div>
+
+        <div class="nav-item active">
+            <div style="width:18px; height:18px; background:var(--accent); border-radius:4px; opacity:0.3;"></div>
+            Dashboard
+        </div>
+        <div class="nav-item">
+            <div style="width:18px; height:18px; background:#475569; border-radius:4px;"></div>
+            Market Watch
+        </div>
+        <div class="nav-item">
+            <div style="width:18px; height:18px; background:#475569; border-radius:4px;"></div>
+            Trade Log
+        </div>
+        <div class="nav-item">
+            <div style="width:18px; height:18px; background:#475569; border-radius:4px;"></div>
+            Analytics
+        </div>
+    </div>
+
+    <!-- MAIN PLATFORM VIEW -->
+    <div class="main-content">
+        <div class="mock-header">
+            <div>
+                <h1 style="margin:0; font-family:'Outfit'; font-size:32px;">Trading Terminal</h1>
+                <p style="color:#94a3b8; font-size:15px; margin-top:6px;">Lighter Dark Mode Vision (Slate Grey Base)</p>
+            </div>
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                SYSTEM ONLINE
+            </div>
+        </div>
+
+        <div style="position:relative;">
+            <div class="section-tag">PREVIEW: LIGHTER DARK THEME</div>
+            <div class="mock-chart-container">
+                <!-- Large background logo with higher visibility -->
+                <img src="public/logos/at_logo_glass_dark_neon.png" class="neon-logo-large" alt="Watermark Light">
+                <div
+                    style="z-index: 10; text-align: center; background: rgba(0,0,0,0.4); padding: 20px 40px; border-radius: 20px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1);">
+                    <h3 style="margin:0; color:var(--accent);">High-Intensity Neon</h3>
+                    <p style="color:#cbd5e1; margin:10px 0 0; font-size:14px;">Zvýšený kontrast na břidlicovém (Slate)
+                        pozadí</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BROWSER TAB SIMULATION -->
+    <div class="browser-mockup">
+        <div class="browser-tabs">
+            <div class="tab">
+                <div class="favicon">
+                    <img src="public/logos/at_logo_glass_dark_neon.png" alt="Favicon Bright">
+                </div>
+                <div>Alpha Trade App</div>
+            </div>
+        </div>
+        <div
+            style="height: 120px; background: var(--bg-dark); display: flex; align-items: center; justify-content: center;">
+            <p style="font-size: 11px; color: #64748b; letter-spacing: 0.1em;">FAVICON GLOW TEST</p>
+        </div>
+    </div>
+
+    <div
+        style="position: fixed; bottom: 30px; left: 300px; background: rgba(36, 41, 51, 0.9); padding: 15px 25px; border-radius: 12px; border: 1px solid var(--glass-border); font-size: 14px; backdrop-filter: blur(10px);">
+        <strong style="color:var(--accent)">Aktualizace:</strong> Pozadí změněno na Slate Grey (#1a1d23) + zvýšena
+        intenzita neonu.
+    </div>
+
+</body>
+
+</html>
