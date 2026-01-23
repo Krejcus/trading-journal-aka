@@ -21,6 +21,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
     const [canPull, setCanPull] = useState(false);
     const [holdTimer, setHoldTimer] = useState<NodeJS.Timeout | null>(null);
     const [isHoldValid, setIsHoldValid] = useState(false);
+    const [isAtTop, setIsAtTop] = useState(true);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const maxPullDistance = 100; // Maximum pull distance
@@ -44,18 +45,11 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
         const handleTouchMove = (e: TouchEvent) => {
             if (!canPull || disabled || isRefreshing) return;
 
-            const container = containerRef.current;
-            if (!container) return;
-
             const currentY = e.touches[0].clientY;
             const distance = currentY - startY;
 
-            // Only activate pull-to-refresh if:
-            // 1. Pulling down (distance > 0)
-            // 2. Still at top of scroll (scrollTop === 0)
-            // 3. Not scrolling up from bottom
-            if (distance > 0 && container.scrollTop === 0) {
-                // Prevent default scrolling when pulling down from top
+            if (distance > 0) {
+                // Prevent default scrolling when pulling down
                 e.preventDefault();
 
                 // Apply resistance: slower pull as you go further
@@ -86,14 +80,12 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                                 setIsRefreshing(false);
                                 setPullDistance(0);
                                 setIsHoldValid(false);
-                                setCanPull(false); // Ensure canPull is reset
                             }, 600);
                         } catch (error) {
                             console.error('[PullToRefresh] Error:', error);
                             setIsRefreshing(false);
                             setIsHoldValid(false);
                             setPullDistance(0);
-                            setCanPull(false); // Ensure canPull is reset
                         }
                     }, holdDuration);
                     setHoldTimer(timer);
@@ -103,20 +95,12 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                     setHoldTimer(null);
                     setIsHoldValid(false);
                 }
-            } else if (distance < 0) {
-                // User is scrolling up, disable pull-to-refresh
-                setCanPull(false);
-                setPullDistance(0);
-                if (holdTimer) {
-                    clearTimeout(holdTimer);
-                    setHoldTimer(null);
-                    setIsHoldValid(false);
-                }
             }
         };
 
         const handleTouchEnd = async () => {
-            // Always cleanup, even if canPull is false
+            if (!canPull || disabled) return;
+
             setCanPull(false);
 
             // Clear hold timer if exists
@@ -135,23 +119,11 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
             setIsHoldValid(false);
         };
 
-        const handleTouchCancel = () => {
-            // Cleanup on touch cancel (important for iOS)
-            setCanPull(false);
-            setPullDistance(0);
-            setIsHoldValid(false);
-            if (holdTimer) {
-                clearTimeout(holdTimer);
-                setHoldTimer(null);
-            }
-        };
-
         const container = containerRef.current;
         if (container) {
             container.addEventListener('touchstart', handleTouchStart, { passive: true });
             container.addEventListener('touchmove', handleTouchMove, { passive: false });
-            container.addEventListener('touchend', handleTouchEnd, { passive: true });
-            container.addEventListener('touchcancel', handleTouchCancel, { passive: true });
+            container.addEventListener('touchend', handleTouchEnd);
         }
 
         return () => {
@@ -159,11 +131,6 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                 container.removeEventListener('touchstart', handleTouchStart);
                 container.removeEventListener('touchmove', handleTouchMove);
                 container.removeEventListener('touchend', handleTouchEnd);
-                container.removeEventListener('touchcancel', handleTouchCancel);
-            }
-            // Cleanup timers on unmount
-            if (holdTimer) {
-                clearTimeout(holdTimer);
             }
         };
     }, [canPull, pullDistance, startY, disabled, isRefreshing, onRefresh]);
@@ -304,9 +271,10 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
             {/* Scrollable Content */}
             <div
                 ref={containerRef}
-                className="flex-1 overflow-y-auto overscroll-none"
-                style={{
-                    WebkitOverflowScrolling: 'touch', // iOS momentum scrolling
+                className={`flex-1 overflow-y-auto ${isAtTop ? 'overscroll-none' : 'overscroll-y-auto'}`}
+                onScroll={(e) => {
+                    const target = e.target as HTMLDivElement;
+                    setIsAtTop(target.scrollTop === 0);
                 }}
             >
                 {children}
