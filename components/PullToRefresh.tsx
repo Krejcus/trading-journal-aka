@@ -19,10 +19,14 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
     const [isComplete, setIsComplete] = useState(false);
     const [startY, setStartY] = useState(0);
     const [canPull, setCanPull] = useState(false);
+    const [lastTouchY, setLastTouchY] = useState(0);
+    const [lastTouchTime, setLastTouchTime] = useState(0);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const maxPullDistance = 100; // Maximum pull distance
     const triggerDistance = 70; // Distance to trigger refresh
+    const minPullToShow = 30; // Minimum pull before showing logo
+    const maxVelocity = 2; // Max velocity (px/ms) to allow pull-to-refresh
 
     useEffect(() => {
         const handleTouchStart = (e: TouchEvent) => {
@@ -33,6 +37,8 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
             if (container && container.scrollTop === 0) {
                 setCanPull(true);
                 setStartY(e.touches[0].clientY);
+                setLastTouchY(e.touches[0].clientY);
+                setLastTouchTime(Date.now());
             }
         };
 
@@ -40,9 +46,26 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
             if (!canPull || disabled || isRefreshing) return;
 
             const currentY = e.touches[0].clientY;
+            const currentTime = Date.now();
             const distance = currentY - startY;
 
+            // Calculate velocity (px per millisecond)
+            const timeDelta = currentTime - lastTouchTime;
+            const yDelta = currentY - lastTouchY;
+            const velocity = timeDelta > 0 ? Math.abs(yDelta / timeDelta) : 0;
+
+            // Update last touch position and time
+            setLastTouchY(currentY);
+            setLastTouchTime(currentTime);
+
             if (distance > 0) {
+                // If scrolling too fast, don't activate pull-to-refresh
+                if (velocity > maxVelocity) {
+                    setCanPull(false);
+                    setPullDistance(0);
+                    return;
+                }
+
                 // Prevent default scrolling when pulling down
                 e.preventDefault();
 
@@ -122,7 +145,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
         <div className="relative h-full flex flex-col">
             {/* Logo Indicator - Fixed between header and content */}
             <AnimatePresence>
-                {(pullDistance > 0 || isRefreshing) && (
+                {(pullDistance > minPullToShow || isRefreshing) && (
                     <motion.div
                         initial={{ height: 0, opacity: 0 }}
                         animate={{
@@ -174,12 +197,20 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                             }}
                         >
                             {/* Logo Image */}
-                            <img
+                            <motion.img
                                 src="/logos/at_logo_light_clean.png"
                                 alt="Refreshing"
-                                className="w-10 h-10 object-contain"
+                                className="w-16 h-16 object-contain"
                                 style={{
                                     filter: `drop-shadow(0 0 ${6 + glowIntensity * 16}px rgba(34, 211, 238, ${0.4 + glowIntensity * 0.4}))`,
+                                }}
+                                animate={isRefreshing && !isComplete ? {
+                                    scale: [1, 1.1, 1],
+                                } : {}}
+                                transition={{
+                                    duration: 1,
+                                    repeat: isRefreshing && !isComplete ? Infinity : 0,
+                                    ease: "easeInOut"
                                 }}
                             />
 
