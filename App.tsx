@@ -382,12 +382,13 @@ const App: React.FC = () => {
         }
         if (cachedPrefs) applyPreferences(cachedPrefs);
 
-        // DO NOT clear loading screen yet. Wait for sync to ensure fresh data and prevent "pop".
-        // setLoading(false);
-        // setIsInitialLoadDone(true);
+        // FAST PATH: Show cached data IMMEDIATELY, sync in background
+        // This is the key to perceived speed - don't wait for server!
+        setLoading(false);
+        setIsInitialLoadDone(true);
 
-        // Sync from server and THEN clear loading
-        await syncFromServer(activeId);
+        // Sync from server IN BACKGROUND (non-blocking)
+        syncFromServer(activeId);
       } else {
         // --- SLOW PATH: Cache is empty, must wait for server ---
         console.log("[Load] Cache MISS. Waiting for server data...");
