@@ -40,7 +40,6 @@ import {
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
-import { DataService } from './services/DataService';
 
 const DEFAULT_USER: User = {
   id: 'default_user',
@@ -562,27 +561,9 @@ const App: React.FC = () => {
     }
   }, [sharedTrade, session]);
 
-  // Phase B: Startup Global Sync (Incremental)
-  useEffect(() => {
-    if (session && isInitialLoadDone) {
-      const syncData = async () => {
-        console.log("[Sync] Starting global incremental bridge...");
-        const instruments = ['usatechidxusd', 'usa500idxusd'];
-        for (const inst of instruments) {
-          try {
-            await DataService.syncIncremental(inst, (msg) => console.log(`[Sync] ${inst}: ${msg}`));
-          } catch (e) {
-            console.error(`[Sync] Failed for ${inst}:`, e);
-          }
-        }
-        console.log("[Sync] Background bridge complete.");
-      };
-
-      // Delay slightly to not compete with initial load resources
-      const timer = setTimeout(syncData, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [session, isInitialLoadDone]);
+  // Phase B: Startup Global Sync (Incremental) - DISABLED
+  // Trade Replay was removed for performance optimization.
+  // See .archive/trade-replay-system/RESTORATION_GUIDE.md to restore.
 
   useEffect(() => {
     if (accounts.length > 0 && filters.accounts.length === 0) {

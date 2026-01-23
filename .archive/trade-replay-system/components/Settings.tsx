@@ -150,6 +150,7 @@ const Settings: React.FC<SettingsProps> = ({
     { id: 'psychology', label: 'Psychologie', icon: Brain, description: 'Emoce a katalog chyb' },
     { id: 'strategy', label: 'Strategie', icon: Target, description: 'Pravidla a konfluence' },
     { id: 'market', label: 'Trh', icon: Clock, description: 'Seance a časový plán' },
+    { id: 'debug', label: 'Cache & Data', icon: Database, description: 'Správa paměti a diagnostika' },
   ] as const;
 
   return (
@@ -525,8 +526,332 @@ const Settings: React.FC<SettingsProps> = ({
               </div>
             )
           }
+
+          {
+            activeTab === 'debug' && (
+              <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
+                <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[var(--bg-card)]/80 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="p-3 rounded-xl bg-orange-500 text-white shadow-lg shadow-orange-500/10"><Database size={20} /></div>
+                    <div>
+                      <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>CACHE MANAGER</h3>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Správa a kontrola stavu databáze</p>
+                    </div>
+                  </div>
+
+                  <CacheManager isDark={isDark} />
+                </section>
+              </div>
+            )
+          }
         </div>
       </main>
+    </div>
+  );
+};
+
+// --- Embedded Cache Manager Component ---
+import { DataService, SyncStats } from '../services/DataService';
+
+const CacheManager = ({ isDark }: { isDark: boolean }) => {
+  const [stats, setStats] = useState<Record<string, SyncStats>>({});
+  const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [statusLog, setStatusLog] = useState<string>('Systém připraven.');
+  const [selectedInst, setSelectedInst] = useState('usatechidxusd');
+
+  const checkStats = async () => {
+    setLoading(true);
+    setStatusLog('Kontrola integrity dat...');
+    try {
+      const instruments = ['usatechidxusd', 'usa500idxusd'];
+      const newStats: Record<string, SyncStats> = {};
+
+      for (const inst of instruments) {
+        newStats[inst] = await DataService.getInstrumentStats(inst);
+      }
+      setStats(newStats);
+      setStatusLog('Data Health: OK');
+    } catch (error: any) {
+      console.error("Failed to check stats:", error);
+      setStatusLog(`Chyba: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    checkStats();
+  }, []);
+
+  const handleDeepSync = async (months: number) => {
+    if (downloading) return;
+    setDownloading(true);
+    setDownloadProgress(0);
+
+    try {
+      const now = new Date();
+      const from = new Date(now.getTime() - months * 30 * 24 * 60 * 60 * 1000);
+
+      setStatusLog(`Zahajuji hloubkovou synchronizaci (${months} měsíců)...`);
+
+      await DataService.importHistory(
+        selectedInst,
+        from,
+        now,
+        1, // 1 day chunks for stability
+        (msg) => setStatusLog(msg),
+        (progress) => setDownloadProgress(progress)
+      );
+
+      setStatusLog('Synchronizace dokončena úspěšně.');
+      await checkStats();
+    } catch (error: any) {
+      setStatusLog(`CHYBA: ${error.message}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const menuInsts = [
+    { id: 'usatechidxusd', label: 'Nasdaq (NQ / MNQ)' },
+    { id: 'usa500idxusd', label: 'S&P 500 (ES / MES)' }
+  ];
+
+  return (
+    <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-page)]/20 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h4 className={`text-sm font-bold uppercase tracking-widest ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>Data Health Dashboard</h4>
+        <div className="flex gap-4">
+          {loading && <Loader2 size={16} className="animate-spin text-slate-500" />}
+          <button onClick={checkStats} className="text-xs text-blue-500 hover:underline">Obnovit stav</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        {menuInsts.map(inst => (
+          <div key={inst.id} className={`p-4 rounded-xl border ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+            <div className="flex justify-between items-start mb-2">
+              <p className="text-[10px] font-black uppercase text-slate-500">{inst.label}</p>
+              <div className={`w-2 h-2 rounded-full ${stats[inst.id]?.count ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-slate-700'}`} />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-baseline gap-2">
+                <p className={`text-xl font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                  {stats[inst.id]?.count ? stats[inst.id].count.toLocaleString() : '0'}
+                </p>
+                <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Svíček</span>
+              </div>
+              {stats[inst.id]?.minDate && (
+                <p className="text-[9px] font-mono text-slate-500">
+                  {new Date(stats[inst.id].minDate!).toLocaleDateString()} - {new Date(stats[inst.id].maxDate!).toLocaleDateString()}
+                </p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {statusLog && (
+        <div className={`mb-6 p-3 rounded-xl font-mono text-[9px] border leading-relaxed ${isDark ? 'bg-black/40 border-white/5 text-blue-400' : 'bg-slate-100 border-slate-200 text-blue-600'}`}>
+          <div className="flex items-center gap-2 mb-1">
+            <Activity size={10} className={downloading ? "animate-pulse" : ""} />
+            <span className="uppercase font-black">Sync Engine Active</span>
+          </div>
+          {statusLog}
+          {downloading && (
+            <div className="mt-2 h-1 w-full bg-blue-900/30 rounded-full overflow-hidden">
+              <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${downloadProgress}%` }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`p-5 rounded-xl border ${isDark ? 'bg-blue-500/5 border-blue-500/10' : 'bg-blue-50 border-blue-100'}`}>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h5 className={`text-xs font-black uppercase tracking-widest ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>Deep History Sync</h5>
+            <p className="text-[10px] opacity-70">Zvolte rozsah pro manuální doplnění historie. Data budou stažena bit-po-bitu.</p>
+          </div>
+
+          <select
+            value={selectedInst}
+            onChange={(e) => setSelectedInst(e.target.value)}
+            disabled={downloading}
+            className={`${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'} px-3 py-2 rounded-lg text-[10px] font-black uppercase outline-none focus:ring-1 focus:ring-blue-500`}
+          >
+            {menuInsts.map(i => <option key={i.id} value={i.id}>{i.label.split(' (')[0]}</option>)}
+          </select>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
+          {[
+            { label: '30 Dní', val: 1 },
+            { label: '6 Měsíců', val: 6 },
+            { label: '1 Rok', val: 12 },
+            { label: '2 Roky', val: 24 }
+          ].map(preset => (
+            <button
+              key={preset.val}
+              disabled={downloading}
+              onClick={() => handleDeepSync(preset.val)}
+              className={`py-2.5 rounded-xl text-[9px] font-black uppercase tracking-tighter transition-all active:scale-95 disabled:opacity-30
+                ${isDark ? 'bg-slate-800 hover:bg-slate-700 text-white border border-white/5' : 'bg-white hover:bg-slate-50 text-slate-900 border border-slate-200 shadow-sm'}
+              `}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+
+        {downloading && (
+          <div className="mt-3 flex items-center justify-center gap-2">
+            <Loader2 size={12} className="animate-spin text-blue-500" />
+            <span className="text-[9px] font-black uppercase tracking-widest text-blue-500">Syncing... Prosím nezavírejte aplikaci</span>
+          </div>
+        )}
+      </div>
+
+      {/* Local Cache Section (IndexedDB) */}
+      <LocalCacheSection isDark={isDark} selectedInst={selectedInst} />
+    </div>
+  );
+};
+
+// --- Local Cache Section for Instant Replay ---
+const LocalCacheSection = ({ isDark, selectedInst }: { isDark: boolean; selectedInst: string }) => {
+  const [localCacheInfo, setLocalCacheInfo] = useState<any[]>([]);
+  const [localCacheSize, setLocalCacheSize] = useState<number>(0);
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState('Připraveno');
+
+  const refreshLocalCache = async () => {
+    try {
+      const { getCacheInfo, getCacheSizeBytes } = await import('../services/candleCache');
+      const info = await getCacheInfo();
+      const size = await getCacheSizeBytes();
+      setLocalCacheInfo(info);
+      setLocalCacheSize(size);
+    } catch (err) {
+      console.error('Failed to get local cache info:', err);
+    }
+  };
+
+  useEffect(() => {
+    refreshLocalCache();
+  }, []);
+
+  const handleLocalDownload = async (days: number) => {
+    if (downloading) return;
+    setDownloading(true);
+    setProgress(0);
+
+    try {
+      const now = new Date();
+      const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+
+      setStatus(`Stahuji ${days} dní dat do lokální cache...`);
+
+      const { DataService } = await import('../services/DataService');
+      await DataService.downloadToLocalCache(
+        selectedInst,
+        from,
+        now,
+        ['1m', '1h'],
+        (msg) => setStatus(msg),
+        (p) => setProgress(p)
+      );
+
+      setStatus('Hotovo! Data jsou připravena pro instant replay.');
+      await refreshLocalCache();
+    } catch (err: any) {
+      setStatus(`Chyba: ${err.message}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleClearLocalCache = async () => {
+    if (!confirm('Opravdu smazat lokální cache? Replay bude pomalejší.')) return;
+    try {
+      const { clearCandleCache } = await import('../services/candleCache');
+      await clearCandleCache();
+      setStatus('Lokální cache vymazána.');
+      await refreshLocalCache();
+    } catch (err: any) {
+      setStatus(`Chyba: ${err.message}`);
+    }
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+
+  return (
+    <div className={`mt-6 p-5 rounded-xl border ${isDark ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+        <div className="space-y-1">
+          <h5 className={`text-xs font-black uppercase tracking-widest ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>⚡ Instant Replay Cache (Lokální)</h5>
+          <p className="text-[10px] opacity-70">Stáhni data do prohlížeče pro okamžité načítání replay bez čekání.</p>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className={`px-3 py-1.5 rounded-lg text-[10px] font-black ${isDark ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'}`}>
+            {formatSize(localCacheSize)}
+          </div>
+          <button
+            onClick={handleClearLocalCache}
+            className="text-[10px] text-rose-500 hover:underline"
+          >
+            Smazat cache
+          </button>
+        </div>
+      </div>
+
+      {localCacheInfo.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+          {localCacheInfo.map((info, idx) => (
+            <div key={idx} className={`p-2 rounded-lg text-[9px] ${isDark ? 'bg-black/20' : 'bg-white'}`}>
+              <p className="font-black uppercase text-slate-500">{info.instrument}:{info.timeframe}</p>
+              <p className={isDark ? 'text-white' : 'text-slate-900'}>{info.count.toLocaleString()} svíček</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {status && (
+        <div className={`mb-4 p-2 rounded-lg text-[9px] ${isDark ? 'bg-black/30 text-emerald-400' : 'bg-emerald-100 text-emerald-700'}`}>
+          {status}
+          {downloading && (
+            <div className="mt-2 h-1 w-full bg-emerald-900/30 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${progress}%` }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          { label: '7 Dní', val: 7 },
+          { label: '30 Dní', val: 30 },
+          { label: '90 Dní', val: 90 },
+          { label: '1 Rok', val: 365 }
+        ].map(preset => (
+          <button
+            key={preset.val}
+            disabled={downloading}
+            onClick={() => handleLocalDownload(preset.val)}
+            className={`py-2.5 rounded-xl text-[9px] font-black uppercase tracking-tighter transition-all active:scale-95 disabled:opacity-30
+              ${isDark ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'}
+            `}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 };

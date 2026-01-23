@@ -21,7 +21,6 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
     const [canPull, setCanPull] = useState(false);
     const [holdTimer, setHoldTimer] = useState<NodeJS.Timeout | null>(null);
     const [isHoldValid, setIsHoldValid] = useState(false);
-    const [isAtTop, setIsAtTop] = useState(true);
     const containerRef = useRef<HTMLDivElement>(null);
 
     const maxPullDistance = 100; // Maximum pull distance
@@ -271,11 +270,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
             {/* Scrollable Content */}
             <div
                 ref={containerRef}
-                className={`flex-1 overflow-y-auto ${isAtTop ? 'overscroll-none' : 'overscroll-y-auto'}`}
-                onScroll={(e) => {
-                    const target = e.target as HTMLDivElement;
-                    setIsAtTop(target.scrollTop === 0);
-                }}
+                className="flex-1 overflow-y-auto overscroll-none"
             >
                 {children}
             </div>

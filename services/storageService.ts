@@ -1,7 +1,6 @@
 
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate } from '../types';
 import { supabase } from './supabase';
-import { prefetchService } from './prefetchService';
 import { get, set } from 'idb-keyval';
 
 // Helper to validate UUID
@@ -386,11 +385,6 @@ export const storageService = {
       timestamp: d.timestamp,
       drawings: d.drawings
     }));
-
-    // Start prefetching in background
-    if (results.length > 0) {
-      prefetchService.prefetchMultiple(results).catch(err => console.error("Prefetch error:", err));
-    }
 
     return results;
   },

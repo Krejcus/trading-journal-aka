@@ -7,8 +7,10 @@ import { storageService } from '../services/storageService';
 import {
     X, Edit3, Trash2, Clock, Image as ImageIcon,
     Maximize2, ArrowRight, Timer, Terminal, ArrowUpRight, ArrowDownRight,
-    Share2, Check, ChevronLeft, ChevronRight, Zap, Brain, FileText, Monitor, Target
+    Share2, Check, ChevronLeft, ChevronRight, Zap, Brain, FileText, Monitor, Target,
+    Columns, Square
 } from 'lucide-react';
+import TradeReplay from './TradeReplay';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface TradeDetailModalProps {
@@ -73,6 +75,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [isZoomed, setIsZoomed] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [shareCopied, setShareCopied] = useState(false);
+    const [showReplayFullscreen, setShowReplayFullscreen] = useState(false);
+    const [layout, setLayout] = useState<'single' | 'split'>(activeTrade.miniViewLayout || 'single');
 
     const images = activeTrade.screenshots && activeTrade.screenshots.length > 0
         ? activeTrade.screenshots
@@ -190,6 +194,24 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         </div>
 
                         <div className="flex items-center gap-2 md:gap-3 ml-auto md:ml-0 mt-2 md:mt-0">
+
+                            <button
+                                onClick={() => setShowReplayFullscreen(true)}
+                                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20 active:scale-95 group"
+                                title="Vstoupit do hloubkové analýzy"
+                            >
+                                <Play size={16} fill="currentColor" className="group-hover:translate-x-0.5 transition-transform" />
+                                <span className="font-black text-[10px] uppercase tracking-widest hidden sm:inline">Replay</span>
+                            </button>
+                            <button
+                                onClick={() => setLayout(prev => prev === 'single' ? 'split' : 'single')}
+                                className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-all active:scale-95 group ${layout === 'split' ? 'bg-amber-500/10 border-amber-500/20 text-amber-500' : 'bg-slate-500/10 text-slate-500 hover:bg-slate-600 hover:text-white'}`}
+                                title={layout === 'split' ? "Jednoduchý pohled" : "Rozdělený pohled (split screen)"}
+                            >
+                                {layout === 'split' ? <Square size={16} /> : <Columns size={16} />}
+                                <span className="font-black text-[10px] uppercase tracking-widest hidden lg:inline">{layout === 'split' ? 'Single' : 'Split'}</span>
+                            </button>
+                            <div className="h-6 md:h-8 w-px bg-slate-800 mx-0.5 md:mx-1"></div>
                             <button
                                 onClick={handleShare}
                                 className={`p-2 md:p-2.5 rounded-xl transition-all flex items-center gap-1 md:gap-2 ${shareCopied ? 'bg-emerald-500/20 text-emerald-500' : 'bg-blue-500/10 text-blue-500 hover:bg-blue-600 hover:text-white'}`}
@@ -289,32 +311,23 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 )}
                             </div>
                         </div>
-                        {/* Right Panel: Large Screenshot View (Trade Replay removed for performance) */}
-                        <div className={`relative h-full w-full overflow-hidden flex items-center justify-center ${isDark ? 'bg-[var(--bg-page)]' : 'bg-slate-100'}`}>
-                            {images.length > 0 ? (
-                                <div className="relative w-full h-full flex items-center justify-center p-4 group">
-                                    <img
-                                        src={images[activeImageIndex]}
-                                        className="max-w-full max-h-full object-contain rounded-xl shadow-2xl cursor-pointer transition-transform hover:scale-[1.02]"
-                                        onClick={() => setIsZoomed(true)}
-                                    />
-                                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button
-                                            onClick={() => setIsZoomed(true)}
-                                            className="px-4 py-2 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-colors shadow-xl flex items-center gap-2"
-                                        >
-                                            <Maximize2 size={14} />
-                                            <span className="text-[10px] font-bold uppercase">Zvětšit</span>
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="text-center opacity-30">
-                                    <ImageIcon size={64} className="mx-auto mb-4 text-slate-500" />
-                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Žádný screenshot</p>
-                                    <p className="text-[9px] text-slate-600 mt-2">Přidej screenshot při vytváření obchodu</p>
-                                </div>
-                            )}
+                        {/* Right Panel: Interactive Chart */}
+                        <div className={`relative h-full w-full overflow-hidden ${isDark ? 'bg-[var(--bg-page)]' : 'bg-slate-100'}`}>
+                            <ErrorBoundary name="TradeReplay">
+                                <TradeReplay
+                                    ref={replayRef}
+                                    trade={activeTrade}
+                                    theme={theme}
+                                    onClose={() => { }}
+                                    minimal={true}
+                                    embedded={true}
+                                    initialLayout={layout}
+                                    onUpdateTrade={(updates) => {
+                                        setFullTrade(prev => ({ ...prev, ...updates }));
+                                        onUpdateTrade?.(updates);
+                                    }}
+                                />
+                            </ErrorBoundary>
                         </div>
                     </div>
                 </div>
@@ -328,7 +341,21 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                 </div>
             )}
 
-
+            {showReplayFullscreen && (
+                <div className="fixed inset-0 z-[300] bg-black/95 backdrop-blur-3xl animate-in fade-in duration-500">
+                    <TradeReplay
+                        trade={activeTrade}
+                        theme={theme}
+                        onClose={() => setShowReplayFullscreen(false)}
+                        minimal={false}
+                        embedded={false}
+                        onUpdateTrade={(updates) => {
+                            setFullTrade(prev => ({ ...prev, ...updates }));
+                            onUpdateTrade?.(updates);
+                        }}
+                    />
+                </div>
+            )}
 
         </>
     );
