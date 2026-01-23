@@ -382,6 +382,12 @@ const App: React.FC = () => {
         }
         if (cachedPrefs) applyPreferences(cachedPrefs);
 
+        // Also load cached journal data to prevent data loss
+        const cachedPreps = storageService.getCachedDailyPreps();
+        const cachedReviews = storageService.getCachedDailyReviews();
+        if (cachedPreps.length > 0) setDailyPreps(cachedPreps);
+        if (cachedReviews.length > 0) setDailyReviews(cachedReviews);
+
         // FAST PATH: Show cached data IMMEDIATELY, sync in background
         // This is the key to perceived speed - don't wait for server!
         setLoading(false);

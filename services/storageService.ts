@@ -612,7 +612,27 @@ export const storageService = {
     await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
   },
 
-  // Daily Journal
+  // Daily Journal - Cached getters for fast path
+  getCachedDailyPreps(): DailyPrep[] {
+    const localData = localStorage.getItem('alphatrade_daily_preps');
+    if (!localData) return [];
+    try {
+      return JSON.parse(localData);
+    } catch (e) {
+      return [];
+    }
+  },
+
+  getCachedDailyReviews(): DailyReview[] {
+    const localData = localStorage.getItem('alphatrade_daily_reviews');
+    if (!localData) return [];
+    try {
+      return JSON.parse(localData);
+    } catch (e) {
+      return [];
+    }
+  },
+
   async getDailyPreps(targetUserId?: string): Promise<DailyPrep[]> {
     const userId = targetUserId || await getUserId();
 
