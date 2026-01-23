@@ -1,0 +1,63 @@
+{
+    "name": "Alpha Trade Mentor",
+    "short_name": "AlphaTrade",
+    "description": "Professional Trading Journal & Performance Analytics",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#000000",
+    "theme_color": "#000000",
+    "orientation": "portrait-primary",
+    "scope": "/",
+    "icons": [
+        {
+            "src": "/logos/at_logo_light_clean.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/logos/at_logo_light_clean.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/logos/at_logo_light_clean.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ],
+    "categories": [
+        "finance",
+        "productivity",
+        "business"
+    ],
+    "screenshots": [],
+    "shortcuts": [
+        {
+            "name": "Zapsat obchod",
+            "short_name": "Nový obchod",
+            "description": "Rychle přidat nový obchod do deníku",
+            "url": "/?action=add-trade",
+            "icons": [
+                {
+                    "src": "/logos/at_logo_light_clean.png",
+                    "sizes": "192x192"
+                }
+            ]
+        },
+        {
+            "name": "Dashboard",
+            "short_name": "Dashboard",
+            "description": "Zobrazit přehled výkonnosti",
+            "url": "/?page=dashboard",
+            "icons": [
+                {
+                    "src": "/logos/at_logo_light_clean.png",
+                    "sizes": "192x192"
+                }
+            ]
+        }
+    ]
+}

@@ -7,10 +7,22 @@
   <meta name="theme-color" content="#000000">
   <title>ALPHA TRADE | Professional Terminal</title>
 
-  <!-- Premium Favicon & Mobile Icons -->
+  <!-- PWA Meta Tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AlphaTrade">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="description" content="Professional Trading Journal & Performance Analytics">
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json">
+
   <!-- Premium Favicon & Mobile Icons -->
   <link rel="icon" type="image/png" href="/logos/at_logo_light_clean.png">
   <link rel="apple-touch-icon" href="/logos/at_logo_light_clean.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/logos/at_logo_light_clean.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="/logos/at_logo_light_clean.png">
+  <link rel="apple-touch-icon" sizes="167x167" href="/logos/at_logo_light_clean.png">
   <script>
     (function () {
       try {
@@ -33,18 +45,6 @@
           document.documentElement.classList.remove('light-theme', 'oled-theme');
         }
       } catch (e) { }
-
-      // Force unregister any ghost service workers from previous PWA attempts
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then(function (registrations) {
-          for (let registration of registrations) {
-            registration.unregister();
-            console.log('Ghost Service Worker unregistered successfully');
-          }
-        }).catch(function (error) {
-          console.error('Service Worker unregistration failed:', error);
-        });
-      }
     })();
   </script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -141,22 +141,6 @@
       border: 1px solid rgba(255, 255, 255, 0.05);
     }
   </style>
-  <script type="importmap">
-{
-  "imports": {
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
-    "recharts": "https://aistudiocdn.com/recharts@^3.5.1",
-    "papaparse": "https://aistudiocdn.com/papaparse@^5.5.3",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react-markdown": "https://aistudiocdn.com/react-markdown@^10.1.0",
-    "remark-gfm": "https://aistudiocdn.com/remark-gfm@^4.0.1",
-    "xlsx": "https://aistudiocdn.com/xlsx@^0.18.5"
-  }
-}
-</script>
   <link rel="stylesheet" href="/index.css">
 </head>
 
