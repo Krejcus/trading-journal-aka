@@ -189,6 +189,8 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                             }}
                             animate={isRefreshing && !isComplete ? {
                                 rotate: 360,
+                            } : isComplete ? {
+                                rotate: 0,
                             } : {
                                 rotate: rotation,
                             }}
@@ -198,6 +200,8 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                                     repeat: Infinity,
                                     ease: 'linear',
                                 }
+                            } : isComplete ? {
+                                rotate: { duration: 0.3, ease: 'easeOut' }
                             } : {
                                 rotate: { duration: 0 }
                             }}
