@@ -1,25 +1,29 @@
 
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
-import { prefetchService } from './services/prefetchService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode } from './types';
-import FileUpload from './components/FileUpload';
-import Dashboard from './components/Dashboard';
-import ManualTradeForm from './components/ManualTradeForm';
+
+// Critical components - loaded immediately
 import Sidebar from './components/Sidebar';
-import TradeHistory from './components/TradeHistory';
-import Settings from './components/Settings';
-import AccountsManager from './components/AccountsManager';
-import FilterDropdown from './components/FilterDropdown';
-import DailyJournal from './components/DailyJournal';
-import UserProfileModal from './components/UserProfileModal';
-import SharedTradeView from './components/SharedTradeView';
-import NetworkHub from './components/NetworkHub';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
-import BusinessHub from './components/BusinessHub';
 import { PullToRefresh } from './components/PullToRefresh';
+
+// Lazy-loaded components - loaded on demand (code splitting)
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const TradeHistory = lazy(() => import('./components/TradeHistory'));
+const Settings = lazy(() => import('./components/Settings'));
+const DailyJournal = lazy(() => import('./components/DailyJournal'));
+const BusinessHub = lazy(() => import('./components/BusinessHub'));
+const NetworkHub = lazy(() => import('./components/NetworkHub'));
+const AccountsManager = lazy(() => import('./components/AccountsManager'));
+const FileUpload = lazy(() => import('./components/FileUpload'));
+const ManualTradeForm = lazy(() => import('./components/ManualTradeForm'));
+const FilterDropdown = lazy(() => import('./components/FilterDropdown'));
+const UserProfileModal = lazy(() => import('./components/UserProfileModal'));
+const SharedTradeView = lazy(() => import('./components/SharedTradeView'));
+import { DashboardSkeleton, PageSkeleton } from './components/Skeletons';
 import {
   Sun,
   Moon,
@@ -1224,7 +1228,7 @@ const App: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <>
+              <Suspense fallback={<DashboardSkeleton theme={theme} />}>
                 {activePage === 'dashboard' && (
                   <Dashboard
                     stats={filteredStats}
@@ -1356,7 +1360,7 @@ const App: React.FC = () => {
                     onUpdateAccounts={setAccounts}
                   />
                 )}
-              </>
+              </Suspense>
             )}
           </div>
         </PullToRefresh>
