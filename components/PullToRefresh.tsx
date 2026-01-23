@@ -57,12 +57,34 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                 setPullDistance(adjustedDistance);
 
                 // Start hold timer when user reaches trigger distance
-                if (adjustedDistance >= triggerDistance && !holdTimer && !isHoldValid) {
-                    const timer = setTimeout(() => {
+                if (adjustedDistance >= triggerDistance && !holdTimer && !isHoldValid && !isRefreshing) {
+                    const timer = setTimeout(async () => {
+                        // Trigger refresh immediately after hold duration
                         setIsHoldValid(true);
-                        // Haptic feedback when hold is valid
+                        setIsRefreshing(true);
+                        setPullDistance(triggerDistance);
+
+                        // Haptic feedback when refresh starts
                         if ('vibrate' in navigator) {
-                            navigator.vibrate(30);
+                            navigator.vibrate(50);
+                        }
+
+                        try {
+                            await onRefresh();
+
+                            // Show completion state
+                            setIsComplete(true);
+                            setTimeout(() => {
+                                setIsComplete(false);
+                                setIsRefreshing(false);
+                                setPullDistance(0);
+                                setIsHoldValid(false);
+                            }, 600);
+                        } catch (error) {
+                            console.error('[PullToRefresh] Error:', error);
+                            setIsRefreshing(false);
+                            setIsHoldValid(false);
+                            setPullDistance(0);
                         }
                     }, holdDuration);
                     setHoldTimer(timer);
@@ -86,38 +108,14 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                 setHoldTimer(null);
             }
 
-            if (pullDistance >= triggerDistance && isHoldValid) {
-                // Lock pull distance at trigger point
-                setPullDistance(triggerDistance);
-                setIsRefreshing(true);
-                setIsHoldValid(false);
-
-                // Haptic feedback (if supported)
-                if ('vibrate' in navigator) {
-                    navigator.vibrate(50);
-                }
-
-                try {
-                    await onRefresh();
-
-                    // Show completion state
-                    setIsComplete(true);
-                    setTimeout(() => {
-                        setIsComplete(false);
-                        setIsRefreshing(false);
-                        setPullDistance(0);
-                    }, 600);
-                } catch (error) {
-                    console.error('[PullToRefresh] Error:', error);
-                    setIsRefreshing(false);
-                    setIsHoldValid(false);
-                    setPullDistance(0);
-                }
-            } else {
-                // Didn't pull far enough or didn't hold, reset
-                setPullDistance(0);
-                setIsHoldValid(false);
+            // If refresh is already running (from hold timer), just cleanup
+            if (isRefreshing) {
+                return;
             }
+
+            // If user releases before hold timer completes, reset
+            setPullDistance(0);
+            setIsHoldValid(false);
         };
 
         const container = containerRef.current;
