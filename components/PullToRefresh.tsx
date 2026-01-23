@@ -21,8 +21,8 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
     const [canPull, setCanPull] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    const maxPullDistance = 120; // Maximum pull distance
-    const triggerDistance = 80; // Distance to trigger refresh
+    const maxPullDistance = 100; // Maximum pull distance
+    const triggerDistance = 70; // Distance to trigger refresh
 
     useEffect(() => {
         const handleTouchStart = (e: TouchEvent) => {
@@ -47,7 +47,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                 e.preventDefault();
 
                 // Apply resistance: slower pull as you go further
-                const resistance = 0.5;
+                const resistance = 0.4;
                 const adjustedDistance = Math.min(distance * resistance, maxPullDistance);
                 setPullDistance(adjustedDistance);
             }
@@ -59,7 +59,8 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
             setCanPull(false);
 
             if (pullDistance >= triggerDistance) {
-                // Trigger refresh
+                // Lock pull distance at trigger point
+                setPullDistance(triggerDistance);
                 setIsRefreshing(true);
 
                 // Haptic feedback (if supported)
@@ -76,7 +77,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                         setIsComplete(false);
                         setIsRefreshing(false);
                         setPullDistance(0);
-                    }, 800);
+                    }, 600);
                 } catch (error) {
                     console.error('[PullToRefresh] Error:', error);
                     setIsRefreshing(false);
@@ -109,127 +110,127 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
 
     // Calculate opacity and scale
     const opacity = Math.min(pullDistance / triggerDistance, 1);
-    const scale = Math.min(0.5 + (pullDistance / maxPullDistance) * 0.5, 1);
+    const scale = Math.min(0.6 + (pullDistance / maxPullDistance) * 0.4, 1);
 
     // Glow intensity
     const glowIntensity = Math.min(pullDistance / triggerDistance, 1);
 
+    // Active pull distance (for content offset)
+    const activeDistance = isRefreshing ? triggerDistance : pullDistance;
+
     return (
-        <div
-            ref={containerRef}
-            className="relative h-full overflow-y-auto overscroll-none"
-            style={{
-                transform: `translateY(${isRefreshing ? triggerDistance : pullDistance}px)`,
-                transition: canPull ? 'none' : 'transform 0.3s ease-out'
-            }}
-        >
-            {/* Pull-to-Refresh Indicator */}
+        <div className="relative h-full flex flex-col">
+            {/* Logo Indicator - Fixed between header and content */}
             <AnimatePresence>
                 {(pullDistance > 0 || isRefreshing) && (
                     <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="absolute top-0 left-0 right-0 flex justify-center pointer-events-none"
-                        style={{
-                            height: isRefreshing ? triggerDistance : pullDistance,
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{
+                            height: activeDistance,
+                            opacity: 1
                         }}
+                        exit={{
+                            height: 0,
+                            opacity: 0,
+                            transition: { duration: 0.2 }
+                        }}
+                        transition={{ type: "tween", duration: canPull ? 0 : 0.3 }}
+                        className="relative flex items-center justify-center overflow-hidden flex-shrink-0"
                     >
-                        <div className="relative flex items-end pb-4">
-                            {/* Glassmorphism Background Blob */}
-                            <motion.div
-                                className="absolute inset-0 -top-20 mx-auto"
+                        {/* Glassmorphism Background Blob */}
+                        <motion.div
+                            className="absolute inset-0 flex items-center justify-center"
+                            style={{
+                                background: 'radial-gradient(circle, rgba(34, 211, 238, 0.1) 0%, transparent 70%)',
+                                filter: 'blur(30px)',
+                                opacity: glowIntensity * 0.8,
+                            }}
+                            animate={isRefreshing && !isComplete ? {
+                                scale: [1, 1.3, 1],
+                            } : {}}
+                            transition={{ duration: 2, repeat: isRefreshing && !isComplete ? Infinity : 0 }}
+                        />
+
+                        {/* Logo Container */}
+                        <motion.div
+                            className="relative z-10"
+                            style={{
+                                opacity,
+                                scale,
+                            }}
+                            animate={isRefreshing && !isComplete ? {
+                                rotate: 360,
+                            } : {
+                                rotate: rotation,
+                            }}
+                            transition={isRefreshing && !isComplete ? {
+                                rotate: {
+                                    duration: 1,
+                                    repeat: Infinity,
+                                    ease: 'linear',
+                                }
+                            } : {
+                                rotate: { duration: 0 }
+                            }}
+                        >
+                            {/* Logo Image */}
+                            <img
+                                src="/logos/at_logo_light_clean.png"
+                                alt="Refreshing"
+                                className="w-10 h-10 object-contain"
                                 style={{
-                                    width: 100 + (pullDistance / maxPullDistance) * 50,
-                                    background: 'radial-gradient(circle, rgba(34, 211, 238, 0.15) 0%, transparent 70%)',
-                                    filter: 'blur(20px)',
-                                    opacity: glowIntensity * 0.6,
+                                    filter: `drop-shadow(0 0 ${6 + glowIntensity * 16}px rgba(34, 211, 238, ${0.4 + glowIntensity * 0.4}))`,
                                 }}
-                                animate={isRefreshing ? {
-                                    scale: [1, 1.2, 1],
-                                } : {}}
-                                transition={{ duration: 2, repeat: isRefreshing ? Infinity : 0 }}
                             />
 
-                            {/* Logo Container */}
+                            {/* Checkmark Overlay (on complete) */}
+                            <AnimatePresence>
+                                {isComplete && (
+                                    <motion.div
+                                        initial={{ scale: 0, opacity: 0 }}
+                                        animate={{ scale: 1, opacity: 1 }}
+                                        exit={{ scale: 0, opacity: 0 }}
+                                        transition={{ duration: 0.3 }}
+                                        className="absolute inset-0 flex items-center justify-center bg-cyan-500/20 rounded-full backdrop-blur-sm"
+                                    >
+                                        <Check className="w-5 h-5 text-cyan-400" strokeWidth={3} />
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </motion.div>
+
+                        {/* Pulsing Glow Effect (while refreshing) */}
+                        {isRefreshing && !isComplete && (
                             <motion.div
-                                className="relative z-10"
-                                style={{
-                                    opacity,
-                                    scale,
+                                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                                animate={{
+                                    opacity: [0.3, 0.6, 0.3],
                                 }}
-                                animate={isRefreshing ? {
-                                    rotate: 360,
-                                    scale: isComplete ? [1, 1.2, 1] : 1,
-                                } : {
-                                    rotate: rotation,
-                                }}
-                                transition={isRefreshing ? {
-                                    rotate: {
-                                        duration: 1,
-                                        repeat: isComplete ? 0 : Infinity,
-                                        ease: 'linear',
-                                    },
-                                    scale: {
-                                        duration: 0.4,
-                                    }
-                                } : {
-                                    rotate: { duration: 0 }
+                                transition={{
+                                    duration: 1.5,
+                                    repeat: Infinity,
+                                    ease: "easeInOut",
                                 }}
                             >
-                                {/* Logo Image */}
-                                <img
-                                    src="/logos/at_logo_light_clean.png"
-                                    alt="Refreshing"
-                                    className="w-12 h-12 object-contain transition-all duration-300"
+                                <div
+                                    className="w-14 h-14 rounded-full"
                                     style={{
-                                        filter: `drop-shadow(0 0 ${8 + glowIntensity * 20}px rgba(34, 211, 238, ${0.3 + glowIntensity * 0.4}))`,
+                                        background: 'radial-gradient(circle, rgba(34, 211, 238, 0.3) 0%, transparent 70%)',
                                     }}
                                 />
-
-                                {/* Checkmark Overlay (on complete) */}
-                                <AnimatePresence>
-                                    {isComplete && (
-                                        <motion.div
-                                            initial={{ scale: 0, opacity: 0 }}
-                                            animate={{ scale: 1, opacity: 1 }}
-                                            exit={{ scale: 0, opacity: 0 }}
-                                            className="absolute inset-0 flex items-center justify-center bg-cyan-500/20 rounded-full backdrop-blur-sm"
-                                        >
-                                            <Check className="w-6 h-6 text-cyan-400" strokeWidth={3} />
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
                             </motion.div>
-
-                            {/* Pulsing Glow Effect (while refreshing) */}
-                            {isRefreshing && !isComplete && (
-                                <motion.div
-                                    className="absolute inset-0 flex items-center justify-center pointer-events-none"
-                                    animate={{
-                                        opacity: [0.4, 0.8, 0.4],
-                                    }}
-                                    transition={{
-                                        duration: 1.5,
-                                        repeat: Infinity,
-                                        ease: "easeInOut",
-                                    }}
-                                >
-                                    <div
-                                        className="w-16 h-16 rounded-full"
-                                        style={{
-                                            background: 'radial-gradient(circle, rgba(34, 211, 238, 0.3) 0%, transparent 70%)',
-                                        }}
-                                    />
-                                </motion.div>
-                            )}
-                        </div>
+                        )}
                     </motion.div>
                 )}
             </AnimatePresence>
 
-            {/* Content */}
-            {children}
+            {/* Scrollable Content */}
+            <div
+                ref={containerRef}
+                className="flex-1 overflow-y-auto overscroll-none"
+            >
+                {children}
+            </div>
         </div>
     );
 };

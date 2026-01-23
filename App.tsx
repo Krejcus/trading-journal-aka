@@ -19,6 +19,7 @@ import NetworkHub from './components/NetworkHub';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
 import BusinessHub from './components/BusinessHub';
+import { PullToRefresh } from './components/PullToRefresh';
 import {
   Sun,
   Moon,
@@ -799,6 +800,63 @@ const App: React.FC = () => {
     }
   }, [displayTrades, displayBalance]);
 
+  // Global refresh handler for Pull-to-Refresh
+  const handleRefreshData = useCallback(async () => {
+    if (!session) return;
+
+    try {
+      console.log('[Refresh] Starting data refresh...');
+
+      const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
+        storageService.getTrades(),
+        storageService.getAccounts(),
+        storageService.getDailyPreps(),
+        storageService.getDailyReviews(),
+        storageService.getPreferences(),
+        storageService.getUser(),
+        storageService.getWeeklyFocusList()
+      ]);
+
+      console.log('[Refresh] Data received, updating state...');
+
+      if (dbUser) setCurrentUser(dbUser);
+
+      const cleanedTrades = (dbTrades || []).filter(t => {
+        const d = new Date(t.date);
+        const day = d.getDay();
+        return day !== 0 && day !== 6;
+      });
+      setTrades(cleanedTrades);
+
+      if (dbAccounts && dbAccounts.length > 0) {
+        setAccounts(dbAccounts);
+      }
+
+      if (!isJournalDirty.current) {
+        setDailyPreps(dbPreps || []);
+        setDailyReviews(dbReviews || []);
+      }
+      setWeeklyFocusList(dbWeeklyFocus || []);
+
+      if (dbPrefs && !isPreferencesDirty.current) {
+        // Apply preferences if not dirty
+        if (dbPrefs.emotions) setUserEmotions(dbPrefs.emotions);
+        if (dbPrefs.standardMistakes) setUserMistakes(dbPrefs.standardMistakes);
+        if (dbPrefs.standardGoals) setStandardGoals(dbPrefs.standardGoals);
+        if (dbPrefs.dashboardLayout) setDashboardLayout(dbPrefs.dashboardLayout);
+        if (dbPrefs.sessions) setSessions(dbPrefs.sessions);
+        if (dbPrefs.htfOptions) setHtfOptions(dbPrefs.htfOptions);
+        if (dbPrefs.ltfOptions) setLtfOptions(dbPrefs.ltfOptions);
+        if (dbPrefs.ironRules) setIronRules(dbPrefs.ironRules);
+      }
+
+      console.log('[Refresh] Refresh complete!');
+    } catch (error) {
+      console.error('[Refresh] Error:', error);
+      throw error; // Re-throw to show error in Pull-to-Refresh
+    }
+  }, [session, isJournalDirty, isPreferencesDirty]);
+
   const filteredDisplayTrades = useMemo(() => {
     const now = new Date();
     const filtered = displayTrades.filter(t => {
@@ -1164,161 +1222,163 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className="p-4 lg:p-8 flex-1 overflow-x-hidden">
-          {syncError && (
-            <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
-              <AlertTriangle size={16} />
-              <span>{syncError}</span>
-            </div>
-          )}
-          {appError ? (
-            <div className="flex flex-col items-center justify-center h-[60vh] text-center p-6 bg-red-500/5 border border-red-500/20 rounded-[40px]">
-              <AlertTriangle className="text-red-500 w-16 h-16 mb-4 animate-pulse" />
-              <h2 className="text-2xl font-black text-white mb-2">CHYBA TERMINÁLU</h2>
-              <p className="text-slate-400 mb-6 max-w-md">{appError}</p>
-              <button
-                onClick={() => window.location.reload()}
-                className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs"
-              >
-                Restartovat aplikaci
-              </button>
-            </div>
-          ) : (
-            <>
-              {activePage === 'dashboard' && (
-                <Dashboard
-                  stats={filteredStats}
-                  theme={theme}
-                  preps={dailyPreps}
-                  reviews={dailyReviews}
-                  layout={dashboardLayout}
-                  sessions={sessions}
-                  ironRules={ironRules}
-                  onUpdateLayout={setDashboardLayout}
-                  isEditing={isDashboardEditing}
-                  onCloseEdit={() => setIsDashboardEditing(false)}
-                  dashboardMode={dashboardMode}
-                  setDashboardMode={setDashboardMode}
-                  accounts={accounts}
-                  emotions={userEmotions}
-                  viewMode={viewMode}
-                  onDeleteTrade={handleDeleteTrade}
-                  onUpdateTrade={handleUpdateTrade}
-                  user={currentUser}
-                  pnlDisplayMode={pnlDisplayMode}
-                />
-              )}
-
-              {activePage === 'history' && (
-                trades.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
-                    <div className="w-full max-w-md h-64">
-                      <FileUpload onDataLoaded={handleFileUpload} />
-                    </div>
-                    <div className="flex items-center gap-4 w-full max-w-md">
-                      <div className="h-px bg-slate-800 flex-1"></div>
-                      <span className="text-xs text-slate-500 font-bold uppercase">Nebo</span>
-                      <div className="h-px bg-slate-800 flex-1"></div>
-                    </div>
-                    <button onClick={() => setIsManualEntryOpen(true)} className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95">
-                      <Plus size={18} /> Zapsat první obchod
-                    </button>
-                  </div>
-                ) : (
-                  <TradeHistory
-                    trades={filteredDisplayTrades}
-                    accounts={accounts}
-                    onDelete={handleDeleteTrade}
-                    onUpdateTrade={handleUpdateTrade}
-                    onClear={handleClearTrades}
+        <PullToRefresh onRefresh={handleRefreshData} disabled={!session || loading}>
+          <div className="p-4 lg:p-8 flex-1 overflow-x-hidden">
+            {syncError && (
+              <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
+                <AlertTriangle size={16} />
+                <span>{syncError}</span>
+              </div>
+            )}
+            {appError ? (
+              <div className="flex flex-col items-center justify-center h-[60vh] text-center p-6 bg-red-500/5 border border-red-500/20 rounded-[40px]">
+                <AlertTriangle className="text-red-500 w-16 h-16 mb-4 animate-pulse" />
+                <h2 className="text-2xl font-black text-white mb-2">CHYBA TERMINÁLU</h2>
+                <p className="text-slate-400 mb-6 max-w-md">{appError}</p>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs"
+                >
+                  Restartovat aplikaci
+                </button>
+              </div>
+            ) : (
+              <>
+                {activePage === 'dashboard' && (
+                  <Dashboard
+                    stats={filteredStats}
                     theme={theme}
+                    preps={dailyPreps}
+                    reviews={dailyReviews}
+                    layout={dashboardLayout}
+                    sessions={sessions}
+                    ironRules={ironRules}
+                    onUpdateLayout={setDashboardLayout}
+                    isEditing={isDashboardEditing}
+                    onCloseEdit={() => setIsDashboardEditing(false)}
+                    dashboardMode={dashboardMode}
+                    setDashboardMode={setDashboardMode}
+                    accounts={accounts}
                     emotions={userEmotions}
+                    viewMode={viewMode}
+                    onDeleteTrade={handleDeleteTrade}
+                    onUpdateTrade={handleUpdateTrade}
+                    user={currentUser}
                     pnlDisplayMode={pnlDisplayMode}
-                    initialBalance={displayBalance}
                   />
-                )
-              )}
+                )}
 
-              {activePage === 'journal' && (
-                <DailyJournal
-                  theme={theme}
-                  trades={filteredDisplayTrades}
-                  preps={dailyPreps}
-                  reviews={dailyReviews}
-                  onSavePrep={handleSavePrep}
-                  onSaveReview={handleSaveReview}
-                  onDeletePrep={handleDeletePrep}
-                  onDeleteReview={handleDeleteReview}
-                  standardGoals={standardGoals}
-                  ironRules={ironRules}
-                  psychoMetrics={psychoMetrics}
-                  viewMode={viewMode}
-                  weeklyFocusList={weeklyFocusList}
-                />
-              )}
+                {activePage === 'history' && (
+                  trades.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
+                      <div className="w-full max-w-md h-64">
+                        <FileUpload onDataLoaded={handleFileUpload} />
+                      </div>
+                      <div className="flex items-center gap-4 w-full max-w-md">
+                        <div className="h-px bg-slate-800 flex-1"></div>
+                        <span className="text-xs text-slate-500 font-bold uppercase">Nebo</span>
+                        <div className="h-px bg-slate-800 flex-1"></div>
+                      </div>
+                      <button onClick={() => setIsManualEntryOpen(true)} className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95">
+                        <Plus size={18} /> Zapsat první obchod
+                      </button>
+                    </div>
+                  ) : (
+                    <TradeHistory
+                      trades={filteredDisplayTrades}
+                      accounts={accounts}
+                      onDelete={handleDeleteTrade}
+                      onUpdateTrade={handleUpdateTrade}
+                      onClear={handleClearTrades}
+                      theme={theme}
+                      emotions={userEmotions}
+                      pnlDisplayMode={pnlDisplayMode}
+                      initialBalance={displayBalance}
+                    />
+                  )
+                )}
 
-              {activePage === 'accounts' && (
-                <AccountsManager
-                  accounts={accounts}
-                  activeAccountId={activeAccountId}
-                  setActiveAccountId={setActiveAccountId}
-                  onUpdate={setAccounts}
-                  onDelete={handleDeleteAccount}
-                  theme={theme}
-                  trades={trades}
-                  onUpdateTrades={handleUpdateTrades}
-                  onAddExpense={(exp) => { setBusinessExpenses(prev => [...prev, exp]); isPreferencesDirty.current = true; }}
-                  onAddPayout={(p) => { setBusinessPayouts(prev => [...prev, p]); isPreferencesDirty.current = true; }}
-                />
-              )}
+                {activePage === 'journal' && (
+                  <DailyJournal
+                    theme={theme}
+                    trades={filteredDisplayTrades}
+                    preps={dailyPreps}
+                    reviews={dailyReviews}
+                    onSavePrep={handleSavePrep}
+                    onSaveReview={handleSaveReview}
+                    onDeletePrep={handleDeletePrep}
+                    onDeleteReview={handleDeleteReview}
+                    standardGoals={standardGoals}
+                    ironRules={ironRules}
+                    psychoMetrics={psychoMetrics}
+                    viewMode={viewMode}
+                    weeklyFocusList={weeklyFocusList}
+                  />
+                )}
 
-              {activePage === 'network' && (
-                <NetworkHub theme={theme} accounts={accounts} emotions={userEmotions} />
-              )}
+                {activePage === 'accounts' && (
+                  <AccountsManager
+                    accounts={accounts}
+                    activeAccountId={activeAccountId}
+                    setActiveAccountId={setActiveAccountId}
+                    onUpdate={setAccounts}
+                    onDelete={handleDeleteAccount}
+                    theme={theme}
+                    trades={trades}
+                    onUpdateTrades={handleUpdateTrades}
+                    onAddExpense={(exp) => { setBusinessExpenses(prev => [...prev, exp]); isPreferencesDirty.current = true; }}
+                    onAddPayout={(p) => { setBusinessPayouts(prev => [...prev, p]); isPreferencesDirty.current = true; }}
+                  />
+                )}
+
+                {activePage === 'network' && (
+                  <NetworkHub theme={theme} accounts={accounts} emotions={userEmotions} />
+                )}
 
 
 
 
-              {activePage === 'settings' && (
-                <Settings
-                  theme={theme}
-                  userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); isPreferencesDirty.current = true; }}
-                  userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); isPreferencesDirty.current = true; }}
-                  htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); isPreferencesDirty.current = true; }}
-                  ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); isPreferencesDirty.current = true; }}
-                  sessions={sessions} setSessions={(v) => { setSessions(v); isPreferencesDirty.current = true; }}
-                  ironRules={ironRules}
-                  setIronRules={(v) => { setIronRules(v); isPreferencesDirty.current = true; }}
-                  psychoMetrics={psychoMetrics}
-                  setPsychoMetrics={(v) => { setPsychoMetrics(v); isPreferencesDirty.current = true; }}
-                  weeklyFocusList={weeklyFocusList}
-                  setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isJournalDirty.current = true; }}
-                />
-              )}
+                {activePage === 'settings' && (
+                  <Settings
+                    theme={theme}
+                    userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); isPreferencesDirty.current = true; }}
+                    userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); isPreferencesDirty.current = true; }}
+                    htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); isPreferencesDirty.current = true; }}
+                    ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); isPreferencesDirty.current = true; }}
+                    sessions={sessions} setSessions={(v) => { setSessions(v); isPreferencesDirty.current = true; }}
+                    ironRules={ironRules}
+                    setIronRules={(v) => { setIronRules(v); isPreferencesDirty.current = true; }}
+                    psychoMetrics={psychoMetrics}
+                    setPsychoMetrics={(v) => { setPsychoMetrics(v); isPreferencesDirty.current = true; }}
+                    weeklyFocusList={weeklyFocusList}
+                    setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isJournalDirty.current = true; }}
+                  />
+                )}
 
-              {activePage === 'business' && (
-                <BusinessHub
-                  theme={theme}
-                  trades={trades}
-                  accounts={accounts}
-                  expenses={businessExpenses}
-                  payouts={businessPayouts}
-                  playbook={playbookItems}
-                  goals={businessGoals}
-                  resources={businessResources}
-                  settings={businessSettings}
-                  onUpdateExpenses={(v) => { setBusinessExpenses(v); isPreferencesDirty.current = true; }}
-                  onUpdatePayouts={(v) => { setBusinessPayouts(v); isPreferencesDirty.current = true; }}
-                  onUpdatePlaybook={(v) => { setPlaybookItems(v); isPreferencesDirty.current = true; }}
-                  onUpdateGoals={(v) => { setBusinessGoals(v); isPreferencesDirty.current = true; }}
-                  onUpdateResources={(v) => { setBusinessResources(v); isPreferencesDirty.current = true; }}
-                  onUpdateSettings={(v) => { setBusinessSettings(v); isPreferencesDirty.current = true; }}
-                  onUpdateAccounts={setAccounts}
-                />
-              )}
-            </>
-          )}
-        </div>
+                {activePage === 'business' && (
+                  <BusinessHub
+                    theme={theme}
+                    trades={trades}
+                    accounts={accounts}
+                    expenses={businessExpenses}
+                    payouts={businessPayouts}
+                    playbook={playbookItems}
+                    goals={businessGoals}
+                    resources={businessResources}
+                    settings={businessSettings}
+                    onUpdateExpenses={(v) => { setBusinessExpenses(v); isPreferencesDirty.current = true; }}
+                    onUpdatePayouts={(v) => { setBusinessPayouts(v); isPreferencesDirty.current = true; }}
+                    onUpdatePlaybook={(v) => { setPlaybookItems(v); isPreferencesDirty.current = true; }}
+                    onUpdateGoals={(v) => { setBusinessGoals(v); isPreferencesDirty.current = true; }}
+                    onUpdateResources={(v) => { setBusinessResources(v); isPreferencesDirty.current = true; }}
+                    onUpdateSettings={(v) => { setBusinessSettings(v); isPreferencesDirty.current = true; }}
+                    onUpdateAccounts={setAccounts}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </PullToRefresh>
       </main >
 
       {isManualEntryOpen && (
