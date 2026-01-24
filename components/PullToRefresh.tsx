@@ -7,12 +7,14 @@ interface PullToRefreshProps {
     onRefresh: () => Promise<void>;
     children: React.ReactNode;
     disabled?: boolean;
+    className?: string;
 }
 
 export const PullToRefresh: React.FC<PullToRefreshProps> = ({
     onRefresh,
     children,
-    disabled = false
+    disabled = false,
+    className = ""
 }) => {
     const [pullDistance, setPullDistance] = useState(0);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -34,7 +36,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
 
             // Only allow pull if at the top of the scroll container
             const container = containerRef.current;
-            if (container && container.scrollTop === 0) {
+            if (container && container.scrollTop <= 5) {
                 setCanPull(true);
                 setStartY(e.touches[0].clientY);
                 setIsHoldValid(false);
@@ -44,21 +46,51 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
         const handleTouchMove = (e: TouchEvent) => {
             if (!canPull || disabled || isRefreshing) return;
 
+            const container = containerRef.current;
             const currentY = e.touches[0].clientY;
             const distance = currentY - startY;
 
-            if (distance > 0) {
-                // Prevent default scrolling when pulling down
-                e.preventDefault();
+            // SAFETY CHECK: If the user starts scrolling the content instead of pulling the refresh,
+            // we must cancel the pull immediately to avoid "stuck" UI at the bottom.
+            if (container && container.scrollTop > 10) {
+                setCanPull(false);
+                setPullDistance(0);
+                return;
+            }
 
+            if (distance > 0) {
                 // Apply resistance: slower pull as you go further
                 const resistance = 0.4;
                 const adjustedDistance = Math.min(distance * resistance, maxPullDistance);
+
+                // Prevent default scrolling only when we are actually pulling the refresh logo
+                // This is critical for mobile browsers to allow normal scrolling when needed.
+                if (adjustedDistance > 10 && container && container.scrollTop <= 5) {
+                    if (e.cancelable) e.preventDefault();
+                } else if (container && container.scrollTop > 5) {
+                    // If we are not at the top, don't interfere with natural scrolling
+                    setCanPull(false);
+                    setPullDistance(0);
+                    return;
+                }
+
                 setPullDistance(adjustedDistance);
 
                 // Start hold timer when user reaches trigger distance
                 if (adjustedDistance >= triggerDistance && !holdTimer && !isHoldValid && !isRefreshing) {
+                    // Haptic feedback for "snap" to trigger
+                    if ('vibrate' in navigator) {
+                        navigator.vibrate(12);
+                    }
+
                     const timer = setTimeout(async () => {
+                        // Double check if we are still at the top before triggering
+                        if (containerRef.current && containerRef.current.scrollTop > 20) {
+                            setIsRefreshing(false);
+                            setPullDistance(0);
+                            return;
+                        }
+
                         // Trigger refresh immediately after hold duration
                         setIsHoldValid(true);
                         setIsRefreshing(true);
@@ -66,7 +98,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
 
                         // Haptic feedback when refresh starts
                         if ('vibrate' in navigator) {
-                            navigator.vibrate(50);
+                            navigator.vibrate(40);
                         }
 
                         try {
@@ -132,7 +164,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                 container.removeEventListener('touchend', handleTouchEnd);
             }
         };
-    }, [canPull, pullDistance, startY, disabled, isRefreshing, onRefresh]);
+    }, [canPull, pullDistance, startY, disabled, isRefreshing, onRefresh, holdTimer, isHoldValid]);
 
     // Calculate rotation based on pull distance
     const rotation = (pullDistance / maxPullDistance) * 360;
@@ -148,7 +180,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
     const activeDistance = isRefreshing ? triggerDistance : pullDistance;
 
     return (
-        <div className="relative h-full flex flex-col">
+        <div className={`relative h-full flex flex-col ${className}`}>
             {/* Logo Indicator - Fixed between header and content */}
             <AnimatePresence>
                 {(pullDistance > minPullToShow || isRefreshing) && (

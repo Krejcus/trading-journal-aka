@@ -2,7 +2,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
-import { prefetchService } from './services/prefetchService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode } from './types';
 import FileUpload from './components/FileUpload';
 import Dashboard from './components/Dashboard';
@@ -1203,7 +1202,11 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <PullToRefresh onRefresh={handleRefreshData} disabled={!session || loading}>
+        <PullToRefresh
+          onRefresh={handleRefreshData}
+          disabled={!session || loading}
+          className="flex-1"
+        >
           <div className="p-4 lg:p-8 flex-1 overflow-x-hidden">
             {syncError && (
               <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
