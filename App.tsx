@@ -350,12 +350,16 @@ const App: React.FC = () => {
     const load = async () => {
       // Avoid redundant loads if the session is the same
       if (session?.user?.id === lastLoadedSessionId.current && isInitialLoadDone) return;
+
+      // DEBOUNCE / DELAY: Wait a bit for Supabase session to stabilize
+      // This solves the "too fast loading" issue
+      await new Promise(r => setTimeout(r, 600));
+
       lastLoadedSessionId.current = session?.user?.id || null;
 
       const lastUserId = localStorage.getItem('alphatrade_last_session_user');
       if (lastUserId && lastUserId !== session.user.id) {
-        console.warn("User mismatch detected. Purging local storage for safety.");
-        localStorage.clear();
+        console.warn("User change detected. Initializing fresh sync.");
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
@@ -483,6 +487,20 @@ const App: React.FC = () => {
         if (!isJournalDirty.current) {
           setDailyPreps(dbPreps || []);
           setDailyReviews(dbReviews || []);
+
+          // AUTO-PUSH: Check if local cache has contents but DB was empty/older
+          // This fixes the data-loss after logout scenario
+          const localPreps = storageService.getCachedDailyPreps();
+          const localReviews = storageService.getCachedDailyReviews();
+
+          if (localPreps.length > (dbPreps?.length || 0)) {
+            console.log("[Sync] Auto-Pushing local preps to server...");
+            storageService.saveDailyPreps(localPreps).catch(e => console.error("Auto-push failed", e));
+          }
+          if (localReviews.length > (dbReviews?.length || 0)) {
+            console.log("[Sync] Auto-Pushing local reviews to server...");
+            storageService.saveDailyReviews(localReviews).catch(e => console.error("Auto-push failed", e));
+          }
         } else {
           console.log("[Sync] Skipping journal sync (dirty state)");
         }
@@ -1141,10 +1159,12 @@ const App: React.FC = () => {
         onAddTrade={() => setIsManualEntryOpen(true)}
         user={currentUser}
         onLogout={async () => {
-          localStorage.clear(); // CRITICAL: Clear dirty local data
+          // Keep localStorage to prevent data loss of unsynced journals
+          // Just remove session-specific flags
+          localStorage.removeItem('alphatrade_last_session_user');
           await supabase.auth.signOut();
           setSession(null);
-          window.location.reload(); // Force a clean state
+          window.location.reload();
         }}
         onOpenProfile={() => setActivePage('profile')}
         onNavigate={(page) => {
