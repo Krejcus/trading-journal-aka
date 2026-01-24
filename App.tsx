@@ -1,29 +1,25 @@
 
-import React, { useState, useMemo, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
+import { prefetchService } from './services/prefetchService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode } from './types';
-
-// Critical components - loaded immediately
+import FileUpload from './components/FileUpload';
+import Dashboard from './components/Dashboard';
+import ManualTradeForm from './components/ManualTradeForm';
 import Sidebar from './components/Sidebar';
+import TradeHistory from './components/TradeHistory';
+import Settings from './components/Settings';
+import AccountsManager from './components/AccountsManager';
+import FilterDropdown from './components/FilterDropdown';
+import DailyJournal from './components/DailyJournal';
+import UserProfileModal from './components/UserProfileModal';
+import SharedTradeView from './components/SharedTradeView';
+import NetworkHub from './components/NetworkHub';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
+import BusinessHub from './components/BusinessHub';
 import { PullToRefresh } from './components/PullToRefresh';
-
-// Lazy-loaded components - loaded on demand (code splitting)
-const Dashboard = lazy(() => import('./components/Dashboard'));
-const TradeHistory = lazy(() => import('./components/TradeHistory'));
-const Settings = lazy(() => import('./components/Settings'));
-const DailyJournal = lazy(() => import('./components/DailyJournal'));
-const BusinessHub = lazy(() => import('./components/BusinessHub'));
-const NetworkHub = lazy(() => import('./components/NetworkHub'));
-const AccountsManager = lazy(() => import('./components/AccountsManager'));
-const FileUpload = lazy(() => import('./components/FileUpload'));
-const ManualTradeForm = lazy(() => import('./components/ManualTradeForm'));
-const FilterDropdown = lazy(() => import('./components/FilterDropdown'));
-const UserProfileModal = lazy(() => import('./components/UserProfileModal'));
-const SharedTradeView = lazy(() => import('./components/SharedTradeView'));
-import { DashboardSkeleton, PageSkeleton } from './components/Skeletons';
 import {
   Sun,
   Moon,
@@ -350,16 +346,12 @@ const App: React.FC = () => {
     const load = async () => {
       // Avoid redundant loads if the session is the same
       if (session?.user?.id === lastLoadedSessionId.current && isInitialLoadDone) return;
-
-      // DEBOUNCE / DELAY: Wait a bit for Supabase session to stabilize
-      // This solves the "too fast loading" issue
-      await new Promise(r => setTimeout(r, 600));
-
       lastLoadedSessionId.current = session?.user?.id || null;
 
       const lastUserId = localStorage.getItem('alphatrade_last_session_user');
       if (lastUserId && lastUserId !== session.user.id) {
-        console.warn("User change detected. Initializing fresh sync.");
+        console.warn("User mismatch detected. Purging local storage for safety.");
+        localStorage.clear();
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
@@ -386,19 +378,12 @@ const App: React.FC = () => {
         }
         if (cachedPrefs) applyPreferences(cachedPrefs);
 
-        // Also load cached journal data to prevent data loss
-        const cachedPreps = storageService.getCachedDailyPreps();
-        const cachedReviews = storageService.getCachedDailyReviews();
-        if (cachedPreps.length > 0) setDailyPreps(cachedPreps);
-        if (cachedReviews.length > 0) setDailyReviews(cachedReviews);
+        // DO NOT clear loading screen yet. Wait for sync to ensure fresh data and prevent "pop".
+        // setLoading(false);
+        // setIsInitialLoadDone(true);
 
-        // FAST PATH: Show cached data IMMEDIATELY, sync in background
-        // This is the key to perceived speed - don't wait for server!
-        setLoading(false);
-        setIsInitialLoadDone(true);
-
-        // Sync from server IN BACKGROUND (non-blocking)
-        syncFromServer(activeId);
+        // Sync from server and THEN clear loading
+        await syncFromServer(activeId);
       } else {
         // --- SLOW PATH: Cache is empty, must wait for server ---
         console.log("[Load] Cache MISS. Waiting for server data...");
@@ -487,20 +472,6 @@ const App: React.FC = () => {
         if (!isJournalDirty.current) {
           setDailyPreps(dbPreps || []);
           setDailyReviews(dbReviews || []);
-
-          // AUTO-PUSH: Check if local cache has contents but DB was empty/older
-          // This fixes the data-loss after logout scenario
-          const localPreps = storageService.getCachedDailyPreps();
-          const localReviews = storageService.getCachedDailyReviews();
-
-          if (localPreps.length > (dbPreps?.length || 0)) {
-            console.log("[Sync] Auto-Pushing local preps to server...");
-            storageService.saveDailyPreps(localPreps).catch(e => console.error("Auto-push failed", e));
-          }
-          if (localReviews.length > (dbReviews?.length || 0)) {
-            console.log("[Sync] Auto-Pushing local reviews to server...");
-            storageService.saveDailyReviews(localReviews).catch(e => console.error("Auto-push failed", e));
-          }
         } else {
           console.log("[Sync] Skipping journal sync (dirty state)");
         }
@@ -1159,12 +1130,10 @@ const App: React.FC = () => {
         onAddTrade={() => setIsManualEntryOpen(true)}
         user={currentUser}
         onLogout={async () => {
-          // Keep localStorage to prevent data loss of unsynced journals
-          // Just remove session-specific flags
-          localStorage.removeItem('alphatrade_last_session_user');
+          localStorage.clear(); // CRITICAL: Clear dirty local data
           await supabase.auth.signOut();
           setSession(null);
-          window.location.reload();
+          window.location.reload(); // Force a clean state
         }}
         onOpenProfile={() => setActivePage('profile')}
         onNavigate={(page) => {
@@ -1255,7 +1224,7 @@ const App: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <Suspense fallback={<DashboardSkeleton theme={theme} />}>
+              <>
                 {activePage === 'dashboard' && (
                   <Dashboard
                     stats={filteredStats}
@@ -1387,7 +1356,7 @@ const App: React.FC = () => {
                     onUpdateAccounts={setAccounts}
                   />
                 )}
-              </Suspense>
+              </>
             )}
           </div>
         </PullToRefresh>
