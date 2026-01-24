@@ -659,12 +659,22 @@ export const storageService = {
 
     const dbPreps = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
-    // 3. Merge Local and DB (DB wins, but local might have newer entries if they weren't synced)
-    // For now, let's just use DB if available, and update local storage
-    // Limit journal preps as well
-    safeSetItem('alphatrade_daily_preps', dbPreps.slice(0, 100));
+    // 3. Smart Merge (Local + DB)
+    // Combine both sets of data, preferring newer DB entries but keeping local ones that don't exist on DB
+    const mergedPreps = [...dbPreps];
+    localPreps.forEach(lp => {
+      if (!mergedPreps.find(dp => dp.date === lp.date)) {
+        mergedPreps.push(lp);
+      }
+    });
 
-    return dbPreps;
+    // Sort by date descending
+    mergedPreps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    // Update local storage with the merged set
+    safeSetItem('alphatrade_daily_preps', mergedPreps.slice(0, 100));
+
+    return mergedPreps;
   },
 
   async saveDailyPreps(preps: DailyPrep[]): Promise<void> {
@@ -704,19 +714,21 @@ export const storageService = {
     if (!userId) return localReviews;
 
     // 2. Fetch from Supabase
-    const { data, error } = await supabase.from('daily_reviews').select('*').eq('user_id', userId);
-
-    if (error) {
-      console.error("Supabase getDailyReviews error:", error);
-      return localReviews;
-    }
-
     const dbReviews = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
-    // 3. Sync local storage (limited)
-    safeSetItem('alphatrade_daily_reviews', dbReviews.slice(0, 100));
+    // 3. Smart Merge (Local + DB)
+    const mergedReviews = [...dbReviews];
+    localReviews.forEach(lr => {
+      if (!mergedReviews.find(dr => dr.date === lr.date)) {
+        mergedReviews.push(lr);
+      }
+    });
 
-    return dbReviews;
+    mergedReviews.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    safeSetItem('alphatrade_daily_reviews', mergedReviews.slice(0, 100));
+
+    return mergedReviews;
   },
 
   async saveDailyReviews(reviews: DailyReview[]): Promise<void> {
