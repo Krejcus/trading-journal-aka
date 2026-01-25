@@ -112,7 +112,7 @@ export const storageService = {
     const userId = targetUserId || await getUserId();
 
     // Fast IndexedDB fallback
-    const localKey = targetUserId ? `alphatrade_trades_${targetUserId}` : 'alphatrade_trades';
+    const localKey = userId ? `alphatrade_trades_${userId}` : 'alphatrade_trades';
     let localTrades: Trade[] = await get(localKey) || [];
 
     if (!userId) return localTrades;
@@ -325,13 +325,11 @@ export const storageService = {
   },
 
   async saveTrades(trades: Trade[]): Promise<Trade[]> {
-    // Save only most recent to local storage immediately
-    // For trades, we now use IndexedDB which is async.
-    // So "safeSetItem" helper is not used here.
-    await set('alphatrade_trades', trades);
-
     const userId = await getUserId();
     if (!userId || trades.length === 0) return [];
+
+    // Save only for the current user
+    await set(`alphatrade_trades_${userId}`, trades);
 
     let { data: dbAccounts } = await supabase.from('accounts').select('id, name').eq('user_id', userId);
 
@@ -374,7 +372,7 @@ export const storageService = {
     const { data, error } = await supabase.from('trades').upsert(tradesToUpsert).select();
     if (error) throw error;
 
-    const results = data.map(d => ({
+    const results = (data || []).map(d => ({
       ...d.data,
       id: d.id,
       accountId: d.account_id,
@@ -577,8 +575,10 @@ export const storageService = {
   },
 
   // Preferences
-  getCachedPreferences(): UserPreferences | null {
-    const stored = localStorage.getItem('alphatrade_preferences');
+  async getCachedPreferences(): Promise<UserPreferences | null> {
+    const userId = await getUserId();
+    const localKey = userId ? `alphatrade_preferences_${userId}` : 'alphatrade_preferences';
+    const stored = localStorage.getItem(localKey);
     if (!stored) return null;
     try {
       return JSON.parse(stored);
@@ -603,12 +603,14 @@ export const storageService = {
 
   async savePreferences(prefs: UserPreferences): Promise<void> {
     const userId = await getUserId();
+    const localKey = userId ? `alphatrade_preferences_${userId}` : 'alphatrade_preferences';
+
     if (!userId) {
       // Still save locally even if not logged in (e.g. login page theme)
-      safeSetItem('alphatrade_preferences', prefs);
+      safeSetItem(localKey, prefs);
       return;
     }
-    safeSetItem('alphatrade_preferences', prefs);
+    safeSetItem(localKey, prefs);
     await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
   },
 
@@ -617,7 +619,8 @@ export const storageService = {
     const userId = targetUserId || await getUserId();
 
     // 1. Try to load from Local Storage first as a fast fallback
-    const localData = localStorage.getItem('alphatrade_daily_preps');
+    const localKey = userId ? `alphatrade_daily_preps_${userId}` : 'alphatrade_daily_preps';
+    const localData = localStorage.getItem(localKey);
     let localPreps: DailyPrep[] = [];
     if (localData) {
       try {
@@ -642,17 +645,17 @@ export const storageService = {
     // 3. Merge Local and DB (DB wins, but local might have newer entries if they weren't synced)
     // For now, let's just use DB if available, and update local storage
     // Limit journal preps as well
-    safeSetItem('alphatrade_daily_preps', dbPreps.slice(0, 100));
+    if (userId) safeSetItem(`alphatrade_daily_preps_${userId}`, dbPreps.slice(0, 100));
 
     return dbPreps;
   },
 
   async saveDailyPreps(preps: DailyPrep[]): Promise<void> {
-    // Always save to local storage immediately (limited)
-    safeSetItem('alphatrade_daily_preps', preps.slice(0, 100));
-
     const userId = await getUserId();
     if (!userId) return;
+
+    // Always save to local storage immediately (limited)
+    safeSetItem(`alphatrade_daily_preps_${userId} `, preps.slice(0, 100));
     const prepsToUpsert = preps.map(p => ({ user_id: userId, date: p.date, data: p }));
     const { error } = await supabase.from('daily_preps').upsert(prepsToUpsert, { onConflict: 'user_id,date' });
     if (error) {
@@ -671,7 +674,8 @@ export const storageService = {
     const userId = targetUserId || await getUserId();
 
     // 1. Try Local Storage fallback
-    const localData = localStorage.getItem('alphatrade_daily_reviews');
+    const localKey = userId ? `alphatrade_daily_reviews_${userId} ` : 'alphatrade_daily_reviews';
+    const localData = localStorage.getItem(localKey);
     let localReviews: DailyReview[] = [];
     if (localData) {
       try {
@@ -694,17 +698,17 @@ export const storageService = {
     const dbReviews = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
     // 3. Sync local storage (limited)
-    safeSetItem('alphatrade_daily_reviews', dbReviews.slice(0, 100));
+    if (userId) safeSetItem(`alphatrade_daily_reviews_${userId} `, dbReviews.slice(0, 100));
 
     return dbReviews;
   },
 
   async saveDailyReviews(reviews: DailyReview[]): Promise<void> {
-    // Always save to local storage immediately (limited)
-    safeSetItem('alphatrade_daily_reviews', reviews.slice(0, 100));
-
     const userId = await getUserId();
     if (!userId) return;
+
+    // Always save to local storage immediately (limited)
+    safeSetItem(`alphatrade_daily_reviews_${userId} `, reviews.slice(0, 100));
     const reviewsToUpsert = reviews.map(r => ({ user_id: userId, date: r.date, data: r }));
     const { error } = await supabase.from('daily_reviews').upsert(reviewsToUpsert, { onConflict: 'user_id,date' });
     if (error) {
@@ -811,7 +815,7 @@ export const storageService = {
     const { data, error } = await supabase
       .from('profiles')
       .select('id, email, full_name')
-      .or(`email.ilike.%${query}%,full_name.ilike.%${query}%`)
+      .or(`email.ilike.% ${query}%, full_name.ilike.% ${query}% `)
       .limit(10);
 
     if (error) return [];
@@ -837,8 +841,8 @@ export const storageService = {
     if (!userId) return [];
     const { data, error } = await supabase
       .from('connections')
-      .select(`*, sender:profiles!sender_id(id, email, full_name), receiver:profiles!receiver_id(id, email, full_name)`)
-      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+      .select(`*, sender: profiles!sender_id(id, email, full_name), receiver: profiles!receiver_id(id, email, full_name)`)
+      .or(`sender_id.eq.${userId}, receiver_id.eq.${userId} `);
 
     if (error) return [];
     return (data || []).map(c => ({
@@ -869,7 +873,7 @@ export const storageService = {
     const { data: connections } = await supabase
       .from('connections')
       .select('sender_id, receiver_id, permissions')
-      .or(`sender_id.eq.${currentUserId},receiver_id.eq.${currentUserId}`)
+      .or(`sender_id.eq.${currentUserId}, receiver_id.eq.${currentUserId} `)
       .eq('status', 'accepted');
 
     const permissionMap: Record<string, any> = {};
@@ -1102,7 +1106,7 @@ export const storageService = {
     const { data: connection } = await supabase
       .from('connections')
       .select('permissions')
-      .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${currentUserId})`)
+      .or(`and(sender_id.eq.${currentUserId}, receiver_id.eq.${targetUserId}), and(sender_id.eq.${targetUserId}, receiver_id.eq.${currentUserId})`)
       .eq('status', 'accepted')
       .maybeSingle();
 

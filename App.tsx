@@ -163,8 +163,32 @@ const App: React.FC = () => {
       }
 
       if (event === 'SIGNED_OUT') {
+        console.log("[Auth] User signed out, resetting all state.");
         setSession(null);
         setLoading(false);
+        setIsInitialLoadDone(false);
+        lastLoadedSessionId.current = null;
+
+        // Reset all data states to prevent leakage to next user
+        setTrades([]);
+        setAccounts([]);
+        setActiveAccountId('');
+        setCurrentUser(DEFAULT_USER);
+        setDailyPreps([]);
+        setDailyReviews([]);
+        setWeeklyFocusList([]);
+        setBusinessExpenses([]);
+        setBusinessPayouts([]);
+        setBusinessGoals([]);
+        setBusinessResources([]);
+        setPlaybookItems([]);
+
+        // Reset flags
+        isJournalDirty.current = false;
+        isPreferencesDirty.current = false;
+
+        // Optional: clear entire localStorage on logout for ultimate safety
+        localStorage.clear();
       }
     });
 
@@ -595,7 +619,7 @@ const App: React.FC = () => {
       console.log("[Load] Phase 1: Checking cache...");
       const cachedTrades = await storageService.getTradesCheckCacheFirst();
       const cachedAccounts = storageService.getCachedAccounts();
-      const cachedPrefs = storageService.getCachedPreferences();
+      const cachedPrefs = await storageService.getCachedPreferences();
       const activeId = storageService.getActiveAccountId();
 
       const hasCachedData = cachedTrades.length > 0 || cachedAccounts.length > 0;
@@ -811,54 +835,59 @@ const App: React.FC = () => {
 
 
 
+  // Security check: Ensure we don't save if there's a session mismatch or no session
+  const canSave = useMemo(() => {
+    return !sharedTrade && !!session && isInitialLoadDone && session.user?.id === lastLoadedSessionId.current;
+  }, [sharedTrade, session, isInitialLoadDone, lastLoadedSessionId.current]);
+
   useEffect(() => {
-    if (!sharedTrade && session && isInitialLoadDone) {
+    if (canSave) {
       const timer = setTimeout(() => {
         storageService.saveDailyPreps(dailyPreps);
-      }, 2000); // 2s debounce for journal
+      }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [dailyPreps, sharedTrade, session, isInitialLoadDone]);
+  }, [dailyPreps, canSave]);
 
   useEffect(() => {
-    if (!sharedTrade && session && isInitialLoadDone) {
+    if (canSave) {
       const timer = setTimeout(() => {
         storageService.saveDailyReviews(dailyReviews);
-      }, 2000); // 2s debounce for journal
+      }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [dailyReviews, sharedTrade, session, isInitialLoadDone]);
+  }, [dailyReviews, canSave]);
 
-  useEffect(() => { if (!sharedTrade && session && isInitialLoadDone) storageService.setActiveAccountId(activeAccountId); }, [activeAccountId, sharedTrade, session, isInitialLoadDone]);
+  useEffect(() => { if (canSave) storageService.setActiveAccountId(activeAccountId); }, [activeAccountId, canSave]);
 
   useEffect(() => {
-    if (!sharedTrade && session && isInitialLoadDone && weeklyFocusList.length > 0) {
+    if (canSave && weeklyFocusList.length > 0) {
       const timer = setTimeout(() => {
-        // We only save the one that might have changed if we wanted to be efficient, 
-        // but for now, we'll just handle it in the save function if we use a specific trigger.
-        // Or just save all (upsert).
         weeklyFocusList.forEach(wf => storageService.saveWeeklyFocus(wf));
       }, 5000);
       return () => clearTimeout(timer);
     }
-  }, [weeklyFocusList, sharedTrade, session, isInitialLoadDone]);
+  }, [weeklyFocusList, canSave]);
 
   // Handle theme persistence independently of session
   useEffect(() => {
     try {
       localStorage.setItem('alphatrade_theme', theme);
       const stored = localStorage.getItem('alphatrade_preferences');
+      const currentUserId = session?.user?.id;
+      const prefKey = currentUserId ? `alphatrade_preferences_${currentUserId}` : 'alphatrade_preferences';
+
       const currentPrefs = stored ? JSON.parse(stored) : {};
       if (currentPrefs.theme !== theme) {
-        localStorage.setItem('alphatrade_preferences', JSON.stringify({ ...currentPrefs, theme }));
+        localStorage.setItem(prefKey, JSON.stringify({ ...currentPrefs, theme }));
       }
     } catch (e) {
       console.error("Failed to save theme to localStorage", e);
     }
-  }, [theme]);
+  }, [theme, session]);
 
   useEffect(() => {
-    if (!sharedTrade && session && isInitialLoadDone) {
+    if (canSave) {
       const timer = setTimeout(() => {
         storageService.savePreferences({
           emotions: userEmotions,
@@ -882,10 +911,10 @@ const App: React.FC = () => {
         }).then(() => {
           isPreferencesDirty.current = false;
         });
-      }, 2000); // 2s debounce for preferences
+      }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, businessExpenses, businessPayouts, playbookItems, businessGoals, businessResources, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, sharedTrade, session, isInitialLoadDone]);
+  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, businessExpenses, businessPayouts, playbookItems, businessGoals, businessResources, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, canSave]);
 
   // Handle Dashboard Mode Switching
   useEffect(() => {
