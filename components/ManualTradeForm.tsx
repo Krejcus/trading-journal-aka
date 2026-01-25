@@ -8,6 +8,7 @@ import {
   Hash, ImageIcon, Maximize2, Monitor, Layout,
   AlertOctagon, AlertTriangle, Plus, Trash2, Clock, DollarSign, Check
 } from 'lucide-react';
+import ConfirmationModal from './ConfirmationModal';
 import { Trade, Account, CustomEmotion } from '../types';
 
 interface ManualTradeFormProps {
@@ -44,6 +45,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   const [expandedSection, setExpandedSection] = useState<'emotions' | 'htf' | 'ltf' | 'mistakes' | null>('emotions');
   const [isZoomed, setIsZoomed] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [isDeleteDraftModalOpen, setIsDeleteDraftModalOpen] = useState(false);
   const isDark = theme !== 'light';
 
   const getLocalISOString = (date?: Date) => {
@@ -297,12 +299,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
               {localStorage.getItem('alphatrade_trade_draft') && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (window.confirm("Opravdu smazat rozpracovaný recept?")) {
-                      localStorage.removeItem('alphatrade_trade_draft');
-                      window.location.reload(); // Quick way to reset state
-                    }
-                  }}
+                  onClick={() => setIsDeleteDraftModalOpen(true)}
                   className="ml-4 px-3 py-1.5 rounded-lg bg-rose-500/10 text-rose-500 text-[9px] font-black uppercase hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20"
                 >
                   Smazat koncept
@@ -505,6 +502,18 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
         </div >
       </div >
       {isZoomed && (<div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-300" onClick={() => setIsZoomed(null)}><button className="absolute top-10 right-10 p-4 bg-white/10 hover:bg-white/20 rounded-full transition-all"><X size={32} className="text-white" /></button><img src={isZoomed} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl" onClick={e => e.stopPropagation()} /></div>)}
+
+      <ConfirmationModal
+        isOpen={isDeleteDraftModalOpen}
+        onClose={() => setIsDeleteDraftModalOpen(false)}
+        onConfirm={() => {
+          localStorage.removeItem('alphatrade_trade_draft');
+          window.location.reload();
+        }}
+        title="Smazat koncept"
+        message="Opravdu chcete smazat rozpracovaný koncept obchodu? Tato akce je nevratná."
+        theme={theme}
+      />
     </>
   );
 };

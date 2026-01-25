@@ -20,6 +20,7 @@ import {
   Briefcase
 } from 'lucide-react';
 import { User } from '../types';
+import { t } from '../services/translations';
 
 interface SidebarProps {
   activePage: string;
@@ -50,17 +51,19 @@ const Sidebar: React.FC<SidebarProps> = ({
   onOpenProfile,
   onNavigate
 }) => {
+  const lang = user.language || 'cs';
+
   const mainItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'history', label: 'Historie', icon: History },
-    { id: 'journal', label: 'Deník & Rituály', icon: BookOpen },
-    { id: 'business', label: 'Business Hub', icon: Briefcase },
+    { id: 'dashboard', label: t('dashboard', lang), icon: LayoutDashboard },
+    { id: 'history', label: t('history', lang) || 'Historie', icon: History },
+    { id: 'journal', label: t('journal', lang), icon: BookOpen },
+    { id: 'business', label: t('business', lang), icon: Briefcase },
   ];
 
   const secondaryItems = [
-    { id: 'network', label: 'Network', icon: Globe },
-    { id: 'accounts', label: 'Účty', icon: Wallet },
-    { id: 'settings', label: 'Nastavení', icon: Settings },
+    { id: 'network', label: t('network', lang), icon: Globe },
+    { id: 'accounts', label: t('accounts', lang), icon: Wallet },
+    { id: 'settings', label: t('settings', lang), icon: Settings },
   ];
 
   const isDark = theme !== 'light';
@@ -178,7 +181,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             <p
               className="px-6 text-[9px] font-black uppercase text-slate-500 mb-3 mt-4 tracking-[0.3em] animate-in fade-in duration-500 cursor-pointer hover:text-white transition-colors"
             >
-              Analytika
+              {lang === 'cs' ? 'Analytika' : 'Analytics'}
             </p>
           )}
           {isCollapsed && <div className="h-px bg-[var(--border-subtle)] mx-6 my-4" />}
@@ -204,7 +207,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             );
           })}
 
-          {!isCollapsed && <p className="px-6 text-[9px] font-black uppercase text-slate-500 mb-3 mt-10 tracking-[0.3em] animate-in fade-in duration-500">Konfigurace</p>}
+          {!isCollapsed && <p className="px-6 text-[9px] font-black uppercase text-slate-500 mb-3 mt-10 tracking-[0.3em] animate-in fade-in duration-500">{t('configuration', lang)}</p>}
           {isCollapsed && <div className="h-px bg-[var(--border-subtle)] mx-6 my-8" />}
 
           {secondaryItems.map((item) => {
@@ -254,7 +257,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                   <p className="text-[10px] font-black uppercase truncate tracking-wider">{user.name}</p>
                   <p className="text-[8px] font-bold uppercase text-emerald-500 tracking-[0.2em] mt-0.5 flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
-                    Online • Profile
+                    {t('online_profile', lang)}
                   </p>
                 </div>
               )}

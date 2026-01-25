@@ -19,6 +19,13 @@ import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
 import BusinessHub from './components/BusinessHub';
 import { PullToRefresh } from './components/PullToRefresh';
+import ConfirmationModal from './components/ConfirmationModal';
+import { currencyService, ExchangeRates } from './services/currencyService';
+import { t } from './services/translations';
+import { GuardianIntervention, GuardianOverlay, DebtCollector } from './components/GuardianSystem';
+import { getGuardianState, GuardianState } from './utils/guardianLogic';
+import { requestNotificationPermission, sendLocalNotification } from './utils/notificationHelper';
+import { subscribeUserToPush } from './utils/pushManager';
 import {
   Sun,
   Moon,
@@ -39,6 +46,8 @@ import {
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
+
+const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
 
 const DEFAULT_USER: User = {
   id: 'default_user',
@@ -216,6 +225,10 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('alphatrade_dash_mode');
     return (saved as DashboardMode) || 'combined';
   });
+
+  useEffect(() => {
+    localStorage.setItem('alphatrade_dash_mode', dashboardMode);
+  }, [dashboardMode]);
   const [sessions, setSessions] = useState<SessionConfig[]>(DEFAULT_SESSIONS);
   const [ironRules, setIronRules] = useState<IronRule[]>([
     { id: 'r_meditation', label: 'Ranní meditace / klid', type: 'ritual' },
@@ -238,8 +251,189 @@ const App: React.FC = () => {
 
   const [weeklyFocusList, setWeeklyFocusList] = useState<WeeklyFocus[]>([]);
 
+  const [systemSettings, setSystemSettings] = useState<any>({
+    sessionAlertsEnabled: true,
+    sessionStartAlert15m: true,
+    sessionStartAlertExact: true,
+    sessionEndAlertExact: true,
+    sessionEndAlert10m: false,
+    guardianEnabled: true,
+    morningPrepAlert60m: true,
+    morningPrepAlert15m: true,
+    morningPrepAlertCritical: true,
+    strictModeEnabled: false,
+    eveningAuditAlertEnabled: true,
+    eveningAuditAlertTime: '21:00',
+    morningWakeUpDebtAlert: true
+  });
+
+  const [guardian, setGuardian] = useState<GuardianState>({
+    isCriticalAlert: false,
+    isPrepMissing: true,
+    activeSession: null,
+    nextSession: null,
+    isDebtActive: false,
+    showMorningIntervention: false,
+    showEveningIntervention: false
+  });
+  const [isMorningInterventionOpen, setIsMorningInterventionOpen] = useState(false);
+  const [isEveningInterventionOpen, setIsEveningInterventionOpen] = useState(false);
+  const hasTriggeredMorning = useRef(false);
+  const hasTriggeredEvening = useRef(false);
+  const [isGuardianOverlayOpen, setIsGuardianOverlayOpen] = useState(false);
+  const [isDebtCollectorOpen, setIsDebtCollectorOpen] = useState(false);
+  const lastCheckTime = useRef<string>("");
+
+  useEffect(() => {
+    const checkGuardian = () => {
+      const state = getGuardianState(systemSettings, sessions, dailyPreps, dailyReviews);
+      setGuardian(state);
+
+      // Notification Logic
+      const now = new Date();
+      const timeKey = `${now.getHours()}:${now.getMinutes()}`;
+      if (timeKey === lastCheckTime.current) return;
+      lastCheckTime.current = timeKey;
+
+      if (systemSettings.sessionAlertsEnabled) {
+        sessions.forEach(s => {
+          const startH = parseInt(s.startTime.split(':')[0]);
+          const startM = parseInt(s.startTime.split(':')[1]);
+          const endH = parseInt(s.endTime.split(':')[0]);
+          const endM = parseInt(s.endTime.split(':')[1]);
+
+          const diffStart = (startH * 60 + startM) - (now.getHours() * 60 + now.getMinutes());
+          const diffEnd = (endH * 60 + endM) - (now.getHours() * 60 + now.getMinutes());
+
+          if (systemSettings.sessionStartAlert15m && diffStart === 15) {
+            sendLocalNotification(`Seance ${s.name} začíná za 15m`, "Jsi připraven? Zkontroluj svůj plán.");
+          }
+          if (systemSettings.sessionStartAlertExact && diffStart === 0) {
+            sendLocalNotification(`Seance ${s.name} právě začala`, "Přejeme úspěšný trading!");
+          }
+          if (systemSettings.sessionEndAlertExact && diffEnd === 0) {
+            sendLocalNotification(`Konec seance ${s.name}`, "Je čas zastavit trading a jít na audit.");
+          }
+          if (systemSettings.sessionEndAlert10m && diffEnd === -10) {
+            sendLocalNotification("Audit čeká", "Už je to 10m od konce seance. Máš hotový večerní audit?");
+          }
+        });
+
+        // Guardian Alerts
+        if (state.nextSession && state.isPrepMissing && systemSettings.guardianEnabled) {
+          if (systemSettings.morningPrepAlert60m && state.nextSession.minutesToStart === 60) {
+            sendLocalNotification("Alpha Guardian: 60m do startu", "Máš dost času na kvalitní přípravu.");
+          }
+          if (systemSettings.morningPrepAlert15m && state.nextSession.minutesToStart === 15) {
+            sendLocalNotification("Alpha Guardian: 15m do startu", "VAROVÁNÍ: Stále nemáš hotovou přípravu!", "/logos/at_logo_light_clean.png");
+          }
+        }
+      }
+
+      if (isInitialLoadDone) {
+        if (state.showMorningIntervention && !hasTriggeredMorning.current) {
+          setIsMorningInterventionOpen(true);
+          hasTriggeredMorning.current = true;
+        }
+        if (state.showEveningIntervention && !hasTriggeredEvening.current) {
+          setIsEveningInterventionOpen(true);
+          hasTriggeredEvening.current = true;
+        }
+      }
+
+      // Reset triggers when conditions no longer met (to allow re-triggering if user ignores but session changes etc)
+      if (!state.showMorningIntervention) hasTriggeredMorning.current = false;
+      if (!state.showEveningIntervention) hasTriggeredEvening.current = false;
+
+      // Test Mode Notification
+      if (systemSettings.testModeEnabled) {
+        sendLocalNotification(`Test: ${timeKey}`, "Alpha Guardian Test Notifikace");
+      }
+    };
+
+    const timer = setInterval(checkGuardian, 30000);
+    checkGuardian();
+    return () => clearInterval(timer);
+  }, [systemSettings, sessions, dailyPreps, dailyReviews]);
+
+  useEffect(() => {
+    if (isInitialLoadDone && guardian.isDebtActive && systemSettings.morningWakeUpDebtAlert) {
+      setIsDebtCollectorOpen(true);
+    }
+  }, [isInitialLoadDone, guardian.isDebtActive, systemSettings.morningWakeUpDebtAlert]);
+
+  const handleTryAddTrade = () => {
+    if (systemSettings.strictModeEnabled && guardian.isPrepMissing) {
+      setIsGuardianOverlayOpen(true);
+    } else {
+      setIsManualEntryOpen(true);
+    }
+  };
+
+  const handleApplyNotificationPermission = async () => {
+    const granted = await requestNotificationPermission();
+    if (granted) {
+      try {
+        const sub = await subscribeUserToPush();
+
+        if (sub && (sub as any).endpoint) {
+          const currentPrefs = currentUserPreferences();
+          const updatedPrefs = { ...currentPrefs, pushSubscription: sub };
+          await storageService.savePreferences(updatedPrefs as any);
+          alert("✅ HOTOVO!\nNotifikace na pozadí byly úspěšně aktivovány.");
+        }
+      } catch (err: any) {
+        alert("❌ CHYBA AKTIVACE:\n" + err.message);
+      }
+    } else {
+      alert("⚠️ Oznámení nejsou v prohlížeči povolena.");
+    }
+  };
+
+  const handleHardRefresh = async () => {
+    if (confirm("Opravdu chcete vyčistit mezipaměť a restartovat aplikaci?")) {
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (let registration of registrations) {
+          await registration.unregister();
+        }
+      }
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        for (let name of cacheNames) {
+          await caches.delete(name);
+        }
+      }
+      localStorage.removeItem('alphatrade_preferences');
+      window.location.reload();
+    }
+  };
+
+  // Helper to get current prefs state
+  const currentUserPreferences = () => ({
+    emotions: userEmotions,
+    standardGoals,
+    standardMistakes: userMistakes,
+    dashboardLayout,
+    sessions,
+    htfOptions,
+    ltfOptions,
+    ironRules,
+    businessExpenses,
+    businessPayouts,
+    playbookItems,
+    businessGoals,
+    businessResources,
+    businessSettings,
+    psychoMetricsConfig: psychoMetrics,
+    theme,
+    dashboardMode,
+    systemSettings
+  });
+
 
   const [activePage, setActivePage] = useState('dashboard');
+  const [isClearTradesModalOpen, setIsClearTradesModalOpen] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light' | 'oled'>(() => {
     try {
       const storedTheme = localStorage.getItem('alphatrade_theme');
@@ -312,6 +506,7 @@ const App: React.FC = () => {
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [isDashboardEditing, setIsDashboardEditing] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [exchangeRates, setExchangeRates] = useState<ExchangeRates | null>(null);
   const lastLoadedSessionId = React.useRef<string | null>(null);
 
   const handleSavePrep = useCallback((prep: DailyPrep) => {
@@ -323,6 +518,41 @@ const App: React.FC = () => {
     isJournalDirty.current = true;
     setDailyReviews(prev => [...prev.filter(r => r.date !== rev.date), rev]);
   }, []);
+
+  const applyPreferences = useCallback((prefs: UserPreferences) => {
+    if (isPreferencesDirty.current) {
+      console.log("[Sync] Skipping preferences sync (dirty state)");
+      return;
+    }
+
+    if (prefs.emotions) setUserEmotions(prefs.emotions);
+    if (prefs.standardMistakes) setUserMistakes(prefs.standardMistakes);
+    if (prefs.standardGoals) setStandardGoals(prefs.standardGoals);
+    if (prefs.dashboardLayout) setDashboardLayout(prefs.dashboardLayout);
+    if (prefs.sessions) {
+      const migratedSessions = (prefs.sessions as any[]).map(s => ({
+        ...s,
+        startTime: s.startTime || `${String(s.startHour ?? 9).padStart(2, '0')}:00`,
+        endTime: s.endTime || `${String(s.endHour ?? 17).padStart(2, '0')}:00`,
+        color: s.color || '#3b82f6'
+      }));
+      setSessions(migratedSessions);
+    }
+    if (prefs.htfOptions) setHtfOptions(prefs.htfOptions);
+    if (prefs.ltfOptions) setLtfOptions(prefs.ltfOptions);
+    if (prefs.ironRules) setIronRules(prefs.ironRules);
+    if (prefs.businessExpenses) setBusinessExpenses(prefs.businessExpenses);
+    if (prefs.businessPayouts) setBusinessPayouts(prefs.businessPayouts);
+    if (prefs.playbookItems) setPlaybookItems(prefs.playbookItems);
+    if (prefs.businessGoals) setBusinessGoals(prefs.businessGoals);
+    if (prefs.businessResources) setBusinessResources(prefs.businessResources);
+    if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
+    if (prefs.psychoMetricsConfig) setPsychoMetrics(prefs.psychoMetricsConfig);
+    if (prefs.theme) setTheme(prefs.theme);
+    if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
+    if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
+  }, []);
+
 
   const [filters, setFilters] = useState<TradeFilters>({
     days: ['Po', 'Út', 'St', 'Čt', 'Pá'],
@@ -337,6 +567,10 @@ const App: React.FC = () => {
     ltfConfluences: [],
     mistakes: []
   });
+
+  useEffect(() => {
+    currencyService.getRates().then(setExchangeRates);
+  }, []);
 
   useEffect(() => {
     if (sharedTrade) return;
@@ -514,38 +748,7 @@ const App: React.FC = () => {
     };
 
     // Helper to apply preferences to state
-    const applyPreferences = (prefs: UserPreferences) => {
-      if (isPreferencesDirty.current) {
-        console.log("[Sync] Skipping preferences sync (dirty state)");
-        return;
-      }
 
-      if (prefs.emotions) setUserEmotions(prefs.emotions);
-      if (prefs.standardMistakes) setUserMistakes(prefs.standardMistakes);
-      if (prefs.standardGoals) setStandardGoals(prefs.standardGoals);
-      if (prefs.dashboardLayout) setDashboardLayout(prefs.dashboardLayout);
-      if (prefs.sessions) {
-        const migratedSessions = (prefs.sessions as any[]).map(s => ({
-          ...s,
-          startTime: s.startTime || `${String(s.startHour ?? 9).padStart(2, '0')}:00`,
-          endTime: s.endTime || `${String(s.endHour ?? 17).padStart(2, '0')}:00`,
-          color: s.color || '#3b82f6'
-        }));
-        setSessions(migratedSessions);
-      }
-      if (prefs.htfOptions) setHtfOptions(prefs.htfOptions);
-      if (prefs.ltfOptions) setLtfOptions(prefs.ltfOptions);
-      if (prefs.ironRules) setIronRules(prefs.ironRules);
-      if (prefs.businessExpenses) setBusinessExpenses(prefs.businessExpenses);
-      if (prefs.businessPayouts) setBusinessPayouts(prefs.businessPayouts);
-      if (prefs.playbookItems) setPlaybookItems(prefs.playbookItems);
-      if (prefs.businessGoals) setBusinessGoals(prefs.businessGoals);
-      if (prefs.businessResources) setBusinessResources(prefs.businessResources);
-      if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
-      if (prefs.psychoMetricsConfig) setPsychoMetrics(prefs.psychoMetricsConfig);
-      if (prefs.theme) setTheme(prefs.theme);
-      if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
-    };
 
     if (session) {
       // If we switched users, we might still have old data in state
@@ -605,6 +808,8 @@ const App: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [accounts, sharedTrade, session, isInitialLoadDone]);
+
+
 
   useEffect(() => {
     if (!sharedTrade && session && isInitialLoadDone) {
@@ -673,12 +878,14 @@ const App: React.FC = () => {
           psychoMetricsConfig: psychoMetrics,
           theme,
           dashboardMode,
-
+          systemSettings,
+        }).then(() => {
+          isPreferencesDirty.current = false;
         });
-      }, 5000); // 5s debounce for preferences
+      }, 2000); // 2s debounce for preferences
       return () => clearTimeout(timer);
     }
-  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, businessExpenses, businessPayouts, playbookItems, businessGoals, businessResources, businessSettings, psychoMetrics, theme, dashboardMode, sharedTrade, session, isInitialLoadDone]);
+  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, businessExpenses, businessPayouts, playbookItems, businessGoals, businessResources, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, sharedTrade, session, isInitialLoadDone]);
 
   // Handle Dashboard Mode Switching
   useEffect(() => {
@@ -818,17 +1025,7 @@ const App: React.FC = () => {
       }
       setWeeklyFocusList(dbWeeklyFocus || []);
 
-      if (dbPrefs && !isPreferencesDirty.current) {
-        // Apply preferences if not dirty
-        if (dbPrefs.emotions) setUserEmotions(dbPrefs.emotions);
-        if (dbPrefs.standardMistakes) setUserMistakes(dbPrefs.standardMistakes);
-        if (dbPrefs.standardGoals) setStandardGoals(dbPrefs.standardGoals);
-        if (dbPrefs.dashboardLayout) setDashboardLayout(dbPrefs.dashboardLayout);
-        if (dbPrefs.sessions) setSessions(dbPrefs.sessions);
-        if (dbPrefs.htfOptions) setHtfOptions(dbPrefs.htfOptions);
-        if (dbPrefs.ltfOptions) setLtfOptions(dbPrefs.ltfOptions);
-        if (dbPrefs.ironRules) setIronRules(dbPrefs.ironRules);
-      }
+      if (dbPrefs) applyPreferences(dbPrefs);
 
       console.log('[Refresh] Refresh complete!');
     } catch (error) {
@@ -837,9 +1034,9 @@ const App: React.FC = () => {
     }
   }, [session, isJournalDirty, isPreferencesDirty]);
 
-  const filteredDisplayTrades = useMemo(() => {
+  const baseFilteredTrades = useMemo(() => {
     const now = new Date();
-    const filtered = displayTrades.filter(t => {
+    return displayTrades.filter(t => {
       // Filter by phase based on dashboardMode
       if (dashboardMode === 'challenge') {
         const isChallenge = t.phase === 'Challenge' || (!t.phase && accounts.find(a => a.id === t.accountId)?.phase === 'Challenge');
@@ -904,9 +1101,11 @@ const App: React.FC = () => {
       return matchDay && matchHour && matchAcc && matchDir && matchRes && matchPeriod &&
         matchStatus && matchHtf && matchLtf && matchMistake;
     });
+  }, [displayTrades, filters, viewMode, accounts, dashboardMode]);
 
-    return viewMode === 'combined' ? aggregateTrades(filtered) : filtered;
-  }, [displayTrades, filters, viewMode, accounts]);
+  const filteredDisplayTrades = useMemo(() => {
+    return viewMode === 'combined' ? aggregateTrades(baseFilteredTrades) : baseFilteredTrades;
+  }, [baseFilteredTrades, viewMode]);
 
   const filteredStats = useMemo(() => {
     try {
@@ -1102,7 +1301,10 @@ const App: React.FC = () => {
   };
 
   const handleClearTrades = async () => {
-    if (!window.confirm("Opravdu chcete smazat VŠECHNY obchody? Tato akce je nevratná.")) return;
+    setIsClearTradesModalOpen(true);
+  };
+
+  const executeClearTrades = async () => {
     try {
       setTrades([]);
       await storageService.clearTrades(activeAccountId);
@@ -1126,7 +1328,7 @@ const App: React.FC = () => {
         isCollapsed={isSidebarCollapsed}
         setIsCollapsed={setIsSidebarCollapsed}
         theme={theme}
-        onAddTrade={() => setIsManualEntryOpen(true)}
+        onAddTrade={handleTryAddTrade}
         user={currentUser}
         onLogout={async () => {
           localStorage.clear(); // CRITICAL: Clear dirty local data
@@ -1134,7 +1336,7 @@ const App: React.FC = () => {
           setSession(null);
           window.location.reload(); // Force a clean state
         }}
-        onOpenProfile={() => setActivePage('profile')}
+        onOpenProfile={() => setIsProfileOpen(true)}
         onNavigate={(page) => {
           setActivePage(page);
           setIsSidebarOpen(false);
@@ -1249,6 +1451,8 @@ const App: React.FC = () => {
                     onUpdateTrade={handleUpdateTrade}
                     user={currentUser}
                     pnlDisplayMode={pnlDisplayMode}
+                    exchangeRates={exchangeRates}
+                    allTrades={trades}
                   />
                 )}
 
@@ -1263,7 +1467,7 @@ const App: React.FC = () => {
                         <span className="text-xs text-slate-500 font-bold uppercase">Nebo</span>
                         <div className="h-px bg-slate-800 flex-1"></div>
                       </div>
-                      <button onClick={() => setIsManualEntryOpen(true)} className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95">
+                      <button onClick={handleTryAddTrade} className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95">
                         <Plus size={18} /> Zapsat první obchod
                       </button>
                     </div>
@@ -1278,6 +1482,9 @@ const App: React.FC = () => {
                       emotions={userEmotions}
                       pnlDisplayMode={pnlDisplayMode}
                       initialBalance={displayBalance}
+                      user={currentUser}
+                      exchangeRates={exchangeRates}
+                      allTrades={trades}
                     />
                   )
                 )}
@@ -1336,12 +1543,21 @@ const App: React.FC = () => {
                     setPsychoMetrics={(v) => { setPsychoMetrics(v); isPreferencesDirty.current = true; }}
                     weeklyFocusList={weeklyFocusList}
                     setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isJournalDirty.current = true; }}
+                    systemSettings={systemSettings}
+                    setSystemSettings={(v: any) => { setSystemSettings(v); isPreferencesDirty.current = true; }}
+                    standardGoals={standardGoals}
+                    setStandardGoals={(v) => { setStandardGoals(v); isPreferencesDirty.current = true; }}
+                    onEnableNotifications={handleApplyNotificationPermission}
+                    appVersion={APP_VERSION}
+                    onHardRefresh={handleHardRefresh}
                   />
                 )}
 
                 {activePage === 'business' && (
                   <BusinessHub
                     theme={theme}
+                    user={currentUser}
+                    exchangeRates={exchangeRates}
                     trades={trades}
                     accounts={accounts}
                     expenses={businessExpenses}
@@ -1365,6 +1581,45 @@ const App: React.FC = () => {
         </PullToRefresh>
       </main >
 
+      {/* Alpha Guardian System Components */}
+      <GuardianIntervention
+        type="morning"
+        isOpen={isMorningInterventionOpen}
+        onClose={() => setIsMorningInterventionOpen(false)}
+        onAction={() => {
+          setIsMorningInterventionOpen(false);
+          setActivePage('journal');
+        }}
+      />
+
+      <GuardianIntervention
+        type="evening"
+        isOpen={isEveningInterventionOpen}
+        onClose={() => setIsEveningInterventionOpen(false)}
+        onAction={() => {
+          setIsEveningInterventionOpen(false);
+          setActivePage('journal');
+        }}
+      />
+
+      <GuardianOverlay
+        isOpen={isGuardianOverlayOpen}
+        onClose={() => setIsGuardianOverlayOpen(false)}
+        onGoToJournal={() => {
+          setIsGuardianOverlayOpen(false);
+          setActivePage('journal');
+        }}
+      />
+
+      <DebtCollector
+        isOpen={isDebtCollectorOpen}
+        onClose={() => setIsDebtCollectorOpen(false)}
+        onGoToAudit={() => {
+          setIsDebtCollectorOpen(false);
+          setActivePage('journal');
+        }}
+      />
+
       {isManualEntryOpen && (
         <ManualTradeForm
           onAdd={handleManualTrade}
@@ -1385,10 +1640,18 @@ const App: React.FC = () => {
         onClose={() => setIsProfileOpen(false)}
         user={currentUser}
         onUpdate={handleUpdateUser}
-        trades={trades}
         theme={theme}
       />
-    </div >
+
+      <ConfirmationModal
+        isOpen={isClearTradesModalOpen}
+        onClose={() => setIsClearTradesModalOpen(false)}
+        onConfirm={executeClearTrades}
+        title="Smazat vše"
+        message="Opravdu chcete smazat VŠECHNY obchody z tohoto účtu? Tato akce je nevratná a data budou trvale odstraněna z cloudu."
+        theme={theme}
+      />
+    </div>
   );
 };
 

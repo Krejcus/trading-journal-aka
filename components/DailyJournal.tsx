@@ -191,15 +191,22 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   // Track the most recent form state to save on switch/unmount
   const lastPrepForm = useRef(prepForm);
   const lastReviewForm = useRef(reviewForm);
+  const skipAutoSavePrep = useRef(false);
+  const skipAutoSaveReview = useRef(false);
 
   useEffect(() => { lastPrepForm.current = prepForm; }, [prepForm]);
   useEffect(() => { lastReviewForm.current = reviewForm; }, [reviewForm]);
 
-  // Force save on unmount
+  // Force save on unmount (only if not empty)
   useEffect(() => {
     return () => {
-      onSavePrep(lastPrepForm.current);
-      onSaveReview(lastReviewForm.current);
+      const p = lastPrepForm.current;
+      const r = lastReviewForm.current;
+      const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length;
+      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes;
+
+      if (!isPrepEmpty) onSavePrep(p);
+      if (!isReviewEmpty) onSaveReview(r);
     };
   }, []);
 
@@ -220,12 +227,22 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   // Auto-save Logic for Prep
   useEffect(() => {
+    if (skipAutoSavePrep.current) {
+      skipAutoSavePrep.current = false;
+      return;
+    }
     // Skip initial mount or invalid forms
     if (!prepForm || !prepForm.date) return;
 
     // Check if form is actually different from saved prop to avoid loops/unnecessary saves
     const saved = preps.find(p => p.date === prepForm.date);
     if (!saved || JSON.stringify(prepForm) !== JSON.stringify(saved)) {
+      // Don't auto-save a brand new prep if it's still empty
+      if (!saved) {
+        const isEmpty = !prepForm.scenarios.bullish && !prepForm.scenarios.bearish && !prepForm.mindsetState && !prepForm.scenarios.scenarioImages?.length;
+        if (isEmpty) return;
+      }
+
       setHasUnsavedChanges(true);
       setSaveStatus('saving');
       setIsSaving(true);
@@ -245,12 +262,22 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   // Auto-save Logic for Review
   useEffect(() => {
+    if (skipAutoSaveReview.current) {
+      skipAutoSaveReview.current = false;
+      return;
+    }
     // Skip initial mount or invalid forms
     if (!reviewForm || !reviewForm.date) return;
 
     // Check if form is actually different from saved prop
     const saved = reviews.find(r => r.date === reviewForm.date);
     if (!saved || JSON.stringify(reviewForm) !== JSON.stringify(saved)) {
+      // Don't auto-save a brand new review if it's still empty
+      if (!saved) {
+        const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes;
+        if (isEmpty) return;
+      }
+
       setHasUnsavedChanges(true);
       setSaveStatus('saving');
       setIsSaving(true);
@@ -674,12 +701,15 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const currentReview = useMemo(() => reviews.find(r => r.date === selectedDate), [reviews, selectedDate]);
 
   useEffect(() => {
-    // 1. Force save the PREVIOUS date's form if it changed
+    // 1. Force save the PREVIOUS date's form if it changed and not empty
     if (lastPrepForm.current.date && lastPrepForm.current.date !== selectedDate) {
-      onSavePrep(lastPrepForm.current);
+      const p = lastPrepForm.current;
+      const isEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length;
+      if (!isEmpty) onSavePrep(p);
     }
 
     // 2. Load the new date's form
+    skipAutoSavePrep.current = true;
     if (currentPrep) {
       if (prepForm.date !== selectedDate || (currentPrep.id && prepForm.id !== currentPrep.id)) {
         setPrepForm(currentPrep);
@@ -696,15 +726,18 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         confidence: 5
       });
     }
-  }, [currentPrep, selectedDate]); // Omezení závislostí
+  }, [currentPrep, selectedDate, standardGoals, rituals]); // Omezení závislostí
 
   useEffect(() => {
-    // 1. Force save the PREVIOUS date's review if it changed
+    // 1. Force save the PREVIOUS date's review if it changed and not empty
     if (lastReviewForm.current.date && lastReviewForm.current.date !== selectedDate) {
-      onSaveReview(lastReviewForm.current);
+      const r = lastReviewForm.current;
+      const isEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes;
+      if (!isEmpty) onSaveReview(r);
     }
 
     // 2. Load the new date's review
+    skipAutoSaveReview.current = true;
     if (currentReview) {
       if (reviewForm.date !== selectedDate || (currentReview.id && reviewForm.id !== currentReview.id)) {
         setReviewForm(currentReview);

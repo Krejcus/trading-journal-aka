@@ -24,6 +24,7 @@ import {
     X,
     Trophy
 } from 'lucide-react';
+import ConfirmationModal from './ConfirmationModal';
 import {
     Trade,
     Account,
@@ -32,11 +33,16 @@ import {
     PlaybookItem,
     BusinessGoal,
     BusinessResource,
-    BusinessSettings
+    BusinessSettings,
+    User
 } from '../types';
+import { currencyService, ExchangeRates } from '../services/currencyService';
+import { t } from '../services/translations';
 
 interface BusinessHubProps {
     theme: 'dark' | 'light' | 'oled';
+    user: User;
+    exchangeRates: ExchangeRates | null;
     trades: Trade[];
     accounts: Account[];
     expenses: BusinessExpense[];
@@ -55,7 +61,7 @@ interface BusinessHubProps {
 }
 
 const BusinessHub: React.FC<BusinessHubProps> = ({
-    theme, trades, accounts, expenses, payouts, playbook, goals, resources, settings,
+    theme, user, exchangeRates, trades, accounts, expenses, payouts, playbook, goals, resources, settings,
     onUpdateExpenses, onUpdatePayouts, onUpdatePlaybook, onUpdateGoals, onUpdateResources, onUpdateSettings, onUpdateAccounts
 }) => {
     const [activeTab, setActiveTab] = useState<'financials' | 'goals'>('financials');
@@ -79,7 +85,19 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     });
     const [updatingGoalId, setUpdatingGoalId] = useState<string | null>(null);
     const [incrementValue, setIncrementValue] = useState<number>(0);
+
+    const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'expense' | 'payout' | 'goal' | 'playbook' | 'resource' } | null>(null);
+
     const isDark = theme !== 'light';
+    const lang = user.language || 'cs';
+    const targetCurrency = user.currency || 'USD';
+
+    // Helper for formatting currency based on user preference
+    const formatValue = (usdAmount: number) => {
+        if (!exchangeRates) return currencyService.format(usdAmount, 'USD');
+        const converted = currencyService.convert(usdAmount, targetCurrency, exchangeRates);
+        return currencyService.format(converted, targetCurrency);
+    };
 
     const handleAddGoal = () => {
         if (!newGoal.label || !newGoal.target) return;
@@ -163,47 +181,36 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
         onUpdatePayouts(newPayouts);
     };
 
-    // --- Financial Calculations ---
+    // --- Financial Calculations (All in USD base) ---
     const totalPnL = useMemo(() => trades.reduce((sum, t) => sum + t.pnl, 0), [trades]);
     const totalExpenses = useMemo(() => expenses.reduce((sum, e) => sum + e.amount, 0), [expenses]);
-
-    // Realized income is the sum of ALL withdrawals from ALL accounts
     const totalPayouts = useMemo(() => accounts.reduce((sum, acc) => sum + (acc.totalWithdrawals || 0), 0), [accounts]);
 
-    // We want to show a unified history. We take the detailed payouts array,
-    // but also for each account, we check if it has "untracked" withdrawals (legacy).
     const unifiedPayouts = useMemo(() => {
         const history = [...payouts];
-
         accounts.forEach(acc => {
             const accDetailedTotal = payouts
                 .filter(p => p.accountId === acc.id && p.status === 'Received')
                 .reduce((sum, p) => sum + p.amount, 0);
-
             const untrackedAmount = (acc.totalWithdrawals || 0) - accDetailedTotal;
-
             if (untrackedAmount > 0.01) {
-                // Add a "virtual" payout row for this account's historical balance
                 history.push({
                     id: `legacy_${acc.id}`,
                     accountId: acc.id,
                     amount: untrackedAmount,
-                    date: "2026-01-20", // Today's sync date
+                    date: "2026-01-20",
                     status: 'Received',
                     notes: 'Historický zůstatek z účtu'
                 } as BusinessPayout);
             }
         });
-
         return history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }, [payouts, accounts]);
 
-    // Realized Business Metrics (Based on Payouts, not trade PnL)
-    const realizedTaxReserve = useMemo(() => (totalPayouts > 0 ? (totalPayouts * (settings.taxRatePct / 100)) : 0), [totalPayouts, settings.taxRatePct]);
-    const netBusinessCash = useMemo(() => totalPayouts - totalExpenses - realizedTaxReserve, [totalPayouts, totalExpenses, realizedTaxReserve]);
+    const realizedTaxReserveValue = useMemo(() => (totalPayouts > 0 ? (totalPayouts * (settings.taxRatePct / 100)) : 0), [totalPayouts, settings.taxRatePct]);
+    const netBusinessCashValue = useMemo(() => totalPayouts - totalExpenses - realizedTaxReserveValue, [totalPayouts, totalExpenses, realizedTaxReserveValue]);
 
-    // OpEx Summaries
-    const monthlyRecurringOpEx = useMemo(() => {
+    const monthlyRecurringOpExValue = useMemo(() => {
         return expenses.reduce((sum, e) => {
             if (e.recurring === 'monthly') return sum + e.amount;
             if (e.recurring === 'yearly') return sum + (e.amount / 12);
@@ -211,28 +218,13 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
         }, 0);
     }, [expenses]);
 
-    const yearlyRecurringOpEx = useMemo(() => {
+    const yearlyRecurringOpExValue = useMemo(() => {
         return expenses.reduce((sum, e) => {
             if (e.recurring === 'yearly') return sum + e.amount;
             if (e.recurring === 'monthly') return sum + (e.amount * 12);
             return sum;
         }, 0);
     }, [expenses]);
-
-    const accountProfitableDays = useMemo(() => {
-        const stats: Record<string, number> = {};
-        accounts.forEach(acc => {
-            const accTrades = trades.filter(t => t.accountId === acc.id);
-            const days: Record<string, number> = {};
-            accTrades.forEach(t => {
-                const d = t.date.split('T')[0];
-                days[d] = (days[d] || 0) + t.pnl;
-            });
-            const threshold = acc.propThreshold || settings.defaultPropThreshold;
-            stats[acc.id] = Object.values(days).filter(pnl => pnl >= threshold).length;
-        });
-        return stats;
-    }, [trades, accounts, settings.defaultPropThreshold]);
 
     // --- Render Helpers ---
     const cardClass = `p-6 rounded-[24px] lg:rounded-[32px] border transition-all ${isDark ? 'bg-[var(--bg-card)]/80 border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-white/80 border-slate-200 shadow-sm'}`;
@@ -242,14 +234,14 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
         <div className="space-y-8 pb-32 max-w-[1400px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
                 <div>
-                    <h2 className={`text-4xl lg:text-6xl font-black tracking-tighter italic ${isDark ? 'text-white' : 'text-slate-900'}`}>BUSINESS HUB</h2>
-                    <p className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-500">Corporate Grade Trading Management • HQ</p>
+                    <h2 className={`text-4xl lg:text-6xl font-black tracking-tighter italic ${isDark ? 'text-white' : 'text-slate-900'}`}>{t('business_hub', lang)}</h2>
+                    <p className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-500">{t('hq_desc', lang)}</p>
                 </div>
 
                 <div className={`flex p-1.5 rounded-2xl border backdrop-blur-md ${isDark ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
                     {[
-                        { id: 'financials', label: 'FINANCE' },
-                        { id: 'goals', label: 'CÍLE' }
+                        { id: 'financials', label: t('finance', lang) },
+                        { id: 'goals', label: t('goals', lang) }
                     ].map(tab => (
                         <button
                             key={tab.id}
@@ -264,27 +256,26 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
             {activeTab === 'financials' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-500">
-                    {/* Main Financial Stats */}
-                    <div className="lg:col-span-8 space-y-6">
+                    <div className="lg:col-span-12 space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div className={cardClass + " border-blue-500/20 shadow-[0_0_20px_rgba(59,130,246,0.1)]"}>
                                 <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Čistá firemní hotovost</span>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('net_cash', lang)}</span>
                                     <div className="p-2 bg-emerald-500/10 text-emerald-500 rounded-lg"><Wallet size={16} /></div>
                                 </div>
-                                <div className={`text-3xl font-black tracking-tighter ${netBusinessCash >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                    ${netBusinessCash.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                <div className={`text-3xl font-black tracking-tighter ${netBusinessCashValue >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                    {formatValue(netBusinessCashValue)}
                                 </div>
                                 <p className="text-[9px] font-bold text-slate-500 mt-2 uppercase tracking-tight">Realizovaný zisk po zdanění a nákladech (OpEx)</p>
                             </div>
 
                             <div className={cardClass}>
                                 <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Daňová rezerva ({settings.taxRatePct}%)</span>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('tax_reserve', lang)} ({settings.taxRatePct}%)</span>
                                     <div className="p-2 bg-amber-500/10 text-amber-500 rounded-lg"><PieChartIcon size={16} /></div>
                                 </div>
                                 <div className={`text-3xl font-black tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                                    ${realizedTaxReserve.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                    {formatValue(realizedTaxReserveValue)}
                                 </div>
                                 <div className="mt-4 flex items-center gap-2">
                                     <input
@@ -297,39 +288,38 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <div className={cardClass}>
                                 <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Realizované příjmy</span>
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('realized_income', lang)}</span>
                                     <div className="p-2 bg-blue-500/10 text-blue-500 rounded-lg"><DollarSign size={16} /></div>
                                 </div>
                                 <div className={`text-3xl font-black tracking-tighter text-blue-500`}>
-                                    ${totalPayouts.toLocaleString()}
+                                    {formatValue(totalPayouts)}
                                 </div>
                                 <p className="text-[9px] font-bold text-slate-500 mt-2 uppercase tracking-tight">Celkové obdržené výplaty</p>
                             </div>
                         </div>
 
-                        {/* Expenses Tracker */}
                         <div className={cardClass}>
                             <div className="flex justify-between items-center mb-8">
                                 <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
-                                    <Layers size={16} className="text-blue-500" /> Provozní náklady
+                                    <Layers size={16} className="text-blue-500" /> {t('operating_expenses', lang)}
                                 </h3>
                                 <div className="flex items-center gap-4">
                                     <div className={`hidden md:flex items-center gap-6 px-4 py-2 rounded-xl border ${isDark ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
                                         <div>
-                                            <p className="text-[8px] font-black text-slate-500 uppercase">Měsíční burn</p>
-                                            <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>${monthlyRecurringOpEx.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                                            <p className="text-[8px] font-black text-slate-500 uppercase">{t('monthly_burn', lang)}</p>
+                                            <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(monthlyRecurringOpExValue)}</p>
                                         </div>
                                         <div className={`w-[1px] h-4 ${isDark ? 'bg-[var(--border-subtle)]' : 'bg-slate-200'}`}></div>
                                         <div>
-                                            <p className="text-[8px] font-black text-slate-500 uppercase">Roční projekce</p>
-                                            <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>${yearlyRecurringOpEx.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                                            <p className="text-[8px] font-black text-slate-500 uppercase">{t('yearly_projection', lang)}</p>
+                                            <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(yearlyRecurringOpExValue)}</p>
                                         </div>
                                     </div>
                                     <button
                                         onClick={() => setIsAddingExpense(true)}
                                         className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase transition-all hover:bg-blue-500"
                                     >
-                                        <Plus size={14} /> Přidat náklad
+                                        <Plus size={14} /> {t('add_expense', lang)}
                                     </button>
                                 </div>
                             </div>
@@ -356,9 +346,9 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                     <td className="py-4 text-[10px] font-bold text-slate-400 font-mono italic">{exp.date}</td>
                                                     <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{exp.label}</td>
                                                     <td className="py-4 text-[10px] font-bold text-slate-500 uppercase">{exp.category}</td>
-                                                    <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>${exp.amount.toLocaleString()}</td>
+                                                    <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(exp.amount)}</td>
                                                     <td className="py-4 text-right">
-                                                        <button onClick={() => onUpdateExpenses(expenses.filter(e => e.id !== exp.id))} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>
+                                                        <button onClick={() => setItemToDelete({ id: exp.id, type: 'expense' })} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>
                                                     </td>
                                                 </tr>
                                             ))
@@ -368,11 +358,10 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                             </div>
                         </div>
 
-                        {/* Payouts Tracker */}
                         <div className={cardClass}>
                             <div className="flex justify-between items-center mb-8">
                                 <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
-                                    <DollarSign size={16} className="text-emerald-500" /> Historie výplat
+                                    <DollarSign size={16} className="text-emerald-500" /> {t('payout_history', lang)}
                                 </h3>
                             </div>
 
@@ -400,7 +389,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                     <tr key={p.id}>
                                                         <td className="py-4 text-[10px] font-bold text-slate-400 font-mono italic">{p.date}</td>
                                                         <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý'}</td>
-                                                        <td className={`py-4 text-xs font-mono font-black text-emerald-500`}>${p.amount.toLocaleString()}</td>
+                                                        <td className={`py-4 text-xs font-mono font-black text-emerald-500`}>{formatValue(p.amount)}</td>
                                                         <td className="py-4">
                                                             {isLegacy ? (
                                                                 <span className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
@@ -414,7 +403,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                             )}
                                                         </td>
                                                         <td className="py-4 text-right">
-                                                            {!isLegacy && <button onClick={() => onUpdatePayouts(payouts.filter(x => x.id !== p.id))} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>}
+                                                            {!isLegacy && <button onClick={() => setItemToDelete({ id: p.id, type: 'payout' })} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>}
                                                         </td>
                                                     </tr>
                                                 );
@@ -425,116 +414,6 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                             </div>
                         </div>
                     </div>
-
-                    {/* Sidebar Financials */}
-                    <div className="lg:col-span-4 space-y-6">
-                        <div className={cardClass}>
-                            <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 mb-6">
-                                <ShieldCheck size={16} className="text-emerald-500" /> Status Prop Firm
-                            </h3>
-                            <div className="space-y-4">
-                                {accounts.filter(acc => acc.type === 'Funded').map(acc => (
-                                    <div key={acc.id} className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                                        <div className="flex justify-between items-center mb-3">
-                                            <span className="text-[10px] font-black text-white uppercase">{acc.name}</span>
-                                            <span className="px-2 py-0.5 bg-blue-500/10 text-blue-500 text-[8px] font-black rounded uppercase tracking-widest">
-                                                {accountProfitableDays[acc.id]} / 5 dní
-                                            </span>
-                                        </div>
-                                        <div className={`h-1.5 w-full rounded-full overflow-hidden ${isDark ? 'bg-[var(--bg-input)]' : 'bg-slate-200'}`}>
-                                            <div
-                                                className="h-full bg-blue-500 transition-all duration-1000"
-                                                style={{ width: `${Math.min(100, (accountProfitableDays[acc.id] / 5) * 100)}%` }}
-                                            ></div>
-                                        </div>
-                                        <div className="mt-3 flex justify-between items-center">
-                                            <span className="text-[8px] font-bold text-slate-500 uppercase">Min. zisk za den</span>
-                                            <span className={`text-[9px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>${acc.propThreshold || settings.defaultPropThreshold}</span>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Add Expense Modal */}
-                    {isAddingExpense && (
-                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-                            <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                                <div className="flex justify-between items-center mb-6">
-                                    <h3 className="text-xl font-black italic tracking-tight">PŘIDAT NÁKLAD</h3>
-                                    <button onClick={() => setIsAddingExpense(false)} className="p-2 text-slate-500 hover:text-white transition-all"><X size={20} /></button>
-                                </div>
-
-                                <div className="space-y-6">
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Popis nákladu</label>
-                                        <input
-                                            type="text" value={newExpense.label}
-                                            onChange={(e) => setNewExpense({ ...newExpense, label: e.target.value })}
-                                            className={inputClass} placeholder="např. Předplatné TradingView"
-                                        />
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Částka ($)</label>
-                                            <input
-                                                type="number" value={newExpense.amount}
-                                                onChange={(e) => setNewExpense({ ...newExpense, amount: Number(e.target.value) })}
-                                                className={inputClass}
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Kategorie</label>
-                                            <select
-                                                value={newExpense.category}
-                                                onChange={(e) => setNewExpense({ ...newExpense, category: e.target.value as any })}
-                                                className={inputClass}
-                                            >
-                                                <option value="Software">Software</option>
-                                                <option value="Education">Vzdělávání</option>
-                                                <option value="Hardware">Hardware</option>
-                                                <option value="Taxes">Daně</option>
-                                                <option value="Challenges">Challenges</option>
-                                                <option value="Other">Ostatní</option>
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Frekvence</label>
-                                            <select
-                                                value={newExpense.recurring}
-                                                onChange={(e) => setNewExpense({ ...newExpense, recurring: e.target.value as any })}
-                                                className={inputClass}
-                                            >
-                                                <option value="monthly">Měsíčně</option>
-                                                <option value="yearly">Ročně</option>
-                                                <option value="once">Jednorázově</option>
-                                            </select>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Datum</label>
-                                            <input
-                                                type="date" value={newExpense.date}
-                                                onChange={(e) => setNewExpense({ ...newExpense, date: e.target.value })}
-                                                className={inputClass}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <button
-                                        onClick={handleAddExpense}
-                                        className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
-                                    >
-                                        Uložit náklad
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
             )}
 
@@ -570,7 +449,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                 return (
                                     <div key={goal.id} className={cardClass + ` relative group overflow-hidden pb-2 ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
                                         <button
-                                            onClick={() => onUpdateGoals(goals.filter(g => g.id !== goal.id))}
+                                            onClick={() => setItemToDelete({ id: goal.id, type: 'goal' })}
                                             className="absolute top-4 right-4 p-2 bg-rose-500/10 text-rose-500 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500 hover:text-white z-10"
                                         >
                                             <Trash2 size={12} />
@@ -612,7 +491,9 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                 </div>
                                                 <h4 className={`text-xs font-black uppercase truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{goal.label}</h4>
                                                 <p className="text-[10px] font-mono font-black text-slate-400 mt-1">
-                                                    {goal.current.toLocaleString()} <span className="text-slate-600">/</span> {goal.target.toLocaleString()}
+                                                    {goal.metric === 'PnL' ? formatValue(goal.current) : goal.current.toLocaleString()}
+                                                    <span className="text-slate-600 ml-1">/</span>
+                                                    {goal.metric === 'PnL' ? formatValue(goal.target) : goal.target.toLocaleString()}
                                                 </p>
                                             </div>
 
@@ -660,7 +541,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                                 {new Date(log.date).toLocaleDateString()}
                                                             </span>
                                                             <span className={`font-black ${colorClass}`}>
-                                                                +{log.amount.toLocaleString()}
+                                                                +{goal.metric === 'PnL' ? formatValue(log.amount) : log.amount.toLocaleString()}
                                                             </span>
                                                         </div>
                                                     ))}
@@ -673,7 +554,6 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                         )}
                     </div>
 
-                    {/* Overall Summary Row */}
                     <div className={cardClass + " p-8"}>
                         <div className="flex flex-col md:flex-row items-center justify-between gap-8">
                             <div className="flex items-center gap-6">
@@ -703,7 +583,84 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                 </div>
             )}
 
-            {/* Add Goal Modal */}
+            {isAddingExpense && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
+                    <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-xl font-black italic tracking-tight">PŘIDAT NÁKLAD</h3>
+                            <button onClick={() => setIsAddingExpense(false)} className="p-2 text-slate-500 hover:text-white transition-all"><X size={20} /></button>
+                        </div>
+
+                        <div className="space-y-6">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Popis nákladu</label>
+                                <input
+                                    type="text" value={newExpense.label}
+                                    onChange={(e) => setNewExpense({ ...newExpense, label: e.target.value })}
+                                    className={inputClass} placeholder="např. Předplatné TradingView"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Částka (USD)</label>
+                                    <input
+                                        type="number" value={newExpense.amount}
+                                        onChange={(e) => setNewExpense({ ...newExpense, amount: Number(e.target.value) })}
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Kategorie</label>
+                                    <select
+                                        value={newExpense.category}
+                                        onChange={(e) => setNewExpense({ ...newExpense, category: e.target.value as any })}
+                                        className={inputClass}
+                                    >
+                                        <option value="Software">Software</option>
+                                        <option value="Education">Vzdělávání</option>
+                                        <option value="Hardware">Hardware</option>
+                                        <option value="Taxes">Daně</option>
+                                        <option value="Challenges">Challenges</option>
+                                        <option value="Other">Ostatní</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Frekvence</label>
+                                    <select
+                                        value={newExpense.recurring}
+                                        onChange={(e) => setNewExpense({ ...newExpense, recurring: e.target.value as any })}
+                                        className={inputClass}
+                                    >
+                                        <option value="monthly">Měsíčně</option>
+                                        <option value="yearly">Ročně</option>
+                                        <option value="once">Jednorázově</option>
+                                    </select>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Datum</label>
+                                    <input
+                                        type="date" value={newExpense.date}
+                                        onChange={(e) => setNewExpense({ ...newExpense, date: e.target.value })}
+                                        className={inputClass}
+                                    />
+                                </div>
+                            </div>
+
+                            <button
+                                onClick={handleAddExpense}
+                                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
+                            >
+                                Uložit náklad
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {isAddingGoal && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
                     <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
@@ -779,6 +736,27 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                     </div>
                 </div>
             )}
+            {/* Confirmation Modal */}
+            <ConfirmationModal
+                isOpen={!!itemToDelete}
+                onClose={() => setItemToDelete(null)}
+                onConfirm={() => {
+                    if (!itemToDelete) return;
+                    if (itemToDelete.type === 'expense') onUpdateExpenses(expenses.filter(x => x.id !== itemToDelete.id));
+                    if (itemToDelete.type === 'payout') onUpdatePayouts(payouts.filter(x => x.id !== itemToDelete.id));
+                    if (itemToDelete.type === 'goal') onUpdateGoals(goals.filter(x => x.id !== itemToDelete.id));
+                    if (itemToDelete.type === 'playbook') onUpdatePlaybook(playbook.filter(x => x.id !== itemToDelete.id));
+                    if (itemToDelete.type === 'resource') onUpdateResources(resources.filter(x => x.id !== itemToDelete.id));
+                }}
+                title={
+                    itemToDelete?.type === 'expense' ? 'Smazat výdaj' :
+                        itemToDelete?.type === 'payout' ? 'Smazat výplatu' :
+                            itemToDelete?.type === 'goal' ? 'Smazat cíl' :
+                                itemToDelete?.type === 'playbook' ? 'Smazat položku' : 'Smazat zdroj'
+                }
+                message="Opravdu chcete tuto položku trvale odstranit? Tato akce je nevratná."
+                theme={theme}
+            />
         </div>
     );
 };

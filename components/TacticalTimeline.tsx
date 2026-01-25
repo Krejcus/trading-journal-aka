@@ -23,6 +23,7 @@ import {
   AlertOctagon,
   Trash2
 } from 'lucide-react';
+import ConfirmationModal from './ConfirmationModal';
 
 interface TacticalTimelineProps {
   date: string;
@@ -40,6 +41,8 @@ interface TacticalTimelineProps {
 const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review, trades, theme, onEditPrep, onEditReview, onDeletePrep, onDeleteReview, isMini = false }) => {
   const isDark = theme !== 'light';
   const [zoomImg, setZoomImg] = useState<string | null>(null);
+  const [isDeletingPrep, setIsDeletingPrep] = useState(false);
+  const [isDeletingReview, setIsDeletingReview] = useState(false);
 
   const dayStats = useMemo(() => {
     if (trades.length === 0) return null;
@@ -97,7 +100,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (confirm('Opravdu smazat ranní přípravu?')) onDeletePrep(date);
+                          setIsDeletingPrep(true);
                         }}
                         className="ml-auto p-1.5 hover:bg-rose-500/10 text-slate-400 hover:text-rose-500 rounded-lg transition-all"
                         title="Smazat přípravu"
@@ -215,7 +218,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (confirm('Opravdu smazat večerní audit?')) onDeleteReview(date);
+                            setIsDeletingReview(true);
                           }}
                           className="p-1 hover:bg-rose-500/10 text-slate-400 hover:text-rose-500 rounded-lg transition-all"
                           title="Smazat audit"
@@ -262,6 +265,24 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
           <img src={zoomImg} className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl border border-white/10" onClick={e => e.stopPropagation()} />
         </div>
       )}
+
+      <ConfirmationModal
+        isOpen={isDeletingPrep}
+        onClose={() => setIsDeletingPrep(false)}
+        onConfirm={() => onDeletePrep?.(date)}
+        title="Smazat přípravu"
+        message="Opravdu chcete smazat ranní přípravu pro tento den? Tato akce je nevratná."
+        theme={theme}
+      />
+
+      <ConfirmationModal
+        isOpen={isDeletingReview}
+        onClose={() => setIsDeletingReview(false)}
+        onConfirm={() => onDeleteReview?.(date)}
+        title="Smazat audit"
+        message="Opravdu chcete smazat večerní audit (reflexi) pro tento den? Tato akce je nevratná."
+        theme={theme}
+      />
     </div>
   );
 };

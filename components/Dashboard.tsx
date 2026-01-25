@@ -1,7 +1,9 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode } from '../types';
-import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
+import { formatPnL, calculateTotalRR, formatCurrency } from '../utils/formatPnL';
+import { currencyService, ExchangeRates } from '../services/currencyService';
+import { t } from '../services/translations';
 import Charts from './Charts';
 import DashboardCalendar from './DashboardCalendar';
 import DisciplineDashboard from './DisciplineDashboard';
@@ -69,6 +71,8 @@ interface DashboardProps {
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
   user?: User;
   pnlDisplayMode?: PnLDisplayMode;
+  exchangeRates: ExchangeRates | null;
+  allTrades?: Trade[];
 }
 
 // ... existing imports ...
@@ -93,7 +97,8 @@ const COLORS = {
 };
 
 // --- NEW WIDGET: DISTANCE TO TARGET ---
-const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[], theme: 'dark' | 'light' | 'oled' }> = ({ stats, accounts, theme }) => {
+const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[], theme: 'dark' | 'light' | 'oled', currency: 'USD' | 'CZK' | 'EUR', rates: any }> = ({ stats, accounts, theme, currency, rates }) => {
+  const format = (val: number) => formatCurrency(val, currency, rates);
   const initial = stats.initialBalance;
   const current = initial + stats.totalPnL;
   const target = initial * 1.10; // 10% Profit Target
@@ -113,10 +118,10 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
       </div>
       <div className="flex-1 flex flex-col justify-center">
         <div className="flex justify-between items-end mb-2">
-          <span className="text-3xl font-black tracking-tighter text-white">${current.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+          <span className="text-3xl font-black tracking-tighter text-white">{format(current)}</span>
           <div className="text-right">
             <span className="text-[10px] font-bold text-slate-500 uppercase block">Cíl (10%)</span>
-            <span className="text-sm font-black text-slate-300">${target.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+            <span className="text-sm font-black text-slate-300">{format(target)}</span>
           </div>
         </div>
         <div className="h-4 w-full bg-slate-900 rounded-full overflow-hidden relative border border-white/5">
@@ -126,8 +131,8 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
           <div className="absolute top-0 bottom-0 w-px bg-white/20 left-[50%]"></div>
         </div>
         <div className="mt-3 flex justify-between items-center text-[10px] font-bold text-slate-500">
-          <span>Start: ${initial.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-          <span>Zbývá: <span className="text-white">${Math.max(0, remaining).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></span>
+          <span>Start: {format(initial)}</span>
+          <span>Zbývá: <span className="text-white">{format(Math.max(0, remaining))}</span></span>
         </div>
       </div>
     </div>
@@ -199,7 +204,11 @@ const InfoIcon: React.FC<{ text: string; theme: 'dark' | 'light' | 'oled' }> = (
 );
 
 // --- NEW WIDGET: AVG WIN/LOSS ---
-const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled', pnlDisplayMode: PnLDisplayMode, initialBalance: number }> = ({ stats, theme, pnlDisplayMode, initialBalance }) => {
+const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled', pnlDisplayMode: PnLDisplayMode, initialBalance: number, currency: any, rates: any }> = ({ stats, theme, pnlDisplayMode, initialBalance, currency, rates }) => {
+  const formatVal = (val: number, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
+    return formatPnL(val, mode, bal, rr, sign, currency, rates);
+  };
+  const formatRaw = (val: number) => formatCurrency(val, currency, rates);
   const avgWin = stats.avgWin || 0;
   const avgLoss = Math.abs(stats.avgLoss || 0);
   const ratio = avgLoss > 0 ? avgWin / avgLoss : 0;
@@ -221,7 +230,7 @@ const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 
           <div className="w-full h-3 bg-slate-800 rounded-full flex items-center">
             <SmartTooltip
               text="Průměrný zisk"
-              subtext={`$${Math.round(avgWin).toLocaleString()}`}
+              subtext={formatRaw(avgWin)}
               theme={theme}
               color={COLORS.profit}
               style={{ width: `${winPct}%` }}
@@ -233,7 +242,7 @@ const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 
             </SmartTooltip>
             <SmartTooltip
               text="Průměrná ztráta"
-              subtext={`$${Math.round(avgLoss).toLocaleString()}`}
+              subtext={formatRaw(avgLoss)}
               theme={theme}
               color={COLORS.loss}
               style={{ width: `${100 - winPct}%` }}
@@ -247,8 +256,8 @@ const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 
         </div>
 
         <div className="flex justify-between items-center text-xs font-black">
-          <span className={COLORS.textProfit}>{formatPnL(avgWin, pnlDisplayMode, initialBalance, stats.avgWinPct / (stats.avgRisk || 1))}</span>
-          <span className={COLORS.textLoss}>{formatPnL(-avgLoss, pnlDisplayMode, initialBalance, -stats.avgLossPct / (stats.avgRisk || 1))}</span>
+          <span className={COLORS.textProfit}>{formatVal(avgWin, pnlDisplayMode, initialBalance, stats.avgWinPct / (stats.avgRisk || 1))}</span>
+          <span className={COLORS.textLoss}>{formatVal(-avgLoss, pnlDisplayMode, initialBalance, -stats.avgLossPct / (stats.avgRisk || 1))}</span>
         </div>
       </div>
     </div>
@@ -671,7 +680,10 @@ const ProKpiCard: React.FC<{
   );
 };
 
-const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled', pnlDisplayMode: PnLDisplayMode, initialBalance: number }> = ({ stats, theme, pnlDisplayMode, initialBalance }) => {
+const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled', pnlDisplayMode: PnLDisplayMode, initialBalance: number, currency: any, rates: any }> = ({ stats, theme, pnlDisplayMode, initialBalance, currency, rates }) => {
+  const formatVal = (val: number, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
+    return formatPnL(val, mode, bal, rr, sign, currency, rates);
+  };
   const isDark = theme !== 'light';
   const formatDur = (mins: number) => {
     if (!mins || mins === 0) return "0m";
@@ -701,8 +713,8 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
         <div className={`p-4 rounded-2xl border ${isDark ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
           <h4 className={`text-[10px] font-black uppercase tracking-widest ${COLORS.textProfit} mb-4 flex items-center gap-2`}><ArrowUp size={12} /> Ziskové Obchody</h4>
           <div className="space-y-1">
-            <Row label="Nejlepší zisk" value={formatPnL(stats.maxWin, pnlDisplayMode, initialBalance, stats.bestWinPct / (stats.avgRisk || 1))} color={COLORS.textProfit} />
-            <Row label="Průměrný zisk" value={formatPnL(stats.avgWin, pnlDisplayMode, initialBalance, stats.avgWinPct / (stats.avgRisk || 1))} color={COLORS.textProfit} />
+            <Row label="Nejlepší zisk" value={formatVal(stats.maxWin, pnlDisplayMode, initialBalance, stats.bestWinPct / (stats.avgRisk || 1))} color={COLORS.textProfit} />
+            <Row label="Průměrný zisk" value={formatVal(stats.avgWin, pnlDisplayMode, initialBalance, stats.avgWinPct / (stats.avgRisk || 1))} color={COLORS.textProfit} />
             <Row label="Průměrná doba" value={formatDur(stats.avgDurationWin)} />
             <Row label="Max v řadě" value={stats.maxConsecutiveWins} />
           </div>
@@ -710,8 +722,8 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
         <div className={`p-4 rounded-2xl border ${isDark ? 'bg-rose-500/5 border-rose-500/10' : 'bg-rose-50 border-rose-100'}`}>
           <h4 className={`text-[10px] font-black uppercase tracking-widest ${COLORS.textLoss} mb-4 flex items-center gap-2`}><ArrowDown size={12} /> Ztrátové Obchody</h4>
           <div className="space-y-1">
-            <Row label="Nejhorší ztráta" value={formatPnL(stats.maxLoss, pnlDisplayMode, initialBalance, stats.worstLossPct / (stats.avgRisk || 1))} color={COLORS.textLoss} />
-            <Row label="Průměrná ztráta" value={formatPnL(-stats.avgLoss, pnlDisplayMode, initialBalance, stats.avgLossPct / (stats.avgRisk || 1))} color={COLORS.textLoss} />
+            <Row label="Nejhorší ztráta" value={formatVal(stats.maxLoss, pnlDisplayMode, initialBalance, stats.worstLossPct / (stats.avgRisk || 1))} color={COLORS.textLoss} />
+            <Row label="Průměrná ztráta" value={formatVal(-stats.avgLoss, pnlDisplayMode, initialBalance, stats.avgLossPct / (stats.avgRisk || 1))} color={COLORS.textLoss} />
             <Row label="Průměrná doba" value={formatDur(stats.avgDurationLoss)} />
             <Row label="Max v řadě" value={stats.maxConsecutiveLosses} />
           </div>
@@ -933,7 +945,24 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
   );
 };
 
-const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout, isEditing, onCloseEdit, accounts, emotions, onDeleteTrade, onUpdateTrade, dashboardMode, setDashboardMode, user, pnlDisplayMode = 'usd' }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+  stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout,
+  isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
+  setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
+  allTrades = []
+}) => {
+  const isDark = theme !== 'light';
+  const lang = user?.language || 'cs';
+  const targetCurrency = user?.currency || 'USD';
+
+  // Local helper for formatting with user preferences
+  const formatValue = (val: number, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
+    return formatPnL(val, mode, bal, rr, sign, targetCurrency, exchangeRates);
+  };
+
+  const formatRawCurrency = (val: number, showSign: boolean = false) => {
+    return formatCurrency(val, targetCurrency, exchangeRates, showSign);
+  };
   // Check if we need to auto-inject the Challenge widget when in Challenge mode
   useEffect(() => {
     if (dashboardMode === 'challenge' && !layout.some(w => w.id === 'challenge_target')) {
@@ -1037,7 +1066,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
 
   const renderWidget = (id: string, config?: DashboardWidgetConfig) => {
     switch (id) {
-      case 'challenge_target': return <DistanceToTargetWidget stats={stats} accounts={accounts} theme={theme} />;
+      case 'challenge_target': return <DistanceToTargetWidget stats={stats} accounts={accounts} theme={theme} currency={targetCurrency} rates={exchangeRates} />;
       case 'discipline': return <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={stats.trades} ironRules={ironRules} />;
       case 'kpi_pnl': {
         const totalRr = pnlDisplayMode === 'rr' ? calculateTotalRR(stats.trades) : undefined;
@@ -1045,7 +1074,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
           <ProKpiCard
             theme={theme}
             label="Net P&L"
-            value={formatPnL(stats.totalPnL, pnlDisplayMode, stats.initialBalance, totalRr)}
+            value={formatValue(stats.totalPnL, pnlDisplayMode, stats.initialBalance, totalRr)}
             sampleSize={stats.totalTrades}
             info="Čistý zisk nebo ztráta po odečtení všech nákladů a poplatků."
             icon={<div className="bg-purple-100 text-purple-600 p-1 rounded-lg dark:bg-purple-500/20"><BarChart3 size={14} /></div>}
@@ -1058,15 +1087,15 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
           <ProKpiCard
             theme={theme}
             label="Max Drawdown"
-            value={formatPnL(stats.maxDrawdown, pnlDisplayMode, stats.initialBalance, drawdownRr, false)}
+            value={formatValue(stats.maxDrawdown, pnlDisplayMode, stats.initialBalance, drawdownRr, false)}
             icon={<div className={`${COLORS.bgLoss} ${COLORS.textLoss} p-1 rounded-lg`}><AlertTriangle size={14} /></div>}
             info="Největší propad kapitálu z vrcholu (peak-to-trough). Důležité pro řízení rizika a psychiku."
           />
         );
       }
-      case 'avg_win_loss': return <AvgWinLossWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} />;
+      case 'avg_win_loss': return <AvgWinLossWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} currency={targetCurrency} rates={exchangeRates} />;
       case 'streak': return <StreakWidget stats={stats} theme={theme} />;
-      case 'winners_losers': return <WinnersLosersWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} />;
+      case 'winners_losers': return <WinnersLosersWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} currency={targetCurrency} rates={exchangeRates} />;
       case 'monthly_performance': return <PerformanceByMonthWidget monthlyData={stats.monthlyBreakdown} theme={theme} />;
       case 'hourly_edge': return <HourlyEdgeWidget data={stats.hourStats} theme={theme} />;
       case 'daily_edge': return <DailyEdgeWidget data={stats.dayStats} theme={theme} />;
@@ -1082,7 +1111,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
           onTradeClick={(id) => setSelectedTradeId(id)}
         />
       );
-      case 'calendar': return <div className="h-full flex flex-col overflow-hidden"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} /></div>;
+      case 'calendar': return <div className="h-full flex flex-col overflow-hidden"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} /></div>;
       default: return null;
     }
   };
@@ -1209,6 +1238,9 @@ const Dashboard: React.FC<DashboardProps> = ({ stats, theme, preps, reviews, lay
           pnlDisplayMode={pnlDisplayMode}
           accounts={accounts}
           initialBalance={stats.initialBalance}
+          user={user}
+          exchangeRates={exchangeRates}
+          allTrades={allTrades.length > 0 ? allTrades : stats.trades}
         />
       )}
     </div>

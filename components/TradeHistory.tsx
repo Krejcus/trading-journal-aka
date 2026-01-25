@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Trade, Account, CustomEmotion, PnLDisplayMode } from '../types';
+import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL } from '../utils/formatPnL';
+import { ExchangeRates } from '../services/currencyService';
 import { storageService } from '../services/storageService';
 import {
   Trash2, TrendingUp, TrendingDown, X, Edit3, Calendar,
@@ -24,9 +25,21 @@ interface TradeHistoryProps {
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
   pnlDisplayMode?: PnLDisplayMode;
   initialBalance?: number;
+  user: User;
+  exchangeRates: ExchangeRates | null;
+  allTrades?: Trade[];
 }
 
-const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, pnlDisplayMode = 'usd', initialBalance }) => {
+const TradeHistory: React.FC<TradeHistoryProps> = ({
+  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
+  pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = []
+}) => {
+  const isDark = theme !== 'light';
+  const targetCurrency = user.currency || 'USD';
+
+  const formatValue = (val: number, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
+    return formatPnL(val, mode, bal, rr, sign, targetCurrency, exchangeRates);
+  };
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
@@ -64,8 +77,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
           <button
             onClick={() => setViewMode('grid')}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${viewMode === 'grid'
-                ? (theme !== 'light' ? 'bg-white/10 text-white shadow-lg' : 'bg-white text-slate-900 shadow-sm')
-                : 'text-slate-500 hover:text-slate-300'
+              ? (theme !== 'light' ? 'bg-white/10 text-white shadow-lg' : 'bg-white text-slate-900 shadow-sm')
+              : 'text-slate-500 hover:text-slate-300'
               }`}
           >
             <LayoutGrid size={14} />
@@ -74,8 +87,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
           <button
             onClick={() => setViewMode('table')}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${viewMode === 'table'
-                ? (theme !== 'light' ? 'bg-white/10 text-white shadow-lg' : 'bg-white text-slate-900 shadow-sm')
-                : 'text-slate-500 hover:text-slate-300'
+              ? (theme !== 'light' ? 'bg-white/10 text-white shadow-lg' : 'bg-white text-slate-900 shadow-sm')
+              : 'text-slate-500 hover:text-slate-300'
               }`}
           >
             <List size={14} />
@@ -155,11 +168,11 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
                   <div className="flex items-end justify-between mt-6 md:mt-0">
                     <div className="flex flex-col">
                       <span className={`text-3xl md:text-4xl font-black tracking-tighter leading-none font-mono ${pnlColor}`}>
-                        {formatPnL(
+                        {formatValue(
                           trade.pnl,
                           pnlDisplayMode,
-                          initialBalance || accounts.find(a => a.id === trade.accountId)?.initialBalance,
-                          trade.riskAmount ? (trade.pnl / trade.riskAmount) : undefined
+                          accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
+                          trade.riskAmount ? trade.pnl / trade.riskAmount : undefined
                         )}
                         {trade.isMaster && (
                           <span className="text-[10px] text-slate-500 ml-2 font-black uppercase tracking-widest">
@@ -252,8 +265,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
                       </td>
                       <td className="px-6 py-3">
                         <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase border tracking-tighter ${isMissed ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                            isWin ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
-                              'bg-rose-500/10 text-rose-500 border-rose-500/20'
+                          isWin ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
+                            'bg-rose-500/10 text-rose-500 border-rose-500/20'
                           }`}>
                           {isMissed ? 'MISSED' : trade.direction}
                         </span>
@@ -269,10 +282,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
                       </td>
                       <td className="px-6 py-3 text-right">
                         <span className={`text-sm font-mono font-black ${pnlColor}`}>
-                          {formatPnL(
+                          {formatValue(
                             trade.pnl,
                             pnlDisplayMode,
-                            initialBalance || accounts.find(a => a.id === trade.accountId)?.initialBalance,
+                            accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
                             trade.riskAmount ? (trade.pnl / trade.riskAmount) : undefined
                           )}
                         </span>
@@ -313,6 +326,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
           pnlDisplayMode={pnlDisplayMode}
           accounts={accounts}
           initialBalance={initialBalance}
+          user={user}
+          exchangeRates={exchangeRates}
           onPrev={() => {
             const idx = sortedTrades.findIndex(t => t.id === selectedTrade.id);
             if (idx > 0) setSelectedTrade(sortedTrades[idx - 1]);
@@ -323,6 +338,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({ trades, accounts, onDelete,
           }}
           hasPrev={sortedTrades.findIndex(t => t.id === selectedTrade.id) > 0}
           hasNext={sortedTrades.findIndex(t => t.id === selectedTrade.id) < sortedTrades.length - 1}
+          allTrades={allTrades.length > 0 ? allTrades : trades}
         />
       )}
     </div>

@@ -62,6 +62,9 @@ export interface User {
   email: string;
   name: string;
   avatar?: string;
+  language?: 'cs' | 'en';
+  currency?: 'USD' | 'CZK' | 'EUR';
+  timezone?: string;
 }
 
 export interface SocialConnection {
@@ -478,6 +481,25 @@ export interface UserPreferences {
   businessResources?: BusinessResource[];
   businessSettings?: BusinessSettings;
   theme?: 'dark' | 'light' | 'oled';
+  systemSettings?: SystemSettings;
+  pushSubscription?: any; // Stores the Web Push Subscription object (endpoint, keys)
+}
+
+export interface SystemSettings {
+  sessionAlertsEnabled: boolean;
+  sessionStartAlert15m: boolean;
+  sessionStartAlertExact: boolean;
+  sessionEndAlertExact: boolean;
+  sessionEndAlert10m: boolean;
+  guardianEnabled: boolean;
+  morningPrepAlert60m: boolean;
+  morningPrepAlert15m: boolean;
+  morningPrepAlertCritical: boolean;
+  strictModeEnabled: boolean;
+  eveningAuditAlertEnabled: boolean;
+  eveningAuditAlertTime: string; // HH:mm
+  morningWakeUpDebtAlert: boolean;
+  testModeEnabled?: boolean;
 }
 
 

@@ -278,7 +278,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
       />
 
       {/* Background gradient effect */}
-      <div className="absolute inset-0 bg-gradient-to-b from-purple-900/40 via-purple-950/20 to-black pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-b from-blue-900/20 via-slate-950/40 to-black pointer-events-none" />
 
       {/* Noise texture overlay */}
       <div className="absolute inset-0 opacity-[0.03] mix-blend-soft-light pointer-events-none"
@@ -287,10 +287,6 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
           backgroundSize: '200px 200px'
         }}
       />
-
-      {/* Ambient background blobs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-[120px] animate-pulse pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-600/10 rounded-full blur-[120px] animate-pulse pointer-events-none" style={{ animationDelay: '1s' }} />
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -370,49 +366,67 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
               <form onSubmit={handleSubmit} className="space-y-4">
                 {authMode === 'signup' && (
                   <div className="space-y-1">
-                    <div className="relative">
+                    <div className="relative group/input">
+                      <label htmlFor="name" className="sr-only">Celé jméno</label>
                       <Input
+                        id="name"
                         type="text"
+                        name="name"
+                        autoComplete="name"
                         placeholder="Celé jméno"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         className="pl-10 bg-black/20"
                         required
                       />
-                      <User className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" size={16} />
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within/input:text-blue-400 transition-colors" size={16} />
                     </div>
                   </div>
                 )}
 
                 {authMode !== 'update-password' && (
                   <div className="space-y-1">
-                    <div className="relative">
+                    <div className="relative group/input">
+                      <label htmlFor="email" className="sr-only">E-mail</label>
                       <Input
+                        key={`email-${authMode}`}
+                        id="email"
                         type="email"
+                        name={authMode === 'login' ? 'username' : 'email'}
+                        autoComplete={authMode === 'signup' ? 'email' : 'username'}
+                        inputMode="email"
                         placeholder="access@alphatrade.cz"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         className="pl-10 bg-black/20"
                         required
                       />
-                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" size={16} />
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within/input:text-blue-400 transition-colors" size={16} />
                     </div>
                   </div>
                 )}
 
                 {authMode !== 'forgot-password' && (
                   <div className="space-y-1">
-                    <div className="relative">
+                    <div className="relative group/input">
+                      <label htmlFor="password" className="sr-only">Heslo</label>
                       <Input
+                        key={`password-${authMode}`}
+                        id="password"
                         type={showPassword ? "text" : "password"}
+                        name="password"
+                        autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
                         placeholder="••••••••"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         className="pl-10 pr-10 bg-black/20"
                         required
                       />
-                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" size={16} />
-                      <div onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer hover:text-white transition-colors text-white/30">
+                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within/input:text-blue-400 transition-colors" size={16} />
+                      <div
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowPassword(!showPassword); }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer hover:text-white transition-colors text-white/30 z-20 p-2"
+                      >
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </div>
                     </div>

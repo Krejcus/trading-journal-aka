@@ -1,8 +1,14 @@
 
-import React, { useState, useEffect } from 'react';
-import { Save, Shield, Trash2, Database, Key, Plus, Brain, Tag, X, Target, ListChecks, Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck, ShieldAlert, DollarSign, Activity, Check, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
-import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus } from '../types';
-import { supabase } from '../services/supabase';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Trash2, Plus, Brain, X, Target,
+  Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck,
+  ShieldAlert, Activity, Check, ChevronLeft,
+  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle
+} from 'lucide-react';
+import ConfirmationModal from './ConfirmationModal';
+import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus, SystemSettings } from '../types';
 
 interface SettingsProps {
   theme: 'dark' | 'light' | 'oled';
@@ -22,10 +28,14 @@ interface SettingsProps {
   setPsychoMetrics: React.Dispatch<React.SetStateAction<PsychoMetricConfig[]>>;
   weeklyFocusList: WeeklyFocus[];
   setWeeklyFocusList: React.Dispatch<React.SetStateAction<WeeklyFocus[]>>;
+  systemSettings: SystemSettings;
+  setSystemSettings: (settings: SystemSettings) => void;
+  standardGoals: string[];
+  setStandardGoals: (goals: string[]) => void;
+  onEnableNotifications?: () => void;
+  appVersion?: string;
+  onHardRefresh?: () => void;
 }
-
-const INSTRUMENT_LIST = ['MNQ', 'NQ', 'MES', 'ES', 'CL', 'GC', 'CUSTOM'];
-
 
 const Settings: React.FC<SettingsProps> = ({
   theme, userEmotions, setUserEmotions,
@@ -34,21 +44,28 @@ const Settings: React.FC<SettingsProps> = ({
   sessions, setSessions,
   ironRules, setIronRules,
   psychoMetrics, setPsychoMetrics,
-  weeklyFocusList, setWeeklyFocusList
+  weeklyFocusList, setWeeklyFocusList,
+  systemSettings, setSystemSettings,
+  standardGoals, setStandardGoals,
+  onEnableNotifications, appVersion, onHardRefresh
 }) => {
-  const [activeTab, setActiveTab] = useState<'psychology' | 'strategy' | 'market'>('psychology');
+  const [activeTab, setActiveTab] = useState<'psychology' | 'strategy' | 'market' | 'system'>('psychology');
+  const isDark = theme !== 'light';
 
+  // Local State for adding items
   const [newHtf, setNewHtf] = useState('');
   const [newLtf, setNewLtf] = useState('');
   const [newMistake, setNewMistake] = useState('');
   const [newEmoLabel, setNewEmoLabel] = useState('');
   const [newRuleLabel, setNewRuleLabel] = useState('');
   const [newRuleType, setNewRuleType] = useState<'ritual' | 'trading'>('ritual');
-
   const [newMetricLabel, setNewMetricLabel] = useState('');
-  const [newMetricColor, setNewMetricColor] = useState('#6366f1');
+  const [newMetricColor, setNewMetricColor] = useState('#3b82f6');
+  const [newStandardGoal, setNewStandardGoal] = useState('');
 
-  // Weekly Focus State
+  const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'metric' | 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
+
+  // Weekly Focus Logic
   const [selectedWeek, setSelectedWeek] = useState(() => {
     const now = new Date();
     const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
@@ -59,28 +76,11 @@ const Settings: React.FC<SettingsProps> = ({
     return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
   });
 
-  const getWeekRange = (weekISO: string) => {
-    if (!weekISO) return '';
-    const [year, week] = weekISO.split('-W').map(Number);
-    const d = new Date(Date.UTC(year, 0, 1));
-    const dayNum = d.getUTCDay() || 7;
-    // Align to the Monday of the requested week
-    d.setUTCDate(d.getUTCDate() + (week - 1) * 7 - dayNum + 1);
-
-    const monday = new Date(d);
-    const sunday = new Date(d);
-    sunday.setUTCDate(sunday.getUTCDate() + 6);
-
-    return `${monday.getUTCDate()}.${monday.getUTCMonth() + 1}. - ${sunday.getUTCDate()}.${sunday.getUTCMonth() + 1}.`;
-  };
-
-  const handleWeekChange = (direction: number) => {
+  const handleWeekChange = (dir: number) => {
     const [year, week] = selectedWeek.split('-W').map(Number);
     const d = new Date(Date.UTC(year, 0, 1));
     const dayNum = d.getUTCDay() || 7;
-    d.setUTCDate(d.getUTCDate() + (week - 1) * 7 - dayNum + 1 + (direction * 7));
-
-    // Recalculate ISO week for the new date
+    d.setUTCDate(d.getUTCDate() + (week - 1) * 7 - dayNum + 1 + (dir * 7));
     const target = new Date(d.getTime());
     const day = target.getUTCDay() || 7;
     target.setUTCDate(target.getUTCDate() + 4 - day);
@@ -89,444 +89,569 @@ const Settings: React.FC<SettingsProps> = ({
     setSelectedWeek(`${target.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`);
   };
 
+  const getWeekRange = (weekISO: string) => {
+    const [year, week] = weekISO.split('-W').map(Number);
+    const d = new Date(Date.UTC(year, 0, 1));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + (week - 1) * 7 - dayNum + 1);
+    const mon = new Date(d);
+    const sun = new Date(d);
+    sun.setUTCDate(sun.getUTCDate() + 6);
+    return `${mon.getUTCDate()}.${mon.getUTCMonth() + 1}. - ${sun.getUTCDate()}.${sun.getUTCMonth() + 1}.`;
+  };
+
   const currentWeeklyFocus = weeklyFocusList.find(wf => wf.weekISO === selectedWeek) || { id: '', weekISO: selectedWeek, goals: [] };
 
-  const updateWeeklyGoal = (index: number, text: string) => {
-    const newList = [...weeklyFocusList];
-    const existingIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
-
-    if (existingIdx !== -1) {
-      const updatedGoals = [...newList[existingIdx].goals];
-      updatedGoals[index] = text;
-      newList[existingIdx] = { ...newList[existingIdx], goals: updatedGoals.filter(g => g.trim() !== '' || index === updatedGoals.length - 1) };
-    } else {
-      newList.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [text] });
-    }
-    setWeeklyFocusList(newList);
-  };
-
-  const addWeeklyGoal = () => {
-    const newList = [...weeklyFocusList];
-    const existingIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
-    if (existingIdx !== -1) {
-      if (newList[existingIdx].goals.length < 5) {
-        newList[existingIdx] = { ...newList[existingIdx], goals: [...newList[existingIdx].goals, ''] };
-      }
-    } else {
-      newList.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [''] });
-    }
-    setWeeklyFocusList(newList);
-  };
-
-  const addHtf = () => { if (newHtf && !htfOptions.includes(newHtf)) { setHtfOptions([...htfOptions, newHtf]); setNewHtf(''); } };
-  const addLtf = () => { if (newLtf && !ltfOptions.includes(newLtf)) { setLtfOptions([...ltfOptions, newLtf]); setNewLtf(''); } };
+  // Handlers
   const addMistake = () => { if (newMistake && !userMistakes.includes(newMistake)) { setUserMistakes([...userMistakes, newMistake]); setNewMistake(''); } };
   const addEmo = () => { if (newEmoLabel) { setUserEmotions([...userEmotions, { id: Date.now().toString(), label: newEmoLabel, icon: '' }]); setNewEmoLabel(''); } };
+  const addMetric = () => { if (newMetricLabel.trim()) { setPsychoMetrics([...psychoMetrics, { id: `metric_${Date.now()}`, label: newMetricLabel, color: newMetricColor }]); setNewMetricLabel(''); } };
   const addIronRule = () => { if (newRuleLabel) { setIronRules([...ironRules, { id: `rule_${Date.now()}`, label: newRuleLabel, type: newRuleType }]); setNewRuleLabel(''); } };
-  const addMetric = () => {
-    if (newMetricLabel.trim()) {
-      setPsychoMetrics([...psychoMetrics, { id: `metric_${Date.now()}`, label: newMetricLabel, color: newMetricColor }]);
-      setNewMetricLabel('');
-    }
+  const addHtf = () => { if (newHtf && !htfOptions.includes(newHtf)) { setHtfOptions([...htfOptions, newHtf]); setNewHtf(''); } };
+  const addLtf = () => { if (newLtf && !ltfOptions.includes(newLtf)) { setLtfOptions([...ltfOptions, newLtf]); setNewLtf(''); } };
+  const addStandardGoal = () => { if (newStandardGoal && !standardGoals.includes(newStandardGoal)) { setStandardGoals([...standardGoals, newStandardGoal]); setNewStandardGoal(''); } };
+  const addSession = () => { setSessions([...sessions, { id: `session_${Date.now()}`, name: 'Nová Seance', startTime: '09:00', endTime: '17:00', color: '#6366f1' }]); };
+  const updateSession = (id: string, up: Partial<SessionConfig>) => setSessions(sessions.map(s => s.id === id ? { ...s, ...up } : s));
+
+  const updateSystem = (key: keyof SystemSettings, val: any) => {
+    setSystemSettings({ ...systemSettings, [key]: val });
   };
 
-  const removeHtf = (opt: string) => setHtfOptions(htfOptions.filter(o => o !== opt));
-  const removeLtf = (opt: string) => setLtfOptions(ltfOptions.filter(o => o !== opt));
-  const removeMistake = (opt: string) => setUserMistakes(userMistakes.filter(o => o !== opt));
-  const removeEmo = (id: string) => setUserEmotions(userEmotions.filter(e => e.id !== id));
-  const removeRule = (id: string) => setIronRules(ironRules.filter(r => r.id !== id));
-  const updateSession = (id: string, updates: Partial<SessionConfig>) => setSessions(sessions.map(s => s.id === id ? { ...s, ...updates } : s));
-  const addSession = () => {
-    const newSession: SessionConfig = { id: `session_${Date.now()}`, name: 'Nová Seance', startTime: '09:00', endTime: '17:00', color: '#6366f1' };
-    setSessions([...sessions, newSession]);
-  };
-  const removeSession = (id: string) => { if (sessions.length > 1) setSessions(sessions.filter(s => s.id !== id)); };
+  // Visual Components
+  const SectionHeader = ({ icon: Icon, title, subtitle, color }: any) => (
+    <div className="flex items-center gap-4 mb-6">
+      <div className={`p-3 rounded-2xl ${color} text-white shadow-lg`}>
+        <Icon size={20} />
+      </div>
+      <div>
+        <h3 className={`text-lg font-black tracking-tight uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{subtitle}</p>
+      </div>
+    </div>
+  );
 
-  const isDark = theme !== 'light';
-  const inputClass = `px-4 py-3 rounded-xl border focus:ring-2 focus:ring-blue-500/40 outline-none transition-all ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-white placeholder-slate-700' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400'
-    }`;
+  const InputField = ({ value, onChange, placeholder, onKeyDown, icon: Icon, type = "text" }: any) => (
+    <div className="relative group/input flex-1">
+      {Icon && <Icon size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within/input:text-blue-500 transition-colors" />}
+      <input
+        type={type}
+        value={value}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        className={`w-full ${Icon ? 'pl-11' : 'px-4'} py-3.5 rounded-2xl text-xs font-bold outline-none border transition-all ${isDark ? 'bg-white/5 border-white/5 focus:bg-white/10 focus:border-blue-500/50 text-white' : 'bg-slate-50 border-slate-200 focus:bg-white focus:border-blue-500'
+          }`}
+      />
+    </div>
+  );
+
+  const Card = ({ children, className = "" }: any) => (
+    <div className={`p-6 rounded-[32px] border ${isDark ? 'bg-[#0a0f1d]/60 border-white/5 shadow-2xl backdrop-blur-xl' : 'bg-white border-slate-200 shadow-sm'} ${className}`}>
+      {children}
+    </div>
+  );
+
+  const Toggle = ({ active, onClick, label, desc }: any) => (
+    <div className="flex items-center justify-between p-4 rounded-2xl border border-white/5 hover:bg-white/5 transition-all group cursor-pointer" onClick={onClick}>
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[11px] font-black uppercase tracking-widest">{label}</span>
+        {desc && <span className="text-[9px] text-slate-500 font-bold">{desc}</span>}
+      </div>
+      <div className={`w-10 h-5 rounded-full transition-all relative ${active ? 'bg-blue-600 shadow-[0_0_12px_rgba(37,99,235,0.6)]' : 'bg-slate-800'}`}>
+        <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${active ? 'left-6' : 'left-1'}`} />
+      </div>
+    </div>
+  );
 
   const tabs = [
-    { id: 'psychology', label: 'Psychologie', icon: Brain, description: 'Emoce a katalog chyb' },
-    { id: 'strategy', label: 'Strategie', icon: Target, description: 'Pravidla a konfluence' },
-    { id: 'market', label: 'Trh', icon: Clock, description: 'Seance a časový plán' },
+    { id: 'psychology', label: 'Psychologie', icon: Brain, desc: 'Emoce & Metriky' },
+    { id: 'strategy', label: 'Strategie', icon: Target, desc: 'Pravidla & Focus' },
+    { id: 'market', label: 'Trh', icon: Clock, desc: 'Seance & Čas' },
+    { id: 'system', label: 'Systém', icon: Shield, desc: 'Alpha Guardian' },
   ] as const;
 
   return (
-    <div className={`p-0.5 gap-0.5 flex flex-col lg:flex-row animate-in fade-in slide-in-from-bottom-4 duration-700 pb-16 max-w-7xl mx-auto rounded-[32px] border overflow-hidden ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-3xl' : 'bg-white border-slate-200 shadow-2xl'}`}>
-      {/* Integrated Sidebar Navigation */}
-      <aside className={`w-full lg:w-64 shrink-0 p-4 lg:p-6 flex flex-col border-b lg:border-b-0 lg:border-r ${isDark ? 'border-[var(--bg-input)] bg-[var(--bg-page)]/20' : 'border-slate-100 bg-slate-50/50'}`}>
-        <div className="mb-6 px-2 lg:px-4">
-          <h2 className={`text-xl font-black italic tracking-tighter mb-0.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>SETTINGS</h2>
-          <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">System Configuration Hub</p>
-        </div>
-        <div className="space-y-1.5">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-3.5 px-5 py-3.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all relative group
-                  ${isActive
-                    ? (isDark ? 'bg-blue-600 text-white shadow-xl shadow-blue-600/20 ring-1 ring-blue-500' : 'bg-blue-600 text-white shadow-lg shadow-blue-600/10')
-                    : (isDark ? 'text-slate-500 hover:text-slate-300 hover:bg-[var(--text-primary)]/5' : 'text-slate-400 hover:text-slate-900 hover:bg-white')
-                  }
-                `}
-              >
-                <Icon size={16} className={isActive ? 'text-white' : ''} />
-                <div className="text-left">
-                  <span className="block">{tab.label}</span>
-                  <span className={`text-[7px] opacity-60 font-bold normal-case tracking-tight block ${isActive ? 'text-white/80' : ''}`}>{tab.description}</span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </aside>
+    <div className="max-w-7xl mx-auto pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-6">
+      {/* Top Navbar Style */}
+      <div className={`p-2 rounded-[28px] border flex flex-wrap items-center justify-center gap-2 ${isDark ? 'bg-black/40 border-white/5 backdrop-blur-3xl' : 'bg-white border-slate-200 shadow-xl'}`}>
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`
+              flex items-center gap-3 px-6 py-2.5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 border relative group overflow-hidden
+              ${activeTab === tab.id
+                ? (isDark
+                  ? 'bg-blue-600 border-white/20 text-white shadow-[0_0_20px_rgba(37,99,235,0.4)]'
+                  : 'bg-blue-600 border-blue-500 text-white shadow-lg')
+                : (isDark
+                  ? 'bg-transparent border-transparent text-slate-500 hover:bg-white/5 hover:text-white'
+                  : 'bg-transparent border-transparent text-slate-400 hover:bg-slate-50 hover:text-slate-900')
+              }
+            `}
+          >
+            <tab.icon size={16} className={activeTab === tab.id ? 'animate-pulse' : ''} />
+            <span>{tab.label}</span>
+            {activeTab === tab.id && (
+              <motion.div layoutId="setting-tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-white/30" />
+            )}
+            <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 -translate-x-full group-hover:translate-x-full transition-all duration-1000"></div>
+          </button>
+        ))}
+      </div>
 
       {/* Main Content Area */}
-      <main className="flex-1 min-w-0 p-5 lg:p-8">
-        <div className="space-y-8">
-          {activeTab === 'psychology' && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
-              {/* Errors Section */}
-              <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[var(--bg-card)]/80 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-                <div className="flex items-center gap-3 mb-6">
-                  <div className="p-3 rounded-xl bg-rose-500 text-white shadow-lg shadow-rose-500/10"><AlertOctagon size={20} /></div>
-                  <div>
-                    <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>KATALOG CHYB</h3>
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Identifikace a eliminace špatných návyků</p>
-                  </div>
-                </div>
-
-                <div className={`mb-8 p-6 rounded-[24px] border border-dashed ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]/20' : 'border-slate-200 bg-slate-50'}`}>
-                  <h4 className={`text-sm font-bold uppercase tracking-widest mb-4 flex items-center gap-2 ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}><Activity size={16} /> Metriky Psychiky (Posuvníky)</h4>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-3">
-                      {psychoMetrics.map(metric => (
-                        <div key={metric.id} className={`p-3 rounded-xl border flex items-center justify-between group ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
+      <main className="min-w-0">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.3 }}
+            className="space-y-6"
+          >
+            {activeTab === 'psychology' && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <Card>
+                    <SectionHeader icon={Activity} title="Metriky Psychiky" subtitle="Posuvníky pro denní audit" color="bg-indigo-600" />
+                    <div className="space-y-3 mb-6">
+                      {psychoMetrics.map(m => (
+                        <div key={m.id} className={`flex items-center justify-between p-3.5 rounded-2xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'} group`}>
                           <div className="flex items-center gap-3">
-                            <div className="w-3 h-3 rounded-full shadow-[0_0_10px_currentColor]" style={{ backgroundColor: metric.color, color: metric.color }} />
-                            <span className="font-bold text-xs uppercase tracking-wider">{metric.label}</span>
+                            <div className="w-2.5 h-2.5 rounded-full shadow-[0_0_8px_currentColor]" style={{ color: m.color, backgroundColor: m.color }} />
+                            <span className="text-[10px] font-black uppercase tracking-widest">{m.label}</span>
                           </div>
-                          <button onClick={() => setPsychoMetrics(psychoMetrics.filter(m => m.id !== metric.id))} className="text-slate-500 hover:text-rose-500 transition-colors p-2 hover:bg-rose-500/10 rounded-lg"><Trash2 size={14} /></button>
+                          <button onClick={() => setItemToDelete({ id: m.id, type: 'metric' })} className="p-2 text-slate-500 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button>
                         </div>
                       ))}
                     </div>
-                    <div className={`space-y-3 p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-page)]/30 border-[var(--border-subtle)]' : 'bg-slate-50/30 border-slate-200'}`}>
-                      <p className="text-[10px] uppercase font-black text-slate-500">Přidat novou metriku</p>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newMetricLabel}
-                          onChange={(e) => setNewMetricLabel(e.target.value)}
-                          placeholder="Název (např. Focus)"
-                          className={`${inputClass} flex-1`}
-                        />
-                        <input
-                          type="color"
-                          value={newMetricColor}
-                          onChange={(e) => setNewMetricColor(e.target.value)}
-                          className="h-full w-12 p-0.5 bg-transparent border-0 rounded cursor-pointer self-stretch"
-                        />
-                        <button onClick={addMetric} className="px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all shadow-lg active:scale-95"><Plus size={18} /></button>
+                    <div className="flex gap-2 p-1.5 rounded-[22px] bg-indigo-500/5 border border-indigo-500/10">
+                      <input value={newMetricLabel} onChange={e => setNewMetricLabel(e.target.value)} placeholder="Název metriky..." className="flex-1 bg-transparent px-4 py-2 text-[10px] font-bold outline-none" />
+                      <input type="color" value={newMetricColor} onChange={e => setNewMetricColor(e.target.value)} className="w-10 h-10 rounded-xl bg-transparent border-0 cursor-pointer p-0" />
+                      <button onClick={addMetric} className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-500 shadow-lg active:scale-90 transition-all"><Plus size={20} /></button>
+                    </div>
+                  </Card>
+
+                  <Card>
+                    <SectionHeader icon={AlertOctagon} title="Katalog Chyb" subtitle="Identifikace slabých stránek" color="bg-rose-600" />
+                    <div className="flex flex-wrap gap-2 mb-6 max-h-[160px] overflow-y-auto custom-scrollbar pr-2">
+                      {userMistakes.map(m => (
+                        <div key={m} className={`group flex items-center gap-2 px-4 py-1.5 rounded-full border text-[9px] font-black uppercase transition-all ${isDark ? 'bg-rose-500/5 border-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white' : 'bg-rose-50 border-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white'}`}>
+                          <span>{m}</span>
+                          <button onClick={() => setUserMistakes(prev => prev.filter(x => x !== m))} className="opacity-40 group-hover:opacity-100"><X size={12} /></button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex gap-2 p-1.5 rounded-[22px] bg-rose-500/5 border border-rose-500/10">
+                      <InputField value={newMistake} onChange={(e: any) => setNewMistake(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addMistake()} placeholder="Přidat chybu (např. Overtrading)" />
+                      <button onClick={addMistake} className="w-12 rounded-xl bg-rose-600 text-white flex items-center justify-center hover:bg-rose-500 shadow-lg active:scale-95 transition-all"><Plus size={20} /></button>
+                    </div>
+                  </Card>
+                </div>
+
+                <Card>
+                  <SectionHeader icon={Brain} title="Emoční Mapa" subtitle="Vliv emocí na rozhodování" color="bg-purple-600" />
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+                    {userEmotions.map(emo => (
+                      <div key={emo.id} className={`p-4 rounded-2xl border flex flex-col items-center justify-center gap-2 text-center group transition-all duration-300 hover:translate-y-[-2px] relative ${isDark ? 'bg-white/5 border-white/5 hover:border-purple-500/40 hover:bg-purple-500/5' : 'bg-slate-50 border-slate-100 hover:shadow-md'}`}>
+                        <div className="w-1.5 h-1.5 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
+                        <span className="text-[10px] font-black uppercase tracking-tight text-slate-400 group-hover:text-purple-400">{emo.label}</span>
+                        <button onClick={() => setUserEmotions(prev => prev.filter(e => e.id !== emo.id))} className="absolute top-2 right-2 p-1 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><X size={10} /></button>
                       </div>
-                    </div>
+                    ))}
                   </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
-                  {userMistakes.map(mistake => (
-                    <div key={mistake} className={`p-4 rounded-2xl border flex items-center justify-between group transition-all hover:scale-[1.01] ${isDark ? 'bg-[var(--bg-input)]/50 border-[var(--border-subtle)] hover:border-rose-500/30' : 'bg-slate-50 border-slate-100 hover:shadow-sm'}`}>
-                      <span className="text-[10px] font-black uppercase tracking-tight text-slate-400 group-hover:text-rose-400 transition-colors">{mistake}</span>
-                      <button onClick={() => removeMistake(mistake)} className="p-2 rounded-lg bg-rose-500/10 text-rose-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500 hover:text-white"><X size={12} /></button>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex flex-col sm:flex-row gap-3 p-3 rounded-2xl bg-slate-950/20 border border-white/5 backdrop-blur-xl">
-                  <input value={newMistake} onChange={e => setNewMistake(e.target.value)} onKeyDown={e => e.key === 'Enter' && addMistake()} className={`${inputClass} flex-1 py-3 px-4 text-xs`} placeholder="Nová typická bota..." />
-                  <button onClick={addMistake} className="px-6 py-3 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-rose-600/20 active:scale-95 transition-all flex items-center justify-center gap-2"><Plus size={16} /> Přidat chybu</button>
-                </div>
-              </section>
-
-              {/* Emotions Section */}
-              <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[var(--bg-card)]/80 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-                <div className="flex items-center gap-3 mb-6">
-                  <div className="p-3 rounded-xl bg-purple-500 text-white shadow-lg shadow-purple-500/10"><Brain size={20} /></div>
-                  <div>
-                    <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>EMOČNÍ MAPA</h3>
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Sledování vlivu emocí na tvůj trading</p>
+                  <div className="flex gap-2 max-w-md mx-auto p-1.5 rounded-[22px] bg-purple-500/5 border border-purple-500/10">
+                    <InputField value={newEmoLabel} onChange={(e: any) => setNewEmoLabel(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addEmo()} placeholder="Nová emoce..." />
+                    <button onClick={addEmo} className="px-6 rounded-xl bg-purple-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-purple-500 shadow-lg active:scale-95 transition-all">Přidat</button>
                   </div>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
-                  {userEmotions.map(emo => (
-                    <div key={emo.id} className={`p-4 rounded-2xl border flex flex-col items-center justify-center gap-2 group transition-all hover:scale-[1.02] ${isDark ? 'bg-[var(--bg-input)]/50 border-[var(--border-subtle)] hover:border-purple-500/30' : 'bg-slate-50 border-slate-100 hover:shadow-sm'}`}>
-                      <span className="text-[10px] font-black uppercase tracking-tight text-slate-400 group-hover:text-purple-400 transition-colors text-center">{emo.label}</span>
-                      <button onClick={() => removeEmo(emo.id)} className="p-1.5 rounded-lg bg-rose-500/10 text-rose-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500 hover:text-white"><Trash2 size={10} /></button>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex flex-col sm:flex-row gap-3 p-3 rounded-2xl bg-slate-950/20 border border-white/5 backdrop-blur-xl">
-                  <input value={newEmoLabel} onChange={e => setNewEmoLabel(e.target.value)} onKeyDown={e => e.key === 'Enter' && addEmo()} className={`${inputClass} flex-1 py-3 px-4 text-xs`} placeholder="Jak se cítíš?" />
-                  <button onClick={addEmo} className="px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-purple-600/20 active:scale-95 transition-all flex items-center justify-center gap-2"><Plus size={16} /> Přidat emoci</button>
-                </div>
-              </section>
-            </div>
-          )
-          }
+                </Card>
+              </div>
+            )}
 
-          {
-            activeTab === 'strategy' && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
-                {/* Iron Rules */}
-                <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[#0a0f1d]/80 border-blue-500/10' : 'bg-white border-slate-200 shadow-sm'}`}>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="p-3 rounded-xl bg-blue-500 text-white shadow-lg shadow-blue-500/10"><ShieldCheck size={20} /></div>
-                    <div>
-                      <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>ŽELEZNÁ PRAVIDLA</h3>
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Master Checklist tvého obchodního dne</p>
-                    </div>
-                  </div>
-                  <div className="space-y-2 mb-6">
+            {activeTab === 'strategy' && (
+              <div className="space-y-6">
+                <Card>
+                  <SectionHeader icon={ShieldCheck} title="Železná Pravidla" subtitle="Tvůj denní kodex disciplíny" color="bg-blue-600" />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                     {ironRules.map(rule => (
-                      <div key={rule.id} className={`p-4 rounded-2xl border flex items-center justify-between group transition-all ${isDark ? 'bg-[var(--bg-input)]/50 border-[var(--border-subtle)] hover:border-blue-500/30' : 'bg-slate-50 border-slate-100 hover:shadow-sm'}`}>
+                      <div key={rule.id} className={`relative p-5 rounded-[24px] border group transition-all ${isDark ? 'bg-white/5 border-white/5 hover:border-blue-500/30' : 'bg-slate-50 border-slate-100 hover:shadow-lg'}`}>
                         <div className="flex items-center gap-4">
-                          <div className={`p-2.5 rounded-xl transition-all group-hover:scale-105 ${rule.type === 'ritual' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/10' : 'bg-blue-600 text-white shadow-lg shadow-blue-600/10'}`}>
-                            {rule.type === 'ritual' ? <Zap size={18} /> : <ShieldAlert size={18} />}
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg ${rule.type === 'ritual' ? 'bg-indigo-600 text-white shadow-indigo-600/20' : 'bg-blue-600 text-white shadow-blue-600/20'}`}>
+                            {rule.type === 'ritual' ? <Zap size={20} /> : <ShieldAlert size={20} />}
                           </div>
                           <div>
-                            <p className="text-xs font-black uppercase tracking-tight mb-0.5">{rule.label}</p>
+                            <p className="text-xs font-black uppercase tracking-tight mb-1">{rule.label}</p>
                             <div className="flex items-center gap-2">
-                              <p className={`text-[8px] font-black uppercase tracking-widest ${rule.type === 'ritual' ? 'text-indigo-400' : 'text-blue-400'}`}>{rule.type === 'ritual' ? 'Daily Ritual' : 'Hard Rule'}</p>
-                              <span className="w-0.5 h-0.5 rounded-full bg-slate-600" />
-                              <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Unbreakable</p>
+                              <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${rule.type === 'ritual' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                                {rule.type === 'ritual' ? 'Ritual' : 'Hard Rule'}
+                              </span>
+                              <div className="w-1 h-1 rounded-full bg-slate-600" />
+                              <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">Unbreakable</span>
                             </div>
                           </div>
                         </div>
-                        <button onClick={() => removeRule(rule.id)} className="p-2.5 rounded-xl bg-rose-500/10 text-rose-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500 hover:text-white"><Trash2 size={16} /></button>
+                        <button onClick={() => setItemToDelete({ id: rule.id, type: 'rule' })} className="absolute top-4 right-4 p-2 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button>
                       </div>
                     ))}
                   </div>
-                  <div className={`flex flex-col sm:flex-row gap-3 p-3 rounded-2xl border backdrop-blur-xl ${isDark ? 'bg-[var(--bg-card)]/20 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                    <input value={newRuleLabel} onChange={e => setNewRuleLabel(e.target.value)} className={`${inputClass} flex-[2] py-3 px-4 text-xs truncate`} placeholder="Nadefinuj nové pravidlo..." />
-                    <select value={newRuleType} onChange={e => setNewRuleType(e.target.value as any)} className={`${inputClass} flex-1 min-w-[120px] py-3 px-4 text-[9px] uppercase font-black tracking-widest`}>
+                  <div className="flex flex-col sm:flex-row gap-3 p-2 rounded-[28px] bg-blue-500/5 border border-blue-500/10">
+                    <InputField value={newRuleLabel} onChange={(e: any) => setNewRuleLabel(e.target.value)} placeholder="Nadefinuj nové pravidlo..." />
+                    <select value={newRuleType} onChange={e => setNewRuleType(e.target.value as any)} className={`px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
                       <option value="ritual">Rituál</option>
                       <option value="trading">Pravidlo</option>
                     </select>
-                    <button onClick={addIronRule} className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-blue-600/20 active:scale-95 transition-all flex items-center justify-center gap-2"><Plus size={16} /> Přidat</button>
+                    <button onClick={addIronRule} className="px-8 py-3 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-blue-600/40 hover:bg-blue-500 transition-all">Přidat Pravidlo</button>
                   </div>
-                </section>
+                </Card>
 
-                {/* Confluence Hub */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[#0a0f1d]/80 border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
-                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2.5">
-                      <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-500"><Activity size={16} /></div>
-                      HTF Confluence
-                    </h4>
-                    <div className="flex flex-wrap gap-2 mb-6">
-                      {htfOptions.map(opt => (
-                        <div key={opt} className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-600/10 border border-blue-500/20 text-[9px] font-black uppercase text-blue-400 group hover:bg-blue-600 hover:text-white transition-all">
-                          <span>{opt}</span>
-                          <button onClick={() => removeHtf(opt)} className="text-rose-500 hover:text-white"><X size={14} /></button>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex gap-2.5">
-                      <input value={newHtf} onChange={e => setNewHtf(e.target.value)} onKeyDown={e => e.key === 'Enter' && addHtf()} className={`${inputClass} flex-1 py-3 px-4 text-xs`} placeholder="Nová HTF..." />
-                      <button onClick={addHtf} className="p-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg transition-all active:scale-90"><Plus size={20} /></button>
-                    </div>
-                  </section>
-                  <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[#0a0f1d]/80 border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
-                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2.5">
-                      <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-500"><Activity size={16} /></div>
-                      LTF Confluence
-                    </h4>
-                    <div className="flex flex-wrap gap-2 mb-6">
-                      {ltfOptions.map(opt => (
-                        <div key={opt} className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-600/10 border border-blue-500/20 text-[9px] font-black uppercase text-blue-400 group hover:bg-blue-600 hover:text-white transition-all">
-                          <span>{opt}</span>
-                          <button onClick={() => removeLtf(opt)} className="text-rose-500 hover:text-white"><X size={14} /></button>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex gap-2.5">
-                      <input value={newLtf} onChange={e => setNewLtf(e.target.value)} onKeyDown={e => e.key === 'Enter' && addLtf()} className={`${inputClass} flex-1 py-3 px-4 text-xs`} placeholder="Nová LTF..." />
-                      <button onClick={addLtf} className="p-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg transition-all active:scale-90"><Plus size={20} /></button>
-                    </div>
-                  </section>
-                </div>
-
-                {/* Weekly Focus Section */}
-                <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[#0a0f1d]/80 border-blue-500/10' : 'bg-white border-slate-200 shadow-sm'}`}>
-                  <div className="flex items-center justify-between mb-6">
-                    <div className="flex items-center gap-3">
-                      <div className="p-3 rounded-xl bg-emerald-500 text-white shadow-lg shadow-emerald-500/10"><ListChecks size={20} /></div>
-                      <div>
-                        <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>TÝDENNÍ CÍLE</h3>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Specifické focus pointy pro vybraný týden</p>
+                <Card>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+                    <SectionHeader icon={Target} title="Weekly Focus" subtitle="Tvůj hlavní směr pro tento týden" color="bg-emerald-600" />
+                    <div className={`flex items-center gap-2 p-1.5 rounded-[22px] border ${isDark ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200 shadow-inner'}`}>
+                      <button onClick={() => handleWeekChange(-1)} className="p-2 rounded-xl hover:bg-white/5 transition-all text-slate-400"><ChevronLeft size={18} /></button>
+                      <div className="px-4 text-center">
+                        <p className={`text-[10px] font-black uppercase tracking-widest whitespace-nowrap ${isDark ? 'text-emerald-500' : 'text-emerald-600'}`}>{selectedWeek}</p>
+                        <p className="text-[7px] font-black text-slate-500 leading-none">{getWeekRange(selectedWeek)}</p>
                       </div>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <div className={`flex items-center gap-2 p-1.5 rounded-2xl border transition-all ${isDark ? 'bg-slate-900/50 border-white/5' : 'bg-slate-50 border-slate-200 shadow-inner'}`}>
-                        <button
-                          onClick={() => handleWeekChange(-1)}
-                          className={`p-2 rounded-xl transition-all active:scale-90 ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-black/5 text-slate-600'}`}
-                        >
-                          <ChevronLeft size={16} />
-                        </button>
-                        <div className="px-4 py-1 text-center min-w-[120px]">
-                          <p className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-emerald-500' : 'text-emerald-600'}`}>{selectedWeek}</p>
-                          <p className="text-[8px] font-black text-slate-500 uppercase tracking-tighter">{getWeekRange(selectedWeek)}</p>
-                        </div>
-                        <button
-                          onClick={() => handleWeekChange(1)}
-                          className={`p-2 rounded-xl transition-all active:scale-90 ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-black/5 text-slate-600'}`}
-                        >
-                          <ChevronRight size={16} />
-                        </button>
-                      </div>
+                      <button onClick={() => handleWeekChange(1)} className="p-2 rounded-xl hover:bg-white/5 transition-all text-slate-400"><ChevronRight size={18} /></button>
                     </div>
                   </div>
 
-                  <div className="space-y-3 mb-6">
-                    {currentWeeklyFocus.goals.map((goal, idx) => (
-                      <div key={idx} className={`flex items-center gap-3 p-3 rounded-2xl border ${isDark ? 'bg-[var(--bg-input)]/30 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                        <span className="text-[10px] font-black text-emerald-500 w-4">{idx + 1}.</span>
-                        <input
-                          value={goal}
-                          onChange={(e) => updateWeeklyGoal(idx, e.target.value)}
-                          className="flex-1 bg-transparent border-0 outline-none text-xs font-bold"
-                          placeholder="Zadej týdenní cíl..."
-                        />
-                        <button
-                          onClick={() => {
-                            const newList = [...weeklyFocusList];
-                            const existingIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
-                            if (existingIdx !== -1) {
-                              const updatedGoals = newList[existingIdx].goals.filter((_, i) => i !== idx);
-                              newList[existingIdx] = { ...newList[existingIdx], goals: updatedGoals };
+                  <div className="space-y-3 mb-8">
+                    <AnimatePresence>
+                      {currentWeeklyFocus.goals.map((goal, idx) => (
+                        <motion.div key={`${selectedWeek}-${idx}`} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95 }} className={`flex items-center gap-4 p-4 rounded-2xl border transition-all ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}>
+                          <div className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-500 flex items-center justify-center text-[10px] font-black">{idx + 1}</div>
+                          <input
+                            value={goal}
+                            onChange={(e) => {
+                              const newList = [...weeklyFocusList];
+                              const exIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
+                              if (exIdx !== -1) {
+                                const newGoals = [...newList[exIdx].goals];
+                                newGoals[idx] = e.target.value;
+                                newList[exIdx] = { ...newList[exIdx], goals: newGoals };
+                              } else {
+                                newList.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [e.target.value] });
+                              }
                               setWeeklyFocusList(newList);
+                            }}
+                            className="flex-1 bg-transparent border-0 outline-none text-xs font-bold"
+                            placeholder="Zadej týdenní focus..."
+                          />
+                          <button onClick={() => {
+                            const nl = [...weeklyFocusList];
+                            const i = nl.findIndex(wf => wf.weekISO === selectedWeek);
+                            if (i !== -1) {
+                              nl[i] = { ...nl[i], goals: nl[i].goals.filter((_, gx) => gx !== idx) };
+                              setWeeklyFocusList(nl);
                             }
-                          }}
-                          className="p-2 text-slate-500 hover:text-rose-500 transition-colors"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    ))}
+                          }} className="p-2 text-slate-600 hover:text-rose-500 transition-colors"><Trash2 size={14} /></button>
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
 
                     {currentWeeklyFocus.goals.length < 5 && (
-                      <button
-                        onClick={addWeeklyGoal}
-                        className={`w-full py-4 rounded-2xl border border-dashed flex items-center justify-center gap-2 group transition-all ${isDark ? 'border-[var(--border-subtle)] hover:border-emerald-500/40 hover:bg-emerald-500/5' : 'border-slate-200 hover:border-emerald-500/40 hover:bg-emerald-50'}`}
-                      >
-                        <Plus size={16} className="text-slate-500 group-hover:text-emerald-500" />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 group-hover:text-emerald-500">Přidat týdenní cíl</span>
+                      <button onClick={() => {
+                        const nl = [...weeklyFocusList];
+                        const i = nl.findIndex(wf => wf.weekISO === selectedWeek);
+                        if (i !== -1) nl[i] = { ...nl[i], goals: [...nl[i].goals, ''] };
+                        else nl.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [''] });
+                        setWeeklyFocusList(nl);
+                      }} className={`w-full py-5 rounded-[22px] border border-dashed text-[10px] font-black uppercase tracking-[0.2em] transition-all ${isDark ? 'border-white/10 text-slate-500 hover:border-emerald-500/50 hover:text-emerald-500 hover:bg-emerald-500/5' : 'border-slate-300 text-slate-400 hover:border-emerald-500/50 hover:bg-emerald-50 hover:text-emerald-600'}`}>
+                        + Další Týdenní Cíl
                       </button>
                     )}
                   </div>
+                </Card>
 
-                  <div className={`p-4 rounded-2xl ${isDark ? 'bg-blue-500/5 text-blue-400' : 'bg-blue-50 text-blue-600'} border border-blue-500/10`}>
-                    <p className="text-[9px] font-bold leading-relaxed">
-                      <Zap size={10} className="inline mr-1 pb-0.5" />
-                      Tyto cíle se ti automaticky zobrazí v každodenním večerním auditu pro daný týden. Pomohou ti soustředit se na konkrétní zlepšení nad rámec tvých železných pravidel.
-                    </p>
+                <Card>
+                  <SectionHeader icon={Target} title="Výchozí Cíle Dne" subtitle="Automaticky předvyplněno v deníku" color="bg-orange-600" />
+                  <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
+                    {standardGoals.map(goal => (
+                      <span key={goal} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black uppercase ${isDark ? 'bg-white/5 border-white/10 text-orange-400 group hover:border-orange-500/50' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>
+                        {goal}
+                        <button onClick={() => setStandardGoals(standardGoals.filter(x => x !== goal))} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
+                      </span>
+                    ))}
                   </div>
-                </section>
-              </div>
-            )
-          }
+                  <div className="flex gap-2">
+                    <InputField value={newStandardGoal} onChange={(e: any) => setNewStandardGoal(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addStandardGoal()} placeholder="Nový výchozí cíl..." />
+                    <button onClick={addStandardGoal} className="px-6 rounded-xl bg-orange-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-orange-500 shadow-lg active:scale-95 transition-all">Přidat</button>
+                  </div>
+                </Card>
 
-          {
-            activeTab === 'market' && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
-                <section className={`p-6 rounded-[32px] border relative overflow-hidden ${isDark ? 'bg-[var(--bg-card)]/80 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-                  <div className="flex items-center justify-between mb-8">
-                    <div className="flex items-center gap-3">
-                      <div className="p-3 rounded-xl bg-indigo-600 text-white shadow-lg shadow-indigo-500/10"><Globe size={20} /></div>
-                      <div>
-                        <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>OBCHODNÍ SEANCE</h3>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Definice obchodního dne s minutovou přesností</p>
-                      </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <Card>
+                    <SectionHeader icon={Activity} title="HTF Confluence" subtitle="Vyšší časové rámce" color="bg-emerald-600" />
+                    <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
+                      {htfOptions.map(opt => (
+                        <span key={opt} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black uppercase ${isDark ? 'bg-white/5 border-white/10 text-emerald-400 group hover:border-emerald-500/50' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`}>
+                          {opt}
+                          <button onClick={() => setHtfOptions(prev => prev.filter(x => x !== opt))} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
+                        </span>
+                      ))}
                     </div>
-                    <button onClick={addSession} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-xl shadow-indigo-600/20 flex items-center gap-2 active:scale-95"><Plus size={18} /> Přidat seanci</button>
+                    <div className="flex gap-2">
+                      <InputField value={newHtf} onChange={(e: any) => setNewHtf(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addHtf()} placeholder="Nová HTF..." />
+                      <button onClick={addHtf} className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center hover:bg-emerald-500 shadow-lg active:scale-95 transition-all"><Plus size={24} /></button>
+                    </div>
+                  </Card>
+                  <Card>
+                    <SectionHeader icon={Monitor} title="LTF Confluence" subtitle="Potvrzení vstupu" color="bg-blue-600" />
+                    <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
+                      {ltfOptions.map(opt => (
+                        <span key={opt} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black uppercase ${isDark ? 'bg-white/5 border-white/10 text-blue-400 hover:border-blue-500/50' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
+                          {opt}
+                          <button onClick={() => setLtfOptions(prev => prev.filter(x => x !== opt))} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <InputField value={newLtf} onChange={(e: any) => setNewLtf(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addLtf()} placeholder="Nová LTF..." />
+                      <button onClick={addLtf} className="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 shadow-lg active:scale-95 transition-all"><Plus size={24} /></button>
+                    </div>
+                  </Card>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'market' && (
+              <div className="space-y-6">
+                <Card>
+                  <div className="flex items-center justify-between mb-8">
+                    <SectionHeader icon={Globe} title="Obchodní Seance" subtitle="Harmonogram tvého dne" color="bg-indigo-600" />
+                    <button onClick={addSession} className="px-6 py-3 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-indigo-600/30 hover:bg-indigo-500 active:scale-95 transition-all flex items-center gap-2"><Plus size={16} /> Přidat seanci</button>
                   </div>
 
-                  {/* Updated Timeline Visualization */}
-                  <div className={`mb-8 p-6 rounded-[32px] border ${isDark ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
-                    <div className="flex justify-between text-[9px] font-black text-slate-500 uppercase mb-4 px-2">
+                  <div className={`mb-10 p-8 rounded-[40px] border ${isDark ? 'bg-black/30 border-white/5' : 'bg-slate-50 border-slate-100'} overflow-hidden relative group`}>
+                    <div className="flex justify-between text-[8px] font-black text-slate-500 uppercase mb-5 px-3">
                       {[0, 3, 6, 9, 12, 15, 18, 21].map(h => <span key={h}>{h}h</span>)}
                       <span>24h</span>
                     </div>
-                    <div className="h-6 w-full bg-slate-900 rounded-full relative overflow-hidden flex shadow-inner group">
-                      {sessions.map(session => {
-                        const startTime = session.startTime || '09:00';
-                        const endTime = session.endTime || '17:00';
-                        const [startH, startM] = startTime.split(':').map(Number);
-                        const [endH, endM] = endTime.split(':').map(Number);
-
-                        const startMinutes = startH * 60 + (startM || 0);
-                        const endMinutes = endH * 60 + (endM || 0);
-
-                        const start = (startMinutes / 1440) * 100;
-                        const end = (endMinutes / 1440) * 100;
-
+                    <div className="h-4 w-full bg-slate-900 rounded-full relative shadow-inner flex items-center">
+                      <div className="absolute inset-x-0 h-[1px] bg-white/5 top-1/2" />
+                      {sessions.map(s => {
+                        const [sh, sm] = (s.startTime || '09:00').split(':').map(Number);
+                        const [eh, em] = (s.endTime || '17:00').split(':').map(Number);
+                        const start = ((sh * 60 + sm) / 1440) * 100;
+                        const end = ((eh * 60 + em) / 1440) * 100;
                         const width = end >= start ? end - start : (100 - start) + end;
-
-                        const blockColor = session.color || '#3b82f6';
-
-                        if (end < start) {
-                          return (
-                            <React.Fragment key={session.id}>
-                              <div className="absolute h-full opacity-70 group-hover:opacity-100 transition-all duration-500" style={{ left: `${start}%`, width: `${100 - start}%`, backgroundColor: blockColor }} />
-                              <div className="absolute h-full opacity-70 group-hover:opacity-100 transition-all duration-500" style={{ left: '0%', width: `${end}%`, backgroundColor: blockColor }} />
-                            </React.Fragment>
-                          );
-                        }
-                        return <div key={session.id} className="absolute h-full opacity-70 border-x border-white/10 group-hover:opacity-100 transition-all duration-500" style={{ left: `${start}%`, width: `${width}%`, backgroundColor: blockColor }} />;
+                        return (
+                          <div key={s.id} className="absolute h-full opacity-80 rounded-full transition-all duration-500 hover:opacity-100 group-hover:h-[120%]" style={{ left: `${start}%`, width: `${width}%`, backgroundColor: s.color || '#3b82f6', boxShadow: `0 0 15px ${s.color}40` }} />
+                        );
                       })}
-                      <div className="absolute inset-x-0 h-px bg-white/10 top-1/2" />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {sessions.map(session => (
-                      <div key={session.id} className={`p-5 rounded-[32px] border relative group transition-all hover:scale-[1.01] ${isDark ? 'bg-[var(--bg-input)]/80 border-[var(--border-subtle)] hover:border-indigo-500/20' : 'bg-white border-slate-100 shadow-sm hover:shadow-lg'}`}>
-                        <button onClick={() => removeSession(session.id)} className="absolute -top-2 -right-2 p-2 bg-rose-600 text-white rounded-xl opacity-0 group-hover:opacity-100 transition-all shadow-xl active:scale-95 z-10"><X size={14} /></button>
-                        <div className="space-y-4">
+                    {sessions.map(s => (
+                      <div key={s.id} className={`p-6 rounded-[32px] border relative transition-all duration-300 hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:border-indigo-500/40' : 'bg-white border-slate-100 hover:shadow-xl'}`}>
+                        <div className="space-y-5">
                           <div className="flex items-center gap-3">
-                            <div className="relative group/color shrink-0">
-                              <input type="color" value={session.color || '#3b82f6'} onChange={e => updateSession(session.id, { color: e.target.value })} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
-                              <div className="w-8 h-8 rounded-xl shadow-lg transition-transform group-hover/color:scale-110 border-2 border-white/10" style={{ backgroundColor: session.color || '#3b82f6' }} />
+                            <div className="relative group shrink-0">
+                              <input type="color" value={s.color || '#3b82f6'} onChange={e => updateSession(s.id, { color: e.target.value })} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
+                              <div className="w-8 h-8 rounded-xl border-2 border-white/10 shadow-lg" style={{ backgroundColor: s.color || '#3b82f6' }} />
                             </div>
-                            <input value={session.name} onChange={e => updateSession(session.id, { name: e.target.value })} className={`flex-1 bg-transparent text-sm font-black uppercase tracking-widest outline-none border-b border-transparent focus:border-indigo-500 py-0.5 transition-all ${isDark ? 'text-white' : 'text-slate-900'}`} placeholder="Název" />
+                            <input value={s.name} onChange={e => updateSession(s.id, { name: e.target.value })} className={`flex-1 bg-transparent text-sm font-black uppercase tracking-tighter outline-none border-b border-transparent focus:border-indigo-500 py-1 transition-all ${isDark ? 'text-white' : 'text-slate-900'}`} />
                           </div>
-
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-1.5">
-                              <label className="text-[8px] font-black uppercase text-slate-500 flex items-center gap-1.5"><Clock size={10} className="text-indigo-400" /> Start</label>
-                              <input type="time" value={session.startTime} onChange={e => updateSession(session.id, { startTime: e.target.value })} className={`${inputClass} w-full py-2 px-3 text-[10px] font-black tracking-widest`} />
+                              <label className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Start Time</label>
+                              <input type="time" value={s.startTime} onChange={e => updateSession(s.id, { startTime: e.target.value })} className={`w-full px-3 py-2 rounded-xl text-xs font-bold ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`} />
                             </div>
                             <div className="space-y-1.5">
-                              <label className="text-[8px] font-black uppercase text-slate-500 flex items-center gap-1.5"><Clock size={10} className="text-rose-400" /> Konec</label>
-                              <input type="time" value={session.endTime} onChange={e => updateSession(session.id, { endTime: e.target.value })} className={`${inputClass} w-full py-2 px-3 text-[10px] font-black tracking-widest`} />
+                              <label className="text-[8px] font-black uppercase text-slate-500 tracking-widest">End Time</label>
+                              <input type="time" value={s.endTime} onChange={e => updateSession(s.id, { endTime: e.target.value })} className={`w-full px-3 py-2 rounded-xl text-xs font-bold ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`} />
                             </div>
                           </div>
                         </div>
+                        <button onClick={() => setSessions(prev => prev.filter(x => x.id !== s.id))} className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-rose-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg active:scale-90"><Trash2 size={14} /></button>
                       </div>
                     ))}
                   </div>
-                </section>
+                </Card>
               </div>
-            )
-          }
-        </div>
+            )}
+
+            {activeTab === 'system' && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Seance & Alerty */}
+                  <Card>
+                    <SectionHeader icon={Bell} title="Seance & Alerty" subtitle="Push notifikace do telefonu" color="bg-blue-600" />
+                    <div className="space-y-2">
+                      <Toggle
+                        active={systemSettings.sessionAlertsEnabled}
+                        onClick={() => updateSystem('sessionAlertsEnabled', !systemSettings.sessionAlertsEnabled)}
+                        label="Aktivovat Notifikace Seancí"
+                        desc="Ponechte vypnuté, pokud nechcete být rušeni."
+                      />
+                      <AnimatePresence>
+                        {systemSettings.sessionAlertsEnabled && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="space-y-2 pl-4 border-l border-blue-500/20 ml-2 py-2">
+                            <Toggle active={systemSettings.sessionStartAlert15m} onClick={() => updateSystem('sessionStartAlert15m', !systemSettings.sessionStartAlert15m)} label="15 minut před startem" />
+                            <Toggle active={systemSettings.sessionStartAlertExact} onClick={() => updateSystem('sessionStartAlertExact', !systemSettings.sessionStartAlertExact)} label="Při startu seance" />
+                            <Toggle active={systemSettings.sessionEndAlertExact} onClick={() => updateSystem('sessionEndAlertExact', !systemSettings.sessionEndAlertExact)} label="Při konci seance" />
+                            <Toggle active={systemSettings.sessionEndAlert10m} onClick={() => updateSystem('sessionEndAlert10m', !systemSettings.sessionEndAlert10m)} label="10 minut po (čas na audit)" />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </Card>
+
+                  {/* Alpha Guardian */}
+                  <Card>
+                    <SectionHeader icon={Shield} title="Alpha Guardian" subtitle="Hlídač disciplíny a procesu" color="bg-emerald-600" />
+                    <div className="space-y-2">
+                      <Toggle
+                        active={systemSettings.guardianEnabled}
+                        onClick={() => updateSystem('guardianEnabled', !systemSettings.guardianEnabled)}
+                        label="Aktivovat Alpha Guardian"
+                        desc="Integrovaný risk manager a mentor."
+                      />
+                      <AnimatePresence>
+                        {systemSettings.guardianEnabled && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="space-y-2 pl-4 border-l border-emerald-500/20 ml-2 py-2">
+                            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-2 px-4">Upozornění na přípravu</p>
+                            <Toggle active={systemSettings.morningPrepAlert60m} onClick={() => updateSystem('morningPrepAlert60m', !systemSettings.morningPrepAlert60m)} label="60 minut před startem" desc="Informační připomínka" />
+                            <Toggle active={systemSettings.morningPrepAlert15m} onClick={() => updateSystem('morningPrepAlert15m', !systemSettings.morningPrepAlert15m)} label="15 minut před startem" desc="Důrazná připomínka" />
+                            <Toggle active={systemSettings.morningPrepAlertCritical} onClick={() => updateSystem('morningPrepAlertCritical', !systemSettings.morningPrepAlertCritical)} label="Start seance (Kritické)" desc="Pruhy na dashboardu" />
+
+                            <div className="h-px bg-white/5 my-4" />
+                            <Toggle active={systemSettings.strictModeEnabled} onClick={() => updateSystem('strictModeEnabled', !systemSettings.strictModeEnabled)} label="Strict Enforcement" desc="Blokovat zápis obchodu bez přípravy" />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </Card>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Večerní Audit */}
+                  <Card>
+                    <SectionHeader icon={Check} title="Večerní Audit" subtitle="Uzavření obchodního dne" color="bg-indigo-600" />
+                    <div className="space-y-4">
+                      <Toggle
+                        active={systemSettings.eveningAuditAlertEnabled}
+                        onClick={() => updateSystem('eveningAuditAlertEnabled', !systemSettings.eveningAuditAlertEnabled)}
+                        label="Připomínka Auditu"
+                        desc="Kdy chcete uzavřít deník?"
+                      />
+                      {systemSettings.eveningAuditAlertEnabled && (
+                        <div className="px-4">
+                          <label className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-1.5 block">Čas notifikace</label>
+                          <input
+                            type="time"
+                            value={systemSettings.eveningAuditAlertTime}
+                            onChange={(e) => updateSystem('eveningAuditAlertTime', e.target.value)}
+                            className={`w-full max-w-[120px] px-4 py-2.5 rounded-2xl text-xs font-bold outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'
+                              }`}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+
+                  {/* Resty z minulosti */}
+                  <Card>
+                    <SectionHeader icon={AlertCircle} title="Backlog Guardian" subtitle="Vymahač dluhů z minulosti" color="bg-rose-600" />
+                    <div className="space-y-2">
+                      <Toggle
+                        active={systemSettings.morningWakeUpDebtAlert}
+                        onClick={() => updateSystem('morningWakeUpDebtAlert', !systemSettings.morningWakeUpDebtAlert)}
+                        label="Morning Debt Collector"
+                        desc="Ranní upozornění na neuzavřený audit z včerejška."
+                      />
+                    </div>
+                  </Card>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Debug / Test Mode */}
+                  <Card>
+                    <SectionHeader icon={Zap} title="Debug Režim" subtitle="Testování notifikací a Guardiana" color="bg-zinc-600" />
+                    <div className="space-y-4">
+                      <Toggle
+                        active={systemSettings.testModeEnabled}
+                        onClick={() => updateSystem('testModeEnabled', !systemSettings.testModeEnabled)}
+                        label="Testovací Režim"
+                        desc="Zapne simulaci kritického stavu a pošle notifikaci každou minutu."
+                      />
+                    </div>
+                  </Card>
+                </div>
+
+                {/* iOS Notification Helper */}
+                <div className={`p-8 rounded-[40px] border ${isDark ? 'bg-blue-600/5 border-blue-500/20' : 'bg-blue-50 border-blue-100'} flex flex-col items-center text-center gap-4`}>
+                  <div className="p-4 bg-blue-600 rounded-3xl text-white shadow-2xl shadow-blue-600/40"><Bell size={32} /></div>
+                  <div className="max-w-xl">
+                    <h3 className={`text-xl font-black italic tracking-tighter mb-2 ${isDark ? 'text-white' : 'text-slate-900'}`}>AKTIVUJTE PUSH NOTIFIKACE</h3>
+                    <p className={`text-xs font-bold leading-relaxed mb-6 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                      Pro doručování zpráv do iPhonu/Androidu musíte mít aplikaci přidanou na ploše.<br />
+                      Klepněte na <span className="p-1 px-2 bg-blue-600/20 text-blue-500 rounded-lg mx-1 inline-flex items-center gap-1"><Plus size={10} /> Přidat na plochu</span> v prohlížeči Safari.
+                    </p>
+                    <button
+                      onClick={onEnableNotifications || (() => {
+                        if ('Notification' in window) {
+                          Notification.requestPermission().then(res => {
+                            alert(res === 'granted' ? 'Notifikace povoleny!' : 'Notifikace byly zamítnuty v prohlížeči.');
+                          });
+                        }
+                      })}
+                      className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-blue-600/40 hover:bg-blue-500 active:scale-95 transition-all"
+                    >
+                      Povolit notifikace na tomto zařízení
+                    </button>
+                  </div>
+                </div>
+
+                {/* Diagnostic / Support */}
+                <div className={`mt-12 p-8 rounded-[40px] border ${isDark ? 'bg-zinc-900/50 border-white/5' : 'bg-slate-50 border-slate-200'} flex flex-col gap-6`}>
+                  <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                    <div>
+                      <h4 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>Systémová diagnostika</h4>
+                      <p className="text-[10px] text-zinc-500 font-medium whitespace-nowrap overflow-hidden text-ellipsis">Verze: {appVersion || 'Unknown'}</p>
+                    </div>
+                    {onHardRefresh && (
+                      <button
+                        onClick={onHardRefresh}
+                        className="px-6 py-3 bg-zinc-800 hover:bg-rose-900/20 hover:text-rose-500 text-zinc-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-white/5"
+                      >
+                        Hard Refresh
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
       </main>
+
+      <ConfirmationModal
+        isOpen={!!itemToDelete}
+        onClose={() => setItemToDelete(null)}
+        onConfirm={() => {
+          if (!itemToDelete) return;
+          if (itemToDelete.type === 'metric') setPsychoMetrics(prev => prev.filter(x => x.id !== itemToDelete.id));
+          if (itemToDelete.type === 'rule') setIronRules(prev => prev.filter(x => x.id !== itemToDelete.id));
+          if (itemToDelete.type === 'emotion') setUserEmotions(prev => prev.filter(x => x.id !== itemToDelete.id));
+          if (itemToDelete.type === 'mistake') setUserMistakes(prev => prev.filter(x => x !== itemToDelete.id));
+          if (itemToDelete.type === 'session') setSessions(prev => prev.filter(x => x.id !== itemToDelete.id));
+          if (itemToDelete.type === 'goal') setStandardGoals(standardGoals.filter(x => x !== itemToDelete.id));
+        }}
+        title={
+          itemToDelete?.type === 'metric' ? 'Smazat metriku' :
+            itemToDelete?.type === 'rule' ? 'Smazat pravidlo' :
+              itemToDelete?.type === 'emotion' ? 'Smazat emoci' :
+                itemToDelete?.type === 'session' ? 'Smazat seanci' : 'Smazat položku'
+        }
+        message="Opravdu chcete tuto položku trvale odstranit? Tato akce je nevratná."
+        theme={theme}
+      />
     </div>
   );
 };

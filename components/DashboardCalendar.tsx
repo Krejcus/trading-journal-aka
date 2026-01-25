@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Trade, DailyPrep, DailyReview, Account, CustomEmotion, PnLDisplayMode } from '../types';
+import { Trade, DailyPrep, DailyReview, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
+import { ExchangeRates } from '../services/currencyService';
 import {
    ChevronLeft,
    ChevronRight,
@@ -65,6 +66,8 @@ interface DashboardCalendarProps {
    emotions: CustomEmotion[];
    onDayClick?: (dateStr: string) => void;
    pnlFormat?: PnLDisplayMode;
+   user: User;
+   exchangeRates: ExchangeRates | null;
 }
 
 interface DayData {
@@ -130,8 +133,16 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
    initialBalance,
    emotions,
    onDayClick,
-   pnlFormat
+   pnlFormat,
+   user,
+   exchangeRates
 }) => {
+   const isDark = theme !== 'light';
+   const targetCurrency = user.currency || 'USD';
+
+   const formatValue = (val: number, mode: PnLDisplayMode = (pnlFormat || 'usd'), bal?: number, rr?: number, sign: boolean = true) => {
+      return formatPnL(val, mode, bal, rr, sign, targetCurrency, exchangeRates);
+   };
    const [currentMonthIndex, setCurrentMonthIndex] = useState(0);
    const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
    const [selectedWeek, setSelectedWeek] = useState<WeekData | null>(null);
@@ -188,21 +199,26 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
                pnlFormat={pnlFormat as PnLDisplayMode}
                accounts={accounts}
                initialBalance={initialBalance}
+               currency={targetCurrency}
+               rates={exchangeRates}
             />
          </div>
          {selectedDay && createPortal(
-            <DayDeepDiveModal day={selectedDay} theme={theme} onClose={() => setSelectedDay(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} />,
+            <DayDeepDiveModal day={selectedDay} theme={theme} onClose={() => setSelectedDay(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} />,
             document.body
          )}
          {selectedWeek && createPortal(
-            <WeekDetailModal week={selectedWeek} monthName={new Date(currentData.year, currentData.month - 1, 1).toLocaleString('cs-CZ', { month: 'long' })} theme={theme} onClose={() => setSelectedWeek(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} />,
+            <WeekDetailModal week={selectedWeek} monthName={new Date(currentData.year, currentData.month - 1, 1).toLocaleString('cs-CZ', { month: 'long' })} theme={theme} onClose={() => setSelectedWeek(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} />,
             document.body
          )}
       </div>
    );
 };
 
-const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, preps, reviews, theme, onPrev, onNext, canPrev, canNext, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance }) => {
+const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: any }> = ({ year, month, trades, preps, reviews, theme, onPrev, onNext, canPrev, canNext, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance, currency, rates }) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+      return formatPnL(val, mode, bal, rr, sign, currency, rates);
+   };
    const gridRows = useMemo(() => {
       const rows: GridCell[][] = [];
       const daysInMonth = new Date(year, month, 0).getDate();
@@ -301,7 +317,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, 
                }`}>
                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-500">Měsíční PnL</span>
                <span className={`text-2xl font-mono font-black tracking-tighter ${totalMonthPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                  {formatPnL(
+                  {formatVal(
                      totalMonthPnl,
                      pnlFormat as PnLDisplayMode,
                      initialBalance,
@@ -328,7 +344,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, 
             {gridRows.map((row, rIdx) => (
                <div key={rIdx} className="grid grid-cols-6 gap-3">
                   {row.map((cell, cIdx) => (
-                     <CalendarCell key={cIdx} cell={cell} theme={theme} maxPnL={maxDayPnL} onDayClick={onDayClick} onWeekClick={onWeekClick} pnlFormat={pnlFormat as PnLDisplayMode} accounts={accounts} initialBalance={initialBalance} />
+                     <CalendarCell key={cIdx} cell={cell} theme={theme} maxPnL={maxDayPnL} onDayClick={onDayClick} onWeekClick={onWeekClick} pnlFormat={pnlFormat as PnLDisplayMode} accounts={accounts} initialBalance={initialBalance} currency={currency} rates={rates} />
                   ))}
                </div>
             ))}
@@ -337,7 +353,10 @@ const SingleMonthView: React.FC<SingleMonthViewProps> = ({ year, month, trades, 
    );
 };
 
-const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled'; maxPnL: number; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number }> = ({ cell, theme, maxPnL, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance }) => {
+const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled'; maxPnL: number; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number; currency: any, rates: any }> = ({ cell, theme, maxPnL, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance, currency, rates }) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+      return formatPnL(val, mode, bal, rr, sign, currency, rates);
+   };
    if (cell.type === 'empty') return <div className="aspect-square opacity-0"></div>;
    if (cell.type === 'summary') {
       const week = cell.summaryData!;
@@ -350,7 +369,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
             <div className={`absolute top-0 w-full h-1 ${pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
             <span className="text-[8px] font-black uppercase tracking-widest opacity-60 mb-1">T{weekIndex}</span>
             <span className={`font-bold font-mono text-xs md:text-sm ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-               {formatPnL(
+               {formatVal(
                   pnl,
                   pnlFormat,
                   initialBalance,
@@ -383,7 +402,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
          <div className="flex-1 flex items-center justify-center">
             {day.hasTrades ? (
                <span className={`font-bold text-sm md:text-base tracking-tighter ${intensity > 0.6 ? 'text-white' : (day.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>
-                  {formatPnL(
+                  {formatVal(
                      day.pnl,
                      pnlFormat,
                      initialBalance,
@@ -397,7 +416,10 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    );
 };
 
-const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number }> = ({ week, monthName, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance }) => {
+const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any }> = ({ week, monthName, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates }) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+      return formatPnL(val, mode, bal, rr, sign, currency, rates);
+   };
    const isDark = theme !== 'light';
    const [activeTab, setActiveTab] = useState<'overview' | 'trades'>('overview');
    const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
@@ -560,12 +582,15 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                </div>
             </div>
          </div>
-         {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat || 'usd'} />}
+         {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat || 'usd'} currency={currency} rates={rates} />}
       </>
    );
 };
 
-const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number }> = ({ day, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance }) => {
+const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any }> = ({ day, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates }) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+      return formatPnL(val, mode, bal, rr, sign, currency, rates);
+   };
    const { dateObj, pnl, trades, prep, review, dominantEmotion, hasTrades } = day;
    const isDark = theme !== 'light';
    const formattedDate = dateObj.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -600,7 +625,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                      <div className="text-right">
                         <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Daily PnL</p>
                         <p className={`text-3xl font-black font-mono leading-none ${hasTrades ? (pnl >= 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-slate-500'}`}>
-                           {hasTrades ? formatPnL(day.pnl, pnlFormat, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined) : ''}
+                           {hasTrades ? formatVal(day.pnl, pnlFormat, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined) : ''}
                         </p>
                      </div>
                      <button onClick={onClose} className="p-2.5 hover:bg-white/10 rounded-full transition-all text-slate-500 hover:text-white"><X size={24} /></button>
@@ -629,7 +654,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${t.executionStatus === 'Missed' ? 'bg-blue-500/20 text-blue-400' : (t.direction === 'Long' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-rose-500/20 text-rose-500')}`}>{t.executionStatus === 'Missed' ? 'MISSED' : t.direction}</span>
                                        <div><p className="text-[10px] font-black uppercase">{t.instrument}</p><p className="text-[9px] text-slate-500 font-mono">{t.duration}</p></div>
                                     </div>
-                                    <div className="flex items-center gap-3"><span className={`text-sm font-black font-mono ${t.executionStatus === 'Missed' ? 'text-blue-400' : (t.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>{t.executionStatus === 'Missed' ? '±' : formatPnL(t.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === t.accountId)?.initialBalance : 0, t.riskAmount ? t.pnl / t.riskAmount : undefined)}</span><ArrowRight size={12} className="text-slate-600" /></div>
+                                    <div className="flex items-center gap-3"><span className={`text-sm font-black font-mono ${t.executionStatus === 'Missed' ? 'text-blue-400' : (t.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>{t.executionStatus === 'Missed' ? '±' : formatVal(t.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === t.accountId)?.initialBalance : 0, t.riskAmount ? t.pnl / t.riskAmount : undefined)}</span><ArrowRight size={12} className="text-slate-600" /></div>
                                  </div>
                               ))}
                            </div>
@@ -643,12 +668,15 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                </div>
             </div>
          </div>
-         {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat || 'usd'} />}
+         {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat || 'usd'} currency={currency} rates={rates} />}
       </>
    );
 };
 
-const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'oled', onClose: () => void, accounts: Account[], emotions: CustomEmotion[], pnlFormat: PnLDisplayMode }> = ({ trade, theme, onClose, accounts, emotions, pnlFormat }) => {
+const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'oled', onClose: () => void, accounts: Account[], emotions: CustomEmotion[], pnlFormat: PnLDisplayMode, currency: any, rates: any }> = ({ trade, theme, onClose, accounts, emotions, pnlFormat, currency, rates }) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+      return formatPnL(val, mode, bal, rr, sign, currency, rates);
+   };
    const isDark = theme !== 'light';
    const [isZoomed, setIsZoomed] = useState(false);
    const [activeImageIndex, setActiveImageIndex] = useState(0);
@@ -691,7 +719,7 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{new Date(trade.date).toLocaleString('cs-CZ')}</p>
                   </div>
                </div>
-               <div className={`text-3xl font-black font-mono tracking-tighter ${pnlColor}`}>{isMissed ? '±' : formatPnL(trade.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === trade.accountId)?.initialBalance : 0, trade.riskAmount ? trade.pnl / trade.riskAmount : undefined)}</div>
+               <div className={`text-3xl font-black font-mono tracking-tighter ${pnlColor}`}>{isMissed ? '±' : formatVal(trade.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === trade.accountId)?.initialBalance : 0, trade.riskAmount ? trade.pnl / trade.riskAmount : undefined)}</div>
                <button onClick={onClose} className="p-2.5 hover:bg-white/10 rounded-full transition-all text-slate-500 hover:text-white"><X size={20} /></button>
             </div>
 
@@ -704,7 +732,7 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
                      <MetricCell label="Take Profit" value={takeProfit || '-'} color="text-emerald-500" />
                      <MetricCell label="Size" value={trade.positionSize || 1} />
                      <MetricCell label="Duration" value={holdTime} color="text-blue-400" />
-                     <MetricCell label="Risk" value={`$${riskAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} color="text-slate-400" />
+                     <MetricCell label="Risk" value={formatVal(riskAmount, 'usd')} color="text-slate-400" />
                      <MetricCell label="Realized RR" value={`${realRRR}R`} color={parseFloat(realRRR) > 1 ? 'text-emerald-500' : 'text-slate-400'} />
                   </div>
                   <div className="p-6 space-y-6">

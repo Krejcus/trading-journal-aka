@@ -1,52 +1,113 @@
 
-import React, { useState, useMemo, useRef } from 'react';
-import { User, Trade } from '../types';
+import React, { useState, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
    X, User as UserIcon, Camera, Mail, Hash,
-   TrendingUp, Target, Briefcase,
-   Upload, Lock, Trash2
+   Lock, Upload, Trash2, Check, Copy, Globe, DollarSign, Loader2
 } from 'lucide-react';
+import { User } from '../types';
+import { supabase } from '../services/supabase';
 
 interface UserProfileModalProps {
    user: User;
-   trades: Trade[];
    isOpen: boolean;
    onClose: () => void;
    onUpdate: (updatedUser: User) => void;
    theme: 'dark' | 'light' | 'oled';
 }
 
-const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, trades, isOpen, onClose, onUpdate, theme }) => {
+const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClose, onUpdate, theme }) => {
    const [formData, setFormData] = useState({
-      name: user.name,
-      email: user.email,
-      avatar: user.avatar || ''
+      name: user.name || '',
+      email: user.email || '',
+      avatar: user.avatar || '',
+      language: user.language || 'cs',
+      currency: user.currency || 'USD',
+      timezone: user.timezone || 'Europe/Prague'
    });
+
+   const [passwords, setPasswords] = useState({
+      currentPassword: '',
+      newPassword: '',
+      confirmPassword: ''
+   });
+
+   const [copied, setCopied] = useState(false);
+   const [msg, setMsg] = useState<{ text: string, type: 'error' | 'success' } | null>(null);
 
    const fileInputRef = useRef<HTMLInputElement>(null);
    const isDark = theme !== 'light';
-
-   // --- LIFETIME STATS CALCULATION ---
-   const stats = useMemo(() => {
-      const totalTrades = trades.length;
-      const totalPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
-      const winRate = totalTrades > 0
-         ? (trades.filter(t => t.pnl > 0).length / totalTrades) * 100
-         : 0;
-
-      // Member since calculation based on ID timestamp or current date fallback
-      const timestamp = parseInt(user.id.split('_')[1]);
-      const memberSince = !isNaN(timestamp) ? new Date(timestamp) : new Date();
-
-      return { totalTrades, totalPnL, winRate, memberSince };
-   }, [trades, user.id]);
+   const [isSaving, setIsSaving] = useState(false);
 
    if (!isOpen) return null;
 
-   const handleSubmit = (e: React.FormEvent) => {
+   const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
-      onUpdate({ ...user, ...formData });
-      onClose();
+      setMsg(null);
+      setIsSaving(true);
+
+      try {
+         // Password change logic with real verification
+         if (passwords.newPassword) {
+            if (!passwords.currentPassword) {
+               setMsg({ text: 'Pro změnu hesla zadejte současné heslo', type: 'error' });
+               setIsSaving(false);
+               return;
+            }
+            if (passwords.newPassword !== passwords.confirmPassword) {
+               setMsg({ text: 'Nová hesla se neshodují', type: 'error' });
+               setIsSaving(false);
+               return;
+            }
+            if (passwords.newPassword.length < 6) {
+               setMsg({ text: 'Heslo musí mít alespoň 6 znaků', type: 'error' });
+               setIsSaving(false);
+               return;
+            }
+
+            // 1. Verify current password by re-authenticating
+            const { error: authError } = await supabase.auth.signInWithPassword({
+               email: formData.email,
+               password: passwords.currentPassword
+            });
+
+            if (authError) {
+               setMsg({ text: 'Současné heslo není správné', type: 'error' });
+               setIsSaving(false);
+               return;
+            }
+
+            // 2. Update to new password
+            const { error: updateError } = await supabase.auth.updateUser({
+               password: passwords.newPassword
+            });
+
+            if (updateError) {
+               setMsg({ text: `Chyba při změně hesla: ${updateError.message}`, type: 'error' });
+               setIsSaving(false);
+               return;
+            }
+         }
+
+         // Profile update logic
+         onUpdate({ ...user, ...formData });
+
+         if (passwords.newPassword) {
+            setMsg({ text: 'Heslo a profil byly úspěšně změněny', type: 'success' });
+            setPasswords({ currentPassword: '', newPassword: '', confirmPassword: '' });
+         } else {
+            setMsg({ text: 'Profil byl úspěšně aktualizován', type: 'success' });
+         }
+
+         setTimeout(() => {
+            onClose();
+            setMsg(null);
+         }, 1500);
+      } catch (err: any) {
+         setMsg({ text: 'Došlo k neočekávané chybě při ukládání', type: 'error' });
+      } finally {
+         setIsSaving(false);
+      }
    };
 
    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -60,56 +121,238 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, trades, isOpe
       }
    };
 
-   const removeAvatar = () => {
-      setFormData(prev => ({ ...prev, avatar: '' }));
-      if (fileInputRef.current) fileInputRef.current.value = '';
+   const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
    };
 
-   const inputClass = `w-full px-4 py-3 rounded-xl border outline-none transition-all focus:ring-2 focus:ring-blue-500/40 ${isDark ? 'bg-slate-950/50 border-slate-800 text-white placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-900'
-      }`;
+   const glassBg = isDark
+      ? 'bg-slate-900/60 backdrop-blur-3xl border-white/10'
+      : 'bg-white/80 backdrop-blur-3xl border-slate-200 shadow-2xl';
 
-   const disabledInputClass = `w-full px-4 py-3 rounded-xl border outline-none cursor-not-allowed opacity-60 ${isDark ? 'bg-slate-900 border-slate-800 text-slate-400' : 'bg-slate-100 border-slate-200 text-slate-500'
-      }`;
+   const inputBg = isDark
+      ? 'bg-white/5 border-white/5 focus:border-blue-500/50 text-white'
+      : 'bg-slate-900/5 border-slate-900/5 focus:border-blue-500/50 text-slate-900';
 
    return (
-      <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xl animate-in fade-in duration-300">
-         <div className={`w-full max-w-4xl rounded-[40px] overflow-hidden shadow-2xl flex flex-col md:flex-row border ${isDark ? 'bg-[#0a0f1d] border-white/10' : 'bg-white border-slate-200'}`}>
+      <AnimatePresence>
+         {isOpen && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+               {/* Backdrop */}
+               <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={onClose}
+                  className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+               />
 
-            {/* LEFT: Identity Column */}
-            <div className={`w-full md:w-[40%] p-8 border-r flex flex-col ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-               <div className="text-center mb-8">
-                  <div className="relative inline-block group">
-                     <div
-                        onClick={() => fileInputRef.current?.click()}
-                        className={`w-32 h-32 rounded-full border-4 overflow-hidden mb-4 mx-auto cursor-pointer transition-all hover:scale-105 hover:border-blue-500 relative group/avatar ${isDark ? 'border-slate-800 bg-slate-900' : 'border-white bg-white shadow-xl'}`}
-                     >
-                        {formData.avatar ? (
-                           <img src={formData.avatar} alt="Profile" className="w-full h-full object-cover" />
-                        ) : (
-                           <div className="w-full h-full flex items-center justify-center text-slate-600"><UserIcon size={48} /></div>
-                        )}
+               {/* Modal Content */}
+               <motion.div
+                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                  className={`relative w-full max-w-xl overflow-hidden rounded-[40px] border ${glassBg}`}
+               >
+                  {/* Closing Button */}
+                  <button
+                     onClick={onClose}
+                     className="absolute top-6 right-6 p-2 rounded-full hover:bg-white/10 transition-colors z-20 text-slate-500 hover:text-white"
+                  >
+                     <X size={20} />
+                  </button>
 
-                        {/* Hover Overlay */}
-                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center transition-opacity">
-                           <Camera size={24} className="text-white" />
+                  <div className="p-8 md:p-10 max-h-[90vh] overflow-y-auto custom-scrollbar">
+                     <div className="text-center mb-8">
+                        <div className="relative inline-block group">
+                           <div
+                              onClick={() => fileInputRef.current?.click()}
+                              className="w-24 h-24 rounded-[32px] border-2 border-blue-500/30 overflow-hidden mx-auto cursor-pointer relative group/avatar transition-transform active:scale-95 shadow-2xl"
+                           >
+                              {formData.avatar ? (
+                                 <img src={formData.avatar} alt="Profile" className="w-full h-full object-cover" />
+                              ) : (
+                                 <div className="w-full h-full bg-gradient-to-br from-blue-500/10 to-cyan-500/10 flex items-center justify-center text-blue-500">
+                                    <UserIcon size={32} />
+                                 </div>
+                              )}
+
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center transition-opacity">
+                                 <Camera size={20} className="text-white" />
+                              </div>
+                           </div>
+                           <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className="absolute -bottom-1 -right-1 p-2 bg-blue-600 text-white rounded-2xl shadow-lg hover:bg-blue-500 transition-colors"
+                           >
+                              <Upload size={12} />
+                           </button>
                         </div>
                      </div>
 
-                     {/* ID Badge */}
-                     <div className={`absolute -bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border shadow-xl ${isDark ? 'bg-slate-900 border-slate-700 text-slate-400' : 'bg-white border-slate-200 text-slate-500'}`}>
-                        ID: {user.id.slice(0, 8)}
-                     </div>
+                     <form onSubmit={handleSubmit} className="space-y-6">
+                        {/* Status Message */}
+                        {msg && (
+                           <motion.div
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className={`p-4 rounded-2xl text-center text-[10px] font-black uppercase tracking-[0.2em] ${msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}
+                           >
+                              {msg.text}
+                           </motion.div>
+                        )}
 
-                     {/* Remove Avatar Button (only if avatar exists) */}
-                     {formData.avatar && (
-                        <button
-                           onClick={removeAvatar}
-                           className="absolute top-0 right-0 p-1.5 bg-rose-500 text-white rounded-full shadow-lg hover:bg-rose-600 transition-colors"
-                           title="Odstranit fotku"
-                        >
-                           <Trash2 size={12} />
-                        </button>
-                     )}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                           <div className="space-y-2">
+                              <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                                 <UserIcon size={12} /> Jméno
+                              </label>
+                              <input
+                                 type="text"
+                                 value={formData.name}
+                                 onChange={e => setFormData({ ...formData, name: e.target.value })}
+                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all ${inputBg}`}
+                                 placeholder="Trader Name"
+                              />
+                           </div>
+
+                           <div className="space-y-2">
+                              <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                                 <Globe size={12} /> Jazyk
+                              </label>
+                              <select
+                                 value={formData.language}
+                                 onChange={e => setFormData({ ...formData, language: e.target.value as any })}
+                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all appearance-none cursor-pointer ${inputBg}`}
+                              >
+                                 <option value="cs">Čeština (CS)</option>
+                                 <option value="en">English (EN)</option>
+                              </select>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                           <div className="space-y-2">
+                              <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                                 <DollarSign size={12} /> Hlavní měna
+                              </label>
+                              <select
+                                 value={formData.currency}
+                                 onChange={e => setFormData({ ...formData, currency: e.target.value as any })}
+                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all appearance-none cursor-pointer ${inputBg}`}
+                              >
+                                 <option value="USD">Americký Dolar (USD)</option>
+                                 <option value="CZK">Česká Koruna (CZK)</option>
+                                 <option value="EUR">Euro (EUR)</option>
+                              </select>
+                           </div>
+                           <div className="space-y-2">
+                              <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                                 <Globe size={12} /> Časové pásmo
+                              </label>
+                              <select
+                                 value={formData.timezone}
+                                 onChange={e => setFormData({ ...formData, timezone: e.target.value })}
+                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all appearance-none cursor-pointer ${inputBg}`}
+                              >
+                                 <option value="Europe/Prague">Praha (GMT+1)</option>
+                                 <option value="Europe/London">Londýn (GMT+0)</option>
+                                 <option value="America/New_York">New York (EST)</option>
+                                 <option value="UTC">UTC</option>
+                              </select>
+                           </div>
+                        </div>
+
+                        <div className="space-y-2 opacity-60">
+                           <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                              <Mail size={12} /> Emailový Login
+                           </label>
+                           <div className="relative">
+                              <input
+                                 type="email"
+                                 value={formData.email}
+                                 readOnly
+                                 disabled
+                                 className={`w-full pl-6 pr-12 py-4 rounded-[22px] border text-xs font-bold cursor-not-allowed ${inputBg}`}
+                              />
+                              <Lock size={14} className="absolute right-5 top-1/2 -translate-y-1/2 text-slate-600" />
+                           </div>
+                        </div>
+
+                        {/* ID & Copy */}
+                        <div className={`p-5 rounded-[26px] border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-900/5 border-slate-900/5'} flex justify-between items-center group`}>
+                           <div className="flex items-center gap-4">
+                              <div className="p-3 bg-blue-500/10 text-blue-500 rounded-2xl">
+                                 <Hash size={16} />
+                              </div>
+                              <div>
+                                 <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Trader ID</p>
+                                 <p className={`text-xs font-mono font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                                    {user.id.slice(0, 16).toUpperCase()}
+                                 </p>
+                              </div>
+                           </div>
+                           <button
+                              type="button"
+                              onClick={() => copyToClipboard(user.id)}
+                              className={`p-3 rounded-2xl transition-all ${copied ? 'bg-emerald-500/20 text-emerald-500' : 'hover:bg-blue-500/10 text-slate-500 hover:text-blue-500'}`}
+                           >
+                              {copied ? <Check size={18} /> : <Copy size={18} />}
+                           </button>
+                        </div>
+
+                        {/* Security Section */}
+                        <div className="pt-6 border-t border-white/5">
+                           <h4 className="text-[10px] font-black uppercase text-slate-500 mb-4 px-4 tracking-widest flex items-center gap-2">
+                              <Lock size={12} /> Změna hesla
+                           </h4>
+                           <div className="space-y-4">
+                              <input
+                                 type="password"
+                                 placeholder="Současné heslo"
+                                 value={passwords.currentPassword}
+                                 onChange={e => setPasswords({ ...passwords, currentPassword: e.target.value })}
+                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all ${inputBg}`}
+                              />
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                 <input
+                                    type="password"
+                                    placeholder="Nové heslo"
+                                    value={passwords.newPassword}
+                                    onChange={e => setPasswords({ ...passwords, newPassword: e.target.value })}
+                                    className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all ${inputBg}`}
+                                 />
+                                 <input
+                                    type="password"
+                                    placeholder="Potvrzení hesla"
+                                    value={passwords.confirmPassword}
+                                    onChange={e => setPasswords({ ...passwords, confirmPassword: e.target.value })}
+                                    className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all ${inputBg}`}
+                                 />
+                              </div>
+                           </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4 pt-6">
+                           <button
+                              type="button"
+                              onClick={onClose}
+                              className={`py-4 rounded-[22px] border text-[10px] font-black uppercase tracking-widest transition-all ${isDark ? 'border-white/5 hover:bg-white/5 text-slate-400' : 'border-slate-200 hover:bg-slate-50 text-slate-500'}`}
+                           >
+                              Zrušit
+                           </button>
+                           <button
+                              type="submit"
+                              disabled={isSaving}
+                              className={`py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-[22px] text-[10px] font-black uppercase tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95 flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                           >
+                              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                              {isSaving ? 'Ukládám...' : 'Uložit nastavení'}
+                           </button>
+                        </div>
+                     </form>
                   </div>
 
                   {/* Hidden File Input */}
@@ -120,96 +363,10 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, trades, isOpe
                      accept="image/*"
                      onChange={handleImageUpload}
                   />
-
-                  <h2 className={`text-2xl font-black italic tracking-tight mt-6 ${isDark ? 'text-white' : 'text-slate-900'}`}>{formData.name || 'Trader'}</h2>
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">Professional Account</p>
-               </div>
-
-               <form onSubmit={handleSubmit} className="space-y-6 flex-1">
-                  <div className="space-y-1">
-                     <label className="text-[9px] font-black uppercase text-slate-500 ml-2">Jméno</label>
-                     <div className="relative">
-                        <UserIcon size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-                        <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className={`${inputClass} pl-10`} />
-                     </div>
-                  </div>
-
-                  <div className="space-y-1">
-                     <div className="flex justify-between ml-2">
-                        <label className="text-[9px] font-black uppercase text-slate-500">Email (Login)</label>
-                        <span className="text-[9px] font-bold text-slate-600 flex items-center gap-1"><Lock size={10} /> Neměnné</span>
-                     </div>
-                     <div className="relative">
-                        <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-                        <input
-                           type="email"
-                           value={formData.email}
-                           readOnly
-                           disabled
-                           className={`${disabledInputClass} pl-10`}
-                        />
-                        <Lock size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-600" />
-                     </div>
-                  </div>
-
-                  {/* Upload Button Helper (Mobile friendly) */}
-                  <div className="pt-2">
-                     <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className={`w-full py-3 rounded-xl border border-dashed flex items-center justify-center gap-2 text-xs font-bold transition-all ${isDark ? 'border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-white' : 'border-slate-300 text-slate-500 hover:bg-slate-50'}`}
-                     >
-                        <Upload size={14} /> {formData.avatar ? 'Změnit fotku' : 'Nahrát fotku'}
-                     </button>
-                  </div>
-
-                  <button type="submit" className="w-full mt-auto py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black uppercase text-xs tracking-widest shadow-lg shadow-blue-600/20 active:scale-95 transition-all">
-                     Uložit Profil
-                  </button>
-               </form>
+               </motion.div>
             </div>
-
-            {/* RIGHT: Career Stats */}
-            <div className="flex-1 p-8 flex flex-col overflow-y-auto">
-               <div className="flex justify-between items-center mb-8">
-                  <div>
-                     <h3 className={`text-xl font-black italic uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>Kariérní Přehled</h3>
-                     <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Agregovaná data ze všech portfolií</p>
-                  </div>
-                  <button onClick={onClose} className="p-2 rounded-full hover:bg-slate-800 text-slate-500 transition-all"><X size={24} /></button>
-               </div>
-
-               {/* Grid Stats */}
-               <div className="grid grid-cols-2 gap-4 mb-8">
-                  <div className={`p-6 rounded-2xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-white border-slate-100'}`}>
-                     <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-2 flex items-center gap-2"><TrendingUp size={14} /> Lifetime PnL</p>
-                     <p className={`text-3xl font-black font-mono tracking-tighter ${stats.totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                        {stats.totalPnL >= 0 ? '+' : ''}${stats.totalPnL.toLocaleString()}
-                     </p>
-                  </div>
-                  <div className={`p-6 rounded-2xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-white border-slate-100'}`}>
-                     <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-2 flex items-center gap-2"><Target size={14} /> Global Win Rate</p>
-                     <p className="text-3xl font-black text-blue-500">
-                        {stats.winRate.toFixed(1)}%
-                     </p>
-                  </div>
-                  <div className={`p-6 rounded-2xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-white border-slate-100'}`}>
-                     <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-2 flex items-center gap-2"><Hash size={14} /> Total Trades</p>
-                     <p className="text-3xl font-black text-white">
-                        {stats.totalTrades}
-                     </p>
-                  </div>
-                  <div className={`p-6 rounded-2xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-white border-slate-100'}`}>
-                     <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-2 flex items-center gap-2"><Briefcase size={14} /> Active Accounts</p>
-                     <p className="text-3xl font-black text-white">
-                        {new Set(trades.map(t => t.accountId)).size}
-                     </p>
-                  </div>
-               </div>
-
-            </div>
-         </div>
-      </div>
+         )}
+      </AnimatePresence>
    );
 };
 

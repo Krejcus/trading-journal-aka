@@ -29,6 +29,7 @@ import {
   Settings2,
   ChevronDown
 } from 'lucide-react';
+import ConfirmationModal from './ConfirmationModal';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -104,7 +105,8 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   theme,
   trades,
   onUpdateTrades,
-  onAddExpense
+  onAddExpense,
+  onAddPayout
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -947,26 +949,14 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         )
       }
 
-      {/* DELETE MODAL */}
-      {
-        accountToDelete && (
-          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300" onClick={() => setAccountToDelete(null)}>
-            <div className={`max-w-md w-full p-8 rounded-[32px] border shadow-2xl ${theme !== 'light' ? 'bg-slate-900 border-white/10' : 'bg-white border-rose-200'}`} onClick={e => e.stopPropagation()}>
-              <div className="text-center space-y-6">
-                <div className="inline-block p-4 bg-rose-500/10 text-rose-500 rounded-full"><AlertCircle size={32} /></div>
-                <div>
-                  <h3 className="text-xl font-black italic mb-2 text-rose-500">SMAZAT ÚČET?</h3>
-                  <p className="text-slate-500 text-sm">Opravdu chceš trvale odstranit účet <span className="font-bold text-white">{accountToDelete.name}</span>? Tato akce je nevratná.</p>
-                </div>
-                <div className="flex gap-3">
-                  <button onClick={() => setAccountToDelete(null)} className="flex-1 py-3 text-xs font-black uppercase tracking-widest text-slate-500 bg-slate-800 rounded-xl">Zachovat</button>
-                  <button onClick={executeDelete} className="flex-1 py-3 text-xs font-black uppercase tracking-widest bg-rose-600 text-white rounded-xl shadow-lg shadow-rose-600/20">Smazat</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )
-      }
+      <ConfirmationModal
+        isOpen={!!accountToDelete}
+        onClose={() => setAccountToDelete(null)}
+        onConfirm={executeDelete}
+        title="Smazat účet"
+        message={`Opravdu chcete trvale odstranit účet "${accountToDelete?.name}" z Alpha Matrixu? Tato akce je nevratná a odstraní všechna s ním spojená data.`}
+        theme={theme}
+      />
 
     </div >
   );

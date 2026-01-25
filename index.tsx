@@ -13,20 +13,19 @@ let forceUpdate = false;
 const updateSW = registerSW({
   onNeedRefresh() {
     console.log('[PWA] New version available!');
-
-    // Check if force update is required (you can set this flag when deploying critical updates)
-    // For now, we'll use soft update by default
-    forceUpdate = false;
-
-    showUpdateBanner = true;
-    updateSWCallback = updateSW;
-
-    // Trigger re-render
-    renderApp();
+    alert("K dispozici je nová verze aplikace. Aktualizuji...");
+    updateSW(true);
   },
   onOfflineReady() {
     console.log('[PWA] App ready to work offline!');
   },
+  onRegisteredSW(swUrl, registration) {
+    console.log('[PWA] Service Worker registered:', swUrl);
+    if (registration) {
+      // Force update if it's waiting
+      registration.update();
+    }
+  }
 });
 
 const handleUpdate = () => {
