@@ -273,6 +273,15 @@ export const storageService = {
       console.error("Failed to update drawings:", error);
       throw error;
     }
+
+    // Update IndexedDB cache
+    const localKey = `alphatrade_trades_${userId}`;
+    const cachedTrades: Trade[] = await get(localKey) || [];
+    const updatedTrades = cachedTrades.map(t => 
+      t.id === tradeId ? { ...t, drawings } : t
+    );
+    await set(localKey, updatedTrades);
+    console.log(`[UpdateDrawings] Updated drawings for trade ${tradeId} in cache`);
   },
 
   async updateTrade(tradeId: string | number, updates: Partial<Trade>): Promise<void> {
@@ -338,6 +347,15 @@ export const storageService = {
       console.error("Failed to update trade:", error);
       throw error;
     }
+
+    // Update IndexedDB cache
+    const localKey = `alphatrade_trades_${userId}`;
+    const cachedTrades: Trade[] = await get(localKey) || [];
+    const updatedTrades = cachedTrades.map(t => 
+      t.id === tradeId ? { ...t, ...updates } : t
+    );
+    await set(localKey, updatedTrades);
+    console.log(`[UpdateTrade] Updated trade ${tradeId} in cache`);
   },
 
   async saveTrades(trades: Trade[]): Promise<Trade[]> {
@@ -429,17 +447,45 @@ export const storageService = {
 
   async deleteTrade(id: string): Promise<void> {
     if (!isUUID(id)) return;
+    
+    // 1. Delete from Supabase
     const { error } = await supabase.from('trades').delete().eq('id', id);
     if (error) throw error;
+
+    // 2. Update IndexedDB cache
+    const userId = await getUserId();
+    if (userId) {
+      const localKey = `alphatrade_trades_${userId}`;
+      const cachedTrades: Trade[] = await get(localKey) || [];
+      const updatedTrades = cachedTrades.filter(t => t.id !== id);
+      await set(localKey, updatedTrades);
+      console.log(`[DeleteTrade] Removed trade ${id} from cache`);
+    }
   },
 
   async clearTrades(accountId?: string): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
+    
+    // 1. Delete from Supabase
     let query = supabase.from('trades').delete().eq('user_id', userId);
     if (accountId) query = query.eq('account_id', accountId);
     const { error } = await query;
     if (error) throw error;
+
+    // 2. Clear IndexedDB cache
+    const localKey = `alphatrade_trades_${userId}`;
+    if (accountId) {
+      // Partial clear - remove only trades from specific account
+      const cachedTrades: Trade[] = await get(localKey) || [];
+      const filteredTrades = cachedTrades.filter(t => t.accountId !== accountId);
+      await set(localKey, filteredTrades);
+      console.log(`[ClearTrades] Removed trades for account ${accountId} from cache`);
+    } else {
+      // Full clear - remove all trades
+      await set(localKey, []);
+      console.log(`[ClearTrades] Cleared all trades from cache`);
+    }
   },
 
   async markTradeAsPublic(id: string): Promise<void> {
