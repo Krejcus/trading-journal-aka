@@ -625,8 +625,15 @@ const App: React.FC = () => {
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
-      // Cleanup legacy localStorage trades (now using IndexedDB)
-      localStorage.removeItem('alphatrade_trades');
+      // Cleanup ALL legacy localStorage data (now using IndexedDB for large data)
+      // This frees up quota that was causing errors
+      const keysToRemove = Object.keys(localStorage).filter(k => 
+        k.includes('alphatrade_trades') || 
+        k.includes('alphatrade_daily_preps') || 
+        k.includes('alphatrade_daily_reviews')
+      );
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+      console.log(`[Cleanup] Removed ${keysToRemove.length} legacy localStorage keys`);
 
       // --- PHASE 1: CHECK CACHE ---
       console.log("[Load] Phase 1: Checking cache...");

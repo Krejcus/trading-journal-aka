@@ -348,10 +348,16 @@ export interface DailyReview {
   psycho?: PsychoState;
 }
 
+export interface WeeklyGoal {
+  id: string;
+  text: string;
+  emoji?: string;
+}
+
 export interface WeeklyFocus {
   id: string;
   weekISO: string; // e.g. "2026-W02"
-  goals: string[];
+  goals: WeeklyGoal[];
 }
 
 export interface WeeklyReview {

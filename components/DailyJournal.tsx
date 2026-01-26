@@ -210,9 +210,10 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     };
   }, []);
 
-  // Current Week Focus Helper
+  // Current Week Focus Helper - Harmonized with Settings.tsx
   const getSelectedWeekISO = (dateStr: string) => {
-    const d = new Date(dateStr);
+    const date = new Date(dateStr);
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
     const dayNum = d.getUTCDay() || 7;
     d.setUTCDate(d.getUTCDate() + 4 - dayNum);
     const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
@@ -682,7 +683,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           const rev = reviews.find(r => r.date === day);
           if (rev?.weeklyGoalAdherence?.[idx]?.status === 'Pass') passCount++;
         });
-        return { label: goal, count: passCount };
+        return { label: goal.text, emoji: goal.emoji, count: passCount };
       }) || []
     };
   }, [trades, reviews, preps, currentWeekInfo, ironRules, weeklyFocusList, currentWeekFocus]);
@@ -991,21 +992,48 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 {/* Weekly Focus Adherence List */}
                 {weeklyStats.weeklyGoalStats && weeklyStats.weeklyGoalStats.length > 0 && (
                   <div className="space-y-6">
-                    <p className="text-[10px] font-black uppercase text-emerald-500 tracking-[0.2em] flex items-center gap-2"><ClipboardCheck size={14} /> Weekly Focus Adherence</p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {weeklyStats.weeklyGoalStats.map((goal: any, idx: number) => (
-                        <div key={idx} className={`p-4 rounded-[24px] border transition-all ${theme !== 'light' ? 'bg-[var(--bg-input)]/20 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                          <div className="flex justify-between items-center mb-3">
-                            <span className="text-[10px] font-black uppercase tracking-tight text-slate-400 truncate pr-4">{goal.label}</span>
-                            <span className={`text-[10px] font-bold ${goal.count >= 4 ? 'text-emerald-500' : 'text-blue-500'}`}>{goal.count}/5</span>
+                    <p className="text-[10px] font-black uppercase text-emerald-500 tracking-[0.2em] flex items-center gap-2"><ClipboardCheck size={14} /> Weekly Focus Mastery</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {weeklyStats.weeklyGoalStats.map((goal: any, idx: number) => {
+                        const isMastered = goal.count === 5;
+                        return (
+                          <div
+                            key={idx}
+                            className={`relative p-6 rounded-[40px] border overflow-hidden transition-all duration-700 group hover:scale-[1.02] ${isMastered
+                              ? 'bg-emerald-500/10 border-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.15)]Scale'
+                              : (theme !== 'light' ? 'bg-[var(--bg-input)]/20 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100 shadow-sm')
+                              }`}
+                          >
+                            {/* Pulse for Mastered */}
+                            {isMastered && <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent animate-pulse" />}
+
+                            <div className="relative z-10 flex flex-col items-center text-center gap-4">
+                              <div className={`text-6xl transition-all duration-1000 transform ${goal.count === 0 ? 'grayscale opacity-20 scale-90' : 'grayscale-0 opacity-100 scale-110'} ${isMastered ? 'drop-shadow-[0_0_20px_rgba(16,185,129,0.8)] animate-bounce-slow' : ''}`}>
+                                {goal.emoji || '🎯'}
+                              </div>
+
+                              <div className="space-y-1">
+                                <h5 className={`text-[11px] font-black uppercase tracking-widest ${isMastered ? 'text-emerald-500' : 'text-slate-400'}`}>{goal.label}</h5>
+                                <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${isMastered ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
+                                  {isMastered ? <><Sparkles size={10} /> MASTERED</> : `${goal.count}/5 DAYS`}
+                                </div>
+                              </div>
+
+                              <div className="flex gap-2.5">
+                                {[...Array(5)].map((_, i) => (
+                                  <div
+                                    key={i}
+                                    className={`w-2.5 h-2.5 rounded-full transition-all duration-700 ${i < goal.count
+                                      ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]'
+                                      : (theme !== 'light' ? 'bg-slate-800' : 'bg-slate-200')
+                                      }`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
                           </div>
-                          <div className={`h-1.5 w-full rounded-full overflow-hidden flex gap-0.5 p-0.5 ${theme !== 'light' ? 'bg-[var(--bg-page)]/50' : 'bg-slate-200/50'}`}>
-                            {[...Array(5)].map((_, i) => (
-                              <div key={i} className={`flex-1 rounded-full ${i < goal.count ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : (theme !== 'light' ? 'bg-[var(--border-subtle)]' : 'bg-slate-300')}`} />
-                            ))}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -1235,12 +1263,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                                 }`}
                             >
                               <div className="flex items-center gap-4">
-                                <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${adherence ? 'bg-white border-white text-emerald-600' : 'border-slate-700 text-transparent group-hover:border-emerald-500'}`}>
-                                  <Check size={14} strokeWidth={4} />
+                                <div className={`w-8 h-8 rounded-xl border flex items-center justify-center transition-all ${adherence ? 'bg-white text-emerald-600' : 'bg-slate-800'}`}>
+                                  <span className="text-sm">{goal.emoji || '🎯'}</span>
                                 </div>
-                                <span className={`text-xs font-black uppercase tracking-tight text-left ${adherence ? 'text-white' : 'text-slate-400'}`}>{goal}</span>
+                                <span className={`text-xs font-black uppercase tracking-tight text-left ${adherence ? 'text-white' : 'text-slate-400'}`}>{goal.text}</span>
                               </div>
-                              {adherence && <Sparkles size={14} className="animate-pulse" />}
+                              {adherence ? <Check size={14} strokeWidth={4} /> : <div className="w-4 h-4 rounded-full border border-slate-700" />}
                             </button>
                           );
                         })}
