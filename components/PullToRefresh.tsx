@@ -58,6 +58,13 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                 return;
             }
 
+            // If user is scrolling UP (negative distance), cancel pull immediately
+            if (distance < 0) {
+                setCanPull(false);
+                setPullDistance(0);
+                return;
+            }
+
             if (distance > 0) {
                 // Apply resistance: slower pull as you go further
                 const resistance = 0.4;
