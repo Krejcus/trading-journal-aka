@@ -634,64 +634,37 @@ export const storageService = {
   async getCachedDailyPreps(): Promise<DailyPrep[]> {
     const userId = await getUserId();
     if (!userId) return [];
-    const localKey = `alphatrade_daily_preps_${userId}`;
-    const localData = localStorage.getItem(localKey);
-    if (localData) {
-      try {
-        return JSON.parse(localData);
-      } catch (e) {
-        console.error("Failed to parse cached preps", e);
-      }
-    }
-    return [];
+    // Use IndexedDB for large data (screenshots are base64 encoded)
+    const cached = await get(`alphatrade_daily_preps_${userId}`);
+    return cached || [];
   },
 
   async getCachedDailyReviews(): Promise<DailyReview[]> {
     const userId = await getUserId();
     if (!userId) return [];
-    const localKey = `alphatrade_daily_reviews_${userId}`;
-    const localData = localStorage.getItem(localKey);
-    if (localData) {
-      try {
-        return JSON.parse(localData);
-      } catch (e) {
-        console.error("Failed to parse cached reviews", e);
-      }
-    }
-    return [];
+    // Use IndexedDB for large data
+    const cached = await get(`alphatrade_daily_reviews_${userId}`);
+    return cached || [];
   },
 
   async getDailyPreps(targetUserId?: string): Promise<DailyPrep[]> {
     const userId = targetUserId || await getUserId();
+    if (!userId) return [];
 
-    // 1. Try to load from Local Storage first as a fast fallback
-    const localKey = userId ? `alphatrade_daily_preps_${userId}` : 'alphatrade_daily_preps';
-    const localData = localStorage.getItem(localKey);
-    let localPreps: DailyPrep[] = [];
-    if (localData) {
-      try {
-        localPreps = JSON.parse(localData);
-      } catch (e) {
-        console.error("Failed to parse local preps", e);
-      }
-    }
-
-    if (!userId) return localPreps;
-
-    // 2. Fetch from Supabase
+    // 1. Fetch from Supabase
     const { data, error } = await supabase.from('daily_preps').select('*').eq('user_id', userId);
 
     if (error) {
       console.error("Supabase getDailyPreps error:", error);
-      return localPreps; // Fallback to local
+      // Fallback to IndexedDB cache
+      const cached = await get(`alphatrade_daily_preps_${userId}`);
+      return cached || [];
     }
 
     const dbPreps = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
-    // 3. Merge Local and DB (DB wins, but local might have newer entries if they weren't synced)
-    // For now, let's just use DB if available, and update local storage
-    // Limit journal preps as well
-    if (userId) safeSetItem(`alphatrade_daily_preps_${userId}`, dbPreps.slice(0, 100));
+    // 2. Cache to IndexedDB (can handle large base64 screenshots)
+    if (userId) await set(`alphatrade_daily_preps_${userId}`, dbPreps);
 
     return dbPreps;
   },
@@ -700,8 +673,10 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
-    // Always save to local storage immediately (limited)
-    safeSetItem(`alphatrade_daily_preps_${userId}`, preps.slice(0, 100));
+    // Save to IndexedDB immediately (can handle large screenshots)
+    await set(`alphatrade_daily_preps_${userId}`, preps);
+    
+    // Sync to Supabase
     const prepsToUpsert = preps.map(p => ({ user_id: userId, date: p.date, data: p }));
     const { error } = await supabase.from('daily_preps').upsert(prepsToUpsert, { onConflict: 'user_id,date' });
     if (error) {
@@ -718,33 +693,22 @@ export const storageService = {
 
   async getDailyReviews(targetUserId?: string): Promise<DailyReview[]> {
     const userId = targetUserId || await getUserId();
+    if (!userId) return [];
 
-    // 1. Try Local Storage fallback
-    const localKey = userId ? `alphatrade_daily_reviews_${userId}` : 'alphatrade_daily_reviews';
-    const localData = localStorage.getItem(localKey);
-    let localReviews: DailyReview[] = [];
-    if (localData) {
-      try {
-        localReviews = JSON.parse(localData);
-      } catch (e) {
-        console.error("Failed to parse local reviews", e);
-      }
-    }
-
-    if (!userId) return localReviews;
-
-    // 2. Fetch from Supabase
+    // 1. Fetch from Supabase
     const { data, error } = await supabase.from('daily_reviews').select('*').eq('user_id', userId);
 
     if (error) {
       console.error("Supabase getDailyReviews error:", error);
-      return localReviews;
+      // Fallback to IndexedDB cache
+      const cached = await get(`alphatrade_daily_reviews_${userId}`);
+      return cached || [];
     }
 
     const dbReviews = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
-    // 3. Sync local storage (limited)
-    if (userId) safeSetItem(`alphatrade_daily_reviews_${userId}`, dbReviews.slice(0, 100));
+    // 2. Cache to IndexedDB
+    if (userId) await set(`alphatrade_daily_reviews_${userId}`, dbReviews);
 
     return dbReviews;
   },
@@ -753,8 +717,10 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
-    // Always save to local storage immediately (limited)
-    safeSetItem(`alphatrade_daily_reviews_${userId} `, reviews.slice(0, 100));
+    // Save to IndexedDB immediately
+    await set(`alphatrade_daily_reviews_${userId}`, reviews);
+    
+    // Sync to Supabase
     const reviewsToUpsert = reviews.map(r => ({ user_id: userId, date: r.date, data: r }));
     const { error } = await supabase.from('daily_reviews').upsert(reviewsToUpsert, { onConflict: 'user_id,date' });
     if (error) {
