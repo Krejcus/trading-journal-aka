@@ -627,9 +627,9 @@ const App: React.FC = () => {
 
       // Cleanup ALL legacy localStorage data (now using IndexedDB for large data)
       // This frees up quota that was causing errors
-      const keysToRemove = Object.keys(localStorage).filter(k => 
-        k.includes('alphatrade_trades') || 
-        k.includes('alphatrade_daily_preps') || 
+      const keysToRemove = Object.keys(localStorage).filter(k =>
+        k.includes('alphatrade_trades') ||
+        k.includes('alphatrade_daily_preps') ||
         k.includes('alphatrade_daily_reviews')
       );
       keysToRemove.forEach(k => localStorage.removeItem(k));
@@ -726,9 +726,9 @@ const App: React.FC = () => {
     // Background sync when we had cache data
     const syncFromServer = async (activeId: string | null) => {
       try {
-        console.log("[Sync] Background sync starting...");
+        console.log("[Sync] Smart background sync starting...");
         const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-          storageService.getTrades(),
+          storageService.getTradesWithSmartRefresh(),
           storageService.getAccounts(),
           storageService.getDailyPreps(),
           storageService.getDailyReviews(),
@@ -737,7 +737,7 @@ const App: React.FC = () => {
           storageService.getWeeklyFocusList()
         ]);
 
-        console.log("[Sync] Background sync complete.");
+        console.log("[Sync] Smart background sync complete.");
 
         if (dbUser) setCurrentUser(dbUser);
 
@@ -1386,7 +1386,7 @@ const App: React.FC = () => {
 
   return (
     <div
-      className={`min-h-screen font-sans flex transition-colors duration-300 ${theme === 'light' ? 'light-theme' : (theme === 'oled' ? 'oled-theme' : '')} bg-[var(--bg-page)] text-[var(--text-primary)]`}
+      className={`h-screen font-sans flex overflow-hidden transition-colors duration-300 ${theme === 'light' ? 'light-theme' : (theme === 'oled' ? 'oled-theme' : '')} bg-[var(--bg-page)] text-[var(--text-primary)]`}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
@@ -1414,7 +1414,7 @@ const App: React.FC = () => {
         }}
       />
 
-      <main className={`flex-1 transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-24' : 'lg:ml-72'}`}>
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-24' : 'lg:ml-72'}`}>
         <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-4 flex items-center justify-between transition-all bg-[var(--bg-page)]/80 border-[var(--border-subtle)]`}>
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>

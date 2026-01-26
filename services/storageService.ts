@@ -344,8 +344,32 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId || trades.length === 0) return [];
 
-    // Save only for the current user
-    await set(`alphatrade_trades_${userId}`, trades);
+    // --- OPUS-LEVEL CACHE MERGE ---
+    // Nenačítáme slepě, ale mergujeme nové obchody s existující cache.
+    // To řeší "Race Condition", kdy se při refreshi nenačetl nejnovější obchod.
+    try {
+      const cacheKey = `alphatrade_trades_${userId}`;
+      const currentCache = (await get<Trade[]>(cacheKey)) || [];
+
+      // Vytvoříme Mapu pro unifikaci podle ID (přepíše staré verze novými)
+      const tradeMap = new Map<string | number, Trade>();
+      currentCache.forEach(t => tradeMap.set(t.id, t));
+      trades.forEach(t => tradeMap.set(t.id, t));
+
+      // Seřadíme sestupně podle času (nejnovější nahoře)
+      const mergedCache = Array.from(tradeMap.values()).sort((a, b) => {
+        const timeA = a.timestamp || new Date(a.date).getTime();
+        const timeB = b.timestamp || new Date(b.date).getTime();
+        return timeB - timeA;
+      });
+
+      // Uložíme sloučenou verzi zpět do IndexedDB
+      await set(cacheKey, mergedCache);
+    } catch (err) {
+      console.error("[Storage] Cache merge failed:", err);
+      // Fallback: Pokud selže merge, uložíme alespoň to co máme (better than nothing)
+      await set(`alphatrade_trades_${userId}`, trades);
+    }
 
     let { data: dbAccounts } = await supabase.from('accounts').select('id, name').eq('user_id', userId);
 
@@ -675,7 +699,7 @@ export const storageService = {
 
     // Save to IndexedDB immediately (can handle large screenshots)
     await set(`alphatrade_daily_preps_${userId}`, preps);
-    
+
     // Sync to Supabase
     const prepsToUpsert = preps.map(p => ({ user_id: userId, date: p.date, data: p }));
     const { error } = await supabase.from('daily_preps').upsert(prepsToUpsert, { onConflict: 'user_id,date' });
@@ -719,7 +743,7 @@ export const storageService = {
 
     // Save to IndexedDB immediately
     await set(`alphatrade_daily_reviews_${userId}`, reviews);
-    
+
     // Sync to Supabase
     const reviewsToUpsert = reviews.map(r => ({ user_id: userId, date: r.date, data: r }));
     const { error } = await supabase.from('daily_reviews').upsert(reviewsToUpsert, { onConflict: 'user_id,date' });
@@ -1298,5 +1322,161 @@ export const storageService = {
     const templates: DrawingTemplate[] = (prefs as any).drawingTemplates || [];
     const filtered = templates.filter(t => t.id !== templateId);
     await this.savePreferences({ ...prefs, drawingTemplates: filtered } as any);
+  },
+
+  // Smart refresh - načte nové obchody ze serveru pokud cache obsahuje starší data
+  async getTradesWithSmartRefresh(targetUserId?: string): Promise<Trade[]> {
+    const userId = targetUserId || await getUserId();
+    if (!userId) return [];
+
+    const localKey = userId ? `alphatrade_trades_${userId}` : 'alphatrade_trades';
+    let localTrades: Trade[] = await get(localKey) || [];
+
+    // Pokud nemáme žádná cached data, načti vše ze serveru
+    if (localTrades.length === 0) {
+      console.log("[SmartRefresh] No cache, fetching all from server");
+      return await this.getTrades(targetUserId);
+    }
+
+    // Najdi nejnovější obchod v cache
+    const newestCachedTrade = localTrades.reduce((newest, trade) => {
+      const tradeTime = trade.timestamp || new Date(trade.date).getTime();
+      const newestTime = newest.timestamp || new Date(newest.date).getTime();
+      return tradeTime > newestTime ? trade : newest;
+    }, localTrades[0]);
+
+    const newestCacheTime = newestCachedTrade.timestamp || new Date(newestCachedTrade.date).getTime();
+
+    // Načti pouze novější obchody ze serveru
+    const { data: recentTrades, error } = await supabase
+      .from('trades')
+      .select(`
+        id,
+        user_id,
+        account_id,
+        instrument,
+        pnl,
+        direction,
+        date,
+        timestamp,
+        drawings,
+        is_public,
+        created_at,
+        setup:data->>setup,
+        mistake:data->>mistake,
+        notes:data->>notes,
+        tags:data->tags,
+        runUp:data->>runUp,
+        drawdown:data->>drawdown,
+        riskAmount:data->>riskAmount,
+        targetAmount:data->>targetAmount,
+        entryPrice:data->>entryPrice,
+        exitPrice:data->>exitPrice,
+        stopLoss:data->>stopLoss,
+        takeProfit:data->>takeProfit,
+        quantity:data->>quantity,
+        signal:data->>signal,
+        session:data->>session,
+        confidence:data->>confidence,
+        rr:data->>rr,
+        duration:data->>duration,
+        isValid:data->>isValid,
+        groupId:data->>groupId,
+        htfConfluence:data->htfConfluence,
+        ltfConfluence:data->ltfConfluence,
+        mistakes:data->mistakes,
+        emotions:data->emotions,
+        planAdherence:data->>planAdherence,
+        executionStatus:data->>executionStatus,
+        screenshot:data->>screenshot,
+        screenshots:data->screenshots,
+        miniViewRange:data->>miniViewRange,
+        miniViewLayout:data->>miniViewLayout,
+        miniViewSecondaryRange:data->>miniViewSecondaryRange,
+        miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe,
+        durationMinutes:data->>durationMinutes
+      `)
+      .eq('user_id', userId)
+      .gt('timestamp', newestCacheTime)
+      .order('timestamp', { ascending: false });
+
+    if (error) {
+      console.error("[SmartRefresh] Failed to fetch recent trades:", error);
+      return localTrades; // Vrať cache při chybě
+    }
+
+    // Pokud nejsou nové obchody, vrať cache
+    if (!recentTrades || recentTrades.length === 0) {
+      console.log("[SmartRefresh] No newer trades found, using cache");
+      return localTrades;
+    }
+
+    console.log(`[SmartRefresh] Found ${recentTrades.length} newer trades, merging with cache`);
+
+    // Převeď nová data na Trade objekty
+    const newTrades = recentTrades.map((t: any) => ({
+      id: t.id,
+      userId: t.user_id,
+      accountId: t.account_id,
+      instrument: t.instrument,
+      pnl: t.pnl,
+      direction: t.direction,
+      date: t.date,
+      timestamp: t.timestamp,
+      drawings: t.drawings || [],
+      isPublic: t.is_public,
+      createdAt: t.created_at,
+      setup: t.setup,
+      mistake: t.mistake,
+      notes: t.notes,
+      tags: t.tags,
+      runUp: t.runUp ? Number(t.runUp) : undefined,
+      drawdown: t.drawdown ? Number(t.drawdown) : undefined,
+      riskAmount: t.riskAmount ? Number(t.riskAmount) : undefined,
+      targetAmount: t.targetAmount ? Number(t.targetAmount) : undefined,
+      entryPrice: t.entryPrice ? Number(t.entryPrice) : undefined,
+      exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
+      stopLoss: t.stopLoss ? Number(t.stopLoss) : undefined,
+      takeProfit: t.takeProfit ? Number(t.takeProfit) : undefined,
+      quantity: t.quantity ? Number(t.quantity) : undefined,
+      signal: t.signal,
+      session: t.session,
+      confidence: t.confidence ? Number(t.confidence) : undefined,
+      rr: t.rr ? Number(t.rr) : undefined,
+      duration: t.duration,
+      durationMinutes: t.durationMinutes ? Number(t.durationMinutes) : 0,
+      isValid: t.isValid === 'true' || t.isValid === true,
+      groupId: t.groupId,
+      htfConfluence: t.htfConfluence,
+      ltfConfluence: t.ltfConfluence,
+      mistakes: t.mistakes,
+      emotions: t.emotions,
+      planAdherence: t.planAdherence,
+      executionStatus: t.executionStatus,
+      screenshot: t.screenshot,
+      screenshots: t.screenshots,
+      miniViewRange: t.miniViewRange,
+      miniViewLayout: t.miniViewLayout,
+      miniViewSecondaryRange: t.miniViewSecondaryRange,
+      miniViewSecondaryTimeframe: t.miniViewSecondaryTimeframe,
+      data: {}
+    })) as Trade[];
+
+    // Merge s cache pomocí Map pro unikátní ID
+    const tradeMap = new Map<string | number, Trade>();
+    localTrades.forEach(t => tradeMap.set(t.id, t));
+    newTrades.forEach(t => tradeMap.set(t.id, t));
+
+    // Seřaď podle času (nejnovější nahoře)
+    const mergedTrades = Array.from(tradeMap.values()).sort((a, b) => {
+      const timeA = a.timestamp || new Date(a.date).getTime();
+      const timeB = b.timestamp || new Date(b.date).getTime();
+      return timeB - timeA;
+    });
+
+    // Ulož mergované obchody zpět do cache
+    await set(localKey, mergedTrades);
+
+    return mergedTrades;
   }
 };
