@@ -43,6 +43,13 @@ const safeSetItem = (key: string, value: any) => {
 
 export const storageService = {
   // User Profile
+  async getCachedUser(): Promise<User | null> {
+    const userId = await getUserId();
+    if (!userId) return null;
+    const cached = await get(`alphatrade_user_profile_${userId}`);
+    return cached || null;
+  },
+
   async getUser(): Promise<User | null> {
     const userId = await getUserId();
     if (!userId) return null;
@@ -58,12 +65,18 @@ export const storageService = {
       return null;
     }
     if (!data) return null;
-    return {
+
+    const user = {
       id: data.id,
       email: data.email || '',
       name: data.full_name || '',
       avatar: data.avatar_url
     };
+
+    // Keep cache in sync
+    set(`alphatrade_user_profile_${userId}`, user);
+
+    return user;
   },
 
   async getProfile(userId: string): Promise<User | null> {
@@ -94,6 +107,9 @@ export const storageService = {
       console.error("Supabase saveUser error details:", error);
       throw error;
     }
+
+    // Sync local cache
+    set(`alphatrade_user_profile_${userId}`, user);
   },
 
   // Trades
@@ -615,6 +631,36 @@ export const storageService = {
   },
 
   // Daily Journal
+  async getCachedDailyPreps(): Promise<DailyPrep[]> {
+    const userId = await getUserId();
+    if (!userId) return [];
+    const localKey = `alphatrade_daily_preps_${userId}`;
+    const localData = localStorage.getItem(localKey);
+    if (localData) {
+      try {
+        return JSON.parse(localData);
+      } catch (e) {
+        console.error("Failed to parse cached preps", e);
+      }
+    }
+    return [];
+  },
+
+  async getCachedDailyReviews(): Promise<DailyReview[]> {
+    const userId = await getUserId();
+    if (!userId) return [];
+    const localKey = `alphatrade_daily_reviews_${userId}`;
+    const localData = localStorage.getItem(localKey);
+    if (localData) {
+      try {
+        return JSON.parse(localData);
+      } catch (e) {
+        console.error("Failed to parse cached reviews", e);
+      }
+    }
+    return [];
+  },
+
   async getDailyPreps(targetUserId?: string): Promise<DailyPrep[]> {
     const userId = targetUserId || await getUserId();
 
@@ -655,7 +701,7 @@ export const storageService = {
     if (!userId) return;
 
     // Always save to local storage immediately (limited)
-    safeSetItem(`alphatrade_daily_preps_${userId} `, preps.slice(0, 100));
+    safeSetItem(`alphatrade_daily_preps_${userId}`, preps.slice(0, 100));
     const prepsToUpsert = preps.map(p => ({ user_id: userId, date: p.date, data: p }));
     const { error } = await supabase.from('daily_preps').upsert(prepsToUpsert, { onConflict: 'user_id,date' });
     if (error) {
@@ -674,7 +720,7 @@ export const storageService = {
     const userId = targetUserId || await getUserId();
 
     // 1. Try Local Storage fallback
-    const localKey = userId ? `alphatrade_daily_reviews_${userId} ` : 'alphatrade_daily_reviews';
+    const localKey = userId ? `alphatrade_daily_reviews_${userId}` : 'alphatrade_daily_reviews';
     const localData = localStorage.getItem(localKey);
     let localReviews: DailyReview[] = [];
     if (localData) {
@@ -698,7 +744,7 @@ export const storageService = {
     const dbReviews = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
     // 3. Sync local storage (limited)
-    if (userId) safeSetItem(`alphatrade_daily_reviews_${userId} `, dbReviews.slice(0, 100));
+    if (userId) safeSetItem(`alphatrade_daily_reviews_${userId}`, dbReviews.slice(0, 100));
 
     return dbReviews;
   },
@@ -741,7 +787,13 @@ export const storageService = {
       .maybeSingle();
 
     if (error || !data) return null;
-    return { id: data.id, weekISO: data.week_iso, goals: data.goals };
+
+    // Map legacy string array to WeeklyGoal objects if needed
+    const goals = (data.goals || []).map((g: any, i: number) =>
+      typeof g === 'string' ? { id: `g_${i}`, text: g, emoji: this.predictEmoji(g) } : g
+    );
+
+    return { id: data.id, weekISO: data.week_iso, goals };
   },
 
   async getWeeklyFocusList(): Promise<WeeklyFocus[]> {
@@ -753,7 +805,34 @@ export const storageService = {
       .eq('user_id', userId);
 
     if (error) return [];
-    return data.map(d => ({ id: d.id, weekISO: d.week_iso, goals: d.goals }));
+    return data.map(d => {
+      const goals = (d.goals || []).map((g: any, i: number) =>
+        typeof g === 'string' ? { id: `g_${i}`, text: g, emoji: this.predictEmoji(g) } : g
+      );
+      return { id: d.id, weekISO: d.week_iso, goals };
+    });
+  },
+
+  predictEmoji(text: string): string {
+    const t = text.toLowerCase();
+    if (t.includes('risk') || t.includes('stop loss') || t.includes('sl')) return '🛡️';
+    if (t.includes('profit') || t.includes('tp') || t.includes('target')) return '🎯';
+    if (t.includes('discipline') || t.includes('discipline') || t.includes('trval') || t.includes('pravidl')) return '⚖️';
+    if (t.includes('patience') || t.includes('trpělivost') || t.includes('počkej') || t.includes('wait')) return '🧘';
+    if (t.includes('entry') || t.includes('vstup')) return '🚪';
+    if (t.includes('exit') || t.includes('výstup')) return '🏁';
+    if (t.includes('overtrading') || t.includes('míň') || t.includes('limit')) return '🛑';
+    if (t.includes('analysis') || t.includes('analýza') || t.includes('příprava')) return '🔭';
+    if (t.includes('news') || t.includes('zprávy')) return '📰';
+    if (t.includes('journal') || t.includes('deník') || t.includes('zápis')) return '✍️';
+    if (t.includes('morning') || t.includes('ráno')) return '🌅';
+    if (t.includes('evening') || t.includes('večer')) return '🌃';
+    if (t.includes('meditation') || t.includes('meditace')) return '🧘‍♂️';
+    if (t.includes('gym') || t.includes('cvičení')) return '💪';
+    if (t.includes('sleep') || t.includes('spánek')) return '😴';
+    if (t.includes('money') || t.includes('peníze')) return '💰';
+    if (t.includes('chart') || t.includes('graf')) return '📊';
+    return '✨'; // Default magic
   },
 
   async saveWeeklyFocus(focus: WeeklyFocus): Promise<void> {

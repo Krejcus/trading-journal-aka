@@ -3,23 +3,24 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode } from './types';
-import FileUpload from './components/FileUpload';
-import Dashboard from './components/Dashboard';
-import ManualTradeForm from './components/ManualTradeForm';
+const Dashboard = React.lazy(() => import('./components/Dashboard'));
+const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
+const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
+const Settings = React.lazy(() => import('./components/Settings'));
+const AccountsManager = React.lazy(() => import('./components/AccountsManager'));
+const DailyJournal = React.lazy(() => import('./components/DailyJournal'));
+const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
+const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
+const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
+const FileUpload = React.lazy(() => import('./components/FileUpload'));
+
 import Sidebar from './components/Sidebar';
-import TradeHistory from './components/TradeHistory';
-import Settings from './components/Settings';
-import AccountsManager from './components/AccountsManager';
 import FilterDropdown from './components/FilterDropdown';
-import DailyJournal from './components/DailyJournal';
-import UserProfileModal from './components/UserProfileModal';
-import SharedTradeView from './components/SharedTradeView';
-import NetworkHub from './components/NetworkHub';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
-import BusinessHub from './components/BusinessHub';
 import { PullToRefresh } from './components/PullToRefresh';
 import ConfirmationModal from './components/ConfirmationModal';
+import SharedTradeView from './components/SharedTradeView';
 import { currencyService, ExchangeRates } from './services/currencyService';
 import { t } from './services/translations';
 import { GuardianIntervention, GuardianOverlay, DebtCollector } from './components/GuardianSystem';
@@ -115,6 +116,18 @@ const aggregateTrades = (trades: Trade[]): Trade[] => {
 
   return aggregated.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 };
+
+// Elegant Loading Fallback for Suspense
+const LoadingFallback = () => (
+  <div className="flex-1 flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in duration-500">
+    <div className="relative">
+      <div className="w-12 h-12 border-4 border-blue-500/10 border-t-blue-500 rounded-full animate-spin transition-all" />
+      <div className="absolute inset-x-0 -bottom-8 whitespace-nowrap text-center">
+        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 animate-pulse">Načítám modul...</span>
+      </div>
+    </div>
+  </div>
+);
 
 const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
@@ -617,30 +630,37 @@ const App: React.FC = () => {
 
       // --- PHASE 1: CHECK CACHE ---
       console.log("[Load] Phase 1: Checking cache...");
-      const cachedTrades = await storageService.getTradesCheckCacheFirst();
-      const cachedAccounts = storageService.getCachedAccounts();
-      const cachedPrefs = await storageService.getCachedPreferences();
+      const [cachedTrades, cachedAccounts, cachedPrefs, cachedUser, cachedPreps, cachedReviews] = await Promise.all([
+        storageService.getTradesCheckCacheFirst(),
+        storageService.getCachedAccounts(),
+        storageService.getCachedPreferences(),
+        storageService.getCachedUser(),
+        storageService.getCachedDailyPreps(),
+        storageService.getCachedDailyReviews()
+      ]);
       const activeId = storageService.getActiveAccountId();
 
       const hasCachedData = cachedTrades.length > 0 || cachedAccounts.length > 0;
 
       if (hasCachedData) {
-
         // --- FAST PATH: Cache has data ---
-        console.log("[Load] Cache HIT!");
+        console.log("[Load] Cache HIT! Displaying local data immediately.");
         if (cachedTrades.length > 0) setTrades(cachedTrades);
         if (cachedAccounts.length > 0) {
           setAccounts(cachedAccounts);
           setActiveAccountId(activeId || cachedAccounts[0].id);
         }
         if (cachedPrefs) applyPreferences(cachedPrefs);
+        if (cachedUser) setCurrentUser(cachedUser);
+        if (cachedPreps.length > 0) setDailyPreps(cachedPreps);
+        if (cachedReviews.length > 0) setDailyReviews(cachedReviews);
 
-        // DO NOT clear loading screen yet. Wait for sync to ensure fresh data and prevent "pop".
-        // setLoading(false);
-        // setIsInitialLoadDone(true);
+        // RELEASE THE SCREEN NOW! User sees dashboard in < 500ms
+        setLoading(false);
+        setIsInitialLoadDone(true);
 
-        // Sync from server and THEN clear loading
-        await syncFromServer(activeId);
+        // Sync from server in the BACKGROUND
+        syncFromServer(activeId);
       } else {
         // --- SLOW PATH: Cache is empty, must wait for server ---
         console.log("[Load] Cache MISS. Waiting for server data...");
@@ -786,6 +806,21 @@ const App: React.FC = () => {
       setLoading(false); // Ensure loading is off if no session
     }
   }, [sharedTrade, session]);
+
+  // --- SMART PREFETCHING ---
+  // Start downloading secondary modules in background after initial load is interactive
+  useEffect(() => {
+    if (isInitialLoadDone) {
+      const prefetchTimer = setTimeout(() => {
+        console.log("[Prefetch] Starting background module download...");
+        // Trigger lazy loads without rendering them
+        import('./components/DailyJournal');
+        import('./components/Settings');
+        import('./components/BusinessHub');
+      }, 3000); // 3s buffer to ensure dashboard is fully settled
+      return () => clearTimeout(prefetchTimer);
+    }
+  }, [isInitialLoadDone]);
 
   // Phase B: Startup Global Sync (Incremental) - DISABLED
   // Trade Replay was removed for performance optimization.
@@ -1458,7 +1493,7 @@ const App: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <>
+              <React.Suspense fallback={<LoadingFallback />}>
                 {activePage === 'dashboard' && (
                   <Dashboard
                     stats={filteredStats}
@@ -1604,7 +1639,7 @@ const App: React.FC = () => {
                     onUpdateAccounts={setAccounts}
                   />
                 )}
-              </>
+              </React.Suspense>
             )}
           </div>
         </PullToRefresh>
@@ -1649,20 +1684,22 @@ const App: React.FC = () => {
         }}
       />
 
-      {isManualEntryOpen && (
-        <ManualTradeForm
-          onAdd={handleManualTrade}
-          onClose={() => setIsManualEntryOpen(false)}
-          theme={theme}
-          accounts={accounts}
-          activeAccountId={activeAccountId}
-          availableEmotions={userEmotions}
-          availableMistakes={userMistakes}
-          availableHtfOptions={htfOptions}
-          availableLtfOptions={ltfOptions}
-          viewMode={viewMode}
-        />
-      )}
+      {
+        isManualEntryOpen && (
+          <ManualTradeForm
+            onAdd={handleManualTrade}
+            onClose={() => setIsManualEntryOpen(false)}
+            theme={theme}
+            accounts={accounts}
+            activeAccountId={activeAccountId}
+            availableEmotions={userEmotions}
+            availableMistakes={userMistakes}
+            availableHtfOptions={htfOptions}
+            availableLtfOptions={ltfOptions}
+            viewMode={viewMode}
+          />
+        )
+      }
 
       <UserProfileModal
         isOpen={isProfileOpen}
@@ -1680,7 +1717,7 @@ const App: React.FC = () => {
         message="Opravdu chcete smazat VŠECHNY obchody z tohoto účtu? Tato akce je nevratná a data budou trvale odstraněna z cloudu."
         theme={theme}
       />
-    </div>
+    </div >
   );
 };
 
