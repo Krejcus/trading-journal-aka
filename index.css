@@ -339,89 +339,122 @@ body {
 }
 
 /* ===== LIGHT MODE VARIANTS ===== */
-/* Higher specificity to override dark mode defaults */
+/* Rich, immersive skins that replace generic white with themed tints */
+
+/* PURPLE - Royal Lavender Skin */
 html.light-theme[data-accent="purple"],
 :root.light-theme[data-accent="purple"] {
-  --bg-page: #faf5ff !important;
-  --bg-sidebar: #f3e8ff !important;
-  --bg-card: #ffffff !important;
-  --bg-input: #ffffff !important;
-  --text-primary: #581c87 !important;
-  --text-secondary: #7e22ce !important;
-  --text-muted: #a855f7 !important;
-  --border-subtle: #e9d5ff !important;
-  --border-active: rgba(168, 85, 247, 0.5) !important;
-  --shadow-card: 0 4px 20px -5px rgba(168, 85, 247, 0.1) !important;
+  --bg-page: #f3e8ff !important;
+  /* Richer lavender */
+  --bg-sidebar: #e9d5ff !important;
+  /* Slightly darker sidebar */
+  --bg-card: rgba(255, 255, 255, 0.7) !important;
+  /* Glassy white */
+  --bg-input: rgba(255, 255, 255, 0.9) !important;
+
+  --text-primary: #3b0764 !important;
+  /* Deepest purple */
+  --text-secondary: #6b21a8 !important;
+  --text-muted: #9333ea !important;
+
+  --border-subtle: #d8b4fe !important;
+  --border-active: #a855f7 !important;
+  --shadow-card: 0 8px 30px -5px rgba(147, 51, 234, 0.15) !important;
 }
 
+/* PINK - Rose Petal Skin */
 html.light-theme[data-accent="pink"],
 :root.light-theme[data-accent="pink"] {
-  --bg-page: #fdf2f8 !important;
-  --bg-sidebar: #fce7f3 !important;
-  --bg-card: #ffffff !important;
-  --bg-input: #ffffff !important;
+  --bg-page: #fce7f3 !important;
+  /* Richer rose */
+  --bg-sidebar: #fbcfe8 !important;
+  --bg-card: rgba(255, 255, 255, 0.7) !important;
+  --bg-input: rgba(255, 255, 255, 0.9) !important;
+
   --text-primary: #831843 !important;
-  --text-secondary: #be185d !important;
+  /* Deepest pink */
+  --text-secondary: #db2777 !important;
   --text-muted: #ec4899 !important;
-  --border-subtle: #fbcfe8 !important;
-  --border-active: rgba(236, 72, 153, 0.5) !important;
-  --shadow-card: 0 4px 20px -5px rgba(236, 72, 153, 0.1) !important;
+
+  --border-subtle: #f9a8d4 !important;
+  --border-active: #ec4899 !important;
+  --shadow-card: 0 8px 30px -5px rgba(219, 39, 119, 0.15) !important;
 }
 
+/* GREEN - Emerald Garden Skin */
 html.light-theme[data-accent="green"],
 :root.light-theme[data-accent="green"] {
-  --bg-page: #ecfdf5 !important;
-  --bg-sidebar: #d1fae5 !important;
-  --bg-card: #ffffff !important;
-  --bg-input: #ffffff !important;
-  --text-primary: #064e3b !important;
-  --text-secondary: #047857 !important;
+  --bg-page: #d1fae5 !important;
+  /* Fresh mint - significantly stronger */
+  --bg-sidebar: #a7f3d0 !important;
+  --bg-card: rgba(255, 255, 255, 0.7) !important;
+  --bg-input: rgba(255, 255, 255, 0.9) !important;
+
+  --text-primary: #022c22 !important;
+  /* Deepest forest green */
+  --text-secondary: #059669 !important;
   --text-muted: #10b981 !important;
-  --border-subtle: #a7f3d0 !important;
-  --border-active: rgba(16, 185, 129, 0.5) !important;
-  --shadow-card: 0 4px 20px -5px rgba(16, 185, 129, 0.1) !important;
+
+  --border-subtle: #6ee7b7 !important;
+  --border-active: #10b981 !important;
+  --shadow-card: 0 8px 30px -5px rgba(5, 150, 105, 0.15) !important;
 }
 
+/* ORANGE - Sunset Citrus Skin */
 html.light-theme[data-accent="orange"],
 :root.light-theme[data-accent="orange"] {
-  --bg-page: #fff7ed !important;
-  --bg-sidebar: #ffedd5 !important;
-  --bg-card: #ffffff !important;
-  --bg-input: #ffffff !important;
+  --bg-page: #ffedd5 !important;
+  /* Warm peach */
+  --bg-sidebar: #fed7aa !important;
+  --bg-card: rgba(255, 255, 255, 0.7) !important;
+  --bg-input: rgba(255, 255, 255, 0.9) !important;
+
   --text-primary: #7c2d12 !important;
-  --text-secondary: #c2410c !important;
+  /* Deep rust */
+  --text-secondary: #ea580c !important;
   --text-muted: #f97316 !important;
-  --border-subtle: #fed7aa !important;
-  --border-active: rgba(249, 115, 22, 0.5) !important;
-  --shadow-card: 0 4px 20px -5px rgba(249, 115, 22, 0.1) !important;
+
+  --border-subtle: #fdba74 !important;
+  --border-active: #f97316 !important;
+  --shadow-card: 0 8px 30px -5px rgba(234, 88, 12, 0.15) !important;
 }
 
+/* RED - Crimson Bloom Skin */
 html.light-theme[data-accent="red"],
 :root.light-theme[data-accent="red"] {
-  --bg-page: #fef2f2 !important;
-  --bg-sidebar: #fee2e2 !important;
-  --bg-card: #ffffff !important;
-  --bg-input: #ffffff !important;
+  --bg-page: #fee2e2 !important;
+  /* Soft rose */
+  --bg-sidebar: #fecaca !important;
+  --bg-card: rgba(255, 255, 255, 0.7) !important;
+  --bg-input: rgba(255, 255, 255, 0.9) !important;
+
   --text-primary: #7f1d1d !important;
-  --text-secondary: #b91c1c !important;
+  /* Deep blood red */
+  --text-secondary: #dc2626 !important;
   --text-muted: #ef4444 !important;
-  --border-subtle: #fecaca !important;
-  --border-active: rgba(239, 68, 68, 0.5) !important;
-  --shadow-card: 0 4px 20px -5px rgba(239, 68, 68, 0.1) !important;
+
+  --border-subtle: #fca5a5 !important;
+  --border-active: #ef4444 !important;
+  --shadow-card: 0 8px 30px -5px rgba(220, 38, 38, 0.15) !important;
 }
 
+/* CYAN - Arctic Ice Skin */
 html.light-theme[data-accent="cyan"],
 :root.light-theme[data-accent="cyan"] {
-  --bg-page: #ecfeff !important;
-  --bg-sidebar: #cffafe !important;
-  --bg-card: #ffffff !important;
-  --bg-input: #ffffff !important;
+  --bg-page: #cffafe !important;
+  /* Cool ice */
+  --bg-sidebar: #a5f3fc !important;
+  --bg-card: rgba(255, 255, 255, 0.7) !important;
+  --bg-input: rgba(255, 255, 255, 0.9) !important;
+
   --text-primary: #164e63 !important;
-  --text-secondary: #0e7490 !important;
+  /* Deep ocean */
+  --text-secondary: #0891b2 !important;
   --text-muted: #06b6d4 !important;
-  --border-subtle: #a5f3fc !important;
-  --border-active: rgba(6, 182, 212, 0.5) !important;
-  --shadow-card: 0 4px 20px -5px rgba(6, 182, 212, 0.1) !important;
+
+  --border-subtle: #67e8f9 !important;
+  --border-active: #06b6d4 !important;
+  --shadow-card: 0 8px 30px -5px rgba(8, 145, 178, 0.15) !important;
 }
 
 /* ===== OLED MODE VARIANTS ===== */
