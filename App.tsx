@@ -519,6 +519,20 @@ const App: React.FC = () => {
     localStorage.setItem('alphatrade_accent_color', color);
   };
 
+  // Fix theme switching - properly manage CSS classes
+  useEffect(() => {
+    // Remove all theme classes first
+    document.documentElement.classList.remove('light-theme', 'oled-theme');
+
+    // Add the appropriate class for current theme
+    if (theme === 'light') {
+      document.documentElement.classList.add('light-theme');
+    } else if (theme === 'oled') {
+      document.documentElement.classList.add('oled-theme');
+    }
+    // dark theme has no class (default)
+  }, [theme]);
+
   const [viewMode, setViewMode] = useState<'individual' | 'combined'>(
     (localStorage.getItem('alphatrade_view_mode') as 'individual' | 'combined') || 'individual'
   );
