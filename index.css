@@ -236,8 +236,12 @@ body {
 
 /* BLUE (Default) - already defined in :root */
 
+/* ===== DARK MODE ACCENT VARIANTS ===== */
+/* Dark mode needs explicit selector to avoid conflicting with light/OLED */
+
 /* PURPLE - Deep Royal */
-:root[data-accent="purple"] {
+:root:not(.light-theme):not(.oled-theme)[data-accent="purple"],
+html:not(.light-theme):not(.oled-theme)[data-accent="purple"] {
   --bg-page: #0f0a1f;
   --bg-sidebar: #0a0616;
   --bg-card: #1a0f2e;
@@ -254,7 +258,8 @@ body {
 }
 
 /* PINK - Magenta Dreams */
-:root[data-accent="pink"] {
+:root:not(.light-theme):not(.oled-theme)[data-accent="pink"],
+html:not(.light-theme):not(.oled-theme)[data-accent="pink"] {
   --bg-page: #1a0a14;
   --bg-sidebar: #140810;
   --bg-card: #2a1020;
@@ -271,7 +276,8 @@ body {
 }
 
 /* GREEN - Emerald Matrix */
-:root[data-accent="green"] {
+:root:not(.light-theme):not(.oled-theme)[data-accent="green"],
+html:not(.light-theme):not(.oled-theme)[data-accent="green"] {
   --bg-page: #0a1612;
   --bg-sidebar: #06100c;
   --bg-card: #0f2419;
@@ -288,7 +294,8 @@ body {
 }
 
 /* ORANGE - Sunset Glow */
-:root[data-accent="orange"] {
+:root:not(.light-theme):not(.oled-theme)[data-accent="orange"],
+html:not(.light-theme):not(.oled-theme)[data-accent="orange"] {
   --bg-page: #1a0f08;
   --bg-sidebar: #140a06;
   --bg-card: #2a1810;
@@ -305,7 +312,8 @@ body {
 }
 
 /* RED - Crimson Fire */
-:root[data-accent="red"] {
+:root:not(.light-theme):not(.oled-theme)[data-accent="red"],
+html:not(.light-theme):not(.oled-theme)[data-accent="red"] {
   --bg-page: #1a0808;
   --bg-sidebar: #140606;
   --bg-card: #2a1010;
@@ -322,7 +330,8 @@ body {
 }
 
 /* CYAN - Electric Teal */
-:root[data-accent="cyan"] {
+:root:not(.light-theme):not(.oled-theme)[data-accent="cyan"],
+html:not(.light-theme):not(.oled-theme)[data-accent="cyan"] {
   --bg-page: #08141a;
   --bg-sidebar: #061014;
   --bg-card: #10242a;
