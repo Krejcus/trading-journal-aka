@@ -707,8 +707,8 @@ const App: React.FC = () => {
         setLoading(false);
         setIsInitialLoadDone(true);
 
-        // Sync from server in the BACKGROUND with immediate feedback
-        console.log("[Load] Starting background sync for newer data...");
+        // Start background sync immediately (smart refresh will load newer trades)
+        console.log("[Load] Starting background sync for updated data...");
         syncFromServer(activeId);
       } else {
         // --- SLOW PATH: Cache is empty, must wait for server ---

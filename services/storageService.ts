@@ -1413,6 +1413,7 @@ export const storageService = {
     }
 
     console.log(`[SmartRefresh] Found ${recentTrades.length} newer trades, merging with cache`);
+    console.log(`[SmartRefresh] Cache had ${localTrades.length} trades, merging with ${recentTrades.length} new trades`);
 
     // Převeď nová data na Trade objekty - použij stejnou transformaci jako getTrades()
     const newTrades = recentTrades.map((t: any) => ({
@@ -1479,6 +1480,7 @@ export const storageService = {
 
     // Ulož mergované obchody zpět do cache
     await set(localKey, mergedTrades);
+    console.log(`[SmartRefresh] Updated cache with ${mergedTrades.length} total trades`);
 
     return mergedTrades;
   }

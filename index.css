@@ -231,20 +231,26 @@ body {
   border-radius: 2px;
 }
 
-/* ===== ACCENT COLORS ===== */
-/* Default Blue - already using Tailwind's blue */
+/* ===== ACCENT COLOR THEMES ===== */
+/* Each accent color has its own complete color scheme */
 
+/* BLUE (Default) - already defined in :root */
+
+/* PURPLE - Deep Royal */
 :root[data-accent="purple"] {
-  --accent-50: #faf5ff;
-  --accent-100: #f3e8ff;
-  --accent-200: #e9d5ff;
-  --accent-300: #d8b4fe;
-  --accent-400: #c084fc;
-  --accent-500: #a855f7;
-  --accent-600: #9333ea;
-  --accent-700: #7e22ce;
-  --accent-800: #6b21a8;
-  --accent-900: #581c87;
+  --bg-page: #0f0a1f;
+  --bg-sidebar: #0a0616;
+  --bg-card: #1a0f2e;
+  --bg-input: rgba(138, 43, 226, 0.1);
+
+  --text-primary: #f5f0ff;
+  --text-secondary: #c4b5fd;
+  --text-muted: #8b7cb8;
+
+  --border-subtle: rgba(168, 85, 247, 0.1);
+  --border-active: rgba(168, 85, 247, 0.4);
+
+  --shadow-card: 0 10px 30px -10px rgba(168, 85, 247, 0.3);
 }
 
 :root[data-accent="pink"] {
