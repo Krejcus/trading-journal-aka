@@ -73,7 +73,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     ${isOpen ? 'translate-x-0' : '-translate-x-full'} 
     lg:translate-x-0 lg:fixed lg:top-0 lg:h-screen
     ${isCollapsed ? 'lg:w-24' : 'lg:w-72'}
-    ${isDark ? 'bg-black/40' : 'bg-white/80'} 
+    ${isDark ? 'bg-black/40' : 'bg-[var(--glass-bg)]'} 
     border-r border-white/5 backdrop-blur-[32px]
     flex flex-col shadow-[20px_0_50px_rgba(0,0,0,0.1)]
   `;
@@ -83,7 +83,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     ${isActive
       ? (isDark
         ? 'bg-white/10 border-white/20 text-white shadow-[0_0_20px_rgba(255,255,255,0.1)] shadow-inner'
-        : 'bg-slate-900/10 border-slate-900/20 text-slate-900 shadow-[0_4px_12px_rgba(15,23,42,0.08)]')
+        : 'bg-[var(--bg-page)] border-[var(--border-active)] text-[var(--text-primary)] shadow-[0_4px_12px_rgba(15,23,42,0.08)]')
       : 'bg-transparent border-transparent theme-text-secondary lg:hover:bg-white/5 lg:hover:text-[var(--text-primary)] lg:hover:translate-x-1 active:scale-95'
     }
     ${isCollapsed ? 'justify-center px-0 mx-auto w-12 h-12' : 'px-5 mx-2'}
@@ -148,7 +148,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-700">
                   <h1 className={`
                     uppercase leading-none whitespace-nowrap transition-all duration-500 font-extralight text-[18px] tracking-[0.5em]
-                    ${isDark ? 'text-white' : 'text-slate-900'}
+                    ${isDark ? 'text-white' : 'text-[var(--text-primary)]'}
                   `}>
                     ALPHA <span className="text-cyan-500 font-normal">TRADE</span>
                   </h1>
@@ -179,7 +179,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         <nav className="flex-1 px-2 space-y-2 overflow-y-auto custom-scrollbar no-scrollbar py-2">
           {!isCollapsed && (
             <p
-              className="px-6 text-[9px] font-black uppercase text-slate-500 mb-3 mt-4 tracking-[0.3em] animate-in fade-in duration-500 cursor-pointer hover:text-white transition-colors"
+              className="px-6 text-[9px] font-black uppercase text-[var(--text-muted)] mb-3 mt-4 tracking-[0.3em] animate-in fade-in duration-500 cursor-pointer hover:text-[var(--text-primary)] transition-colors"
             >
               {lang === 'cs' ? 'Analytika' : 'Analytics'}
             </p>
@@ -196,10 +196,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                 className={navItemClass(isActive)}
                 title={isCollapsed ? item.label : ""}
               >
-                <Icon size={isCollapsed ? 20 : 16} className={isActive ? (isDark ? 'text-white' : 'text-slate-900') : 'text-current'} />
+                <Icon size={isCollapsed ? 20 : 16} className={isActive ? (isDark ? 'text-white' : 'text-[var(--text-primary)]') : 'text-current'} />
                 {!isCollapsed && <span className="animate-in fade-in duration-500 whitespace-nowrap">{item.label}</span>}
                 {isActive && !isCollapsed && (
-                  <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-slate-900 shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
+                  <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-[var(--text-primary)] shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
                 )}
                 {/* Subtle highlight sheen */}
                 <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 -translate-x-full group-hover:translate-x-full transition-all duration-1000"></div>
@@ -207,7 +207,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             );
           })}
 
-          {!isCollapsed && <p className="px-6 text-[9px] font-black uppercase text-slate-500 mb-3 mt-10 tracking-[0.3em] animate-in fade-in duration-500">{t('configuration', lang)}</p>}
+          {!isCollapsed && <p className="px-6 text-[9px] font-black uppercase text-[var(--text-muted)] mb-3 mt-10 tracking-[0.3em] animate-in fade-in duration-500">{t('configuration', lang)}</p>}
           {isCollapsed && <div className="h-px bg-[var(--border-subtle)] mx-6 my-8" />}
 
           {secondaryItems.map((item) => {
@@ -220,10 +220,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                 className={navItemClass(isActive)}
                 title={isCollapsed ? item.label : ""}
               >
-                <Icon size={isCollapsed ? 20 : 16} className={isActive ? (isDark ? 'text-white' : 'text-slate-900') : 'text-current'} />
+                <Icon size={isCollapsed ? 20 : 16} className={isActive ? (isDark ? 'text-white' : 'text-[var(--text-primary)]') : 'text-current'} />
                 {!isCollapsed && <span className="animate-in fade-in duration-500 whitespace-nowrap">{item.label}</span>}
                 {isActive && !isCollapsed && (
-                  <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-slate-900 shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
+                  <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-[var(--text-primary)] shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
                 )}
                 {/* Subtle highlight sheen */}
                 <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 -translate-x-full group-hover:translate-x-full transition-all duration-1000"></div>
@@ -233,12 +233,12 @@ const Sidebar: React.FC<SidebarProps> = ({
         </nav>
 
         {/* User Profile - Fixed at the Bottom - CLICKABLE */}
-        <div className={`p-4 mt-auto border-t transition-colors ${isDark ? 'border-white/5' : 'border-slate-200'} ${isCollapsed ? 'lg:p-2' : ''}`}>
+        <div className={`p-4 mt-auto border-t transition-colors ${isDark ? 'border-white/5' : 'border-[var(--border-subtle)]'} ${isCollapsed ? 'lg:p-2' : ''}`}>
           <div
             onClick={onOpenProfile}
             className={`
               flex items-center justify-between gap-3 p-4 rounded-[24px] transition-all relative overflow-hidden group cursor-pointer 
-              ${isDark ? 'bg-white/[0.03] border border-white/10 hover:bg-white/[0.05] hover:border-white/20' : 'bg-slate-50 border border-slate-200 hover:bg-slate-100'} 
+              ${isDark ? 'bg-white/[0.03] border border-white/10 hover:bg-white/[0.05] hover:border-white/20' : 'bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:bg-[var(--bg-page)]'} 
               lg:hover:shadow-2xl active:scale-95
             `}
           >

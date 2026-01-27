@@ -385,7 +385,7 @@ const CustomEdgeTooltip = (props: any) => {
     return (
       <div className={`p-4 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 min-w-[180px] z-[1000] pointer-events-none transition-transform ${isRightSide ? '-translate-x-[105%]' : ''} ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
         theme === 'dark' ? 'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-white' :
-          'bg-white/95 border-slate-200 text-slate-900'
+          'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-[var(--text-primary)]'
         }`}>
         <div className={`flex justify-between items-center mb-3 pb-2 border-b ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
           <span className="font-black text-sm uppercase tracking-tight">{label}</span>

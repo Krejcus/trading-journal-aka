@@ -275,9 +275,9 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     onAdd(tradesToCreate);
   };
 
-  const inputContainerClass = `relative h-[42px] rounded-xl border transition-all flex items-center overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-blue-500/50' : 'bg-white/80 border-slate-200 focus-within:border-blue-500'}`;
-  const inlineLabelClass = `px-3 text-[9px] font-black uppercase text-slate-500 whitespace-nowrap border-r border-[var(--border-subtle)] h-full flex items-center bg-[var(--bg-page)]/50 min-w-[85px]`;
-  const inputClass = `w-full px-3 py-2 bg-transparent text-sm font-black tabular-nums outline-none ${theme === 'light' ? 'text-slate-900' : 'text-white'} placeholder-slate-700`;
+  const inputContainerClass = `relative h-[42px] rounded-xl border transition-all flex items-center overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-blue-500/50' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-[var(--border-active)]'}`;
+  const inlineLabelClass = `px-3 text-[9px] font-black uppercase text-[var(--text-muted)] whitespace-nowrap border-r border-[var(--border-subtle)] h-full flex items-center bg-[var(--bg-page)]/50 min-w-[85px]`;
+  const inputClass = `w-full px-3 py-2 bg-transparent text-sm font-black tabular-nums outline-none text-[var(--text-primary)] placeholder-[var(--text-secondary)]`;
   const pilarHeaderClass = "text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 mb-4 flex items-center gap-2";
 
   const currentInst = INSTRUMENTS.find(i => i.id === formData.instrument);
@@ -289,12 +289,12 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   return (
     <>
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 md:p-4 bg-[var(--bg-page)]/60 backdrop-blur-2xl animate-in fade-in duration-500">
-        <div className={`w-full max-w-[1400px] max-h-[96vh] rounded-[32px] md:rounded-[40px] shadow-[0_32px_128px_rgba(0,0,0,0.8)] border flex flex-col overflow-hidden animate-in zoom-in-95 duration-500 relative z-10 ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+        <div className={`w-full max-w-[1400px] max-h-[96vh] rounded-[32px] md:rounded-[40px] shadow-[0_32px_128px_rgba(0,0,0,0.8)] border flex flex-col overflow-hidden animate-in zoom-in-95 duration-500 relative z-10 ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-2xl'}`}>
           <div className={`px-5 py-4 md:px-8 md:py-5 border-b flex justify-between items-center bg-[var(--bg-page)]/50 border-[var(--border-subtle)] backdrop-blur-md shrink-0`}>
             <div className="flex items-center gap-3 md:gap-4">
               <div className={`p-2.5 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/20`}><Plus size={18} className="text-white" /></div>
               <div>
-                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>NOVÝ OBCHOD</h2>
+                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase text-[var(--text-primary)]`}>NOVÝ OBCHOD</h2>
               </div>
               {localStorage.getItem('alphatrade_trade_draft') && (
                 <button

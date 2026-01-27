@@ -81,8 +81,8 @@ const SectionHeader = ({ icon: Icon, title, subtitle, color, isDark }: any) => (
       <Icon size={20} />
     </div>
     <div>
-      <h3 className={`text-lg font-black tracking-tight uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
-      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{subtitle}</p>
+      <h3 className={`text-lg font-black tracking-tight uppercase ${isDark ? 'text-white' : 'text-[var(--text-primary)]'}`}>{title}</h3>
+      <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">{subtitle}</p>
     </div>
   </div>
 );
@@ -96,14 +96,14 @@ const InputField = ({ value, onChange, placeholder, onKeyDown, icon: Icon, type 
       onChange={onChange}
       onKeyDown={onKeyDown}
       placeholder={placeholder}
-      className={`w-full ${Icon ? 'pl-11' : 'px-4'} py-3.5 rounded-2xl text-xs font-bold outline-none border transition-all ${isDark ? 'bg-white/5 border-white/5 focus:bg-white/10 focus:border-blue-500/50 text-white' : 'bg-slate-50 border-slate-200 focus:bg-white focus:border-blue-500'
+      className={`w-full ${Icon ? 'pl-11' : 'px-4'} py-3.5 rounded-2xl text-xs font-bold outline-none border transition-all ${isDark ? 'bg-white/5 border-white/5 focus:bg-white/10 focus:border-blue-500/50 text-white' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus:border-[var(--border-active)] text-[var(--text-primary)]'
         }`}
     />
   </div>
 );
 
 const Card = ({ children, className = "", isDark }: any) => (
-  <div className={`p-6 rounded-[32px] border ${isDark ? 'bg-[#0a0f1d]/60 border-white/5 shadow-2xl backdrop-blur-xl' : 'bg-white border-slate-200 shadow-sm'} ${className}`}>
+  <div className={`p-6 rounded-[32px] border ${isDark ? 'bg-[#0a0f1d]/60 border-white/5 shadow-2xl backdrop-blur-xl' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm backdrop-blur-md'} ${className}`}>
     {children}
   </div>
 );
@@ -217,7 +217,7 @@ const Settings: React.FC<SettingsProps> = ({
   return (
     <div className="max-w-7xl mx-auto pb-20 space-y-6">
       {/* Top Navbar Style */}
-      <div className={`p-2 rounded-[28px] border flex flex-wrap items-center justify-center gap-2 ${isDark ? 'bg-black/40 border-white/5 backdrop-blur-3xl' : 'bg-white border-slate-200 shadow-xl'}`}>
+      <div className={`p-2 rounded-[28px] border flex flex-wrap items-center justify-center gap-2 ${isDark ? 'bg-black/40 border-white/5 backdrop-blur-3xl' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl'}`}>
         {tabs.map(tab => (
           <button
             key={tab.id}
@@ -227,10 +227,10 @@ const Settings: React.FC<SettingsProps> = ({
               ${activeTab === tab.id
                 ? (isDark
                   ? 'bg-blue-600 border-white/20 text-white shadow-[0_0_20px_rgba(37,99,235,0.4)]'
-                  : 'bg-blue-600 border-blue-500 text-white shadow-lg')
+                  : 'bg-[var(--text-primary)] border-[var(--border-active)] text-white shadow-lg')
                 : (isDark
                   ? 'bg-transparent border-transparent text-slate-500 hover:bg-white/5 hover:text-white'
-                  : 'bg-transparent border-transparent text-slate-400 hover:bg-slate-50 hover:text-slate-900')
+                  : 'bg-transparent border-transparent text-[var(--text-muted)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)]')
               }
             `}
           >
@@ -572,10 +572,10 @@ const Settings: React.FC<SettingsProps> = ({
                         }
                       }}
                       className={`group relative flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all duration-300 ${accentColor === ac.id
-                          ? 'border-white/40 scale-105'
-                          : isDark
-                            ? 'border-white/5 hover:border-white/20'
-                            : 'border-slate-200 hover:border-slate-300'
+                        ? 'border-white/40 scale-105'
+                        : isDark
+                          ? 'border-white/5 hover:border-white/20'
+                          : 'border-slate-200 hover:border-slate-300'
                         }`}
                       style={{
                         backgroundColor: accentColor === ac.id ? `${ac.color}20` : 'transparent'
@@ -589,8 +589,8 @@ const Settings: React.FC<SettingsProps> = ({
                         }}
                       />
                       <span className={`text-[9px] font-black uppercase tracking-widest transition-all ${accentColor === ac.id
-                          ? isDark ? 'text-white' : 'text-slate-900'
-                          : 'text-slate-500'
+                        ? isDark ? 'text-white' : 'text-slate-900'
+                        : 'text-slate-500'
                         }`}>
                         {ac.label}
                       </span>
