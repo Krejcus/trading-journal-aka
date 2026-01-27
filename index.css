@@ -337,3 +337,248 @@ body {
 
   --shadow-card: 0 10px 30px -10px rgba(6, 182, 212, 0.3);
 }
+
+/* ===== LIGHT MODE VARIANTS ===== */
+.light-theme[data-accent="purple"] {
+  --bg-page: #faf5ff;
+  --bg-sidebar: #f3e8ff;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --text-primary: #581c87;
+  --text-secondary: #7e22ce;
+  --text-muted: #a855f7;
+  --border-subtle: #e9d5ff;
+  --border-active: rgba(168, 85, 247, 0.5);
+  --shadow-card: 0 4px 20px -5px rgba(168, 85, 247, 0.1);
+}
+
+.light-theme[data-accent="pink"] {
+  --bg-page: #fdf2f8;
+  --bg-sidebar: #fce7f3;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --text-primary: #831843;
+  --text-secondary: #be185d;
+  --text-muted: #ec4899;
+  --border-subtle: #fbcfe8;
+  --border-active: rgba(236, 72, 153, 0.5);
+  --shadow-card: 0 4px 20px -5px rgba(236, 72, 153, 0.1);
+}
+
+.light-theme[data-accent="green"] {
+  --bg-page: #ecfdf5;
+  --bg-sidebar: #d1fae5;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --text-primary: #064e3b;
+  --text-secondary: #047857;
+  --text-muted: #10b981;
+  --border-subtle: #a7f3d0;
+  --border-active: rgba(16, 185, 129, 0.5);
+  --shadow-card: 0 4px 20px -5px rgba(16, 185, 129, 0.1);
+}
+
+.light-theme[data-accent="orange"] {
+  --bg-page: #fff7ed;
+  --bg-sidebar: #ffedd5;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --text-primary: #7c2d12;
+  --text-secondary: #c2410c;
+  --text-muted: #f97316;
+  --border-subtle: #fed7aa;
+  --border-active: rgba(249, 115, 22, 0.5);
+  --shadow-card: 0 4px 20px -5px rgba(249, 115, 22, 0.1);
+}
+
+.light-theme[data-accent="red"] {
+  --bg-page: #fef2f2;
+  --bg-sidebar: #fee2e2;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --text-primary: #7f1d1d;
+  --text-secondary: #b91c1c;
+  --text-muted: #ef4444;
+  --border-subtle: #fecaca;
+  --border-active: rgba(239, 68, 68, 0.5);
+  --shadow-card: 0 4px 20px -5px rgba(239, 68, 68, 0.1);
+}
+
+.light-theme[data-accent="cyan"] {
+  --bg-page: #ecfeff;
+  --bg-sidebar: #cffafe;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --text-primary: #164e63;
+  --text-secondary: #0e7490;
+  --text-muted: #06b6d4;
+  --border-subtle: #a5f3fc;
+  --border-active: rgba(6, 182, 212, 0.5);
+  --shadow-card: 0 4px 20px -5px rgba(6, 182, 212, 0.1);
+}
+
+/* ===== OLED MODE VARIANTS ===== */
+.oled-theme[data-accent="purple"] {
+  --border-subtle: rgba(168, 85, 247, 0.15);
+  --border-active: #a855f7;
+  --text-secondary: #c4b5fd;
+}
+
+.oled-theme[data-accent="pink"] {
+  --border-subtle: rgba(236, 72, 153, 0.15);
+  --border-active: #ec4899;
+  --text-secondary: #f9a8d4;
+}
+
+.oled-theme[data-accent="green"] {
+  --border-subtle: rgba(16, 185, 129, 0.15);
+  --border-active: #10b981;
+  --text-secondary: #6ee7b7;
+}
+
+.oled-theme[data-accent="orange"] {
+  --border-subtle: rgba(249, 115, 22, 0.15);
+  --border-active: #f97316;
+  --text-secondary: #fdba74;
+}
+
+.oled-theme[data-accent="red"] {
+  --border-subtle: rgba(239, 68, 68, 0.15);
+  --border-active: #ef4444;
+  --text-secondary: #fca5a5;
+}
+
+.oled-theme[data-accent="cyan"] {
+  --border-subtle: rgba(6, 182, 212, 0.15);
+  --border-active: #06b6d4;
+  --text-secondary: #67e8f9;
+}
+
+/* ===== GLOBAL BLUE OVERRIDES ===== */
+/* Replace all hardcoded blue-* Tailwind classes with theme-aware colors */
+
+/* Purple theme */
+:root[data-accent="purple"] .bg-blue-600,
+:root[data-accent="purple"] .bg-blue-500 {
+  background-color: #a855f7 !important;
+}
+
+:root[data-accent="purple"] .hover\:bg-blue-600:hover,
+:root[data-accent="purple"] .hover\:bg-blue-500:hover {
+  background-color: #9333ea !important;
+}
+
+:root[data-accent="purple"] .text-blue-600,
+:root[data-accent="purple"] .text-blue-500,
+:root[data-accent="purple"] .text-blue-400 {
+  color: #a855f7 !important;
+}
+
+:root[data-accent="purple"] .border-blue-500 {
+  border-color: #a855f7 !important;
+}
+
+/* Pink theme */
+:root[data-accent="pink"] .bg-blue-600,
+:root[data-accent="pink"] .bg-blue-500 {
+  background-color: #ec4899 !important;
+}
+
+:root[data-accent="pink"] .hover\:bg-blue-600:hover,
+:root[data-accent="pink"] .hover\:bg-blue-500:hover {
+  background-color: #db2777 !important;
+}
+
+:root[data-accent="pink"] .text-blue-600,
+:root[data-accent="pink"] .text-blue-500,
+:root[data-accent="pink"] .text-blue-400 {
+  color: #ec4899 !important;
+}
+
+:root[data-accent="pink"] .border-blue-500 {
+  border-color: #ec4899 !important;
+}
+
+/* Green theme */
+:root[data-accent="green"] .bg-blue-600,
+:root[data-accent="green"] .bg-blue-500 {
+  background-color: #10b981 !important;
+}
+
+:root[data-accent="green"] .hover\:bg-blue-600:hover,
+:root[data-accent="green"] .hover\:bg-blue-500:hover {
+  background-color: #059669 !important;
+}
+
+:root[data-accent="green"] .text-blue-600,
+:root[data-accent="green"] .text-blue-500,
+:root[data-accent="green"] .text-blue-400 {
+  color: #10b981 !important;
+}
+
+:root[data-accent="green"] .border-blue-500 {
+  border-color: #10b981 !important;
+}
+
+/* Orange theme */
+:root[data-accent="orange"] .bg-blue-600,
+:root[data-accent="orange"] .bg-blue-500 {
+  background-color: #f97316 !important;
+}
+
+:root[data-accent="orange"] .hover\:bg-blue-600:hover,
+:root[data-accent="orange"] .hover\:bg-blue-500:hover {
+  background-color: #ea580c !important;
+}
+
+:root[data-accent="orange"] .text-blue-600,
+:root[data-accent="orange"] .text-blue-500,
+:root[data-accent="orange"] .text-blue-400 {
+  color: #f97316 !important;
+}
+
+:root[data-accent="orange"] .border-blue-500 {
+  border-color: #f97316 !important;
+}
+
+/* Red theme */
+:root[data-accent="red"] .bg-blue-600,
+:root[data-accent="red"] .bg-blue-500 {
+  background-color: #ef4444 !important;
+}
+
+:root[data-accent="red"] .hover\:bg-blue-600:hover,
+:root[data-accent="red"] .hover\:bg-blue-500:hover {
+  background-color: #dc2626 !important;
+}
+
+:root[data-accent="red"] .text-blue-600,
+:root[data-accent="red"] .text-blue-500,
+:root[data-accent="red"] .text-blue-400 {
+  color: #ef4444 !important;
+}
+
+:root[data-accent="red"] .border-blue-500 {
+  border-color: #ef4444 !important;
+}
+
+/* Cyan theme */
+:root[data-accent="cyan"] .bg-blue-600,
+:root[data-accent="cyan"] .bg-blue-500 {
+  background-color: #06b6d4 !important;
+}
+
+:root[data-accent="cyan"] .hover\:bg-blue-600:hover,
+:root[data-accent="cyan"] .hover\:bg-blue-500:hover {
+  background-color: #0891b2 !important;
+}
+
+:root[data-accent="cyan"] .text-blue-600,
+:root[data-accent="cyan"] .text-blue-500,
+:root[data-accent="cyan"] .text-blue-400 {
+  color: #06b6d4 !important;
+}
+
+:root[data-accent="cyan"] .border-blue-500 {
+  border-color: #06b6d4 !important;
+}
