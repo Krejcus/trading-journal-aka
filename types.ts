@@ -81,7 +81,7 @@ export interface SocialConnection {
     canSeePrep?: boolean;
     canSeeReviewStats?: boolean;
     canSeeReviewNotes?: boolean; // Replaces 'canSeeNotes' logic
-    canSeeNotes: boolean; // Deprecated but kept for type compat until migration
+    canSeeNotes?: boolean; // Made optional for backward compatibility
     canSeeScreenshots: boolean;
   };
 }
@@ -170,7 +170,7 @@ export interface Trade {
   screenshot?: string;
   screenshots?: string[];
   notes?: string;
-  drawings?: any[]; // Stores array of drawing objects (lines, rects, text)
+  drawings?: DrawingObject[]; // Array of drawing objects (lines, rects, text, fib, etc.)
   entryPrice?: number;
   exitPrice?: number;
   stopLoss?: number;
@@ -313,6 +313,7 @@ export interface DailyPrep {
   };
   ritualCompletions?: RuleCompletion[];
   mindsetState: string;
+  /** Confidence level (0-100) */
   confidence: number;
 }
 
@@ -340,6 +341,7 @@ export interface DailyReview {
   mainTakeaway: string;
   mistakes: string[];
   lessons: string;
+  /** Day rating (1-5 stars) */
   rating: number;
   goalResults?: GoalResult[];
   scenarioResult?: 'Bullish' | 'Bearish' | 'Range' | 'Unpredicted';
