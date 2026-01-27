@@ -493,6 +493,32 @@ const App: React.FC = () => {
     return 'dark';
   });
 
+  const [accentColor, setAccentColor] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem('alphatrade_accent_color');
+      if (stored) {
+        document.documentElement.dataset.accent = stored;
+        return stored;
+      }
+      const prefs = localStorage.getItem('alphatrade_preferences');
+      if (prefs) {
+        const parsed = JSON.parse(prefs);
+        if (parsed.accentColor) {
+          document.documentElement.dataset.accent = parsed.accentColor;
+          return parsed.accentColor;
+        }
+      }
+    } catch (e) { }
+    document.documentElement.dataset.accent = 'blue';
+    return 'blue';
+  });
+
+  const handleAccentColorChange = (color: string) => {
+    setAccentColor(color);
+    document.documentElement.dataset.accent = color;
+    localStorage.setItem('alphatrade_accent_color', color);
+  };
+
   const [viewMode, setViewMode] = useState<'individual' | 'combined'>(
     (localStorage.getItem('alphatrade_view_mode') as 'individual' | 'combined') || 'individual'
   );
@@ -1634,6 +1660,8 @@ const App: React.FC = () => {
                     onEnableNotifications={handleApplyNotificationPermission}
                     appVersion={APP_VERSION}
                     onHardRefresh={handleHardRefresh}
+                    accentColor={accentColor}
+                    onAccentColorChange={handleAccentColorChange}
                   />
                 )}
 

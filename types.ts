@@ -463,6 +463,8 @@ export interface SessionConfig {
   color: string;
 }
 
+export type AccentColor = 'blue' | 'purple' | 'pink' | 'green' | 'orange' | 'red' | 'cyan';
+
 export interface UserPreferences {
   emotions: CustomEmotion[];
   standardGoals: string[];
@@ -487,6 +489,7 @@ export interface UserPreferences {
   businessResources?: BusinessResource[];
   businessSettings?: BusinessSettings;
   theme?: 'dark' | 'light' | 'oled';
+  accentColor?: AccentColor;
   systemSettings?: SystemSettings;
   pushSubscription?: any; // Stores the Web Push Subscription object (endpoint, keys)
 }

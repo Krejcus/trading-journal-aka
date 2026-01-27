@@ -35,6 +35,8 @@ interface SettingsProps {
   onEnableNotifications?: () => void;
   appVersion?: string;
   onHardRefresh?: () => void;
+  accentColor?: string;
+  onAccentColorChange?: (color: string) => void;
 }
 
 // Global Helper for Weekly Focus Consistency
@@ -128,7 +130,9 @@ const Settings: React.FC<SettingsProps> = ({
   weeklyFocusList, setWeeklyFocusList,
   systemSettings, setSystemSettings,
   standardGoals, setStandardGoals,
-  onEnableNotifications, appVersion, onHardRefresh
+  onEnableNotifications, appVersion, onHardRefresh,
+  accentColor = 'blue',
+  onAccentColorChange
 }) => {
   const [activeTab, setActiveTab] = useState<'psychology' | 'strategy' | 'market' | 'system'>('psychology');
   const isDark = theme !== 'light';
@@ -543,6 +547,66 @@ const Settings: React.FC<SettingsProps> = ({
 
           {activeTab === 'system' && (
             <div className="space-y-6">
+              {/* Accent Color Picker */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Sliders} title="Accent Color" subtitle="Personalizuj barvu rozhraní" color="bg-gradient-to-br from-purple-600 to-pink-600" isDark={isDark} />
+                <p className={`text-xs mb-6 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Vyber akcentovou barvu, která se objeví na buttonech, aktivních prvcích a zvýrazněních v celé aplikaci.
+                </p>
+                <div className="grid grid-cols-4 sm:grid-cols-7 gap-3">
+                  {[
+                    { id: 'blue', color: '#3b82f6', label: 'Modrá' },
+                    { id: 'purple', color: '#a855f7', label: 'Fialová' },
+                    { id: 'pink', color: '#ec4899', label: 'Růžová' },
+                    { id: 'green', color: '#10b981', label: 'Zelená' },
+                    { id: 'orange', color: '#f97316', label: 'Oranžová' },
+                    { id: 'red', color: '#ef4444', label: 'Červená' },
+                    { id: 'cyan', color: '#06b6d4', label: 'Cyan' },
+                  ].map(ac => (
+                    <button
+                      key={ac.id}
+                      onClick={() => {
+                        if (onAccentColorChange) {
+                          onAccentColorChange(ac.id);
+                          showToast(`${ac.label} aktivována`);
+                        }
+                      }}
+                      className={`group relative flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all duration-300 ${accentColor === ac.id
+                          ? 'border-white/40 scale-105'
+                          : isDark
+                            ? 'border-white/5 hover:border-white/20'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                      style={{
+                        backgroundColor: accentColor === ac.id ? `${ac.color}20` : 'transparent'
+                      }}
+                    >
+                      <div
+                        className="w-12 h-12 rounded-xl shadow-lg transition-all duration-300 group-hover:scale-110"
+                        style={{
+                          backgroundColor: ac.color,
+                          boxShadow: accentColor === ac.id ? `0 0 20px ${ac.color}80` : `0 4px 12px ${ac.color}40`
+                        }}
+                      />
+                      <span className={`text-[9px] font-black uppercase tracking-widest transition-all ${accentColor === ac.id
+                          ? isDark ? 'text-white' : 'text-slate-900'
+                          : 'text-slate-500'
+                        }`}>
+                        {ac.label}
+                      </span>
+                      {accentColor === ac.id && (
+                        <motion.div
+                          layoutId="accent-indicator"
+                          className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-white shadow-lg flex items-center justify-center"
+                        >
+                          <Check size={14} style={{ color: ac.color }} strokeWidth={3} />
+                        </motion.div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </Card>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Seance & Alerty */}
                 <Card isDark={isDark}>

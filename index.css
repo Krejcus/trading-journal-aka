@@ -230,3 +230,210 @@ body {
   animation: generating-loader-bar-anim 2s infinite linear;
   border-radius: 2px;
 }
+
+/* ===== ACCENT COLORS ===== */
+/* Default Blue - already using Tailwind's blue */
+
+:root[data-accent="purple"] {
+  --accent-50: #faf5ff;
+  --accent-100: #f3e8ff;
+  --accent-200: #e9d5ff;
+  --accent-300: #d8b4fe;
+  --accent-400: #c084fc;
+  --accent-500: #a855f7;
+  --accent-600: #9333ea;
+  --accent-700: #7e22ce;
+  --accent-800: #6b21a8;
+  --accent-900: #581c87;
+}
+
+:root[data-accent="pink"] {
+  --accent-50: #fdf2f8;
+  --accent-100: #fce7f3;
+  --accent-200: #fbcfe8;
+  --accent-300: #f9a8d4;
+  --accent-400: #f472b6;
+  --accent-500: #ec4899;
+  --accent-600: #db2777;
+  --accent-700: #be185d;
+  --accent-800: #9d174d;
+  --accent-900: #831843;
+}
+
+:root[data-accent="green"] {
+  --accent-50: #ecfdf5;
+  --accent-100: #d1fae5;
+  --accent-200: #a7f3d0;
+  --accent-300: #6ee7b7;
+  --accent-400: #34d399;
+  --accent-500: #10b981;
+  --accent-600: #059669;
+  --accent-700: #047857;
+  --accent-800: #065f46;
+  --accent-900: #064e3b;
+}
+
+:root[data-accent="orange"] {
+  --accent-50: #fff7ed;
+  --accent-100: #ffedd5;
+  --accent-200: #fed7aa;
+  --accent-300: #fdba74;
+  --accent-400: #fb923c;
+  --accent-500: #f97316;
+  --accent-600: #ea580c;
+  --accent-700: #c2410c;
+  --accent-800: #9a3412;
+  --accent-900: #7c2d12;
+}
+
+:root[data-accent="red"] {
+  --accent-50: #fef2f2;
+  --accent-100: #fee2e2;
+  --accent-200: #fecaca;
+  --accent-300: #fca5a5;
+  --accent-400: #f87171;
+  --accent-500: #ef4444;
+  --accent-600: #dc2626;
+  --accent-700: #b91c1c;
+  --accent-800: #991b1b;
+  --accent-900: #7f1d1d;
+}
+
+:root[data-accent="cyan"] {
+  --accent-50: #ecfeff;
+  --accent-100: #cffafe;
+  --accent-200: #a5f3fc;
+  --accent-300: #67e8f9;
+  --accent-400: #22d3ee;
+  --accent-500: #06b6d4;
+  --accent-600: #0891b2;
+  --accent-700: #0e7490;
+  --accent-800: #155e75;
+  --accent-900: #164e63;
+}
+
+/* Apply accent colors to key UI elements */
+:root[data-accent="purple"] .bg-blue-600,
+:root[data-accent="purple"] .bg-blue-500 {
+  background-color: var(--accent-600) !important;
+}
+
+:root[data-accent="purple"] .hover\:bg-blue-500:hover,
+:root[data-accent="purple"] .hover\:bg-blue-600:hover {
+  background-color: var(--accent-500) !important;
+}
+
+:root[data-accent="purple"] .text-blue-400,
+:root[data-accent="purple"] .text-blue-500,
+:root[data-accent="purple"] .text-blue-600 {
+  color: var(--accent-500) !important;
+}
+
+:root[data-accent="purple"] .border-blue-500 {
+  border-color: var(--accent-500) !important;
+}
+
+/* Pink */
+:root[data-accent="pink"] .bg-blue-600,
+:root[data-accent="pink"] .bg-blue-500 {
+  background-color: var(--accent-600) !important;
+}
+
+:root[data-accent="pink"] .hover\:bg-blue-500:hover,
+:root[data-accent="pink"] .hover\:bg-blue-600:hover {
+  background-color: var(--accent-500) !important;
+}
+
+:root[data-accent="pink"] .text-blue-400,
+:root[data-accent="pink"] .text-blue-500,
+:root[data-accent="pink"] .text-blue-600 {
+  color: var(--accent-500) !important;
+}
+
+:root[data-accent="pink"] .border-blue-500 {
+  border-color: var(--accent-500) !important;
+}
+
+/* Green */
+:root[data-accent="green"] .bg-blue-600,
+:root[data-accent="green"] .bg-blue-500 {
+  background-color: var(--accent-600) !important;
+}
+
+:root[data-accent="green"] .hover\:bg-blue-500:hover,
+:root[data-accent="green"] .hover\:bg-blue-600:hover {
+  background-color: var(--accent-500) !important;
+}
+
+:root[data-accent="green"] .text-blue-400,
+:root[data-accent="green"] .text-blue-500,
+:root[data-accent="green"] .text-blue-600 {
+  color: var(--accent-500) !important;
+}
+
+:root[data-accent="green"] .border-blue-500 {
+  border-color: var(--accent-500) !important;
+}
+
+/* Orange */
+:root[data-accent="orange"] .bg-blue-600,
+:root[data-accent="orange"] .bg-blue-500 {
+  background-color: var(--accent-600) !important;
+}
+
+:root[data-accent="orange"] .hover\:bg-blue-500:hover,
+:root[data-accent="orange"] .hover\:bg-blue-600:hover {
+  background-color: var(--accent-500) !important;
+}
+
+:root[data-accent="orange"] .text-blue-400,
+:root[data-accent="orange"] .text-blue-500,
+:root[data-accent="orange"] .text-blue-600 {
+  color: var(--accent-500) !important;
+}
+
+:root[data-accent="orange"] .border-blue-500 {
+  border-color: var(--accent-500) !important;
+}
+
+/* Red */
+:root[data-accent="red"] .bg-blue-600,
+:root[data-accent="red"] .bg-blue-500 {
+  background-color: var(--accent-600) !important;
+}
+
+:root[data-accent="red"] .hover\:bg-blue-500:hover,
+:root[data-accent="red"] .hover\:bg-blue-600:hover {
+  background-color: var(--accent-500) !important;
+}
+
+:root[data-accent="red"] .text-blue-400,
+:root[data-accent="red"] .text-blue-500,
+:root[data-accent="red"] .text-blue-600 {
+  color: var(--accent-500) !important;
+}
+
+:root[data-accent="red"] .border-blue-500 {
+  border-color: var(--accent-500) !important;
+}
+
+/* Cyan */
+:root[data-accent="cyan"] .bg-blue-600,
+:root[data-accent="cyan"] .bg-blue-500 {
+  background-color: var(--accent-600) !important;
+}
+
+:root[data-accent="cyan"] .hover\:bg-blue-500:hover,
+:root[data-accent="cyan"] .hover\:bg-blue-600:hover {
+  background-color: var(--accent-500) !important;
+}
+
+:root[data-accent="cyan"] .text-blue-400,
+:root[data-accent="cyan"] .text-blue-500,
+:root[data-accent="cyan"] .text-blue-600 {
+  color: var(--accent-500) !important;
+}
+
+:root[data-accent="cyan"] .border-blue-500 {
+  border-color: var(--accent-500) !important;
+}
