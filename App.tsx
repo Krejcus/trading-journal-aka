@@ -137,6 +137,7 @@ const App: React.FC = () => {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [initStatus, setInitStatus] = useState<string>("Inicializace...");
   const [showRetry, setShowRetry] = useState(false);
+  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
 
   useEffect(() => {
     console.log("[Auth] Starting initialization...");
@@ -666,7 +667,8 @@ const App: React.FC = () => {
         setLoading(false);
         setIsInitialLoadDone(true);
 
-        // Sync from server in the BACKGROUND
+        // Sync from server in the BACKGROUND with immediate feedback
+        console.log("[Load] Starting background sync for newer data...");
         syncFromServer(activeId);
       } else {
         // --- SLOW PATH: Cache is empty, must wait for server ---
@@ -726,6 +728,7 @@ const App: React.FC = () => {
     // Background sync when we had cache data
     const syncFromServer = async (activeId: string | null) => {
       try {
+        setIsBackgroundSyncing(true);
         console.log("[Sync] Smart background sync starting...");
         const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
           storageService.getTradesWithSmartRefresh(),
@@ -772,6 +775,8 @@ const App: React.FC = () => {
         // Even on error, we must eventually show the dashboard (with cached data)
         setLoading(false);
         setIsInitialLoadDone(true);
+      } finally {
+        setIsBackgroundSyncing(false);
       }
     };
 
@@ -1459,6 +1464,14 @@ const App: React.FC = () => {
                 pnlDisplayMode={pnlDisplayMode}
                 setPnlDisplayMode={setPnlDisplayMode}
               />
+
+              {/* Background Sync Indicator */}
+              {isBackgroundSyncing && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                  <Loader2 size={16} className="animate-spin text-blue-400" />
+                  <span className="text-xs text-blue-400 font-medium">Sync...</span>
+                </div>
+              )}
 
               <button
                 onClick={() => {

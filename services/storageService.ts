@@ -1386,65 +1386,20 @@ export const storageService = {
 
     // Najdi nejnovější obchod v cache
     const newestCachedTrade = localTrades.reduce((newest, trade) => {
-      const tradeTime = trade.timestamp || new Date(trade.date).getTime();
-      const newestTime = newest.timestamp || new Date(newest.date).getTime();
+      const tradeTime = new Date(trade.createdAt || trade.date).getTime();
+      const newestTime = new Date(newest.createdAt || newest.date).getTime();
       return tradeTime > newestTime ? trade : newest;
     }, localTrades[0]);
 
-    const newestCacheTime = newestCachedTrade.timestamp || new Date(newestCachedTrade.date).getTime();
+    const newestCacheDate = new Date(newestCachedTrade.createdAt || newestCachedTrade.date).toISOString();
 
-    // Načti pouze novější obchody ze serveru
+    // Načti pouze novější obchody ze serveru - optimized query s jen potřebnými poli
     const { data: recentTrades, error } = await supabase
       .from('trades')
-      .select(`
-        id,
-        user_id,
-        account_id,
-        instrument,
-        pnl,
-        direction,
-        date,
-        timestamp,
-        drawings,
-        is_public,
-        created_at,
-        setup:data->>setup,
-        mistake:data->>mistake,
-        notes:data->>notes,
-        tags:data->tags,
-        runUp:data->>runUp,
-        drawdown:data->>drawdown,
-        riskAmount:data->>riskAmount,
-        targetAmount:data->>targetAmount,
-        entryPrice:data->>entryPrice,
-        exitPrice:data->>exitPrice,
-        stopLoss:data->>stopLoss,
-        takeProfit:data->>takeProfit,
-        quantity:data->>quantity,
-        signal:data->>signal,
-        session:data->>session,
-        confidence:data->>confidence,
-        rr:data->>rr,
-        duration:data->>duration,
-        isValid:data->>isValid,
-        groupId:data->>groupId,
-        htfConfluence:data->htfConfluence,
-        ltfConfluence:data->ltfConfluence,
-        mistakes:data->mistakes,
-        emotions:data->emotions,
-        planAdherence:data->>planAdherence,
-        executionStatus:data->>executionStatus,
-        screenshot:data->>screenshot,
-        screenshots:data->screenshots,
-        miniViewRange:data->>miniViewRange,
-        miniViewLayout:data->>miniViewLayout,
-        miniViewSecondaryRange:data->>miniViewSecondaryRange,
-        miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe,
-        durationMinutes:data->>durationMinutes
-      `)
+      .select('*') // Faster than selecting individual JSON fields
       .eq('user_id', userId)
-      .gt('timestamp', newestCacheTime)
-      .order('timestamp', { ascending: false });
+      .gt('created_at', newestCacheDate)
+      .order('created_at', { ascending: false });
 
     if (error) {
       console.error("[SmartRefresh] Failed to fetch recent trades:", error);
@@ -1459,7 +1414,7 @@ export const storageService = {
 
     console.log(`[SmartRefresh] Found ${recentTrades.length} newer trades, merging with cache`);
 
-    // Převeď nová data na Trade objekty
+    // Převeď nová data na Trade objekty - použij stejnou transformaci jako getTrades()
     const newTrades = recentTrades.map((t: any) => ({
       id: t.id,
       userId: t.user_id,
@@ -1472,40 +1427,42 @@ export const storageService = {
       drawings: t.drawings || [],
       isPublic: t.is_public,
       createdAt: t.created_at,
-      setup: t.setup,
-      mistake: t.mistake,
-      notes: t.notes,
-      tags: t.tags,
-      runUp: t.runUp ? Number(t.runUp) : undefined,
-      drawdown: t.drawdown ? Number(t.drawdown) : undefined,
-      riskAmount: t.riskAmount ? Number(t.riskAmount) : undefined,
-      targetAmount: t.targetAmount ? Number(t.targetAmount) : undefined,
-      entryPrice: t.entryPrice ? Number(t.entryPrice) : undefined,
-      exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
-      stopLoss: t.stopLoss ? Number(t.stopLoss) : undefined,
-      takeProfit: t.takeProfit ? Number(t.takeProfit) : undefined,
-      quantity: t.quantity ? Number(t.quantity) : undefined,
-      signal: t.signal,
-      session: t.session,
-      confidence: t.confidence ? Number(t.confidence) : undefined,
-      rr: t.rr ? Number(t.rr) : undefined,
-      duration: t.duration,
-      durationMinutes: t.durationMinutes ? Number(t.durationMinutes) : 0,
-      isValid: t.isValid === 'true' || t.isValid === true,
-      groupId: t.groupId,
-      htfConfluence: t.htfConfluence,
-      ltfConfluence: t.ltfConfluence,
-      mistakes: t.mistakes,
-      emotions: t.emotions,
-      planAdherence: t.planAdherence,
-      executionStatus: t.executionStatus,
-      screenshot: t.screenshot,
-      screenshots: t.screenshots,
-      miniViewRange: t.miniViewRange,
-      miniViewLayout: t.miniViewLayout,
-      miniViewSecondaryRange: t.miniViewSecondaryRange,
-      miniViewSecondaryTimeframe: t.miniViewSecondaryTimeframe,
-      data: {}
+
+      // Mapped JSON fields from data blob
+      setup: t.data?.setup,
+      mistake: t.data?.mistake,
+      notes: t.data?.notes,
+      tags: t.data?.tags,
+      runUp: t.data?.runUp ? Number(t.data.runUp) : undefined,
+      drawdown: t.data?.drawdown ? Number(t.data.drawdown) : undefined,
+      riskAmount: t.data?.riskAmount ? Number(t.data.riskAmount) : undefined,
+      targetAmount: t.data?.targetAmount ? Number(t.data.targetAmount) : undefined,
+      entryPrice: t.data?.entryPrice ? Number(t.data.entryPrice) : undefined,
+      exitPrice: t.data?.exitPrice ? Number(t.data.exitPrice) : undefined,
+      stopLoss: t.data?.stopLoss ? Number(t.data.stopLoss) : undefined,
+      takeProfit: t.data?.takeProfit ? Number(t.data.takeProfit) : undefined,
+      quantity: t.data?.quantity ? Number(t.data.quantity) : undefined,
+      signal: t.data?.signal,
+      session: t.data?.session,
+      confidence: t.data?.confidence ? Number(t.data.confidence) : undefined,
+      rr: t.data?.rr ? Number(t.data.rr) : undefined,
+      duration: t.data?.duration,
+      durationMinutes: t.data?.durationMinutes ? Number(t.data.durationMinutes) : 0,
+      isValid: t.data?.isValid === 'true' || t.data?.isValid === true,
+      groupId: t.data?.groupId,
+      htfConfluence: t.data?.htfConfluence,
+      ltfConfluence: t.data?.ltfConfluence,
+      mistakes: t.data?.mistakes,
+      emotions: t.data?.emotions,
+      planAdherence: t.data?.planAdherence,
+      executionStatus: t.data?.executionStatus,
+      screenshot: t.data?.screenshot,
+      screenshots: t.data?.screenshots,
+      miniViewRange: t.data?.miniViewRange,
+      miniViewLayout: t.data?.miniViewLayout,
+      miniViewSecondaryRange: t.data?.miniViewSecondaryRange,
+      miniViewSecondaryTimeframe: t.data?.miniViewSecondaryTimeframe,
+      data: t.data || {}
     })) as Trade[];
 
     // Merge s cache pomocí Map pro unikátní ID
