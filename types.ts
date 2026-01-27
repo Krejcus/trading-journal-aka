@@ -1,10 +1,11 @@
-import { Time } from 'lightweight-charts';
+// Local type definition to avoid dependency on lightweight-charts if not installed
+export type ChartTime = number | string | { year: number; month: number; day: number };
 
 export interface DrawingObject {
   id: string;
   type: 'line' | 'rect' | 'text' | 'fib' | 'horizontal';
-  p1: { time: number | Time; price: number };
-  p2?: { time: number | Time; price: number };
+  p1: { time: number | ChartTime; price: number };
+  p2?: { time: number | ChartTime; price: number };
   text?: string;
   color?: string;
   lineWidth?: number;
