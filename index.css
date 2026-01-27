@@ -348,206 +348,222 @@ html:not(.light-theme):not(.oled-theme)[data-accent="cyan"] {
 }
 
 /* ===== LIGHT MODE VARIANTS ===== */
-/* Rich, immersive skins that replace generic white with themed tints */
+/* BOLD, vibrant skins matching dark mode intensity */
 
 /* PURPLE - Royal Lavender Skin */
 html.light-theme[data-accent="purple"],
 :root.light-theme[data-accent="purple"] {
-  --bg-page: #f3e8ff !important;
-  /* Richer lavender */
-  --bg-sidebar: #e9d5ff !important;
-  /* Slightly darker sidebar */
-  --bg-card: rgba(255, 255, 255, 0.7) !important;
-  /* Glassy white */
-  --bg-input: rgba(255, 255, 255, 0.9) !important;
+  --bg-page: #e9d5ff !important;
+  /* BOLD lavender - much stronger */
+  --bg-sidebar: #d8b4fe !important;
+  /* Rich purple sidebar */
+  --bg-card: rgba(250, 245, 255, 0.85) !important;
+  /* Purple tinted cards */
+  --bg-input: rgba(250, 245, 255, 0.95) !important;
 
   --text-primary: #3b0764 !important;
   /* Deepest purple */
   --text-secondary: #6b21a8 !important;
   --text-muted: #9333ea !important;
 
-  --border-subtle: #d8b4fe !important;
+  --border-subtle: #c4b5fd !important;
+  /* More visible borders */
   --border-active: #a855f7 !important;
-  --shadow-card: 0 8px 30px -5px rgba(147, 51, 234, 0.15) !important;
+  --shadow-card: 0 8px 30px -5px rgba(147, 51, 234, 0.25) !important;
 }
 
 /* PINK - Rose Petal Skin */
 html.light-theme[data-accent="pink"],
 :root.light-theme[data-accent="pink"] {
-  --bg-page: #fce7f3 !important;
-  /* Richer rose */
-  --bg-sidebar: #fbcfe8 !important;
-  --bg-card: rgba(255, 255, 255, 0.7) !important;
-  --bg-input: rgba(255, 255, 255, 0.9) !important;
+  --bg-page: #fbcfe8 !important;
+  /* BOLD pink */
+  --bg-sidebar: #f9a8d4 !important;
+  /* Rich pink sidebar */
+  --bg-card: rgba(253, 242, 248, 0.85) !important;
+  --bg-input: rgba(253, 242, 248, 0.95) !important;
 
   --text-primary: #831843 !important;
-  /* Deepest pink */
   --text-secondary: #db2777 !important;
   --text-muted: #ec4899 !important;
 
-  --border-subtle: #f9a8d4 !important;
+  --border-subtle: #f472b6 !important;
   --border-active: #ec4899 !important;
-  --shadow-card: 0 8px 30px -5px rgba(219, 39, 119, 0.15) !important;
+  --shadow-card: 0 8px 30px -5px rgba(219, 39, 119, 0.25) !important;
 }
 
 /* GREEN - Emerald Garden Skin */
 html.light-theme[data-accent="green"],
 :root.light-theme[data-accent="green"] {
-  --bg-page: #d1fae5 !important;
-  /* Fresh mint - significantly stronger */
-  --bg-sidebar: #a7f3d0 !important;
-  --bg-card: rgba(255, 255, 255, 0.7) !important;
-  --bg-input: rgba(255, 255, 255, 0.9) !important;
+  --bg-page: #a7f3d0 !important;
+  /* BOLD mint green - very strong */
+  --bg-sidebar: #6ee7b7 !important;
+  /* Vibrant green sidebar */
+  --bg-card: rgba(236, 253, 245, 0.85) !important;
+  --bg-input: rgba(236, 253, 245, 0.95) !important;
 
   --text-primary: #022c22 !important;
-  /* Deepest forest green */
-  --text-secondary: #059669 !important;
+  --text-secondary: #047857 !important;
   --text-muted: #10b981 !important;
 
-  --border-subtle: #6ee7b7 !important;
+  --border-subtle: #34d399 !important;
   --border-active: #10b981 !important;
-  --shadow-card: 0 8px 30px -5px rgba(5, 150, 105, 0.15) !important;
+  --shadow-card: 0 8px 30px -5px rgba(5, 150, 105, 0.25) !important;
 }
 
 /* ORANGE - Sunset Citrus Skin */
 html.light-theme[data-accent="orange"],
 :root.light-theme[data-accent="orange"] {
-  --bg-page: #ffedd5 !important;
-  /* Warm peach */
-  --bg-sidebar: #fed7aa !important;
-  --bg-card: rgba(255, 255, 255, 0.7) !important;
-  --bg-input: rgba(255, 255, 255, 0.9) !important;
+  --bg-page: #fed7aa !important;
+  /* BOLD orange */
+  --bg-sidebar: #fdba74 !important;
+  /* Warm orange sidebar */
+  --bg-card: rgba(255, 247, 237, 0.85) !important;
+  --bg-input: rgba(255, 247, 237, 0.95) !important;
 
   --text-primary: #7c2d12 !important;
-  /* Deep rust */
-  --text-secondary: #ea580c !important;
+  --text-secondary: #c2410c !important;
   --text-muted: #f97316 !important;
 
-  --border-subtle: #fdba74 !important;
+  --border-subtle: #fb923c !important;
   --border-active: #f97316 !important;
-  --shadow-card: 0 8px 30px -5px rgba(234, 88, 12, 0.15) !important;
+  --shadow-card: 0 8px 30px -5px rgba(234, 88, 12, 0.25) !important;
 }
 
 /* RED - Crimson Bloom Skin */
 html.light-theme[data-accent="red"],
 :root.light-theme[data-accent="red"] {
-  --bg-page: #fee2e2 !important;
-  /* Soft rose */
-  --bg-sidebar: #fecaca !important;
-  --bg-card: rgba(255, 255, 255, 0.7) !important;
-  --bg-input: rgba(255, 255, 255, 0.9) !important;
+  --bg-page: #fecaca !important;
+  /* BOLD red */
+  --bg-sidebar: #fca5a5 !important;
+  /* Strong red sidebar */
+  --bg-card: rgba(254, 242, 242, 0.85) !important;
+  --bg-input: rgba(254, 242, 242, 0.95) !important;
 
   --text-primary: #7f1d1d !important;
-  /* Deep blood red */
-  --text-secondary: #dc2626 !important;
+  --text-secondary: #b91c1c !important;
   --text-muted: #ef4444 !important;
 
-  --border-subtle: #fca5a5 !important;
+  --border-subtle: #f87171 !important;
   --border-active: #ef4444 !important;
-  --shadow-card: 0 8px 30px -5px rgba(220, 38, 38, 0.15) !important;
+  --shadow-card: 0 8px 30px -5px rgba(220, 38, 38, 0.25) !important;
 }
 
 /* CYAN - Arctic Ice Skin */
 html.light-theme[data-accent="cyan"],
 :root.light-theme[data-accent="cyan"] {
-  --bg-page: #cffafe !important;
-  /* Cool ice */
-  --bg-sidebar: #a5f3fc !important;
-  --bg-card: rgba(255, 255, 255, 0.7) !important;
-  --bg-input: rgba(255, 255, 255, 0.9) !important;
+  --bg-page: #a5f3fc !important;
+  /* BOLD cyan */
+  --bg-sidebar: #67e8f9 !important;
+  /* Vibrant cyan sidebar */
+  --bg-card: rgba(236, 254, 255, 0.85) !important;
+  --bg-input: rgba(236, 254, 255, 0.95) !important;
 
   --text-primary: #164e63 !important;
-  /* Deep ocean */
-  --text-secondary: #0891b2 !important;
+  --text-secondary: #0e7490 !important;
   --text-muted: #06b6d4 !important;
 
-  --border-subtle: #67e8f9 !important;
+  --border-subtle: #22d3ee !important;
   --border-active: #06b6d4 !important;
-  --shadow-card: 0 8px 30px -5px rgba(8, 145, 178, 0.15) !important;
+  --shadow-card: 0 8px 30px -5px rgba(8, 145, 178, 0.25) !important;
 }
 
 /* ===== OLED MODE VARIANTS ===== */
-/* OLED needs all variables defined to fully theme the app */
+/* BOLD colored OLED - deep saturated backgrounds matching dark mode intensity */
+
 html.oled-theme[data-accent="purple"],
 :root.oled-theme[data-accent="purple"] {
-  --bg-page: #000000 !important;
-  --bg-sidebar: #000000 !important;
-  --bg-card: #000000 !important;
-  --bg-input: #000000 !important;
+  --bg-page: #0a0616 !important;
+  /* Deep purple instead of black */
+  --bg-sidebar: #0f0a1f !important;
+  /* Slightly lighter sidebar */
+  --bg-card: #120820 !important;
+  /* Subtle purple cards */
+  --bg-input: #1a0f2e !important;
+
   --text-primary: #f5f0ff !important;
   --text-secondary: #c4b5fd !important;
   --text-muted: #8b7cb8 !important;
-  --border-subtle: rgba(168, 85, 247, 0.15) !important;
+  --border-subtle: rgba(168, 85, 247, 0.25) !important;
   --border-active: #a855f7 !important;
   --shadow-card: none !important;
 }
 
 html.oled-theme[data-accent="pink"],
 :root.oled-theme[data-accent="pink"] {
-  --bg-page: #000000 !important;
-  --bg-sidebar: #000000 !important;
-  --bg-card: #000000 !important;
-  --bg-input: #000000 !important;
+  --bg-page: #140810 !important;
+  /* Deep magenta */
+  --bg-sidebar: #1a0a14 !important;
+  --bg-card: #1f0e18 !important;
+  --bg-input: #2a1020 !important;
+
   --text-primary: #fce7f3 !important;
   --text-secondary: #f9a8d4 !important;
   --text-muted: #be185d !important;
-  --border-subtle: rgba(236, 72, 153, 0.15) !important;
+  --border-subtle: rgba(236, 72, 153, 0.25) !important;
   --border-active: #ec4899 !important;
   --shadow-card: none !important;
 }
 
 html.oled-theme[data-accent="green"],
 :root.oled-theme[data-accent="green"] {
-  --bg-page: #000000 !important;
-  --bg-sidebar: #000000 !important;
-  --bg-card: #000000 !important;
-  --bg-input: #000000 !important;
+  --bg-page: #06100c !important;
+  /* Deep forest green */
+  --bg-sidebar: #0a1612 !important;
+  --bg-card: #0d1a15 !important;
+  --bg-input: #0f2419 !important;
+
   --text-primary: #ecfdf5 !important;
   --text-secondary: #6ee7b7 !important;
   --text-muted: #047857 !important;
-  --border-subtle: rgba(16, 185, 129, 0.15) !important;
+  --border-subtle: rgba(16, 185, 129, 0.25) !important;
   --border-active: #10b981 !important;
   --shadow-card: none !important;
 }
 
 html.oled-theme[data-accent="orange"],
 :root.oled-theme[data-accent="orange"] {
-  --bg-page: #000000 !important;
-  --bg-sidebar: #000000 !important;
-  --bg-card: #000000 !important;
-  --bg-input: #000000 !important;
+  --bg-page: #140a06 !important;
+  /* Deep burnt orange */
+  --bg-sidebar: #1a0f08 !important;
+  --bg-card: #1f120a !important;
+  --bg-input: #2a1810 !important;
+
   --text-primary: #fff7ed !important;
   --text-secondary: #fdba74 !important;
   --text-muted: #c2410c !important;
-  --border-subtle: rgba(249, 115, 22, 0.15) !important;
+  --border-subtle: rgba(249, 115, 22, 0.25) !important;
   --border-active: #f97316 !important;
   --shadow-card: none !important;
 }
 
 html.oled-theme[data-accent="red"],
 :root.oled-theme[data-accent="red"] {
-  --bg-page: #000000 !important;
-  --bg-sidebar: #000000 !important;
-  --bg-card: #000000 !important;
-  --bg-input: #000000 !important;
+  --bg-page: #140606 !important;
+  /* Deep blood red */
+  --bg-sidebar: #1a0808 !important;
+  --bg-card: #1f0a0a !important;
+  --bg-input: #2a1010 !important;
+
   --text-primary: #fef2f2 !important;
   --text-secondary: #fca5a5 !important;
   --text-muted: #b91c1c !important;
-  --border-subtle: rgba(239, 68, 68, 0.15) !important;
+  --border-subtle: rgba(239, 68, 68, 0.25) !important;
   --border-active: #ef4444 !important;
   --shadow-card: none !important;
 }
 
 html.oled-theme[data-accent="cyan"],
 :root.oled-theme[data-accent="cyan"] {
-  --bg-page: #000000 !important;
-  --bg-sidebar: #000000 !important;
-  --bg-card: #000000 !important;
-  --bg-input: #000000 !important;
+  --bg-page: #061014 !important;
+  /* Deep teal */
+  --bg-sidebar: #08141a !important;
+  --bg-card: #0a181e !important;
+  --bg-input: #10242a !important;
+
   --text-primary: #ecfeff !important;
   --text-secondary: #67e8f9 !important;
   --text-muted: #0e7490 !important;
-  --border-subtle: rgba(6, 182, 212, 0.15) !important;
+  --border-subtle: rgba(6, 182, 212, 0.25) !important;
   --border-active: #06b6d4 !important;
   --shadow-card: none !important;
 }
