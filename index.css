@@ -704,3 +704,98 @@ html.oled-theme[data-accent="cyan"],
 :root[data-accent="cyan"] .border-blue-500 {
   border-color: #06b6d4 !important;
 }
+
+/* ===== LIGHT MODE BACKGROUND OVERRIDES ===== */
+/* Override hardcoded bg-white and bg-slate-* in light mode with accent colors */
+
+/* These rules ensure components using hardcoded Tailwind classes still respect the accent theme */
+
+html.light-theme[data-accent="purple"] .bg-white,
+html.light-theme[data-accent="purple"] .bg-slate-50 {
+  background-color: rgba(250, 245, 255, 0.9) !important;
+}
+
+html.light-theme[data-accent="purple"] .bg-slate-100,
+html.light-theme[data-accent="purple"] .bg-slate-50\/80 {
+  background-color: rgba(243, 232, 255, 0.8) !important;
+}
+
+html.light-theme[data-accent="purple"] .border-slate-200,
+html.light-theme[data-accent="purple"] .border-slate-100 {
+  border-color: #c4b5fd !important;
+}
+
+html.light-theme[data-accent="pink"] .bg-white,
+html.light-theme[data-accent="pink"] .bg-slate-50 {
+  background-color: rgba(253, 242, 248, 0.9) !important;
+}
+
+html.light-theme[data-accent="pink"] .bg-slate-100,
+html.light-theme[data-accent="pink"] .bg-slate-50\/80 {
+  background-color: rgba(252, 231, 243, 0.8) !important;
+}
+
+html.light-theme[data-accent="pink"] .border-slate-200,
+html.light-theme[data-accent="pink"] .border-slate-100 {
+  border-color: #f472b6 !important;
+}
+
+html.light-theme[data-accent="green"] .bg-white,
+html.light-theme[data-accent="green"] .bg-slate-50 {
+  background-color: rgba(240, 253, 244, 0.9) !important;
+}
+
+html.light-theme[data-accent="green"] .bg-slate-100,
+html.light-theme[data-accent="green"] .bg-slate-50\/80 {
+  background-color: rgba(220, 252, 231, 0.8) !important;
+}
+
+html.light-theme[data-accent="green"] .border-slate-200,
+html.light-theme[data-accent="green"] .border-slate-100 {
+  border-color: #6ee7b7 !important;
+}
+
+html.light-theme[data-accent="orange"] .bg-white,
+html.light-theme[data-accent="orange"] .bg-slate-50 {
+  background-color: rgba(255, 247, 237, 0.9) !important;
+}
+
+html.light-theme[data-accent="orange"] .bg-slate-100,
+html.light-theme[data-accent="orange"] .bg-slate-50\/80 {
+  background-color: rgba(254, 243, 199, 0.8) !important;
+}
+
+html.light-theme[data-accent="orange"] .border-slate-200,
+html.light-theme[data-accent="orange"] .border-slate-100 {
+  border-color: #fb923c !important;
+}
+
+html.light-theme[data-accent="red"] .bg-white,
+html.light-theme[data-accent="red"] .bg-slate-50 {
+  background-color: rgba(254, 242, 242, 0.9) !important;
+}
+
+html.light-theme[data-accent="red"] .bg-slate-100,
+html.light-theme[data-accent="red"] .bg-slate-50\/80 {
+  background-color: rgba(254, 226, 226, 0.8) !important;
+}
+
+html.light-theme[data-accent="red"] .border-slate-200,
+html.light-theme[data-accent="red"] .border-slate-100 {
+  border-color: #f87171 !important;
+}
+
+html.light-theme[data-accent="cyan"] .bg-white,
+html.light-theme[data-accent="cyan"] .bg-slate-50 {
+  background-color: rgba(236, 254, 255, 0.9) !important;
+}
+
+html.light-theme[data-accent="cyan"] .bg-slate-100,
+html.light-theme[data-accent="cyan"] .bg-slate-50\/80 {
+  background-color: rgba(207, 250, 254, 0.8) !important;
+}
+
+html.light-theme[data-accent="cyan"] .border-slate-200,
+html.light-theme[data-accent="cyan"] .border-slate-100 {
+  border-color: #22d3ee !important;
+}
