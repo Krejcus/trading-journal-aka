@@ -275,22 +275,22 @@ html:not(.light-theme):not(.oled-theme)[data-accent="pink"] {
   --shadow-card: 0 10px 30px -10px rgba(236, 72, 153, 0.3);
 }
 
-/* GREEN - Emerald Matrix */
+/* GREEN - Forest Emerald */
 :root:not(.light-theme):not(.oled-theme)[data-accent="green"],
 html:not(.light-theme):not(.oled-theme)[data-accent="green"] {
-  --bg-page: #0a1612;
-  --bg-sidebar: #06100c;
-  --bg-card: #0f2419;
-  --bg-input: rgba(16, 185, 129, 0.1);
+  --bg-page: #071a12;
+  --bg-sidebar: #041008;
+  --bg-card: #0c261a;
+  --bg-input: rgba(5, 150, 105, 0.12);
 
   --text-primary: #ecfdf5;
-  --text-secondary: #6ee7b7;
-  --text-muted: #047857;
+  --text-secondary: #34d399;
+  --text-muted: #065f46;
 
-  --border-subtle: rgba(16, 185, 129, 0.1);
-  --border-active: rgba(16, 185, 129, 0.4);
+  --border-subtle: rgba(5, 150, 105, 0.15);
+  --border-active: rgba(16, 185, 129, 0.5);
 
-  --shadow-card: 0 10px 30px -10px rgba(16, 185, 129, 0.3);
+  --shadow-card: 0 10px 30px -10px rgba(5, 150, 105, 0.25);
 }
 
 /* ORANGE - Sunset Glow */
@@ -391,23 +391,29 @@ html.light-theme[data-accent="pink"],
   --shadow-card: 0 8px 30px -5px rgba(219, 39, 119, 0.25) !important;
 }
 
-/* GREEN - Emerald Garden Skin */
+/* GREEN - Forest Emerald Skin */
 html.light-theme[data-accent="green"],
 :root.light-theme[data-accent="green"] {
-  --bg-page: #a7f3d0 !important;
-  /* BOLD mint green - very strong */
-  --bg-sidebar: #6ee7b7 !important;
-  /* Vibrant green sidebar */
-  --bg-card: rgba(236, 253, 245, 0.85) !important;
-  --bg-input: rgba(236, 253, 245, 0.95) !important;
+  --bg-page: #d1fae5 !important;
+  /* Softer emerald-100 - less saturated, more elegant */
+  --bg-sidebar: #a7f3d0 !important;
+  /* Emerald-200 sidebar */
+  --bg-card: rgba(240, 253, 244, 0.9) !important;
+  /* Green-50 tinted cards */
+  --bg-input: rgba(240, 253, 244, 0.95) !important;
 
-  --text-primary: #022c22 !important;
-  --text-secondary: #047857 !important;
-  --text-muted: #10b981 !important;
+  --text-primary: #064e3b !important;
+  /* Emerald-900 - deep forest */
+  --text-secondary: #065f46 !important;
+  /* Emerald-800 */
+  --text-muted: #059669 !important;
+  /* Emerald-600 */
 
-  --border-subtle: #34d399 !important;
+  --border-subtle: #6ee7b7 !important;
+  /* Emerald-300 */
   --border-active: #10b981 !important;
-  --shadow-card: 0 8px 30px -5px rgba(5, 150, 105, 0.25) !important;
+  /* Emerald-500 */
+  --shadow-card: 0 8px 30px -5px rgba(5, 150, 105, 0.2) !important;
 }
 
 /* ORANGE - Sunset Citrus Skin */
@@ -506,16 +512,18 @@ html.oled-theme[data-accent="pink"],
 
 html.oled-theme[data-accent="green"],
 :root.oled-theme[data-accent="green"] {
-  --bg-page: #06100c !important;
-  /* Deep forest green */
-  --bg-sidebar: #0a1612 !important;
-  --bg-card: #0d1a15 !important;
-  --bg-input: #0f2419 !important;
+  --bg-page: #041008 !important;
+  /* Deep forest black */
+  --bg-sidebar: #071a12 !important;
+  --bg-card: #0a1f16 !important;
+  --bg-input: #0c261a !important;
 
   --text-primary: #ecfdf5 !important;
-  --text-secondary: #6ee7b7 !important;
-  --text-muted: #047857 !important;
-  --border-subtle: rgba(16, 185, 129, 0.25) !important;
+  --text-secondary: #34d399 !important;
+  /* Emerald-400 */
+  --text-muted: #065f46 !important;
+  /* Emerald-800 */
+  --border-subtle: rgba(5, 150, 105, 0.3) !important;
   --border-active: #10b981 !important;
   --shadow-card: none !important;
 }

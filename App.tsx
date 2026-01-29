@@ -1431,7 +1431,7 @@ const App: React.FC = () => {
 
   return (
     <div
-      className={`h-screen font-sans flex overflow-hidden transition-colors duration-300 ${theme === 'light' ? 'light-theme' : (theme === 'oled' ? 'oled-theme' : '')} bg-[var(--bg-page)] text-[var(--text-primary)]`}
+      className="h-screen font-sans flex overflow-hidden transition-colors duration-300 bg-[var(--bg-page)] text-[var(--text-primary)]"
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
