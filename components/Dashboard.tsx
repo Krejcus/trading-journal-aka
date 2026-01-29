@@ -1093,6 +1093,74 @@ const Dashboard: React.FC<DashboardProps> = ({
           />
         );
       }
+      case 'kpi_winrate': {
+        const winCount = stats.trades.filter(t => t.pnl > 0 && t.executionStatus !== 'Missed').length;
+        const totalCount = stats.trades.filter(t => t.executionStatus !== 'Missed').length;
+        const winRate = totalCount > 0 ? ((winCount / totalCount) * 100).toFixed(1) : '0.0';
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Trade win %"
+            value={`${winRate}%`}
+            sampleSize={totalCount}
+            icon={<div className="bg-blue-100 text-blue-600 p-1 rounded-lg dark:bg-blue-500/20"><Activity size={14} /></div>}
+            info="Procento vítězných obchodů ze všech uzavřených obchodů."
+          />
+        );
+      }
+      case 'kpi_profit_factor': {
+        const grossProfit = stats.trades.filter(t => t.pnl > 0 && t.executionStatus !== 'Missed').reduce((sum, t) => sum + t.pnl, 0);
+        const grossLoss = Math.abs(stats.trades.filter(t => t.pnl < 0 && t.executionStatus !== 'Missed').reduce((sum, t) => sum + t.pnl, 0));
+        const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : (grossProfit > 0 ? '∞' : '0.00');
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Profit Factor"
+            value={profitFactor}
+            sampleSize={stats.totalTrades}
+            icon={<div className={`${COLORS.bgProfit} ${COLORS.textProfit} p-1 rounded-lg`}><BarChart3 size={14} /></div>}
+            info="Poměr hrubých zisků a ztrát. Hodnota > 1.5 je považována za dobrou."
+          />
+        );
+      }
+      case 'kpi_day_winrate': {
+        // Group trades by date and calculate profitable days
+        const dayPnL: Record<string, number> = {};
+        stats.trades.filter(t => t.executionStatus !== 'Missed').forEach(t => {
+          dayPnL[t.date] = (dayPnL[t.date] || 0) + t.pnl;
+        });
+        const tradingDays = Object.keys(dayPnL).length;
+        const profitableDays = Object.values(dayPnL).filter(pnl => pnl > 0).length;
+        const dayWinRate = tradingDays > 0 ? ((profitableDays / tradingDays) * 100).toFixed(1) : '0.0';
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Day win %"
+            value={`${dayWinRate}%`}
+            sampleSize={tradingDays}
+            subValue={`${profitableDays}/${tradingDays} dnů`}
+            icon={<div className="bg-purple-100 text-purple-600 p-1 rounded-lg dark:bg-purple-500/20"><CalendarIcon size={14} /></div>}
+            info="Procento ziskových obchodních dnů."
+          />
+        );
+      }
+      case 'kpi_execution_rate': {
+        // Calculate how many signals were taken vs missed
+        const allSignals = stats.trades.length;
+        const executedSignals = stats.trades.filter(t => t.executionStatus !== 'Missed').length;
+        const executionRate = allSignals > 0 ? ((executedSignals / allSignals) * 100).toFixed(1) : '100.0';
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Execution %"
+            value={`${executionRate}%`}
+            sampleSize={allSignals}
+            subValue={`${executedSignals}/${allSignals} signálů`}
+            icon={<div className="bg-orange-100 text-orange-600 p-1 rounded-lg dark:bg-orange-500/20"><Target size={14} /></div>}
+            info="Procento signálů, které jsi skutečně zexekutoval. Zmeškané obchody snižují toto číslo."
+          />
+        );
+      }
       case 'avg_win_loss': return <AvgWinLossWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} currency={targetCurrency} rates={exchangeRates} />;
       case 'streak': return <StreakWidget stats={stats} theme={theme} />;
       case 'winners_losers': return <WinnersLosersWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} currency={targetCurrency} rates={exchangeRates} />;
