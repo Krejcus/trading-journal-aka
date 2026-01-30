@@ -138,6 +138,7 @@ const App: React.FC = () => {
   const [initStatus, setInitStatus] = useState<string>("Inicializace...");
   const [showRetry, setShowRetry] = useState(false);
   const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
+  const [dataReadyToShow, setDataReadyToShow] = useState(false);
 
   useEffect(() => {
     console.log("[Auth] Starting initialization...");
@@ -650,6 +651,16 @@ const App: React.FC = () => {
     currencyService.getRates().then(setExchangeRates);
   }, []);
 
+  // Watch for when data is ready AND actually in state, then release the UI
+  useEffect(() => {
+    if (dataReadyToShow && trades.length > 0) {
+      console.log(`[Load] Data confirmed in state (${trades.length} trades), releasing UI`);
+      setLoading(false);
+      setIsInitialLoadDone(true);
+      setDataReadyToShow(false); // Reset flag
+    }
+  }, [dataReadyToShow, trades]);
+
   useEffect(() => {
     if (sharedTrade) return;
     if (!session) return;
@@ -708,13 +719,8 @@ const App: React.FC = () => {
         if (cachedPreps.length > 0) setDailyPreps(cachedPreps);
         if (cachedReviews.length > 0) setDailyReviews(cachedReviews);
 
-        // Use setTimeout to ensure React has time to batch all state updates before showing UI
-        // This prevents the "0 trades" flash
-        setTimeout(() => {
-          // RELEASE THE SCREEN NOW! User sees dashboard in < 500ms
-          setLoading(false);
-          setIsInitialLoadDone(true);
-        }, 50); // Small delay to ensure state updates are applied
+        // Mark data as ready - useEffect will handle showing UI once state is applied
+        setDataReadyToShow(true);
 
         // Start background sync immediately (smart refresh will load newer trades)
         console.log("[Load] Starting background sync for updated data...");
