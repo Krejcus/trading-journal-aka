@@ -1,7 +1,7 @@
 
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate } from '../types';
 import { supabase } from './supabase';
-import { get, set, del } from 'idb-keyval';
+import { get, set } from 'idb-keyval';
 
 // Helper to validate UUID
 const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -119,52 +119,9 @@ export const storageService = {
   },
 
   // Async method to get cached trades from IndexedDB
-  async getTradesCheckCacheFirst(userId?: string): Promise<Trade[]> {
-    const id = userId || await getUserId();
-    if (!id) return [];
-
-    // Crucial: Use user-specific key exclusively if ID is available
-    const localKey = `alphatrade_trades_${id}`;
-    const cached = await get(localKey);
-
-    // If user key is empty but we have a legacy global key, we will migrate it in repairStorage()
-    return (cached as Trade[]) || [];
-  },
-
-  /**
-   * Repairs and simplifies storage by migrating legacy data to user-specific keys
-   * and clearing old global keys that cause stale data issues.
-   */
-  async repairStorage(userId: string): Promise<void> {
-    if (!userId) return;
-
-    const globalKey = 'alphatrade_trades';
-    const userKey = `alphatrade_trades_${userId}`;
-
-    try {
-      const globalTrades = await get(globalKey);
-      if (globalTrades && Array.isArray(globalTrades) && globalTrades.length > 0) {
-        console.log(`[Repair] Migrating ${globalTrades.length} legacy trades to user cache...`);
-        const userTrades = (await get(userKey)) || [];
-
-        // Merge - unique by ID
-        const tradeMap = new Map();
-        userTrades.forEach((t: any) => tradeMap.set(t.id, t));
-        globalTrades.forEach((t: any) => tradeMap.set(t.id, t));
-
-        const merged = Array.from(tradeMap.values()).sort((a, b) => {
-          const tA = a.timestamp || new Date(a.date).getTime() || 0;
-          const tB = b.timestamp || new Date(b.date).getTime() || 0;
-          return tB - tA;
-        });
-
-        await set(userKey, merged);
-        await del(globalKey);
-        console.log("[Repair] Legacy trades migrated and global key deleted.");
-      }
-    } catch (e) {
-      console.warn("[Repair] Failed to migrate trades:", e);
-    }
+  async getTradesCheckCacheFirst(): Promise<Trade[]> {
+    const cached = await get('alphatrade_trades');
+    return cached || [];
   },
 
   async getTrades(targetUserId?: string): Promise<Trade[]> {
@@ -1427,26 +1384,70 @@ export const storageService = {
       return await this.getTrades(targetUserId);
     }
 
-    // Reliable detection of newest trade using timestamp first, then createdAt
+    // Najdi nejnovější obchod v cache podle timestamp (spolehlivější než created_at)
     const newestCachedTrade = localTrades.reduce((newest, trade) => {
-      const tradeTime = trade.timestamp || (trade.createdAt ? new Date(trade.createdAt).getTime() : 0) || new Date(trade.date).getTime() || 0;
-      const newestTime = newest.timestamp || (newest.createdAt ? new Date(newest.createdAt).getTime() : 0) || new Date(newest.date).getTime() || 0;
+      const tradeTime = trade.timestamp || new Date(trade.date).getTime();
+      const newestTime = newest.timestamp || new Date(newest.date).getTime();
       return tradeTime > newestTime ? trade : newest;
     }, localTrades[0]);
 
-    // Use ISO string of the newest createdAt or derive from timestamp
-    const newestCacheDate = newestCachedTrade.createdAt ||
-      (newestCachedTrade.timestamp ? new Date(newestCachedTrade.timestamp).toISOString() : new Date(newestCachedTrade.date).toISOString());
+    // Použij timestamp místo created_at (spolehlivější pro určení "nejnovějšího obchodu")
+    const newestTimestamp = newestCachedTrade.timestamp || new Date(newestCachedTrade.date).getTime();
 
-    console.log(`[SmartRefresh] Newest cached trade: ${newestCachedTrade.date}, seeking trades since: ${newestCacheDate}`);
+    console.log(`[SmartRefresh] Newest cached trade timestamp: ${newestTimestamp} (${new Date(newestTimestamp).toISOString()})`);
 
-    // Načti pouze novější obchody ze serveru
-    const { data: recentTrades, error } = await supabase
+    // Načti pouze novější obchody ze serveru - použij STEJNÝ select jako getTrades() pro konzistenci
+    const { data: rawData, error } = await supabase
       .from('trades')
-      .select('*')
+      .select(`
+        id,
+        user_id,
+        account_id,
+        instrument,
+        pnl,
+        direction,
+        date,
+        timestamp,
+        drawings,
+        is_public,
+        created_at,
+        setup:data->>setup,
+        mistake:data->>mistake,
+        notes:data->>notes,
+        tags:data->tags,
+        runUp:data->>runUp,
+        drawdown:data->>drawdown,
+        riskAmount:data->>riskAmount,
+        targetAmount:data->>targetAmount,
+        entryPrice:data->>entryPrice,
+        exitPrice:data->>exitPrice,
+        stopLoss:data->>stopLoss,
+        takeProfit:data->>takeProfit,
+        quantity:data->>quantity,
+        signal:data->>signal,
+        session:data->>session,
+        confidence:data->>confidence,
+        rr:data->>rr,
+        duration:data->>duration,
+        isValid:data->>isValid,
+        groupId:data->>groupId,
+        htfConfluence:data->htfConfluence,
+        ltfConfluence:data->ltfConfluence,
+        mistakes:data->mistakes,
+        emotions:data->emotions,
+        planAdherence:data->>planAdherence,
+        executionStatus:data->>executionStatus,
+        screenshot:data->>screenshot,
+        screenshots:data->screenshots,
+        miniViewRange:data->>miniViewRange,
+        miniViewLayout:data->>miniViewLayout,
+        miniViewSecondaryRange:data->>miniViewSecondaryRange,
+        miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe,
+        durationMinutes:data->>durationMinutes
+      `)
       .eq('user_id', userId)
-      .gt('created_at', newestCacheDate)
-      .order('created_at', { ascending: false });
+      .gte('timestamp', newestTimestamp) // Použij >= místo > pro edge cases
+      .order('timestamp', { ascending: false });
 
     if (error) {
       console.error("[SmartRefresh] Failed to fetch recent trades:", error);
@@ -1454,16 +1455,15 @@ export const storageService = {
     }
 
     // Pokud nejsou nové obchody, vrať cache
-    if (!recentTrades || recentTrades.length === 0) {
+    if (!rawData || rawData.length === 0) {
       console.log("[SmartRefresh] No newer trades found, using cache");
       return localTrades;
     }
 
-    console.log(`[SmartRefresh] Found ${recentTrades.length} newer trades, merging with cache`);
-    console.log(`[SmartRefresh] Cache had ${localTrades.length} trades, merging with ${recentTrades.length} new trades`);
+    console.log(`[SmartRefresh] Found ${rawData.length} newer trades, merging with cache`);
 
-    // Převeď nová data na Trade objekty - použij stejnou transformaci jako getTrades()
-    const newTrades = recentTrades.map((t: any) => ({
+    // Převeď nová data na Trade objekty - použij STEJNOU transformaci jako getTrades()
+    const newTrades = rawData.map((t: any) => ({
       id: t.id,
       userId: t.user_id,
       accountId: t.account_id,
@@ -1476,41 +1476,43 @@ export const storageService = {
       isPublic: t.is_public,
       createdAt: t.created_at,
 
-      // Mapped JSON fields from data blob
-      setup: t.data?.setup,
-      mistake: t.data?.mistake,
-      notes: t.data?.notes,
-      tags: t.data?.tags,
-      runUp: t.data?.runUp ? Number(t.data.runUp) : undefined,
-      drawdown: t.data?.drawdown ? Number(t.data.drawdown) : undefined,
-      riskAmount: t.data?.riskAmount ? Number(t.data.riskAmount) : undefined,
-      targetAmount: t.data?.targetAmount ? Number(t.data.targetAmount) : undefined,
-      entryPrice: t.data?.entryPrice ? Number(t.data.entryPrice) : undefined,
-      exitPrice: t.data?.exitPrice ? Number(t.data.exitPrice) : undefined,
-      stopLoss: t.data?.stopLoss ? Number(t.data.stopLoss) : undefined,
-      takeProfit: t.data?.takeProfit ? Number(t.data.takeProfit) : undefined,
-      quantity: t.data?.quantity ? Number(t.data.quantity) : undefined,
-      signal: t.data?.signal,
-      session: t.data?.session,
-      confidence: t.data?.confidence ? Number(t.data.confidence) : undefined,
-      rr: t.data?.rr ? Number(t.data.rr) : undefined,
-      duration: t.data?.duration,
-      durationMinutes: t.data?.durationMinutes ? Number(t.data.durationMinutes) : 0,
-      isValid: t.data?.isValid === 'true' || t.data?.isValid === true,
-      groupId: t.data?.groupId,
-      htfConfluence: t.data?.htfConfluence,
-      ltfConfluence: t.data?.ltfConfluence,
-      mistakes: t.data?.mistakes,
-      emotions: t.data?.emotions,
-      planAdherence: t.data?.planAdherence,
-      executionStatus: t.data?.executionStatus,
-      screenshot: t.data?.screenshot,
-      screenshots: t.data?.screenshots,
-      miniViewRange: t.data?.miniViewRange,
-      miniViewLayout: t.data?.miniViewLayout,
-      miniViewSecondaryRange: t.data?.miniViewSecondaryRange,
-      miniViewSecondaryTimeframe: t.data?.miniViewSecondaryTimeframe,
-      data: t.data || {}
+      // Mapped JSON fields
+      setup: t.setup,
+      mistake: t.mistake,
+      notes: t.notes,
+      tags: t.tags,
+      runUp: t.runUp ? Number(t.runUp) : undefined,
+      drawdown: t.drawdown ? Number(t.drawdown) : undefined,
+      riskAmount: t.riskAmount ? Number(t.riskAmount) : undefined,
+      targetAmount: t.targetAmount ? Number(t.targetAmount) : undefined,
+      entryPrice: t.entryPrice ? Number(t.entryPrice) : undefined,
+      exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
+      stopLoss: t.stopLoss ? Number(t.stopLoss) : undefined,
+      takeProfit: t.takeProfit ? Number(t.takeProfit) : undefined,
+      quantity: t.quantity ? Number(t.quantity) : undefined,
+      signal: t.signal,
+      session: t.session,
+      confidence: t.confidence ? Number(t.confidence) : undefined,
+      rr: t.rr ? Number(t.rr) : undefined,
+      duration: t.duration,
+      durationMinutes: t.durationMinutes ? Number(t.durationMinutes) : 0,
+      isValid: t.isValid === 'true' || t.isValid === true,
+      groupId: t.groupId,
+      htfConfluence: t.htfConfluence,
+      ltfConfluence: t.ltfConfluence,
+      mistakes: t.mistakes,
+      emotions: t.emotions,
+      planAdherence: t.planAdherence,
+      executionStatus: t.executionStatus,
+      screenshot: t.screenshot,
+      screenshots: t.screenshots,
+      miniViewRange: t.miniViewRange,
+      miniViewLayout: t.miniViewLayout,
+      miniViewSecondaryRange: t.miniViewSecondaryRange,
+      miniViewSecondaryTimeframe: t.miniViewSecondaryTimeframe,
+
+      // We don't carry the full blob anymore to save memory
+      data: {}
     })) as Trade[];
 
     // Merge s cache pomocí Map pro unikátní ID
@@ -1527,7 +1529,7 @@ export const storageService = {
 
     // Ulož mergované obchody zpět do cache
     await set(localKey, mergedTrades);
-    console.log(`[SmartRefresh] Updated cache with ${mergedTrades.length} total trades`);
+    console.log(`[SmartRefresh] Updated cache with ${mergedTrades.length} total trades (was ${localTrades.length}, added ${newTrades.length})`);
 
     return mergedTrades;
   }

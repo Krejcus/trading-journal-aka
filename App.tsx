@@ -138,7 +138,6 @@ const App: React.FC = () => {
   const [initStatus, setInitStatus] = useState<string>("Inicializace...");
   const [showRetry, setShowRetry] = useState(false);
   const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
-  const [dataReadyToShow, setDataReadyToShow] = useState(false);
 
   useEffect(() => {
     console.log("[Auth] Starting initialization...");
@@ -651,16 +650,6 @@ const App: React.FC = () => {
     currencyService.getRates().then(setExchangeRates);
   }, []);
 
-  // Watch for when data is ready AND actually in state, then release the UI
-  useEffect(() => {
-    if (dataReadyToShow && trades.length > 0) {
-      console.log(`[Load] Data confirmed in state (${trades.length} trades), releasing UI`);
-      setLoading(false);
-      setIsInitialLoadDone(true);
-      setDataReadyToShow(false); // Reset flag
-    }
-  }, [dataReadyToShow, trades]);
-
   useEffect(() => {
     if (sharedTrade) return;
     if (!session) return;
@@ -687,14 +676,11 @@ const App: React.FC = () => {
       keysToRemove.forEach(k => localStorage.removeItem(k));
       console.log(`[Cleanup] Removed ${keysToRemove.length} legacy localStorage keys`);
 
-      // --- PHASE 0: REPAIR STORAGE ---
-      await storageService.repairStorage(session.user.id);
-
       // --- PHASE 1: CHECK CACHE ---
       console.log("[Load] Phase 1: Checking cache...");
       const [cachedTrades, cachedAccounts, cachedPrefs, cachedUser, cachedPreps, cachedReviews] = await Promise.all([
-        storageService.getTradesCheckCacheFirst(session.user.id),
-        storageService.getCachedAccounts(session.user.id),
+        storageService.getTradesCheckCacheFirst(),
+        storageService.getCachedAccounts(),
         storageService.getCachedPreferences(),
         storageService.getCachedUser(),
         storageService.getCachedDailyPreps(),
@@ -707,8 +693,6 @@ const App: React.FC = () => {
       if (hasCachedData) {
         // --- FAST PATH: Cache has data ---
         console.log("[Load] Cache HIT! Displaying local data immediately.");
-
-        // Apply all cached data to state FIRST
         if (cachedTrades.length > 0) setTrades(cachedTrades);
         if (cachedAccounts.length > 0) {
           setAccounts(cachedAccounts);
@@ -719,8 +703,9 @@ const App: React.FC = () => {
         if (cachedPreps.length > 0) setDailyPreps(cachedPreps);
         if (cachedReviews.length > 0) setDailyReviews(cachedReviews);
 
-        // Mark data as ready - useEffect will handle showing UI once state is applied
-        setDataReadyToShow(true);
+        // RELEASE THE SCREEN NOW! User sees dashboard in < 500ms
+        setLoading(false);
+        setIsInitialLoadDone(true);
 
         // Start background sync immediately (smart refresh will load newer trades)
         console.log("[Load] Starting background sync for updated data...");
@@ -1250,8 +1235,7 @@ const App: React.FC = () => {
   const badExits = useMemo(() => findBadExits(filteredDisplayTrades), [filteredDisplayTrades]);
 
   // Show loader during initial auth check OR when logged in but data not yet loaded
-  // Also keep showing loader if we have session but no trades yet (prevents showing "0 trades" flash)
-  if ((loading || (session && !isInitialLoadDone) || (session && trades.length === 0 && !isInitialLoadDone)) && !sharedTrade) {
+  if ((loading || (session && !isInitialLoadDone)) && !sharedTrade) {
     return <QuantumLoader theme={theme} />;
   }
 
