@@ -1,7 +1,7 @@
 
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate } from '../types';
 import { supabase } from './supabase';
-import { get, set } from 'idb-keyval';
+import { get, set, del } from 'idb-keyval';
 
 // Helper to validate UUID
 const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -119,9 +119,52 @@ export const storageService = {
   },
 
   // Async method to get cached trades from IndexedDB
-  async getTradesCheckCacheFirst(): Promise<Trade[]> {
-    const cached = await get('alphatrade_trades');
-    return cached || [];
+  async getTradesCheckCacheFirst(userId?: string): Promise<Trade[]> {
+    const id = userId || await getUserId();
+    if (!id) return [];
+
+    // Crucial: Use user-specific key exclusively if ID is available
+    const localKey = `alphatrade_trades_${id}`;
+    const cached = await get(localKey);
+
+    // If user key is empty but we have a legacy global key, we will migrate it in repairStorage()
+    return (cached as Trade[]) || [];
+  },
+
+  /**
+   * Repairs and simplifies storage by migrating legacy data to user-specific keys
+   * and clearing old global keys that cause stale data issues.
+   */
+  async repairStorage(userId: string): Promise<void> {
+    if (!userId) return;
+
+    const globalKey = 'alphatrade_trades';
+    const userKey = `alphatrade_trades_${userId}`;
+
+    try {
+      const globalTrades = await get(globalKey);
+      if (globalTrades && Array.isArray(globalTrades) && globalTrades.length > 0) {
+        console.log(`[Repair] Migrating ${globalTrades.length} legacy trades to user cache...`);
+        const userTrades = (await get(userKey)) || [];
+
+        // Merge - unique by ID
+        const tradeMap = new Map();
+        userTrades.forEach((t: any) => tradeMap.set(t.id, t));
+        globalTrades.forEach((t: any) => tradeMap.set(t.id, t));
+
+        const merged = Array.from(tradeMap.values()).sort((a, b) => {
+          const tA = a.timestamp || new Date(a.date).getTime() || 0;
+          const tB = b.timestamp || new Date(b.date).getTime() || 0;
+          return tB - tA;
+        });
+
+        await set(userKey, merged);
+        await del(globalKey);
+        console.log("[Repair] Legacy trades migrated and global key deleted.");
+      }
+    } catch (e) {
+      console.warn("[Repair] Failed to migrate trades:", e);
+    }
   },
 
   async getTrades(targetUserId?: string): Promise<Trade[]> {
@@ -277,7 +320,7 @@ export const storageService = {
     // Update IndexedDB cache
     const localKey = `alphatrade_trades_${userId}`;
     const cachedTrades: Trade[] = await get(localKey) || [];
-    const updatedTrades = cachedTrades.map(t => 
+    const updatedTrades = cachedTrades.map(t =>
       t.id === tradeId ? { ...t, drawings } : t
     );
     await set(localKey, updatedTrades);
@@ -351,7 +394,7 @@ export const storageService = {
     // Update IndexedDB cache
     const localKey = `alphatrade_trades_${userId}`;
     const cachedTrades: Trade[] = await get(localKey) || [];
-    const updatedTrades = cachedTrades.map(t => 
+    const updatedTrades = cachedTrades.map(t =>
       t.id === tradeId ? { ...t, ...updates } : t
     );
     await set(localKey, updatedTrades);
@@ -447,7 +490,7 @@ export const storageService = {
 
   async deleteTrade(id: string): Promise<void> {
     if (!isUUID(id)) return;
-    
+
     // 1. Delete from Supabase
     const { error } = await supabase.from('trades').delete().eq('id', id);
     if (error) throw error;
@@ -466,7 +509,7 @@ export const storageService = {
   async clearTrades(accountId?: string): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
-    
+
     // 1. Delete from Supabase
     let query = supabase.from('trades').delete().eq('user_id', userId);
     if (accountId) query = query.eq('account_id', accountId);
@@ -1384,19 +1427,23 @@ export const storageService = {
       return await this.getTrades(targetUserId);
     }
 
-    // Najdi nejnovější obchod v cache
+    // Reliable detection of newest trade using timestamp first, then createdAt
     const newestCachedTrade = localTrades.reduce((newest, trade) => {
-      const tradeTime = new Date(trade.createdAt || trade.date).getTime();
-      const newestTime = new Date(newest.createdAt || newest.date).getTime();
+      const tradeTime = trade.timestamp || (trade.createdAt ? new Date(trade.createdAt).getTime() : 0) || new Date(trade.date).getTime() || 0;
+      const newestTime = newest.timestamp || (newest.createdAt ? new Date(newest.createdAt).getTime() : 0) || new Date(newest.date).getTime() || 0;
       return tradeTime > newestTime ? trade : newest;
     }, localTrades[0]);
 
-    const newestCacheDate = new Date(newestCachedTrade.createdAt || newestCachedTrade.date).toISOString();
+    // Use ISO string of the newest createdAt or derive from timestamp
+    const newestCacheDate = newestCachedTrade.createdAt ||
+      (newestCachedTrade.timestamp ? new Date(newestCachedTrade.timestamp).toISOString() : new Date(newestCachedTrade.date).toISOString());
 
-    // Načti pouze novější obchody ze serveru - optimized query s jen potřebnými poli
+    console.log(`[SmartRefresh] Newest cached trade: ${newestCachedTrade.date}, seeking trades since: ${newestCacheDate}`);
+
+    // Načti pouze novější obchody ze serveru
     const { data: recentTrades, error } = await supabase
       .from('trades')
-      .select('*') // Faster than selecting individual JSON fields
+      .select('*')
       .eq('user_id', userId)
       .gt('created_at', newestCacheDate)
       .order('created_at', { ascending: false });

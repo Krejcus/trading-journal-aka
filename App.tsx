@@ -676,11 +676,14 @@ const App: React.FC = () => {
       keysToRemove.forEach(k => localStorage.removeItem(k));
       console.log(`[Cleanup] Removed ${keysToRemove.length} legacy localStorage keys`);
 
+      // --- PHASE 0: REPAIR STORAGE ---
+      await storageService.repairStorage(session.user.id);
+
       // --- PHASE 1: CHECK CACHE ---
       console.log("[Load] Phase 1: Checking cache...");
       const [cachedTrades, cachedAccounts, cachedPrefs, cachedUser, cachedPreps, cachedReviews] = await Promise.all([
-        storageService.getTradesCheckCacheFirst(),
-        storageService.getCachedAccounts(),
+        storageService.getTradesCheckCacheFirst(session.user.id),
+        storageService.getCachedAccounts(session.user.id),
         storageService.getCachedPreferences(),
         storageService.getCachedUser(),
         storageService.getCachedDailyPreps(),

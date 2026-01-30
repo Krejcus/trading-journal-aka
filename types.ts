@@ -189,6 +189,7 @@ export interface Trade {
   groupId?: string;
   isMaster?: boolean; // If this is the source trade for a copy group
   masterTradeId?: string | number; // ID of the master trade if this is a copy
+  createdAt?: string;
   phase?: 'Challenge' | 'Funded';
   miniViewRange?: { from: number; to: number };
   miniViewLayout?: 'single' | 'split';
