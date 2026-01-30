@@ -696,6 +696,8 @@ const App: React.FC = () => {
       if (hasCachedData) {
         // --- FAST PATH: Cache has data ---
         console.log("[Load] Cache HIT! Displaying local data immediately.");
+
+        // Apply all cached data to state FIRST
         if (cachedTrades.length > 0) setTrades(cachedTrades);
         if (cachedAccounts.length > 0) {
           setAccounts(cachedAccounts);
@@ -706,9 +708,13 @@ const App: React.FC = () => {
         if (cachedPreps.length > 0) setDailyPreps(cachedPreps);
         if (cachedReviews.length > 0) setDailyReviews(cachedReviews);
 
-        // RELEASE THE SCREEN NOW! User sees dashboard in < 500ms
-        setLoading(false);
-        setIsInitialLoadDone(true);
+        // Use setTimeout to ensure React has time to batch all state updates before showing UI
+        // This prevents the "0 trades" flash
+        setTimeout(() => {
+          // RELEASE THE SCREEN NOW! User sees dashboard in < 500ms
+          setLoading(false);
+          setIsInitialLoadDone(true);
+        }, 50); // Small delay to ensure state updates are applied
 
         // Start background sync immediately (smart refresh will load newer trades)
         console.log("[Load] Starting background sync for updated data...");
@@ -1238,7 +1244,8 @@ const App: React.FC = () => {
   const badExits = useMemo(() => findBadExits(filteredDisplayTrades), [filteredDisplayTrades]);
 
   // Show loader during initial auth check OR when logged in but data not yet loaded
-  if ((loading || (session && !isInitialLoadDone)) && !sharedTrade) {
+  // Also keep showing loader if we have session but no trades yet (prevents showing "0 trades" flash)
+  if ((loading || (session && !isInitialLoadDone) || (session && trades.length === 0 && !isInitialLoadDone)) && !sharedTrade) {
     return <QuantumLoader theme={theme} />;
   }
 
