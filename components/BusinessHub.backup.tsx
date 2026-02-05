@@ -35,15 +35,10 @@ import {
     BusinessGoal,
     BusinessResource,
     BusinessSettings,
-    User,
-    ConstitutionRule,
-    CareerCheckpoint,
-    DailyReview,
-    WeeklyFocus
+    User
 } from '../types';
 import { currencyService, ExchangeRates } from '../services/currencyService';
 import { t } from '../services/translations';
-
 
 interface BusinessHubProps {
     theme: 'dark' | 'light' | 'oled';
@@ -64,18 +59,11 @@ interface BusinessHubProps {
     onUpdateResources: (resources: BusinessResource[]) => void;
     onUpdateSettings: (settings: BusinessSettings) => void;
     onUpdateAccounts: (accounts: Account[]) => void;
-    constitutionRules: ConstitutionRule[];
-    onUpdateConstitution: (rules: ConstitutionRule[]) => void;
-    careerRoadmap: CareerCheckpoint[];
-    onUpdateRoadmap: (roadmap: CareerCheckpoint[]) => void;
-    dailyReviews: DailyReview[];
-    weeklyFocusList: WeeklyFocus[];
 }
 
 const BusinessHub: React.FC<BusinessHubProps> = ({
     theme, user, exchangeRates, trades, accounts, expenses, payouts, playbook, goals, resources, settings,
-    onUpdateExpenses, onUpdatePayouts, onUpdatePlaybook, onUpdateGoals, onUpdateResources, onUpdateSettings, onUpdateAccounts,
-    constitutionRules, onUpdateConstitution, careerRoadmap, onUpdateRoadmap, dailyReviews, weeklyFocusList
+    onUpdateExpenses, onUpdatePayouts, onUpdatePlaybook, onUpdateGoals, onUpdateResources, onUpdateSettings, onUpdateAccounts
 }) => {
     const [activeTab, setActiveTab] = useState<'financials' | 'goals'>('financials');
     const [isAddingExpense, setIsAddingExpense] = useState(false);
@@ -104,7 +92,6 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     const [editingPayout, setEditingPayout] = useState<BusinessPayout | null>(null);
 
     const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'expense' | 'payout' | 'goal' | 'playbook' | 'resource' } | null>(null);
-    const [showMonthlyExpenseBreakdown, setShowMonthlyExpenseBreakdown] = useState(false);
 
     const isDark = theme !== 'light';
     const lang = user.language || 'cs';
@@ -214,16 +201,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
     // --- Financial Calculations (All in USD base) ---
     const totalPnL = useMemo(() => trades.reduce((sum, t) => sum + t.pnl, 0), [trades]);
-    const normalizedTotalExpenses = useMemo(() => expenses.reduce((sum, e) => sum + e.amount, 0), [expenses]);
-    const expensesThisMonthValue = useMemo(() => {
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        return expenses.reduce((sum, e) => {
-            const expDate = new Date(e.date);
-            if (expDate >= startOfMonth) return sum + e.amount;
-            return sum;
-        }, 0);
-    }, [expenses]);
+    const totalExpenses = useMemo(() => expenses.reduce((sum, e) => sum + e.amount, 0), [expenses]);
 
     // Calculate total net payouts from the payouts history
     const totalPayouts = useMemo(() =>
@@ -235,7 +213,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     }, [payouts]);
 
     const realizedTaxReserveValue = useMemo(() => (totalPayouts > 0 ? (totalPayouts * (settings.taxRatePct / 100)) : 0), [totalPayouts, settings.taxRatePct]);
-    const netBusinessCashValue = useMemo(() => totalPayouts - normalizedTotalExpenses - realizedTaxReserveValue, [totalPayouts, normalizedTotalExpenses, realizedTaxReserveValue]);
+    const netBusinessCashValue = useMemo(() => totalPayouts - totalExpenses - realizedTaxReserveValue, [totalPayouts, totalExpenses, realizedTaxReserveValue]);
 
     const monthlyRecurringOpExValue = useMemo(() => {
         return expenses.reduce((sum, e) => {
@@ -251,16 +229,6 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
             if (e.recurring === 'monthly') return sum + (e.amount * 12);
             return sum;
         }, 0);
-    }, [expenses]);
-
-    const expensesMonthlyBreakdown = useMemo(() => {
-        const groups: Record<string, number> = {};
-        expenses.forEach(e => {
-            const date = new Date(e.date);
-            const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-            groups[key] = (groups[key] || 0) + e.amount;
-        });
-        return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
     }, [expenses]);
 
     // --- Render Helpers ---
@@ -290,8 +258,6 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                     ))}
                 </div>
             </div>
-
-            {/* Remove StrategicHub tab content completely */}
 
             {activeTab === 'financials' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-500">
@@ -343,62 +309,25 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     <Layers size={16} className="text-blue-500" /> {t('operating_expenses', lang)}
                                 </h3>
                                 <div className="flex items-center gap-4">
-                                    <div className="flex items-center gap-4">
-                                        <div className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-lg shadow-blue-500/5' : 'bg-blue-50 border-blue-100 shadow-sm'}`}>
-                                            <div className="p-2 bg-blue-500/20 text-blue-500 rounded-xl">
-                                                <Zap size={14} />
-                                            </div>
-                                            <div>
-                                                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Tento měsíc</p>
-                                                <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(expensesThisMonthValue)}</p>
-                                            </div>
+                                    <div className={`hidden md:flex items-center gap-6 px-4 py-2 rounded-xl border ${isDark ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
+                                        <div>
+                                            <p className="text-[8px] font-black text-slate-500 uppercase">{t('monthly_burn', lang)}</p>
+                                            <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(monthlyRecurringOpExValue)}</p>
                                         </div>
-                                        <div
-                                            onClick={() => setShowMonthlyExpenseBreakdown(!showMonthlyExpenseBreakdown)}
-                                            className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border cursor-pointer transition-all hover:scale-105 active:scale-95 ${showMonthlyExpenseBreakdown ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : (isDark ? 'bg-slate-500/5 border-slate-500/20' : 'bg-slate-50 border-slate-100')}`}
-                                        >
-                                            <div className={`p-2 rounded-xl ${showMonthlyExpenseBreakdown ? 'bg-white/20 text-white' : 'bg-slate-500/20 text-slate-500'}`}>
-                                                <Layers size={14} />
-                                            </div>
-                                            <div>
-                                                <p className={`text-[8px] font-black uppercase tracking-widest ${showMonthlyExpenseBreakdown ? 'text-blue-100' : 'text-slate-500'}`}>Dohromady</p>
-                                                <p className={`text-xs font-black`}>{formatValue(normalizedTotalExpenses)}</p>
-                                            </div>
+                                        <div className={`w-[1px] h-4 ${isDark ? 'bg-[var(--border-subtle)]' : 'bg-slate-200'}`}></div>
+                                        <div>
+                                            <p className="text-[8px] font-black text-slate-500 uppercase">{t('yearly_projection', lang)}</p>
+                                            <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(yearlyRecurringOpExValue)}</p>
                                         </div>
                                     </div>
                                     <button
                                         onClick={() => setIsAddingExpense(true)}
-                                        className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-500/20"
+                                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase transition-all hover:bg-blue-500"
                                     >
-                                        <Plus size={16} /> {t('add_expense', lang)}
+                                        <Plus size={14} /> {t('add_expense', lang)}
                                     </button>
                                 </div>
                             </div>
-
-                            {showMonthlyExpenseBreakdown && (
-                                <div className={`mb-8 p-6 rounded-3xl border animate-in slide-in-from-top-4 duration-300 ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-inner' : 'bg-blue-50/50 border-blue-100'}`}>
-                                    <div className="flex justify-between items-center mb-6">
-                                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 flex items-center gap-2">
-                                            <Calendar size={14} /> Měsíční historie nákladů
-                                        </h4>
-                                        <button onClick={() => setShowMonthlyExpenseBreakdown(false)} className="text-slate-500 hover:text-rose-500 transition-all">
-                                            <X size={16} />
-                                        </button>
-                                    </div>
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                                        {expensesMonthlyBreakdown.map(([monthKey, total]) => {
-                                            const [year, month] = monthKey.split('-');
-                                            const monthLabel = new Date(Number(year), Number(month) - 1).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-US', { month: 'long' });
-                                            return (
-                                                <div key={monthKey} className={`p-4 rounded-2xl border transition-all hover:scale-105 ${isDark ? 'bg-[var(--bg-page)]/60 border-white/5 hover:border-blue-500/30' : 'bg-white border-slate-100 shadow-sm hover:border-blue-200'}`}>
-                                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{monthLabel} {year}</p>
-                                                    <p className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(total)}</p>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            )}
 
                             <div className="overflow-x-auto">
                                 <table className="w-full text-left">

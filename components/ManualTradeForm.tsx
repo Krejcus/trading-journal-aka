@@ -252,6 +252,8 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
         drawdown: 0,
         durationMinutes: calculations.durationMinutes,
         duration: `${Math.floor(calculations.durationMinutes)}m`,
+        entryTime: new Date(formData.entryDate).getTime(),
+        entryDate: new Date(formData.entryDate).toISOString(),
         notes: formData.notes,
         htfConfluence: formData.htfConfluence,
         ltfConfluence: formData.ltfConfluence,

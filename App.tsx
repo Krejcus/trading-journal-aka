@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService } from './services/storageService';
-import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode } from './types';
+import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
@@ -43,7 +43,8 @@ import {
   Loader2,
   Users,
   User as UserIcon,
-  Layers
+  Layers,
+  RefreshCw
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
@@ -81,6 +82,21 @@ const DEFAULT_SESSIONS: SessionConfig[] = [
   { id: 'london', name: 'London', startTime: '09:00', endTime: '16:00', color: '#3b82f6' },
   { id: 'ny', name: 'New York', startTime: '15:30', endTime: '22:00', color: '#f97316' }
 ];
+
+const DEFAULT_CONSTITUTION: ConstitutionRule[] = [
+  { id: 'c_daily_loss', label: 'Denní Limit Ztráty', type: 'daily_loss', value: 1, unit: '%', action: 'stop_trading', penaltyDays: 1, isActive: true, description: 'Max 1 % účtu / den. -1 % = okamžitý konec dne.' },
+  { id: 'c_daily_trades', label: 'Max Počet Obchodů', type: 'daily_trades', value: 2, unit: 'trades', action: 'warning', isActive: true, description: 'Max 2 obchody denně.' },
+  { id: 'c_weekly_loss', label: 'Týdenní Limit Ztráty', type: 'weekly_loss', value: 3, unit: '%', action: 'stop_trading', penaltyDays: 3, isActive: true, description: 'Max -3 % týdně. Při dosažení zbytek týdne pouze replay.' },
+  { id: 'c_kill_switch', label: 'Absolutní Kill-Switch', type: 'absolute_dd', value: 10, unit: '%', action: 'reset', isActive: true, description: 'DD -10 % od začátku období = konec experimentu.' }
+];
+
+const DEFAULT_ROADMAP: CareerCheckpoint[] = [
+  { id: 'cp_30', label: 'Checkpoint 30 Dní', dayTarget: 30, description: 'První měsíc v procesu', status: 'active', criteria: [{ label: 'Max DD < 5%', metric: 'dd', condition: '<', targetValue: 5 }], rules: DEFAULT_CONSTITUTION },
+  { id: 'cp_60', label: 'Checkpoint 60 Dní', dayTarget: 60, description: 'Stabilizace disciplíny', status: 'locked', criteria: [{ label: 'Risk Adherence 100%', metric: 'risk_adherence', condition: '==', targetValue: 100 }], rules: DEFAULT_CONSTITUTION },
+  { id: 'cp_150', label: 'Finální Verdikt', dayTarget: 150, description: 'Rozhodnutí o budoucnosti tradingu', status: 'locked', criteria: [{ label: 'Max DD < 10%', metric: 'dd', condition: '<', targetValue: 10 }], rules: DEFAULT_CONSTITUTION }
+];
+
+
 
 const aggregateTrades = (trades: Trade[]): Trade[] => {
   const groups = new Map<string, Trade[]>();
@@ -121,10 +137,8 @@ const aggregateTrades = (trades: Trade[]): Trade[] => {
 const LoadingFallback = () => (
   <div className="flex-1 flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in duration-500">
     <div className="relative">
-      <div className="w-12 h-12 border-4 border-blue-500/10 border-t-blue-500 rounded-full animate-spin transition-all" />
-      <div className="absolute inset-x-0 -bottom-8 whitespace-nowrap text-center">
-        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 animate-pulse">Načítám modul...</span>
-      </div>
+      <img src="/logos/at_logo_light_clean.png" alt="Loading..." className="w-32 h-32 object-contain animate-spin animate-pulse" style={{ animationDuration: '2s' }} />
+
     </div>
   </div>
 );
@@ -137,7 +151,6 @@ const App: React.FC = () => {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [initStatus, setInitStatus] = useState<string>("Inicializace...");
   const [showRetry, setShowRetry] = useState(false);
-  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
 
   useEffect(() => {
     console.log("[Auth] Starting initialization...");
@@ -280,6 +293,8 @@ const App: React.FC = () => {
   const [businessPayouts, setBusinessPayouts] = useState<BusinessPayout[]>([]);
   const [playbookItems, setPlaybookItems] = useState<PlaybookItem[]>([]);
   const [businessGoals, setBusinessGoals] = useState<BusinessGoal[]>([]);
+  const [constitutionRules, setConstitutionRules] = useState<ConstitutionRule[]>(DEFAULT_CONSTITUTION);
+  const [careerRoadmap, setCareerRoadmap] = useState<CareerCheckpoint[]>(DEFAULT_ROADMAP);
   const [businessResources, setBusinessResources] = useState<BusinessResource[]>([]);
   const [businessSettings, setBusinessSettings] = useState<BusinessSettings>({ taxRatePct: 15, defaultPropThreshold: 150 });
   const [psychoMetrics, setPsychoMetrics] = useState<PsychoMetricConfig[]>([
@@ -580,7 +595,7 @@ const App: React.FC = () => {
       setIsSidebarOpen(false);
     }
   };
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [isDashboardEditing, setIsDashboardEditing] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -623,6 +638,8 @@ const App: React.FC = () => {
     if (prefs.businessPayouts) setBusinessPayouts(prefs.businessPayouts);
     if (prefs.playbookItems) setPlaybookItems(prefs.playbookItems);
     if (prefs.businessGoals) setBusinessGoals(prefs.businessGoals);
+    if (prefs.constitutionRules) setConstitutionRules(prefs.constitutionRules);
+    if (prefs.careerRoadmap) setCareerRoadmap(prefs.careerRoadmap);
     if (prefs.businessResources) setBusinessResources(prefs.businessResources);
     if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
     if (prefs.psychoMetricsConfig) setPsychoMetrics(prefs.psychoMetricsConfig);
@@ -671,107 +688,46 @@ const App: React.FC = () => {
       const keysToRemove = Object.keys(localStorage).filter(k =>
         k.includes('alphatrade_trades') ||
         k.includes('alphatrade_daily_preps') ||
-        k.includes('alphatrade_daily_reviews')
+        k.includes('alphatrade_daily_reviews') ||
+        k.includes('alphatrade_cache_timestamp') // Remove old cache timestamp strategy
       );
       keysToRemove.forEach(k => localStorage.removeItem(k));
-      console.log(`[Cleanup] Removed ${keysToRemove.length} legacy localStorage keys`);
 
-      // --- PHASE 1: CHECK CACHE ---
-      console.log("[Load] Phase 1: Checking cache...");
-      const [cachedTrades, cachedAccounts, cachedPrefs, cachedUser, cachedPreps, cachedReviews] = await Promise.all([
-        storageService.getTradesCheckCacheFirst(),
-        storageService.getCachedAccounts(),
-        storageService.getCachedPreferences(),
-        storageService.getCachedUser(),
-        storageService.getCachedDailyPreps(),
-        storageService.getCachedDailyReviews()
-      ]);
-      const activeId = storageService.getActiveAccountId();
-
-      const hasCachedData = cachedTrades.length > 0 || cachedAccounts.length > 0;
-
-      if (hasCachedData) {
-        // --- FAST PATH: Cache has data ---
-        console.log("[Load] Cache HIT! Displaying local data immediately.");
-        if (cachedTrades.length > 0) setTrades(cachedTrades);
-        if (cachedAccounts.length > 0) {
-          setAccounts(cachedAccounts);
-          setActiveAccountId(activeId || cachedAccounts[0].id);
-        }
-        if (cachedPrefs) applyPreferences(cachedPrefs);
-        if (cachedUser) setCurrentUser(cachedUser);
-        if (cachedPreps.length > 0) setDailyPreps(cachedPreps);
-        if (cachedReviews.length > 0) setDailyReviews(cachedReviews);
-
-        // RELEASE THE SCREEN NOW! User sees dashboard in < 500ms
-        setLoading(false);
-        setIsInitialLoadDone(true);
-
-        // Start background sync immediately (smart refresh will load newer trades)
-        console.log("[Load] Starting background sync for updated data...");
-        syncFromServer(activeId);
-      } else {
-        // --- SLOW PATH: Cache is empty, must wait for server ---
-        console.log("[Load] Cache MISS. Waiting for server data...");
-        setInitStatus("Načítám data ze serveru...");
-
+      // VERSION-BASED CACHE CLEARING: Clear IndexedDB cache on major architecture change
+      const CURRENT_VERSION = '2.0.0-supabase-first';
+      const lastVersion = localStorage.getItem('alphatrade_app_version');
+      if (lastVersion !== CURRENT_VERSION) {
+        console.log(`[Migration] Version change detected (${lastVersion} → ${CURRENT_VERSION}). Clearing cache...`);
         try {
-          // Fetch ALL critical data
-          const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-            storageService.getTrades(),
-            storageService.getAccounts(),
-            storageService.getDailyPreps(),
-            storageService.getDailyReviews(),
-            storageService.getPreferences(),
-            storageService.getUser(),
-            storageService.getWeeklyFocusList()
-          ]);
-
-          console.log("[Load] Critical data received.");
-
-          const cleanedTrades = (dbTrades || []).filter(t => {
-            const d = new Date(t.date);
-            const day = d.getDay();
-            return day !== 0 && day !== 6;
-          });
-          setTrades(cleanedTrades);
-
-          if (dbAccounts && dbAccounts.length > 0) {
-            setAccounts(dbAccounts);
-            setActiveAccountId(dbAccounts[0].id);
-          } else {
-            setAccounts([DEFAULT_ACCOUNT]);
-            setActiveAccountId(DEFAULT_ACCOUNT.id);
-          }
-
-          if (dbUser) setCurrentUser(dbUser);
-          if (dbPrefs) applyPreferences(dbPrefs);
-          setDailyPreps(dbPreps || []);
-          setDailyReviews(dbReviews || []);
-          setWeeklyFocusList(dbWeeklyFocus || []);
-
-          // Now we can show the dashboard
-          setLoading(false);
-          setIsInitialLoadDone(true);
-
-          // fetchSecondaryData no longer needed for critical items
-
-        } catch (error: any) {
-          console.error("[Load] Server fetch error:", error);
-          setAppError(error.message || "Nepodařilo se načíst data ze serveru.");
-          setLoading(false);
-          setIsInitialLoadDone(true);
+          await indexedDB.deleteDatabase('keyval-store');
+          console.log('[Migration] IndexedDB cache cleared successfully');
+        } catch (err) {
+          console.warn('[Migration] Failed to clear IndexedDB:', err);
         }
+        localStorage.setItem('alphatrade_app_version', CURRENT_VERSION);
       }
-    };
 
-    // Background sync when we had cache data
-    const syncFromServer = async (activeId: string | null) => {
+      // --- SIMPLIFIED LOADING: Server-First for 100% Consistency ---
+      console.log("[Load] Starting Supabase-first data load...");
+
+      // OPTIONAL: Show cached data immediately as placeholder while loading fresh data
+      const [cachedTrades, cachedAccounts] = await Promise.all([
+        storageService.getTradesCheckCacheFirst(),
+        storageService.getCachedAccounts()
+      ]);
+
+      if (cachedTrades.length > 0 || cachedAccounts.length > 0) {
+        console.log("[Load] Showing cached data as placeholder...");
+        if (cachedTrades.length > 0) setTrades(cachedTrades);
+        if (cachedAccounts.length > 0) setAccounts(cachedAccounts);
+      }
+
+      // ALWAYS fetch fresh data from server (single source of truth)
+      setInitStatus("Načítám aktuální data...");
+
       try {
-        setIsBackgroundSyncing(true);
-        console.log("[Sync] Smart background sync starting...");
         const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-          storageService.getTradesWithSmartRefresh(),
+          storageService.getTrades(), // ALWAYS fresh from Supabase
           storageService.getAccounts(),
           storageService.getDailyPreps(),
           storageService.getDailyReviews(),
@@ -780,66 +736,37 @@ const App: React.FC = () => {
           storageService.getWeeklyFocusList()
         ]);
 
-        console.log("[Sync] Smart background sync complete.");
+        console.log("[Load] Fresh data received from server.");
 
-        if (dbUser) setCurrentUser(dbUser);
-
-        const cleanedTrades = (dbTrades || []).filter(t => {
-          const d = new Date(t.date);
-          const day = d.getDay();
-          return day !== 0 && day !== 6;
-        });
-        setTrades(cleanedTrades);
+        // Update all state with FRESH data
+        setTrades(dbTrades || []);
 
         if (dbAccounts && dbAccounts.length > 0) {
           setAccounts(dbAccounts);
-          if (!activeId) setActiveAccountId(dbAccounts[0].id);
-        }
-
-        if (!isJournalDirty.current) {
-          setDailyPreps(dbPreps || []);
-          setDailyReviews(dbReviews || []);
+          const activeId = storageService.getActiveAccountId();
+          setActiveAccountId(activeId || dbAccounts[0].id);
         } else {
-          console.log("[Sync] Skipping journal sync (dirty state)");
+          setAccounts([DEFAULT_ACCOUNT]);
+          setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
-        setWeeklyFocusList(dbWeeklyFocus || []);
-
-        if (dbPrefs) applyPreferences(dbPrefs);
-        setSyncError(null);
-
-        // Ensure loader is cleared after sync
-        setLoading(false);
-        setIsInitialLoadDone(true);
-      } catch (error: any) {
-        console.error("[Sync] Background sync error:", error);
-        // Even on error, we must eventually show the dashboard (with cached data)
-        setLoading(false);
-        setIsInitialLoadDone(true);
-      } finally {
-        setIsBackgroundSyncing(false);
-      }
-    };
-
-    // Fetch secondary data after critical data is loaded (for cache-miss path)
-    const fetchSecondaryData = async () => {
-      try {
-        const [dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-          storageService.getDailyPreps(),
-          storageService.getDailyReviews(),
-          storageService.getPreferences(),
-          storageService.getUser(),
-          storageService.getWeeklyFocusList()
-        ]);
 
         if (dbUser) setCurrentUser(dbUser);
-        if (!isJournalDirty.current) {
-          setDailyPreps(dbPreps || []);
-          setDailyReviews(dbReviews || []);
-        }
-        setWeeklyFocusList(dbWeeklyFocus || []);
         if (dbPrefs) applyPreferences(dbPrefs);
-      } catch (e) {
-        console.error("[Load] Secondary data fetch error:", e);
+        setDailyPreps(dbPreps || []);
+        setDailyReviews(dbReviews || []);
+        setWeeklyFocusList(dbWeeklyFocus || []);
+
+        setSyncError(null);
+        setLoading(false);
+        setIsInitialLoadDone(true);
+
+      } catch (error: any) {
+        console.error("[Load] Server fetch error:", error);
+        setAppError(error.message || "Nepodařilo se načíst data ze serveru.");
+
+        // If server fails, keep cached data visible
+        setLoading(false);
+        setIsInitialLoadDone(true);
       }
     };
 
@@ -858,6 +785,101 @@ const App: React.FC = () => {
       setLoading(false); // Ensure loading is off if no session
     }
   }, [sharedTrade, session]);
+
+  // START REALTIME SYNC
+  useEffect(() => {
+    if (!session || !isInitialLoadDone) return;
+
+    console.log("[Realtime] Setting up trades subscription...");
+    const tradesChannel = supabase
+      .channel('public:trades')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'trades',
+          filter: `user_id=eq.${session.user.id}`
+        },
+        async (payload) => {
+          console.log("[Realtime] Trade change detected:", payload.eventType);
+
+          if (payload.eventType === 'INSERT') {
+            const raw = payload.new;
+            // Use storageService to get formatted trade (handles JSON mapping)
+            const fullTrade = await storageService.getTradeById(raw.id);
+            if (fullTrade) {
+              setTrades(prev => {
+                // Avoid duplicates if insert was also triggered locally
+                if (prev.some(t => t.id === fullTrade.id)) return prev;
+                const newTrades = [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
+                return newTrades;
+              });
+
+              // CRITICAL FIX: Also update IndexedDB cache so data persists across reloads
+              try {
+                const { addTradeToCache } = await import('./services/cacheHelper');
+                await addTradeToCache(fullTrade);
+                console.log('[Realtime] Trade added to cache for persistence');
+              } catch (err) {
+                console.error('[Realtime] Failed to update cache:', err);
+              }
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const raw = payload.new;
+            const fullTrade = await storageService.getTradeById(raw.id);
+            if (fullTrade) {
+              setTrades(prev => prev.map(t => t.id === fullTrade.id ? fullTrade : t));
+            }
+          } else if (payload.eventType === 'DELETE') {
+            setTrades(prev => prev.filter(t => t.id !== payload.old.id));
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("[Realtime] Subscription status:", status);
+      });
+
+    return () => {
+      console.log("[Realtime] Cleaning up trades subscription");
+      supabase.removeChannel(tradesChannel);
+    };
+  }, [session, isInitialLoadDone]);
+
+  // Cross-tab synchronization for preferences
+  // When user edits business data in Tab A, Tab B will auto-sync
+  useEffect(() => {
+    if (!session) return;
+
+    const handleStorageChange = async (e: StorageEvent) => {
+      // Only react to preferences changes
+      if (!e.key?.includes('alphatrade_preferences_')) return;
+
+      // Ignore if we're currently editing (dirty state)
+      if (isPreferencesDirty.current) {
+        console.log("[Cross-tab] Ignoring sync during local edit");
+        return;
+      }
+
+      console.log("[Cross-tab] Detected preferences change in another tab");
+
+      // Debounce to avoid multiple rapid syncs
+      setTimeout(async () => {
+        try {
+          const freshPrefs = await storageService.getPreferences();
+          if (freshPrefs) {
+            applyPreferences(freshPrefs);
+            console.log("[Cross-tab] Synced preferences from other tab");
+          }
+        } catch (err) {
+          console.error("[Cross-tab] Sync failed:", err);
+        }
+      }, 500);
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [session, applyPreferences]);
 
   // --- SMART PREFETCHING ---
   // Start downloading secondary modules in background after initial load is interactive
@@ -930,7 +952,14 @@ const App: React.FC = () => {
   useEffect(() => {
     if (canSave) {
       const timer = setTimeout(() => {
-        storageService.saveDailyPreps(dailyPreps);
+        // CRITICAL FIX: Clear journal dirty flag BEFORE saving
+        const wasDirty = isJournalDirty.current;
+        isJournalDirty.current = false;
+
+        storageService.saveDailyPreps(dailyPreps).catch(err => {
+          console.error("[Journal] DailyPreps save failed:", err);
+          if (wasDirty) isJournalDirty.current = true; // Rollback on error
+        });
       }, 2000);
       return () => clearTimeout(timer);
     }
@@ -939,7 +968,14 @@ const App: React.FC = () => {
   useEffect(() => {
     if (canSave) {
       const timer = setTimeout(() => {
-        storageService.saveDailyReviews(dailyReviews);
+        // CRITICAL FIX: Clear journal dirty flag BEFORE saving
+        const wasDirty = isJournalDirty.current;
+        isJournalDirty.current = false;
+
+        storageService.saveDailyReviews(dailyReviews).catch(err => {
+          console.error("[Journal] DailyReviews save failed:", err);
+          if (wasDirty) isJournalDirty.current = true; // Rollback on error
+        });
       }, 2000);
       return () => clearTimeout(timer);
     }
@@ -950,7 +986,16 @@ const App: React.FC = () => {
   useEffect(() => {
     if (canSave && weeklyFocusList.length > 0) {
       const timer = setTimeout(() => {
-        weeklyFocusList.forEach(wf => storageService.saveWeeklyFocus(wf));
+        // CRITICAL FIX: Clear journal dirty flag BEFORE saving weekly focus
+        const wasDirty = isJournalDirty.current;
+        isJournalDirty.current = false;
+
+        // Convert forEach to Promise.all for better error handling
+        Promise.all(weeklyFocusList.map(wf => storageService.saveWeeklyFocus(wf)))
+          .catch(err => {
+            console.error("[Journal] WeeklyFocus save failed:", err);
+            if (wasDirty) isJournalDirty.current = true; // Rollback on error
+          });
       }, 5000);
       return () => clearTimeout(timer);
     }
@@ -976,6 +1021,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (canSave) {
       const timer = setTimeout(() => {
+        // CRITICAL FIX: Clear dirty flag BEFORE saving, not after
+        // This prevents background sync from skipping fresh data while save is in progress
+        isPreferencesDirty.current = false;
+
         storageService.savePreferences({
           emotions: userEmotions,
           standardMistakes: userMistakes,
@@ -989,19 +1038,89 @@ const App: React.FC = () => {
           businessPayouts,
           playbookItems,
           businessGoals,
+          constitutionRules,
+          careerRoadmap,
           businessResources,
           businessSettings,
           psychoMetricsConfig: psychoMetrics,
           theme,
           dashboardMode,
           systemSettings,
-        }).then(() => {
-          isPreferencesDirty.current = false;
+        }).catch(err => {
+          // If save fails, mark as dirty again so we retry
+          console.error("[Preferences] Save failed:", err);
+          isPreferencesDirty.current = true;
         });
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, businessExpenses, businessPayouts, playbookItems, businessGoals, businessResources, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, canSave]);
+  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, businessExpenses, businessPayouts, playbookItems, businessGoals, constitutionRules, careerRoadmap, businessResources, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, canSave]);
+
+  // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
+  // Backup save every 30s if user is still editing
+  // This protects against browser crashes or quick tab closures
+  useEffect(() => {
+    if (!canSave) return;
+
+    console.log("[Auto-Save] Periodic auto-save enabled (30s interval)");
+
+    const interval = setInterval(() => {
+      // Only save if there are pending changes
+      if (isPreferencesDirty.current) {
+        console.log("[Auto-Save] Periodic preferences save triggered");
+        isPreferencesDirty.current = false;
+
+        storageService.savePreferences({
+          emotions: userEmotions,
+          standardMistakes: userMistakes,
+          standardGoals: standardGoals,
+          dashboardLayout,
+          sessions,
+          htfOptions,
+          ltfOptions,
+          ironRules,
+          businessExpenses,
+          businessPayouts,
+          playbookItems,
+          businessGoals,
+          constitutionRules,
+          careerRoadmap,
+          businessResources,
+          businessSettings,
+          psychoMetricsConfig: psychoMetrics,
+          theme,
+          dashboardMode,
+          systemSettings,
+        }).catch(err => {
+          console.error("[Auto-Save] Periodic save failed:", err);
+          isPreferencesDirty.current = true;
+        });
+      }
+
+      // Journal data (daily preps/reviews)
+      if (isJournalDirty.current) {
+        console.log("[Auto-Save] Periodic journal save triggered");
+        const wasJournalDirty = isJournalDirty.current;
+        isJournalDirty.current = false;
+
+        Promise.all([
+          storageService.saveDailyPreps(dailyPreps),
+          storageService.saveDailyReviews(dailyReviews),
+          weeklyFocusList.length > 0
+            ? Promise.all(weeklyFocusList.map(wf => storageService.saveWeeklyFocus(wf)))
+            : Promise.resolve()
+        ]).catch(err => {
+          console.error("[Auto-Save] Periodic journal save failed:", err);
+          if (wasJournalDirty) isJournalDirty.current = true;
+        });
+      }
+    }, 30000); // 30 seconds
+
+    return () => {
+      console.log("[Auto-Save] Periodic auto-save disabled");
+      clearInterval(interval);
+    };
+  }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, businessExpenses, businessPayouts, playbookItems, businessGoals, constitutionRules, careerRoadmap, businessResources, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, dailyPreps, dailyReviews, weeklyFocusList]);
 
   // Handle Dashboard Mode Switching
   useEffect(() => {
@@ -1124,12 +1243,8 @@ const App: React.FC = () => {
 
       if (dbUser) setCurrentUser(dbUser);
 
-      const cleanedTrades = (dbTrades || []).filter(t => {
-        const d = new Date(t.date);
-        const day = d.getDay();
-        return day !== 0 && day !== 6;
-      });
-      setTrades(cleanedTrades);
+      // No longer filter weekends at data level - this should be a UI filter
+      setTrades(dbTrades || []);
 
       if (dbAccounts && dbAccounts.length > 0) {
         setAccounts(dbAccounts);
@@ -1234,18 +1349,7 @@ const App: React.FC = () => {
 
   const badExits = useMemo(() => findBadExits(filteredDisplayTrades), [filteredDisplayTrades]);
 
-  // Show loader during initial auth check OR when logged in but data not yet loaded
-  if ((loading || (session && !isInitialLoadDone)) && !sharedTrade) {
-    return <QuantumLoader theme={theme} />;
-  }
 
-  if (sharedTrade) {
-    return <SharedTradeView trade={sharedTrade} theme={theme} />;
-  }
-
-  if (!session) {
-    return <Auth onLogin={(user) => { }} theme={theme} />;
-  }
 
   const handleUpdateUser = async (updatedUser: User) => {
     setCurrentUser(updatedUser);
@@ -1331,7 +1435,7 @@ const App: React.FC = () => {
     });
   };
 
-  const handleUpdateTrade = (tradeId: string | number, updates: Partial<Trade>) => {
+  const handleUpdateTrade = useCallback((tradeId: string | number, updates: Partial<Trade>) => {
     setTrades(prev => {
       const updated = prev.map(t => t.id === tradeId ? { ...t, ...updates } : t);
       // Persist to DB
@@ -1341,9 +1445,9 @@ const App: React.FC = () => {
       });
       return updated;
     });
-  };
+  }, []);
 
-  const handleDeletePrep = async (date: string) => {
+  const handleDeletePrep = useCallback(async (date: string) => {
     try {
       await storageService.deleteDailyPrep(date);
       setDailyPreps(prev => prev.filter(p => p.date !== date));
@@ -1351,9 +1455,9 @@ const App: React.FC = () => {
       console.error("Failed to delete prep", err);
       setSyncError("Nepodařilo se smazat ranní přípravu.");
     }
-  };
+  }, []);
 
-  const handleDeleteReview = async (date: string) => {
+  const handleDeleteReview = useCallback(async (date: string) => {
     try {
       await storageService.deleteDailyReview(date);
       setDailyReviews(prev => prev.filter(r => r.date !== date));
@@ -1361,15 +1465,29 @@ const App: React.FC = () => {
       console.error("Failed to delete review", err);
       setSyncError("Nepodařilo se smazat večerní audit.");
     }
-  };
+  }, []);
 
-  const handleDeleteAccount = async (id: string) => {
+  const handleDeleteAccount = useCallback(async (id: string) => {
     try {
-      await storageService.deleteAccount(id);
-      setAccounts(accounts.filter(a => a.id !== id));
-      setTrades(trades.filter(t => t.accountId !== id));
-      if (activeAccountId === id) {
-        const nextAccount = accounts.find(a => a.id !== id);
+      // Find all slave accounts that depend on this account
+      const slaveIds = accounts.filter(a => a.parentAccountId === id).map(a => a.id);
+      const allIdsToDelete = [id, ...slaveIds];
+
+      // 1. Delete from database
+      for (const accountId of allIdsToDelete) {
+        await storageService.deleteAccount(accountId);
+      }
+
+      // 2. Update local state - Accounts
+      setAccounts(prev => prev.filter(a => !allIdsToDelete.includes(a.id)));
+
+      // 3. Update local state - Trades (Delete trades for ALL deleted accounts)
+      setTrades(prev => prev.filter(t => !allIdsToDelete.includes(t.accountId)));
+
+      // 4. Handle active account redirection
+      if (allIdsToDelete.includes(activeAccountId)) {
+        const remainingAccounts = accounts.filter(a => !allIdsToDelete.includes(a.id));
+        const nextAccount = remainingAccounts[0];
         if (nextAccount) {
           setActiveAccountId(nextAccount.id);
         } else {
@@ -1377,10 +1495,10 @@ const App: React.FC = () => {
         }
       }
     } catch (err) {
-      console.error("Failed to delete account", err);
-      setSyncError("Nepodařilo se smazat účet.");
+      console.error("Failed to delete account(s)", err);
+      setSyncError("Nepodařilo se smazat účet a jeho kopie.");
     }
-  };
+  }, [accounts, trades, activeAccountId]);
 
   const handleDeleteTrade = async (id: number | string) => {
     try {
@@ -1428,6 +1546,19 @@ const App: React.FC = () => {
       console.error("Failed to clear trades:", err);
     }
   };
+  // Show loader during initial auth check OR when logged in but data not yet loaded
+  if ((loading || (session && !isInitialLoadDone)) && !sharedTrade) {
+    return <QuantumLoader theme={theme} />;
+  }
+
+  if (sharedTrade) {
+    return <SharedTradeView trade={sharedTrade} theme={theme} />;
+  }
+
+  if (!session) {
+    return <Auth onLogin={(user) => { }} theme={theme} />;
+  }
+
 
   return (
     <div
@@ -1459,8 +1590,8 @@ const App: React.FC = () => {
         }}
       />
 
-      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-24' : 'lg:ml-72'}`}>
-        <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-4 flex items-center justify-between transition-all bg-[var(--bg-page)]/80 border-[var(--border-subtle)]`}>
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-[240px]'}`}>
+        <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-2 flex items-center justify-between transition-all bg-[var(--bg-page)]/30 border-[var(--border-subtle)]`}>
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <h2 className="text-xl font-black uppercase tracking-tighter">
@@ -1476,7 +1607,7 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-6">
             {/* Dashboard Mode Status - Clean Text Design */}
-            <div className="hidden md:flex items-center h-12 px-4">
+            <div className="hidden md:flex items-center h-8 px-4">
               <div className="flex items-center gap-2.5">
                 <div className="relative flex h-2 w-2">
                   <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' : 'hidden'}`}></span>
@@ -1505,13 +1636,15 @@ const App: React.FC = () => {
                 setPnlDisplayMode={setPnlDisplayMode}
               />
 
-              {/* Background Sync Indicator */}
-              {isBackgroundSyncing && (
-                <div className="flex items-center gap-2 px-3 py-2 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                  <Loader2 size={16} className="animate-spin text-blue-400" />
-                  <span className="text-xs text-blue-400 font-medium">Sync...</span>
-                </div>
-              )}
+              {/* Force Refresh Button */}
+              <button
+                onClick={() => window.location.reload()}
+                className="flex items-center gap-2 px-3 py-2 bg-[var(--bg-subtle)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)] rounded-lg transition-colors"
+                title="Force Refresh - načíst nejnovější data ze serveru"
+              >
+                <RefreshCw size={16} className="text-[var(--text-secondary)]" />
+                <span className="text-xs text-[var(--text-secondary)] font-medium hidden md:inline">Refresh</span>
+              </button>
 
               <button
                 onClick={() => {
@@ -1528,184 +1661,194 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <PullToRefresh
-          onRefresh={handleRefreshData}
-          disabled={!session || loading}
-          className="flex-1"
-        >
-          <div className="p-4 lg:p-8 flex-1 overflow-x-hidden">
-            {syncError && (
-              <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
-                <AlertTriangle size={16} />
-                <span>{syncError}</span>
-              </div>
-            )}
-            {appError ? (
-              <div className="flex flex-col items-center justify-center h-[60vh] text-center p-6 bg-red-500/5 border border-red-500/20 rounded-[40px]">
-                <AlertTriangle className="text-red-500 w-16 h-16 mb-4 animate-pulse" />
-                <h2 className="text-2xl font-black text-white mb-2">CHYBA TERMINÁLU</h2>
-                <p className="text-slate-400 mb-6 max-w-md">{appError}</p>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs"
-                >
-                  Restartovat aplikaci
-                </button>
-              </div>
-            ) : (
-              <React.Suspense fallback={<LoadingFallback />}>
-                {activePage === 'dashboard' && (
-                  <Dashboard
-                    stats={filteredStats}
-                    theme={theme}
-                    preps={dailyPreps}
-                    reviews={dailyReviews}
-                    layout={dashboardLayout}
-                    sessions={sessions}
-                    ironRules={ironRules}
-                    onUpdateLayout={setDashboardLayout}
-                    isEditing={isDashboardEditing}
-                    onCloseEdit={() => setIsDashboardEditing(false)}
-                    dashboardMode={dashboardMode}
-                    setDashboardMode={setDashboardMode}
-                    accounts={accounts}
-                    emotions={userEmotions}
-                    viewMode={viewMode}
-                    onDeleteTrade={handleDeleteTrade}
-                    onUpdateTrade={handleUpdateTrade}
-                    user={currentUser}
-                    pnlDisplayMode={pnlDisplayMode}
-                    exchangeRates={exchangeRates}
-                    allTrades={trades}
-                  />
-                )}
-
-                {activePage === 'history' && (
-                  trades.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
-                      <div className="w-full max-w-md h-64">
-                        <FileUpload onDataLoaded={handleFileUpload} />
-                      </div>
-                      <div className="flex items-center gap-4 w-full max-w-md">
-                        <div className="h-px bg-slate-800 flex-1"></div>
-                        <span className="text-xs text-slate-500 font-bold uppercase">Nebo</span>
-                        <div className="h-px bg-slate-800 flex-1"></div>
-                      </div>
-                      <button onClick={handleTryAddTrade} className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95">
-                        <Plus size={18} /> Zapsat první obchod
-                      </button>
-                    </div>
-                  ) : (
-                    <TradeHistory
-                      trades={filteredDisplayTrades}
-                      accounts={accounts}
-                      onDelete={handleDeleteTrade}
-                      onUpdateTrade={handleUpdateTrade}
-                      onClear={handleClearTrades}
+        <div className="flex-1 overflow-y-auto no-scrollbar">
+          <PullToRefresh
+            onRefresh={handleRefreshData}
+            disabled={!session || loading}
+          >
+            <div className="p-4 lg:p-8 pb-12 flex-1 overflow-x-hidden">
+              {syncError && (
+                <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
+                  <AlertTriangle size={16} />
+                  <span>{syncError}</span>
+                </div>
+              )}
+              {appError ? (
+                <div className="flex flex-col items-center justify-center h-[60vh] text-center p-6 bg-red-500/5 border border-red-500/20 rounded-[40px]">
+                  <AlertTriangle className="text-red-500 w-16 h-16 mb-4 animate-pulse" />
+                  <h2 className="text-2xl font-black text-white mb-2">CHYBA TERMINÁLU</h2>
+                  <p className="text-slate-400 mb-6 max-w-md">{appError}</p>
+                  <button
+                    onClick={() => window.location.reload()}
+                    className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs"
+                  >
+                    Restartovat aplikaci
+                  </button>
+                </div>
+              ) : (
+                <React.Suspense fallback={<LoadingFallback />}>
+                  {activePage === 'dashboard' && (
+                    <Dashboard
+                      stats={filteredStats}
                       theme={theme}
+                      preps={dailyPreps}
+                      reviews={dailyReviews}
+                      layout={dashboardLayout}
+                      sessions={sessions}
+                      ironRules={ironRules}
+                      onUpdateLayout={setDashboardLayout}
+                      isEditing={isDashboardEditing}
+                      onCloseEdit={() => setIsDashboardEditing(false)}
+                      dashboardMode={dashboardMode}
+                      setDashboardMode={setDashboardMode}
+                      accounts={accounts}
                       emotions={userEmotions}
-                      pnlDisplayMode={pnlDisplayMode}
-                      initialBalance={displayBalance}
+                      viewMode={viewMode}
+                      onDeleteTrade={handleDeleteTrade}
+                      onUpdateTrade={handleUpdateTrade}
                       user={currentUser}
+                      pnlDisplayMode={pnlDisplayMode}
                       exchangeRates={exchangeRates}
                       allTrades={trades}
+                      payouts={businessPayouts}
                     />
-                  )
-                )}
+                  )}
 
-                {activePage === 'journal' && (
-                  <DailyJournal
-                    theme={theme}
-                    trades={filteredDisplayTrades}
-                    preps={dailyPreps}
-                    reviews={dailyReviews}
-                    onSavePrep={handleSavePrep}
-                    onSaveReview={handleSaveReview}
-                    onDeletePrep={handleDeletePrep}
-                    onDeleteReview={handleDeleteReview}
-                    standardGoals={standardGoals}
-                    ironRules={ironRules}
-                    psychoMetrics={psychoMetrics}
-                    viewMode={viewMode}
-                    weeklyFocusList={weeklyFocusList}
-                  />
-                )}
+                  {activePage === 'history' && (
+                    trades.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
+                        <div className="w-full max-w-md h-64">
+                          <FileUpload onDataLoaded={handleFileUpload} />
+                        </div>
+                        <div className="flex items-center gap-4 w-full max-w-md">
+                          <div className="h-px bg-slate-800 flex-1"></div>
+                          <span className="text-xs text-slate-500 font-bold uppercase">Nebo</span>
+                          <div className="h-px bg-slate-800 flex-1"></div>
+                        </div>
+                        <button onClick={handleTryAddTrade} className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95">
+                          <Plus size={18} /> Zapsat první obchod
+                        </button>
+                      </div>
+                    ) : (
+                      <TradeHistory
+                        trades={filteredDisplayTrades}
+                        accounts={accounts}
+                        onDelete={handleDeleteTrade}
+                        onUpdateTrade={handleUpdateTrade}
+                        onClear={handleClearTrades}
+                        theme={theme}
+                        emotions={userEmotions}
+                        pnlDisplayMode={pnlDisplayMode}
+                        initialBalance={displayBalance}
+                        user={currentUser}
+                        exchangeRates={exchangeRates}
+                        allTrades={trades}
+                      />
+                    )
+                  )}
 
-                {activePage === 'accounts' && (
-                  <AccountsManager
-                    accounts={accounts}
-                    activeAccountId={activeAccountId}
-                    setActiveAccountId={setActiveAccountId}
-                    onUpdate={setAccounts}
-                    onDelete={handleDeleteAccount}
-                    theme={theme}
-                    trades={trades}
-                    onUpdateTrades={handleUpdateTrades}
-                    onAddExpense={(exp) => { setBusinessExpenses(prev => [...prev, exp]); isPreferencesDirty.current = true; }}
-                    onAddPayout={(p) => { setBusinessPayouts(prev => [...prev, p]); isPreferencesDirty.current = true; }}
-                  />
-                )}
+                  {activePage === 'journal' && (
+                    <DailyJournal
+                      theme={theme}
+                      trades={filteredDisplayTrades}
+                      preps={dailyPreps}
+                      reviews={dailyReviews}
+                      onSavePrep={handleSavePrep}
+                      onSaveReview={handleSaveReview}
+                      onDeletePrep={handleDeletePrep}
+                      onDeleteReview={handleDeleteReview}
+                      standardGoals={standardGoals}
+                      ironRules={ironRules}
+                      psychoMetrics={psychoMetrics}
+                      viewMode={viewMode}
+                      weeklyFocusList={weeklyFocusList}
+                    />
+                  )}
 
-                {activePage === 'network' && (
-                  <NetworkHub theme={theme} accounts={accounts} emotions={userEmotions} />
-                )}
+                  {activePage === 'accounts' && (
+                    <AccountsManager
+                      accounts={accounts}
+                      activeAccountId={activeAccountId}
+                      setActiveAccountId={setActiveAccountId}
+                      onUpdate={setAccounts}
+                      onDelete={handleDeleteAccount}
+                      theme={theme}
+                      trades={trades}
+                      onUpdateTrades={handleUpdateTrades}
+                      onAddExpense={(exp) => { setBusinessExpenses(prev => [...prev, exp]); isPreferencesDirty.current = true; }}
+                      onUpdatePayouts={(p) => { setBusinessPayouts(p); isPreferencesDirty.current = true; }}
+                      payouts={businessPayouts}
+                      user={currentUser}
+                    />
+                  )}
+
+                  {activePage === 'network' && (
+                    <NetworkHub theme={theme} accounts={accounts} emotions={userEmotions} />
+                  )}
 
 
 
 
-                {activePage === 'settings' && (
-                  <Settings
-                    theme={theme}
-                    userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); isPreferencesDirty.current = true; }}
-                    userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); isPreferencesDirty.current = true; }}
-                    htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); isPreferencesDirty.current = true; }}
-                    ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); isPreferencesDirty.current = true; }}
-                    sessions={sessions} setSessions={(v) => { setSessions(v); isPreferencesDirty.current = true; }}
-                    ironRules={ironRules}
-                    setIronRules={(v) => { setIronRules(v); isPreferencesDirty.current = true; }}
-                    psychoMetrics={psychoMetrics}
-                    setPsychoMetrics={(v) => { setPsychoMetrics(v); isPreferencesDirty.current = true; }}
-                    weeklyFocusList={weeklyFocusList}
-                    setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isJournalDirty.current = true; }}
-                    systemSettings={systemSettings}
-                    setSystemSettings={(v: any) => { setSystemSettings(v); isPreferencesDirty.current = true; }}
-                    standardGoals={standardGoals}
-                    setStandardGoals={(v) => { setStandardGoals(v); isPreferencesDirty.current = true; }}
-                    onEnableNotifications={handleApplyNotificationPermission}
-                    appVersion={APP_VERSION}
-                    onHardRefresh={handleHardRefresh}
-                    accentColor={accentColor}
-                    onAccentColorChange={handleAccentColorChange}
-                  />
-                )}
+                  {activePage === 'settings' && (
+                    <Settings
+                      theme={theme}
+                      userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); isPreferencesDirty.current = true; }}
+                      userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); isPreferencesDirty.current = true; }}
+                      htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); isPreferencesDirty.current = true; }}
+                      ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); isPreferencesDirty.current = true; }}
+                      sessions={sessions} setSessions={(v) => { setSessions(v); isPreferencesDirty.current = true; }}
+                      ironRules={ironRules}
+                      setIronRules={(v) => { setIronRules(v); isPreferencesDirty.current = true; }}
+                      psychoMetrics={psychoMetrics}
+                      setPsychoMetrics={(v) => { setPsychoMetrics(v); isPreferencesDirty.current = true; }}
+                      weeklyFocusList={weeklyFocusList}
+                      setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isJournalDirty.current = true; }}
+                      systemSettings={systemSettings}
+                      setSystemSettings={(v: any) => { setSystemSettings(v); isPreferencesDirty.current = true; }}
+                      standardGoals={standardGoals}
+                      setStandardGoals={(v) => { setStandardGoals(v); isPreferencesDirty.current = true; }}
+                      onEnableNotifications={handleApplyNotificationPermission}
+                      appVersion={APP_VERSION}
+                      onHardRefresh={handleHardRefresh}
+                      accentColor={accentColor}
+                      onAccentColorChange={handleAccentColorChange}
+                    />
+                  )}
 
-                {activePage === 'business' && (
-                  <BusinessHub
-                    theme={theme}
-                    user={currentUser}
-                    exchangeRates={exchangeRates}
-                    trades={trades}
-                    accounts={accounts}
-                    expenses={businessExpenses}
-                    payouts={businessPayouts}
-                    playbook={playbookItems}
-                    goals={businessGoals}
-                    resources={businessResources}
-                    settings={businessSettings}
-                    onUpdateExpenses={(v) => { setBusinessExpenses(v); isPreferencesDirty.current = true; }}
-                    onUpdatePayouts={(v) => { setBusinessPayouts(v); isPreferencesDirty.current = true; }}
-                    onUpdatePlaybook={(v) => { setPlaybookItems(v); isPreferencesDirty.current = true; }}
-                    onUpdateGoals={(v) => { setBusinessGoals(v); isPreferencesDirty.current = true; }}
-                    onUpdateResources={(v) => { setBusinessResources(v); isPreferencesDirty.current = true; }}
-                    onUpdateSettings={(v) => { setBusinessSettings(v); isPreferencesDirty.current = true; }}
-                    onUpdateAccounts={setAccounts}
-                  />
-                )}
-              </React.Suspense>
-            )}
-          </div>
-        </PullToRefresh>
-      </main >
+                  {activePage === 'business' && (
+                    <BusinessHub
+                      theme={theme}
+                      user={currentUser}
+                      exchangeRates={exchangeRates}
+                      trades={trades}
+                      accounts={accounts}
+                      expenses={businessExpenses}
+                      payouts={businessPayouts}
+                      playbook={playbookItems}
+                      goals={businessGoals}
+                      resources={businessResources}
+                      settings={businessSettings}
+                      onUpdateExpenses={(v) => { setBusinessExpenses(v); isPreferencesDirty.current = true; }}
+                      onUpdatePayouts={(v) => { setBusinessPayouts(v); isPreferencesDirty.current = true; }}
+                      onUpdatePlaybook={(v) => { setPlaybookItems(v); isPreferencesDirty.current = true; }}
+                      onUpdateGoals={(v) => { setBusinessGoals(v); isPreferencesDirty.current = true; }}
+                      onUpdateResources={(v) => { setBusinessResources(v); isPreferencesDirty.current = true; }}
+                      onUpdateSettings={(v) => { setBusinessSettings(v); isPreferencesDirty.current = true; }}
+                      onUpdateAccounts={setAccounts}
+                      constitutionRules={constitutionRules}
+                      onUpdateConstitution={setConstitutionRules}
+                      careerRoadmap={careerRoadmap}
+                      onUpdateRoadmap={setCareerRoadmap}
+                      dailyReviews={dailyReviews}
+                      weeklyFocusList={weeklyFocusList}
+                    />
+                  )}
+                </React.Suspense>
+              )}
+            </div>
+          </PullToRefresh>
+        </div>
+      </main>
 
       {/* Alpha Guardian System Components */}
       <GuardianIntervention

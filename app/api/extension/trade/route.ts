@@ -15,8 +15,12 @@ export async function POST(request: Request) {
         const body = await request.json();
         const { symbol, risk, entryTime, screenshot, entry, stop, target, tp, sl, direction, status, accountId } = body;
 
-        if (!symbol || !entryTime || !accountId) {
-            return NextResponse.json({ error: 'Missing required fields (Symbol, Time, Account)' }, { status: 400 });
+        // Validate required fields
+        if (!symbol || !entryTime || !direction) {
+            console.error('[Extension API] Missing required fields:', { symbol, entryTime, direction });
+            return NextResponse.json({
+                error: 'Missing required fields: symbol, entryTime, and direction are mandatory'
+            }, { status: 400 });
         }
 
         // 1. Upload Screenshot if exists
@@ -57,25 +61,55 @@ export async function POST(request: Request) {
         // Helper to parse potential string numbers
         const safeFloat = (val: any) => val ? parseFloat(val) : null;
 
-        const tradeData = {
+        // Calculate exit time based on duration (if provided)
+        const durationMin = body.duration ? parseInt(body.duration) : 0;
+        const entryDateObj = entryTime ? new Date(entryTime) : new Date();
+        const exitDateObj = new Date(entryDateObj.getTime() + (durationMin * 60000));
+
+        const tradeData: any = {
             user_id: session.user.id,
-            account_id: accountId, // Required field
+            account_id: accountId,
             symbol: symbol,
-            entry_date: entryTime, // ISO string from popup
+            instrument: symbol, // Map to standard instrument field
+            entry_date: entryDateObj.toISOString(),
+            date: exitDateObj.toISOString().split('T')[0],
+            timestamp: exitDateObj.getTime(), // Use local computer time for consistency
             status: tradeStatus,
             outcome: outcome,
-            direction: direction || 'LONG', // Default to Long if unknown
+            direction: direction || 'LONG',
             planned_rr: body.rrr ? safeFloat(body.rrr) : null,
 
             // Map inputs correctly. Popup sends 'tp' and 'sl' and 'entry'
             entry_price: safeFloat(entry),
-            stop_loss: safeFloat(stop) || safeFloat(sl), // Fallback
-            take_profit: safeFloat(target) || safeFloat(tp), // Fallback
+            stop_loss: safeFloat(stop) || safeFloat(sl),
+            take_profit: safeFloat(target) || safeFloat(tp),
             risk_amount: safeFloat(risk),
+            pnl: safeFloat(body.pnl) || 0,
+            duration_minutes: durationMin,
 
-            notes: "Imported from AlphaTrade Bridge",
+            notes: body.notes || "Imported from AlphaTrade Bridge",
             image_url: screenshotUrl,
-            session: 'NY' // Default or infer from time?
+            session: 'NY'
+        };
+
+        // Map entry_time for frontend compatibility (TradeDetailModal looks for this)
+        tradeData.entry_time = entryDateObj.getTime();
+
+        // CRITICAL: Frontend expects a 'data' JSONB column that contains the full trade object
+        tradeData.data = {
+            ...tradeData,
+            accountId: accountId,
+            entryPrice: tradeData.entry_price,
+            exitPrice: safeFloat(body.exit) || safeFloat(body.exitPrice),
+            stopLoss: tradeData.stop_loss,
+            takeProfit: tradeData.take_profit,
+            riskAmount: tradeData.risk_amount,
+            durationMinutes: durationMin,
+            entryTime: entryDateObj.getTime(), // Frontend uses this
+            entryDate: entryDateObj.toISOString(), // Also provide ISO format
+            screenshot: screenshotUrl,
+            screenshots: screenshotUrl ? [screenshotUrl] : [],
+            isValid: true
         };
 
         const { data: trade, error: tradeError } = await supabase

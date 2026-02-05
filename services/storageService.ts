@@ -41,6 +41,15 @@ const safeSetItem = (key: string, value: any) => {
   }
 };
 
+// Helper to update cache timestamp after successful saves
+const updateCacheTimestamp = async () => {
+  const userId = await getUserId();
+  if (userId) {
+    const timestampKey = `alphatrade_cache_timestamp_${userId}`;
+    localStorage.setItem(timestampKey, Date.now().toString());
+  }
+};
+
 export const storageService = {
   // User Profile
   async getCachedUser(): Promise<User | null> {
@@ -120,7 +129,11 @@ export const storageService = {
 
   // Async method to get cached trades from IndexedDB
   async getTradesCheckCacheFirst(): Promise<Trade[]> {
-    const cached = await get('alphatrade_trades');
+    const userId = await getUserId();
+    if (!userId) return [];
+
+    const localKey = `alphatrade_trades_${userId}`;
+    const cached = await get(localKey);
     return cached || [];
   },
 
@@ -147,7 +160,6 @@ export const storageService = {
         date,
         timestamp,
         drawings,
-        is_public,
         is_public,
         created_at,
         setup:data->>setup,
@@ -442,6 +454,7 @@ export const storageService = {
       drawings: d.drawings
     }));
 
+    await updateCacheTimestamp(); // Mark cache as fresh
     return results;
   },
 
@@ -639,6 +652,7 @@ export const storageService = {
       const finalResults = results.length > 0 ? results : accounts;
       // Update cache with server results (which have real IDs)
       safeSetItem('alphatrade_accounts', finalResults);
+      await updateCacheTimestamp(); // Mark cache as fresh
       return finalResults;
 
     } catch (err: any) {
@@ -684,6 +698,14 @@ export const storageService = {
       .single();
 
     if (error || !data) return null;
+
+    // CRITICAL FIX: Update localStorage cache with fresh data from Supabase
+    // This prevents data loss when page reloads
+    const localKey = userId ? `alphatrade_preferences_${userId}` : 'alphatrade_preferences';
+    if (data.preferences) {
+      safeSetItem(localKey, data.preferences);
+    }
+
     return data.preferences;
   },
 
@@ -698,6 +720,7 @@ export const storageService = {
     }
     safeSetItem(localKey, prefs);
     await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
+    await updateCacheTimestamp(); // Mark cache as fresh
   },
 
   // Daily Journal
@@ -753,6 +776,7 @@ export const storageService = {
       console.error("Failed to sync preps to Supabase:", error);
       throw error;
     }
+    await updateCacheTimestamp(); // Mark cache as fresh
   },
 
   async deleteDailyPrep(date: string): Promise<void> {
@@ -797,6 +821,7 @@ export const storageService = {
       console.error("Failed to sync reviews to Supabase:", error);
       throw error;
     }
+    await updateCacheTimestamp(); // Mark cache as fresh
   },
 
   async deleteDailyReview(date: string): Promise<void> {
@@ -1368,169 +1393,5 @@ export const storageService = {
     const templates: DrawingTemplate[] = (prefs as any).drawingTemplates || [];
     const filtered = templates.filter(t => t.id !== templateId);
     await this.savePreferences({ ...prefs, drawingTemplates: filtered } as any);
-  },
-
-  // Smart refresh - načte nové obchody ze serveru pokud cache obsahuje starší data
-  async getTradesWithSmartRefresh(targetUserId?: string): Promise<Trade[]> {
-    const userId = targetUserId || await getUserId();
-    if (!userId) return [];
-
-    const localKey = userId ? `alphatrade_trades_${userId}` : 'alphatrade_trades';
-    let localTrades: Trade[] = await get(localKey) || [];
-
-    // Pokud nemáme žádná cached data, načti vše ze serveru
-    if (localTrades.length === 0) {
-      console.log("[SmartRefresh] No cache, fetching all from server");
-      return await this.getTrades(targetUserId);
-    }
-
-    // Najdi nejnovější obchod v cache podle timestamp (spolehlivější než created_at)
-    const newestCachedTrade = localTrades.reduce((newest, trade) => {
-      const tradeTime = trade.timestamp || new Date(trade.date).getTime();
-      const newestTime = newest.timestamp || new Date(newest.date).getTime();
-      return tradeTime > newestTime ? trade : newest;
-    }, localTrades[0]);
-
-    // Použij timestamp místo created_at (spolehlivější pro určení "nejnovějšího obchodu")
-    const newestTimestamp = newestCachedTrade.timestamp || new Date(newestCachedTrade.date).getTime();
-
-    console.log(`[SmartRefresh] Newest cached trade timestamp: ${newestTimestamp} (${new Date(newestTimestamp).toISOString()})`);
-
-    // Načti pouze novější obchody ze serveru - použij STEJNÝ select jako getTrades() pro konzistenci
-    const { data: rawData, error } = await supabase
-      .from('trades')
-      .select(`
-        id,
-        user_id,
-        account_id,
-        instrument,
-        pnl,
-        direction,
-        date,
-        timestamp,
-        drawings,
-        is_public,
-        created_at,
-        setup:data->>setup,
-        mistake:data->>mistake,
-        notes:data->>notes,
-        tags:data->tags,
-        runUp:data->>runUp,
-        drawdown:data->>drawdown,
-        riskAmount:data->>riskAmount,
-        targetAmount:data->>targetAmount,
-        entryPrice:data->>entryPrice,
-        exitPrice:data->>exitPrice,
-        stopLoss:data->>stopLoss,
-        takeProfit:data->>takeProfit,
-        quantity:data->>quantity,
-        signal:data->>signal,
-        session:data->>session,
-        confidence:data->>confidence,
-        rr:data->>rr,
-        duration:data->>duration,
-        isValid:data->>isValid,
-        groupId:data->>groupId,
-        htfConfluence:data->htfConfluence,
-        ltfConfluence:data->ltfConfluence,
-        mistakes:data->mistakes,
-        emotions:data->emotions,
-        planAdherence:data->>planAdherence,
-        executionStatus:data->>executionStatus,
-        screenshot:data->>screenshot,
-        screenshots:data->screenshots,
-        miniViewRange:data->>miniViewRange,
-        miniViewLayout:data->>miniViewLayout,
-        miniViewSecondaryRange:data->>miniViewSecondaryRange,
-        miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe,
-        durationMinutes:data->>durationMinutes
-      `)
-      .eq('user_id', userId)
-      .gte('timestamp', newestTimestamp) // Použij >= místo > pro edge cases
-      .order('timestamp', { ascending: false });
-
-    if (error) {
-      console.error("[SmartRefresh] Failed to fetch recent trades:", error);
-      return localTrades; // Vrať cache při chybě
-    }
-
-    // Pokud nejsou nové obchody, vrať cache
-    if (!rawData || rawData.length === 0) {
-      console.log("[SmartRefresh] No newer trades found, using cache");
-      return localTrades;
-    }
-
-    console.log(`[SmartRefresh] Found ${rawData.length} newer trades, merging with cache`);
-
-    // Převeď nová data na Trade objekty - použij STEJNOU transformaci jako getTrades()
-    const newTrades = rawData.map((t: any) => ({
-      id: t.id,
-      userId: t.user_id,
-      accountId: t.account_id,
-      instrument: t.instrument,
-      pnl: t.pnl,
-      direction: t.direction,
-      date: t.date,
-      timestamp: t.timestamp,
-      drawings: t.drawings || [],
-      isPublic: t.is_public,
-      createdAt: t.created_at,
-
-      // Mapped JSON fields
-      setup: t.setup,
-      mistake: t.mistake,
-      notes: t.notes,
-      tags: t.tags,
-      runUp: t.runUp ? Number(t.runUp) : undefined,
-      drawdown: t.drawdown ? Number(t.drawdown) : undefined,
-      riskAmount: t.riskAmount ? Number(t.riskAmount) : undefined,
-      targetAmount: t.targetAmount ? Number(t.targetAmount) : undefined,
-      entryPrice: t.entryPrice ? Number(t.entryPrice) : undefined,
-      exitPrice: t.exitPrice ? Number(t.exitPrice) : undefined,
-      stopLoss: t.stopLoss ? Number(t.stopLoss) : undefined,
-      takeProfit: t.takeProfit ? Number(t.takeProfit) : undefined,
-      quantity: t.quantity ? Number(t.quantity) : undefined,
-      signal: t.signal,
-      session: t.session,
-      confidence: t.confidence ? Number(t.confidence) : undefined,
-      rr: t.rr ? Number(t.rr) : undefined,
-      duration: t.duration,
-      durationMinutes: t.durationMinutes ? Number(t.durationMinutes) : 0,
-      isValid: t.isValid === 'true' || t.isValid === true,
-      groupId: t.groupId,
-      htfConfluence: t.htfConfluence,
-      ltfConfluence: t.ltfConfluence,
-      mistakes: t.mistakes,
-      emotions: t.emotions,
-      planAdherence: t.planAdherence,
-      executionStatus: t.executionStatus,
-      screenshot: t.screenshot,
-      screenshots: t.screenshots,
-      miniViewRange: t.miniViewRange,
-      miniViewLayout: t.miniViewLayout,
-      miniViewSecondaryRange: t.miniViewSecondaryRange,
-      miniViewSecondaryTimeframe: t.miniViewSecondaryTimeframe,
-
-      // We don't carry the full blob anymore to save memory
-      data: {}
-    })) as Trade[];
-
-    // Merge s cache pomocí Map pro unikátní ID
-    const tradeMap = new Map<string | number, Trade>();
-    localTrades.forEach(t => tradeMap.set(t.id, t));
-    newTrades.forEach(t => tradeMap.set(t.id, t));
-
-    // Seřaď podle času (nejnovější nahoře)
-    const mergedTrades = Array.from(tradeMap.values()).sort((a, b) => {
-      const timeA = a.timestamp || new Date(a.date).getTime();
-      const timeB = b.timestamp || new Date(b.date).getTime();
-      return timeB - timeA;
-    });
-
-    // Ulož mergované obchody zpět do cache
-    await set(localKey, mergedTrades);
-    console.log(`[SmartRefresh] Updated cache with ${mergedTrades.length} total trades (was ${localTrades.length}, added ${newTrades.length})`);
-
-    return mergedTrades;
   }
 };

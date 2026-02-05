@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { registerSW } from 'virtual:pwa-register';
 import { UpdateBanner } from './components/UpdateBanner';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 // State for update banner
 let showUpdateBanner = false;
@@ -48,13 +49,15 @@ const renderApp = () => {
   const root = ReactDOM.createRoot(rootElement);
   root.render(
     <React.StrictMode>
-      <UpdateBanner
-        show={showUpdateBanner}
-        onUpdate={handleUpdate}
-        onDismiss={forceUpdate ? undefined : handleDismiss}
-        forceUpdate={forceUpdate}
-      />
-      <App />
+      <ErrorBoundary name="AppRoot">
+        <UpdateBanner
+          show={showUpdateBanner}
+          onUpdate={handleUpdate}
+          onDismiss={forceUpdate ? undefined : handleDismiss}
+          forceUpdate={forceUpdate}
+        />
+        <App />
+      </ErrorBoundary>
     </React.StrictMode>
   );
 };

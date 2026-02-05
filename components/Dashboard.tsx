@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode } from '../types';
+import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
 import { formatPnL, calculateTotalRR, formatCurrency } from '../utils/formatPnL';
 import { currencyService, ExchangeRates } from '../services/currencyService';
 import { t } from '../services/translations';
@@ -11,8 +11,6 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, ReferenceLine, LabelList, PieChart, Pie, Sector, AreaChart, Area, Rectangle
 } from 'recharts';
 import {
-  Maximize2,
-  Minimize2,
   Activity,
   BarChart3,
   LayoutGrid,
@@ -33,8 +31,6 @@ import {
   LineChart,
   ArrowUp,
   ArrowDown,
-  ArrowLeft,
-  ArrowRight,
   Wallet,
   CheckCircle2,
   Layers,
@@ -42,7 +38,6 @@ import {
   Brain,
   TrendingUp,
   TrendingDown,
-  ChevronUp,
   Percent,
   Timer,
   AlertTriangle,
@@ -73,6 +68,7 @@ interface DashboardProps {
   pnlDisplayMode?: PnLDisplayMode;
   exchangeRates: ExchangeRates | null;
   allTrades?: Trade[];
+  payouts?: BusinessPayout[];
 }
 
 // ... existing imports ...
@@ -81,6 +77,24 @@ interface DashboardProps {
 
 // ... MASTER_WIDGET_LIST update ...
 import TradeDetailModal from './TradeDetailModal';
+import SortableWidget from './SortableWidget';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+  DragStartEvent,
+  DragOverlay,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  rectSortingStrategy,
+} from '@dnd-kit/sortable';
 
 const COLORS = {
   profit: '#10b981',
@@ -97,10 +111,18 @@ const COLORS = {
 };
 
 // --- NEW WIDGET: DISTANCE TO TARGET ---
-const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[], theme: 'dark' | 'light' | 'oled', currency: 'USD' | 'CZK' | 'EUR', rates: any }> = ({ stats, accounts, theme, currency, rates }) => {
+const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[], theme: 'dark' | 'light' | 'oled', currency: 'USD' | 'CZK' | 'EUR', rates: any, payouts?: BusinessPayout[] }> = ({ stats, accounts, theme, currency, rates, payouts = [] }) => {
   const format = (val: number) => formatCurrency(val, currency, rates);
   const initial = stats.initialBalance;
-  const current = initial + stats.totalPnL;
+
+  // Calculate withdrawals for active accounts if we're in individual mode
+  // Or just sum up all payouts in the current stats context
+  const totalWithdrawals = payouts
+    .filter(p => p.status === 'Received')
+    .filter(p => stats.trades.some(t => t.accountId === p.accountId)) // Only payouts for accounts present in current stats
+    .reduce((sum, p) => sum + (p.grossAmount || p.amount), 0);
+
+  const current = initial + stats.totalPnL - totalWithdrawals;
   const target = initial * 1.10; // 10% Profit Target
   const progress = Math.min(100, Math.max(0, ((current - initial) / (target - initial)) * 100));
   const remaining = target - current;
@@ -334,6 +356,8 @@ const MASTER_WIDGET_LIST = [
   { id: 'kpi_profit_factor', label: 'Profit factor', category: 'KPIs', icon: <BarChart3 size={18} />, description: 'Poměr hrubých zisků a ztrát.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>19.89</div>, defaultRowSpan: 1 },
   { id: 'kpi_day_winrate', label: 'Day win %', category: 'KPIs', icon: <CalendarIcon size={18} />, description: 'Procento ziskových obchodních dnů.', preview: <div className="text-purple-500 font-black text-xl">62.15%</div>, defaultRowSpan: 1 },
   { id: 'kpi_max_drawdown', label: 'Max Drawdown', category: 'KPIs', icon: <TrendingDown size={18} />, description: 'Největší propad kapitálu.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>12.4%</div>, defaultRowSpan: 1 },
+  { id: 'kpi_avg_win', label: 'Average Win', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Průměrný zisk na vítězný trade.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$450</div>, defaultRowSpan: 1 },
+  { id: 'kpi_avg_loss', label: 'Average Loss', category: 'KPIs', icon: <ArrowDown size={18} />, description: 'Průměrná ztráta na trade.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>$320</div>, defaultRowSpan: 1 },
   { id: 'discipline', label: 'Rituály & Disciplína', category: 'Chování', icon: <Brain size={18} />, description: 'Sleduje tvé ranní a večerní rituály.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 2 },
   { id: 'winners_losers', label: 'Výhry a Prohry', category: 'Analýza', icon: <TrendingUp size={18} />, description: 'Statistické srovnání zisků a ztrát.', preview: <div className="flex gap-1"><div className={`w-4 h-4 ${COLORS.bgProfit} ${COLORS.borderProfit} border rounded`} /><div className={`w-4 h-4 ${COLORS.bgLoss} ${COLORS.borderLoss} border rounded`} /></div>, defaultRowSpan: 2 },
   { id: 'monthly_performance', label: 'Měsíční Výkonnost', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Měsíční přehled ziskovosti s heatmapou.', preview: <div className="grid grid-cols-4 gap-0.5"><div className="w-2 h-2 bg-emerald-500/40" /><div className="w-2 h-2 bg-emerald-500/80" /><div className="w-2 h-2 bg-emerald-500/20" /><div className="w-2 h-2 bg-rose-500/40" /></div>, defaultRowSpan: 2 },
@@ -949,7 +973,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout,
   isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
-  allTrades = []
+  allTrades = [], payouts = []
 }) => {
   const isDark = theme !== 'light';
   const lang = user?.language || 'cs';
@@ -973,6 +997,15 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isArmoryOpen, setIsArmoryOpen] = useState(false);
   const [selectedTradeId, setSelectedTradeId] = useState<string | number | null>(null);
+  const [isDraggingWidget, setIsDraggingWidget] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [resizingWidget, setResizingWidget] = useState<{
+    id: string;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+  } | null>(null);
 
   const selectedTrade = useMemo(() => {
     if (!selectedTradeId) return null;
@@ -1016,18 +1049,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     }
     if (visible && window.innerWidth < 1024) setIsArmoryOpen(false);
   };
-  const toggleWidgetSize = (id: string) => {
-    onUpdateLayout(layout.map(w => {
-      if (w.id === id) {
-        let nextSize: 'small' | 'large' | 'full' = 'small';
-        if (w.size === 'small') nextSize = 'large';
-        else if (w.size === 'large') nextSize = 'full';
-        else if (w.size === 'full') nextSize = 'small';
-        return { ...w, size: nextSize };
-      }
-      return w;
-    }));
-  };
   const toggleWidgetHeight = (id: string) => {
     onUpdateLayout(layout.map(w => {
       if (w.id === id) {
@@ -1046,27 +1067,110 @@ const Dashboard: React.FC<DashboardProps> = ({
       return w;
     }));
   };
-  const moveWidget = (id: string, direction: 'prev' | 'next') => {
-    const visibleWidgets = [...currentLayout];
-    const index = visibleWidgets.findIndex(w => w.id === id);
-    if (index < 0) return;
-    const targetIndex = direction === 'prev' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= visibleWidgets.length) return;
-    const currentWidget = { ...visibleWidgets[index] };
-    const targetWidget = { ...visibleWidgets[targetIndex] };
-    const currentOrder = currentWidget.order;
-    const targetOrder = targetWidget.order;
-    const newLayout = layout.map(w => {
-      if (w.id === currentWidget.id) return { ...w, order: targetOrder };
-      if (w.id === targetWidget.id) return { ...w, order: currentOrder };
-      return w;
+
+  // Drag & Drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  // Handle drag start event
+  const handleDragStart = (event: DragStartEvent) => {
+    setIsDraggingWidget(true);
+    setActiveId(event.active.id as string);
+  };
+
+  // Handle drag end event
+  const handleDragEnd = (event: DragEndEvent) => {
+    setIsDraggingWidget(false);
+    setActiveId(null);
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = currentLayout.findIndex((w) => w.id === active.id);
+    const newIndex = currentLayout.findIndex((w) => w.id === over.id);
+
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    // Create new order for all widgets
+    const reorderedLayout = arrayMove(currentLayout, oldIndex, newIndex);
+
+    // Update order values
+    const newLayout = layout.map(widget => {
+      const newPosition = reorderedLayout.findIndex(w => w.id === widget.id);
+      if (newPosition !== -1) {
+        return { ...widget, order: newPosition };
+      }
+      return widget;
     });
+
     onUpdateLayout(newLayout);
   };
 
+  // Resize handlers
+  const handleResizeStart = (widgetId: string, event: React.MouseEvent) => {
+    const widget = layout.find(w => w.id === widgetId);
+    if (!widget) return;
+
+    const startWidth = widget.size === 'small' ? 1 : widget.size === 'large' ? 2 : 4;
+    setResizingWidget({
+      id: widgetId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth,
+      startHeight: widget.rowSpan || 1,
+    });
+  };
+
+  useEffect(() => {
+    if (!resizingWidget) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Width (Columns)
+      const deltaX = e.clientX - resizingWidget.startX;
+      const columnWidth = window.innerWidth >= 1024 ? window.innerWidth / 4 : window.innerWidth / 2;
+      const columnsChanged = Math.round(deltaX / columnWidth);
+
+      let newColumns = resizingWidget.startWidth + columnsChanged;
+      newColumns = Math.max(1, Math.min(4, newColumns));
+
+      let newSize: 'small' | 'large' | 'full';
+      if (newColumns === 1) newSize = 'small';
+      else if (newColumns <= 2) newSize = 'large';
+      else newSize = 'full';
+
+      // Height (RowSpan)
+      const deltaY = e.clientY - resizingWidget.startY;
+      const rowHeight = 180; // Approximate base row height from auto-rows-[minmax(180px,auto)]
+      const rowsChanged = Math.round(deltaY / rowHeight);
+      let newRowSpan = resizingWidget.startHeight + rowsChanged;
+      newRowSpan = Math.max(1, Math.min(4, newRowSpan));
+
+      // Update widget size and height
+      onUpdateLayout(layout.map(w =>
+        w.id === resizingWidget.id ? { ...w, size: newSize, rowSpan: newRowSpan } : w
+      ));
+    };
+
+    const handleMouseUp = () => {
+      setResizingWidget(null);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingWidget, layout, onUpdateLayout]);
+
   const renderWidget = (id: string, config?: DashboardWidgetConfig) => {
     switch (id) {
-      case 'challenge_target': return <DistanceToTargetWidget stats={stats} accounts={accounts} theme={theme} currency={targetCurrency} rates={exchangeRates} />;
+      case 'challenge_target': return <DistanceToTargetWidget stats={stats} accounts={accounts} theme={theme} currency={targetCurrency} rates={exchangeRates} payouts={payouts} />;
       case 'discipline': return <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={stats.trades} ironRules={ironRules} />;
       case 'kpi_pnl': {
         const totalRr = pnlDisplayMode === 'rr' ? calculateTotalRR(stats.trades) : undefined;
@@ -1093,8 +1197,32 @@ const Dashboard: React.FC<DashboardProps> = ({
           />
         );
       }
+      case 'kpi_avg_win': {
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Average Win"
+            value={formatPnL(stats.avgWin, pnlDisplayMode, stats.initialBalance, stats.avgWinPct / (stats.avgRisk || 1), true, targetCurrency, exchangeRates)}
+            icon={<div className={`${COLORS.bgProfit} ${COLORS.textProfit} p-1 rounded-lg`}><ArrowUp size={14} /></div>}
+            info="Průměrný dolarový zisk na jeden vítězný obchod."
+          />
+        );
+      }
+      case 'kpi_avg_loss': {
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Average Loss"
+            value={formatPnL(-stats.avgLoss, pnlDisplayMode, stats.initialBalance, -stats.avgLossPct / (stats.avgRisk || 1), true, targetCurrency, exchangeRates)}
+            icon={<div className={`${COLORS.bgLoss} ${COLORS.textLoss} p-1 rounded-lg`}><ArrowDown size={14} /></div>}
+            info="Průměrná dolarová ztráta na jeden trade."
+          />
+        );
+      }
       case 'kpi_winrate': {
         const winCount = stats.trades.filter(t => t.pnl > 0 && t.executionStatus !== 'Missed').length;
+        const beCount = stats.trades.filter(t => t.pnl === 0 && t.executionStatus !== 'Missed').length;
+        const lossCount = stats.trades.filter(t => t.pnl < 0 && t.executionStatus !== 'Missed').length;
         const totalCount = stats.trades.filter(t => t.executionStatus !== 'Missed').length;
         const winRate = totalCount > 0 ? ((winCount / totalCount) * 100).toFixed(1) : '0.0';
         return (
@@ -1102,7 +1230,9 @@ const Dashboard: React.FC<DashboardProps> = ({
             theme={theme}
             label="Trade win %"
             value={`${winRate}%`}
+            type="gauge"
             sampleSize={totalCount}
+            data={{ wins: winCount, be: beCount, losses: lossCount }}
             icon={<div className="bg-blue-100 text-blue-600 p-1 rounded-lg dark:bg-blue-500/20"><Activity size={14} /></div>}
             info="Procento vítězných obchodů ze všech uzavřených obchodů."
           />
@@ -1117,6 +1247,8 @@ const Dashboard: React.FC<DashboardProps> = ({
             theme={theme}
             label="Profit Factor"
             value={profitFactor}
+            type="donut"
+            data={{ profit: grossProfit, loss: grossLoss }}
             sampleSize={stats.totalTrades}
             icon={<div className={`${COLORS.bgProfit} ${COLORS.textProfit} p-1 rounded-lg`}><BarChart3 size={14} /></div>}
             info="Poměr hrubých zisků a ztrát. Hodnota > 1.5 je považována za dobrou."
@@ -1131,13 +1263,17 @@ const Dashboard: React.FC<DashboardProps> = ({
         });
         const tradingDays = Object.keys(dayPnL).length;
         const profitableDays = Object.values(dayPnL).filter(pnl => pnl > 0).length;
+        const lossDays = Object.values(dayPnL).filter(pnl => pnl < 0).length;
+        const beDays = Object.values(dayPnL).filter(pnl => pnl === 0).length;
         const dayWinRate = tradingDays > 0 ? ((profitableDays / tradingDays) * 100).toFixed(1) : '0.0';
         return (
           <ProKpiCard
             theme={theme}
             label="Day win %"
             value={`${dayWinRate}%`}
+            type="gauge"
             sampleSize={tradingDays}
+            data={{ wins: profitableDays, be: beDays, losses: lossDays }}
             subValue={`${profitableDays}/${tradingDays} dnů`}
             icon={<div className="bg-purple-100 text-purple-600 p-1 rounded-lg dark:bg-purple-500/20"><CalendarIcon size={14} /></div>}
             info="Procento ziskových obchodních dnů."
@@ -1148,13 +1284,16 @@ const Dashboard: React.FC<DashboardProps> = ({
         // Calculate how many signals were taken vs missed
         const allSignals = stats.trades.length;
         const executedSignals = stats.trades.filter(t => t.executionStatus !== 'Missed').length;
+        const missedSignals = stats.trades.filter(t => t.executionStatus === 'Missed').length;
         const executionRate = allSignals > 0 ? ((executedSignals / allSignals) * 100).toFixed(1) : '100.0';
         return (
           <ProKpiCard
             theme={theme}
             label="Execution %"
             value={`${executionRate}%`}
+            type="gauge"
             sampleSize={allSignals}
+            data={{ wins: executedSignals, missed: missedSignals }}
             subValue={`${executedSignals}/${allSignals} signálů`}
             icon={<div className="bg-orange-100 text-orange-600 p-1 rounded-lg dark:bg-orange-500/20"><Target size={14} /></div>}
             info="Procento signálů, které jsi skutečně zexekutoval. Zmeškané obchody snižují toto číslo."
@@ -1201,45 +1340,70 @@ const Dashboard: React.FC<DashboardProps> = ({
           )}
         </div>
 
-        <div className={`grid grid-cols-4 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] grid-flow-dense transition-all duration-700 w-full overflow-x-hidden`}>
-          {currentLayout.map((widget, idx) => {
-            const gridClass = widget.size === 'small' ? 'col-span-2 lg:col-span-1' : (widget.size === 'large' ? 'col-span-4 lg:col-span-2' : 'col-span-4');
-            const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={currentLayout.map(w => w.id)}
+            strategy={rectSortingStrategy}
+          >
+            <div className={`grid grid-cols-4 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px]`}>
+              {currentLayout.map((widget, idx) => {
+                const gridClass = widget.size === 'small' ? 'col-span-2 lg:col-span-1' : (widget.size === 'large' ? 'col-span-4 lg:col-span-2' : 'col-span-4');
+                const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
 
-            return (
-              <div key={widget.id} className={`${gridClass} ${rowSpanClass} relative transition-all duration-500 h-full overflow-visible hover:z-[50]`}>
-                {isEditing && (
-                  <div className="absolute -top-1 -left-1 -right-1 -bottom-1 z-30 rounded-[28px] border-2 border-dashed border-blue-500 flex flex-col items-center justify-center pointer-events-none bg-blue-500/10 backdrop-blur-[2px]">
-                    <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[8px] font-black px-3 py-1 rounded-full uppercase tracking-widest flex items-center gap-2 pointer-events-auto shadow-2xl">
-                      <GripVertical size={10} /> {widget.label}
-                    </div>
-                    <div className="absolute bottom-4 flex items-center gap-2 pointer-events-auto">
-                      <button onClick={(e) => { e.stopPropagation(); moveWidget(widget.id, 'prev'); }} disabled={idx === 0} className="p-2 bg-slate-900 text-white border border-slate-700 rounded-lg hover:bg-slate-800 disabled:opacity-30 shadow-xl transition-all"><ArrowLeft size={14} /></button>
-                      {widget.id === 'equity' && (
-                        <button onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }} className={`p-2 border rounded-lg shadow-xl transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-900 text-slate-500 border-slate-700'}`} title="Zlatá křivka"><ShieldCheck size={14} /></button>
-                      )}
-                      <button onClick={(e) => { e.stopPropagation(); toggleWidgetHeight(widget.id); }} className="p-2 bg-indigo-600 text-white border border-indigo-500 rounded-lg hover:bg-indigo-500 shadow-xl transition-all flex flex-col items-center gap-0.5" title="Změnit výšku">
-                        <div className="flex gap-0.5">
-                          {[...Array(4)].map((_, i) => (
-                            <div key={i} className={`w-1 h-3 rounded-full ${i < (widget.rowSpan || 1) ? 'bg-white' : 'bg-white/20'}`} />
-                          ))}
-                        </div>
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); toggleWidgetSize(widget.id); }} className="p-2 bg-blue-600 text-white border border-blue-500 rounded-lg hover:bg-blue-500 shadow-xl transition-all" title="Změnit šířku">
-                        {widget.size === 'small' ? <Maximize2 size={14} /> : (widget.size === 'large' ? <ChevronUp size={14} /> : <Minimize2 size={14} />)}
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }} className="p-2 bg-rose-600 text-white border border-rose-500 rounded-lg hover:bg-rose-500 shadow-xl transition-all"><Trash2 size={14} /></button>
-                      <button onClick={(e) => { e.stopPropagation(); moveWidget(widget.id, 'next'); }} disabled={idx === currentLayout.length - 1} className="p-2 bg-slate-900 text-white border border-slate-700 rounded-lg hover:bg-slate-800 disabled:opacity-30 shadow-xl transition-all"><ArrowRight size={14} /></button>
-                    </div>
-                  </div>
-                )}
-                <div className={`h-full animate-in fade-in zoom-in-95 duration-500 ${isEditing ? 'opacity-40 blur-[2px]' : ''}`}>
-                  {renderWidget(widget.id, widget)}
-                </div>
+                return (
+                  <SortableWidget
+                    key={widget.id}
+                    id={widget.id}
+                    isEditing={isEditing}
+                    label={widget.label}
+                    gridClass={gridClass}
+                    rowSpanClass={rowSpanClass}
+                    size={widget.size}
+                    rowSpan={widget.rowSpan || 1}
+                    onResizeStart={handleResizeStart}
+                  >
+                    {isEditing && (
+                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto z-40">
+                        {widget.id === 'equity' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }}
+                            className={`p-2.5 border rounded-xl shadow-xl transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-900 text-slate-500 border-slate-700'}`}
+                            title="Zlatá křivka"
+                          >
+                            <ShieldCheck size={16} />
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }}
+                          className="p-2.5 bg-rose-600/90 text-white border border-rose-500 rounded-xl hover:bg-rose-500 shadow-xl transition-all backdrop-blur-md"
+                          title="Odstranit"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    )}
+                    {renderWidget(widget.id, widget)}
+                  </SortableWidget>
+                );
+              })}
+            </div>
+          </SortableContext>
+          <DragOverlay adjustScale={true} dropAnimation={{
+            duration: 500,
+            easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)',
+          }}>
+            {activeId ? (
+              <div className="w-full h-full opacity-90 cursor-grabbing shadow-2xl scale-102 transition-transform duration-300 ring-4 ring-blue-500/30 rounded-[24px] overflow-hidden">
+                {renderWidget(activeId, layout.find(w => w.id === activeId))}
               </div>
-            );
-          })}
-        </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       </div>
       <aside className={`fixed top-0 right-0 bottom-0 z-[100] transform transition-all duration-700 ease-in-out shadow-[-20px_0_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden ${isEditing && isArmoryOpen ? 'translate-x-0' : 'translate-x-full'} w-full sm:w-[340px] bg-[var(--bg-sidebar)] border-l border-[var(--border-subtle)] backdrop-blur-3xl`}>
         <div className="p-6 md:p-8 border-b border-slate-800/50 flex flex-col gap-6">

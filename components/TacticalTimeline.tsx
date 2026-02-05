@@ -54,11 +54,16 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
   const events = [
     { type: 'prep', time: '08:00', label: 'Pre-Market Preparation' },
-    ...trades.sort((a, b) => a.timestamp - b.timestamp).map(t => ({
-      type: 'trade',
-      time: new Date(t.timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' }),
-      data: t
-    })),
+    ...trades.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)).map(t => {
+      const d = new Date(t.timestamp || 0);
+      const time = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+      const isPlaceholderTime = time === '01:00' || time === '00:00';
+      return {
+        type: 'trade',
+        time: isPlaceholderTime ? '' : time,
+        data: t
+      };
+    }),
     { type: 'review', time: '18:00', label: 'Post-Market Review' }
   ];
 

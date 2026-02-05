@@ -145,7 +145,17 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const pnl = safeValue(activeTrade.pnl);
     const realRRR = (riskAmount > 0) ? (pnl / riskAmount) : 0;
 
-    const holdTime = activeTrade.duration || (Math.round(safeValue(activeTrade.durationMinutes)) + 'm');
+    const exitTime = activeTrade.timestamp || new Date(activeTrade.date).getTime();
+    const tradeEntryTime = activeTrade.entryTime || activeTrade.entryDate || (exitTime - (safeValue(activeTrade.durationMinutes) * 60 * 1000));
+
+    // Format the time range string
+    const formatTime = (time: any) => {
+        const d = new Date(time);
+        return isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+    };
+
+    const timeRange = `${formatTime(tradeEntryTime)} - ${formatTime(exitTime)}`;
+    const holdTime = activeTrade.duration || (Math.round(safeValue(activeTrade.durationMinutes || activeTrade.duration_minutes)) + 'm');
     const status = activeTrade.executionStatus || (activeTrade.isValid === false ? 'Invalid' : 'Valid');
     const isMissed = status === 'Missed';
     const isWin = pnl >= 0;
@@ -208,9 +218,20 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
                             <div className="min-w-0">
                                 <h2 className={`text-sm md:text-base font-black tracking-tighter uppercase truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</h2>
-                                <p className="text-[7px] md:text-[8px] font-bold text-slate-500 uppercase tracking-widest truncate">
-                                    {trade.date ? new Date(trade.date).toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
-                                </p>
+                                <div className="flex items-center gap-2">
+                                    <p className="text-[7px] md:text-[8px] font-bold text-slate-500 uppercase tracking-widest truncate">
+                                        {trade.date ? new Date(trade.date).toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
+                                    </p>
+                                    {trade.date && !(() => {
+                                        const d = new Date(trade.date);
+                                        const t = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+                                        return t === '01:00' || t === '00:00';
+                                    })() && (
+                                            <span className="text-[7px] md:text-[8px] font-mono font-black text-blue-500/50 bg-blue-500/5 px-1.5 py-0.5 rounded border border-blue-500/10">
+                                                {new Date(trade.date).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}
+                                            </span>
+                                        )}
+                                </div>
                             </div>
                         </div>
 
@@ -252,7 +273,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 <DataTile label="STOP LOSS" value={stopLoss || '—'} color="text-rose-500" icon={ShieldCheck} />
                                 <DataTile label="TAKE PROFIT" value={takeProfit || '—'} color="text-emerald-500" icon={Target} />
                                 <DataTile label="QUANTITY" value={activeTrade.positionSize || 1} icon={Layers} />
-                                <DataTile label="DURATION" value={holdTime} icon={Timer} />
+                                <DataTile label="DURATION" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') || timeRange.includes('00:00 - 00:00') ? undefined : timeRange} icon={Timer} />
                                 <DataTile label="RISK AMOUNT" value={formatValue(riskAmount, 'usd')} color="text-slate-400" />
                                 <DataTile label="RR RATIO" value={`${isFinite(realRRR) ? realRRR.toFixed(2) : '0.00'} R`} color={realRRR >= 1 ? 'text-emerald-500' : 'text-slate-400'} />
                             </div>

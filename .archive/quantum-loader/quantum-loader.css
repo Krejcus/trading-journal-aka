@@ -1,0 +1,71 @@
+/* ===== QUANTUM PULSE LOADER CSS ===== */
+/* Required for QuantumLoader animated text and progress bar */
+
+@keyframes generating-loader-letter-anim {
+    0% {
+        opacity: 0;
+        transform: translateY(20px) rotateX(-90deg);
+        text-shadow: 0 0 0px rgba(255, 255, 255, 0);
+    }
+
+    10% {
+        opacity: 1;
+        transform: translateY(0) rotateX(0deg);
+        text-shadow: 0 0 15px rgba(59, 130, 246, 0.8), 0 0 30px rgba(59, 130, 246, 0.4);
+    }
+
+    30% {
+        opacity: 1;
+        transform: translateY(0) rotateX(0deg);
+        text-shadow: 0 0 15px rgba(59, 130, 246, 0.8), 0 0 30px rgba(59, 130, 246, 0.4);
+    }
+
+    50% {
+        opacity: 0;
+        transform: translateY(-20px) rotateX(90deg);
+        text-shadow: 0 0 0px rgba(255, 255, 255, 0);
+    }
+
+    100% {
+        opacity: 0;
+    }
+}
+
+@keyframes generating-loader-bar-anim {
+    0% {
+        left: -100%;
+    }
+
+    50% {
+        left: 100%;
+    }
+
+    100% {
+        left: -100%;
+    }
+}
+
+.generating-loader-letter {
+    display: inline-block;
+    animation: generating-loader-letter-anim 2.5s infinite;
+    perspective: 1000px;
+}
+
+.generating-loader-bar {
+    width: 200px;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    border-radius: 2px;
+    position: relative;
+}
+
+.generating-loader-bar::after {
+    content: "";
+    position: absolute;
+    width: 60%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, #3b82f6, #60a5fa, #3b82f6, transparent);
+    animation: generating-loader-bar-anim 2s infinite linear;
+    border-radius: 2px;
+}

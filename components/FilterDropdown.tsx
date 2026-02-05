@@ -475,7 +475,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
               <motion.div variants={itemVariants}>
                 <div className={sectionLabelClass}><Wallet size={10} /> Portfolia & Účty</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {accounts.map(acc => (
+                  {accounts.filter(a => a.status === 'Active').map(acc => (
                     <button key={acc.id} onClick={() => setFilters(f => ({ ...f, accounts: toggleItem(f.accounts, acc.id) }))} className={`w-full py-2.5 px-3 flex items-center justify-between rounded-xl ${getGlassBtnClass(filters.accounts.includes(acc.id))}`}>
                       <span className="truncate">{acc.name}</span>
                       {filters.accounts.includes(acc.id) && <Check size={12} />}

@@ -114,6 +114,8 @@ export const normalizeTrades = (raw: any[], accountId: string): Trade[] => {
       drawdown: t.drawdown,
       date: t.exitDateStr,
       timestamp: t.exitTime,
+      entryTime: t.entryTime,
+      entryDate: t.entryTime ? new Date(t.entryTime).toISOString() : undefined,
       durationMinutes: t.entryTime ? (t.exitTime - t.entryTime) / 60000 : 0,
       duration: t.entryTime ? `${Math.round((t.exitTime - t.entryTime) / 60000)}m` : '0m',
       direction: (t.direction as 'Long' | 'Short') || 'Long',

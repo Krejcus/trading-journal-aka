@@ -168,6 +168,8 @@ export interface Trade {
   timestamp: number;
   duration: string;
   durationMinutes: number;
+  entryTime?: number;
+  entryDate?: string;
   screenshot?: string;
   screenshots?: string[];
   notes?: string;
@@ -402,9 +404,12 @@ export interface BusinessPayout {
   id: string;
   date: string;
   amount: number;
+  grossAmount?: number;
+  profitSplitUsed?: number;
   accountId: string;
-  status: 'Pending' | 'Received';
+  status?: 'Pending' | 'Received';
   notes?: string;
+  image?: string;
 }
 
 export interface PlaybookItem {
@@ -429,6 +434,34 @@ export interface BusinessGoal {
   category: 'Financial' | 'Psychology' | 'Technical';
   logs?: { date: string; amount: number }[];
 }
+
+export interface ConstitutionRule {
+  id: string;
+  label: string;
+  description?: string;
+  type: 'daily_loss' | 'daily_trades' | 'weekly_loss' | 'absolute_dd' | 'custom' | 'habit';
+  value: number;
+  unit: '%' | 'trades' | 'fixed' | 'binary';
+  action: 'stop_trading' | 'warning' | 'reset' | 'coaching';
+  penaltyDays?: number;
+  isActive: boolean;
+}
+
+export interface CareerCheckpoint {
+  id: string;
+  label: string;
+  dayTarget: number;
+  description: string;
+  criteria: {
+    label: string;
+    metric: 'dd' | 'risk_adherence' | 'psych_score' | 'pnl';
+    condition: '<' | '>' | '==';
+    targetValue: number;
+  }[];
+  rules: ConstitutionRule[];
+  status: 'locked' | 'active' | 'completed';
+}
+
 
 export interface BusinessResource {
   id: string;
@@ -491,6 +524,8 @@ export interface UserPreferences {
   businessGoals?: BusinessGoal[];
   businessResources?: BusinessResource[];
   businessSettings?: BusinessSettings;
+  constitutionRules?: ConstitutionRule[];
+  careerRoadmap?: CareerCheckpoint[];
   theme?: 'dark' | 'light' | 'oled';
   accentColor?: AccentColor;
   systemSettings?: SystemSettings;

@@ -34,6 +34,7 @@ export const translations = {
         operating_expenses: "Provozní náklady",
         payout_history: "Historie výplat",
         add_expense: "Přidat náklad",
+        add_payout: "Přidat výplatu",
         monthly_burn: "Měsíční burn",
         yearly_projection: "Roční projekce",
 
@@ -95,6 +96,7 @@ export const translations = {
         operating_expenses: "Operating Expenses",
         payout_history: "Payout History",
         add_expense: "Add Expense",
+        add_payout: "Add Payout",
         monthly_burn: "Monthly Burn",
         yearly_projection: "Yearly Projection",
 

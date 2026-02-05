@@ -59,7 +59,15 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
   const formatTradeDate = (dateStr: string) => {
     const d = new Date(dateStr);
-    return isNaN(d.getTime()) ? dateStr : d.toLocaleString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    if (isNaN(d.getTime())) return { date: dateStr, time: '' };
+
+    const date = d.toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const time = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+
+    // If time is exactly 01:00 (CET) or 00:00 (UTC), it's likely a date-only timestamp
+    const isPlaceholderTime = time === '01:00' || time === '00:00';
+
+    return { date, time, isPlaceholderTime };
   };
 
   const getAccountName = (id: string) => accounts.find(a => a.id === id)?.name || 'Neznámý účet';
@@ -133,7 +141,22 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         }`}>
                         {isMissed ? 'MISSED' : trade.direction}
                       </span>
-                      <span className="text-[9px] font-mono font-bold text-slate-500">{formatTradeDate(trade.date)}</span>
+                      <div className="flex items-center gap-1.5 bg-slate-500/5 px-2 py-0.5 rounded border border-white/5">
+                        <Calendar size={8} className="text-slate-500" />
+                        <span className="text-[9px] font-mono font-bold text-slate-500">{formatTradeDate(trade.date).date}</span>
+                      </div>
+                      {!formatTradeDate(trade.date).isPlaceholderTime && (
+                        <div className="flex items-center gap-1.5 bg-blue-500/5 px-2 py-0.5 rounded border border-blue-500/10">
+                          <Clock size={8} className="text-blue-500/60" />
+                          <span className="text-[9px] font-mono font-bold text-blue-500/60">{formatTradeDate(trade.date).time}</span>
+                        </div>
+                      )}
+                      {(trade.durationMinutes && trade.durationMinutes > 0) && (
+                        <div className="flex items-center gap-1.5 bg-indigo-500/5 px-2 py-0.5 rounded border border-indigo-500/10">
+                          <Timer size={8} className="text-indigo-500/60" />
+                          <span className="text-[9px] font-mono font-bold text-indigo-500/60">{trade.duration || (Math.round(trade.durationMinutes) + 'm')}</span>
+                        </div>
+                      )}
                       {/* Master/Copy Indicators */}
                       {trade.isMaster && (
                         <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 rounded text-[7px] font-black tracking-widest border border-blue-500/30 flex items-center gap-1">
@@ -272,7 +295,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         </span>
                       </td>
                       <td className="px-6 py-3">
-                        <span className="text-[10px] font-mono text-slate-500">{formatTradeDate(trade.date)}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-slate-400">{formatTradeDate(trade.date).date}</span>
+                          {!formatTradeDate(trade.date).isPlaceholderTime && (
+                            <span className="text-[10px] font-mono text-blue-500/60">{formatTradeDate(trade.date).time}</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-3">
                         <div className="flex items-center gap-2">
