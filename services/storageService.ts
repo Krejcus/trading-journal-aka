@@ -912,13 +912,121 @@ export const storageService = {
 
   // Business Hub
   async getBusinessExpenses(): Promise<BusinessExpense[]> {
-    const prefs = await this.getPreferences();
-    return prefs?.businessExpenses || [];
+    const userId = await getUserId();
+    if (!userId) return [];
+
+    const { data, error } = await supabase
+      .from('business_expenses')
+      .select('*')
+      .eq('user_id', userId)
+      .order('date', { ascending: false });
+
+    if (error) {
+      console.error('[Storage] Error fetching expenses:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async saveBusinessExpense(expense: Omit<BusinessExpense, 'id' | 'created_at' | 'updated_at'>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
+    const { error } = await supabase
+      .from('business_expenses')
+      .insert({
+        ...expense,
+        user_id: userId
+      });
+
+    if (error) {
+      console.error('[Storage] Failed to save expense:', error);
+      throw new Error('Failed to save expense');
+    }
+  },
+
+  async updateBusinessExpense(id: string, updates: Partial<BusinessExpense>): Promise<void> {
+    const { error } = await supabase
+      .from('business_expenses')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      console.error('[Storage] Failed to update expense:', error);
+      throw new Error('Failed to update expense');
+    }
+  },
+
+  async deleteBusinessExpense(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('business_expenses')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('[Storage] Failed to delete expense:', error);
+      throw new Error('Failed to delete expense');
+    }
   },
 
   async getBusinessPayouts(): Promise<BusinessPayout[]> {
-    const prefs = await this.getPreferences();
-    return prefs?.businessPayouts || [];
+    const userId = await getUserId();
+    if (!userId) return [];
+
+    const { data, error } = await supabase
+      .from('business_payouts')
+      .select('*')
+      .eq('user_id', userId)
+      .order('date', { ascending: false });
+
+    if (error) {
+      console.error('[Storage] Error fetching payouts:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async saveBusinessPayout(payout: Omit<BusinessPayout, 'id' | 'created_at' | 'updated_at'>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
+    const { error } = await supabase
+      .from('business_payouts')
+      .insert({
+        ...payout,
+        user_id: userId
+      });
+
+    if (error) {
+      console.error('[Storage] Failed to save payout:', error);
+      throw new Error('Failed to save payout');
+    }
+  },
+
+  async updateBusinessPayout(id: string, updates: Partial<BusinessPayout>): Promise<void> {
+    const { error } = await supabase
+      .from('business_payouts')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      console.error('[Storage] Failed to update payout:', error);
+      throw new Error('Failed to update payout');
+    }
+  },
+
+  async deleteBusinessPayout(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('business_payouts')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('[Storage] Failed to delete payout:', error);
+      throw new Error('Failed to delete payout');
+    }
   },
 
   async getPlaybookItems(): Promise<PlaybookItem[]> {
@@ -927,13 +1035,121 @@ export const storageService = {
   },
 
   async getBusinessGoals(): Promise<BusinessGoal[]> {
-    const prefs = await this.getPreferences();
-    return prefs?.businessGoals || [];
+    const userId = await getUserId();
+    if (!userId) return [];
+
+    const { data, error } = await supabase
+      .from('business_goals')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[Storage] Error fetching goals:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async saveBusinessGoal(goal: Omit<BusinessGoal, 'id' | 'created_at' | 'updated_at'>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
+    const { error } = await supabase
+      .from('business_goals')
+      .insert({
+        ...goal,
+        user_id: userId
+      });
+
+    if (error) {
+      console.error('[Storage] Failed to save goal:', error);
+      throw new Error('Failed to save goal');
+    }
+  },
+
+  async updateBusinessGoal(id: string, updates: Partial<BusinessGoal>): Promise<void> {
+    const { error } = await supabase
+      .from('business_goals')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      console.error('[Storage] Failed to update goal:', error);
+      throw new Error('Failed to update goal');
+    }
+  },
+
+  async deleteBusinessGoal(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('business_goals')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('[Storage] Failed to delete goal:', error);
+      throw new Error('Failed to delete goal');
+    }
   },
 
   async getBusinessResources(): Promise<BusinessResource[]> {
-    const prefs = await this.getPreferences();
-    return prefs?.businessResources || [];
+    const userId = await getUserId();
+    if (!userId) return [];
+
+    const { data, error } = await supabase
+      .from('business_resources')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[Storage] Error fetching resources:', error);
+      return [];
+    }
+
+    return data || [];
+  },
+
+  async saveBusinessResource(resource: Omit<BusinessResource, 'id' | 'created_at' | 'updated_at'>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
+    const { error } = await supabase
+      .from('business_resources')
+      .insert({
+        ...resource,
+        user_id: userId
+      });
+
+    if (error) {
+      console.error('[Storage] Failed to save resource:', error);
+      throw new Error('Failed to save resource');
+    }
+  },
+
+  async updateBusinessResource(id: string, updates: Partial<BusinessResource>): Promise<void> {
+    const { error } = await supabase
+      .from('business_resources')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      console.error('[Storage] Failed to update resource:', error);
+      throw new Error('Failed to update resource');
+    }
+  },
+
+  async deleteBusinessResource(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('business_resources')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('[Storage] Failed to delete resource:', error);
+      throw new Error('Failed to delete resource');
+    }
   },
 
   async getBusinessSettings(): Promise<BusinessSettings> {

@@ -393,23 +393,25 @@ export interface MonthlyReview {
 
 export interface BusinessExpense {
   id: string;
+  user_id: string;
   date: string;
-  label: string;
+  description?: string;
   amount: number;
-  category: 'Subscription' | 'Data' | 'Software' | 'Education' | 'Hardware' | 'Office' | 'Challenges' | 'Other';
-  recurring?: 'monthly' | 'yearly';
+  category: string;
+  receipt_url?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface BusinessPayout {
   id: string;
+  user_id: string;
   date: string;
   amount: number;
-  grossAmount?: number;
-  profitSplitUsed?: number;
-  accountId: string;
-  status?: 'Pending' | 'Received';
-  notes?: string;
-  image?: string;
+  description?: string;
+  payout_method?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface PlaybookItem {
@@ -425,14 +427,14 @@ export interface PlaybookItem {
 
 export interface BusinessGoal {
   id: string;
-  type: 'Monthly' | 'Yearly' | 'Count' | 'Other';
-  metric: 'PnL' | 'Discipline' | 'Education' | 'Other';
-  label: string;
-  target: number;
-  current: number;
-  deadline: string;
-  category: 'Financial' | 'Psychology' | 'Technical';
-  logs?: { date: string; amount: number }[];
+  user_id: string;
+  title: string;
+  description?: string;
+  target_amount?: number;
+  deadline?: string;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface ConstitutionRule {
@@ -465,9 +467,13 @@ export interface CareerCheckpoint {
 
 export interface BusinessResource {
   id: string;
-  label: string;
-  category: 'Knowledge' | 'Strategy' | 'Mindset' | 'Tools';
-  url: string;
+  user_id: string;
+  title: string;
+  url?: string;
+  description?: string;
+  category?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface BusinessSettings {

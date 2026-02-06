@@ -154,21 +154,11 @@ const App: React.FC = () => {
 
   useEffect(() => {
     console.log("[Auth] Starting initialization...");
-    const start = Date.now();
-
-    // Top-level safety timeout to always clear loading screen
-    const safetyTimer = setTimeout(() => {
-      if (loading) {
-        console.warn(`[Auth] Safety timeout reached after ${Date.now() - start}ms. Force clearing loading state.`);
-        setLoading(false);
-        setShowRetry(true);
-      }
-    }, 10000); // 10s is safer for Vercel cold starts
 
     setInitStatus("Kontrola přihlášení...");
     console.log("[Auth] Calling getSession()...");
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
-      console.log(`[Auth] getSession result: ${activeSession ? 'Logged in' : 'No session'} (${Date.now() - start}ms)`);
+      console.log(`[Auth] getSession result: ${activeSession ? 'Logged in' : 'No session'}`);
       if (activeSession) {
         setSession(activeSession);
         setInitStatus("Načítám data...");
@@ -181,11 +171,18 @@ const App: React.FC = () => {
       setAppError("Nepodařilo se ověřit přihlášení. Zkus obnovit stránku.");
     });
 
-    console.log("[Auth] Setting up onAuthStateChange...");
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, activeSession) => {
-      console.log(`[Auth] Auth state change: ${event}, Session: ${activeSession ? 'Yes' : 'No'} (${Date.now() - start}ms)`);
+      console.log(`[Auth] Auth state change: ${event}, Session: ${activeSession ? 'Yes' : 'No'}`);
+
       if (activeSession) {
-        setSession(activeSession);
+        // Only trigger session update if it's actually different to avoid loops
+        setSession(prev => {
+          if (prev?.user?.id === activeSession.user.id && prev?.access_token === activeSession.access_token) {
+            return prev;
+          }
+          return activeSession;
+        });
+
         if (!isInitialLoadDone) setInitStatus("Přihlašuji...");
       }
 
@@ -222,13 +219,13 @@ const App: React.FC = () => {
     return () => {
       console.log("[Auth] Cleaning up subscription");
       subscription.unsubscribe();
-      clearTimeout(safetyTimer);
     };
   }, []);
 
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
   const isPreferencesDirty = useRef(false);
   const isJournalDirty = useRef(false);
+  const isFetchingRef = useRef(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -672,14 +669,42 @@ const App: React.FC = () => {
     if (!session) return;
 
     const load = async () => {
+      if (isFetchingRef.current) return;
+
       // Avoid redundant loads if the session is the same
-      if (session?.user?.id === lastLoadedSessionId.current && isInitialLoadDone) return;
+      if (session?.user?.id === lastLoadedSessionId.current && isInitialLoadDone) {
+        setLoading(false);
+        return;
+      }
+
+      isFetchingRef.current = true;
       lastLoadedSessionId.current = session?.user?.id || null;
+
+      // Safety timeout in case everything hangs
+      const safetyTimer = setTimeout(() => {
+        if (loading && !isInitialLoadDone) {
+          console.warn("[Load] Safety timeout reached. Forcing dashboard display.");
+          setLoading(false);
+          setIsInitialLoadDone(true);
+          isFetchingRef.current = false;
+        }
+      }, 15000);
 
       const lastUserId = localStorage.getItem('alphatrade_last_session_user');
       if (lastUserId && lastUserId !== session.user.id) {
-        console.warn("User mismatch detected. Purging local storage for safety.");
-        localStorage.clear();
+        console.warn(`[Safety] User switched: ${lastUserId.slice(0, 8)}... → ${session.user.id.slice(0, 8)}...`);
+
+        // SAFE: Only remove data from the PREVIOUS user
+        const keysToRemove = Object.keys(localStorage).filter(k =>
+          k.startsWith('alphatrade_') && k.includes(lastUserId)
+        );
+
+        keysToRemove.forEach(k => {
+          localStorage.removeItem(k);
+          console.log(`[Safety] Removed old user data: ${k}`);
+        });
+
+        console.log(`[Safety] Cleaned ${keysToRemove.length} old user keys (selective cleanup)`);
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
@@ -693,52 +718,30 @@ const App: React.FC = () => {
       );
       keysToRemove.forEach(k => localStorage.removeItem(k));
 
-      // VERSION-BASED CACHE CLEARING: Clear IndexedDB cache on major architecture change
-      const CURRENT_VERSION = '2.0.0-supabase-first';
-      const lastVersion = localStorage.getItem('alphatrade_app_version');
-      if (lastVersion !== CURRENT_VERSION) {
-        console.log(`[Migration] Version change detected (${lastVersion} → ${CURRENT_VERSION}). Clearing cache...`);
-        try {
-          await indexedDB.deleteDatabase('keyval-store');
-          console.log('[Migration] IndexedDB cache cleared successfully');
-        } catch (err) {
-          console.warn('[Migration] Failed to clear IndexedDB:', err);
-        }
-        localStorage.setItem('alphatrade_app_version', CURRENT_VERSION);
-      }
 
-      // --- SIMPLIFIED LOADING: Server-First for 100% Consistency ---
-      console.log("[Load] Starting Supabase-first data load...");
-
-      // OPTIONAL: Show cached data immediately as placeholder while loading fresh data
-      const [cachedTrades, cachedAccounts] = await Promise.all([
-        storageService.getTradesCheckCacheFirst(),
-        storageService.getCachedAccounts()
-      ]);
-
-      if (cachedTrades.length > 0 || cachedAccounts.length > 0) {
-        console.log("[Load] Showing cached data as placeholder...");
-        if (cachedTrades.length > 0) setTrades(cachedTrades);
-        if (cachedAccounts.length > 0) setAccounts(cachedAccounts);
-      }
-
-      // ALWAYS fetch fresh data from server (single source of truth)
-      setInitStatus("Načítám aktuální data...");
+      // --- SIMPLE RELIABLE LOADING: Server-First ---
+      console.log("[Load] Starting simple server data load...");
+      setInitStatus("Načítám data...");
 
       try {
-        const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-          storageService.getTrades(), // ALWAYS fresh from Supabase
+        // SIMPLE: Just fetch everything from server
+        const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus, dbExpenses, dbPayouts, dbGoals, dbResources] = await Promise.all([
+          storageService.getTrades(),
           storageService.getAccounts(),
           storageService.getDailyPreps(),
           storageService.getDailyReviews(),
           storageService.getPreferences(),
           storageService.getUser(),
-          storageService.getWeeklyFocusList()
+          storageService.getWeeklyFocusList(),
+          storageService.getBusinessExpenses(),
+          storageService.getBusinessPayouts(),
+          storageService.getBusinessGoals(),
+          storageService.getBusinessResources()
         ]);
 
-        console.log("[Load] Fresh data received from server.");
+        console.log(`[Load] Success! Loaded ${dbTrades?.length || 0} trades, ${dbAccounts?.length || 0} accounts, ${dbExpenses?.length || 0} expenses`);
 
-        // Update all state with FRESH data
+        // Update state with fresh data
         setTrades(dbTrades || []);
 
         if (dbAccounts && dbAccounts.length > 0) {
@@ -755,6 +758,10 @@ const App: React.FC = () => {
         setDailyPreps(dbPreps || []);
         setDailyReviews(dbReviews || []);
         setWeeklyFocusList(dbWeeklyFocus || []);
+        setBusinessExpenses(dbExpenses || []);
+        setBusinessPayouts(dbPayouts || []);
+        setBusinessGoals(dbGoals || []);
+        setBusinessResources(dbResources || []);
 
         setSyncError(null);
         setLoading(false);
@@ -762,11 +769,12 @@ const App: React.FC = () => {
 
       } catch (error: any) {
         console.error("[Load] Server fetch error:", error);
-        setAppError(error.message || "Nepodařilo se načíst data ze serveru.");
-
-        // If server fails, keep cached data visible
+        setAppError(error.message || "Nepodařilo se načíst data ze serveru");
         setLoading(false);
         setIsInitialLoadDone(true);
+      } finally {
+        isFetchingRef.current = false;
+        clearTimeout(safetyTimer);
       }
     };
 
@@ -786,11 +794,12 @@ const App: React.FC = () => {
     }
   }, [sharedTrade, session]);
 
-  // START REALTIME SYNC
+  // START REALTIME SYNC - Non-blocking, starts immediately after login
   useEffect(() => {
-    if (!session || !isInitialLoadDone) return;
+    if (!session) return;
 
     console.log("[Realtime] Setting up trades subscription...");
+
     const tradesChannel = supabase
       .channel('public:trades')
       .on(
@@ -838,13 +847,18 @@ const App: React.FC = () => {
       )
       .subscribe((status) => {
         console.log("[Realtime] Subscription status:", status);
+
+        // Don't block app if WebSocket fails - REST API will work fine
+        if (status === 'CHANNEL_ERROR') {
+          console.warn('[Realtime] WebSocket connection failed. Falling back to REST API only.');
+        }
       });
 
     return () => {
       console.log("[Realtime] Cleaning up trades subscription");
       supabase.removeChannel(tradesChannel);
     };
-  }, [session, isInitialLoadDone]);
+  }, [session]); // Removed isInitialLoadDone dependency
 
   // Cross-tab synchronization for preferences
   // When user edits business data in Tab A, Tab B will auto-sync
@@ -882,16 +896,19 @@ const App: React.FC = () => {
   }, [session, applyPreferences]);
 
   // --- SMART PREFETCHING ---
-  // Start downloading secondary modules in background after initial load is interactive
+  // Preload critical secondary modules immediately after dashboard loads
   useEffect(() => {
     if (isInitialLoadDone) {
+      // DailyJournal is frequently accessed - preload immediately
+      console.log("[Prefetch] Preloading DailyJournal for instant access...");
+      import('./components/DailyJournal');
+
+      // Less critical modules - prefetch after small delay
       const prefetchTimer = setTimeout(() => {
-        console.log("[Prefetch] Starting background module download...");
-        // Trigger lazy loads without rendering them
-        import('./components/DailyJournal');
+        console.log("[Prefetch] Prefetching secondary modules...");
         import('./components/Settings');
         import('./components/BusinessHub');
-      }, 3000); // 3s buffer to ensure dashboard is fully settled
+      }, 2000);
       return () => clearTimeout(prefetchTimer);
     }
   }, [isInitialLoadDone]);
