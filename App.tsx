@@ -721,18 +721,29 @@ const App: React.FC = () => {
       try {
         // OPTIMIZED: Fetch critical data first, Business Hub data is loaded lazily
         // This reduces initial load from 11 to 7 API calls (saves ~3-4 seconds)
+
+        // ⏱️ PERFORMANCE MEASUREMENT - Individual API calls
+        console.time('[Perf] TOTAL LOAD');
+
+        const timedFetch = async <T,>(name: string, fn: () => Promise<T>): Promise<T> => {
+          console.time(`[Perf] ${name}`);
+          const result = await fn();
+          console.timeEnd(`[Perf] ${name}`);
+          return result;
+        };
+
         const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus, dbPayouts] = await Promise.all([
-          storageService.getTrades(),
-          storageService.getAccounts(),
-          storageService.getDailyPreps(),
-          storageService.getDailyReviews(),
-          storageService.getPreferences(),
-          storageService.getUser(),
-          storageService.getWeeklyFocusList(),
-          storageService.getBusinessPayouts() // Keep payouts - needed for Dashboard
-          // businessExpenses, businessGoals, businessResources are loaded lazily in BusinessHub
+          timedFetch('trades', () => storageService.getTrades()),
+          timedFetch('accounts', () => storageService.getAccounts()),
+          timedFetch('dailyPreps', () => storageService.getDailyPreps()),
+          timedFetch('dailyReviews', () => storageService.getDailyReviews()),
+          timedFetch('preferences', () => storageService.getPreferences()),
+          timedFetch('user', () => storageService.getUser()),
+          timedFetch('weeklyFocus', () => storageService.getWeeklyFocusList()),
+          timedFetch('payouts', () => storageService.getBusinessPayouts())
         ]);
 
+        console.timeEnd('[Perf] TOTAL LOAD');
         console.log(`[Load] Success! Loaded ${dbTrades?.length || 0} trades, ${dbAccounts?.length || 0} accounts, ${dbPayouts?.length || 0} payouts`);
 
         // Update state with fresh data
