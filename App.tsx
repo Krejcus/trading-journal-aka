@@ -797,71 +797,78 @@ const App: React.FC = () => {
     }
   }, [sharedTrade, session]);
 
-  // START REALTIME SYNC - Non-blocking, starts immediately after login
+  // Realtime channel ref for cleanup
+  const realtimeChannelRef = useRef<any>(null);
+
+  // START REALTIME SYNC - Delayed until after initial load to prevent WebSocket blocking REST API
   useEffect(() => {
-    if (!session) return;
+    if (!session || !isInitialLoadDone) return;
 
-    console.log("[Realtime] Setting up trades subscription...");
+    // Delay Realtime subscription to avoid WebSocket connection attempts blocking initial REST calls
+    const realtimeTimer = setTimeout(() => {
+      console.log("[Realtime] Setting up trades subscription (delayed start)...");
 
-    const tradesChannel = supabase
-      .channel('public:trades')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'trades',
-          filter: `user_id=eq.${session.user.id}`
-        },
-        async (payload) => {
-          console.log("[Realtime] Trade change detected:", payload.eventType);
+      const tradesChannel = supabase
+        .channel('public:trades')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'trades',
+            filter: `user_id=eq.${session.user.id}`
+          },
+          async (payload) => {
+            console.log("[Realtime] Trade change detected:", payload.eventType);
 
-          if (payload.eventType === 'INSERT') {
-            const raw = payload.new;
-            // Use storageService to get formatted trade (handles JSON mapping)
-            const fullTrade = await storageService.getTradeById(raw.id);
-            if (fullTrade) {
-              setTrades(prev => {
-                // Avoid duplicates if insert was also triggered locally
-                if (prev.some(t => t.id === fullTrade.id)) return prev;
-                const newTrades = [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
-                return newTrades;
-              });
+            if (payload.eventType === 'INSERT') {
+              const raw = payload.new;
+              const fullTrade = await storageService.getTradeById(raw.id);
+              if (fullTrade) {
+                setTrades(prev => {
+                  if (prev.some(t => t.id === fullTrade.id)) return prev;
+                  const newTrades = [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
+                  return newTrades;
+                });
 
-              // CRITICAL FIX: Also update IndexedDB cache so data persists across reloads
-              try {
-                const { addTradeToCache } = await import('./services/cacheHelper');
-                await addTradeToCache(fullTrade);
-                console.log('[Realtime] Trade added to cache for persistence');
-              } catch (err) {
-                console.error('[Realtime] Failed to update cache:', err);
+                try {
+                  const { addTradeToCache } = await import('./services/cacheHelper');
+                  await addTradeToCache(fullTrade);
+                  console.log('[Realtime] Trade added to cache for persistence');
+                } catch (err) {
+                  console.error('[Realtime] Failed to update cache:', err);
+                }
               }
+            } else if (payload.eventType === 'UPDATE') {
+              const raw = payload.new;
+              const fullTrade = await storageService.getTradeById(raw.id);
+              if (fullTrade) {
+                setTrades(prev => prev.map(t => t.id === fullTrade.id ? fullTrade : t));
+              }
+            } else if (payload.eventType === 'DELETE') {
+              setTrades(prev => prev.filter(t => t.id !== payload.old.id));
             }
-          } else if (payload.eventType === 'UPDATE') {
-            const raw = payload.new;
-            const fullTrade = await storageService.getTradeById(raw.id);
-            if (fullTrade) {
-              setTrades(prev => prev.map(t => t.id === fullTrade.id ? fullTrade : t));
-            }
-          } else if (payload.eventType === 'DELETE') {
-            setTrades(prev => prev.filter(t => t.id !== payload.old.id));
           }
-        }
-      )
-      .subscribe((status) => {
-        console.log("[Realtime] Subscription status:", status);
+        )
+        .subscribe((status) => {
+          console.log("[Realtime] Subscription status:", status);
+          if (status === 'CHANNEL_ERROR') {
+            console.warn('[Realtime] WebSocket connection failed. Falling back to REST API only.');
+          }
+        });
 
-        // Don't block app if WebSocket fails - REST API will work fine
-        if (status === 'CHANNEL_ERROR') {
-          console.warn('[Realtime] WebSocket connection failed. Falling back to REST API only.');
-        }
-      });
+      realtimeChannelRef.current = tradesChannel;
+    }, 1000); // 1 second delay after initial load
 
     return () => {
-      console.log("[Realtime] Cleaning up trades subscription");
-      supabase.removeChannel(tradesChannel);
+      clearTimeout(realtimeTimer);
+      if (realtimeChannelRef.current) {
+        console.log("[Realtime] Cleaning up trades subscription");
+        supabase.removeChannel(realtimeChannelRef.current);
+        realtimeChannelRef.current = null;
+      }
     };
-  }, [session]); // Removed isInitialLoadDone dependency
+  }, [session, isInitialLoadDone]);
 
   // Cross-tab synchronization for preferences
   // When user edits business data in Tab A, Tab B will auto-sync
