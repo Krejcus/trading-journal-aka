@@ -188,6 +188,7 @@ export const storageService = {
         emotions:data->emotions,
         planAdherence:data->>planAdherence,
         executionStatus:data->>executionStatus,
+        screenshot:data->>screenshot,
         miniViewRange:data->>miniViewRange,
         miniViewLayout:data->>miniViewLayout,
         miniViewSecondaryRange:data->>miniViewSecondaryRange,
@@ -243,8 +244,9 @@ export const storageService = {
       emotions: t.emotions,
       planAdherence: t.planAdherence,
       executionStatus: t.executionStatus,
+      screenshot: t.screenshot,
       // Screenshots loaded on-demand via getTradeById() to speed up initial load
-      screenshot: undefined,
+      // But we now fetch the primary 'screenshot' for better initial UX
       screenshots: undefined,
       miniViewRange: t.miniViewRange,
       miniViewLayout: t.miniViewLayout,
@@ -414,9 +416,46 @@ export const storageService = {
       dbAccounts = [newAcc];
     }
 
+    // CRITICAL SAFEGUARD: Preserve existing screenshots for trades loaded without them.
+    // getTrades() strips screenshot/screenshots for performance (they're huge base64 blobs).
+    // Without this safeguard, re-saving would overwrite the data JSONB and destroy screenshots.
+    const existingIdsWithoutScreenshots = trades
+      .filter(t => isUUID(t.id as string) && t.screenshot === undefined)
+      .map(t => String(t.id));
+
+    const screenshotMap = new Map<string, { screenshot?: string; screenshots?: string[] }>();
+
+    if (existingIdsWithoutScreenshots.length > 0) {
+      try {
+        const { data: screenshotRows } = await supabase
+          .from('trades')
+          .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
+          .in('id', existingIdsWithoutScreenshots)
+          .eq('user_id', userId);
+
+        screenshotRows?.forEach((row: any) => {
+          if (row.screenshot || (row.screenshots && row.screenshots.length > 0)) {
+            screenshotMap.set(row.id, {
+              screenshot: row.screenshot || undefined,
+              screenshots: row.screenshots || undefined
+            });
+          }
+        });
+      } catch (err) {
+        console.error('[saveTrades] Failed to fetch existing screenshots:', err);
+      }
+    }
+
     const tradesToUpsert = trades.map(t => {
       const realAccId = isUUID(t.accountId) ? t.accountId : (dbAccounts?.[0]?.id);
       if (!realAccId) return null;
+
+      const dataBlob: any = { ...t, accountId: realAccId, drawings: t.drawings || [] };
+
+      // Merge preserved screenshots back into the data blob
+      const preserved = screenshotMap.get(String(t.id));
+      if (preserved?.screenshot && !dataBlob.screenshot) dataBlob.screenshot = preserved.screenshot;
+      if (preserved?.screenshots && (!dataBlob.screenshots || dataBlob.screenshots.length === 0)) dataBlob.screenshots = preserved.screenshots;
 
       const obj: any = {
         user_id: userId,
@@ -428,7 +467,7 @@ export const storageService = {
         date: t.date || new Date().toISOString(),
         timestamp: t.timestamp || Date.now(),
         drawings: t.drawings || [],
-        data: { ...t, accountId: realAccId, drawings: t.drawings || [] }
+        data: dataBlob
       };
 
       if (isUUID(t.id)) {
@@ -535,7 +574,7 @@ export const storageService = {
 
     const { data, error } = await supabase
       .from('trades')
-      .select('id, data->screenshot, data->screenshots')
+      .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
       .in('id', tradeIds)
       .eq('user_id', userId);
 

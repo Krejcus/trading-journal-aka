@@ -53,6 +53,15 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // --- LAZY SCREENSHOT CACHE ---
   const [screenshotCache, setScreenshotCache] = useState<Map<string, { screenshot?: string; screenshots?: string[] }>>(new Map());
   const loadingScreenshotsRef = useRef<Set<string>>(new Set());
+  const [loadedImages, setLoadedImages] = useState<Set<string>>(new Set());
+
+  const handleImageLoad = (id: string) => {
+    setLoadedImages(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
 
   // Sync selectedTrade when trades prop changes (e.g., after drawing update)
   useEffect(() => {
@@ -219,6 +228,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
             const tradeScreenshot = getScreenshot(trade);
             const tradeScreenshots = getScreenshots(trade);
+            const isImageLoaded = loadedImages.has(String(trade.id));
 
             return (
               <div
@@ -314,13 +324,24 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   </div>
                 </div>
 
-                <div className={`relative transition-all duration-700 overflow-hidden ${tradeScreenshot ? 'h-48 md:h-full w-full md:w-[42%]' : 'hidden'}`}>
-                  {tradeScreenshot && (
+                <div className={`relative transition-all duration-700 overflow-hidden ${tradeScreenshot || !tradeScreenshot ? 'h-48 md:h-full w-full md:w-[42%] block' : 'hidden'}`}>
+                  {tradeScreenshot ? (
                     <div
-                      className="w-full h-full relative group/img animate-in fade-in duration-500"
+                      className="w-full h-full relative group/img"
                       onClick={(e) => { e.stopPropagation(); setZoomImage(tradeScreenshot); }}
                     >
-                      <img src={tradeScreenshot} className="w-full h-full object-cover transition-transform duration-1000 group-hover/img:scale-105" />
+                      {!isImageLoaded && (
+                        <div className={`absolute inset-0 animate-pulse bg-slate-800/20 backdrop-blur-sm flex items-center justify-center z-10`}>
+                          <ImageIcon size={24} className="text-slate-700/50" />
+                        </div>
+                      )}
+
+                      <img
+                        src={tradeScreenshot}
+                        onLoad={() => handleImageLoad(String(trade.id))}
+                        className={`w-full h-full object-cover transition-all duration-1000 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}
+                      />
+
                       <div className={`absolute inset-0 bg-gradient-to-r ${theme !== 'light' ? 'from-[var(--bg-card)] via-transparent' : 'from-white via-transparent'} to-transparent md:block hidden z-20`}></div>
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition-all duration-500 backdrop-blur-[1px] z-30">
                         <div className="p-4 bg-white/10 rounded-full text-white shadow-2xl border border-white/20 animate-in zoom-in-95"><Maximize2 size={24} /></div>
@@ -331,14 +352,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         </div>
                       )}
                     </div>
+                  ) : (
+                    <div className={`w-full h-full flex items-center justify-center border-l bg-[var(--bg-page)]/10 group-hover:bg-blue-500/5 transition-colors duration-500 ${theme === 'light' ? 'border-slate-100' : 'border-[var(--border-subtle)]'}`}>
+                      <Cpu size={24} className="text-slate-800/40 group-hover:text-blue-500 transition-colors" />
+                    </div>
                   )}
                 </div>
 
-                {!tradeScreenshot && (
-                  <div className={`w-20 hidden md:flex items-center justify-center border-l bg-[var(--bg-page)]/10 group-hover:bg-blue-500/5 transition-colors duration-500 ${theme === 'light' ? 'border-slate-100' : 'border-[var(--border-subtle)]'}`}>
-                    <Cpu size={20} className="text-slate-800/40 group-hover:text-blue-500 transition-colors" />
-                  </div>
-                )}
               </div>
             );
           })}
@@ -373,9 +393,20 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       className={`group hover:bg-white/[0.03] transition-colors cursor-pointer border-b ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'}`}
                     >
                       <td className="px-6 py-3">
-                        <div className="w-12 h-12 rounded-lg border border-white/10 overflow-hidden bg-white/5 flex items-center justify-center">
+                        <div className="w-12 h-12 rounded-lg border border-white/10 overflow-hidden bg-white/5 flex items-center justify-center relative">
                           {tableScreenshot ? (
-                            <img src={tableScreenshot} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity animate-in fade-in duration-300" />
+                            <>
+                              {!loadedImages.has(String(trade.id)) && (
+                                <div className="absolute inset-0 animate-pulse bg-slate-800/20 flex items-center justify-center z-10">
+                                  <ImageIcon size={14} className="text-slate-700/50" />
+                                </div>
+                              )}
+                              <img
+                                src={tableScreenshot}
+                                onLoad={() => handleImageLoad(String(trade.id))}
+                                className={`w-full h-full object-cover group-hover:opacity-100 transition-all duration-700 animate-in fade-in ${loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'}`}
+                              />
+                            </>
                           ) : (
                             <Cpu size={16} className="text-slate-600" />
                           )}
