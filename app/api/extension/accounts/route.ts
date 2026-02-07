@@ -2,6 +2,28 @@ import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 
+// Allowed origins for Chrome Extension CORS
+const ALLOWED_ORIGINS = [
+    'chrome-extension://', // Chrome extensions
+    'https://alphatrade-mentor-15.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000',
+];
+
+function isAllowedOrigin(origin: string | null): boolean {
+    if (!origin) return false;
+    return ALLOWED_ORIGINS.some(allowed => origin.startsWith(allowed));
+}
+
+function setCorsHeaders(response: NextResponse, origin: string | null, methods: string) {
+    if (origin && isAllowedOrigin(origin)) {
+        response.headers.set('Access-Control-Allow-Origin', origin);
+        response.headers.set('Access-Control-Allow-Methods', methods);
+        response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        response.headers.set('Access-Control-Allow-Credentials', 'true');
+    }
+}
+
 export async function GET(request: Request) {
     try {
         const supabase = createRouteHandlerClient({ cookies });
@@ -24,16 +46,7 @@ export async function GET(request: Request) {
         }
 
         const response = NextResponse.json({ success: true, accounts });
-
-        // Add CORS headers for Chrome Extension
-        const origin = request.headers.get('origin');
-        if (origin) {
-            response.headers.set('Access-Control-Allow-Origin', origin);
-            response.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-            response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-            response.headers.set('Access-Control-Allow-Credentials', 'true');
-        }
-
+        setCorsHeaders(response, request.headers.get('origin'), 'GET, OPTIONS');
         return response;
 
     } catch (error: any) {
@@ -44,12 +57,6 @@ export async function GET(request: Request) {
 
 export async function OPTIONS(request: Request) {
     const response = NextResponse.json({}, { status: 200 });
-    const origin = request.headers.get('origin');
-    if (origin) {
-        response.headers.set('Access-Control-Allow-Origin', origin);
-        response.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-        response.headers.set('Access-Control-Allow-Credentials', 'true');
-    }
+    setCorsHeaders(response, request.headers.get('origin'), 'GET, OPTIONS');
     return response;
 }

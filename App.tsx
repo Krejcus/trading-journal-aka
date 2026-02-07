@@ -1275,14 +1275,18 @@ const App: React.FC = () => {
     try {
       console.log('[Refresh] Starting data refresh...');
 
-      const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
+      const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus, dbPayouts, dbExpenses, dbGoals, dbResources] = await Promise.all([
         storageService.getTrades(),
         storageService.getAccounts(),
         storageService.getDailyPreps(),
         storageService.getDailyReviews(),
         storageService.getPreferences(),
         storageService.getUser(),
-        storageService.getWeeklyFocusList()
+        storageService.getWeeklyFocusList(),
+        storageService.getBusinessPayouts(),
+        storageService.getBusinessExpenses(),
+        storageService.getBusinessGoals(),
+        storageService.getBusinessResources()
       ]);
 
       console.log('[Refresh] Data received, updating state...');
@@ -1301,6 +1305,12 @@ const App: React.FC = () => {
         setDailyReviews(dbReviews || []);
       }
       setWeeklyFocusList(dbWeeklyFocus || []);
+
+      // Refresh Business Hub data
+      setBusinessPayouts(dbPayouts || []);
+      setBusinessExpenses(dbExpenses || []);
+      setBusinessGoals(dbGoals || []);
+      setBusinessResources(dbResources || []);
 
       if (dbPrefs) applyPreferences(dbPrefs);
 
@@ -1421,6 +1431,17 @@ const App: React.FC = () => {
       }
     });
     setTrades(uniqueTrades);
+
+    // CRITICAL FIX: Save imported trades to Supabase (without this, they only exist in memory)
+    storageService.saveTrades(uniqueTrades).then(saved => {
+      if (saved && saved.length > 0) {
+        setTrades(saved);
+        console.log(`[FileUpload] Saved ${saved.length} trades to Supabase`);
+      }
+    }).catch(err => {
+      console.error("[FileUpload] Failed to save imported trades:", err);
+      setSyncError("Nepodařilo se uložit importované obchody do cloudu.");
+    });
   };
 
   const handleManualTrade = (tradeOrTrades: Trade | Trade[]) => {
@@ -1592,6 +1613,150 @@ const App: React.FC = () => {
       console.error("Failed to clear trades:", err);
     }
   };
+  // --- BUSINESS HUB PERSISTENCE HANDLERS ---
+  // These ensure business data is saved to dedicated Supabase tables (not just local state)
+  const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+  const handleUpdateExpenses = useCallback(async (newExpenses: BusinessExpense[]) => {
+    const prev = businessExpenses;
+    setBusinessExpenses(newExpenses);
+
+    try {
+      // Detect added items
+      const added = newExpenses.filter(ne => !prev.some(pe => pe.id === ne.id));
+      // Detect removed items
+      const removed = prev.filter(pe => !newExpenses.some(ne => ne.id === pe.id));
+      // Detect updated items (same ID, different data)
+      const updated = newExpenses.filter(ne => {
+        const old = prev.find(pe => pe.id === ne.id);
+        return old && JSON.stringify(old) !== JSON.stringify(ne);
+      });
+
+      for (const exp of added) {
+        await storageService.saveBusinessExpense(exp);
+      }
+      for (const exp of removed) {
+        if (isUUID(exp.id)) await storageService.deleteBusinessExpense(exp.id);
+      }
+      for (const exp of updated) {
+        if (isUUID(exp.id)) await storageService.updateBusinessExpense(exp.id, exp);
+      }
+
+      // Reload from DB to get proper UUIDs for newly added items
+      if (added.length > 0) {
+        const fresh = await storageService.getBusinessExpenses();
+        setBusinessExpenses(fresh);
+      }
+    } catch (err) {
+      console.error('[BusinessHub] Failed to sync expenses:', err);
+    }
+  }, [businessExpenses]);
+
+  const handleUpdatePayouts = useCallback(async (newPayouts: BusinessPayout[]) => {
+    const prev = businessPayouts;
+    setBusinessPayouts(newPayouts);
+
+    try {
+      const added = newPayouts.filter(np => !prev.some(pp => pp.id === np.id));
+      const removed = prev.filter(pp => !newPayouts.some(np => np.id === pp.id));
+      const updated = newPayouts.filter(np => {
+        const old = prev.find(pp => pp.id === np.id);
+        return old && JSON.stringify(old) !== JSON.stringify(np);
+      });
+
+      for (const p of added) {
+        await storageService.saveBusinessPayout(p);
+      }
+      for (const p of removed) {
+        if (isUUID(p.id)) await storageService.deleteBusinessPayout(p.id);
+      }
+      for (const p of updated) {
+        if (isUUID(p.id)) await storageService.updateBusinessPayout(p.id, p);
+      }
+
+      if (added.length > 0) {
+        const fresh = await storageService.getBusinessPayouts();
+        setBusinessPayouts(fresh);
+      }
+    } catch (err) {
+      console.error('[BusinessHub] Failed to sync payouts:', err);
+    }
+  }, [businessPayouts]);
+
+  const handleUpdateGoals = useCallback(async (newGoals: BusinessGoal[]) => {
+    const prev = businessGoals;
+    setBusinessGoals(newGoals);
+
+    try {
+      const added = newGoals.filter(ng => !prev.some(pg => pg.id === ng.id));
+      const removed = prev.filter(pg => !newGoals.some(ng => ng.id === pg.id));
+      const updated = newGoals.filter(ng => {
+        const old = prev.find(pg => pg.id === ng.id);
+        return old && JSON.stringify(old) !== JSON.stringify(ng);
+      });
+
+      for (const g of added) {
+        await storageService.saveBusinessGoal(g);
+      }
+      for (const g of removed) {
+        if (isUUID(g.id)) await storageService.deleteBusinessGoal(g.id);
+      }
+      for (const g of updated) {
+        if (isUUID(g.id)) await storageService.updateBusinessGoal(g.id, g);
+      }
+
+      if (added.length > 0) {
+        const fresh = await storageService.getBusinessGoals();
+        setBusinessGoals(fresh);
+      }
+    } catch (err) {
+      console.error('[BusinessHub] Failed to sync goals:', err);
+    }
+  }, [businessGoals]);
+
+  const handleUpdateResources = useCallback(async (newResources: BusinessResource[]) => {
+    const prev = businessResources;
+    setBusinessResources(newResources);
+
+    try {
+      const added = newResources.filter(nr => !prev.some(pr => pr.id === nr.id));
+      const removed = prev.filter(pr => !newResources.some(nr => nr.id === pr.id));
+      const updated = newResources.filter(nr => {
+        const old = prev.find(pr => pr.id === nr.id);
+        return old && JSON.stringify(old) !== JSON.stringify(nr);
+      });
+
+      for (const r of added) {
+        await storageService.saveBusinessResource(r);
+      }
+      for (const r of removed) {
+        if (isUUID(r.id)) await storageService.deleteBusinessResource(r.id);
+      }
+      for (const r of updated) {
+        if (isUUID(r.id)) await storageService.updateBusinessResource(r.id, r);
+      }
+
+      if (added.length > 0) {
+        const fresh = await storageService.getBusinessResources();
+        setBusinessResources(fresh);
+      }
+    } catch (err) {
+      console.error('[BusinessHub] Failed to sync resources:', err);
+    }
+  }, [businessResources]);
+
+  // Single expense add handler (used by AccountsManager)
+  const handleAddSingleExpense = useCallback(async (exp: BusinessExpense) => {
+    setBusinessExpenses(prev => [...prev, exp]);
+    try {
+      await storageService.saveBusinessExpense(exp);
+      const fresh = await storageService.getBusinessExpenses();
+      setBusinessExpenses(fresh);
+    } catch (err) {
+      console.error('[BusinessHub] Failed to save expense:', err);
+    }
+  }, []);
+
   // Show loader during initial auth check OR when logged in but data not yet loaded
   if ((loading || (session && !isInitialLoadDone)) && !sharedTrade) {
     return <QuantumLoader theme={theme} />;
@@ -1821,8 +1986,8 @@ const App: React.FC = () => {
                       theme={theme}
                       trades={trades}
                       onUpdateTrades={handleUpdateTrades}
-                      onAddExpense={(exp) => { setBusinessExpenses(prev => [...prev, exp]); isPreferencesDirty.current = true; }}
-                      onUpdatePayouts={(p) => { setBusinessPayouts(p); isPreferencesDirty.current = true; }}
+                      onAddExpense={handleAddSingleExpense}
+                      onUpdatePayouts={handleUpdatePayouts}
                       payouts={businessPayouts}
                       user={currentUser}
                     />
@@ -1874,11 +2039,11 @@ const App: React.FC = () => {
                       goals={businessGoals}
                       resources={businessResources}
                       settings={businessSettings}
-                      onUpdateExpenses={(v) => { setBusinessExpenses(v); isPreferencesDirty.current = true; }}
-                      onUpdatePayouts={(v) => { setBusinessPayouts(v); isPreferencesDirty.current = true; }}
+                      onUpdateExpenses={handleUpdateExpenses}
+                      onUpdatePayouts={handleUpdatePayouts}
                       onUpdatePlaybook={(v) => { setPlaybookItems(v); isPreferencesDirty.current = true; }}
-                      onUpdateGoals={(v) => { setBusinessGoals(v); isPreferencesDirty.current = true; }}
-                      onUpdateResources={(v) => { setBusinessResources(v); isPreferencesDirty.current = true; }}
+                      onUpdateGoals={handleUpdateGoals}
+                      onUpdateResources={handleUpdateResources}
                       onUpdateSettings={(v) => { setBusinessSettings(v); isPreferencesDirty.current = true; }}
                       onUpdateAccounts={setAccounts}
                       constitutionRules={constitutionRules}

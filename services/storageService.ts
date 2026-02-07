@@ -459,20 +459,19 @@ export const storageService = {
 
   async deleteTrade(id: string): Promise<void> {
     if (!isUUID(id)) return;
+    const userId = await getUserId();
+    if (!userId) return;
 
-    // 1. Delete from Supabase
-    const { error } = await supabase.from('trades').delete().eq('id', id);
+    // 1. Delete from Supabase (user_id filter for defense-in-depth)
+    const { error } = await supabase.from('trades').delete().eq('id', id).eq('user_id', userId);
     if (error) throw error;
 
     // 2. Update IndexedDB cache
-    const userId = await getUserId();
-    if (userId) {
-      const localKey = `alphatrade_trades_${userId}`;
-      const cachedTrades: Trade[] = await get(localKey) || [];
-      const updatedTrades = cachedTrades.filter(t => t.id !== id);
-      await set(localKey, updatedTrades);
-      console.log(`[DeleteTrade] Removed trade ${id} from cache`);
-    }
+    const localKey = `alphatrade_trades_${userId}`;
+    const cachedTrades: Trade[] = await get(localKey) || [];
+    const updatedTrades = cachedTrades.filter(t => t.id !== id);
+    await set(localKey, updatedTrades);
+    console.log(`[DeleteTrade] Removed trade ${id} from cache`);
   },
 
   async clearTrades(accountId?: string): Promise<void> {
@@ -501,11 +500,18 @@ export const storageService = {
   },
 
   async markTradeAsPublic(id: string): Promise<void> {
-    await supabase.from('trades').update({ is_public: true }).eq('id', id);
+    const userId = await getUserId();
+    if (!userId) return;
+    await supabase.from('trades').update({ is_public: true }).eq('id', id).eq('user_id', userId);
   },
 
   async getTradeById(id: string): Promise<Trade | null> {
-    const { data, error } = await supabase.from('trades').select('*').eq('id', id).single();
+    const userId = await getUserId();
+    if (!userId) return null;
+
+    // Filter by user_id to ensure user can only fetch their own trades in detail
+    // RLS also protects this, but defense-in-depth is important for full data access
+    const { data, error } = await supabase.from('trades').select('*').eq('id', id).eq('user_id', userId).single();
     if (error || !data) return null;
     return {
       ...data.data,
@@ -519,9 +525,37 @@ export const storageService = {
     };
   },
 
+  // Batch fetch screenshots for multiple trades (used by TradeHistory infinite scroll)
+  async getTradeScreenshots(tradeIds: string[]): Promise<Map<string, { screenshot?: string; screenshots?: string[] }>> {
+    const result = new Map<string, { screenshot?: string; screenshots?: string[] }>();
+    if (tradeIds.length === 0) return result;
+
+    const userId = await getUserId();
+    if (!userId) return result;
+
+    const { data, error } = await supabase
+      .from('trades')
+      .select('id, data->screenshot, data->screenshots')
+      .in('id', tradeIds)
+      .eq('user_id', userId);
+
+    if (error || !data) return result;
+
+    data.forEach((row: any) => {
+      result.set(row.id, {
+        screenshot: row.screenshot || undefined,
+        screenshots: row.screenshots || undefined
+      });
+    });
+
+    return result;
+  },
+
   // Accounts
   getCachedAccounts(targetUserId?: string): Account[] {
-    const localKey = targetUserId ? `alphatrade_accounts_${targetUserId}` : 'alphatrade_accounts';
+    // Use userId from cache or provided targetUserId
+    const keyId = targetUserId || cachedUserId;
+    const localKey = keyId ? `alphatrade_accounts_${keyId}` : 'alphatrade_accounts';
     const localData = localStorage.getItem(localKey);
     if (!localData) return [];
     try {
@@ -535,8 +569,8 @@ export const storageService = {
   async getAccounts(targetUserId?: string): Promise<Account[]> {
     const userId = targetUserId || await getUserId();
 
-    // Fast local storage fallback
-    const localKey = targetUserId ? `alphatrade_accounts_${targetUserId}` : 'alphatrade_accounts';
+    // Fast local storage fallback - always use userId-scoped key
+    const localKey = userId ? `alphatrade_accounts_${userId}` : 'alphatrade_accounts';
     const localData = localStorage.getItem(localKey);
     let localAccounts: Account[] = [];
     if (localData) {
@@ -577,10 +611,12 @@ export const storageService = {
   },
 
   async saveAccounts(accounts: Account[]): Promise<Account[]> {
-    // Save to local storage immediately
-    safeSetItem('alphatrade_accounts', accounts);
-
     const userId = await getUserId();
+
+    // Save to local storage immediately with userId-scoped key
+    const localKey = userId ? `alphatrade_accounts_${userId}` : 'alphatrade_accounts';
+    safeSetItem(localKey, accounts);
+
     if (!userId || accounts.length === 0) return accounts;
 
     const existingAccounts = accounts.filter(a => isUUID(a.id));
@@ -650,7 +686,7 @@ export const storageService = {
 
       const finalResults = results.length > 0 ? results : accounts;
       // Update cache with server results (which have real IDs)
-      safeSetItem('alphatrade_accounts', finalResults);
+      safeSetItem(localKey, finalResults);
       await updateCacheTimestamp(); // Mark cache as fresh
       return finalResults;
 
@@ -666,7 +702,10 @@ export const storageService = {
 
   async deleteAccount(id: string): Promise<void> {
     if (!isUUID(id)) return;
-    const { error } = await supabase.from('accounts').delete().eq('id', id);
+    const userId = await getUserId();
+    if (!userId) return;
+
+    const { error } = await supabase.from('accounts').delete().eq('id', id).eq('user_id', userId);
     if (error) {
       console.error("Supabase deleteAccount error:", error);
       throw error;
@@ -946,10 +985,14 @@ export const storageService = {
   },
 
   async updateBusinessExpense(id: string, updates: Partial<BusinessExpense>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     const { error } = await supabase
       .from('business_expenses')
       .update(updates)
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[Storage] Failed to update expense:', error);
@@ -958,10 +1001,14 @@ export const storageService = {
   },
 
   async deleteBusinessExpense(id: string): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     const { error } = await supabase
       .from('business_expenses')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[Storage] Failed to delete expense:', error);
@@ -1005,10 +1052,14 @@ export const storageService = {
   },
 
   async updateBusinessPayout(id: string, updates: Partial<BusinessPayout>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     const { error } = await supabase
       .from('business_payouts')
       .update(updates)
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[Storage] Failed to update payout:', error);
@@ -1017,10 +1068,14 @@ export const storageService = {
   },
 
   async deleteBusinessPayout(id: string): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     const { error } = await supabase
       .from('business_payouts')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[Storage] Failed to delete payout:', error);
@@ -1069,10 +1124,14 @@ export const storageService = {
   },
 
   async updateBusinessGoal(id: string, updates: Partial<BusinessGoal>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     const { error } = await supabase
       .from('business_goals')
       .update(updates)
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[Storage] Failed to update goal:', error);
@@ -1081,10 +1140,14 @@ export const storageService = {
   },
 
   async deleteBusinessGoal(id: string): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     const { error } = await supabase
       .from('business_goals')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[Storage] Failed to delete goal:', error);
@@ -1128,10 +1191,14 @@ export const storageService = {
   },
 
   async updateBusinessResource(id: string, updates: Partial<BusinessResource>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     const { error } = await supabase
       .from('business_resources')
       .update(updates)
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[Storage] Failed to update resource:', error);
@@ -1140,10 +1207,14 @@ export const storageService = {
   },
 
   async deleteBusinessResource(id: string): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     const { error } = await supabase
       .from('business_resources')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .eq('user_id', userId);
 
     if (error) {
       console.error('[Storage] Failed to delete resource:', error);
@@ -1156,9 +1227,15 @@ export const storageService = {
     return prefs?.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 };
   },
 
-  // Active State
-  getActiveAccountId(): string | null { return localStorage.getItem('alphatrade_active_account'); },
-  setActiveAccountId(id: string): void { localStorage.setItem('alphatrade_active_account', id); },
+  // Active State (scoped by cached userId to prevent cross-user leaks)
+  getActiveAccountId(): string | null {
+    const key = cachedUserId ? `alphatrade_active_account_${cachedUserId}` : 'alphatrade_active_account';
+    return localStorage.getItem(key);
+  },
+  setActiveAccountId(id: string): void {
+    const key = cachedUserId ? `alphatrade_active_account_${cachedUserId}` : 'alphatrade_active_account';
+    localStorage.setItem(key, id);
+  },
 
   async clearAll(): Promise<void> {
     localStorage.clear();
@@ -1167,10 +1244,14 @@ export const storageService = {
 
   // Network / Social
   async searchUsers(query: string): Promise<UserSearch[]> {
+    const userId = await getUserId();
+    if (!userId) return [];
+
     const { data, error } = await supabase
       .from('profiles')
       .select('id, email, full_name')
-      .or(`email.ilike.% ${query}%, full_name.ilike.% ${query}% `)
+      .or(`email.ilike.%${query}%,full_name.ilike.%${query}%`)
+      .neq('id', userId)
       .limit(10);
 
     if (error) return [];
@@ -1208,15 +1289,25 @@ export const storageService = {
   },
 
   async updateConnectionStatus(connectionId: string, status: 'accepted' | 'rejected'): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
     if (status === 'rejected') {
+      // Both sender and receiver can delete (RLS allows both)
       await supabase.from('connections').delete().eq('id', connectionId);
     } else {
-      await supabase.from('connections').update({ status }).eq('id', connectionId);
+      // Only receiver can accept (RLS: auth.uid() = receiver_id for UPDATE)
+      await supabase.from('connections').update({ status }).eq('id', connectionId).eq('receiver_id', userId);
     }
   },
 
   async updateConnectionPermissions(connectionId: string, permissions: any): Promise<void> {
-    await supabase.from('connections').update({ permissions }).eq('id', connectionId);
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
+    // Only the receiver (who accepted the request) can modify permissions
+    // RLS also enforces this, but defense-in-depth
+    await supabase.from('connections').update({ permissions }).eq('id', connectionId).eq('receiver_id', userId);
   },
 
   async getNetworkActivity(followingIds: string[]): Promise<any[]> {
@@ -1448,92 +1539,73 @@ export const storageService = {
     const currentUserId = await getUserId();
     if (!currentUserId || !targetUserId) return null;
 
-    // 1. Fetch data
-    const [trades, accounts, preps, reviews, prefs] = await Promise.all([
-      this.getTrades(targetUserId),
-      this.getAccounts(targetUserId),
-      this.getDailyPreps(targetUserId),
-      this.getDailyReviews(targetUserId),
-      this.getPreferences(targetUserId)
-    ]);
-
-    // 2. Check permissions
-    const { data: connection } = await supabase
-      .from('connections')
-      .select('permissions')
-      .or(`and(sender_id.eq.${currentUserId}, receiver_id.eq.${targetUserId}), and(sender_id.eq.${targetUserId}, receiver_id.eq.${currentUserId})`)
-      .eq('status', 'accepted')
-      .maybeSingle();
-
     const isSelf = currentUserId === targetUserId;
-    const rawPerms = isSelf ? null : (connection?.permissions as any);
 
+    // 1. Check permissions FIRST - before fetching any data
+    let rawPerms: any = null;
+    if (!isSelf) {
+      const { data: connection } = await supabase
+        .from('connections')
+        .select('permissions')
+        .or(`and(sender_id.eq.${currentUserId}, receiver_id.eq.${targetUserId}), and(sender_id.eq.${targetUserId}, receiver_id.eq.${currentUserId})`)
+        .eq('status', 'accepted')
+        .maybeSingle();
+
+      if (!connection) return null; // No accepted connection = no access
+      rawPerms = connection.permissions as any;
+    }
+
+    // 2. Resolve permissions
     const perms = {
-      pnlFormat: isSelf ? (prefs?.pnlFormat || 'usd') : (rawPerms?.pnlFormat || (rawPerms?.canSeePnl ? 'usd' : 'hidden')),
+      pnlFormat: isSelf ? 'usd' : (rawPerms?.pnlFormat || (rawPerms?.canSeePnl ? 'usd' : 'hidden')),
       canSeePrep: isSelf || (rawPerms?.canSeePrep ?? false),
       canSeeReviewStats: isSelf || (rawPerms?.canSeeReviewStats ?? false),
       canSeeReviewNotes: isSelf || (rawPerms?.canSeeReviewNotes ?? false),
       canSeeScreenshots: isSelf || (rawPerms?.canSeeScreenshots ?? false)
     };
 
-    // 3. Sanitize TRADES
-    const sanitizedTrades = trades.map(t => {
+    // 3. Fetch only data that permissions allow (minimize network transfer)
+    const fetchPromises: [Promise<Trade[]>, Promise<Account[]>, Promise<DailyPrep[]>, Promise<DailyReview[]>, Promise<UserPreferences | null>] = [
+      this.getTrades(targetUserId),
+      this.getAccounts(targetUserId),
+      perms.canSeePrep ? this.getDailyPreps(targetUserId) : Promise.resolve([]),
+      (perms.canSeeReviewStats || perms.canSeeReviewNotes) ? this.getDailyReviews(targetUserId) : Promise.resolve([]),
+      this.getPreferences(targetUserId)
+    ];
+
+    const [trades, accounts, preps, reviews, prefs] = await Promise.all(fetchPromises);
+
+    // 4. Sanitize TRADES - strip sensitive fields before returning
+    const sanitizedTrades = trades.map((t: Trade) => {
       let displayPnl = 0;
 
       if (perms.pnlFormat === 'usd') {
         displayPnl = t.pnl;
       } else if (perms.pnlFormat === 'rr') {
-        // If R:R, we hide the PnL $ but technically we return 0 in 'pnl' field to ensure stats don't leak total $.
-        // The UI will look for a calculated RR or we can abuse the 'pnl' field? 
-        // Better: return 0 pnl, but add a 'displayRR' field? 
-        // Types don't support displayRR, so we might need to rely on UI calculating it?
-        // But UI needs riskAmount to calculate RR. If we send riskAmount + pnl=0, RR is 0.
-        // We must send RR pre-calculated in a field the UI can read.
-        // Or we update Trade type? For now, let's keep it simple: 
-        // If RR mode: set PnL to 0. The UI "Spectator Detail" needs to know to show RR.
-        // We can't easily push a string "2.5R" into a number 'pnl' field.
-        // Strategy: The UI will check pnlFormat. If 'rr', it will try to calc RR. 
-        // To calc RR, it needs PnL and Risk. If we hide PnL (set to 0), it can't calc RR.
-        // So we must spoof the PnL to be effectively "Risk * RR" but wait, that's just the PnL! 
-        // If we send the real PnL, they can see the $, unless UI hides it.
-        // But SpectatorData is "Sanitized". If we send real PnL, we leak it.
-        // Solution: We need to normalize the trade to 1R = 1 unit? No.
-        // We just send the RR value as the PnL! e.g. 2.5 (meaning 2.5R). 
-        // And we set riskAmount to 1. Then PnL / Risk = 2.5 / 1 = 2.5R.
-        // This way, the $ amount is effectively hidden (it looks like $2.50), but the R value is preserved.
-
         const risk = t.riskAmount || 0;
         const rr = risk > 0 ? t.pnl / risk : 0;
         displayPnl = parseFloat(rr.toFixed(2));
-      } else {
-        displayPnl = 0; // Hidden
       }
 
       return {
         ...t,
         pnl: displayPnl,
-        // If RR mode, force risk to 1 so UI calc works out to exactly the RR value
         riskAmount: perms.pnlFormat === 'rr' ? 1 : t.riskAmount,
-
-        notes: perms.canSeeReviewNotes ? t.notes : null, // Re-using ReviewNotes perm for Trade Notes for simplicity? Or add explicit 'canSeeTradeNotes'? User said "vecerni review rozdelit", implies trade notes might be same or default. Let's use canSeeReviewNotes as "canSeeText".
+        notes: perms.canSeeReviewNotes ? t.notes : null,
         screenshot: perms.canSeeScreenshots ? t.screenshot : null,
         screenshots: perms.canSeeScreenshots ? t.screenshots : [],
-        entryPrice: perms.pnlFormat !== 'hidden' ? t.entryPrice : null, // If they can see metric, maybe entry is ok? Or strictly USD? Let's hide entry if hidden.
+        entryPrice: perms.pnlFormat !== 'hidden' ? t.entryPrice : null,
         exitPrice: perms.pnlFormat !== 'hidden' ? t.exitPrice : null,
       };
     });
 
-    // 4. Sanitize REVIEWS
-    const sanitizedReviews = reviews.map(r => ({
+    // 5. Sanitize REVIEWS
+    const sanitizedReviews = reviews.map((r: DailyReview) => ({
       ...r,
-      // Stats
-      rating: perms.canSeeReviewStats ? r.rating : 0, // 0 stars
+      rating: perms.canSeeReviewStats ? r.rating : 0,
       ruleAdherence: perms.canSeeReviewStats ? r.ruleAdherence : [],
       mistakes: perms.canSeeReviewStats ? r.mistakes : [],
-
-      // Notes
       mainTakeaway: perms.canSeeReviewNotes ? r.mainTakeaway : null,
-      notes: perms.canSeeReviewNotes ? r.notes : null,
       lessons: perms.canSeeReviewNotes ? r.lessons : null,
       psycho: r.psycho ? {
         ...r.psycho,
@@ -1541,30 +1613,18 @@ export const storageService = {
       } : undefined
     }));
 
-    // 5. Sanitize PREPS
-    // Strict toggle: if !canSeePrep, return totally empty shell
-    const sanitizedPreps = preps.map(p => {
-      if (!perms.canSeePrep) {
-        return {
-          ...p,
-          mindsetState: null,
-          notes: null,
-          scenarios: { bullish: null as any, bearish: null as any, bullishImage: null, bearishImage: null }
-        };
+    // 6. Sanitize PREPS (already empty array if not permitted)
+    const sanitizedPreps = preps.map((p: DailyPrep) => ({
+      ...p,
+      scenarios: {
+        ...p.scenarios,
+        bullishImage: perms.canSeeScreenshots ? p.scenarios.bullishImage : null,
+        bearishImage: perms.canSeeScreenshots ? p.scenarios.bearishImage : null,
       }
-      return {
-        ...p,
-        // Even if allowed, still check screenshot perm for images
-        scenarios: {
-          ...p.scenarios,
-          bullishImage: perms.canSeeScreenshots ? p.scenarios.bullishImage : null,
-          bearishImage: perms.canSeeScreenshots ? p.scenarios.bearishImage : null,
-        }
-      };
-    });
+    }));
 
-    // 6. Filter Accounts
-    const sanitizedAccounts = accounts.map(a => ({
+    // 7. Filter Accounts
+    const sanitizedAccounts = accounts.map((a: Account) => ({
       ...a,
       initialBalance: perms.pnlFormat === 'usd' ? a.initialBalance : 0,
       totalWithdrawals: perms.pnlFormat === 'usd' ? a.totalWithdrawals : 0
@@ -1577,7 +1637,7 @@ export const storageService = {
       reviews: sanitizedReviews,
       preferences: prefs,
       meta: {
-        pnlFormat: perms.pnlFormat
+        pnlFormat: perms.pnlFormat as 'usd' | 'rr' | 'hidden'
       }
     };
   },

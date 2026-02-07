@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
@@ -44,6 +44,16 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const [zoomImage, setZoomImage] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
 
+  // --- INFINITE SCROLL STATE ---
+  const PAGE_SIZE = 20;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // --- LAZY SCREENSHOT CACHE ---
+  const [screenshotCache, setScreenshotCache] = useState<Map<string, { screenshot?: string; screenshots?: string[] }>>(new Map());
+  const loadingScreenshotsRef = useRef<Set<string>>(new Set());
+
   // Sync selectedTrade when trades prop changes (e.g., after drawing update)
   useEffect(() => {
     if (selectedTrade) {
@@ -55,7 +65,94 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   }, [trades, selectedTrade]);
 
   // Ensure trades are always sorted by date (newest first) for consistent display and navigation
-  const sortedTrades = [...trades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const sortedTrades = useMemo(() =>
+    [...trades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    [trades]
+  );
+
+  // Visible slice for rendering
+  const visibleTrades = useMemo(() =>
+    sortedTrades.slice(0, visibleCount),
+    [sortedTrades, visibleCount]
+  );
+  const hasMore = visibleCount < sortedTrades.length;
+
+  // Reset visible count when trades change (e.g., filter applied)
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [trades.length]);
+
+  // --- INTERSECTION OBSERVER: Load more on scroll ---
+  useEffect(() => {
+    if (!sentinelRef.current || !hasMore) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !isLoadingMore) {
+          setIsLoadingMore(true);
+          // Small delay for smooth animation
+          setTimeout(() => {
+            setVisibleCount(prev => Math.min(prev + PAGE_SIZE, sortedTrades.length));
+            setIsLoadingMore(false);
+          }, 600);
+        }
+      },
+      { rootMargin: '200px' }
+    );
+
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, isLoadingMore, sortedTrades.length]);
+
+  // --- LAZY SCREENSHOT LOADING ---
+  const loadScreenshots = useCallback(async (tradesToLoad: Trade[]) => {
+    // Filter to trades that have UUID ids, no cached screenshot, and aren't already loading
+    const missing = tradesToLoad.filter(t =>
+      typeof t.id === 'string' &&
+      t.id.includes('-') &&
+      !t.screenshot &&
+      !screenshotCache.has(String(t.id)) &&
+      !loadingScreenshotsRef.current.has(String(t.id))
+    );
+
+    if (missing.length === 0) return;
+
+    const ids = missing.map(t => String(t.id));
+    ids.forEach(id => loadingScreenshotsRef.current.add(id));
+
+    try {
+      const results = await storageService.getTradeScreenshots(ids);
+      setScreenshotCache(prev => {
+        const next = new Map(prev);
+        results.forEach((value, key) => {
+          if (value.screenshot) next.set(key, value);
+        });
+        return next;
+      });
+    } catch (err) {
+      console.error('[Screenshots] Failed to load batch:', err);
+    } finally {
+      ids.forEach(id => loadingScreenshotsRef.current.delete(id));
+    }
+  }, [screenshotCache]);
+
+  // Trigger screenshot loading when visible trades change
+  useEffect(() => {
+    if (visibleTrades.length > 0) {
+      loadScreenshots(visibleTrades);
+    }
+  }, [visibleTrades, loadScreenshots]);
+
+  // Helper: get screenshot for a trade (from cache or trade itself)
+  const getScreenshot = useCallback((trade: Trade): string | undefined => {
+    if (trade.screenshot) return trade.screenshot;
+    return screenshotCache.get(String(trade.id))?.screenshot;
+  }, [screenshotCache]);
+
+  const getScreenshots = useCallback((trade: Trade): string[] | undefined => {
+    if (trade.screenshots && trade.screenshots.length > 0) return trade.screenshots;
+    return screenshotCache.get(String(trade.id))?.screenshots;
+  }, [screenshotCache]);
 
   const formatTradeDate = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -107,7 +204,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
       {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-          {sortedTrades.map((trade) => {
+          {visibleTrades.map((trade) => {
             const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
             const isMissed = status === 'Missed';
             const isWin = trade.pnl >= 0;
@@ -119,6 +216,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             const tradeHex = !isNaN(Number(trade.id))
               ? `0x${Math.abs(Number(trade.id)).toString(16).padStart(6, '0')}`
               : `0xCOMB`;
+
+            const tradeScreenshot = getScreenshot(trade);
+            const tradeScreenshots = getScreenshots(trade);
 
             return (
               <div
@@ -214,27 +314,27 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   </div>
                 </div>
 
-                <div className={`relative transition-all duration-700 overflow-hidden ${trade.screenshot ? 'h-48 md:h-full w-full md:w-[42%]' : 'hidden'}`}>
-                  {trade.screenshot && (
+                <div className={`relative transition-all duration-700 overflow-hidden ${tradeScreenshot ? 'h-48 md:h-full w-full md:w-[42%]' : 'hidden'}`}>
+                  {tradeScreenshot && (
                     <div
-                      className="w-full h-full relative group/img"
-                      onClick={(e) => { e.stopPropagation(); setZoomImage(trade.screenshot!); }}
+                      className="w-full h-full relative group/img animate-in fade-in duration-500"
+                      onClick={(e) => { e.stopPropagation(); setZoomImage(tradeScreenshot); }}
                     >
-                      <img src={trade.screenshot} className="w-full h-full object-cover transition-transform duration-1000 group-hover/img:scale-105" />
+                      <img src={tradeScreenshot} className="w-full h-full object-cover transition-transform duration-1000 group-hover/img:scale-105" />
                       <div className={`absolute inset-0 bg-gradient-to-r ${theme !== 'light' ? 'from-[var(--bg-card)] via-transparent' : 'from-white via-transparent'} to-transparent md:block hidden z-20`}></div>
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition-all duration-500 backdrop-blur-[1px] z-30">
                         <div className="p-4 bg-white/10 rounded-full text-white shadow-2xl border border-white/20 animate-in zoom-in-95"><Maximize2 size={24} /></div>
                       </div>
-                      {trade.screenshots && trade.screenshots.length > 1 && (
+                      {tradeScreenshots && tradeScreenshots.length > 1 && (
                         <div className="absolute bottom-3 right-3 px-2 py-1 bg-black/60 rounded-md text-[8px] font-black text-white uppercase tracking-widest backdrop-blur-md z-40">
-                          +{trade.screenshots.length - 1} more
+                          +{tradeScreenshots.length - 1} more
                         </div>
                       )}
                     </div>
                   )}
                 </div>
 
-                {!trade.screenshot && (
+                {!tradeScreenshot && (
                   <div className={`w-20 hidden md:flex items-center justify-center border-l bg-[var(--bg-page)]/10 group-hover:bg-blue-500/5 transition-colors duration-500 ${theme === 'light' ? 'border-slate-100' : 'border-[var(--border-subtle)]'}`}>
                     <Cpu size={20} className="text-slate-800/40 group-hover:text-blue-500 transition-colors" />
                   </div>
@@ -259,11 +359,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {sortedTrades.map((trade) => {
+                {visibleTrades.map((trade) => {
                   const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
                   const isMissed = status === 'Missed';
                   const isWin = trade.pnl >= 0;
                   const pnlColor = isMissed ? 'text-blue-400' : (isWin ? 'text-emerald-500' : 'text-rose-500');
+                  const tableScreenshot = getScreenshot(trade);
 
                   return (
                     <tr
@@ -273,8 +374,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     >
                       <td className="px-6 py-3">
                         <div className="w-12 h-12 rounded-lg border border-white/10 overflow-hidden bg-white/5 flex items-center justify-center">
-                          {trade.screenshot ? (
-                            <img src={trade.screenshot} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" />
+                          {tableScreenshot ? (
+                            <img src={tableScreenshot} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity animate-in fade-in duration-300" />
                           ) : (
                             <Cpu size={16} className="text-slate-600" />
                           )}
@@ -331,6 +432,31 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Infinite Scroll Sentinel + Loading Spinner */}
+      {hasMore && (
+        <div ref={sentinelRef} className="flex flex-col items-center justify-center py-8">
+          <div className="relative w-16 h-16 animate-pulse">
+            <img
+              src="/logos/at_logo_light_clean.png"
+              alt="Loading..."
+              className="w-full h-full object-contain animate-spin"
+              style={{ animationDuration: '2s' }}
+            />
+          </div>
+          <span className={`mt-3 text-[10px] font-black uppercase tracking-[0.3em] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+            {isLoadingMore ? 'Načítám další obchody...' : `${sortedTrades.length - visibleCount} dalších`}
+          </span>
+        </div>
+      )}
+
+      {!hasMore && sortedTrades.length > PAGE_SIZE && (
+        <div className="flex justify-center py-6">
+          <span className={`text-[10px] font-black uppercase tracking-[0.3em] ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>
+            Zobrazeno všech {sortedTrades.length} obchodů
+          </span>
         </div>
       )}
 
