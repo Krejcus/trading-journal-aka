@@ -133,52 +133,55 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
       }`}>
 
       {/* Header Widgetu */}
-      <div className="flex justify-between items-center mb-5 shrink-0">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
-          <Target size={16} className="text-blue-500" /> Rituály & Disciplína
-          <div className="relative group inline-flex items-center">
-            <div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div>
-          </div>
+      <div className="flex justify-between items-center mb-4 shrink-0">
+        <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
+          <Target size={14} className="text-blue-500" /> Rituály
         </h3>
-        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border border-[var(--border-subtle)]' : 'bg-slate-50 border border-slate-200'}`}>
-          <Flame size={12} className={stats.currentStreak > 0 ? 'text-orange-500' : 'text-slate-600'} />
-          <span className="text-[9px] font-black uppercase text-slate-400">Streak: <span className={theme !== 'light' ? 'text-white' : 'text-slate-900'}>{stats.currentStreak}</span></span>
+        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border border-[var(--border-subtle)]' : 'bg-slate-50 border border-slate-200'}`}>
+          <Flame size={10} className={stats.currentStreak > 0 ? 'text-orange-500' : 'text-slate-600'} />
+          <span className="text-[8px] font-black uppercase text-slate-400">Streak: <span className={theme !== 'light' ? 'text-white' : 'text-slate-900'}>{stats.currentStreak}</span></span>
         </div>
       </div>
 
       <div className="flex flex-col flex-1 min-h-0 gap-5">
 
-        {/* Top Section: Heatmap & Score */}
-        <div className="flex flex-col lg:flex-row gap-5 items-center">
-
-          {/* Heatmap Area */}
-          <div className="flex-1 w-full min-w-0">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">30 Day Consistency</span>
-              <span className={`text-[10px] font-black ${stats.disciplineScore > 80 ? 'text-emerald-500' : 'text-blue-500'}`}>{stats.disciplineScore}% Score</span>
+        {/* Top Section: Heatmap & Score - Stacked for Sidebar */}
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            {/* Score Circle - Mini */}
+            <div className="shrink-0">
+              <div className={`w-14 h-14 rounded-full border-4 flex items-center justify-center relative ${theme !== 'light' ? 'border-[var(--bg-page)]' : 'border-slate-100'}`}>
+                <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 64 64">
+                  <circle cx="32" cy="32" r="28" fill="none" stroke={theme !== 'light' ? 'var(--bg-card)' : '#f1f5f9'} strokeWidth="4" />
+                  <circle
+                    cx="32" cy="32" r="28" fill="none"
+                    stroke={stats.disciplineScore > 75 ? '#10b981' : '#3b82f6'}
+                    strokeWidth="4"
+                    strokeDasharray={`${(stats.disciplineScore / 100) * 175} 175`}
+                    strokeLinecap="round"
+                    className="transition-all duration-1000"
+                  />
+                </svg>
+                <div className="text-center">
+                  <p className="text-xs font-black leading-none">{stats.disciplineScore}</p>
+                  <p className="text-[6px] font-bold text-slate-500 uppercase">Score</p>
+                </div>
+              </div>
             </div>
-            <div className="grid grid-cols-[repeat(15,minmax(0,1fr))] gap-1.5 max-w-[400px]">
-              {stats.heatmapData.slice(-30).map((d, i) => (
-                <div key={i} title={`${d.date}`} className={`aspect-square w-full rounded-[3px] transition-all hover:scale-125 cursor-help ${getStatusColor(d.status)}`} />
-              ))}
+
+            {/* Stats Summary */}
+            <div className="flex-1 text-right">
+              <p className="text-[10px] font-black text-blue-500 uppercase">Disciplína</p>
+              <p className="text-[8px] font-bold text-slate-500 uppercase tracking-tighter">Posledních 30 dní</p>
             </div>
           </div>
 
-          {/* Score Circle - Mini */}
-          <div className="shrink-0 text-center">
-            <div className={`w-12 h-12 rounded-full border-4 flex items-center justify-center relative ${theme !== 'light' ? 'border-[var(--bg-page)]' : 'border-slate-100'}`}>
-              <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 64 64">
-                <circle cx="32" cy="32" r="28" fill="none" stroke={theme !== 'light' ? 'var(--bg-card)' : '#f1f5f9'} strokeWidth="4" />
-                <circle
-                  cx="32" cy="32" r="28" fill="none"
-                  stroke={stats.disciplineScore > 75 ? '#10b981' : '#3b82f6'}
-                  strokeWidth="4"
-                  strokeDasharray={`${(stats.disciplineScore / 100) * 175} 175`}
-                  strokeLinecap="round"
-                  className="transition-all duration-1000"
-                />
-              </svg>
-              <span className="text-[9px] font-black">{stats.disciplineScore}</span>
+          {/* Heatmap Area */}
+          <div className="w-full">
+            <div className="grid grid-cols-[repeat(15,minmax(0,1fr))] gap-1">
+              {stats.heatmapData.slice(-30).map((d, i) => (
+                <div key={i} title={`${d.date}`} className={`aspect-square w-full rounded-[2px] transition-all hover:scale-125 cursor-help ${getStatusColor(d.status)}`} />
+              ))}
             </div>
           </div>
         </div>
@@ -186,9 +189,9 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
         {/* Divider */}
         <div className={`h-px w-full ${theme !== 'light' ? 'bg-[var(--border-subtle)]' : 'bg-slate-100'}`}></div>
 
-        {/* Bottom Section: Compact Elite Trackers */}
+        {/* Bottom Section: Compact Elite Trackers - Grid for Sidebar */}
         <div className="flex-1">
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {Object.entries(stats.ruleStreaks).map(([id, data]: [string, any]) => {
               const isActive = data.streak > 0;
               const colorHex = data.type === 'ritual' ? '#3b82f6' : '#f59e0b'; // Blue vs Amber

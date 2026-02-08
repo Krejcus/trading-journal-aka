@@ -75,16 +75,17 @@ interface DailyJournalProps {
   psychoMetrics?: PsychoMetricConfig[];
   viewMode: 'individual' | 'combined';
   weeklyFocusList: WeeklyFocus[];
+  activeTab: 'daily' | 'weekly' | 'archives';
+  onTabChange: (tab: 'daily' | 'weekly' | 'archives') => void;
 }
 
 const DailyJournal: React.FC<DailyJournalProps> = ({
-  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList
+  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList, activeTab, onTabChange
 }) => {
   const getToday = () => new Date().toLocaleDateString('en-CA');
   const [selectedDate, setSelectedDate] = useState(getToday());
   const today = getToday();
 
-  const [activeTab, setActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
   const [view, setView] = useState<'timeline' | 'edit-prep' | 'edit-review' | 'edit-weekly'>('timeline');
   const [activeImageField, setActiveImageField] = useState<'bullish' | 'bearish' | 'scenarios' | null>(null);
 
@@ -157,11 +158,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const currentPrep = useMemo(() => preps.find(p => p.date === selectedDate), [preps, selectedDate]);
   const currentTrades = useMemo(() => groupedTrades.filter(t => t.date.startsWith(selectedDate)), [groupedTrades, selectedDate]);
 
-  const autoMistakes = useMemo(() => {
-    const m = new Set<string>();
-    currentTrades.forEach(t => t.mistakes?.forEach(mistake => m.add(mistake)));
-    return Array.from(m);
-  }, [currentTrades]);
 
   const [prepForm, setPrepForm] = useState<DailyPrep>({
     id: `prep_${selectedDate}`,
@@ -178,7 +174,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     id: `review_${selectedDate}`,
     date: selectedDate,
     mainTakeaway: '',
-    mistakes: autoMistakes.length > 0 ? autoMistakes : [''],
+    mistakes: [],
     lessons: '',
     rating: 0,
     goalResults: [],
@@ -765,7 +761,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         id: `review_${selectedDate}`,
         date: selectedDate,
         mainTakeaway: '',
-        mistakes: autoMistakes.length > 0 ? autoMistakes : [''],
+        mistakes: [],
         lessons: '',
         rating: 0,
         goalResults: initialResults,
@@ -835,98 +831,135 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   return (
     <div className="space-y-6 lg:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20">
-      <div className="flex justify-center">
-        <div className="p-1 rounded-2xl border flex gap-1 theme-card theme-border shadow-sm">
-          {[
-            { id: 'daily', label: 'Daily', icon: Clock },
-            { id: 'weekly', label: 'Weekly', icon: Calendar },
-            { id: 'archives', label: 'Deník', icon: History }
-          ].map(tab => (
-            <button key={tab.id} onClick={() => { setActiveTab(tab.id as any); setView('timeline'); }} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:text-slate-300'}`}><tab.icon size={14} /> {tab.label}</button>
-          ))}
-        </div>
-      </div>
 
-      {activeTab === 'daily' && (
-        <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={groupedTrades} ironRules={ironRules} />
-      )}
 
-      <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-        <div className="space-y-2">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
-            <h2 className="text-3xl md:text-5xl font-black tracking-tighter italic flex items-center gap-4">
-              {activeTab === 'daily' ? 'DAILY HUB' : (activeTab === 'weekly' ? 'WEEKLY HUB' : 'DENÍK')}
-              {activeTab === 'archives' && (
-                <button
-                  onClick={() => setIsExportModalOpen(true)}
-                  className={`p-2 rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center shadow-lg ${theme !== 'light' ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-blue-600 text-white shadow-blue-500/20'}`}
-                  title="Export Report"
-                >
-                  <Download size={20} />
-                </button>
-              )}
-            </h2>
-            {activeTab !== 'archives' && (
-              <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner">
-                <button onClick={() => activeTab === 'daily' ? navigateDate('prev') : navigateWeek('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90"><ChevronLeft size={20} /></button>
-                <div className="px-3 py-1 text-center min-w-[100px]">
-                  <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">{activeTab === 'daily' ? 'Tactical Date' : `Week ${currentWeekInfo.weekNumber} `}</p>
-                  <p className="text-xs font-black font-mono">{activeTab === 'daily' ? selectedDate : currentWeekInfo.mondayDate}</p>
+      {activeTab === 'daily' && view === 'timeline' ? (
+        <div className="lg:grid lg:grid-cols-[1fr,350px] gap-8 items-start">
+          {/* Main Column: Header + Timeline */}
+          <div className="space-y-8 min-w-0 order-2 lg:order-1">
+            <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+              <div className="space-y-2">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
+                  <h2 className="text-3xl md:text-5xl font-black tracking-tighter italic flex items-center gap-4">
+                    DAILY HUB
+                  </h2>
+                  <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner">
+                    <button onClick={() => navigateDate('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90"><ChevronLeft size={20} /></button>
+                    <div className="px-3 py-1 text-center min-w-[100px]">
+                      <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">Tactical Date</p>
+                      <p className="text-xs font-black font-mono">{selectedDate}</p>
+                    </div>
+                    <button onClick={() => navigateDate('next')} disabled={selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 ${selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
+                  </div>
                 </div>
-                <button onClick={() => activeTab === 'daily' ? navigateDate('next') : navigateWeek('next')} disabled={activeTab === 'daily' && selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 ${activeTab === 'daily' && selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
+                <p className="text-slate-500 font-black uppercase text-[9px] tracking-[0.3em]">
+                  Chronological Feed • Trace Engine
+                </p>
               </div>
-            )}
+              <div className="flex gap-2 w-full sm:w-auto items-center">
+                <button onClick={() => setView('edit-prep')} className="flex-1 sm:flex-none px-4 py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Ranní</button>
+                <button onClick={() => setView('edit-review')} className="flex-1 sm:flex-none px-4 py-3 bg-indigo-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Večerní</button>
+              </div>
+            </div>
+
+            <TacticalTimeline
+              date={selectedDate}
+              prep={currentPrep}
+              review={currentReview}
+              trades={currentTrades}
+              theme={theme}
+              onEditPrep={() => setView('edit-prep')}
+              onEditReview={() => setView('edit-review')}
+              onDeletePrep={onDeletePrep}
+              onDeleteReview={onDeleteReview}
+            />
           </div>
-          <p className="text-slate-500 font-black uppercase text-[9px] tracking-[0.3em]">
-            {activeTab === 'daily' ? `Chronological Feed • Trace Engine` : (activeTab === 'weekly' ? `Weekly Debrief • Týden ${currentWeekInfo.weekNumber} ` : `Psycho Archives • Emoční Historie`)}
-          </p>
-        </div>
-        <div className="flex gap-2 w-full sm:w-auto items-center">
-          {view === 'timeline' && activeTab === 'daily' && (
-            <><button onClick={() => setView('edit-prep')} className="flex-1 sm:flex-none px-4 py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Ranní</button><button onClick={() => setView('edit-review')} className="flex-1 sm:flex-none px-4 py-3 bg-indigo-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Večerní</button></>
-          )}
-          {view !== 'timeline' && (
-            <>
-              <button onClick={() => handleNavigateWithCheck(() => setView('timeline'))} className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-slate-800 text-white hover:bg-slate-700'}`}><LayoutGrid size={14} /> Feed</button>
 
-              {/* Save Button with Status */}
-              <button
-                onClick={handleManualSave}
-                disabled={!hasUnsavedChanges && saveStatus !== 'saving'}
-                className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${saveStatus === 'saving'
-                  ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
-                  : saveStatus === 'saved'
-                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                    : hasUnsavedChanges
-                      ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-400'
-                      : 'bg-[var(--bg-card)] text-slate-500 border border-[var(--border-subtle)] opacity-50 cursor-not-allowed'
-                  }`}
-              >
-                {saveStatus === 'saving' ? (
-                  <><Loader2 size={14} className="animate-spin" /> Ukládám...</>
-                ) : saveStatus === 'saved' ? (
-                  <><Check size={14} /> Uloženo</>
-                ) : (
-                  <><Save size={14} /> Uložit</>
+          {/* Sidebar: Stats */}
+          <div className="lg:sticky lg:top-24 space-y-6 order-1 lg:order-2">
+            <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={groupedTrades} ironRules={ironRules} />
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+            <div className="space-y-2">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
+                <h2 className="text-3xl md:text-5xl font-black tracking-tighter italic flex items-center gap-4">
+                  {activeTab === 'daily' ? 'DAILY HUB' : (activeTab === 'weekly' ? 'WEEKLY HUB' : 'DENÍK')}
+                  {activeTab === 'archives' && (
+                    <button
+                      onClick={() => setIsExportModalOpen(true)}
+                      className={`p-2 rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center shadow-lg ${theme !== 'light' ? 'bg-blue-600 text-white shadow-blue-500/20' : 'bg-blue-600 text-white shadow-blue-500/20'}`}
+                      title="Export Report"
+                    >
+                      <Download size={20} />
+                    </button>
+                  )}
+                </h2>
+                {activeTab !== 'archives' && (
+                  <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner">
+                    <button onClick={() => activeTab === 'daily' ? navigateDate('prev') : navigateWeek('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90"><ChevronLeft size={20} /></button>
+                    <div className="px-3 py-1 text-center min-w-[100px]">
+                      <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">{activeTab === 'daily' ? 'Tactical Date' : `Week ${currentWeekInfo.weekNumber} `}</p>
+                      <p className="text-xs font-black font-mono">{activeTab === 'daily' ? selectedDate : currentWeekInfo.mondayDate}</p>
+                    </div>
+                    <button onClick={() => activeTab === 'daily' ? navigateDate('next') : navigateWeek('next')} disabled={activeTab === 'daily' && selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 ${activeTab === 'daily' && selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
+                  </div>
                 )}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+              </div>
+              <p className="text-slate-500 font-black uppercase text-[9px] tracking-[0.3em]">
+                {activeTab === 'daily' ? `Chronological Feed • Trace Engine` : (activeTab === 'weekly' ? `Weekly Debrief • Týden ${currentWeekInfo.weekNumber} ` : `Psycho Archives • Emoční Historie`)}
+              </p>
+            </div>
+            <div className="flex gap-2 w-full sm:w-auto items-center">
+              {view === 'timeline' && activeTab === 'daily' && (
+                <><button onClick={() => setView('edit-prep')} className="flex-1 sm:flex-none px-4 py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Ranní</button><button onClick={() => setView('edit-review')} className="flex-1 sm:flex-none px-4 py-3 bg-indigo-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Večerní</button></>
+              )}
+              {view !== 'timeline' && (
+                <>
+                  <button onClick={() => handleNavigateWithCheck(() => setView('timeline'))} className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-slate-800 text-white hover:bg-slate-700'}`}><LayoutGrid size={14} /> Feed</button>
 
-      {activeTab === 'daily' && view === 'timeline' && (
-        <TacticalTimeline
-          date={selectedDate}
-          prep={currentPrep}
-          review={currentReview}
-          trades={currentTrades}
-          theme={theme}
-          onEditPrep={() => setView('edit-prep')}
-          onEditReview={() => setView('edit-review')}
-          onDeletePrep={onDeletePrep}
-          onDeleteReview={onDeleteReview}
-        />
+                  {/* Save Button with Status */}
+                  <button
+                    onClick={handleManualSave}
+                    disabled={!hasUnsavedChanges && saveStatus !== 'saving'}
+                    className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${saveStatus === 'saving'
+                      ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                      : saveStatus === 'saved'
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                        : hasUnsavedChanges
+                          ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-400'
+                          : 'bg-[var(--bg-card)] text-slate-500 border border-[var(--border-subtle)] opacity-50 cursor-not-allowed'
+                      }`}
+                  >
+                    {saveStatus === 'saving' ? (
+                      <><Loader2 size={14} className="animate-spin" /> Ukládám...</>
+                    ) : saveStatus === 'saved' ? (
+                      <><Check size={14} /> Uloženo</>
+                    ) : (
+                      <><Save size={14} /> Uložit</>
+                    )}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {activeTab === 'daily' && view === 'timeline' && (
+            <TacticalTimeline
+              date={selectedDate}
+              prep={currentPrep}
+              review={currentReview}
+              trades={currentTrades}
+              theme={theme}
+              onEditPrep={() => setView('edit-prep')}
+              onEditReview={() => setView('edit-review')}
+              onDeletePrep={onDeletePrep}
+              onDeleteReview={onDeleteReview}
+            />
+          )}
+        </>
       )}
 
       {activeTab === 'weekly' && view === 'timeline' && (
@@ -953,8 +986,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                       review={dayReview}
                       trades={dayTrades}
                       theme={theme}
-                      onEditPrep={() => { setSelectedDate(dateStr); setView('edit-prep'); setActiveTab('daily'); }}
-                      onEditReview={() => { setSelectedDate(dateStr); setView('edit-review'); setActiveTab('daily'); }}
+                      onEditPrep={() => { setSelectedDate(dateStr); setView('edit-prep'); onTabChange('daily'); }}
+                      onEditReview={() => { setSelectedDate(dateStr); setView('edit-review'); onTabChange('daily'); }}
                       onDeletePrep={onDeletePrep}
                       onDeleteReview={onDeleteReview}
                       isMini={true}
@@ -1133,7 +1166,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     </div>
 
                     <button
-                      onClick={() => { setSelectedDate(review.date); setActiveTab('daily'); setView('edit-review'); window.scrollTo(0, 0); }}
+                      onClick={() => { setSelectedDate(review.date); onTabChange('daily'); setView('edit-review'); window.scrollTo(0, 0); }}
                       className="mt-6 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-600/10"
                     >
                       Otevřít Detail
@@ -1227,38 +1260,68 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             </div>
           )}
           {view === 'edit-review' && (
-            <div className="space-y-6 lg:space-y-8">
-              <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200'}`}>
-                <div className="flex items-center justify-between mb-6 md:mb-8">
-                  <div className="flex items-center gap-4"><div className="p-3 rounded-2xl bg-amber-500/10 text-amber-500"><ShieldAlert size={20} /></div><div><h3 className="text-xl md:text-2xl font-black italic uppercase">EXECUTION AUDIT</h3><p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Dodržení pravidel</p></div></div>
-                  <div className="flex items-center gap-2">
-                    {isSaving ? (
-                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-500 animate-pulse">
-                        <div className="w-2 h-2 rounded-full bg-blue-500" />
-                        <span className="text-[9px] font-black uppercase tracking-widest">Ukládám...</span>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start animate-in slide-in-from-right-4 duration-500">
+              {/* --- COLUMN 1: CHECKLISTS & ACTION --- */}
+              <div className="space-y-6">
+                {/* EXECUTION AUDIT - Compact Grid */}
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}>
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-500"><ShieldAlert size={18} /></div>
+                      <div>
+                        <h3 className="text-lg font-black italic uppercase">EXECUTION</h3>
+                        <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Dodržení pravidel</p>
                       </div>
-                    ) : lastSaved ? (
-                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-500 transition-all duration-1000">
-                        <Check size={12} />
-                        <span className="text-[9px] font-black uppercase tracking-widest">Uloženo {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="space-y-3 md:space-y-4">{tradeRules.map(rule => { const comp = reviewForm.ruleAdherence?.find(a => a.ruleId === rule.id); const status = comp?.status || 'Pending'; return (<div key={rule.id} className={`p-4 md:p-5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'} `}><div className="flex-1"><h4 className="text-[11px] font-black uppercase tracking-widest">{rule.label}</h4></div><div className="flex gap-2"><button onClick={() => handleSetRuleStatus(rule.id, 'Pass')} className={`flex-1 sm:flex-none px-6 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all ${status === 'Pass' ? 'bg-emerald-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500' : 'bg-slate-900 text-slate-600')} `}>Pass</button><button onClick={() => handleSetRuleStatus(rule.id, 'Fail')} className={`flex-1 sm:flex-none px-6 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all ${status === 'Fail' ? 'bg-rose-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500' : 'bg-slate-900 text-slate-600')} `}>Fail</button></div></div>); })}</div>
-
-                {/* Weekly Focus Adherence Checklist */}
-                {
-                  currentWeekFocus && (
-                    <div className={`mt-8 p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
-                      <div className="flex items-center gap-3 mb-6">
-                        <div className="p-2.5 rounded-xl bg-emerald-500 text-white"><ClipboardCheck size={18} /></div>
-                        <div>
-                          <h4 className="text-sm font-black uppercase tracking-widest text-emerald-500">Weekly Focus Adherence</h4>
-                          <p className="text-[8px] font-bold uppercase tracking-widest opacity-60">Dodržování týdenních cílů</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {isSaving ? (
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-500 animate-pulse">
+                          <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                          <span className="text-[8px] font-black uppercase tracking-widest">Saving...</span>
                         </div>
+                      ) : lastSaved ? (
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-500">
+                          <Check size={10} />
+                          <span className="text-[8px] font-black uppercase tracking-widest">{lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {tradeRules.map(rule => {
+                      const comp = reviewForm.ruleAdherence?.find(a => a.ruleId === rule.id);
+                      const status = comp?.status || 'Pending';
+                      return (
+                        <div key={rule.id} className={`p-3 rounded-xl border flex flex-col justify-between gap-3 ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'} `}>
+                          <h4 className="text-[9px] font-black uppercase tracking-widest leading-tight h-7 line-clamp-2">{rule.label}</h4>
+                          <div className="flex gap-1.5">
+                            <button
+                              onClick={() => handleSetRuleStatus(rule.id, 'Pass')}
+                              className={`flex-1 py-1.5 rounded-lg font-black text-[8px] uppercase tracking-widest transition-all ${status === 'Pass' ? 'bg-emerald-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500 hover:bg-white/5' : 'bg-white text-slate-400 hover:bg-slate-100 shadow-sm')} `}
+                            >
+                              Pass
+                            </button>
+                            <button
+                              onClick={() => handleSetRuleStatus(rule.id, 'Fail')}
+                              className={`flex-1 py-1.5 rounded-lg font-black text-[8px] uppercase tracking-widest transition-all ${status === 'Fail' ? 'bg-rose-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500 hover:bg-white/5' : 'bg-white text-slate-400 hover:bg-slate-100 shadow-sm')} `}
+                            >
+                              Fail
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* WEEKLY FOCUS - Compact Checklist */}
+                  {currentWeekFocus && (
+                    <div className={`mt-6 p-5 rounded-[28px] border ${theme !== 'light' ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="p-2 rounded-lg bg-emerald-500 text-white"><ClipboardCheck size={14} /></div>
+                        <h4 className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Weekly Focus</h4>
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         {currentWeekFocus.goals.map((goal, idx) => {
                           const adherence = reviewForm.weeklyGoalAdherence?.[idx]?.status === 'Pass';
                           return (
@@ -1272,121 +1335,124 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                                   return { ...prev, weeklyGoalAdherence: newList };
                                 });
                               }}
-                              className={`w-full p-4 rounded-2xl border flex items-center justify-between transition-all group ${adherence
-                                ? 'bg-emerald-500 text-white border-emerald-400 shadow-lg shadow-emerald-500/20'
-                                : (theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] hover:border-emerald-500/30' : 'bg-white border-slate-100 hover:border-emerald-500/30 shadow-sm')
+                              className={`w-full px-4 py-2.5 rounded-xl border flex items-center justify-between transition-all group ${adherence
+                                ? 'bg-emerald-500 text-white border-emerald-400 shadow-sm'
+                                : (theme !== 'light' ? 'bg-[var(--bg-input)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-100 shadow-sm')
                                 }`}
                             >
-                              <div className="flex items-center gap-4">
-                                <div className={`w-8 h-8 rounded-xl border flex items-center justify-center transition-all ${adherence ? 'bg-white text-emerald-600' : 'bg-slate-800'}`}>
-                                  <span className="text-sm">{goal.emoji || '🎯'}</span>
-                                </div>
-                                <span className={`text-xs font-black uppercase tracking-tight text-left ${adherence ? 'text-white' : 'text-slate-400'}`}>{goal.text}</span>
+                              <div className="flex items-center gap-3">
+                                <span className={`text-xs ${adherence ? 'filter-none' : 'grayscale opacity-50'}`}>{goal.emoji || '🎯'}</span>
+                                <span className={`text-[10px] font-black uppercase tracking-tight ${adherence ? 'text-white' : 'text-slate-400'}`}>{goal.text}</span>
                               </div>
-                              {adherence ? <Check size={14} strokeWidth={4} /> : <div className="w-4 h-4 rounded-full border border-slate-700" />}
+                              {adherence && <Check size={10} strokeWidth={4} />}
                             </button>
                           );
                         })}
                       </div>
                     </div>
                   )}
-              </section>
 
-              <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border relative overflow-hidden ${theme !== 'light' ? 'bg-indigo-950/10 border-indigo-500/20' : 'bg-indigo-50 border-indigo-200 shadow-sm'}`}>
-                <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" />
-                <div className="flex items-center gap-4 mb-6 md:mb-8 relative z-10">
-                  <div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-500"><Brain size={20} /></div>
-                  <div>
-                    <h3 className="text-xl md:text-2xl font-black italic uppercase">PSYCHO-CYBERNETICS</h3>
-                    <p className="text-[9px] font-black uppercase text-indigo-500 tracking-widest">Mindset & Emoční Audit</p>
+                  <div className="mt-6">
+                    <button
+                      onClick={() => { onSaveReview(reviewForm); setView('timeline'); window.scrollTo(0, 0); }}
+                      className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-indigo-500/20 active:scale-95 transition-all"
+                    >
+                      UZAVŘÍT AUDIT
+                    </button>
                   </div>
-                </div>
+                </section>
+              </div>
 
-                <div className="space-y-8 relative z-10">
-                  {/* Mood & Energy Sliders */}
-                  {/* Dynamic Metrics Sliders */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                    {psychoMetrics?.map(metric => {
-                      const value = reviewForm.psycho?.metrics?.[metric.id] || 5;
-                      return (
-                        <div key={metric.id} className={`p-5 rounded-[24px] border ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                          <div className="flex justify-between items-center mb-4">
-                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2">
-                              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: metric.color }} />
-                              {metric.label}
-                            </label>
-                            <span className="text-sm font-black text-blue-500">{value}/10</span>
+              {/* --- COLUMN 2: PSYCHO & REFLECTIONS --- */}
+              <div className="space-y-6">
+                <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border relative overflow-hidden ${theme !== 'light' ? 'bg-indigo-950/10 border-indigo-500/20' : 'bg-indigo-50 border-indigo-200 shadow-sm'}`}>
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" />
+                  <div className="flex items-center gap-4 mb-6 relative z-10">
+                    <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-500"><Brain size={18} /></div>
+                    <div>
+                      <h3 className="text-lg font-black italic uppercase">PSYCHO-CYBERNETICS</h3>
+                      <p className="text-[8px] font-black uppercase text-indigo-500 tracking-widest">Mindset & Emoční Audit</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6 relative z-10">
+                    {/* Dynamic Metrics Sliders - Compact 2-col */}
+                    <div className="grid grid-cols-2 gap-3">
+                      {psychoMetrics?.map(metric => {
+                        const value = reviewForm.psycho?.metrics?.[metric.id] || 5;
+                        return (
+                          <div key={metric.id} className={`p-4 rounded-2xl border ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                            <div className="flex justify-between items-center mb-3">
+                              <label className="text-[9px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2">
+                                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: metric.color }} />
+                                {metric.label}
+                              </label>
+                              <span className="text-[10px] font-black text-blue-500">{value}/10</span>
+                            </div>
+                            <input
+                              type="range" min="1" max="10" step="1"
+                              value={value}
+                              onChange={(e) => {
+                                const newMetrics = { ...reviewForm.psycho?.metrics, [metric.id]: Number(e.target.value) };
+                                setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, metrics: newMetrics } });
+                              }}
+                              className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer ${theme !== 'light' ? 'bg-[var(--bg-card)]' : 'bg-slate-200'}`}
+                              style={{ accentColor: metric.color }}
+                            />
                           </div>
-                          <input
-                            type="range" min="1" max="10" step="1"
-                            value={value}
-                            onChange={(e) => {
-                              const newMetrics = { ...reviewForm.psycho?.metrics, [metric.id]: Number(e.target.value) };
-                              setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, metrics: newMetrics } });
-                            }}
-                            className={`w-full h-2 rounded-lg appearance-none cursor-pointer ${theme !== 'light' ? 'bg-[var(--bg-card)]' : 'bg-slate-200'}`}
-                            style={{ accentColor: metric.color }}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className={`${labelClass} text-rose-500 text-[9px]`}>Stresory & Spouštěče</label>
+                        <textarea
+                          value={reviewForm.psycho?.stressors || ''}
+                          onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: e.target.value } })}
+                          className={`${inputClass} !h-20 !p-3 resize-none text-[11px]`}
+                          placeholder="Co mě rozhodilo?"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className={`${labelClass} text-emerald-500 text-[9px]`}>Vděčnost & Radost</label>
+                        <textarea
+                          value={reviewForm.psycho?.gratitude || ''}
+                          onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: e.target.value } })}
+                          className={`${inputClass} !h-20 !p-3 resize-none text-[11px]`}
+                          placeholder="Co se povedlo?"
+                        />
+                      </div>
+                    </div>
+
                     <div className="space-y-2">
-                      <label className={`${labelClass} text-rose-500`}>Stresory & Spouštěče (Kdo/Co mě rozhodilo?)</label>
+                      <label className={`${labelClass} text-[9px]`}>Osobní Deník</label>
+                      <div className="flex gap-2 mb-2">
+                        <input
+                          type="text"
+                          value={quickNote}
+                          onChange={(e) => setQuickNote(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && addQuickNote()}
+                          placeholder="Rychlý zápis..."
+                          className={`${inputClass} flex-1 !h-8 !px-3 text-[11px]`}
+                        />
+                        <button
+                          onClick={addQuickNote}
+                          className="px-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-all font-black uppercase text-[8px]"
+                        >
+                          Zapsat
+                        </button>
+                      </div>
                       <textarea
-                        value={reviewForm.psycho?.stressors || ''}
-                        onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: e.target.value } })}
-                        className={`${inputClass} h-24 resize-none`}
-                        placeholder="Např. Hádka s partnerkou, zácpa cestou do práce..."
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className={`${labelClass} text-emerald-500`}>Vděčnost & Radost (Co se povedlo?)</label>
-                      <textarea
-                        value={reviewForm.psycho?.gratitude || ''}
-                        onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: e.target.value } })}
-                        className={`${inputClass} h-24 resize-none`}
-                        placeholder="Např. Dobrý oběd, klidné ráno..."
+                        value={reviewForm.psycho?.notes || ''}
+                        onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, notes: e.target.value } })}
+                        className={`${inputClass} !h-24 !p-3 resize-none font-mono text-[10px] leading-relaxed`}
+                        placeholder="Proud myšlenek..."
                       />
                     </div>
                   </div>
-
-                  <div className="space-y-2">
-                    <label className={labelClass}>Osobní Deník (Volné myšlenky)</label>
-                    <div className="flex gap-2 mb-2">
-                      <input
-                        type="text"
-                        value={quickNote}
-                        onChange={(e) => setQuickNote(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && addQuickNote()}
-                        placeholder="Rychlá poznámka s časem..."
-                        className={`${inputClass} flex-1 h-10`}
-                      />
-                      <button
-                        onClick={addQuickNote}
-                        className="px-4 bg-blue-600 text-white rounded-xl hover:bg-blue-500 transition-all font-black uppercase text-[10px]"
-                      >
-                        Zapsat
-                      </button>
-                    </div>
-                    <textarea
-                      value={reviewForm.psycho?.notes || ''}
-                      onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, notes: e.target.value } })}
-                      className={`${inputClass} h-32 resize-none font-mono text-xs leading-relaxed`}
-                      placeholder="Nebo volný proud myšlenek..."
-                    />
-                  </div>
-
-                </div>
-              </section>
-              <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}>
-                <div className="flex items-center gap-4 mb-6 md:mb-8"><div className="p-3 rounded-2xl bg-indigo-500/10 text-indigo-500"><ShieldCheck size={20} /></div><div><h3 className="text-xl md:text-2xl font-black italic uppercase">AUDIT HUB</h3><p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Reflexe dne</p></div></div>
-                <div className="space-y-6">
-                  <div className={`p-5 md:p-6 rounded-[28px] border ${theme !== 'light' ? 'bg-rose-500/5 border-rose-500/10' : 'bg-rose-50 border-rose-100'}`}><p className="text-[10px] font-black uppercase text-rose-500 mb-4 flex items-center gap-2"><AlertOctagon size={14} /> Chyby dne</p><div className="flex flex-wrap gap-2">{reviewForm.mistakes.map((m, i) => (<div key={i} className={`flex items-center gap-2 px-3 py-1.5 border rounded-xl ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200'} `}><span className="text-[10px] font-black uppercase text-slate-300">{m}</span><button onClick={() => setReviewForm({ ...reviewForm, mistakes: reviewForm.mistakes.filter((_, idx) => idx !== i) })} className="text-slate-600 hover:text-rose-500"><X size={12} /></button></div>))}<button onClick={() => setReviewForm({ ...reviewForm, mistakes: [...reviewForm.mistakes, ''] })} className={`p-2 border border-dashed rounded-xl text-slate-500 hover:text-blue-500 active:scale-95 transition-all ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-300'} `}><Plus size={14} /></button></div></div>
-                  <button onClick={() => { onSaveReview(reviewForm); setView('timeline'); window.scrollTo(0, 0); }} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">UZAVŘÍT AUDIT</button></div>
-              </section>
+                </section>
+              </div>
             </div>
           )}
         </div>

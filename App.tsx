@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
-import { storageService } from './services/storageService';
+import { storageService, getUserId } from './services/storageService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
@@ -44,7 +44,10 @@ import {
   Users,
   User as UserIcon,
   Layers,
-  RefreshCw
+  RefreshCw,
+  Clock,
+  Calendar,
+  History
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
@@ -703,24 +706,15 @@ const App: React.FC = () => {
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
-      // Cleanup ALL legacy localStorage data (now using IndexedDB for large data)
-      // This frees up quota that was causing errors
-      const keysToRemove = Object.keys(localStorage).filter(k =>
-        k.includes('alphatrade_trades') ||
-        k.includes('alphatrade_daily_preps') ||
-        k.includes('alphatrade_daily_reviews') ||
-        k.includes('alphatrade_cache_timestamp') // Remove old cache timestamp strategy
-      );
-      keysToRemove.forEach(k => localStorage.removeItem(k));
-
-
       // --- SIMPLE RELIABLE LOADING: Server-First ---
       console.log("[Load] Starting simple server data load...");
       setInitStatus("Načítám data...");
 
       try {
         // OPTIMIZED: Fetch critical data first, Business Hub data is loaded lazily
-        // This reduces initial load from 11 to 7 API calls (saves ~3-4 seconds)
+
+        // Pre-warm userId cache so all parallel fetches share it
+        await getUserId();
 
         // ⏱️ PERFORMANCE MEASUREMENT - Individual API calls
         console.time('[Perf] TOTAL LOAD');
@@ -769,6 +763,17 @@ const App: React.FC = () => {
         setSyncError(null);
         setLoading(false);
         setIsInitialLoadDone(true);
+
+        // Deferred: cleanup legacy localStorage data (not blocking initial render)
+        setTimeout(() => {
+          const legacyKeys = Object.keys(localStorage).filter(k =>
+            k.includes('alphatrade_trades') ||
+            k.includes('alphatrade_daily_preps') ||
+            k.includes('alphatrade_daily_reviews') ||
+            k.includes('alphatrade_cache_timestamp')
+          );
+          legacyKeys.forEach(k => localStorage.removeItem(k));
+        }, 0);
 
       } catch (error: any) {
         console.error("[Load] Server fetch error:", error);
@@ -912,6 +917,18 @@ const App: React.FC = () => {
       // DailyJournal is frequently accessed - preload immediately
       console.log("[Prefetch] Preloading DailyJournal for instant access...");
       import('./components/DailyJournal');
+
+      // Prefetch trade screenshots in background so TradeHistory has them ready
+      console.log("[Prefetch] Prefetching trade screenshots in background...");
+      storageService.prefetchAllScreenshots().then(screenshotMap => {
+        if (screenshotMap.size > 0) {
+          setTrades(prev => prev.map(t => {
+            const cached = screenshotMap.get(String(t.id));
+            return cached?.screenshot ? { ...t, screenshot: cached.screenshot } : t;
+          }));
+          console.log(`[Prefetch] Screenshots loaded for ${screenshotMap.size} trades`);
+        }
+      }).catch(err => console.warn("[Prefetch] Screenshot prefetch failed:", err));
 
       // Less critical modules - prefetch after small delay
       const prefetchTimer = setTimeout(() => {
@@ -1057,15 +1074,13 @@ const App: React.FC = () => {
   }, [sharedTrade, session, isInitialLoadDone, lastLoadedSessionId.current]);
 
   useEffect(() => {
-    if (canSave) {
+    if (canSave && isJournalDirty.current) {
       const timer = setTimeout(() => {
-        // CRITICAL FIX: Clear journal dirty flag BEFORE saving
-        const wasDirty = isJournalDirty.current;
         isJournalDirty.current = false;
 
         storageService.saveDailyPreps(dailyPreps).catch(err => {
           console.error("[Journal] DailyPreps save failed:", err);
-          if (wasDirty) isJournalDirty.current = true; // Rollback on error
+          isJournalDirty.current = true;
         });
       }, 2000);
       return () => clearTimeout(timer);
@@ -1073,15 +1088,13 @@ const App: React.FC = () => {
   }, [dailyPreps, canSave]);
 
   useEffect(() => {
-    if (canSave) {
+    if (canSave && isJournalDirty.current) {
       const timer = setTimeout(() => {
-        // CRITICAL FIX: Clear journal dirty flag BEFORE saving
-        const wasDirty = isJournalDirty.current;
         isJournalDirty.current = false;
 
         storageService.saveDailyReviews(dailyReviews).catch(err => {
           console.error("[Journal] DailyReviews save failed:", err);
-          if (wasDirty) isJournalDirty.current = true; // Rollback on error
+          isJournalDirty.current = true;
         });
       }, 2000);
       return () => clearTimeout(timer);
@@ -1091,17 +1104,15 @@ const App: React.FC = () => {
   useEffect(() => { if (canSave) storageService.setActiveAccountId(activeAccountId); }, [activeAccountId, canSave]);
 
   useEffect(() => {
-    if (canSave && weeklyFocusList.length > 0) {
+    if (canSave && isJournalDirty.current && weeklyFocusList.length > 0) {
       const timer = setTimeout(() => {
-        // CRITICAL FIX: Clear journal dirty flag BEFORE saving weekly focus
-        const wasDirty = isJournalDirty.current;
         isJournalDirty.current = false;
 
         // Convert forEach to Promise.all for better error handling
         Promise.all(weeklyFocusList.map(wf => storageService.saveWeeklyFocus(wf)))
           .catch(err => {
             console.error("[Journal] WeeklyFocus save failed:", err);
-            if (wasDirty) isJournalDirty.current = true; // Rollback on error
+            isJournalDirty.current = true;
           });
       }, 5000);
       return () => clearTimeout(timer);
@@ -1126,7 +1137,7 @@ const App: React.FC = () => {
   }, [theme, session]);
 
   useEffect(() => {
-    if (canSave) {
+    if (canSave && isPreferencesDirty.current) {
       const timer = setTimeout(() => {
         // CRITICAL FIX: Clear dirty flag BEFORE saving, not after
         // This prevents background sync from skipping fresh data while save is in progress
@@ -1316,6 +1327,10 @@ const App: React.FC = () => {
     return contextAccounts
       .reduce((sum, a) => sum + (a.initialBalance || 0), 0);
   }, [contextAccounts, activeAccount, viewMode]);
+
+  const [quickNote, setQuickNote] = useState('');
+
+  const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
 
   const displayTrades = useMemo(() => {
     if (viewMode === 'individual') return trades;
@@ -1920,6 +1935,26 @@ const App: React.FC = () => {
             </h2>
           </div>
 
+          {activePage === 'journal' && (
+            <div className="hidden md:flex flex-1 justify-center">
+              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] shadow-sm">
+                {[
+                  { id: 'daily', label: 'Daily', icon: Clock },
+                  { id: 'weekly', label: 'Weekly', icon: Calendar },
+                  { id: 'archives', label: 'Deník', icon: History }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setJournalActiveTab(tab.id as any)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${journalActiveTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    <tab.icon size={14} /> {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-6">
             {/* Dashboard Mode Status - Clean Text Design */}
             <div className="hidden md:flex items-center h-8 px-4">
@@ -1944,7 +1979,7 @@ const App: React.FC = () => {
                 isDashboardEditing={activePage === 'dashboard' ? isDashboardEditing : undefined}
                 setIsDashboardEditing={activePage === 'dashboard' ? setIsDashboardEditing : undefined}
                 dashboardMode={dashboardMode}
-                setDashboardMode={setDashboardMode}
+                setDashboardMode={(v) => { setDashboardMode(v); isPreferencesDirty.current = true; }}
                 viewMode={viewMode}
                 setViewMode={setViewMode}
                 pnlDisplayMode={pnlDisplayMode}
@@ -2011,11 +2046,11 @@ const App: React.FC = () => {
                       layout={dashboardLayout}
                       sessions={sessions}
                       ironRules={ironRules}
-                      onUpdateLayout={setDashboardLayout}
+                      onUpdateLayout={(v) => { setDashboardLayout(v); isPreferencesDirty.current = true; }}
                       isEditing={isDashboardEditing}
                       onCloseEdit={() => setIsDashboardEditing(false)}
                       dashboardMode={dashboardMode}
-                      setDashboardMode={setDashboardMode}
+                      setDashboardMode={(v) => { setDashboardMode(v); isPreferencesDirty.current = true; }}
                       accounts={accounts}
                       emotions={userEmotions}
                       viewMode={viewMode}
@@ -2077,6 +2112,8 @@ const App: React.FC = () => {
                       psychoMetrics={psychoMetrics}
                       viewMode={viewMode}
                       weeklyFocusList={weeklyFocusList}
+                      activeTab={journalActiveTab}
+                      onTabChange={setJournalActiveTab}
                     />
                   )}
 
@@ -2157,9 +2194,9 @@ const App: React.FC = () => {
                       onUpdateSettings={(v) => { setBusinessSettings(v); isPreferencesDirty.current = true; }}
                       onUpdateAccounts={setAccounts}
                       constitutionRules={constitutionRules}
-                      onUpdateConstitution={setConstitutionRules}
+                      onUpdateConstitution={(v) => { setConstitutionRules(v); isPreferencesDirty.current = true; }}
                       careerRoadmap={careerRoadmap}
-                      onUpdateRoadmap={setCareerRoadmap}
+                      onUpdateRoadmap={(v) => { setCareerRoadmap(v); isPreferencesDirty.current = true; }}
                       dailyReviews={dailyReviews}
                       weeklyFocusList={weeklyFocusList}
                     />

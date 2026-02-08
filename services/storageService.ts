@@ -188,7 +188,6 @@ export const storageService = {
         emotions:data->emotions,
         planAdherence:data->>planAdherence,
         executionStatus:data->>executionStatus,
-        screenshot:data->>screenshot,
         miniViewRange:data->>miniViewRange,
         miniViewLayout:data->>miniViewLayout,
         miniViewSecondaryRange:data->>miniViewSecondaryRange,
@@ -244,9 +243,7 @@ export const storageService = {
       emotions: t.emotions,
       planAdherence: t.planAdherence,
       executionStatus: t.executionStatus,
-      screenshot: t.screenshot,
-      // Screenshots loaded on-demand via getTradeById() to speed up initial load
-      // But we now fetch the primary 'screenshot' for better initial UX
+      screenshot: undefined,
       screenshots: undefined,
       miniViewRange: t.miniViewRange,
       miniViewLayout: t.miniViewLayout,
@@ -257,10 +254,8 @@ export const storageService = {
       data: {}
     })) as Trade[];
 
-    // Cache only a limited number of most recent trades (e.g. 300) to respect LocalStorage quota
-    // Save to IndexedDB (unlimited size mostly) instead of LocalStorage
-    // Fire and forget
-    await set(localKey, trades);
+    // Cache to IndexedDB (fire-and-forget, don't block return)
+    set(localKey, trades);
     return trades;
   },
 
@@ -573,6 +568,29 @@ export const storageService = {
     return result;
   },
 
+  // Prefetch all trade screenshots in background (returns map of id -> screenshot)
+  async prefetchAllScreenshots(): Promise<Map<string, { screenshot?: string; screenshots?: string[] }>> {
+    const result = new Map<string, { screenshot?: string; screenshots?: string[] }>();
+    const userId = await getUserId();
+    if (!userId) return result;
+
+    const { data, error } = await supabase
+      .from('trades')
+      .select('id, screenshot:data->>screenshot')
+      .eq('user_id', userId)
+      .not('data->>screenshot', 'is', null);
+
+    if (error || !data) return result;
+
+    data.forEach((row: any) => {
+      if (row.screenshot) {
+        result.set(row.id, { screenshot: row.screenshot });
+      }
+    });
+
+    return result;
+  },
+
   // Accounts
   getCachedAccounts(targetUserId?: string): Account[] {
     // Use userId from cache or provided targetUserId
@@ -841,8 +859,8 @@ export const storageService = {
 
     const dbPreps = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
-    // 2. Cache to IndexedDB (can handle large base64 screenshots)
-    if (userId) await set(`alphatrade_daily_preps_${userId}`, dbPreps);
+    // Cache to IndexedDB (fire-and-forget)
+    if (userId) set(`alphatrade_daily_preps_${userId}`, dbPreps);
 
     return dbPreps;
   },
@@ -891,8 +909,8 @@ export const storageService = {
 
     const dbReviews = data.map(d => ({ ...d.data, id: d.id, date: d.date }));
 
-    // 2. Cache to IndexedDB
-    if (userId) await set(`alphatrade_daily_reviews_${userId}`, dbReviews);
+    // Cache to IndexedDB (fire-and-forget)
+    if (userId) set(`alphatrade_daily_reviews_${userId}`, dbReviews);
 
     return dbReviews;
   },
