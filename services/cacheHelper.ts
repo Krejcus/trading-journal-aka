@@ -1,12 +1,6 @@
 import { get, set } from 'idb-keyval';
 import type { Trade } from '../types';
-
-// Get user ID from Supabase session
-async function getUserId(): Promise<string | null> {
-    // This is a simplified version - in production it should use the same supabase client
-    // For now, we'll rely on the fact that storageService already handles auth
-    return localStorage.getItem('alphatrade_last_session_user');
-}
+import { getUserId } from './storageService';
 
 // Helper function to add a new trade to IndexedDB cache
 // This is used by real-time sync to ensure cache stays consistent

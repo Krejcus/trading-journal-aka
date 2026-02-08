@@ -1,0 +1,413 @@
+{
+  "theme": "light",
+  "emotions": [
+    {
+      "id": "fomo",
+      "icon": "zap",
+      "label": "FOMO"
+    },
+    {
+      "id": "fear",
+      "icon": "shield",
+      "label": "Strach"
+    },
+    {
+      "id": "greed",
+      "icon": "dollar-sign",
+      "label": "Chamtivost"
+    },
+    {
+      "id": "revenge",
+      "icon": "flame",
+      "label": "Revenge"
+    },
+    {
+      "id": "flow",
+      "icon": "activity",
+      "label": "Flow"
+    },
+    {
+      "id": "boredom",
+      "icon": "clock",
+      "label": "Nuda"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "asia",
+      "name": "Asia",
+      "color": "#64748b",
+      "endTime": "08:00",
+      "startTime": "02:00"
+    },
+    {
+      "id": "london",
+      "name": "London",
+      "color": "#3b82f6",
+      "endTime": "16:00",
+      "startTime": "09:00"
+    },
+    {
+      "id": "ny",
+      "name": "New York",
+      "color": "#f97316",
+      "endTime": "22:00",
+      "startTime": "15:30"
+    }
+  ],
+  "ironRules": [
+    {
+      "id": "r_meditation",
+      "type": "ritual",
+      "label": "Ranní meditace / klid"
+    },
+    {
+      "id": "r_news",
+      "type": "ritual",
+      "label": "Kontrola High Impact News"
+    },
+    {
+      "id": "t_risk",
+      "type": "trading",
+      "label": "Max 1% Risk na trade"
+    },
+    {
+      "id": "t_revenge",
+      "type": "trading",
+      "label": "Žádný Revenge Trading"
+    },
+    {
+      "id": "t_sl",
+      "type": "trading",
+      "label": "Neposouvat SL do ztráty"
+    }
+  ],
+  "htfOptions": [
+    "4H Demand",
+    "4H Supply",
+    "Daily Level",
+    "Weekly High/Low"
+  ],
+  "ltfOptions": [
+    "M5 BoS",
+    "M1 Choch",
+    "Liquidity Sweep",
+    "FVG Entry"
+  ],
+  "businessGoals": [],
+  "careerRoadmap": [
+    {
+      "id": "cp_30",
+      "label": "Checkpoint 30 Dní",
+      "rules": [
+        {
+          "id": "c_daily_loss",
+          "type": "daily_loss",
+          "unit": "%",
+          "label": "Denní Limit Ztráty",
+          "value": 1,
+          "action": "stop_trading",
+          "isActive": true,
+          "description": "Max 1 % účtu / den. -1 % = okamžitý konec dne.",
+          "penaltyDays": 1
+        },
+        {
+          "id": "c_daily_trades",
+          "type": "daily_trades",
+          "unit": "trades",
+          "label": "Max Počet Obchodů",
+          "value": 2,
+          "action": "warning",
+          "isActive": true,
+          "description": "Max 2 obchody denně."
+        },
+        {
+          "id": "c_weekly_loss",
+          "type": "weekly_loss",
+          "unit": "%",
+          "label": "Týdenní Limit Ztráty",
+          "value": 3,
+          "action": "stop_trading",
+          "isActive": true,
+          "description": "Max -3 % týdně. Při dosažení zbytek týdne pouze replay.",
+          "penaltyDays": 3
+        },
+        {
+          "id": "c_kill_switch",
+          "type": "absolute_dd",
+          "unit": "%",
+          "label": "Absolutní Kill-Switch",
+          "value": 10,
+          "action": "reset",
+          "isActive": true,
+          "description": "DD -10 % od začátku období = konec experimentu."
+        }
+      ],
+      "status": "active",
+      "criteria": [
+        {
+          "label": "Max DD < 5%",
+          "metric": "dd",
+          "condition": "<",
+          "targetValue": 5
+        }
+      ],
+      "dayTarget": 30,
+      "description": "První měsíc v procesu"
+    },
+    {
+      "id": "cp_60",
+      "label": "Checkpoint 60 Dní",
+      "rules": [
+        {
+          "id": "c_daily_loss",
+          "type": "daily_loss",
+          "unit": "%",
+          "label": "Denní Limit Ztráty",
+          "value": 1,
+          "action": "stop_trading",
+          "isActive": true,
+          "description": "Max 1 % účtu / den. -1 % = okamžitý konec dne.",
+          "penaltyDays": 1
+        },
+        {
+          "id": "c_daily_trades",
+          "type": "daily_trades",
+          "unit": "trades",
+          "label": "Max Počet Obchodů",
+          "value": 2,
+          "action": "warning",
+          "isActive": true,
+          "description": "Max 2 obchody denně."
+        },
+        {
+          "id": "c_weekly_loss",
+          "type": "weekly_loss",
+          "unit": "%",
+          "label": "Týdenní Limit Ztráty",
+          "value": 3,
+          "action": "stop_trading",
+          "isActive": true,
+          "description": "Max -3 % týdně. Při dosažení zbytek týdne pouze replay.",
+          "penaltyDays": 3
+        },
+        {
+          "id": "c_kill_switch",
+          "type": "absolute_dd",
+          "unit": "%",
+          "label": "Absolutní Kill-Switch",
+          "value": 10,
+          "action": "reset",
+          "isActive": true,
+          "description": "DD -10 % od začátku období = konec experimentu."
+        }
+      ],
+      "status": "locked",
+      "criteria": [
+        {
+          "label": "Risk Adherence 100%",
+          "metric": "risk_adherence",
+          "condition": "==",
+          "targetValue": 100
+        }
+      ],
+      "dayTarget": 60,
+      "description": "Stabilizace disciplíny"
+    },
+    {
+      "id": "cp_150",
+      "label": "Finální Verdikt",
+      "rules": [
+        {
+          "id": "c_daily_loss",
+          "type": "daily_loss",
+          "unit": "%",
+          "label": "Denní Limit Ztráty",
+          "value": 1,
+          "action": "stop_trading",
+          "isActive": true,
+          "description": "Max 1 % účtu / den. -1 % = okamžitý konec dne.",
+          "penaltyDays": 1
+        },
+        {
+          "id": "c_daily_trades",
+          "type": "daily_trades",
+          "unit": "trades",
+          "label": "Max Počet Obchodů",
+          "value": 2,
+          "action": "warning",
+          "isActive": true,
+          "description": "Max 2 obchody denně."
+        },
+        {
+          "id": "c_weekly_loss",
+          "type": "weekly_loss",
+          "unit": "%",
+          "label": "Týdenní Limit Ztráty",
+          "value": 3,
+          "action": "stop_trading",
+          "isActive": true,
+          "description": "Max -3 % týdně. Při dosažení zbytek týdne pouze replay.",
+          "penaltyDays": 3
+        },
+        {
+          "id": "c_kill_switch",
+          "type": "absolute_dd",
+          "unit": "%",
+          "label": "Absolutní Kill-Switch",
+          "value": 10,
+          "action": "reset",
+          "isActive": true,
+          "description": "DD -10 % od začátku období = konec experimentu."
+        }
+      ],
+      "status": "locked",
+      "criteria": [
+        {
+          "label": "Max DD < 10%",
+          "metric": "dd",
+          "condition": "<",
+          "targetValue": 10
+        }
+      ],
+      "dayTarget": 150,
+      "description": "Rozhodnutí o budoucnosti tradingu"
+    }
+  ],
+  "dashboardMode": "funded",
+  "playbookItems": [],
+  "standardGoals": [
+    "Dodržet max risk 1%",
+    "Žádný obchod po 11:00",
+    "Počkat na setup A+"
+  ],
+  "systemSettings": {
+    "guardianEnabled": true,
+    "strictModeEnabled": false,
+    "sessionEndAlert10m": false,
+    "morningPrepAlert15m": true,
+    "morningPrepAlert60m": true,
+    "sessionAlertsEnabled": true,
+    "sessionEndAlertExact": true,
+    "sessionStartAlert15m": true,
+    "eveningAuditAlertTime": "21:00",
+    "morningWakeUpDebtAlert": true,
+    "sessionStartAlertExact": true,
+    "eveningAuditAlertEnabled": true,
+    "morningPrepAlertCritical": true
+  },
+  "businessPayouts": [],
+  "dashboardLayout": [
+    {
+      "id": "kpi_pnl",
+      "size": "small",
+      "label": "Net P&L",
+      "order": 0,
+      "visible": true
+    },
+    {
+      "id": "kpi_winrate",
+      "size": "small",
+      "label": "Win Rate",
+      "order": 1,
+      "visible": true
+    },
+    {
+      "id": "kpi_profit_factor",
+      "size": "small",
+      "label": "Profit Factor",
+      "order": 2,
+      "visible": true
+    },
+    {
+      "id": "discipline",
+      "size": "full",
+      "label": "Disciplína",
+      "order": 3,
+      "visible": true
+    },
+    {
+      "id": "equity",
+      "size": "large",
+      "label": "Equity Curve",
+      "order": 4,
+      "visible": true
+    },
+    {
+      "id": "calendar",
+      "size": "large",
+      "label": "Kalendář",
+      "order": 5,
+      "visible": true
+    }
+  ],
+  "businessExpenses": [],
+  "businessSettings": {
+    "taxRatePct": 15,
+    "defaultPropThreshold": 150
+  },
+  "standardMistakes": [
+    "Early Exit",
+    "Chase",
+    "No Stop Loss",
+    "Overrisking",
+    "Impulsive Entry"
+  ],
+  "businessResources": [],
+  "constitutionRules": [
+    {
+      "id": "c_daily_loss",
+      "type": "daily_loss",
+      "unit": "%",
+      "label": "Denní Limit Ztráty",
+      "value": 1,
+      "action": "stop_trading",
+      "isActive": true,
+      "description": "Max 1 % účtu / den. -1 % = okamžitý konec dne.",
+      "penaltyDays": 1
+    },
+    {
+      "id": "c_daily_trades",
+      "type": "daily_trades",
+      "unit": "trades",
+      "label": "Max Počet Obchodů",
+      "value": 2,
+      "action": "warning",
+      "isActive": true,
+      "description": "Max 2 obchody denně."
+    },
+    {
+      "id": "c_weekly_loss",
+      "type": "weekly_loss",
+      "unit": "%",
+      "label": "Týdenní Limit Ztráty",
+      "value": 3,
+      "action": "stop_trading",
+      "isActive": true,
+      "description": "Max -3 % týdně. Při dosažení zbytek týdne pouze replay.",
+      "penaltyDays": 3
+    },
+    {
+      "id": "c_kill_switch",
+      "type": "absolute_dd",
+      "unit": "%",
+      "label": "Absolutní Kill-Switch",
+      "value": 10,
+      "action": "reset",
+      "isActive": true,
+      "description": "DD -10 % od začátku období = konec experimentu."
+    }
+  ],
+  "psychoMetricsConfig": [
+    {
+      "id": "mood",
+      "color": "#6366f1",
+      "label": "Nálada"
+    },
+    {
+      "id": "energy",
+      "color": "#f59e0b",
+      "label": "Energie"
+    }
+  ]
+}

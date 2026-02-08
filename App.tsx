@@ -947,6 +947,62 @@ const App: React.FC = () => {
     }
   }, [activePage, session, isBusinessDataLoaded]);
 
+  // Cross-device sync: refresh stale data when user returns to tab after 30+ seconds
+  const lastVisibleAt = useRef(Date.now());
+
+  useEffect(() => {
+    if (!session || !isInitialLoadDone) return;
+
+    const handleFocusSync = async () => {
+      if (document.visibilityState !== 'visible') {
+        lastVisibleAt.current = Date.now();
+        return;
+      }
+
+      const elapsed = Date.now() - lastVisibleAt.current;
+      if (elapsed < 30000) return; // Skip if tab was hidden < 30s
+
+      console.log("[Cross-device] Tab refocused after", Math.round(elapsed / 1000), "s — syncing...");
+
+      try {
+        if (!isJournalDirty.current) {
+          const [freshPreps, freshReviews] = await Promise.all([
+            storageService.getDailyPreps(),
+            storageService.getDailyReviews(),
+          ]);
+          setDailyPreps(freshPreps || []);
+          setDailyReviews(freshReviews || []);
+        }
+
+        if (!isPreferencesDirty.current) {
+          const freshPrefs = await storageService.getPreferences();
+          if (freshPrefs) applyPreferences(freshPrefs);
+        }
+
+        const freshAccounts = await storageService.getAccounts();
+        if (freshAccounts?.length) setAccounts(freshAccounts);
+
+        if (isBusinessDataLoaded) {
+          const [expenses, goals, resources] = await Promise.all([
+            storageService.getBusinessExpenses(),
+            storageService.getBusinessGoals(),
+            storageService.getBusinessResources(),
+          ]);
+          setBusinessExpenses(expenses || []);
+          setBusinessGoals(goals || []);
+          setBusinessResources(resources || []);
+        }
+
+        console.log("[Cross-device] Sync complete");
+      } catch (err) {
+        console.error("[Cross-device] Sync failed:", err);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleFocusSync);
+    return () => document.removeEventListener('visibilitychange', handleFocusSync);
+  }, [session, isInitialLoadDone, applyPreferences, isBusinessDataLoaded]);
+
   // Phase B: Startup Global Sync (Incremental) - DISABLED
   // Trade Replay was removed for performance optimization.
   // See .archive/trade-replay-system/RESTORATION_GUIDE.md to restore.
@@ -1167,6 +1223,39 @@ const App: React.FC = () => {
       clearInterval(interval);
     };
   }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, dailyPreps, dailyReviews, weeklyFocusList]);
+
+  // Flush dirty data to DB when user leaves tab (visibilitychange) or closes browser (beforeunload)
+  useEffect(() => {
+    if (!canSave) return;
+
+    const flushDirtyData = () => {
+      if (isJournalDirty.current) {
+        isJournalDirty.current = false;
+        storageService.saveDailyPreps(dailyPreps).catch(() => { isJournalDirty.current = true; });
+        storageService.saveDailyReviews(dailyReviews).catch(() => { isJournalDirty.current = true; });
+      }
+      if (isPreferencesDirty.current) {
+        isPreferencesDirty.current = false;
+        storageService.savePreferences({
+          emotions: userEmotions, standardMistakes: userMistakes, standardGoals,
+          dashboardLayout, sessions, htfOptions, ltfOptions, ironRules,
+          playbookItems, constitutionRules, careerRoadmap, businessSettings,
+          psychoMetricsConfig: psychoMetrics, theme, dashboardMode, systemSettings,
+        }).catch(() => { isPreferencesDirty.current = true; });
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushDirtyData();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', flushDirtyData);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', flushDirtyData);
+    };
+  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings]);
 
   // Handle Dashboard Mode Switching
   useEffect(() => {
@@ -1483,9 +1572,13 @@ const App: React.FC = () => {
         }
       });
 
-      // Force save immediately for manual entry to be safe
-      storageService.saveTrades(updated).catch(err => console.error("Manual trade save failed", err));
       return updated;
+    });
+
+    // Save ONLY the new/changed trades (not ALL trades — prevents screenshot data loss)
+    storageService.saveTrades(newTradesArray).catch(err => {
+      console.error("Manual trade save failed:", err);
+      setSyncError("Nepodařilo se uložit obchod.");
     });
 
     setIsManualEntryOpen(false);
@@ -1503,15 +1596,16 @@ const App: React.FC = () => {
   };
 
   const handleUpdateTrade = useCallback((tradeId: string | number, updates: Partial<Trade>) => {
-    setTrades(prev => {
-      const updated = prev.map(t => t.id === tradeId ? { ...t, ...updates } : t);
-      // Persist to DB
-      storageService.saveTrades(updated).catch(err => {
-        console.error("Failed to persist trade update", err);
+    // Update local state immediately (optimistic)
+    setTrades(prev => prev.map(t => t.id === tradeId ? { ...t, ...updates } : t));
+
+    // Persist only the changed trade to DB (not ALL trades — prevents screenshot data loss)
+    if (typeof tradeId === 'string' && tradeId.includes('-')) {
+      storageService.updateTrade(tradeId, updates).catch(err => {
+        console.error("Failed to persist trade update:", err);
         setSyncError("Nepodařilo se uložit změny obchodu.");
       });
-      return updated;
-    });
+    }
   }, []);
 
   const handleDeletePrep = useCallback(async (date: string) => {
@@ -1607,10 +1701,12 @@ const App: React.FC = () => {
 
   const executeClearTrades = async () => {
     try {
-      setTrades([]);
+      // Only clear trades for the ACTIVE account from state (not all accounts)
+      setTrades(prev => prev.filter(t => t.accountId !== activeAccountId));
       await storageService.clearTrades(activeAccountId);
     } catch (err) {
       console.error("Failed to clear trades:", err);
+      setSyncError("Nepodařilo se smazat obchody.");
     }
   };
   // --- BUSINESS HUB PERSISTENCE HANDLERS ---
@@ -1649,6 +1745,8 @@ const App: React.FC = () => {
       }
     } catch (err) {
       console.error('[BusinessHub] Failed to sync expenses:', err);
+      setBusinessExpenses(prev); // Rollback on failure
+      setSyncError("Nepodařilo se uložit výdaje.");
     }
   }, [businessExpenses]);
 
@@ -1680,6 +1778,8 @@ const App: React.FC = () => {
       }
     } catch (err) {
       console.error('[BusinessHub] Failed to sync payouts:', err);
+      setBusinessPayouts(prev); // Rollback on failure
+      setSyncError("Nepodařilo se uložit výplaty.");
     }
   }, [businessPayouts]);
 
@@ -1711,6 +1811,8 @@ const App: React.FC = () => {
       }
     } catch (err) {
       console.error('[BusinessHub] Failed to sync goals:', err);
+      setBusinessGoals(prev); // Rollback on failure
+      setSyncError("Nepodařilo se uložit cíle.");
     }
   }, [businessGoals]);
 
@@ -1742,6 +1844,8 @@ const App: React.FC = () => {
       }
     } catch (err) {
       console.error('[BusinessHub] Failed to sync resources:', err);
+      setBusinessResources(prev); // Rollback on failure
+      setSyncError("Nepodařilo se uložit zdroje.");
     }
   }, [businessResources]);
 
@@ -1994,7 +2098,13 @@ const App: React.FC = () => {
                   )}
 
                   {activePage === 'network' && (
-                    <NetworkHub theme={theme} accounts={accounts} emotions={userEmotions} />
+                    <NetworkHub
+                      theme={theme}
+                      accounts={accounts}
+                      emotions={userEmotions}
+                      user={currentUser}
+                      exchangeRates={exchangeRates}
+                    />
                   )}
 
 

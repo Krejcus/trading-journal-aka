@@ -3,7 +3,8 @@ import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
    X, User as UserIcon, Camera, Mail, Hash,
-   Lock, Upload, Trash2, Check, Copy, Globe, DollarSign, Loader2
+   Lock, Upload, Trash2, Check, Copy, Globe, DollarSign, Loader2,
+   Eye, EyeOff
 } from 'lucide-react';
 import { User } from '../types';
 import { supabase } from '../services/supabase';
@@ -38,6 +39,9 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
    const fileInputRef = useRef<HTMLInputElement>(null);
    const isDark = theme !== 'light';
    const [isSaving, setIsSaving] = useState(false);
+   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+   const [showNewPassword, setShowNewPassword] = useState(false);
+   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
    if (!isOpen) return null;
 
@@ -309,28 +313,55 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
                               <Lock size={12} /> Změna hesla
                            </h4>
                            <div className="space-y-4">
-                              <input
-                                 type="password"
-                                 placeholder="Současné heslo"
-                                 value={passwords.currentPassword}
-                                 onChange={e => setPasswords({ ...passwords, currentPassword: e.target.value })}
-                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all ${inputBg}`}
-                              />
+                              <div className="relative">
+                                 <input
+                                    type={showCurrentPassword ? "text" : "password"}
+                                    placeholder="Současné heslo"
+                                    value={passwords.currentPassword}
+                                    onChange={e => setPasswords({ ...passwords, currentPassword: e.target.value })}
+                                    className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all pr-12 ${inputBg}`}
+                                 />
+                                 <button
+                                    type="button"
+                                    onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-blue-500 transition-colors p-1"
+                                 >
+                                    {showCurrentPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                 </button>
+                              </div>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                 <input
-                                    type="password"
-                                    placeholder="Nové heslo"
-                                    value={passwords.newPassword}
-                                    onChange={e => setPasswords({ ...passwords, newPassword: e.target.value })}
-                                    className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all ${inputBg}`}
-                                 />
-                                 <input
-                                    type="password"
-                                    placeholder="Potvrzení hesla"
-                                    value={passwords.confirmPassword}
-                                    onChange={e => setPasswords({ ...passwords, confirmPassword: e.target.value })}
-                                    className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all ${inputBg}`}
-                                 />
+                                 <div className="relative">
+                                    <input
+                                       type={showNewPassword ? "text" : "password"}
+                                       placeholder="Nové heslo"
+                                       value={passwords.newPassword}
+                                       onChange={e => setPasswords({ ...passwords, newPassword: e.target.value })}
+                                       className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all pr-12 ${inputBg}`}
+                                    />
+                                    <button
+                                       type="button"
+                                       onClick={() => setShowNewPassword(!showNewPassword)}
+                                       className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-blue-500 transition-colors p-1"
+                                    >
+                                       {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                    </button>
+                                 </div>
+                                 <div className="relative">
+                                    <input
+                                       type={showConfirmPassword ? "text" : "password"}
+                                       placeholder="Potvrzení hesla"
+                                       value={passwords.confirmPassword}
+                                       onChange={e => setPasswords({ ...passwords, confirmPassword: e.target.value })}
+                                       className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all pr-12 ${inputBg}`}
+                                    />
+                                    <button
+                                       type="button"
+                                       onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                       className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-blue-500 transition-colors p-1"
+                                    >
+                                       {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                    </button>
+                                 </div>
                               </div>
                            </div>
                         </div>

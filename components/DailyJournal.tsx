@@ -210,6 +210,21 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     };
   }, []);
 
+  // Flush pending journal data when browser tab is closed/refreshed
+  useEffect(() => {
+    const flushOnClose = () => {
+      const p = lastPrepForm.current;
+      const r = lastReviewForm.current;
+      const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length;
+      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes;
+
+      if (!isPrepEmpty) onSavePrep(p);
+      if (!isReviewEmpty) onSaveReview(r);
+    };
+    window.addEventListener('beforeunload', flushOnClose);
+    return () => window.removeEventListener('beforeunload', flushOnClose);
+  }, [onSavePrep, onSaveReview]);
+
   // Current Week Focus Helper - Harmonized with Settings.tsx
   const getSelectedWeekISO = (dateStr: string) => {
     const date = new Date(dateStr);

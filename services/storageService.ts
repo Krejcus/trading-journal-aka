@@ -319,40 +319,23 @@ export const storageService = {
       ...updates
     };
 
-    // Update the trade record
-    // List of known columns in 'trades' table (to avoid sending unknown keys which causes Supabase error 400)
-    const knownColumns = ['id', 'user_id', 'account_id', 'instrument', 'pnl', 'direction', 'date', 'timestamp', 'drawings', 'data', 'is_public', 'created_at', 'setup', 'mistake', 'run_up', 'drawdown', 'risk_amount', 'entry_price', 'exit_price', 'quantity', 'notes', 'tags', 'screenshots', 'signal'];
+    // Only sync specific known root columns — spreading arbitrary fields causes Supabase 400 errors
+    const ROOT_COLUMN_MAP: Record<string, string> = {
+      instrument: 'instrument', pnl: 'pnl', direction: 'direction',
+      date: 'date', timestamp: 'timestamp', signal: 'signal',
+      drawings: 'drawings', isPublic: 'is_public'
+    };
 
-    // Filter updates to only include known columns for the root level update
-    const rootUpdates: any = {};
+    const rootUpdate: any = { data: updatedData };
     Object.keys(updates).forEach(key => {
-      // Simple heuristic: camelCase keys usually belong to JSON 'data', snake_case to columns.
-      // But our Trade type mixes them. Let's explicitly check or just save everything to 'data' and only specific ones to root.
-      // Actually, safer approach: ONLY update 'data' with everything, and root with minimal set if needed.
-      // But existing code does sync some fields.
-      if (knownColumns.includes(key) || knownColumns.includes(key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`))) {
-        // Try to map or just pass if matches exact column name.
-        // Since we don't have exact schema introspection here, let's be conservative.
-        // miniViewRange is definitely NOT a column.
-        // So we should NOT include ...updates in the root update if it contains miniViewRange.
+      if (ROOT_COLUMN_MAP[key]) {
+        rootUpdate[ROOT_COLUMN_MAP[key]] = (updates as any)[key];
       }
     });
 
-    // Better strategy: explicitly exclude known non-columns from root spread
-    const { miniViewRange, miniViewLayout, miniViewSecondaryRange, miniViewSecondaryTimeframe, ...safeRootUpdates } = updates as any;
-
-    // Be even safer: 'data' is the source of truth for these new UI fields.
-    // So we update 'data' column with ALL updates merged.
-    // And for the root row update, we only include the 'data' field itself (and maybe essential columns if they changed like pnl/instrument).
-    // The previous code `...updates` was dangerous.
-
     const { error } = await supabase
       .from('trades')
-      .update({
-        // We only spread safe known columns or exclude the new UI ones.
-        ...safeRootUpdates,
-        data: updatedData
-      })
+      .update(rootUpdate)
       .eq('id', tradeId)
       .eq('user_id', userId);
 
@@ -375,32 +358,8 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId || trades.length === 0) return [];
 
-    // --- OPUS-LEVEL CACHE MERGE ---
-    // Nenačítáme slepě, ale mergujeme nové obchody s existující cache.
-    // To řeší "Race Condition", kdy se při refreshi nenačetl nejnovější obchod.
-    try {
-      const cacheKey = `alphatrade_trades_${userId}`;
-      const currentCache = (await get<Trade[]>(cacheKey)) || [];
-
-      // Vytvoříme Mapu pro unifikaci podle ID (přepíše staré verze novými)
-      const tradeMap = new Map<string | number, Trade>();
-      currentCache.forEach(t => tradeMap.set(t.id, t));
-      trades.forEach(t => tradeMap.set(t.id, t));
-
-      // Seřadíme sestupně podle času (nejnovější nahoře)
-      const mergedCache = Array.from(tradeMap.values()).sort((a, b) => {
-        const timeA = a.timestamp || new Date(a.date).getTime();
-        const timeB = b.timestamp || new Date(b.date).getTime();
-        return timeB - timeA;
-      });
-
-      // Uložíme sloučenou verzi zpět do IndexedDB
-      await set(cacheKey, mergedCache);
-    } catch (err) {
-      console.error("[Storage] Cache merge failed:", err);
-      // Fallback: Pokud selže merge, uložíme alespoň to co máme (better than nothing)
-      await set(`alphatrade_trades_${userId}`, trades);
-    }
+    // NOTE: Cache is written AFTER successful DB upsert (not before) to prevent phantom data.
+    // If DB fails, cache stays consistent with what's actually persisted.
 
     let { data: dbAccounts } = await supabase.from('accounts').select('id, name').eq('user_id', userId);
 
@@ -492,7 +451,28 @@ export const storageService = {
       drawings: d.drawings
     }));
 
-    await updateCacheTimestamp(); // Mark cache as fresh
+    // Cache merge AFTER successful DB upsert — prevents phantom data on DB failure
+    try {
+      const cacheKey = `alphatrade_trades_${userId}`;
+      const currentCache = (await get<Trade[]>(cacheKey)) || [];
+
+      const tradeMap = new Map<string | number, Trade>();
+      currentCache.forEach(t => tradeMap.set(t.id, t));
+      // Use server-returned results (with DB-assigned UUIDs) instead of input trades
+      results.forEach(t => tradeMap.set(t.id, t));
+
+      const mergedCache = Array.from(tradeMap.values()).sort((a, b) => {
+        const timeA = a.timestamp || new Date(a.date).getTime();
+        const timeB = b.timestamp || new Date(b.date).getTime();
+        return timeB - timeA;
+      });
+
+      await set(cacheKey, mergedCache);
+    } catch (err) {
+      console.error("[Storage] Post-save cache merge failed:", err);
+    }
+
+    await updateCacheTimestamp();
     return results;
   },
 
@@ -560,7 +540,10 @@ export const storageService = {
       pnl: data.pnl,
       direction: data.direction,
       date: data.date,
-      timestamp: data.timestamp
+      timestamp: data.timestamp,
+      drawings: data.drawings || data.data?.drawings || [],
+      isPublic: data.is_public,
+      createdAt: data.created_at
     };
   },
 
@@ -744,11 +727,32 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
+    // Delete orphaned trades belonging to this account FIRST
+    const { error: tradesErr } = await supabase.from('trades').delete().eq('account_id', id).eq('user_id', userId);
+    if (tradesErr) console.error("[deleteAccount] Failed to delete orphaned trades:", tradesErr);
+
+    // Delete the account
     const { error } = await supabase.from('accounts').delete().eq('id', id).eq('user_id', userId);
     if (error) {
       console.error("Supabase deleteAccount error:", error);
       throw error;
     }
+
+    // Update localStorage cache
+    const localKey = `alphatrade_accounts_${userId}`;
+    const localData = localStorage.getItem(localKey);
+    if (localData) {
+      try {
+        const accounts = JSON.parse(localData).filter((a: any) => a.id !== id);
+        safeSetItem(localKey, accounts);
+      } catch (e) { /* ignore parse error */ }
+    }
+
+    // Update IndexedDB trades cache
+    const tradesKey = `alphatrade_trades_${userId}`;
+    const cachedTrades: Trade[] = await get(tradesKey) || [];
+    const filteredTrades = cachedTrades.filter(t => t.accountId !== id);
+    await set(tradesKey, filteredTrades);
   },
 
   // Preferences
@@ -796,8 +800,12 @@ export const storageService = {
       return;
     }
     safeSetItem(localKey, prefs);
-    await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
-    await updateCacheTimestamp(); // Mark cache as fresh
+    const { error } = await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
+    if (error) {
+      console.error("[savePreferences] DB error:", error);
+      throw error;
+    }
+    await updateCacheTimestamp();
   },
 
   // Daily Journal
@@ -843,23 +851,28 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
-    // Save to IndexedDB immediately (can handle large screenshots)
-    await set(`alphatrade_daily_preps_${userId}`, preps);
-
-    // Sync to Supabase
+    // Sync to Supabase FIRST (cache written after success to prevent phantom data)
     const prepsToUpsert = preps.map(p => ({ user_id: userId, date: p.date, data: p }));
     const { error } = await supabase.from('daily_preps').upsert(prepsToUpsert, { onConflict: 'user_id,date' });
     if (error) {
       console.error("Failed to sync preps to Supabase:", error);
       throw error;
     }
-    await updateCacheTimestamp(); // Mark cache as fresh
+
+    // Cache AFTER successful DB write
+    await set(`alphatrade_daily_preps_${userId}`, preps);
+    await updateCacheTimestamp();
   },
 
   async deleteDailyPrep(date: string): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
-    await supabase.from('daily_preps').delete().eq('user_id', userId).eq('date', date);
+    const { error } = await supabase.from('daily_preps').delete().eq('user_id', userId).eq('date', date);
+    if (error) { console.error("[deleteDailyPrep] DB error:", error); throw error; }
+
+    // Update IndexedDB cache
+    const cached = await get<DailyPrep[]>(`alphatrade_daily_preps_${userId}`) || [];
+    await set(`alphatrade_daily_preps_${userId}`, cached.filter(p => p.date !== date));
   },
 
   async getDailyReviews(targetUserId?: string): Promise<DailyReview[]> {
@@ -888,23 +901,28 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
-    // Save to IndexedDB immediately
-    await set(`alphatrade_daily_reviews_${userId}`, reviews);
-
-    // Sync to Supabase
+    // Sync to Supabase FIRST (cache written after success to prevent phantom data)
     const reviewsToUpsert = reviews.map(r => ({ user_id: userId, date: r.date, data: r }));
     const { error } = await supabase.from('daily_reviews').upsert(reviewsToUpsert, { onConflict: 'user_id,date' });
     if (error) {
       console.error("Failed to sync reviews to Supabase:", error);
       throw error;
     }
-    await updateCacheTimestamp(); // Mark cache as fresh
+
+    // Cache AFTER successful DB write
+    await set(`alphatrade_daily_reviews_${userId}`, reviews);
+    await updateCacheTimestamp();
   },
 
   async deleteDailyReview(date: string): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
-    await supabase.from('daily_reviews').delete().eq('user_id', userId).eq('date', date);
+    const { error } = await supabase.from('daily_reviews').delete().eq('user_id', userId).eq('date', date);
+    if (error) { console.error("[deleteDailyReview] DB error:", error); throw error; }
+
+    // Update IndexedDB cache
+    const cached = await get<DailyReview[]>(`alphatrade_daily_reviews_${userId}`) || [];
+    await set(`alphatrade_daily_reviews_${userId}`, cached.filter(r => r.date !== date));
   },
 
   // Weekly & Monthly
@@ -1286,10 +1304,14 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return [];
 
+    // Sanitize query: remove PostgREST filter special characters to prevent filter injection
+    const sanitized = query.replace(/[%_().,\\]/g, '').trim();
+    if (!sanitized || sanitized.length < 2) return [];
+
     const { data, error } = await supabase
       .from('profiles')
       .select('id, email, full_name')
-      .or(`email.ilike.%${query}%,full_name.ilike.%${query}%`)
+      .or(`email.ilike.%${sanitized}%,full_name.ilike.%${sanitized}%`)
       .neq('id', userId)
       .limit(10);
 
@@ -1317,7 +1339,7 @@ export const storageService = {
     const { data, error } = await supabase
       .from('connections')
       .select(`*, sender: profiles!sender_id(id, email, full_name), receiver: profiles!receiver_id(id, email, full_name)`)
-      .or(`sender_id.eq.${userId}, receiver_id.eq.${userId} `);
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
 
     if (error) return [];
     return (data || []).map(c => ({
@@ -1583,14 +1605,26 @@ export const storageService = {
     // 1. Check permissions FIRST - before fetching any data
     let rawPerms: any = null;
     if (!isSelf) {
-      const { data: connection } = await supabase
+      const { data: connection, error: connErr } = await supabase
         .from('connections')
-        .select('permissions')
-        .or(`and(sender_id.eq.${currentUserId}, receiver_id.eq.${targetUserId}), and(sender_id.eq.${targetUserId}, receiver_id.eq.${currentUserId})`)
-        .eq('status', 'accepted')
+        .select('permissions, status')
+        .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${currentUserId})`)
         .maybeSingle();
 
-      if (!connection) return null; // No accepted connection = no access
+      if (connErr) {
+        console.error("[Spectator] Connection query failed:", connErr);
+        return null;
+      }
+
+      if (!connection) {
+        console.warn("[Spectator] No connection found between users");
+        return null;
+      }
+
+      if (connection.status !== 'accepted') {
+        console.warn("[Spectator] Connection exists but status is:", connection.status);
+        return null;
+      }
       rawPerms = connection.permissions as any;
     }
 

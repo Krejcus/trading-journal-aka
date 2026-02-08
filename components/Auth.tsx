@@ -440,12 +440,13 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
                         required
                       />
                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within/input:text-blue-400 transition-colors" size={16} />
-                      <div
+                      <button
+                        type="button"
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowPassword(!showPassword); }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer hover:text-white transition-colors text-white/30 z-20 p-2"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer hover:text-white transition-colors text-white/50 z-20 p-2"
                       >
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </div>
+                      </button>
                     </div>
                   </div>
                 )}

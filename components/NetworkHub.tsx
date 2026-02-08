@@ -21,9 +21,11 @@ interface NetworkHubProps {
    theme: 'dark' | 'light' | 'oled';
    accounts: Account[];
    emotions: CustomEmotion[];
+   user: User;
+   exchangeRates: ExchangeRates | null;
 }
 
-const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) => {
+const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates }) => {
    const isDark = theme !== 'light';
    const [activeTab, setActiveTab] = useState<'share' | 'following' | 'followers' | 'requests' | 'leaderboard'>('following');
    const [isAirlockOpen, setIsAirlockOpen] = useState(false);
@@ -104,7 +106,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
       setIsSearching(true);
       try {
          const results = await storageService.searchUsers(val);
-         setSearchResults(results.filter(u => u.id !== currentUserId));
+         // Filter out current user AND users with existing connection (pending or accepted)
+         const connectedIds = new Set(connections.map(c => c.sender_id === currentUserId ? c.receiver_id : c.sender_id));
+         setSearchResults(results.filter(u => u.id !== currentUserId && !connectedIds.has(u.id)));
       } finally {
          setIsSearching(false);
       }
@@ -167,7 +171,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
          setSpectatorDate(new Date().toISOString().split('T')[0]);
       } catch (err) {
          console.error("Failed to enter spectator mode:", err);
-         alert("Nepodařilo se načíst data tradera. Možná nemáte oprávnění.");
+         alert("Nepodařilo se načíst data tradera.\n\nMožné příčiny:\n• Protistrana ještě nepřijala vaši žádost o sledování\n• Spojení bylo zrušeno\n• Zkuste obnovit stránku");
          setIsSpectating(false);
       } finally {
          setLoading(false);
@@ -176,6 +180,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
 
    // Derived Lists
    const incomingRequests = connections.filter(c => c.receiver_id === currentUserId && c.status === 'pending');
+   const outgoingRequests = connections.filter(c => c.sender_id === currentUserId && c.status === 'pending');
    const following = connections.filter(c => c.sender_id === currentUserId && c.status === 'accepted');
    const followers = connections.filter(c => c.receiver_id === currentUserId && c.status === 'accepted');
 
@@ -842,6 +847,26 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                      ))}
                   </div>
                )}
+
+               {outgoingRequests.length > 0 && (
+                  <>
+                     <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2 mt-8"><Clock size={14} /> Odeslané žádosti</h3>
+                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {outgoingRequests.map(req => (
+                           <div key={req.id} className={`p-6 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'} flex items-center justify-between`}>
+                              <div className="flex items-center gap-4">
+                                 <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center font-black uppercase">{req.receiver?.name?.substring(0, 2) || 'UT'}</div>
+                                 <div>
+                                    <p className={`font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{req.receiver?.name || 'Trader'}</p>
+                                    <p className="text-[10px] text-amber-500 uppercase font-black tracking-widest">Čeká na schválení</p>
+                                 </div>
+                              </div>
+                              <button onClick={() => handleRequestAction(req.id, 'rejected')} className="p-2 rounded-lg bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all" title="Zrušit žádost"><X size={20} /></button>
+                           </div>
+                        ))}
+                     </div>
+                  </>
+               )}
             </div>
          )}
 
@@ -1060,7 +1085,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                     <span className={`text-xl font-black font-mono tracking-tighter ${dayPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'} ${dayPnL === null ? 'blur-sm select-none opacity-50' : ''}`}>
                                        {dayPnL !== null ? (
                                           spectatorData?.meta?.pnlFormat === 'rr'
-                                             ? formatPnL(dayPnL, 'rr', undefined, calculateTotalRR(filteredRemoteTrades))
+                                             ? formatPnL(dayPnL, 'rr', undefined, calculateTotalRR(filteredRemoteTrades), true, user.currency, exchangeRates)
                                              : `${dayPnL >= 0 ? '+' : ''}$${dayPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
                                        ) : 'HIDDEN'}
                                     </span>
@@ -1137,12 +1162,15 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                           preps={spectatorData?.preps || []}
                                           reviews={spectatorData?.reviews || []}
                                           theme={theme}
-                                          accounts={accounts}
+                                          accounts={spectatorData?.accounts || []}
+                                           initialBalance={spectatorData?.accounts.find(a => a.id === activeSpectatorAccountId)?.initialBalance || 0}
                                           emotions={emotions}
                                           onDayClick={(dateStr) => {
                                              setSpectatorDate(dateStr);
                                           }}
                                           pnlFormat={spectatorData?.meta?.pnlFormat}
+                                           user={user}
+                                           exchangeRates={exchangeRates}
                                        />
                                     </div>
                                  </div>
@@ -1159,7 +1187,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Briefcase size={14} /> Career PnL</p>
                                  <h3 className={`text-3xl font-black italic tracking-tighter ${globalCareerStats.totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                     {spectatorData?.meta?.pnlFormat === 'rr'
-                                       ? formatPnL(globalCareerStats.totalPnL, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined)
+                                       ? formatPnL(globalCareerStats.totalPnL, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined, true, user.currency, exchangeRates)
                                        : `$${globalCareerStats.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                                  </h3>
                                  <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">Total from {globalCareerStats.accountCount} accounts</p>
@@ -1168,7 +1196,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><DollarSign size={14} className="text-emerald-500" /> Total Payouts</p>
                                  <h3 className="text-3xl font-black italic tracking-tighter text-emerald-500">
                                     {spectatorData?.meta?.pnlFormat === 'rr'
-                                       ? formatPnL(globalCareerStats.totalPayouts, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined)
+                                       ? formatPnL(globalCareerStats.totalPayouts, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, undefined, true, user.currency, exchangeRates)
                                        : `$${globalCareerStats.totalPayouts.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                                  </h3>
                                  <div className="flex items-center gap-2 mt-2">
@@ -1296,7 +1324,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions }) =>
                                                       </p>
                                                       <p className={`text-lg font-black italic ${Number(payload[0].value) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                                          {spectatorData?.meta?.pnlFormat === 'rr'
-                                                            ? formatPnL(Number(payload[0].value), (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined)
+                                                            ? formatPnL(Number(payload[0].value), (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined, true, user.currency, exchangeRates)
                                                             : `$${Number(payload[0].value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                                                       </p>
                                                    </div>
