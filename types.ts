@@ -297,15 +297,25 @@ export interface TradeStats {
   trades: Trade[];
 }
 
+export interface SessionAnalysis {
+  id: string; // e.g. "london", "ny", or a UUID
+  label: string;
+  image?: string;
+  plan: string;
+  color?: string;
+}
+
 export interface DailyPrep {
   id: string;
   date: string;
+  bias?: string; // Overall market bias (bullish/bearish/neutral)
   scenarios: {
-    bullish: string;
-    bearish: string;
-    scenarioImages?: string[]; // New way: array of images
+    bullish: string; // Legacy
+    bearish: string; // Legacy
+    scenarioImages?: string[]; // Legacy way
     bullishImage?: string; // Legacy
     bearishImage?: string; // Legacy
+    sessions?: SessionAnalysis[]; // New way: bento cards per session
   };
   goals: string[];
   checklist: {
@@ -393,11 +403,13 @@ export interface MonthlyReview {
 
 export interface BusinessExpense {
   id: string;
-  user_id: string;
+  user_id?: string;
   date: string;
+  label: string;
   description?: string;
   amount: number;
   category: string;
+  recurring?: 'monthly' | 'yearly' | 'one-time';
   receipt_url?: string;
   created_at?: string;
   updated_at?: string;
@@ -405,10 +417,16 @@ export interface BusinessExpense {
 
 export interface BusinessPayout {
   id: string;
-  user_id: string;
+  user_id?: string;
   date: string;
   amount: number;
+  grossAmount?: number;
+  profitSplitUsed?: number;
+  accountId?: string;
   description?: string;
+  notes?: string;
+  image?: string;
+  status?: 'Received' | 'Pending';
   payout_method?: string;
   created_at?: string;
   updated_at?: string;

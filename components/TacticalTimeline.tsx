@@ -117,41 +117,75 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                   </div>
                   {prep ? (
                     <div className={isMini ? 'space-y-1' : 'space-y-4'}>
-                      <div className={`grid ${isMini ? 'grid-cols-1' : 'grid-cols-2'} gap-1.5`}>
-                        {/* New multiple images support - always visible */}
-                        {prep.scenarios.scenarioImages && prep.scenarios.scenarioImages.length > 0 ? (
-                          <div className={`col-span-2 grid ${isMini ? 'grid-cols-2' : 'grid-cols-3'} gap-1.5`}>
-                            {prep.scenarios.scenarioImages.map((img, i) => (
-                              <div key={i} className="aspect-video rounded-lg overflow-hidden border border-blue-500/20 relative group/img" onClick={(e) => { e.stopPropagation(); setZoomImg(img); }}>
-                                <img src={img} className="w-full h-full object-cover" />
-                                <div className="absolute inset-0 bg-black/40 opacity-100 flex items-center justify-center transition-all md:opacity-0 md:group-hover/img:opacity-100"><Maximize2 size={10} className="text-white" /></div>
+
+                      <div className={`grid ${isMini ? 'grid-cols-2' : (prep.scenarios.sessions && prep.scenarios.sessions.length > 1 ? 'grid-cols-2' : 'grid-cols-1')} gap-3`}>
+                        {/* New Session-Based Cards - Tactical Gallery */}
+                        {prep.scenarios.sessions && prep.scenarios.sessions.length > 0 ? (
+                          prep.scenarios.sessions.map((session, i) => (
+                            <div key={session.id || i} className={`group/session overflow-hidden rounded-[24px] border ${isDark ? 'bg-slate-900/40 border-white/5 hover:border-white/10' : 'bg-white/40 border-slate-200/50 hover:border-slate-300'}`}>
+                              {session.image && (
+                                <div className="aspect-video relative overflow-hidden group/img cursor-pointer" onClick={(e) => { e.stopPropagation(); setZoomImg(session.image!); }}>
+                                  <img src={session.image} className="w-full h-full object-cover transition-transform duration-700 group-hover/session:scale-110" />
+                                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition-all bg-gradient-to-t from-black/60 to-transparent">
+                                    <Maximize2 size={16} className="text-white" />
+                                  </div>
+                                  <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-md rounded-lg border border-white/10">
+                                    <p className="text-[7px] font-black uppercase text-white tracking-widest">{session.label}</p>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="p-4">
+                                {!session.image && (
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <Activity size={10} className="text-blue-500" />
+                                    <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">{session.label}</span>
+                                  </div>
+                                )}
+                                {session.plan && (
+                                  <p className={`text-[10px] leading-relaxed italic ${isDark ? 'text-slate-400' : 'text-slate-600'} line-clamp-4`}>
+                                    "{session.plan}"
+                                  </p>
+                                )}
                               </div>
-                            ))}
-                          </div>
+                            </div>
+                          ))
                         ) : (
+                          /* Legacy Support - Multi Images */
                           <>
-                            {(prep.scenarios.bullishImage || prep.scenarios.bearishImage) ? (
+                            {prep.scenarios.scenarioImages && prep.scenarios.scenarioImages.length > 0 && (
+                              <div className={`col-span-2 grid ${isMini ? 'grid-cols-2' : 'grid-cols-3'} gap-1.5`}>
+                                {prep.scenarios.scenarioImages.map((img, i) => (
+                                  <div key={i} className="aspect-video rounded-lg overflow-hidden border border-blue-500/20 relative group/img" onClick={(e) => { e.stopPropagation(); setZoomImg(img); }}>
+                                    <img src={img} className="w-full h-full object-cover" />
+                                    <div className="absolute inset-0 bg-black/40 opacity-100 flex items-center justify-center transition-all md:opacity-0 md:group-hover/img:opacity-100"><Maximize2 size={10} className="text-white" /></div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Legacy Support - Bull/Bear Images */}
+                            {(prep.scenarios.bullishImage || prep.scenarios.bearishImage) && (
                               <div className="col-span-2 grid grid-cols-2 gap-1.5">
                                 {prep.scenarios.bullishImage && (
                                   <div className="aspect-video rounded-lg overflow-hidden border border-emerald-500/20 relative group/img" onClick={(e) => { e.stopPropagation(); setZoomImg(prep.scenarios.bullishImage!); }}>
                                     <img src={prep.scenarios.bullishImage} className="w-full h-full object-cover" />
-                                    <div className="absolute inset-0 bg-black/40 opacity-100 flex items-center justify-center transition-all md:opacity-0 md:group-hover/img:opacity-100"><Maximize2 size={10} className="text-white" /></div>
                                   </div>
                                 )}
                                 {prep.scenarios.bearishImage && (
                                   <div className="aspect-video rounded-lg overflow-hidden border border-rose-500/20 relative group/img" onClick={(e) => { e.stopPropagation(); setZoomImg(prep.scenarios.bearishImage!); }}>
                                     <img src={prep.scenarios.bearishImage} className="w-full h-full object-cover" />
-                                    <div className="absolute inset-0 bg-black/40 opacity-100 flex items-center justify-center transition-all md:opacity-0 md:group-hover/img:opacity-100"><Maximize2 size={10} className="text-white" /></div>
                                   </div>
                                 )}
                               </div>
-                            ) : null}
-                          </>
-                        )}
-                        {!isMini && (
-                          <>
-                            {prep.scenarios.bullish && <div className="col-span-2"><p className="text-[10px] text-slate-400 italic line-clamp-2 mt-1">"Bullish: {prep.scenarios.bullish}"</p></div>}
-                            {prep.scenarios.bearish && <div className="col-span-2"><p className="text-[10px] text-slate-400 italic line-clamp-2 mt-1">"Bearish: {prep.scenarios.bearish}"</p></div>}
+                            )}
+
+                            {/* Legacy Support - Text */}
+                            {!isMini && (
+                              <>
+                                {prep.scenarios.bullish && <div className="col-span-2"><p className="text-[10px] text-slate-400 italic line-clamp-2 mt-1">"Bullish: {prep.scenarios.bullish}"</p></div>}
+                                {prep.scenarios.bearish && <div className="col-span-2"><p className="text-[10px] text-slate-400 italic line-clamp-2 mt-1">"Bearish: {prep.scenarios.bearish}"</p></div>}
+                              </>
+                            )}
                           </>
                         )}
                       </div>
@@ -218,7 +252,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                   <div className={`flex justify-between items-start ${isMini ? 'mb-1.5' : 'mb-4'}`}>
                     <div className="flex items-center gap-1.5">
                       <div className={`${isMini ? 'p-1' : 'p-2'} rounded-lg bg-indigo-600/10 text-indigo-500`}><Moon size={iconSize} /></div>
-                      <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Audit</h4>
+                      <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Večerní Audit</h4>
                       {review && onDeleteReview && !isMini && (
                         <button
                           onClick={(e) => {

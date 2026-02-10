@@ -244,8 +244,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
 
             if (shouldSend) {
-                const ok = await sendPush(sub, title, body);
-                if (ok) sentCount++;
+                const alertType = mockType || 'session';
+                const result = await sendPush(sub, title, body, alertType);
+                if (result === 'sent') sentCount++;
+                if (result === 'expired') {
+                    // Subscription is dead (410 Gone) - clean it from DB
+                    const cleanedPrefs = { ...prefs };
+                    delete cleanedPrefs.pushSubscription;
+                    await supabase
+                        .from('profiles')
+                        .update({ preferences: cleanedPrefs })
+                        .eq('id', profile.id);
+                    console.log(`[Cleanup] Removed expired push subscription for user ${profile.id}`);
+                }
             }
         }
 
@@ -267,17 +278,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 }
 
-async function sendPush(sub: any, title: string, body: string) {
-    const payload = JSON.stringify({ title, body, url: '/' });
+async function sendPush(sub: any, title: string, body: string, alertType: string): Promise<'sent' | 'expired' | 'failed'> {
+    const payload = JSON.stringify({ title, body, url: '/', tag: `alpha-${alertType}` });
     try {
         await webpush.sendNotification(sub, payload, {
             timeout: 5000,
-            TTL: 60,
-            headers: { 'Topic': 'alpha-alerts', 'Urgency': 'high' }
+            TTL: 3600,
+            headers: {
+                'Topic': `alpha-${alertType}`,
+                'Urgency': 'high'
+            }
         });
-        return true;
-    } catch (e) {
-        console.error('Push error:', e);
-        return false;
+        return 'sent';
+    } catch (e: any) {
+        const statusCode = e?.statusCode || e?.status;
+        if (statusCode === 410 || statusCode === 404) {
+            return 'expired';
+        }
+        console.error(`Push error (${statusCode}):`, e?.body || e?.message || e);
+        return 'failed';
     }
 }

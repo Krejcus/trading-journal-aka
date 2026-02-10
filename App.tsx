@@ -1,5 +1,6 @@
 
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService, getUserId } from './services/storageService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint } from './types';
@@ -26,7 +27,7 @@ import { t } from './services/translations';
 import { GuardianIntervention, GuardianOverlay, DebtCollector } from './components/GuardianSystem';
 import { getGuardianState, GuardianState } from './utils/guardianLogic';
 import { requestNotificationPermission, sendLocalNotification } from './utils/notificationHelper';
-import { subscribeUserToPush } from './utils/pushManager';
+import { subscribeUserToPush, verifyAndRefreshSubscription } from './utils/pushManager';
 import {
   Sun,
   Moon,
@@ -638,7 +639,9 @@ const App: React.FC = () => {
     if (prefs.careerRoadmap) setCareerRoadmap(prefs.careerRoadmap);
     if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
     if (prefs.psychoMetricsConfig) setPsychoMetrics(prefs.psychoMetricsConfig);
-    if (prefs.theme) setTheme(prefs.theme);
+    // Theme is NOT applied here — it has its own persistence via localStorage
+    // to prevent cross-tab sync or focus sync from reverting user's theme choice.
+    // Theme is applied only on initial load (useState initializer).
     if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
   }, []);
@@ -929,6 +932,20 @@ const App: React.FC = () => {
           console.log(`[Prefetch] Screenshots loaded for ${screenshotMap.size} trades`);
         }
       }).catch(err => console.warn("[Prefetch] Screenshot prefetch failed:", err));
+
+      // Verify push subscription is still valid (iOS can silently expire it)
+      storageService.getPreferences().then(async (savedPrefs) => {
+        const savedSub = (savedPrefs as any)?.pushSubscription;
+        if (!savedSub) return; // User never enabled notifications
+        const result = await verifyAndRefreshSubscription(savedSub);
+        if (result?.changed && result.subscription?.endpoint) {
+          console.log('[Push] Subscription refreshed, saving to DB...');
+          const prefs = currentUserPreferences();
+          await storageService.savePreferences({ ...prefs, pushSubscription: result.subscription } as any);
+        } else if (!result) {
+          console.log('[Push] Subscription could not be verified (permission revoked or SW missing)');
+        }
+      }).catch(err => console.warn('[Push] Subscription verify failed:', err));
 
       // Less critical modules - prefetch after small delay
       const prefetchTimer = setTimeout(() => {
@@ -1927,7 +1944,7 @@ const App: React.FC = () => {
             <h2 className="text-xl font-black uppercase tracking-tighter">
               {activePage === 'dashboard' && 'Dashboard'}
               {activePage === 'history' && 'Trade Log'}
-              {activePage === 'journal' && 'Tactical Hub'}
+              {activePage === 'journal' && 'Deník'}
               {activePage === 'accounts' && 'Portfolio'}
               {activePage === 'settings' && 'System Config'}
               {activePage === 'network' && 'Network Hub'}
@@ -1939,16 +1956,25 @@ const App: React.FC = () => {
             <div className="hidden md:flex flex-1 justify-center">
               <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] shadow-sm">
                 {[
-                  { id: 'daily', label: 'Daily', icon: Clock },
-                  { id: 'weekly', label: 'Weekly', icon: Calendar },
+                  { id: 'daily', label: 'Dnešek', icon: Clock },
+                  { id: 'weekly', label: 'Týden', icon: Calendar },
                   { id: 'archives', label: 'Deník', icon: History }
                 ].map(tab => (
                   <button
                     key={tab.id}
                     onClick={() => setJournalActiveTab(tab.id as any)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${journalActiveTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:text-slate-300'}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${journalActiveTab === tab.id ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
                   >
-                    <tab.icon size={14} /> {tab.label}
+                    {journalActiveTab === tab.id && (
+                      <motion.div
+                        layoutId="activeJournalTab"
+                        className="absolute inset-0 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20 z-0"
+                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                      />
+                    )}
+                    <span className="relative z-10 flex items-center gap-2">
+                      <tab.icon size={14} /> {tab.label}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -2114,6 +2140,7 @@ const App: React.FC = () => {
                       weeklyFocusList={weeklyFocusList}
                       activeTab={journalActiveTab}
                       onTabChange={setJournalActiveTab}
+                      sessions={sessions}
                     />
                   )}
 

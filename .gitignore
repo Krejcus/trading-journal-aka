@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 .vercel
 .env*.local
+.npm-cache
+.npm-local
+.npm-sandbox

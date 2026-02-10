@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Trash2, Plus, Brain, X, Target,
@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus, SystemSettings } from '../types';
+import { getPushDiagnostics } from '../utils/notificationHelper';
 
 interface SettingsProps {
   theme: 'dark' | 'light' | 'oled';
@@ -151,6 +152,14 @@ const Settings: React.FC<SettingsProps> = ({
 
   const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'metric' | 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
   const [toast, setToast] = useState<{ message: string, id: number } | null>(null);
+
+  // Push notification diagnostics
+  const [pushDiag, setPushDiag] = useState<{ isStandalone: boolean; isApple: boolean; permission: string; hasActiveSW: boolean; hasActiveSubscription: boolean; ready: boolean } | null>(null);
+  useEffect(() => {
+    if (activeTab === 'system') {
+      getPushDiagnostics().then(setPushDiag).catch(() => {});
+    }
+  }, [activeTab]);
 
   const showToast = (message: string) => {
     setToast({ message, id: Date.now() });
@@ -715,26 +724,68 @@ const Settings: React.FC<SettingsProps> = ({
                 </Card>
               </div>
 
-              {/* iOS Notification Helper */}
+              {/* Push Notification Setup & Diagnostics */}
               <div className={`p-8 rounded-[40px] border ${isDark ? 'bg-blue-600/5 border-blue-500/20' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'} flex flex-col items-center text-center gap-4`}>
                 <div className="p-4 bg-[var(--text-secondary)] rounded-3xl text-white shadow-2xl"><Bell size={32} /></div>
-                <div className="max-w-xl">
-                  <h3 className="text-xl font-black italic tracking-tighter mb-2 text-[var(--text-primary)]">AKTIVUJTE PUSH NOTIFIKACE</h3>
-                  <p className={`text-xs font-bold leading-relaxed mb-6 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    Pro doručování zpráv do iPhonu/Androidu musíte mít aplikaci přidanou na ploše.<br />
-                    Klepněte na <span className="p-1 px-2 bg-blue-600/20 text-blue-500 rounded-lg mx-1 inline-flex items-center gap-1"><Plus size={10} /> Přidat na plochu</span> v prohlížeči Safari.
-                  </p>
+                <div className="max-w-xl w-full">
+                  <h3 className="text-xl font-black italic tracking-tighter mb-2 text-[var(--text-primary)]">PUSH NOTIFIKACE</h3>
+
+                  {/* Diagnostic checklist */}
+                  {pushDiag && (
+                    <div className={`rounded-2xl p-4 mb-4 text-left ${isDark ? 'bg-black/30' : 'bg-slate-100'}`}>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500 mb-3">Diagnostika</p>
+                      {[
+                        { ok: pushDiag.isStandalone, label: 'Aplikace na ploše', fix: pushDiag.isApple ? 'Safari → Sdílet → Přidat na plochu' : 'Chrome → Menu → Nainstalovat aplikaci' },
+                        { ok: pushDiag.permission === 'granted', label: 'Povolení notifikací', fix: pushDiag.permission === 'denied' ? 'Přejděte do Nastavení → Oznámení a povolte' : 'Klikněte na tlačítko níže' },
+                        { ok: pushDiag.hasActiveSW, label: 'Service Worker aktivní', fix: 'Zkuste obnovit stránku' },
+                        { ok: pushDiag.hasActiveSubscription, label: 'Push subscription aktivní', fix: 'Klikněte na tlačítko níže pro aktivaci' },
+                      ].map((item, i) => (
+                        <div key={i} className="flex items-center gap-2 py-1.5">
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center text-white text-[10px] font-black ${item.ok ? 'bg-emerald-500' : 'bg-red-500'}`}>
+                            {item.ok ? '✓' : '✗'}
+                          </div>
+                          <div className="flex-1">
+                            <span className={`text-xs font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.label}</span>
+                            {!item.ok && <p className="text-[10px] text-amber-500 font-medium mt-0.5">{item.fix}</p>}
+                          </div>
+                        </div>
+                      ))}
+                      <div className={`mt-3 pt-3 border-t ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
+                        <p className={`text-[10px] font-black uppercase tracking-wider ${pushDiag.ready ? 'text-emerald-500' : 'text-amber-500'}`}>
+                          {pushDiag.ready ? '✓ VŠE PŘIPRAVENO — notifikace budou doručovány' : '⚠ NĚKTERÉ KROKY CHYBÍ'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* iOS-specific guidance */}
+                  {pushDiag?.isApple && !pushDiag?.isStandalone && (
+                    <div className={`rounded-2xl p-4 mb-4 border text-left ${isDark ? 'bg-amber-500/5 border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
+                      <p className={`text-xs font-black mb-2 ${isDark ? 'text-amber-400' : 'text-amber-700'}`}>iPhone / iPad — povinný krok</p>
+                      <ol className={`text-[11px] font-medium space-y-1 list-decimal list-inside ${isDark ? 'text-amber-300/80' : 'text-amber-800'}`}>
+                        <li>Otevřete tuto stránku v <strong>Safari</strong></li>
+                        <li>Klepněte na <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-600/20 text-blue-500 rounded-md text-[10px] font-bold">Sdílet ↑</span></li>
+                        <li>Vyberte <strong>Přidat na plochu</strong></li>
+                        <li>Otevřete appku z plochy a povolte notifikace</li>
+                      </ol>
+                      <p className={`text-[9px] mt-2 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>Na iOS fungují push notifikace pouze v režimu PWA (z plochy), ne v prohlížeči.</p>
+                    </div>
+                  )}
+
                   <button
-                    onClick={onEnableNotifications || (() => {
-                      if ('Notification' in window) {
-                        Notification.requestPermission().then(res => {
-                          alert(res === 'granted' ? 'Notifikace povoleny!' : 'Notifikace byly zamítnuty v prohlížeči.');
-                        });
+                    onClick={async () => {
+                      if (onEnableNotifications) {
+                        onEnableNotifications();
+                      } else if ('Notification' in window) {
+                        const res = await Notification.requestPermission();
+                        alert(res === 'granted' ? 'Notifikace povoleny!' : 'Notifikace byly zamítnuty v prohlížeči.');
                       }
-                    })}
+                      // Refresh diagnostics after action
+                      setTimeout(() => { getPushDiagnostics().then(setPushDiag).catch(() => {}); }, 1000);
+                    }}
                     className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-blue-600/40 hover:bg-blue-500 active:scale-95 transition-all"
                   >
-                    Povolit notifikace na tomto zařízení
+                    {pushDiag?.hasActiveSubscription ? 'Obnovit push subscription' : 'Povolit notifikace na tomto zařízení'}
                   </button>
                 </div>
               </div>

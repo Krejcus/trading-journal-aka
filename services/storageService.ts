@@ -1039,7 +1039,23 @@ export const storageService = {
       return [];
     }
 
-    return data || [];
+    return (data || []).map((d: any) => {
+      // Extra fields stored as JSON in description
+      let extra: any = {};
+      try { if (d.description?.startsWith('{')) extra = JSON.parse(d.description); } catch {}
+      return {
+        id: d.id,
+        user_id: d.user_id,
+        date: d.date,
+        label: extra.label || d.description || '',
+        description: d.description,
+        amount: d.amount,
+        category: d.category,
+        recurring: extra.recurring || 'monthly',
+        created_at: d.created_at,
+        updated_at: d.updated_at
+      };
+    });
   },
 
   async saveBusinessExpense(expense: Omit<BusinessExpense, 'id' | 'created_at' | 'updated_at'>): Promise<void> {
@@ -1049,8 +1065,11 @@ export const storageService = {
     const { error } = await supabase
       .from('business_expenses')
       .insert({
-        ...expense,
-        user_id: userId
+        user_id: userId,
+        date: expense.date,
+        description: JSON.stringify({ label: expense.label || expense.description || '', recurring: expense.recurring }),
+        amount: expense.amount,
+        category: expense.category
       });
 
     if (error) {
@@ -1063,9 +1082,15 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) throw new Error('Not authenticated');
 
+    const dbUpdates: any = {};
+    if (updates.date) dbUpdates.date = updates.date;
+    if (updates.amount !== undefined) dbUpdates.amount = updates.amount;
+    if (updates.category) dbUpdates.category = updates.category;
+    dbUpdates.description = JSON.stringify({ label: updates.label || updates.description || '', recurring: updates.recurring });
+
     const { error } = await supabase
       .from('business_expenses')
-      .update(updates)
+      .update(dbUpdates)
       .eq('id', id)
       .eq('user_id', userId);
 
@@ -1106,7 +1131,26 @@ export const storageService = {
       return [];
     }
 
-    return data || [];
+    return (data || []).map((d: any) => {
+      let extra: any = {};
+      try { if (d.description?.startsWith('{')) extra = JSON.parse(d.description); } catch {}
+      return {
+        id: d.id,
+        user_id: d.user_id,
+        date: d.date,
+        amount: d.amount,
+        description: d.description,
+        payout_method: d.payout_method,
+        grossAmount: extra.grossAmount,
+        profitSplitUsed: extra.profitSplitUsed,
+        accountId: extra.accountId,
+        image: extra.image,
+        notes: extra.notes,
+        status: extra.status || 'Received',
+        created_at: d.created_at,
+        updated_at: d.updated_at
+      };
+    });
   },
 
   async saveBusinessPayout(payout: Omit<BusinessPayout, 'id' | 'created_at' | 'updated_at'>): Promise<void> {
@@ -1116,8 +1160,18 @@ export const storageService = {
     const { error } = await supabase
       .from('business_payouts')
       .insert({
-        ...payout,
-        user_id: userId
+        user_id: userId,
+        date: payout.date,
+        amount: payout.amount,
+        description: JSON.stringify({
+          grossAmount: payout.grossAmount,
+          profitSplitUsed: payout.profitSplitUsed,
+          accountId: payout.accountId,
+          image: payout.image,
+          notes: payout.notes,
+          status: payout.status
+        }),
+        payout_method: payout.payout_method
       });
 
     if (error) {
@@ -1130,9 +1184,22 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) throw new Error('Not authenticated');
 
+    const dbUpdates: any = {};
+    if (updates.date) dbUpdates.date = updates.date;
+    if (updates.amount !== undefined) dbUpdates.amount = updates.amount;
+    if (updates.payout_method) dbUpdates.payout_method = updates.payout_method;
+    dbUpdates.description = JSON.stringify({
+      grossAmount: updates.grossAmount,
+      profitSplitUsed: updates.profitSplitUsed,
+      accountId: updates.accountId,
+      image: updates.image,
+      notes: updates.notes,
+      status: updates.status
+    });
+
     const { error } = await supabase
       .from('business_payouts')
-      .update(updates)
+      .update(dbUpdates)
       .eq('id', id)
       .eq('user_id', userId);
 

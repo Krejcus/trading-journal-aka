@@ -141,17 +141,24 @@ self.addEventListener('push', (event) => {
     console.log('[Service Worker] Push Received.');
     let data = {};
     if (event.data) {
-        data = event.data.json();
+        try {
+            data = event.data.json();
+        } catch (e) {
+            data = { title: 'Alpha Trade', body: event.data.text() };
+        }
     }
 
     const title = data.title || 'Alpha Trade';
+    // Use unique tag per alert type so different notifications don't overwrite each other
+    const tag = data.tag || 'alpha-generic';
     const options = {
         body: data.body || 'Máte novou notifikaci',
         icon: '/logos/at_logo_light_clean.png',
         badge: '/logos/at_logo_light_clean.png',
         vibrate: [200, 100, 200],
         data: data.url || '/',
-        tag: 'alpha-alert' // Groups notifications
+        tag: tag,
+        renotify: true // vibrate again even if same tag replaces existing notification
     };
 
     event.waitUntil(

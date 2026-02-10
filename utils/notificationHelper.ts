@@ -42,3 +42,57 @@ export const sendLocalNotification = (title: string, body: string, icon?: string
 export const isPWA = () => {
     return window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true;
 };
+
+/**
+ * Detects if the device is running iOS
+ */
+export const isIOS = () => {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+};
+
+/**
+ * Returns push notification diagnostic status for Settings UI
+ */
+export const getPushDiagnostics = async (): Promise<{
+    isStandalone: boolean;
+    isApple: boolean;
+    hasNotificationAPI: boolean;
+    permission: string;
+    hasServiceWorker: boolean;
+    hasActiveSW: boolean;
+    hasActiveSubscription: boolean;
+    ready: boolean;
+}> => {
+    const isStandalone = isPWA();
+    const isApple = isIOS();
+    const hasNotificationAPI = 'Notification' in window;
+    const permission = hasNotificationAPI ? Notification.permission : 'unavailable';
+    const hasServiceWorker = 'serviceWorker' in navigator;
+
+    let hasActiveSW = false;
+    let hasActiveSubscription = false;
+
+    if (hasServiceWorker) {
+        try {
+            const reg = await navigator.serviceWorker.getRegistration();
+            hasActiveSW = !!(reg?.active);
+            if (reg) {
+                const sub = await reg.pushManager?.getSubscription();
+                hasActiveSubscription = !!sub;
+            }
+        } catch {}
+    }
+
+    const ready = isStandalone && hasNotificationAPI && permission === 'granted' && hasActiveSW && hasActiveSubscription;
+
+    return {
+        isStandalone,
+        isApple,
+        hasNotificationAPI,
+        permission,
+        hasServiceWorker,
+        hasActiveSW,
+        hasActiveSubscription,
+        ready
+    };
+};

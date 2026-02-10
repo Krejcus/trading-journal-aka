@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { DailyPrep, DailyReview, WeeklyReview, Trade, GoalResult, IronRule, RuleCompletion, PsychoMetricConfig, WeeklyFocus } from '../types';
+import { motion, AnimatePresence } from 'framer-motion';
+import { DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, WeeklyFocus, PsychoMetricConfig, SessionConfig, SessionAnalysis, GoalResult } from '../types';
 import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimeline from './TacticalTimeline';
 import { storageService } from '../services/storageService';
@@ -58,7 +59,8 @@ import {
   CircleAlert,
   Sun,
   ClipboardCheck,
-  Loader2
+  Loader2,
+  Info
 } from 'lucide-react';
 
 interface DailyJournalProps {
@@ -77,17 +79,18 @@ interface DailyJournalProps {
   weeklyFocusList: WeeklyFocus[];
   activeTab: 'daily' | 'weekly' | 'archives';
   onTabChange: (tab: 'daily' | 'weekly' | 'archives') => void;
+  sessions?: SessionConfig[];
 }
 
 const DailyJournal: React.FC<DailyJournalProps> = ({
-  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList, activeTab, onTabChange
+  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = []
 }) => {
   const getToday = () => new Date().toLocaleDateString('en-CA');
   const [selectedDate, setSelectedDate] = useState(getToday());
   const today = getToday();
 
   const [view, setView] = useState<'timeline' | 'edit-prep' | 'edit-review' | 'edit-weekly'>('timeline');
-  const [activeImageField, setActiveImageField] = useState<'bullish' | 'bearish' | 'scenarios' | null>(null);
+  const [activeImageField, setActiveImageField] = useState<'bullish' | 'bearish' | 'scenarios' | string | null>(null);
 
   const [weeklyReviews, setWeeklyReviews] = useState<WeeklyReview[]>([]);
 
@@ -98,6 +101,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     const diff = d.getDate() - day + (day === 0 ? -6 : 1);
     return new Date(d.setDate(diff)).toLocaleDateString('en-CA');
   });
+
+  const [activeSessionTab, setActiveSessionTab] = useState<string | null>(null);
 
   // Export State
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -189,6 +194,18 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const lastReviewForm = useRef(reviewForm);
   const skipAutoSavePrep = useRef(false);
   const skipAutoSaveReview = useRef(false);
+  const prepFormDirty = useRef(false);
+  const reviewFormDirty = useRef(false);
+
+  // Wrapper: marks form dirty before updating (for user edits only)
+  const editPrepForm: typeof setPrepForm = (action) => {
+    prepFormDirty.current = true;
+    setPrepForm(action);
+  };
+  const editReviewForm: typeof setReviewForm = (action) => {
+    reviewFormDirty.current = true;
+    setReviewForm(action);
+  };
 
   useEffect(() => { lastPrepForm.current = prepForm; }, [prepForm]);
   useEffect(() => { lastReviewForm.current = reviewForm; }, [reviewForm]);
@@ -237,18 +254,29 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     return weeklyFocusList.find(wf => wf.weekISO === weekISO);
   }, [selectedDate, weeklyFocusList]);
 
+  // Normalize prep for comparison (strips undefined, normalizes empty arrays/strings)
+  const normalizePrep = (p: DailyPrep) => JSON.stringify({
+    id: p.id, date: p.date,
+    scenarios: { bullish: p.scenarios.bullish || '', bearish: p.scenarios.bearish || '', scenarioImages: p.scenarios.scenarioImages || [] },
+    goals: p.goals || [], checklist: p.checklist,
+    ritualCompletions: p.ritualCompletions || [],
+    mindsetState: p.mindsetState || '', confidence: p.confidence ?? 5
+  });
+
   // Auto-save Logic for Prep
   useEffect(() => {
     if (skipAutoSavePrep.current) {
       skipAutoSavePrep.current = false;
       return;
     }
+    // Only auto-save when user has actually edited the form
+    if (!prepFormDirty.current) return;
     // Skip initial mount or invalid forms
     if (!prepForm || !prepForm.date) return;
 
     // Check if form is actually different from saved prop to avoid loops/unnecessary saves
     const saved = preps.find(p => p.date === prepForm.date);
-    if (!saved || JSON.stringify(prepForm) !== JSON.stringify(saved)) {
+    if (!saved || normalizePrep(prepForm) !== normalizePrep(saved)) {
       // Don't auto-save a brand new prep if it's still empty
       if (!saved) {
         const isEmpty = !prepForm.scenarios.bullish && !prepForm.scenarios.bearish && !prepForm.mindsetState && !prepForm.scenarios.scenarioImages?.length;
@@ -260,6 +288,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       setIsSaving(true);
       const timer = setTimeout(() => {
         onSavePrep(prepForm);
+        prepFormDirty.current = false;
         setLastSaved(new Date());
         setIsSaving(false);
         setHasUnsavedChanges(false);
@@ -278,6 +307,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       skipAutoSaveReview.current = false;
       return;
     }
+    // Only auto-save when user has actually edited the form
+    if (!reviewFormDirty.current) return;
     // Skip initial mount or invalid forms
     if (!reviewForm || !reviewForm.date) return;
 
@@ -295,13 +326,14 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       setIsSaving(true);
       const timer = setTimeout(() => {
         onSaveReview(reviewForm);
+        reviewFormDirty.current = false;
         setLastSaved(new Date());
         setIsSaving(false);
         setHasUnsavedChanges(false);
         setSaveStatus('saved');
         // Reset to idle after 2s
         setTimeout(() => setSaveStatus('idle'), 2000);
-      }, 500); // Reduced from 1000ms to 500ms
+      }, 500);
 
       return () => clearTimeout(timer);
     }
@@ -312,7 +344,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     const now = new Date();
     const timestamp = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}]`;
     const newNote = `${timestamp} ${quickNote}`;
-    setReviewForm(prev => ({
+    editReviewForm(prev => ({
       ...prev,
       psycho: {
         ...prev.psycho!,
@@ -722,23 +754,66 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
     // 2. Load the new date's form
     skipAutoSavePrep.current = true;
+    prepFormDirty.current = false;
     if (currentPrep) {
-      if (prepForm.date !== selectedDate || (currentPrep.id && prepForm.id !== currentPrep.id)) {
-        setPrepForm(currentPrep);
+      // Hydrate missing fields for legacy preps and SYNC labels with current settings
+      const configSessions = sessions.length > 0
+        ? sessions.slice(0, 3).map(s => ({ id: s.id, label: s.name, plan: '', image: '' }))
+        : [
+          { id: 'session1', label: 'Session 1', plan: '', image: '' }
+        ];
+
+      const mergedSessions = (currentPrep.scenarios.sessions || configSessions).map(stored => {
+        const configMatch = sessions.find(s => s.id === stored.id);
+        return configMatch ? { ...stored, label: configMatch.name, color: configMatch.color } : stored;
+      });
+
+      setPrepForm({
+        ...currentPrep,
+        bias: currentPrep.bias || 'Neutral',
+        scenarios: {
+          ...currentPrep.scenarios,
+          sessions: mergedSessions
+        }
+      });
+
+      // Set initial tab if not set
+      if (!activeSessionTab && mergedSessions.length) {
+        setActiveSessionTab(mergedSessions[0].id);
       }
     } else {
+      // Intelligently initialize sessions based on preferences
+      const initialSessions: SessionAnalysis[] = sessions.length > 0
+        ? sessions.slice(0, 3).map(s => ({ id: s.id, label: s.name, plan: '', image: '', color: s.color }))
+        : [
+          { id: 'session1', label: 'Session 1', plan: '', image: '', color: '#3b82f6' }
+        ];
+
       setPrepForm({
         id: `prep_${selectedDate}`,
         date: selectedDate,
-        scenarios: { bullish: '', bearish: '', scenarioImages: [], bullishImage: '', bearishImage: '' },
-        goals: standardGoals.length > 0 ? [...standardGoals] : [''],
-        checklist: { sleptWell: false, planReady: false, disciplineCommitted: false, newsChecked: false },
-        ritualCompletions: rituals.map(r => ({ ruleId: r.id, status: 'Pending' })),
+        bias: 'Neutral',
+        scenarios: {
+          bullish: '',
+          bearish: '',
+          scenarioImages: [],
+          sessions: initialSessions
+        },
+        goals: standardGoals.slice(0, 3),
+        checklist: {
+          sleptWell: false,
+          planReady: false,
+          disciplineCommitted: false,
+          newsChecked: false
+        },
         mindsetState: '',
-        confidence: 5
+        confidence: 80
       });
+      if (!activeSessionTab && initialSessions.length) {
+        setActiveSessionTab(initialSessions[0].id);
+      }
     }
-  }, [currentPrep, selectedDate, standardGoals, rituals]); // Omezení závislostí
+  }, [currentPrep, selectedDate, standardGoals, sessions]);
 
   useEffect(() => {
     // 1. Force save the PREVIOUS date's review if it changed and not empty
@@ -750,6 +825,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
     // 2. Load the new date's review
     skipAutoSaveReview.current = true;
+    reviewFormDirty.current = false;
     if (currentReview) {
       if (reviewForm.date !== selectedDate || (currentReview.id && reviewForm.id !== currentReview.id)) {
         setReviewForm(currentReview);
@@ -773,7 +849,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   }, [currentReview, selectedDate]); // Omezení závislostí
 
   const handleToggleRitual = (ruleId: string) => {
-    setPrepForm(prev => {
+    editPrepForm(prev => {
       const completions = prev.ritualCompletions || [];
       const index = completions.findIndex(c => c.ruleId === ruleId);
       const newCompletions = [...completions];
@@ -784,7 +860,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   };
 
   const handleSetRuleStatus = (ruleId: string, status: 'Pass' | 'Fail') => {
-    setReviewForm(prev => {
+    editReviewForm(prev => {
       const adherence = prev.ruleAdherence || [];
       const index = adherence.findIndex(a => a.ruleId === ruleId);
       const newAdherence = [...adherence];
@@ -806,15 +882,26 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             reader.onloadend = () => {
               const base64 = reader.result as string;
               if (activeImageField === 'scenarios') {
-                setPrepForm(prev => ({
+                editPrepForm(prev => ({
                   ...prev,
                   scenarios: {
                     ...prev.scenarios,
                     scenarioImages: [...(prev.scenarios.scenarioImages || []), base64]
                   }
                 }));
+              } else if (activeImageField?.startsWith('session_')) {
+                const sessionId = activeImageField.replace('session_', '');
+                editPrepForm(prev => ({
+                  ...prev,
+                  scenarios: {
+                    ...prev.scenarios,
+                    sessions: prev.scenarios.sessions?.map(s =>
+                      s.id === sessionId ? { ...s, image: base64 } : s
+                    )
+                  }
+                }));
               } else {
-                setPrepForm(prev => ({ ...prev, scenarios: { ...prev.scenarios, [activeImageField === 'bullish' ? 'bullishImage' : 'bearishImage']: base64 } }));
+                editPrepForm(prev => ({ ...prev, scenarios: { ...prev.scenarios, [activeImageField === 'bullish' ? 'bullishImage' : 'bearishImage']: base64 } }));
               }
             };
             reader.readAsDataURL(blob);
@@ -841,12 +928,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               <div className="space-y-2">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
                   <h2 className="text-3xl md:text-5xl font-black tracking-tighter italic flex items-center gap-4">
-                    DAILY HUB
+                    DENNÍ PŘEHLED
                   </h2>
                   <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner">
                     <button onClick={() => navigateDate('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90"><ChevronLeft size={20} /></button>
                     <div className="px-3 py-1 text-center min-w-[100px]">
-                      <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">Tactical Date</p>
+                      <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">Taktický Datum</p>
                       <p className="text-xs font-black font-mono">{selectedDate}</p>
                     </div>
                     <button onClick={() => navigateDate('next')} disabled={selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 ${selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
@@ -855,10 +942,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 <p className="text-slate-500 font-black uppercase text-[9px] tracking-[0.3em]">
                   Chronological Feed • Trace Engine
                 </p>
-              </div>
-              <div className="flex gap-2 w-full sm:w-auto items-center">
-                <button onClick={() => setView('edit-prep')} className="flex-1 sm:flex-none px-4 py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Ranní</button>
-                <button onClick={() => setView('edit-review')} className="flex-1 sm:flex-none px-4 py-3 bg-indigo-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Večerní</button>
               </div>
             </div>
 
@@ -886,7 +969,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             <div className="space-y-2">
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
                 <h2 className="text-3xl md:text-5xl font-black tracking-tighter italic flex items-center gap-4">
-                  {activeTab === 'daily' ? 'DAILY HUB' : (activeTab === 'weekly' ? 'WEEKLY HUB' : 'DENÍK')}
+                  {activeTab === 'daily' ? 'DENNÍ PŘEHLED' : (activeTab === 'weekly' ? 'WEEKLY HUB' : 'DENÍK')}
                   {activeTab === 'archives' && (
                     <button
                       onClick={() => setIsExportModalOpen(true)}
@@ -901,7 +984,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner">
                     <button onClick={() => activeTab === 'daily' ? navigateDate('prev') : navigateWeek('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90"><ChevronLeft size={20} /></button>
                     <div className="px-3 py-1 text-center min-w-[100px]">
-                      <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">{activeTab === 'daily' ? 'Tactical Date' : `Week ${currentWeekInfo.weekNumber} `}</p>
+                      <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">{activeTab === 'daily' ? 'Taktický Datum' : `Týden ${currentWeekInfo.weekNumber}`}</p>
                       <p className="text-xs font-black font-mono">{activeTab === 'daily' ? selectedDate : currentWeekInfo.mondayDate}</p>
                     </div>
                     <button onClick={() => activeTab === 'daily' ? navigateDate('next') : navigateWeek('next')} disabled={activeTab === 'daily' && selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 ${activeTab === 'daily' && selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
@@ -913,9 +996,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               </p>
             </div>
             <div className="flex gap-2 w-full sm:w-auto items-center">
-              {view === 'timeline' && activeTab === 'daily' && (
-                <><button onClick={() => setView('edit-prep')} className="flex-1 sm:flex-none px-4 py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Ranní</button><button onClick={() => setView('edit-review')} className="flex-1 sm:flex-none px-4 py-3 bg-indigo-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Večerní</button></>
-              )}
               {view !== 'timeline' && (
                 <>
                   <button onClick={() => handleNavigateWithCheck(() => setView('timeline'))} className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-slate-800 text-white hover:bg-slate-700'}`}><LayoutGrid size={14} /> Feed</button>
@@ -1187,76 +1267,211 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
       {/* EDIT FORMS */}
       {(view === 'edit-prep' || view === 'edit-review') && (
-        <div className="max-w-4xl mx-auto animate-in slide-in-from-right-4 duration-500">
+        <div className="max-w-7xl mx-auto animate-in slide-in-from-right-4 duration-500">
           {view === 'edit-prep' && (
-            <div className="space-y-6 lg:space-y-8">
-              <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200'}`}>
-                <div className="flex items-center justify-between mb-6 md:mb-8">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 rounded-2xl bg-blue-500/10 text-blue-500"><Zap size={20} /></div>
-                    <div><h3 className="text-xl md:text-2xl font-black italic uppercase">PREATTACK</h3><p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Ranní aktivace</p></div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isSaving ? (
-                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-500 animate-pulse">
-                        <div className="w-2 h-2 rounded-full bg-blue-500" />
-                        <span className="text-[9px] font-black uppercase tracking-widest">Ukládám...</span>
-                      </div>
-                    ) : lastSaved ? (
-                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-500 transition-all duration-1000">
-                        <Check size={12} />
-                        <span className="text-[9px] font-black uppercase tracking-widest">Uloženo {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{rituals.map(ritual => { const comp = prepForm.ritualCompletions?.find(c => c.ruleId === ritual.id); const isDone = comp?.status === 'Pass'; return (<button key={ritual.id} onClick={() => handleToggleRitual(ritual.id)} className={`p-4 rounded-xl border flex items-center justify-between transition-all active:scale-95 ${isDone ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-600/20' : (theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600')} `}><span className="text-[10px] font-black uppercase tracking-tight text-left pr-2">{ritual.label}</span>{isDone ? <Check size={16} /> : <div className={`w-4 h-4 rounded-full border shrink-0 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-200'} `} />}</button>); })}</div>
-              </section>
-              <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-[var(--bg-card)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                <div className="flex items-center gap-4 mb-6 md:mb-8"><div className="p-3 rounded-2xl bg-blue-500/10 text-blue-500"><Sparkles size={20} /></div><div><h3 className="text-xl md:text-2xl font-black italic uppercase">SCENARIOS</h3><p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Vizualizace & Mapping</p></div></div>
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div className="space-y-4"><label className={`${labelClass} text-emerald-500`}>Bullish Scénář</label><textarea value={prepForm.scenarios.bullish} onChange={e => setPrepForm({ ...prepForm, scenarios: { ...prepForm.scenarios, bullish: e.target.value } })} className={`${inputClass} h-32 resize-none`} /></div>
-                    <div className="space-y-4"><label className={`${labelClass} text-rose-500`}>Bearish Scénář</label><textarea value={prepForm.scenarios.bearish} onChange={e => setPrepForm({ ...prepForm, scenarios: { ...prepForm.scenarios, bearish: e.target.value } })} className={`${inputClass} h-32 resize-none`} /></div>
-                  </div>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
+              {/* Left Column: Tactical Hub */}
+              <div className="lg:col-span-8 space-y-6 lg:space-y-8 order-2 lg:order-1">
+                <section className={`p-6 md:p-10 rounded-[40px] border relative overflow-hidden transition-all duration-700 ${theme !== 'light' ? 'bg-slate-900/40 border-slate-800 backdrop-blur-xl' : 'bg-white/80 border-slate-200 backdrop-blur-md shadow-2xl shadow-slate-200/50'}`}>
+                  {/* Background Glow */}
+                  <div className={`absolute -top-40 -right-40 w-80 h-80 rounded-full blur-[120px] pointer-events-none opacity-20 bg-blue-500`} />
 
-                  <div className="space-y-4">
-                    <label className={labelClass}>Screenshoty scénářů</label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {prepForm.scenarios.scenarioImages?.map((img, idx) => (
-                        <div key={idx} className="relative aspect-video rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-page)]/20 overflow-hidden group">
-                          <img src={img} className="w-full h-full object-cover" />
-                          <button
-                            onClick={() => setPrepForm(prev => ({
-                              ...prev,
-                              scenarios: {
-                                ...prev.scenarios,
-                                scenarioImages: prev.scenarios.scenarioImages?.filter((_, i) => i !== idx)
-                              }
-                            }))}
-                            className="absolute top-2 right-2 p-1.5 bg-rose-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ))}
-                      <div
-                        onClick={() => setActiveImageField('scenarios')}
-                        className={`relative aspect-video rounded-2xl border-2 border-dashed transition-all flex flex-col items-center justify-center cursor-pointer ${activeImageField === 'scenarios' ? 'border-blue-500 bg-blue-500/5' : `border-[var(--border-subtle)] bg-[var(--bg-page)]/20`}`}
-                      >
-                        <ImageIcon size={20} className="mx-auto mb-2 text-slate-700" />
-                        <p className="text-[8px] font-black uppercase text-slate-600">Vložit (CTRL+V)</p>
-                        {prepForm.scenarios.scenarioImages && prepForm.scenarios.scenarioImages.length > 0 && (
-                          <div className="absolute top-2 right-2 p-1.5 bg-blue-500/20 text-blue-500 rounded-lg">
-                            <Plus size={14} />
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-8 mb-10 relative z-10">
+                    <div className="flex items-center gap-5">
+                      <div className={`p-4 rounded-2xl bg-blue-500/10 text-blue-500`}>
+                        <Sparkles size={24} className="animate-pulse" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl md:text-3xl font-black italic uppercase tracking-tight">SESSION ANALÝZA</h3>
+                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.3em] opacity-70">Taktické plánování seancí</p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-end gap-3">
+                      <div className="flex items-center gap-2">
+                        {isSaving ? (
+                          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-500 animate-pulse">
+                            <div className="w-2 h-2 rounded-full bg-blue-500" />
+                            <span className="text-[9px] font-black uppercase tracking-widest">Ukládám...</span>
                           </div>
-                        )}
+                        ) : lastSaved ? (
+                          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-500 transition-all duration-1000">
+                            <Check size={12} />
+                            <span className="text-[9px] font-black uppercase tracking-widest">Uloženo {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {/* Tactical Tabs Switcher */}
+                      <div className={`flex items-center p-1.5 rounded-[20px] border transition-all duration-500 ${theme !== 'light' ? 'bg-black/40 border-slate-800' : 'bg-slate-100 border-slate-200'}`}>
+                        {prepForm.scenarios.sessions?.map((session) => {
+                          const isActive = activeSessionTab === session.id;
+                          const sessionColor = session.color || '#3b82f6'; // Default to blue
+                          return (
+                            <button
+                              key={session.id}
+                              onClick={() => setActiveSessionTab(session.id)}
+                              className={`relative px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all duration-300 ${isActive ? 'text-white' : 'text-slate-500 hover:text-slate-400 hover:bg-white/5'}`}
+                            >
+                              {isActive && (
+                                <motion.div
+                                  layoutId="activeSessionHubTab"
+                                  className="absolute inset-0 rounded-2xl z-0"
+                                  style={{ backgroundColor: sessionColor, boxShadow: `0 10px 15px -3px ${sessionColor}40, 0 4px 6px -4px ${sessionColor}40` }}
+                                  transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                                />
+                              )}
+                              <span className="relative z-10">{session.label}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
+
+                  {/* Focused Workspace for Single Active Session */}
+                  <div className="relative z-10">
+                    {prepForm.scenarios.sessions?.filter(s => s.id === activeSessionTab).map((session, idx) => {
+                      const isEU = session.label.toLowerCase().includes('lon') || session.label.toLowerCase().includes('eu');
+                      const isUS = session.label.toLowerCase().includes('ny') || session.label.toLowerCase().includes('us');
+                      const accentColor = isEU ? 'blue' : isUS ? 'amber' : 'slate';
+
+                      return (
+                        <div key={session.id || idx} className={`group p-6 md:p-8 rounded-[36px] border transition-all duration-500 flex flex-col xl:flex-row gap-8 ${theme !== 'light' ? `bg-slate-900/60 border-slate-800` : `bg-white border-slate-100 shadow-xl shadow-slate-200/20`}`}>
+
+                          {/* Left Side: Screenshot */}
+                          <div className="w-full xl:w-[55%] space-y-4">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-2 h-2 rounded-full animate-pulse ${accentColor === 'blue' ? 'bg-blue-400' : accentColor === 'amber' ? 'bg-amber-400' : 'bg-slate-400'}`} />
+                                <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">{session.label} Analysis</span>
+                              </div>
+                              {session.image && (
+                                <button
+                                  onClick={() => setPrepForm(prev => ({
+                                    ...prev,
+                                    scenarios: {
+                                      ...prev.scenarios,
+                                      sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, image: '' } : s)
+                                    }
+                                  }))}
+                                  className="px-3 py-1.5 bg-rose-500/10 text-rose-500 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-rose-500 hover:text-white transition-all duration-300"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+
+                            <div
+                              onClick={() => setActiveImageField(`session_${session.id}`)}
+                              className={`relative aspect-video rounded-3xl border-2 border-dashed overflow-hidden transition-all duration-500 flex flex-col items-center justify-center cursor-pointer ${activeImageField === `session_${session.id}`
+                                ? 'border-blue-500 bg-blue-500/5 ring-8 ring-blue-500/5'
+                                : theme !== 'light'
+                                  ? 'border-slate-800/50 bg-slate-950/20 group-hover:bg-slate-900/40'
+                                  : 'border-slate-200 bg-slate-50 group-hover:bg-slate-100/50 shadow-inner'
+                                }`}
+                            >
+                              {session.image ? (
+                                <img src={session.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+                              ) : (
+                                <div className="text-center p-6">
+                                  <div className={`w-12 h-12 rounded-full mx-auto mb-4 flex items-center justify-center transition-all duration-500 ${activeImageField === `session_${session.id}` ? 'bg-blue-500 text-white' : 'bg-slate-800/50 text-slate-600'}`}>
+                                    <ImageIcon size={20} />
+                                  </div>
+                                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-1">Visual Analysis</p>
+                                  <p className="text-[7px] font-bold text-slate-600 uppercase italic">CTRL+V to paste</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Right Side: Game Plan */}
+                          <div className="w-full xl:w-[45%] flex flex-col">
+                            <div className="flex items-center gap-2 mb-4 opacity-50">
+                              <FileText size={12} className="text-slate-500" />
+                              <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Tactical Game Plan</span>
+                            </div>
+                            <textarea
+                              value={session.plan}
+                              onChange={(e) => setPrepForm(prev => ({
+                                ...prev,
+                                scenarios: {
+                                  ...prev.scenarios,
+                                  sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, plan: e.target.value } : s)
+                                }
+                              }))}
+                              placeholder="Tvůj plán pro tuto seanci..."
+                              className={`w-full flex-1 min-h-[220px] rounded-3xl p-6 border focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/30 text-sm leading-relaxed transition-all placeholder:text-slate-500 ${theme !== 'light' ? 'bg-slate-950/20 border-slate-800/50 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700 shadow-inner'}`}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Legacy Data Footnote */}
+                  {(prepForm.scenarios.bullish || prepForm.scenarios.bearish) && (
+                    <div className="mt-8 p-5 rounded-[28px] bg-slate-800/30 border border-slate-800/50 backdrop-blur-sm relative z-10">
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500"><AlertTriangle size={14} /></div>
+                        <p className="text-[10px] font-black uppercase text-amber-500/80 tracking-widest">Legacy Analysis Records</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 opacity-60">
+                        {prepForm.scenarios.bullish && <div className="space-y-1"><p className="text-[8px] font-black uppercase text-slate-600">Bullish Scenario</p><p className="text-[11px] text-slate-400 italic font-medium leading-relaxed">"{prepForm.scenarios.bullish}"</p></div>}
+                        {prepForm.scenarios.bearish && <div className="space-y-1"><p className="text-[8px] font-black uppercase text-slate-600">Bearish Scenario</p><p className="text-[11px] text-slate-400 italic font-medium leading-relaxed">"{prepForm.scenarios.bearish}"</p></div>}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-8 relative z-10">
+                    <button
+                      onClick={() => { onSavePrep(prepForm); setView('timeline'); window.scrollTo(0, 0); }}
+                      className={`w-full py-5 rounded-[24px] font-black text-[12px] uppercase tracking-[0.3em] text-white shadow-2xl active:scale-95 transition-all duration-500 bg-blue-600 hover:bg-blue-500 shadow-blue-500/30`}
+                    >
+                      LOCK IN DAILY PREP
+                    </button>
+                  </div>
+                </section>
+              </div>
+
+              {/* Right Column: Preattack Rituals */}
+              <div className="lg:col-span-4 space-y-6 order-1 lg:order-2">
+                <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-4">
+                      <div className="p-3 rounded-2xl bg-blue-500/10 text-blue-500"><Zap size={20} /></div>
+                      <div>
+                        <h3 className="text-xl font-black italic uppercase">RANNÍ CHECKLIST</h3>
+                        <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Aktivace před trhy</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3">
+                    {rituals.map(ritual => {
+                      const comp = prepForm.ritualCompletions?.find(c => c.ruleId === ritual.id);
+                      const isDone = comp?.status === 'Pass';
+                      return (
+                        <button
+                          key={ritual.id}
+                          onClick={() => handleToggleRitual(ritual.id)}
+                          className={`p-4 rounded-xl border flex items-center justify-between transition-all active:scale-95 ${isDone ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-600/20' : (theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600')} `}
+                        >
+                          <span className="text-[10px] font-black uppercase tracking-tight text-left pr-2">{ritual.label}</span>
+                          {isDone ? <Check size={16} /> : <div className={`w-4 h-4 rounded-full border shrink-0 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'bg-slate-200'} `} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                <div className="p-6 rounded-[32px] bg-blue-500/5 border border-blue-500/10 backdrop-blur-sm">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Info size={14} className="text-blue-500" />
+                    <p className="text-[10px] font-black uppercase text-blue-500 tracking-widest">Command Center</p>
+                  </div>
+                  <p className="text-[10px] text-slate-500 leading-relaxed font-medium">Dokonči ranní rituály a vypiluj taktický plán pro nadcházející seanci.</p>
                 </div>
-                <button onClick={() => { onSavePrep(prepForm); setView('timeline'); window.scrollTo(0, 0); }} className="w-full mt-8 py-4 bg-blue-600 rounded-2xl font-black text-[10px] uppercase tracking-widest text-white shadow-xl active:scale-95 transition-all">ULOŽIT PLÁN</button>
-              </section>
+              </div>
             </div>
           )}
           {view === 'edit-review' && (
@@ -1328,7 +1543,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                             <button
                               key={idx}
                               onClick={() => {
-                                setReviewForm(prev => {
+                                editReviewForm(prev => {
                                   const newList = [...(prev.weeklyGoalAdherence || [])];
                                   while (newList.length <= idx) newList.push({ ruleId: `wf_${idx}`, status: 'Pending' });
                                   newList[idx] = { ruleId: `wf_${idx}`, status: adherence ? 'Pending' : 'Pass' };
@@ -1394,7 +1609,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                               value={value}
                               onChange={(e) => {
                                 const newMetrics = { ...reviewForm.psycho?.metrics, [metric.id]: Number(e.target.value) };
-                                setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, metrics: newMetrics } });
+                                editReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, metrics: newMetrics } });
                               }}
                               className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer ${theme !== 'light' ? 'bg-[var(--bg-card)]' : 'bg-slate-200'}`}
                               style={{ accentColor: metric.color }}
@@ -1409,7 +1624,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                         <label className={`${labelClass} text-rose-500 text-[9px]`}>Stresory & Spouštěče</label>
                         <textarea
                           value={reviewForm.psycho?.stressors || ''}
-                          onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: e.target.value } })}
+                          onChange={(e) => editReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: e.target.value } })}
                           className={`${inputClass} !h-20 !p-3 resize-none text-[11px]`}
                           placeholder="Co mě rozhodilo?"
                         />
@@ -1418,7 +1633,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                         <label className={`${labelClass} text-emerald-500 text-[9px]`}>Vděčnost & Radost</label>
                         <textarea
                           value={reviewForm.psycho?.gratitude || ''}
-                          onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: e.target.value } })}
+                          onChange={(e) => editReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: e.target.value } })}
                           className={`${inputClass} !h-20 !p-3 resize-none text-[11px]`}
                           placeholder="Co se povedlo?"
                         />
@@ -1445,7 +1660,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                       </div>
                       <textarea
                         value={reviewForm.psycho?.notes || ''}
-                        onChange={(e) => setReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, notes: e.target.value } })}
+                        onChange={(e) => editReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, notes: e.target.value } })}
                         className={`${inputClass} !h-24 !p-3 resize-none font-mono text-[10px] leading-relaxed`}
                         placeholder="Proud myšlenek..."
                       />
@@ -1457,128 +1672,134 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           )}
         </div>
       )}
+
       {/* Export Modal */}
-      {
-        isExportModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-            <div className={`w-full max-w-md p-8 rounded-[40px] border shadow-2xl ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-              <div className="flex justify-between items-center mb-8">
-                <div>
-                  <h3 className={`text-2xl font-black italic tracking-tighter uppercase ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>Export Deníku</h3>
-                  <p className="text-[10px] font-black uppercase text-blue-500 tracking-widest">Vyberte parametry exportu</p>
+      {isExportModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className={`w-full max-w-md p-8 rounded-[40px] border shadow-2xl ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+            <div className="flex justify-between items-center mb-8">
+              <div>
+                <h3 className={`text-2xl font-black italic tracking-tighter uppercase ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>Export Deníku</h3>
+                <p className="text-[10px] font-black uppercase text-blue-500 tracking-widest">Vyberte parametry exportu</p>
+              </div>
+              <button
+                onClick={() => setIsExportModalOpen(false)}
+                className={`p-2 rounded-xl transition-colors ${theme !== 'light' ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-black/5 text-slate-500'}`}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-8">
+              {/* Range Selection */}
+              <div className="space-y-4">
+                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Časové období</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: '7', label: '7 dní' },
+                    { id: '30', label: '30 dní' },
+                    { id: '90', label: '90 dní' },
+                    { id: 'all', label: 'Vše' }
+                  ].map(r => (
+                    <button
+                      key={r.id}
+                      onClick={() => setExportRange(r.id as any)}
+                      className={`relative px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${exportRange === r.id
+                        ? 'text-white shadow-lg shadow-blue-600/20 scale-[1.02]'
+                        : `${theme !== 'light' ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`
+                        }`}
+                    >
+                      {exportRange === r.id && (
+                        <motion.div
+                          layoutId="exportRangeBubble"
+                          className="absolute inset-0 bg-blue-600 rounded-2xl z-0"
+                          transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                        />
+                      )}
+                      <span className="relative z-10">{r.label}</span>
+                    </button>
+                  ))}
                 </div>
-                <button
-                  onClick={() => setIsExportModalOpen(false)}
-                  className={`p-2 rounded-xl transition-colors ${theme !== 'light' ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-black/5 text-slate-500'}`}
-                >
-                  <X size={20} />
-                </button>
               </div>
 
-              <div className="space-y-8">
-                {/* Range Selection */}
-                <div className="space-y-4">
-                  <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Časové období</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { id: '7', label: '7 dní' },
-                      { id: '30', label: '30 dní' },
-                      { id: '90', label: '90 dní' },
-                      { id: 'all', label: 'Vše' }
-                    ].map(r => (
-                      <button
-                        key={r.id}
-                        onClick={() => setExportRange(r.id as any)}
-                        className={`px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${exportRange === r.id
-                          ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 scale-[1.02]'
-                          : `${theme !== 'light' ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`
-                          }`}
-                      >
-                        {r.label}
-                      </button>
-                    ))}
-                  </div>
+              {/* Field Selection */}
+              <div className="space-y-4">
+                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Data k exportu</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { id: 'notes', label: 'Reflexe' },
+                    { id: 'mistakes', label: 'Chyby' },
+                    { id: 'stressors', label: 'Stresory' },
+                    { id: 'gratitude', label: 'Vděčnost' },
+                    { id: 'pnl', label: 'PnL' },
+                    { id: 'rating', label: 'Rating' },
+                    { id: 'analysisScreenshots', label: 'Analýza (Screeny)' },
+                    { id: 'tradeScreenshots', label: 'Obchody (Screeny)' },
+                    { id: 'showTimestamps', label: 'Časy v pozn.' }
+                  ].map(field => (
+                    <button
+                      key={field.id}
+                      onClick={() => setExportFields(prev => ({ ...prev, [field.id]: !prev[field.id as keyof typeof prev] }))}
+                      className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-between ${exportFields[field.id as keyof typeof exportFields]
+                        ? 'bg-blue-600/10 border-blue-600/50 text-blue-500'
+                        : `${theme !== 'light' ? 'bg-white/5 border-white/5 text-slate-500 hover:bg-white/10' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`
+                        }`}
+                    >
+                      {field.label}
+                      <div className={`w-3.5 h-3.5 rounded-md border flex items-center justify-center transition-all ${exportFields[field.id as keyof typeof exportFields]
+                        ? 'bg-blue-600 border-blue-600'
+                        : 'border-slate-600'
+                        }`}>
+                        {exportFields[field.id as keyof typeof exportFields] && <Check size={10} className="text-white" />}
+                      </div>
+                    </button>
+                  ))}
                 </div>
-
-                {/* Field Selection */}
-                <div className="space-y-4">
-                  <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Data k exportu</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    {[
-                      { id: 'notes', label: 'Reflexe' },
-                      { id: 'mistakes', label: 'Chyby' },
-                      { id: 'stressors', label: 'Stresory' },
-                      { id: 'gratitude', label: 'Vděčnost' },
-                      { id: 'pnl', label: 'PnL' },
-                      { id: 'rating', label: 'Rating' },
-                      { id: 'analysisScreenshots', label: 'Analýza (Screeny)' },
-                      { id: 'tradeScreenshots', label: 'Obchody (Screeny)' },
-                      { id: 'showTimestamps', label: 'Časy v pozn.' }
-                    ].map(field => (
-                      <button
-                        key={field.id}
-                        onClick={() => setExportFields(prev => ({ ...prev, [field.id]: !prev[field.id as keyof typeof prev] }))}
-                        className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-between ${exportFields[field.id as keyof typeof exportFields]
-                          ? 'bg-blue-600/10 border-blue-600/50 text-blue-500'
-                          : `${theme !== 'light' ? 'bg-white/5 border-white/5 text-slate-500 hover:bg-white/10' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`
-                          }`}
-                      >
-                        {field.label}
-                        <div className={`w-3.5 h-3.5 rounded-md border flex items-center justify-center transition-all ${exportFields[field.id as keyof typeof exportFields]
-                          ? 'bg-blue-600 border-blue-600'
-                          : 'border-slate-600'
-                          }`}>
-                          {exportFields[field.id as keyof typeof exportFields] && <Check size={10} className="text-white" />}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Format Selection */}
-                <div className="space-y-4">
-                  <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Formát exportu</p>
-                  <div className="space-y-2">
-                    {[
-                      { id: 'pdf', label: 'Vizuální PDF Report', sub: 'Ideální pro čtení a tisk', icon: FileText },
-                      { id: 'csv', label: 'Data pro Excel (CSV)', sub: 'Ideální pro vlastní analýzu', icon: List },
-                      { id: 'ai', label: 'AI Optimized (MD)', sub: 'Nejlepší pro Gemini / ChatGPT', icon: Brain }
-                    ].map(f => (
-                      <button
-                        key={f.id}
-                        onClick={() => setExportFormat(f.id as any)}
-                        className={`w-full p-4 rounded-3xl flex items-center gap-4 transition-all text-left group ${exportFormat === f.id
-                          ? 'bg-blue-600/10 border-2 border-blue-600'
-                          : `${theme !== 'light' ? 'bg-[var(--bg-input)] border-2 border-transparent hover:bg-white/10' : 'bg-slate-50 border-2 border-transparent hover:bg-slate-100'}`
-                          }`}
-                      >
-                        <div className={`p-2.5 rounded-xl ${exportFormat === f.id ? 'bg-blue-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-400' : 'bg-slate-800 text-slate-400')}`}>
-                          <f.icon size={18} />
-                        </div>
-                        <div className="flex-1">
-                          <p className={`text-[10px] font-black uppercase tracking-widest ${exportFormat === f.id ? 'text-blue-500' : 'text-slate-400'}`}>{f.label}</p>
-                          <p className="text-[9px] text-slate-500 font-bold uppercase">{f.sub}</p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleExport}
-                  className="w-full py-5 rounded-[28px] bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-black uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98] shadow-xl shadow-blue-600/30 flex items-center justify-center gap-3 mt-4"
-                >
-                  Stáhnout Export <Download size={18} />
-                </button>
               </div>
+
+              {/* Format Selection */}
+              <div className="space-y-4">
+                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Formát exportu</p>
+                <div className="space-y-2">
+                  {[
+                    { id: 'pdf', label: 'Vizuální PDF Report', sub: 'Ideální pro čtení a tisk', icon: FileText },
+                    { id: 'csv', label: 'Data pro Excel (CSV)', sub: 'Ideální pro vlastní analýzu', icon: List },
+                    { id: 'ai', label: 'AI Optimized (MD)', sub: 'Nejlepší pro Gemini / ChatGPT', icon: Brain }
+                  ].map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => setExportFormat(f.id as any)}
+                      className={`w-full p-4 rounded-3xl flex items-center gap-4 transition-all text-left group ${exportFormat === f.id
+                        ? 'bg-blue-600/10 border-2 border-blue-600'
+                        : `${theme !== 'light' ? 'bg-[var(--bg-input)] border-2 border-transparent hover:bg-white/10' : 'bg-slate-50 border-2 border-transparent hover:bg-slate-100'}`
+                        }`}
+                    >
+                      <div className={`p-2.5 rounded-xl ${exportFormat === f.id ? 'bg-blue-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-400' : 'bg-slate-800 text-slate-400')}`}>
+                        <f.icon size={18} />
+                      </div>
+                      <div className="flex-1">
+                        <p className={`text-[10px] font-black uppercase tracking-widest ${exportFormat === f.id ? 'text-blue-500' : 'text-slate-400'}`}>{f.label}</p>
+                        <p className="text-[9px] text-slate-500 font-bold uppercase">{f.sub}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={handleExport}
+                className="w-full py-5 rounded-[28px] bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-black uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98] shadow-xl shadow-blue-600/30 flex items-center justify-center gap-3 mt-4"
+              >
+                Stáhnout Export <Download size={18} />
+              </button>
             </div>
           </div>
-        )
-      }
+        </div>
+      )}
 
       {/* Unsaved Changes Warning Modal */}
       {showUnsavedWarning && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className={`w-full max-w-md rounded-3xl shadow-2xl p-6 ${theme !== 'light' ? 'bg-[var(--bg-card)] border border-[var(--border-subtle)]' : 'bg-white border border-slate-200'}`}>
             <div className="flex items-center gap-3 mb-4">
               <div className="p-3 rounded-2xl bg-orange-500/20">
@@ -1589,35 +1810,15 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 <p className="text-sm text-slate-500">Tvoje poznámky ještě nejsou uložené.</p>
               </div>
             </div>
-
-            <p className="text-sm text-slate-400 mb-6">
-              Co chceš udělat s neuloženými změnami?
-            </p>
-
             <div className="flex gap-3">
-              <button
-                onClick={handleSaveAndProceed}
-                className="flex-1 py-3 rounded-2xl bg-green-600 hover:bg-green-500 text-white font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"
-              >
-                <Check size={16} /> Uložit
-              </button>
-              <button
-                onClick={handleDiscardAndProceed}
-                className="flex-1 py-3 rounded-2xl bg-red-600/20 hover:bg-red-600/30 text-red-400 font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 border border-red-500/30"
-              >
-                <X size={16} /> Zahodit
-              </button>
-              <button
-                onClick={handleCancelNavigation}
-                className={`flex-1 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-page)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-input)]' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
-              >
-                Zrušit
-              </button>
+              <button onClick={handleSaveAndProceed} className="flex-1 py-3 rounded-2xl bg-green-600 hover:bg-green-500 text-white font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"><Check size={16} /> Uložit</button>
+              <button onClick={handleDiscardAndProceed} className="flex-1 py-3 rounded-2xl bg-red-600/20 hover:bg-red-600/30 text-red-400 font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 border border-red-500/30"><X size={16} /> Zahodit</button>
+              <button onClick={handleCancelNavigation} className={`flex-1 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-page)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-input)]' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>Zrušit</button>
             </div>
           </div>
         </div>
       )}
-    </div >
+    </div>
   );
 };
 
