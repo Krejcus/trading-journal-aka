@@ -27,3 +27,7 @@ dist-ssr
 .npm-cache
 .npm-local
 .npm-sandbox
+
+# Large backup files
+backups/*.zip
+*.zip
