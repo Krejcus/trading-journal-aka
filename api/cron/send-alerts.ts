@@ -144,6 +144,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const [currentHour, currentMinute] = pragueTime.split(':').map(Number);
         const currentMinutesTotal = currentHour * 60 + currentMinute;
 
+        // Today's date in Prague timezone (YYYY-MM-DD)
+        const todayStr = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Prague' }).format(now);
+
         // Pick dynamic trading tip based on today's day
         const tipIdx = now.getDate() % TRADING_TIPS.length;
         const dailyTip = TRADING_TIPS[tipIdx];
@@ -166,89 +169,215 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             if (!sub) continue;
 
-            let shouldSend = false;
-            let title = '';
-            let body = '';
+            // Collect all alerts for this user (multiple can fire in one cron run)
+            const alerts: { title: string; body: string; type: string }[] = [];
 
             // --- 1. HANDLE MOCK TYPES (MANUAL DEBUG) ---
             if (mockType) {
                 switch (mockType) {
                     case 'asia':
-                        shouldSend = true;
-                        title = '🌏 ASIA OPEN';
-                        body = dailyTip;
+                        alerts.push({ title: '🌏 ASIA OPEN', body: dailyTip, type: 'asia' });
                         break;
                     case 'london':
-                        shouldSend = true;
-                        title = '🏰 LONDON OPEN';
-                        body = dailyTip;
+                        alerts.push({ title: '🏰 LONDON OPEN', body: dailyTip, type: 'london' });
                         break;
                     case 'ny':
-                        shouldSend = true;
-                        title = '🗽 NY OPEN';
-                        body = dailyTip;
+                        alerts.push({ title: '🗽 NY OPEN', body: dailyTip, type: 'ny' });
                         break;
                     case 'g_30m':
-                        shouldSend = true;
-                        title = '🛡️ Alpha: Přípravný čas';
-                        body = 'Trhy se pomalu probouzejí. Ideální čas postavit si herní plán v klidu.';
+                        alerts.push({ title: '🛡️ Alpha: Přípravný čas', body: 'Trhy se pomalu probouzejí. Ideální čas postavit si herní plán v klidu.', type: 'g_30m' });
                         break;
                     case 'g_10m':
-                        shouldSend = true;
-                        title = '⚡ Alpha: Poslední výzva';
-                        body = 'Seance startuje za 10 minut. Stále ti chybí hotová příprava!';
+                        alerts.push({ title: '⚡ Alpha: Poslední výzva', body: 'Seance startuje za 10 minut. Stále ti chybí hotová příprava!', type: 'g_10m' });
                         break;
                     case 'g_start':
-                        shouldSend = true;
-                        title = '🚫 Alpha Guard: PŘÍSTUP BLOKOVÁN';
-                        body = 'Střežený režim aktivní. Nemáte herní plán - dnes jen sledujte.';
+                        alerts.push({ title: '🚫 Alpha Guard: PŘÍSTUP BLOKOVÁN', body: 'Střežený režim aktivní. Nemáte herní plán - dnes jen sledujte.', type: 'g_start' });
                         break;
                     case 'review_detox':
-                        shouldSend = true;
-                        title = '📊 KONEC DNE';
-                        body = 'Grafy tě už nepotřebují. Uzavři deník a vypni terminál.';
+                        alerts.push({ title: '📊 KONEC DNE', body: 'Grafy tě už nepotřebují. Uzavři deník a vypni terminál.', type: 'review_detox' });
                         break;
                     default:
-                        shouldSend = true;
-                        title = 'AlphaTrade Diagnostika';
-                        body = `Server běží OK. (${pragueTime})`;
+                        alerts.push({ title: 'AlphaTrade Diagnostika', body: `Server běží OK. (${pragueTime})`, type: 'standard' });
                 }
             } else {
                 // --- 2. REAL CRON LOGIC (AUTOMATIC) ---
-                if (settings.sessionAlertsEnabled) {
-                    for (const session of userSessions) {
-                        const [sH, sM] = (session.startTime || "0:0").split(':').map(Number);
-                        const startMTotal = sH * 60 + sM;
 
-                        // Exact Session Start?
-                        if (settings.sessionStartAlertExact && Math.abs(currentMinutesTotal - startMTotal) <= 1) {
-                            shouldSend = true;
-                            let emoji = '🔔';
-                            const nameLower = (session.name || '').toLowerCase();
-                            if (nameLower.includes('asia')) emoji = '🌏';
-                            if (nameLower.includes('london') || nameLower.includes('eu')) emoji = '🏰';
-                            if (nameLower.includes('ny') || nameLower.includes('usa')) emoji = '🗽';
-                            title = `${emoji} ${session.name} začíná`;
-                            body = dailyTip;
-                        }
+                // Helper: get session emoji
+                const getEmoji = (name: string) => {
+                    const n = name.toLowerCase();
+                    if (n.includes('asia')) return '🌏';
+                    if (n.includes('london') || n.includes('eu')) return '🏰';
+                    if (n.includes('ny') || n.includes('usa')) return '🗽';
+                    return '🔔';
+                };
 
-                        // TODO: Add logic for T-30 and T-10 automated alerts based on real DB preps
+                // Lazy-loaded DB data (only fetched if needed)
+                let _hasPrepToday: boolean | null = null;
+                let _hasReviewToday: boolean | null = null;
+                let _isDebtActive: boolean | null = null;
+
+                const hasPrepToday = async () => {
+                    if (_hasPrepToday !== null) return _hasPrepToday;
+                    const { count } = await supabase.from('daily_preps').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('date', todayStr);
+                    _hasPrepToday = (count || 0) > 0;
+                    return _hasPrepToday;
+                };
+                const hasReviewToday = async () => {
+                    if (_hasReviewToday !== null) return _hasReviewToday;
+                    const { count } = await supabase.from('daily_reviews').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('date', todayStr);
+                    _hasReviewToday = (count || 0) > 0;
+                    return _hasReviewToday;
+                };
+                const isDebtActive = async () => {
+                    if (_isDebtActive !== null) return _isDebtActive;
+                    // Debt = last day with a prep has no review
+                    const { data: lastPrep } = await supabase.from('daily_preps').select('date').eq('user_id', profile.id).lt('date', todayStr).order('date', { ascending: false }).limit(1);
+                    if (!lastPrep || lastPrep.length === 0) { _isDebtActive = false; return false; }
+                    const lastPrepDate = lastPrep[0].date;
+                    const { count } = await supabase.from('daily_reviews').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('date', lastPrepDate);
+                    _isDebtActive = (count || 0) === 0;
+                    return _isDebtActive;
+                };
+
+                // Find first session of the day (for morning prep alerts)
+                let firstSessionStart = Infinity;
+                let firstSessionName = '';
+                for (const s of userSessions) {
+                    const [h, m] = (s.startTime || '0:0').split(':').map(Number);
+                    const mins = h * 60 + m;
+                    if (mins < firstSessionStart) {
+                        firstSessionStart = mins;
+                        firstSessionName = s.name;
                     }
                 }
 
+                // === SESSION ALERTS ===
+                if (settings.sessionAlertsEnabled) {
+                    for (const session of userSessions) {
+                        const [sH, sM] = (session.startTime || '0:0').split(':').map(Number);
+                        const [eH, eM] = (session.endTime || '0:0').split(':').map(Number);
+                        const startM = sH * 60 + sM;
+                        const endM = eH * 60 + eM;
+                        const emoji = getEmoji(session.name);
+
+                        // T-15 before session start
+                        if (settings.sessionStartAlert15m && Math.abs(currentMinutesTotal - (startM - 15)) <= 1) {
+                            alerts.push({
+                                title: `${emoji} ${session.name} za 15 minut`,
+                                body: 'Připrav se na seanci. Zkontroluj svůj herní plán.',
+                                type: `session-t15-${session.id || session.name}`
+                            });
+                        }
+
+                        // Exact session start
+                        if (settings.sessionStartAlertExact && Math.abs(currentMinutesTotal - startM) <= 1) {
+                            alerts.push({
+                                title: `${emoji} ${session.name} začíná`,
+                                body: dailyTip,
+                                type: `session-start-${session.id || session.name}`
+                            });
+                        }
+
+                        // T-10 before session end
+                        if (settings.sessionEndAlert10m && Math.abs(currentMinutesTotal - (endM - 10)) <= 1) {
+                            alerts.push({
+                                title: `⏰ ${session.name} končí za 10 minut`,
+                                body: 'Uzavři otevřené pozice a dodržuj plán.',
+                                type: `session-end10-${session.id || session.name}`
+                            });
+                        }
+
+                        // Exact session end
+                        if (settings.sessionEndAlertExact && Math.abs(currentMinutesTotal - endM) <= 1) {
+                            alerts.push({
+                                title: `🏁 ${session.name} skončila`,
+                                body: 'Ruce pryč od klávesnice. Čas na review.',
+                                type: `session-end-${session.id || session.name}`
+                            });
+                        }
+                    }
+                }
+
+                // === MORNING PREP ALERTS (Guardian) ===
+                if (settings.guardianEnabled && firstSessionStart < Infinity) {
+                    const minsToFirst = firstSessionStart - currentMinutesTotal;
+
+                    // T-60: Calm reminder to prepare
+                    if (settings.morningPrepAlert60m && Math.abs(minsToFirst - 60) <= 1) {
+                        if (!(await hasPrepToday())) {
+                            alerts.push({
+                                title: '🛡️ Alpha: Přípravný čas',
+                                body: `${firstSessionName} začíná za hodinu. Postav si herní plán v klidu.`,
+                                type: 'guardian-t60'
+                            });
+                        }
+                    }
+
+                    // T-15: Urgent prep warning
+                    if (settings.morningPrepAlert15m && Math.abs(minsToFirst - 15) <= 1) {
+                        if (!(await hasPrepToday())) {
+                            alerts.push({
+                                title: '⚡ Alpha: Poslední výzva',
+                                body: `${firstSessionName} za 15 minut a nemáš přípravu! Otevři deník.`,
+                                type: 'guardian-t15'
+                            });
+                        }
+                    }
+
+                    // T-0: Critical — session starting, no prep
+                    if (settings.morningPrepAlertCritical && Math.abs(minsToFirst) <= 1) {
+                        if (!(await hasPrepToday())) {
+                            alerts.push({
+                                title: '🚫 Alpha Guard: BEZ PŘÍPRAVY',
+                                body: 'Seance začala a nemáš herní plán. Dnes jen sleduj.',
+                                type: 'guardian-critical'
+                            });
+                        }
+                    }
+                }
+
+                // === EVENING AUDIT ALERT ===
+                if (settings.eveningAuditAlertEnabled) {
+                    const [auditH, auditM] = (settings.eveningAuditAlertTime || '20:00').split(':').map(Number);
+                    const auditMinutes = auditH * 60 + auditM;
+                    if (Math.abs(currentMinutesTotal - auditMinutes) <= 1) {
+                        if (!(await hasReviewToday())) {
+                            alerts.push({
+                                title: '📊 Čas na denní review',
+                                body: 'Uzavři dnešní den. Zapiš si co šlo dobře a co zlepšit.',
+                                type: 'evening-audit'
+                            });
+                        }
+                    }
+                }
+
+                // === MORNING DEBT ALERT ===
+                // Fire once in morning (between 6:00-8:00) if previous trading day has no review
+                if (settings.morningWakeUpDebtAlert && currentHour >= 6 && currentHour <= 7 && currentMinute === 0) {
+                    if (await isDebtActive()) {
+                        alerts.push({
+                            title: '⚠️ Dluh z předchozího dne',
+                            body: 'Nemáš hotový review za poslední obchodní den. Dokonči ho před dnešní seancí.',
+                            type: 'morning-debt'
+                        });
+                    }
+                }
+
+                // === TEST MODE ===
                 if (settings.testModeEnabled || prefs.testModeEnabled) {
-                    shouldSend = true;
-                    title = `AlphaTrade Debug (${pragueTime})`;
-                    body = `Automatické hlášení aktivní.`;
+                    alerts.push({
+                        title: `AlphaTrade Debug (${pragueTime})`,
+                        body: `Automatické hlášení aktivní.`,
+                        type: 'debug'
+                    });
                 }
             }
 
-            if (shouldSend) {
-                const alertType = mockType || 'session';
-                const result = await sendPush(sub, title, body, alertType);
+            // Send all alerts for this user
+            for (const alert of alerts) {
+                const result = await sendPush(sub, alert.title, alert.body, alert.type);
                 if (result === 'sent') sentCount++;
                 if (result === 'expired') {
-                    // Subscription is dead (410 Gone) - clean it from DB
                     const cleanedPrefs = { ...prefs };
                     delete cleanedPrefs.pushSubscription;
                     await supabase
@@ -256,6 +385,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         .update({ preferences: cleanedPrefs })
                         .eq('id', profile.id);
                     console.log(`[Cleanup] Removed expired push subscription for user ${profile.id}`);
+                    break; // No point sending more if subscription is dead
                 }
             }
         }
