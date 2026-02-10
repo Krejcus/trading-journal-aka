@@ -5,10 +5,10 @@ import { ExchangeRates } from '../services/currencyService';
 import { storageService } from '../services/storageService';
 import {
   Trash2, TrendingUp, TrendingDown, X, Edit3, Calendar,
-  Tag, Clock, DollarSign, FileText, Image as ImageIcon,
+  Tag, DollarSign, FileText, Image as ImageIcon,
   ChevronRight, ChevronLeft, Wallet, Target, AlertTriangle, AlertCircle, Brain,
   ShieldCheck, ShieldAlert, BarChart3, Activity, Zap, Monitor,
-  Maximize2, ArrowRight, Timer, Gauge, Hash, Ruler, Percent,
+  Maximize2, ArrowRight, Gauge, Hash, Ruler, Percent,
   Compass, Hourglass, Cpu, Terminal, Layers, ArrowUpRight, ArrowDownRight,
   Share2, Check, Copy, LayoutGrid, List
 } from 'lucide-react';
@@ -230,6 +230,25 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             const tradeScreenshots = getScreenshots(trade);
             const isImageLoaded = loadedImages.has(String(trade.id));
 
+            const tradeAccount = accounts.find(a => a.id === trade.accountId);
+            // Find group trades using same logic as TradeDetailModal (groupId + fuzzy)
+            const allTradesList = allTrades.length > 0 ? allTrades : trades;
+            let groupTrades: Trade[] = [];
+            if (trade.groupId) {
+              groupTrades = allTradesList.filter(t => t.groupId === trade.groupId);
+            }
+            if (groupTrades.length <= 1) {
+              const fuzzy = allTradesList.filter(t => t.instrument === trade.instrument && t.timestamp === trade.timestamp && t.direction === trade.direction);
+              if (fuzzy.length > 1) groupTrades = fuzzy;
+            }
+            const isGroupTrade = groupTrades.length > 1;
+            const isCombinedCard = String(trade.id).startsWith('combined_');
+            const masterTrade = groupTrades.find(t => t.isMaster) || groupTrades[0];
+            const masterAcc = isGroupTrade ? accounts.find(a => a.id === masterTrade?.accountId) : null;
+            const copyCount = isGroupTrade ? groupTrades.length - 1 : 0;
+            const isCopyCard = isGroupTrade && !isCombinedCard && trade.id !== masterTrade?.id;
+            const isMasterCard = isGroupTrade && !isCombinedCard && trade.id === masterTrade?.id;
+
             return (
               <div
                 key={trade.id}
@@ -255,27 +274,6 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         <Calendar size={8} className="text-slate-500" />
                         <span className="text-[9px] font-mono font-bold text-slate-500">{formatTradeDate(trade.date).date}</span>
                       </div>
-                      {!formatTradeDate(trade.date).isPlaceholderTime && (
-                        <div className="flex items-center gap-1.5 bg-blue-500/5 px-2 py-0.5 rounded border border-blue-500/10">
-                          <Clock size={8} className="text-blue-500/60" />
-                          <span className="text-[9px] font-mono font-bold text-blue-500/60">{formatTradeDate(trade.date).time}</span>
-                        </div>
-                      )}
-                      {(trade.durationMinutes && trade.durationMinutes > 0) && (
-                        <div className="flex items-center gap-1.5 bg-indigo-500/5 px-2 py-0.5 rounded border border-indigo-500/10">
-                          <Timer size={8} className="text-indigo-500/60" />
-                          <span className="text-[9px] font-mono font-bold text-indigo-500/60">{trade.duration || (Math.round(trade.durationMinutes) + 'm')}</span>
-                        </div>
-                      )}
-                      {/* Master/Copy Indicators */}
-                      {trade.isMaster && (
-                        <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 rounded text-[7px] font-black tracking-widest border border-blue-500/30 flex items-center gap-1">
-                          MASTER <Zap size={8} />
-                        </span>
-                      )}
-                      {trade.masterTradeId && (
-                        <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 rounded text-[7px] font-black tracking-widest border border-purple-500/30">COPY</span>
-                      )}
                       {trade.phase && (
                         <span className={`px-1.5 py-0.5 rounded text-[7px] font-black tracking-widest border ${trade.phase === 'Funded'
                           ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
@@ -289,6 +287,37 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     <h3 className={`text-2xl font-black uppercase tracking-tighter truncate leading-none ${theme !== 'light' ? 'text-white group-hover:text-trade-accent' : 'text-slate-900'} transition-colors duration-300`}>
                       {trade.instrument}
                     </h3>
+
+                    <div className={`flex items-center gap-1.5 mt-1.5 px-2.5 py-1.5 rounded-lg border flex-wrap ${
+                      isGroupTrade
+                        ? 'bg-blue-500/5 border-blue-500/15'
+                        : theme !== 'light' ? 'bg-white/[0.03] border-white/5' : 'bg-slate-50 border-slate-200'
+                    }`}>
+                      <Terminal size={12} className={isGroupTrade ? 'text-blue-400' : 'text-slate-500'} />
+                      {isCombinedCard && masterAcc ? (
+                        <>
+                          <span className={`text-[11px] font-black uppercase tracking-wide truncate max-w-[140px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {masterAcc.name}
+                          </span>
+                          <ArrowRight size={10} className="text-blue-400/60" />
+                          <span className="text-[9px] font-black text-blue-400 uppercase tracking-wider">
+                            {copyCount} {copyCount === 1 ? 'copy' : 'copies'}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className={`text-[11px] font-black uppercase tracking-wide truncate max-w-[140px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {getAccountName(trade.accountId)}
+                          </span>
+                          {isMasterCard && (
+                            <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 rounded text-[7px] font-black tracking-widest border border-blue-500/30">MASTER</span>
+                          )}
+                          {isCopyCard && (
+                            <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 rounded text-[7px] font-black tracking-widest border border-purple-500/30">COPY</span>
+                          )}
+                        </>
+                      )}
+                    </div>
 
                     <div className="flex flex-wrap gap-1.5 pt-1">
                       {(trade.emotions || []).slice(0, 3).map(eId => {
@@ -307,16 +336,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                           accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
                           trade.riskAmount ? trade.pnl / trade.riskAmount : undefined
                         )}
-                        {trade.isMaster && (
-                          <span className="text-[10px] text-slate-500 ml-2 font-black uppercase tracking-widest">
-                            + {accounts.filter(a => a.parentAccountId === trade.accountId).length} copies
-                          </span>
-                        )}
                       </span>
-                      <div className="flex items-center gap-2 mt-2">
-                        <Terminal size={10} className="text-slate-600" />
-                        <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest truncate max-w-[120px]">{getAccountName(trade.accountId)}</span>
-                      </div>
                     </div>
                     <div className="flex items-center gap-2 text-[9px] font-black uppercase text-slate-500 group-hover:text-blue-500 transition-all duration-300 group-hover:translate-x-1">
                       Audit <ChevronRight size={14} className="text-blue-500/50" />
@@ -385,6 +405,22 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   const isWin = trade.pnl >= 0;
                   const pnlColor = isMissed ? 'text-blue-400' : (isWin ? 'text-emerald-500' : 'text-rose-500');
                   const tableScreenshot = getScreenshot(trade);
+                  const tblAllTrades = allTrades.length > 0 ? allTrades : trades;
+                  let tblGroup: Trade[] = [];
+                  if (trade.groupId) {
+                    tblGroup = tblAllTrades.filter(t => t.groupId === trade.groupId);
+                  }
+                  if (tblGroup.length <= 1) {
+                    const fuzzy = tblAllTrades.filter(t => t.instrument === trade.instrument && t.timestamp === trade.timestamp && t.direction === trade.direction);
+                    if (fuzzy.length > 1) tblGroup = fuzzy;
+                  }
+                  const tblIsGroup = tblGroup.length > 1;
+                  const tblIsCombined = String(trade.id).startsWith('combined_');
+                  const tblMaster = tblGroup.find(t => t.isMaster) || tblGroup[0];
+                  const tblMasterAcc = tblIsGroup ? accounts.find(a => a.id === tblMaster?.accountId) : null;
+                  const tblCopyCount = tblIsGroup ? tblGroup.length - 1 : 0;
+                  const tblIsCopy = tblIsGroup && !tblIsCombined && trade.id !== tblMaster?.id;
+                  const tblIsMaster = tblIsGroup && !tblIsCombined && trade.id === tblMaster?.id;
 
                   return (
                     <tr
@@ -435,9 +471,27 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         </div>
                       </td>
                       <td className="px-6 py-3">
-                        <div className="flex items-center gap-2">
-                          <Terminal size={10} className="text-slate-600" />
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-[100px] truncate">{getAccountName(trade.accountId)}</span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Terminal size={10} className={tblIsGroup ? 'text-blue-400' : 'text-slate-600'} />
+                          {tblIsCombined && tblMasterAcc ? (
+                            <>
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-[100px] truncate">{tblMasterAcc.name}</span>
+                              <ArrowRight size={8} className="text-blue-400/60" />
+                              <span className="text-[8px] font-bold text-blue-400 uppercase tracking-wider">
+                                {tblCopyCount} {tblCopyCount === 1 ? 'copy' : 'copies'}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-[100px] truncate">{getAccountName(trade.accountId)}</span>
+                              {tblIsMaster && (
+                                <span className="px-1 py-0.5 bg-blue-600/20 text-blue-400 rounded text-[7px] font-black tracking-widest border border-blue-500/30">MASTER</span>
+                              )}
+                              {tblIsCopy && (
+                                <span className="px-1 py-0.5 bg-purple-600/20 text-purple-400 rounded text-[7px] font-black tracking-widest border border-purple-500/30">COPY</span>
+                              )}
+                            </>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-3 text-right">

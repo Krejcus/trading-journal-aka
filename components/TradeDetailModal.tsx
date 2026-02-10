@@ -126,6 +126,26 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         return [activeTrade];
     }, [activeTrade.groupId, activeTrade.instrument, activeTrade.timestamp, activeTrade.direction, activeTrade.id, allTrades]);
 
+    // Smarter MASTER identification
+    const masterTradeIdInGroup = useMemo(() => {
+        if (groupTrades.length <= 1) return null;
+
+        // 1. Explicit master flag
+        const explicitMaster = groupTrades.find(t => t.isMaster);
+        if (explicitMaster) return explicitMaster.id;
+
+        // 2. Look for "HLAVNÍ" (Main) in account name
+        const masterByName = groupTrades.find(t => {
+            const acc = accounts.find(a => a.id === t.accountId);
+            const name = acc?.name || (t.accountId === activeTrade.accountId ? accountName : '');
+            return name?.toLowerCase().includes('hlavní');
+        });
+        if (masterByName) return masterByName.id;
+
+        // 3. Fallback to first one
+        return groupTrades[0]?.id;
+    }, [groupTrades, accounts, activeTrade.accountId, accountName]);
+
     const [isZoomed, setIsZoomed] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [shareCopied, setShareCopied] = useState(false);
@@ -292,11 +312,20 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                         const pnlVal = safeValue(gt.pnl);
                                         const accName = acc?.name || (gt.accountId === activeTrade.accountId ? accountName : 'Unknown Account');
 
+                                        const isMasterTrade = masterTradeIdInGroup ? gt.id === masterTradeIdInGroup : (gt.isMaster || (!gt.masterTradeId && groupTrades.length > 1 && gt.id === groupTrades[0]?.id));
+                                        const isCopyTrade = !isMasterTrade && groupTrades.length > 1;
+
                                         return (
                                             <div key={gt.id} className={`p-2 rounded-xl border flex items-center justify-between transition-all ${isDark ? 'bg-white/5 border-white/5 hover:bg-white/10' : 'bg-white border-slate-200'}`}>
                                                 <div className="flex items-center gap-2">
                                                     <div className={`w-1.5 h-1.5 rounded-full ${acc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
                                                     <span className="text-[10px] font-black uppercase tracking-tight truncate max-w-[120px]">{accName}</span>
+                                                    {isMasterTrade && (
+                                                        <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 rounded text-[7px] font-black tracking-widest border border-blue-500/30">MASTER</span>
+                                                    )}
+                                                    {isCopyTrade && (
+                                                        <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 rounded text-[7px] font-black tracking-widest border border-purple-500/30">COPY</span>
+                                                    )}
                                                 </div>
                                                 <span className={`text-[10px] font-mono font-bold ${pnlVal >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                                                     {formatValue(pnlVal)}
