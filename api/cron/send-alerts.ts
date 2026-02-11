@@ -3,8 +3,9 @@ import webpush from 'web-push';
 import { createClient } from '@supabase/supabase-js';
 
 // Init Supabase with Service Role Key to bypass RLS in Cron job
-const supabaseUrl = process.env.VITE_SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY!;
+// VITE_ prefix vars are only available at build time, not in serverless runtime
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL!;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Init Web Push
