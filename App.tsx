@@ -102,7 +102,7 @@ const DEFAULT_ROADMAP: CareerCheckpoint[] = [
 
 
 
-const aggregateTrades = (trades: Trade[]): Trade[] => {
+const aggregateTrades = (trades: Trade[], accounts: Account[]): Trade[] => {
   const groups = new Map<string, Trade[]>();
   const independent: Trade[] = [];
 
@@ -118,8 +118,20 @@ const aggregateTrades = (trades: Trade[]): Trade[] => {
   const aggregated: Trade[] = [...independent];
 
   groups.forEach((groupTrades, groupId) => {
-    // Find master trade or just pick the first one
-    const master = groupTrades.find(t => t.isMaster) || groupTrades[0];
+    // Smarter master identification:
+    // 1. Explicit isMaster flag
+    // 2. Account name contains 'hlavní'
+    // 3. Fallback to first one
+    let master = groupTrades.find(t => t.isMaster);
+
+    if (!master && accounts.length > 0) {
+      master = groupTrades.find(t => {
+        const acc = accounts.find(a => a.id === t.accountId);
+        return acc?.name?.toLowerCase().includes('hlavní');
+      });
+    }
+
+    if (!master) master = groupTrades[0];
 
     // Create combined trade Object
     const combined: Trade = {
@@ -321,6 +333,9 @@ const App: React.FC = () => {
     morningWakeUpDebtAlert: true
   });
 
+  // Preserve pushSubscription across preference saves (it's not in React state)
+  const pushSubscriptionRef = useRef<any>(null);
+
   const [guardian, setGuardian] = useState<GuardianState>({
     isCriticalAlert: false,
     isPrepMissing: true,
@@ -431,9 +446,9 @@ const App: React.FC = () => {
         const sub = await subscribeUserToPush();
 
         if (sub && (sub as any).endpoint) {
+          pushSubscriptionRef.current = sub;
           const currentPrefs = currentUserPreferences();
-          const updatedPrefs = { ...currentPrefs, pushSubscription: sub };
-          await storageService.savePreferences(updatedPrefs as any);
+          await storageService.savePreferences(currentPrefs as any);
           alert("✅ HOTOVO!\nNotifikace na pozadí byly úspěšně aktivovány.");
         }
       } catch (err: any) {
@@ -475,11 +490,14 @@ const App: React.FC = () => {
     ltfOptions,
     ironRules,
     playbookItems,
+    constitutionRules,
+    careerRoadmap,
     businessSettings,
     psychoMetricsConfig: psychoMetrics,
     theme,
     dashboardMode,
-    systemSettings
+    systemSettings,
+    ...(pushSubscriptionRef.current ? { pushSubscription: pushSubscriptionRef.current } : {}),
   });
 
 
@@ -644,6 +662,7 @@ const App: React.FC = () => {
     // Theme is applied only on initial load (useState initializer).
     if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
+    if ((prefs as any).pushSubscription) pushSubscriptionRef.current = (prefs as any).pushSubscription;
   }, []);
 
 
@@ -936,12 +955,16 @@ const App: React.FC = () => {
       // Verify push subscription is still valid (iOS can silently expire it)
       storageService.getPreferences().then(async (savedPrefs) => {
         const savedSub = (savedPrefs as any)?.pushSubscription;
+        if (savedSub) pushSubscriptionRef.current = savedSub;
         if (!savedSub) return; // User never enabled notifications
         const result = await verifyAndRefreshSubscription(savedSub);
         if (result?.changed && result.subscription?.endpoint) {
           console.log('[Push] Subscription refreshed, saving to DB...');
+          pushSubscriptionRef.current = result.subscription;
           const prefs = currentUserPreferences();
-          await storageService.savePreferences({ ...prefs, pushSubscription: result.subscription } as any);
+          await storageService.savePreferences(prefs as any);
+        } else if (result && !result.changed) {
+          pushSubscriptionRef.current = result.subscription;
         } else if (!result) {
           console.log('[Push] Subscription could not be verified (permission revoked or SW missing)');
         }
@@ -1162,24 +1185,7 @@ const App: React.FC = () => {
 
         // Business Hub data (expenses, payouts, goals, resources) now saved to dedicated tables
         // NOT in preferences - prevents data duplication and inconsistency
-        storageService.savePreferences({
-          emotions: userEmotions,
-          standardMistakes: userMistakes,
-          standardGoals: standardGoals,
-          dashboardLayout,
-          sessions,
-          htfOptions,
-          ltfOptions,
-          ironRules,
-          playbookItems,
-          constitutionRules,
-          careerRoadmap,
-          businessSettings,
-          psychoMetricsConfig: psychoMetrics,
-          theme,
-          dashboardMode,
-          systemSettings,
-        }).catch(err => {
+        storageService.savePreferences(currentUserPreferences() as any).catch(err => {
           // If save fails, mark as dirty again so we retry
           console.error("[Preferences] Save failed:", err);
           isPreferencesDirty.current = true;
@@ -1204,24 +1210,7 @@ const App: React.FC = () => {
         isPreferencesDirty.current = false;
 
         // Business Hub data excluded - saved to dedicated tables, not preferences
-        storageService.savePreferences({
-          emotions: userEmotions,
-          standardMistakes: userMistakes,
-          standardGoals: standardGoals,
-          dashboardLayout,
-          sessions,
-          htfOptions,
-          ltfOptions,
-          ironRules,
-          playbookItems,
-          constitutionRules,
-          careerRoadmap,
-          businessSettings,
-          psychoMetricsConfig: psychoMetrics,
-          theme,
-          dashboardMode,
-          systemSettings,
-        }).catch(err => {
+        storageService.savePreferences(currentUserPreferences() as any).catch(err => {
           console.error("[Auto-Save] Periodic save failed:", err);
           isPreferencesDirty.current = true;
         });
@@ -1264,12 +1253,7 @@ const App: React.FC = () => {
       }
       if (isPreferencesDirty.current) {
         isPreferencesDirty.current = false;
-        storageService.savePreferences({
-          emotions: userEmotions, standardMistakes: userMistakes, standardGoals,
-          dashboardLayout, sessions, htfOptions, ltfOptions, ironRules,
-          playbookItems, constitutionRules, careerRoadmap, businessSettings,
-          psychoMetricsConfig: psychoMetrics, theme, dashboardMode, systemSettings,
-        }).catch(() => { isPreferencesDirty.current = true; });
+        storageService.savePreferences(currentUserPreferences() as any).catch(() => { isPreferencesDirty.current = true; });
       }
     };
 
@@ -1512,7 +1496,7 @@ const App: React.FC = () => {
   }, [displayTrades, filters, viewMode, accounts, dashboardMode]);
 
   const filteredDisplayTrades = useMemo(() => {
-    return viewMode === 'combined' ? aggregateTrades(baseFilteredTrades) : baseFilteredTrades;
+    return viewMode === 'combined' ? aggregateTrades(baseFilteredTrades, accounts) : baseFilteredTrades;
   }, [baseFilteredTrades, viewMode]);
 
   const filteredStats = useMemo(() => {
