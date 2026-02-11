@@ -37,6 +37,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const mockType = req.query.type as string;
 
     if (!isManualDebug && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+        console.log(`[Cron] AUTH FAILED. Has CRON_SECRET: ${!!process.env.CRON_SECRET}, Header: ${req.headers.authorization?.slice(0, 20)}...`);
         return res.status(401).end('Unauthorized');
     }
 
@@ -162,13 +163,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         let sentCount = 0;
 
+        // Diagnostic log for debugging
+        console.log(`[Cron] Time: ${pragueTime} (${currentMinutesTotal} min) | Date: ${todayStr} | Profiles: ${profiles.length} | Mock: ${mockType || 'none'}`);
+
         for (const profile of profiles) {
             const prefs = profile.preferences || {};
             const sub = prefs.pushSubscription;
             const settings = prefs.systemSettings || {};
             const userSessions = prefs.sessions || [];
 
-            if (!sub) continue;
+            if (!sub) {
+                console.log(`[Cron] User ${profile.id.slice(0, 8)}: NO push subscription, skipping`);
+                continue;
+            }
+
+            console.log(`[Cron] User ${profile.id.slice(0, 8)}: sub=YES | sessions=${userSessions.length} | testMode=${settings.testModeEnabled} | sessionAlerts=${settings.sessionAlertsEnabled} | guardian=${settings.guardianEnabled}`);
+
+            // Log session times for debugging
+            for (const s of userSessions) {
+                console.log(`[Cron]   Session "${s.name}": ${s.startTime} - ${s.endTime}`);
+            }
 
             // Collect all alerts for this user (multiple can fire in one cron run)
             const alerts: { title: string; body: string; type: string }[] = [];
@@ -374,6 +388,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
             }
 
+            console.log(`[Cron] User ${profile.id.slice(0, 8)}: ${alerts.length} alerts to send${alerts.length > 0 ? ': ' + alerts.map(a => a.type).join(', ') : ''}`);
+
             // Send all alerts for this user
             for (const alert of alerts) {
                 const result = await sendPush(sub, alert.title, alert.body, alert.type);
@@ -402,7 +418,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             `);
         }
 
-        return res.status(200).json({ success: true, sent: sentCount });
+        console.log(`[Cron] Done. Total sent: ${sentCount}`);
+        return res.status(200).json({ success: true, sent: sentCount, time: pragueTime, profiles: profiles.length });
 
     } catch (err: any) {
         return res.status(500).json({ error: err.message });
