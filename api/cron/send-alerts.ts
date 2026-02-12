@@ -153,18 +153,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const tipIdx = now.getDate() % TRADING_TIPS.length;
         const dailyTip = TRADING_TIPS[tipIdx];
 
-        let { data: profiles, error } = await supabase
-            .from('profiles')
-            .select('id, preferences');
+        // --- BATCH: Fetch all data in parallel (1 query each instead of per-user) ---
+        const [profilesResult, prepsResult, reviewsResult] = await Promise.all([
+            supabase.from('profiles').select('id, preferences'),
+            supabase.from('daily_preps').select('user_id').eq('date', todayStr),
+            supabase.from('daily_reviews').select('user_id').eq('date', todayStr),
+        ]);
 
-        if (error || !profiles) {
-            return res.status(500).json({ error: error?.message });
+        if (profilesResult.error || !profilesResult.data) {
+            return res.status(500).json({ error: profilesResult.error?.message });
         }
 
-        let sentCount = 0;
+        const profiles = profilesResult.data;
+        // Pre-built lookup sets: O(1) per user instead of O(1 DB query)
+        const usersWithPrepToday = new Set((prepsResult.data || []).map(r => r.user_id));
+        const usersWithReviewToday = new Set((reviewsResult.data || []).map(r => r.user_id));
 
-        // Diagnostic log for debugging
-        console.log(`[Cron] Time: ${pragueTime} (${currentMinutesTotal} min) | Date: ${todayStr} | Profiles: ${profiles.length} | Mock: ${mockType || 'none'}`);
+        console.log(`[Cron] ${pragueTime} (${currentMinutesTotal}min) | ${todayStr} | ${profiles.length} profiles | Mock: ${mockType || 'none'}`);
+
+        // Helper: get session emoji
+        const getEmoji = (name: string) => {
+            const n = name.toLowerCase();
+            if (n.includes('asia')) return '🌏';
+            if (n.includes('london') || n.includes('eu')) return '🏰';
+            if (n.includes('ny') || n.includes('usa')) return '🗽';
+            return '🔔';
+        };
+
+        // Collect all push jobs across all users, then send in parallel
+        type PushJob = { sub: any; title: string; body: string; type: string; profileId: string; prefs: any };
+        const pushJobs: PushJob[] = [];
 
         for (const profile of profiles) {
             const prefs = profile.preferences || {};
@@ -172,19 +190,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const settings = prefs.systemSettings || {};
             const userSessions = prefs.sessions || [];
 
-            if (!sub) {
-                console.log(`[Cron] User ${profile.id.slice(0, 8)}: NO push subscription, skipping`);
-                continue;
-            }
+            if (!sub) continue;
 
-            console.log(`[Cron] User ${profile.id.slice(0, 8)}: sub=YES | sessions=${userSessions.length} | testMode=${settings.testModeEnabled} | sessionAlerts=${settings.sessionAlertsEnabled} | guardian=${settings.guardianEnabled}`);
-
-            // Log session times for debugging
-            for (const s of userSessions) {
-                console.log(`[Cron]   Session "${s.name}": ${s.startTime} - ${s.endTime}`);
-            }
-
-            // Collect all alerts for this user (multiple can fire in one cron run)
             const alerts: { title: string; body: string; type: string }[] = [];
 
             // --- 1. HANDLE MOCK TYPES (MANUAL DEBUG) ---
@@ -216,43 +223,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
             } else {
                 // --- 2. REAL CRON LOGIC (AUTOMATIC) ---
-
-                // Helper: get session emoji
-                const getEmoji = (name: string) => {
-                    const n = name.toLowerCase();
-                    if (n.includes('asia')) return '🌏';
-                    if (n.includes('london') || n.includes('eu')) return '🏰';
-                    if (n.includes('ny') || n.includes('usa')) return '🗽';
-                    return '🔔';
-                };
-
-                // Lazy-loaded DB data (only fetched if needed)
-                let _hasPrepToday: boolean | null = null;
-                let _hasReviewToday: boolean | null = null;
-                let _isDebtActive: boolean | null = null;
-
-                const hasPrepToday = async () => {
-                    if (_hasPrepToday !== null) return _hasPrepToday;
-                    const { count } = await supabase.from('daily_preps').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('date', todayStr);
-                    _hasPrepToday = (count || 0) > 0;
-                    return _hasPrepToday;
-                };
-                const hasReviewToday = async () => {
-                    if (_hasReviewToday !== null) return _hasReviewToday;
-                    const { count } = await supabase.from('daily_reviews').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('date', todayStr);
-                    _hasReviewToday = (count || 0) > 0;
-                    return _hasReviewToday;
-                };
-                const isDebtActive = async () => {
-                    if (_isDebtActive !== null) return _isDebtActive;
-                    // Debt = last day with a prep has no review
-                    const { data: lastPrep } = await supabase.from('daily_preps').select('date').eq('user_id', profile.id).lt('date', todayStr).order('date', { ascending: false }).limit(1);
-                    if (!lastPrep || lastPrep.length === 0) { _isDebtActive = false; return false; }
-                    const lastPrepDate = lastPrep[0].date;
-                    const { count } = await supabase.from('daily_reviews').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('date', lastPrepDate);
-                    _isDebtActive = (count || 0) === 0;
-                    return _isDebtActive;
-                };
+                const hasPrep = usersWithPrepToday.has(profile.id);
+                const hasReview = usersWithReviewToday.has(profile.id);
 
                 // Find first session of the day (for morning prep alerts)
                 let firstSessionStart = Infinity;
@@ -275,40 +247,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         const endM = eH * 60 + eM;
                         const emoji = getEmoji(session.name);
 
-                        // T-15 before session start
                         if (settings.sessionStartAlert15m && Math.abs(currentMinutesTotal - (startM - 15)) <= 1) {
-                            alerts.push({
-                                title: `${emoji} ${session.name} za 15 minut`,
-                                body: 'Připrav se na seanci. Zkontroluj svůj herní plán.',
-                                type: `session-t15-${session.id || session.name}`
-                            });
+                            alerts.push({ title: `${emoji} ${session.name} za 15 minut`, body: 'Připrav se na seanci. Zkontroluj svůj herní plán.', type: `session-t15-${session.id || session.name}` });
                         }
-
-                        // Exact session start
                         if (settings.sessionStartAlertExact && Math.abs(currentMinutesTotal - startM) <= 1) {
-                            alerts.push({
-                                title: `${emoji} ${session.name} začíná`,
-                                body: dailyTip,
-                                type: `session-start-${session.id || session.name}`
-                            });
+                            alerts.push({ title: `${emoji} ${session.name} začíná`, body: dailyTip, type: `session-start-${session.id || session.name}` });
                         }
-
-                        // T-10 before session end
                         if (settings.sessionEndAlert10m && Math.abs(currentMinutesTotal - (endM - 10)) <= 1) {
-                            alerts.push({
-                                title: `⏰ ${session.name} končí za 10 minut`,
-                                body: 'Uzavři otevřené pozice a dodržuj plán.',
-                                type: `session-end10-${session.id || session.name}`
-                            });
+                            alerts.push({ title: `⏰ ${session.name} končí za 10 minut`, body: 'Uzavři otevřené pozice a dodržuj plán.', type: `session-end10-${session.id || session.name}` });
                         }
-
-                        // Exact session end
                         if (settings.sessionEndAlertExact && Math.abs(currentMinutesTotal - endM) <= 1) {
-                            alerts.push({
-                                title: `🏁 ${session.name} skončila`,
-                                body: 'Ruce pryč od klávesnice. Čas na review.',
-                                type: `session-end-${session.id || session.name}`
-                            });
+                            alerts.push({ title: `🏁 ${session.name} skončila`, body: 'Ruce pryč od klávesnice. Čas na review.', type: `session-end-${session.id || session.name}` });
                         }
                     }
                 }
@@ -317,37 +266,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 if (settings.guardianEnabled && firstSessionStart < Infinity) {
                     const minsToFirst = firstSessionStart - currentMinutesTotal;
 
-                    // T-60: Calm reminder to prepare
-                    if (settings.morningPrepAlert60m && Math.abs(minsToFirst - 60) <= 1) {
-                        if (!(await hasPrepToday())) {
-                            alerts.push({
-                                title: '🛡️ Alpha: Přípravný čas',
-                                body: `${firstSessionName} začíná za hodinu. Postav si herní plán v klidu.`,
-                                type: 'guardian-t60'
-                            });
-                        }
+                    if (settings.morningPrepAlert60m && Math.abs(minsToFirst - 60) <= 1 && !hasPrep) {
+                        alerts.push({ title: '🛡️ Alpha: Přípravný čas', body: `${firstSessionName} začíná za hodinu. Postav si herní plán v klidu.`, type: 'guardian-t60' });
                     }
-
-                    // T-15: Urgent prep warning
-                    if (settings.morningPrepAlert15m && Math.abs(minsToFirst - 15) <= 1) {
-                        if (!(await hasPrepToday())) {
-                            alerts.push({
-                                title: '⚡ Alpha: Poslední výzva',
-                                body: `${firstSessionName} za 15 minut a nemáš přípravu! Otevři deník.`,
-                                type: 'guardian-t15'
-                            });
-                        }
+                    if (settings.morningPrepAlert15m && Math.abs(minsToFirst - 15) <= 1 && !hasPrep) {
+                        alerts.push({ title: '⚡ Alpha: Poslední výzva', body: `${firstSessionName} za 15 minut a nemáš přípravu! Otevři deník.`, type: 'guardian-t15' });
                     }
-
-                    // T-0: Critical — session starting, no prep
-                    if (settings.morningPrepAlertCritical && Math.abs(minsToFirst) <= 1) {
-                        if (!(await hasPrepToday())) {
-                            alerts.push({
-                                title: '🚫 Alpha Guard: BEZ PŘÍPRAVY',
-                                body: 'Seance začala a nemáš herní plán. Dnes jen sleduj.',
-                                type: 'guardian-critical'
-                            });
-                        }
+                    if (settings.morningPrepAlertCritical && Math.abs(minsToFirst) <= 1 && !hasPrep) {
+                        alerts.push({ title: '🚫 Alpha Guard: BEZ PŘÍPRAVY', body: 'Seance začala a nemáš herní plán. Dnes jen sleduj.', type: 'guardian-critical' });
                     }
                 }
 
@@ -355,55 +281,60 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 if (settings.eveningAuditAlertEnabled) {
                     const [auditH, auditM] = (settings.eveningAuditAlertTime || '20:00').split(':').map(Number);
                     const auditMinutes = auditH * 60 + auditM;
-                    if (Math.abs(currentMinutesTotal - auditMinutes) <= 1) {
-                        if (!(await hasReviewToday())) {
-                            alerts.push({
-                                title: '📊 Čas na denní review',
-                                body: 'Uzavři dnešní den. Zapiš si co šlo dobře a co zlepšit.',
-                                type: 'evening-audit'
-                            });
-                        }
+                    if (Math.abs(currentMinutesTotal - auditMinutes) <= 1 && !hasReview) {
+                        alerts.push({ title: '📊 Čas na denní review', body: 'Uzavři dnešní den. Zapiš si co šlo dobře a co zlepšit.', type: 'evening-audit' });
                     }
                 }
 
                 // === MORNING DEBT ALERT ===
-                // Fire once in morning (between 6:00-8:00) if previous trading day has no review
                 if (settings.morningWakeUpDebtAlert && currentHour >= 6 && currentHour <= 7 && currentMinute === 0) {
-                    if (await isDebtActive()) {
-                        alerts.push({
-                            title: '⚠️ Dluh z předchozího dne',
-                            body: 'Nemáš hotový review za poslední obchodní den. Dokonči ho před dnešní seancí.',
-                            type: 'morning-debt'
-                        });
+                    // Debt check requires per-user query (different last prep dates), but only fires once a day
+                    const { data: lastPrep } = await supabase.from('daily_preps').select('date').eq('user_id', profile.id).lt('date', todayStr).order('date', { ascending: false }).limit(1);
+                    if (lastPrep && lastPrep.length > 0) {
+                        const { count } = await supabase.from('daily_reviews').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('date', lastPrep[0].date);
+                        if ((count || 0) === 0) {
+                            alerts.push({ title: '⚠️ Dluh z předchozího dne', body: 'Nemáš hotový review za poslední obchodní den. Dokonči ho před dnešní seancí.', type: 'morning-debt' });
+                        }
                     }
                 }
 
                 // === TEST MODE ===
                 if (settings.testModeEnabled || prefs.testModeEnabled) {
-                    alerts.push({
-                        title: `AlphaTrade Debug (${pragueTime})`,
-                        body: `Automatické hlášení aktivní.`,
-                        type: 'debug'
-                    });
+                    alerts.push({ title: `AlphaTrade Debug (${pragueTime})`, body: `Automatické hlášení aktivní.`, type: 'debug' });
                 }
             }
 
-            console.log(`[Cron] User ${profile.id.slice(0, 8)}: ${alerts.length} alerts to send${alerts.length > 0 ? ': ' + alerts.map(a => a.type).join(', ') : ''}`);
+            if (alerts.length > 0) {
+                console.log(`[Cron] User ${profile.id.slice(0, 8)}: ${alerts.map(a => a.type).join(', ')}`);
+            }
 
-            // Send all alerts for this user
             for (const alert of alerts) {
-                const result = await sendPush(sub, alert.title, alert.body, alert.type);
-                if (result === 'sent') sentCount++;
-                if (result === 'expired') {
-                    const cleanedPrefs = { ...prefs };
-                    delete cleanedPrefs.pushSubscription;
-                    await supabase
-                        .from('profiles')
-                        .update({ preferences: cleanedPrefs })
-                        .eq('id', profile.id);
-                    console.log(`[Cleanup] Removed expired push subscription for user ${profile.id}`);
-                    break; // No point sending more if subscription is dead
-                }
+                pushJobs.push({ sub, title: alert.title, body: alert.body, type: alert.type, profileId: profile.id, prefs });
+            }
+        }
+
+        // --- PARALLEL PUSH SENDING (batches of 10) ---
+        let sentCount = 0;
+        const expiredUsers = new Set<string>();
+
+        for (let i = 0; i < pushJobs.length; i += 10) {
+            const batch = pushJobs.slice(i, i + 10);
+            const results = await Promise.allSettled(
+                batch.map(async (job) => {
+                    if (expiredUsers.has(job.profileId)) return 'skip';
+                    const result = await sendPush(job.sub, job.title, job.body, job.type);
+                    if (result === 'expired') {
+                        expiredUsers.add(job.profileId);
+                        const cleanedPrefs = { ...job.prefs };
+                        delete cleanedPrefs.pushSubscription;
+                        await supabase.from('profiles').update({ preferences: cleanedPrefs }).eq('id', job.profileId);
+                        console.log(`[Cleanup] Expired subscription: ${job.profileId.slice(0, 8)}`);
+                    }
+                    return result;
+                })
+            );
+            for (const r of results) {
+                if (r.status === 'fulfilled' && r.value === 'sent') sentCount++;
             }
         }
 
@@ -418,7 +349,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             `);
         }
 
-        console.log(`[Cron] Done. Total sent: ${sentCount}`);
+        console.log(`[Cron] Done: ${sentCount} sent, ${pushJobs.length} total jobs, ${profiles.length} profiles`);
         return res.status(200).json({ success: true, sent: sentCount, time: pragueTime, profiles: profiles.length });
 
     } catch (err: any) {
