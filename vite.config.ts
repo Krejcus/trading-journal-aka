@@ -19,8 +19,8 @@ export default defineConfig(({ mode }) => {
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
         manifest: {
-          name: 'AlphaTrade Mentor',
-          short_name: 'AlphaTrade',
+          name: 'Alpha Trade',
+          short_name: 'Alpha Trade',
           description: 'Professional Trading Journal & Mentor',
           theme_color: '#0f172a',
           background_color: '#0f172a',

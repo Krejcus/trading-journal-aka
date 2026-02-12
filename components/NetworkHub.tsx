@@ -13,7 +13,7 @@ import {
    AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { storageService, getUserId } from '../services/storageService';
-import { User, SocialConnection, UserSearch, Trade, DailyPrep, DailyReview, Account, CustomEmotion, UserPreferences } from '../types';
+import { User, SocialConnection, UserSearch, Trade, DailyPrep, DailyReview, Account, CustomEmotion, UserPreferences, ExchangeRates } from '../types';
 import DashboardCalendar from './DashboardCalendar';
 import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
 
@@ -23,11 +23,12 @@ interface NetworkHubProps {
    emotions: CustomEmotion[];
    user: User;
    exchangeRates: ExchangeRates | null;
+   activeTab: 'share' | 'following' | 'followers' | 'requests' | 'leaderboard';
+   onTabChange: (tab: 'share' | 'following' | 'followers' | 'requests' | 'leaderboard') => void;
 }
 
-const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates }) => {
+const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates, activeTab, onTabChange: setActiveTab }) => {
    const isDark = theme !== 'light';
-   const [activeTab, setActiveTab] = useState<'share' | 'following' | 'followers' | 'requests' | 'leaderboard'>('following');
    const [isAirlockOpen, setIsAirlockOpen] = useState(false);
 
    const [connections, setConnections] = useState<SocialConnection[]>([]);
@@ -685,30 +686,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
             </div>
          )}
 
-         {/* Layout and Tabs */}
-         <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-            <div>
-               <h2 className="text-4xl font-black tracking-tighter italic">NETWORK HUB</h2>
-               <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-500">Secure Trader Networking</p>
-            </div>
-            <div className="p-1.5 rounded-2xl flex gap-1 theme-card theme-border shadow-sm">
-               {[
-                  { id: 'leaderboard', label: 'Žebříček', icon: Trophy },
-                  { id: 'following', label: 'Sledovaní', icon: Users },
-                  { id: 'followers', label: 'Sledující', icon: UserIcon },
-                  { id: 'requests', label: 'Žádosti', icon: MessageSquare, badge: incomingRequests.length }
-               ].map(tab => (
-                  <button
-                     key={tab.id}
-                     onClick={() => setActiveTab(tab.id as any)}
-                     className={`px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 relative ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-500 hover:text-slate-300'}`}
-                  >
-                     <tab.icon size={12} /> {tab.label}
-                     {tab.badge ? <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 text-[8px] flex items-center justify-center text-white border-2 border-[#0B1120] animate-pulse">{tab.badge}</span> : null}
-                  </button>
-               ))}
-            </div>
-         </div>
+         {/* Detail Modals and Search Interface */}
 
          {/* Search Interface */}
          <div className="relative group">
@@ -1163,14 +1141,14 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                           reviews={spectatorData?.reviews || []}
                                           theme={theme}
                                           accounts={spectatorData?.accounts || []}
-                                           initialBalance={spectatorData?.accounts.find(a => a.id === activeSpectatorAccountId)?.initialBalance || 0}
+                                          initialBalance={spectatorData?.accounts.find(a => a.id === activeSpectatorAccountId)?.initialBalance || 0}
                                           emotions={emotions}
                                           onDayClick={(dateStr) => {
                                              setSpectatorDate(dateStr);
                                           }}
                                           pnlFormat={spectatorData?.meta?.pnlFormat}
-                                           user={user}
-                                           exchangeRates={exchangeRates}
+                                          user={user}
+                                          exchangeRates={exchangeRates}
                                        />
                                     </div>
                                  </div>

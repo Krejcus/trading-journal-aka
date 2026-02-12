@@ -70,14 +70,17 @@ interface BusinessHubProps {
     onUpdateRoadmap: (roadmap: CareerCheckpoint[]) => void;
     dailyReviews: DailyReview[];
     weeklyFocusList: WeeklyFocus[];
+    activeTab: 'financials' | 'goals';
+    onTabChange: (tab: 'financials' | 'goals') => void;
 }
 
 const BusinessHub: React.FC<BusinessHubProps> = ({
     theme, user, exchangeRates, trades, accounts, expenses, payouts, playbook, goals, resources, settings,
     onUpdateExpenses, onUpdatePayouts, onUpdatePlaybook, onUpdateGoals, onUpdateResources, onUpdateSettings, onUpdateAccounts,
-    constitutionRules, onUpdateConstitution, careerRoadmap, onUpdateRoadmap, dailyReviews, weeklyFocusList
+    constitutionRules, onUpdateConstitution, careerRoadmap, onUpdateRoadmap, dailyReviews, weeklyFocusList,
+    activeTab, onTabChange
 }) => {
-    const [activeTab, setActiveTab] = useState<'financials' | 'goals'>('financials');
+
     const [isAddingExpense, setIsAddingExpense] = useState(false);
     const [newExpense, setNewExpense] = useState<Partial<BusinessExpense>>({
         label: '',
@@ -303,28 +306,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     const inputClass = `w-full px-4 py-3 rounded-xl border bg-transparent text-sm font-bold outline-none transition-all ${isDark ? 'border-[var(--border-subtle)] focus:border-blue-500 text-white' : 'border-slate-200 focus:border-blue-500 text-slate-900'}`;
 
     return (
-        <div className="space-y-8 pb-32 max-w-[1400px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-                <div>
-                    <h2 className={`text-4xl lg:text-6xl font-black tracking-tighter italic ${isDark ? 'text-white' : 'text-slate-900'}`}>{t('business_hub', lang)}</h2>
-                    <p className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-500">{t('hq_desc', lang)}</p>
-                </div>
-
-                <div className={`flex p-1.5 rounded-2xl border backdrop-blur-md ${isDark ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
-                    {[
-                        { id: 'financials', label: t('finance', lang) },
-                        { id: 'goals', label: t('goals', lang) }
-                    ].map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id as any)}
-                            className={`px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:text-slate-300'}`}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
-                </div>
-            </div>
+        <div className="space-y-8 pb-32 max-w-[1400px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700 pt-4">
 
             {/* Remove StrategicHub tab content completely */}
 
@@ -437,247 +419,249 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                             </div>
                         )}
 
-                        <div className={cardClass}>
-                            <div className="flex justify-between items-center mb-8">
-                                <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
-                                    <Layers size={16} className="text-blue-500" /> {t('operating_expenses', lang)}
-                                </h3>
-                                <div className="flex items-center gap-4">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+                            <div className={cardClass}>
+                                <div className="flex justify-between items-center mb-8">
+                                    <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                                        <Layers size={16} className="text-blue-500" /> {t('operating_expenses', lang)}
+                                    </h3>
                                     <div className="flex items-center gap-4">
-                                        <div className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-lg shadow-blue-500/5' : 'bg-blue-50 border-blue-100 shadow-sm'}`}>
-                                            <div className="p-2 bg-blue-500/20 text-blue-500 rounded-xl">
-                                                <Zap size={14} />
-                                            </div>
-                                            <div>
-                                                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Tento měsíc</p>
-                                                <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(expensesThisMonthValue)}</p>
-                                            </div>
-                                        </div>
-                                        <div
-                                            onClick={() => setShowMonthlyExpenseBreakdown(!showMonthlyExpenseBreakdown)}
-                                            className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border cursor-pointer transition-all hover:scale-105 active:scale-95 ${showMonthlyExpenseBreakdown ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : (isDark ? 'bg-slate-500/5 border-slate-500/20' : 'bg-slate-50 border-slate-100')}`}
-                                        >
-                                            <div className={`p-2 rounded-xl ${showMonthlyExpenseBreakdown ? 'bg-white/20 text-white' : 'bg-slate-500/20 text-slate-500'}`}>
-                                                <Layers size={14} />
-                                            </div>
-                                            <div>
-                                                <p className={`text-[8px] font-black uppercase tracking-widest ${showMonthlyExpenseBreakdown ? 'text-blue-100' : 'text-slate-500'}`}>Dohromady</p>
-                                                <p className={`text-xs font-black`}>{formatValue(normalizedTotalExpenses)}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <button
-                                        onClick={() => setIsAddingExpense(true)}
-                                        className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-500/20"
-                                    >
-                                        <Plus size={16} /> {t('add_expense', lang)}
-                                    </button>
-                                </div>
-                            </div>
-
-                            {showMonthlyExpenseBreakdown && (
-                                <div className={`mb-8 p-6 rounded-3xl border animate-in slide-in-from-top-4 duration-300 ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-inner' : 'bg-blue-50/50 border-blue-100'}`}>
-                                    <div className="flex justify-between items-center mb-6">
-                                        <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 flex items-center gap-2">
-                                            <Calendar size={14} /> Měsíční historie nákladů
-                                        </h4>
-                                        <button onClick={() => setShowMonthlyExpenseBreakdown(false)} className="text-slate-500 hover:text-rose-500 transition-all">
-                                            <X size={16} />
-                                        </button>
-                                    </div>
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                                        {expensesMonthlyBreakdown.map(([monthKey, total]) => {
-                                            const [year, month] = monthKey.split('-');
-                                            const monthLabel = new Date(Number(year), Number(month) - 1).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-US', { month: 'long' });
-                                            return (
-                                                <div key={monthKey} className={`p-4 rounded-2xl border transition-all hover:scale-105 ${isDark ? 'bg-[var(--bg-page)]/60 border-white/5 hover:border-blue-500/30' : 'bg-white border-slate-100 shadow-sm hover:border-blue-200'}`}>
-                                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{monthLabel} {year}</p>
-                                                    <p className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(total)}</p>
+                                        <div className="flex items-center gap-4">
+                                            <div className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-lg shadow-blue-500/5' : 'bg-blue-50 border-blue-100 shadow-sm'}`}>
+                                                <div className="p-2 bg-blue-500/20 text-blue-500 rounded-xl">
+                                                    <Zap size={14} />
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            )}
-
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-left">
-                                    <thead>
-                                        <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Datum</th>
-                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Popis</th>
-                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Kategorie</th>
-                                            <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Částka</th>
-                                            <th className="pb-4"></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className={`divide-y ${isDark ? 'divide-[var(--border-subtle)]' : 'divide-slate-50'}`}>
-                                        {expenses.length === 0 ? (
-                                            <tr>
-                                                <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné náklady.</td>
-                                            </tr>
-                                        ) : (
-                                            [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(exp => (
-                                                <tr key={exp.id}>
-                                                    <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(exp.date)}</td>
-                                                    <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{exp.label}</td>
-                                                    <td className="py-4 text-[10px] font-bold text-slate-500 uppercase">{exp.category}</td>
-                                                    <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(exp.amount)}</td>
-                                                    <td className="py-4 text-right">
-                                                        <button onClick={() => setItemToDelete({ id: exp.id, type: 'expense' })} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>
-                                                    </td>
-                                                </tr>
-                                            ))
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <div className={cardClass}>
-                            <div className="flex justify-between items-center mb-8">
-                                <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
-                                    <DollarSign size={16} className="text-emerald-500" /> {t('payout_history', lang)}
-                                </h3>
-                                <div className="flex items-center gap-4">
-                                    <div className={`flex p-1 rounded-xl border ${isDark ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
+                                                <div>
+                                                    <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Tento měsíc</p>
+                                                    <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(expensesThisMonthValue)}</p>
+                                                </div>
+                                            </div>
+                                            <div
+                                                onClick={() => setShowMonthlyExpenseBreakdown(!showMonthlyExpenseBreakdown)}
+                                                className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border cursor-pointer transition-all hover:scale-105 active:scale-95 ${showMonthlyExpenseBreakdown ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : (isDark ? 'bg-slate-500/5 border-slate-500/20' : 'bg-slate-50 border-slate-100')}`}
+                                            >
+                                                <div className={`p-2 rounded-xl ${showMonthlyExpenseBreakdown ? 'bg-white/20 text-white' : 'bg-slate-500/20 text-slate-500'}`}>
+                                                    <Layers size={14} />
+                                                </div>
+                                                <div>
+                                                    <p className={`text-[8px] font-black uppercase tracking-widest ${showMonthlyExpenseBreakdown ? 'text-blue-100' : 'text-slate-500'}`}>Dohromady</p>
+                                                    <p className={`text-xs font-black`}>{formatValue(normalizedTotalExpenses)}</p>
+                                                </div>
+                                            </div>
+                                        </div>
                                         <button
-                                            onClick={() => setPayoutViewMode('list')}
-                                            className={`p-1.5 rounded-lg transition-all ${payoutViewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                                            onClick={() => setIsAddingExpense(true)}
+                                            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-500/20"
                                         >
-                                            <Calendar size={14} />
-                                        </button>
-                                        <button
-                                            onClick={() => setPayoutViewMode('grid')}
-                                            className={`p-1.5 rounded-lg transition-all ${payoutViewMode === 'grid' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
-                                        >
-                                            <LayoutGrid size={14} />
+                                            <Plus size={16} /> {t('add_expense', lang)}
                                         </button>
                                     </div>
-                                    <button
-                                        onClick={() => setIsAddingPayout(true)}
-                                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase transition-all hover:bg-emerald-500"
-                                    >
-                                        <Plus size={14} /> {t('add_payout', lang) || 'Přidat výplatu'}
-                                    </button>
                                 </div>
-                            </div>
 
-                            <PayoutModal
-                                isOpen={isAddingPayout || !!editingPayout}
-                                onClose={() => { setIsAddingPayout(false); setEditingPayout(null); }}
-                                onSave={handleSavePayout}
-                                accounts={accounts}
-                                payout={editingPayout}
-                                theme={theme}
-                                user={user}
-                            />
+                                {showMonthlyExpenseBreakdown && (
+                                    <div className={`mb-8 p-6 rounded-3xl border animate-in slide-in-from-top-4 duration-300 ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-inner' : 'bg-blue-50/50 border-blue-100'}`}>
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 flex items-center gap-2">
+                                                <Calendar size={14} /> Měsíční historie nákladů
+                                            </h4>
+                                            <button onClick={() => setShowMonthlyExpenseBreakdown(false)} className="text-slate-500 hover:text-rose-500 transition-all">
+                                                <X size={16} />
+                                            </button>
+                                        </div>
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                                            {expensesMonthlyBreakdown.map(([monthKey, total]) => {
+                                                const [year, month] = monthKey.split('-');
+                                                const monthLabel = new Date(Number(year), Number(month) - 1).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-US', { month: 'long' });
+                                                return (
+                                                    <div key={monthKey} className={`p-4 rounded-2xl border transition-all hover:scale-105 ${isDark ? 'bg-[var(--bg-page)]/60 border-white/5 hover:border-blue-500/30' : 'bg-white border-slate-100 shadow-sm hover:border-blue-200'}`}>
+                                                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{monthLabel} {year}</p>
+                                                        <p className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(total)}</p>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
 
-                            {payoutViewMode === 'list' ? (
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-left">
                                         <thead>
                                             <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
                                                 <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Datum</th>
-                                                <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Účet</th>
+                                                <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Popis</th>
+                                                <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Kategorie</th>
                                                 <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Částka</th>
-                                                <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Status</th>
                                                 <th className="pb-4"></th>
                                             </tr>
                                         </thead>
                                         <tbody className={`divide-y ${isDark ? 'divide-[var(--border-subtle)]' : 'divide-slate-50'}`}>
-                                            {unifiedPayouts.length === 0 ? (
+                                            {expenses.length === 0 ? (
                                                 <tr>
-                                                    <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné výplaty.</td>
+                                                    <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné náklady.</td>
                                                 </tr>
                                             ) : (
-                                                unifiedPayouts.map(p => {
-                                                    const acc = accounts.find(a => a.id === p.accountId);
-                                                    const isLegacy = p.id.toString().startsWith('legacy_');
-                                                    return (
-                                                        <tr
-                                                            key={p.id}
-                                                            className={!isLegacy ? "cursor-pointer hover:bg-white/[0.02] transition-colors" : ""}
-                                                            onClick={() => !isLegacy && setEditingPayout(p)}
-                                                        >
-                                                            <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(p.date)}</td>
-                                                            <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý'}</td>
-                                                            <td className={`py-4 text-xs font-mono font-black text-emerald-500`}>{formatValue(p.amount)}</td>
-                                                            <td className="py-4">
-                                                                <div className="flex items-center gap-3">
-                                                                    {isLegacy ? (
-                                                                        <span className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
-                                                                    ) : (
-                                                                        <button
-                                                                            onClick={(e) => { e.stopPropagation(); handleTogglePayoutStatus(p.id); }}
-                                                                            className={`px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all ${p.status === 'Received' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}
-                                                                        >
-                                                                            {p.status === 'Received' ? 'OBDRŽENO' : 'ČEKÁ SE'}
-                                                                        </button>
-                                                                    )}
-                                                                    {p.image && (
-                                                                        <div className="w-6 h-6 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-500">
-                                                                            <Trophy size={12} />
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                            <td className="py-4 text-right">
-                                                                {!isLegacy && (
-                                                                    <button
-                                                                        onClick={(e) => { e.stopPropagation(); setItemToDelete({ id: p.id, type: 'payout' }); }}
-                                                                        className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"
-                                                                    >
-                                                                        <Trash2 size={14} />
-                                                                    </button>
-                                                                )}
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })
+                                                [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(exp => (
+                                                    <tr key={exp.id}>
+                                                        <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(exp.date)}</td>
+                                                        <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{exp.label}</td>
+                                                        <td className="py-4 text-[10px] font-bold text-slate-500 uppercase">{exp.category}</td>
+                                                        <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(exp.amount)}</td>
+                                                        <td className="py-4 text-right">
+                                                            <button onClick={() => setItemToDelete({ id: exp.id, type: 'expense' })} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>
+                                                        </td>
+                                                    </tr>
+                                                ))
                                             )}
                                         </tbody>
                                     </table>
                                 </div>
-                            ) : (
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 animate-in fade-in duration-500">
-                                    {unifiedPayouts.length === 0 ? (
-                                        <div className="col-span-full py-20 text-center opacity-30">
-                                            <LayoutGrid size={48} className="mx-auto text-slate-700 mb-4" />
-                                            <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Zatím nebyly zaznamenány žádné výplaty.</p>
+                            </div>
+
+                            <div className={cardClass}>
+                                <div className="flex justify-between items-center mb-8">
+                                    <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                                        <DollarSign size={16} className="text-emerald-500" /> {t('payout_history', lang)}
+                                    </h3>
+                                    <div className="flex items-center gap-4">
+                                        <div className={`flex p-1 rounded-xl border ${isDark ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
+                                            <button
+                                                onClick={() => setPayoutViewMode('list')}
+                                                className={`p-1.5 rounded-lg transition-all ${payoutViewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                                            >
+                                                <Calendar size={14} />
+                                            </button>
+                                            <button
+                                                onClick={() => setPayoutViewMode('grid')}
+                                                className={`p-1.5 rounded-lg transition-all ${payoutViewMode === 'grid' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                                            >
+                                                <LayoutGrid size={14} />
+                                            </button>
                                         </div>
-                                    ) : (
-                                        unifiedPayouts.map(p => {
-                                            const acc = accounts.find(a => a.id === p.accountId);
-                                            const isLegacy = p.id.toString().startsWith('legacy_');
-                                            return (
-                                                <div
-                                                    key={p.id}
-                                                    onClick={() => !isLegacy && setEditingPayout(p)}
-                                                    className={`aspect-square rounded-2xl border overflow-hidden relative group transition-all ${!isLegacy ? 'cursor-pointer hover:border-blue-500/50 hover:shadow-2xl hover:shadow-blue-500/10' : ''} ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50'}`}
-                                                >
-                                                    {p.image ? (
-                                                        <img src={p.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="Payout proof" />
-                                                    ) : (
-                                                        <div className="w-full h-full flex flex-col items-center justify-center p-4">
-                                                            <DollarSign size={24} className="text-emerald-500/40 mb-2" />
-                                                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Bez fotky</span>
-                                                        </div>
-                                                    )}
-                                                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
-                                                        <p className="text-[8px] font-black text-white uppercase">{formatHubDate(p.date)}</p>
-                                                        <p className="text-[11px] font-black text-emerald-400 font-mono tracking-tighter">{formatValue(p.amount)}</p>
-                                                        <p className="text-[7px] font-black text-white uppercase truncate">{acc?.name || 'Neznámý'}</p>
-                                                    </div>
-                                                    {isLegacy && (
-                                                        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-md text-[6px] font-black text-white/50 uppercase tracking-widest border border-white/5">ARCHIV</div>
-                                                    )}
-                                                </div>
-                                            );
-                                        })
-                                    )}
+                                        <button
+                                            onClick={() => setIsAddingPayout(true)}
+                                            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase transition-all hover:bg-emerald-500"
+                                        >
+                                            <Plus size={14} /> {t('add_payout', lang) || 'Přidat výplatu'}
+                                        </button>
+                                    </div>
                                 </div>
-                            )}
+
+                                <PayoutModal
+                                    isOpen={isAddingPayout || !!editingPayout}
+                                    onClose={() => { setIsAddingPayout(false); setEditingPayout(null); }}
+                                    onSave={handleSavePayout}
+                                    accounts={accounts}
+                                    payout={editingPayout}
+                                    theme={theme}
+                                    user={user}
+                                />
+
+                                {payoutViewMode === 'list' ? (
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left">
+                                            <thead>
+                                                <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Datum</th>
+                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Účet</th>
+                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Částka</th>
+                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Status</th>
+                                                    <th className="pb-4"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className={`divide-y ${isDark ? 'divide-[var(--border-subtle)]' : 'divide-slate-50'}`}>
+                                                {unifiedPayouts.length === 0 ? (
+                                                    <tr>
+                                                        <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné výplaty.</td>
+                                                    </tr>
+                                                ) : (
+                                                    unifiedPayouts.map(p => {
+                                                        const acc = accounts.find(a => a.id === p.accountId);
+                                                        const isLegacy = p.id.toString().startsWith('legacy_');
+                                                        return (
+                                                            <tr
+                                                                key={p.id}
+                                                                className={!isLegacy ? "cursor-pointer hover:bg-white/[0.02] transition-colors" : ""}
+                                                                onClick={() => !isLegacy && setEditingPayout(p)}
+                                                            >
+                                                                <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(p.date)}</td>
+                                                                <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý'}</td>
+                                                                <td className={`py-4 text-xs font-mono font-black text-emerald-500`}>{formatValue(p.amount)}</td>
+                                                                <td className="py-4">
+                                                                    <div className="flex items-center gap-3">
+                                                                        {isLegacy ? (
+                                                                            <span className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
+                                                                        ) : (
+                                                                            <button
+                                                                                onClick={(e) => { e.stopPropagation(); handleTogglePayoutStatus(p.id); }}
+                                                                                className={`px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all ${p.status === 'Received' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}
+                                                                            >
+                                                                                {p.status === 'Received' ? 'OBDRŽENO' : 'ČEKÁ SE'}
+                                                                            </button>
+                                                                        )}
+                                                                        {p.image && (
+                                                                            <div className="w-6 h-6 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-500">
+                                                                                <Trophy size={12} />
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="py-4 text-right">
+                                                                    {!isLegacy && (
+                                                                        <button
+                                                                            onClick={(e) => { e.stopPropagation(); setItemToDelete({ id: p.id, type: 'payout' }); }}
+                                                                            className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"
+                                                                        >
+                                                                            <Trash2 size={14} />
+                                                                        </button>
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 animate-in fade-in duration-500">
+                                        {unifiedPayouts.length === 0 ? (
+                                            <div className="col-span-full py-20 text-center opacity-30">
+                                                <LayoutGrid size={48} className="mx-auto text-slate-700 mb-4" />
+                                                <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Zatím nebyly zaznamenány žádné výplaty.</p>
+                                            </div>
+                                        ) : (
+                                            unifiedPayouts.map(p => {
+                                                const acc = accounts.find(a => a.id === p.accountId);
+                                                const isLegacy = p.id.toString().startsWith('legacy_');
+                                                return (
+                                                    <div
+                                                        key={p.id}
+                                                        onClick={() => !isLegacy && setEditingPayout(p)}
+                                                        className={`aspect-square rounded-2xl border overflow-hidden relative group transition-all ${!isLegacy ? 'cursor-pointer hover:border-blue-500/50 hover:shadow-2xl hover:shadow-blue-500/10' : ''} ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50'}`}
+                                                    >
+                                                        {p.image ? (
+                                                            <img src={p.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="Payout proof" />
+                                                        ) : (
+                                                            <div className="w-full h-full flex flex-col items-center justify-center p-4">
+                                                                <DollarSign size={24} className="text-emerald-500/40 mb-2" />
+                                                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Bez fotky</span>
+                                                            </div>
+                                                        )}
+                                                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
+                                                            <p className="text-[8px] font-black text-white uppercase">{formatHubDate(p.date)}</p>
+                                                            <p className="text-[11px] font-black text-emerald-400 font-mono tracking-tighter">{formatValue(p.amount)}</p>
+                                                            <p className="text-[7px] font-black text-white uppercase truncate">{acc?.name || 'Neznámý'}</p>
+                                                        </div>
+                                                        {isLegacy && (
+                                                            <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-md text-[6px] font-black text-white/50 uppercase tracking-widest border border-white/5">ARCHIV</div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>

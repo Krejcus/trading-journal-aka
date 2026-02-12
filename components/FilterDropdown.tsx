@@ -19,6 +19,8 @@ interface FilterDropdownProps {
   setViewMode: (mode: 'individual' | 'combined') => void;
   pnlDisplayMode?: PnLDisplayMode;
   setPnlDisplayMode?: (mode: PnLDisplayMode) => void;
+  historyLayoutMode?: 'grid' | 'table';
+  setHistoryLayoutMode?: (mode: 'grid' | 'table') => void;
 }
 
 const TRADING_DAYS = ['Po', 'Út', 'St', 'Čt', 'Pá'];
@@ -37,7 +39,9 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   viewMode,
   setViewMode,
   pnlDisplayMode,
-  setPnlDisplayMode
+  setPnlDisplayMode,
+  historyLayoutMode,
+  setHistoryLayoutMode
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -166,7 +170,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
       scale: 1,
       y: 0,
       transition: {
-        type: "spring",
+        type: "spring" as const,
         stiffness: 400,
         damping: 35,
         staggerChildren: 0.03
@@ -310,6 +314,28 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                           className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black tracking-widest transition-colors ${pnlDisplayMode === p.id ? (isDark ? 'text-indigo-400' : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-400' : 'text-slate-500 hover:text-slate-900')}`}
                         >
                           {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+
+                {historyLayoutMode && setHistoryLayoutMode && (
+                  <motion.div variants={itemVariants}>
+                    <div className={sectionLabelClass}><LayoutGrid size={10} /> Zobrazení</div>
+                    <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                      <div
+                        className={`absolute inset-y-0.5 w-[calc(50%-2px)] rounded-lg transition-all duration-300 ease-out ${historyLayoutMode === 'grid' ? `translate-x-0 ${isDark ? 'bg-white/10 border border-white/10' : 'bg-white shadow-sm font-black'}` :
+                          `translate-x-[102%] ${isDark ? 'bg-white/10 border border-white/10' : 'bg-white shadow-sm font-black'}`
+                          }`}
+                      />
+                      {[{ id: 'grid', label: 'Mřížka' }, { id: 'table', label: 'Tabulka' }].map(v => (
+                        <button
+                          key={v.id}
+                          onClick={() => setHistoryLayoutMode(v.id as any)}
+                          className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${historyLayoutMode === v.id ? (isDark ? 'text-white' : 'text-slate-900') : (isDark ? 'text-slate-500 hover:text-slate-400' : 'text-slate-500 hover:text-slate-900')}`}
+                        >
+                          {v.label}
                         </button>
                       ))}
                     </div>

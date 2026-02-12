@@ -48,7 +48,11 @@ import {
   RefreshCw,
   Clock,
   Calendar,
-  History
+  History,
+  DollarSign,
+  Target,
+  Trophy,
+  MessageSquare
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
@@ -1345,6 +1349,12 @@ const App: React.FC = () => {
   const [quickNote, setQuickNote] = useState('');
 
   const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
+  const [businessActiveTab, setBusinessActiveTab] = useState<'financials' | 'goals'>('financials');
+  const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
+  const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'following' | 'followers' | 'requests' | 'share'>('following');
+
+
+
 
   const displayTrades = useMemo(() => {
     if (viewMode === 'individual') return trades;
@@ -1944,11 +1954,11 @@ const App: React.FC = () => {
             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <h2 className="text-xl font-black uppercase tracking-tighter">
               {activePage === 'dashboard' && 'Dashboard'}
-              {activePage === 'history' && 'Trade Log'}
+              {activePage === 'history' && 'Historie obchodu'}
               {activePage === 'journal' && 'Deník'}
               {activePage === 'accounts' && 'Portfolio'}
               {activePage === 'settings' && 'System Config'}
-              {activePage === 'network' && 'Network Hub'}
+              {activePage === 'network' && 'Síť'}
               {activePage === 'business' && 'Business Hub'}
             </h2>
           </div>
@@ -1982,6 +1992,65 @@ const App: React.FC = () => {
             </div>
           )}
 
+          {activePage === 'business' && (
+            <div className="hidden md:flex flex-1 justify-center">
+              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] shadow-sm">
+                {[
+                  { id: 'financials', label: 'Finance', icon: DollarSign },
+                  { id: 'goals', label: 'Cíle', icon: Target }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setBusinessActiveTab(tab.id as any)}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${businessActiveTab === tab.id ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    {businessActiveTab === tab.id && (
+                      <motion.div
+                        layoutId="activeBusinessTab"
+                        className="absolute inset-0 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20 z-0"
+                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                      />
+                    )}
+                    <span className="relative z-10 flex items-center gap-2">
+                      <tab.icon size={14} /> {tab.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activePage === 'network' && (
+            <div className="hidden md:flex flex-1 justify-center">
+              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] shadow-sm">
+                {[
+                  { id: 'leaderboard', label: 'Žebříček', icon: Trophy },
+                  { id: 'following', label: 'Sledovaní', icon: Users },
+                  { id: 'followers', label: 'Sledující', icon: UserIcon },
+                  { id: 'requests', label: 'Žádosti', icon: MessageSquare }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setNetworkActiveTab(tab.id as any)}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${networkActiveTab === tab.id ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    {networkActiveTab === tab.id && (
+                      <motion.div
+                        layoutId="activeNetworkTab"
+                        className="absolute inset-0 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20 z-0"
+                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                      />
+                    )}
+                    <span className="relative z-10 flex items-center gap-2">
+                      <tab.icon size={14} /> {tab.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+
           <div className="flex items-center gap-6">
             {/* Dashboard Mode Status - Clean Text Design */}
             <div className="hidden md:flex items-center h-8 px-4">
@@ -2011,6 +2080,8 @@ const App: React.FC = () => {
                 setViewMode={setViewMode}
                 pnlDisplayMode={pnlDisplayMode}
                 setPnlDisplayMode={setPnlDisplayMode}
+                historyLayoutMode={activePage === 'history' ? historyLayoutMode : undefined}
+                setHistoryLayoutMode={activePage === 'history' ? setHistoryLayoutMode : undefined}
               />
 
               {/* Force Refresh Button */}
@@ -2120,6 +2191,7 @@ const App: React.FC = () => {
                         user={currentUser}
                         exchangeRates={exchangeRates}
                         allTrades={trades}
+                        viewMode={historyLayoutMode}
                       />
                     )
                   )}
@@ -2169,6 +2241,8 @@ const App: React.FC = () => {
                       emotions={userEmotions}
                       user={currentUser}
                       exchangeRates={exchangeRates}
+                      activeTab={networkActiveTab}
+                      onTabChange={setNetworkActiveTab}
                     />
                   )}
 
@@ -2227,8 +2301,11 @@ const App: React.FC = () => {
                       onUpdateRoadmap={(v) => { setCareerRoadmap(v); isPreferencesDirty.current = true; }}
                       dailyReviews={dailyReviews}
                       weeklyFocusList={weeklyFocusList}
+                      activeTab={businessActiveTab}
+                      onTabChange={setBusinessActiveTab}
                     />
                   )}
+
                 </React.Suspense>
               )}
             </div>

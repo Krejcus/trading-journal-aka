@@ -355,7 +355,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
                     />
                   </div>
                 </div>
-                <span className="inline-block px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] uppercase tracking-widest text-white/60 mb-1">AlphaTrade Mentor</span>
+                <span className="inline-block px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] uppercase tracking-widest text-white/60 mb-1">Alpha Trade</span>
                 <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60 tracking-tight">
                   {authMode === 'login' ? 'Vítejte zpět' :
                     authMode === 'signup' ? 'Vytvořit účet' :

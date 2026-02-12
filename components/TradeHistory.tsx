@@ -23,16 +23,14 @@ interface TradeHistoryProps {
   theme: 'dark' | 'light' | 'oled';
   emotions: CustomEmotion[];
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
-  pnlDisplayMode?: PnLDisplayMode;
-  initialBalance?: number;
-  user: User;
-  exchangeRates: ExchangeRates | null;
   allTrades?: Trade[];
+  viewMode: 'grid' | 'table';
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
   trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
-  pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = []
+  pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
+  viewMode
 }) => {
   const isDark = theme !== 'light';
   const targetCurrency = user.currency || 'USD';
@@ -42,7 +40,6 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   };
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
 
   // --- INFINITE SCROLL STATE ---
   const PAGE_SIZE = 20;
@@ -180,36 +177,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const getEmotionDetails = (emoId: string) => emotions.find(e => e.id === emoId) || { label: emoId };
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div className="space-y-1">
-          <h2 className={`text-4xl font-black tracking-tighter italic ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>HISTORIE OBCHODŮ</h2>
-        </div>
-
-        {/* View Toggle */}
-        <div className={`flex items-center p-1 rounded-xl border ${theme !== 'light' ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'}`}>
-          <button
-            onClick={() => setViewMode('grid')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${viewMode === 'grid'
-              ? (theme !== 'light' ? 'bg-white/10 text-white shadow-lg' : 'bg-white text-slate-900 shadow-sm')
-              : 'text-slate-500 hover:text-slate-300'
-              }`}
-          >
-            <LayoutGrid size={14} />
-            Grid
-          </button>
-          <button
-            onClick={() => setViewMode('table')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${viewMode === 'table'
-              ? (theme !== 'light' ? 'bg-white/10 text-white shadow-lg' : 'bg-white text-slate-900 shadow-sm')
-              : 'text-slate-500 hover:text-slate-300'
-              }`}
-          >
-            <List size={14} />
-            Audit Table
-          </button>
-        </div>
-      </div>
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20 pt-4">
 
       {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -288,11 +256,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       {trade.instrument}
                     </h3>
 
-                    <div className={`flex items-center gap-1.5 mt-1.5 px-2.5 py-1.5 rounded-lg border flex-wrap ${
-                      isGroupTrade
+                    <div className={`flex items-center gap-1.5 mt-1.5 px-2.5 py-1.5 rounded-lg border flex-wrap ${isGroupTrade
                         ? 'bg-blue-500/5 border-blue-500/15'
                         : theme !== 'light' ? 'bg-white/[0.03] border-white/5' : 'bg-slate-50 border-slate-200'
-                    }`}>
+                      }`}>
                       <Terminal size={12} className={isGroupTrade ? 'text-blue-400' : 'text-slate-500'} />
                       {isCombinedCard && masterAcc ? (
                         <>

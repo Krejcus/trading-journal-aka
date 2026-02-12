@@ -43,7 +43,8 @@ import {
   AlertTriangle,
   ShieldCheck,
   Terminal,
-  Flag
+  Flag,
+  Flame
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -346,9 +347,102 @@ const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'ole
   );
 };
 
+const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light' | 'oled' }> = ({ trades, theme }) => {
+  const isDark = theme !== 'light';
+
+  const { currentStreak, bestStreak } = useMemo(() => {
+    // Group trades by date, sorted descending
+    const dayMap = new Map<string, Trade[]>();
+    const sorted = [...trades]
+      .filter(t => t.executionStatus !== 'Missed')
+      .sort((a, b) => b.date.localeCompare(a.date));
+    sorted.forEach(t => {
+      const existing = dayMap.get(t.date) || [];
+      existing.push(t);
+      dayMap.set(t.date, existing);
+    });
+
+    const tradingDays = Array.from(dayMap.entries())
+      .sort(([a], [b]) => b.localeCompare(a)); // descending
+
+    // Current streak: consecutive trading days with no isValid=false trades
+    let current = 0;
+    for (const [, dayTrades] of tradingDays) {
+      const hasInvalid = dayTrades.some(t => t.isValid === false);
+      if (hasInvalid) break;
+      current++;
+    }
+
+    // Best streak: longest run ever
+    let best = 0;
+    let run = 0;
+    for (const [, dayTrades] of tradingDays) {
+      const hasInvalid = dayTrades.some(t => t.isValid === false);
+      if (hasInvalid) {
+        run = 0;
+      } else {
+        run++;
+        best = Math.max(best, run);
+      }
+    }
+
+    return { currentStreak: current, bestStreak: best };
+  }, [trades]);
+
+  // Color tiers
+  const getColor = (days: number) => {
+    if (days >= 30) return { ring: 'border-purple-500', text: 'text-purple-400', glow: 'shadow-purple-500/20' };
+    if (days >= 14) return { ring: 'border-amber-500', text: 'text-amber-400', glow: 'shadow-amber-500/20' };
+    if (days >= 7) return { ring: 'border-emerald-500', text: 'text-emerald-400', glow: 'shadow-emerald-500/20' };
+    return { ring: 'border-blue-500', text: 'text-blue-400', glow: 'shadow-blue-500/20' };
+  };
+
+  const color = getColor(currentStreak);
+  const fireCount = currentStreak >= 30 ? 3 : currentStreak >= 14 ? 2 : currentStreak >= 7 ? 1 : 0;
+
+  return (
+    <div className="p-5 rounded-[24px] flex flex-col justify-between h-full relative overflow-visible transition-all hover:scale-[1.02] hover:shadow-xl glass-panel">
+      <div className="flex justify-between items-start mb-2">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+          Discipline Streak
+          <SmartTooltip text="Info" subtext="Počet po sobě jdoucích obchodních dní bez nevalidního obchodu (isValid = false)." theme={theme}>
+            <div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div>
+          </SmartTooltip>
+        </p>
+        <div className="p-1.5 rounded-lg theme-card theme-border theme-text-secondary">
+          <div className={`${currentStreak >= 7 ? 'bg-orange-500/20 text-orange-500' : 'bg-slate-500/20 text-slate-500'} p-1 rounded-lg`}>
+            <Flame size={14} />
+          </div>
+        </div>
+      </div>
+      <div className="flex-1 flex flex-col items-center justify-center gap-2">
+        <div className={`w-20 h-20 rounded-full border-[5px] ${color.ring} flex items-center justify-center shadow-lg ${color.glow} transition-all duration-500`}>
+          <div className="flex flex-col items-center">
+            <span className={`text-2xl font-black leading-none ${isDark ? 'text-white' : 'text-slate-900'}`}>{currentStreak}</span>
+            <span className="text-[7px] font-black uppercase tracking-widest text-slate-500 mt-0.5">
+              {currentStreak === 1 ? 'den' : currentStreak >= 2 && currentStreak <= 4 ? 'dny' : 'dní'}
+            </span>
+          </div>
+        </div>
+        {fireCount > 0 && (
+          <div className="flex gap-0.5">
+            {Array.from({ length: fireCount }).map((_, i) => (
+              <span key={i} className="text-sm animate-pulse" style={{ animationDelay: `${i * 150}ms` }}>🔥</span>
+            ))}
+          </div>
+        )}
+        <p className="text-[9px] font-bold text-slate-500">
+          Rekord: <span className={`font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{bestStreak}</span> {bestStreak === 1 ? 'den' : bestStreak >= 2 && bestStreak <= 4 ? 'dny' : 'dní'}
+        </p>
+      </div>
+    </div>
+  );
+};
+
 const MASTER_WIDGET_LIST = [
   { id: 'avg_win_loss', label: 'Avg Win/Loss', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Poměr průměrného zisku a ztráty.', preview: <div className="text-emerald-500 font-black text-xl">3.40</div>, defaultRowSpan: 1 },
   { id: 'streak', label: 'Current Streak', category: 'Psychologie', icon: <Zap size={18} />, description: 'Aktuální série výher/proher.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 1 },
+  { id: 'discipline_streak', label: 'Discipline Streak', category: 'Psychologie', icon: <Flame size={18} />, description: 'Počet dní bez nevalidního obchodu.', preview: <div className="text-emerald-500 font-black text-xl">12 dní</div>, defaultRowSpan: 1 },
   { id: 'challenge_target', label: 'Challenge Cíl', category: 'KPIs', icon: <Flag size={18} />, description: 'Sleduje postup k profit targetu (10%).', preview: <div className="text-blue-500 font-black text-xs">Progress: 45%</div>, defaultRowSpan: 1 },
   { id: 'kpi_pnl', label: 'Net P&L', category: 'KPIs', icon: <Trophy size={18} />, description: 'Čistý zisk nebo ztráta účtu.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$215,873</div>, defaultRowSpan: 1 },
   { id: 'kpi_winrate', label: 'Trade win %', category: 'KPIs', icon: <Activity size={18} />, description: 'Procento vítězných obchodů.', preview: <div className="text-blue-500 font-black text-xl">57.97%</div>, defaultRowSpan: 1 },
@@ -1302,6 +1396,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       }
       case 'avg_win_loss': return <AvgWinLossWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} currency={targetCurrency} rates={exchangeRates} />;
       case 'streak': return <StreakWidget stats={stats} theme={theme} />;
+      case 'discipline_streak': return <DisciplineStreakWidget trades={stats.trades} theme={theme} />;
       case 'winners_losers': return <WinnersLosersWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} currency={targetCurrency} rates={exchangeRates} />;
       case 'monthly_performance': return <PerformanceByMonthWidget monthlyData={stats.monthlyBreakdown} theme={theme} />;
       case 'hourly_edge': return <HourlyEdgeWidget data={stats.hourStats} theme={theme} />;
