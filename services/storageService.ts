@@ -1120,9 +1120,23 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return [];
 
+    // Optimized: select individual JSON fields to avoid fetching heavy base64 images from description
     const { data, error } = await supabase
       .from('business_payouts')
-      .select('*')
+      .select(`
+        id,
+        user_id,
+        date,
+        amount,
+        payout_method,
+        created_at,
+        updated_at,
+        grossAmount:description->grossAmount,
+        profitSplitUsed:description->profitSplitUsed,
+        accountId:description->>accountId,
+        notes:description->>notes,
+        status:description->>status
+      `)
       .eq('user_id', userId)
       .order('date', { ascending: false });
 
@@ -1131,26 +1145,48 @@ export const storageService = {
       return [];
     }
 
-    return (data || []).map((d: any) => {
-      let extra: any = {};
-      try { if (d.description?.startsWith('{')) extra = JSON.parse(d.description); } catch {}
-      return {
-        id: d.id,
-        user_id: d.user_id,
-        date: d.date,
-        amount: d.amount,
-        description: d.description,
-        payout_method: d.payout_method,
-        grossAmount: extra.grossAmount,
-        profitSplitUsed: extra.profitSplitUsed,
-        accountId: extra.accountId,
-        image: extra.image,
-        notes: extra.notes,
-        status: extra.status || 'Received',
-        created_at: d.created_at,
-        updated_at: d.updated_at
-      };
+    return (data || []).map((d: any) => ({
+      id: d.id,
+      user_id: d.user_id,
+      date: d.date,
+      amount: d.amount,
+      payout_method: d.payout_method,
+      grossAmount: d.grossAmount ? Number(d.grossAmount) : undefined,
+      profitSplitUsed: d.profitSplitUsed ? Number(d.profitSplitUsed) : undefined,
+      accountId: d.accountId,
+      notes: d.notes,
+      status: d.status || 'Received',
+      created_at: d.created_at,
+      updated_at: d.updated_at
+    }));
+  },
+
+  // Prefetch payout proof images in background (like trade screenshots)
+  // description is TEXT column containing JSON with base64 image - must parse client-side
+  async prefetchPayoutImages(): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    const userId = await getUserId();
+    if (!userId) return result;
+
+    const { data, error } = await supabase
+      .from('business_payouts')
+      .select('id, description')
+      .eq('user_id', userId);
+
+    if (error || !data) return result;
+
+    data.forEach((row: any) => {
+      try {
+        if (row.description?.startsWith('{')) {
+          const parsed = JSON.parse(row.description);
+          if (parsed.image) {
+            result.set(String(row.id), parsed.image);
+          }
+        }
+      } catch {}
     });
+
+    return result;
   },
 
   async saveBusinessPayout(payout: Omit<BusinessPayout, 'id' | 'created_at' | 'updated_at'>): Promise<void> {

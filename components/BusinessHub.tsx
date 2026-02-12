@@ -105,6 +105,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
     const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'expense' | 'payout' | 'goal' | 'playbook' | 'resource' } | null>(null);
     const [showMonthlyExpenseBreakdown, setShowMonthlyExpenseBreakdown] = useState(false);
+    const [showCashBreakdown, setShowCashBreakdown] = useState(false);
 
     const isDark = theme !== 'light';
     const lang = user.language || 'cs';
@@ -115,6 +116,19 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
         if (!exchangeRates) return currencyService.format(usdAmount, 'USD');
         const converted = currencyService.convert(usdAmount, targetCurrency, exchangeRates);
         return currencyService.format(converted, targetCurrency);
+    };
+
+    const formatHubDate = (dateStr: string) => {
+        if (!dateStr) return '';
+        try {
+            const d = new Date(dateStr);
+            return d.toLocaleDateString(lang === 'cs' ? 'cs-CZ' : 'en-US', {
+                day: 'numeric',
+                month: 'long'
+            });
+        } catch {
+            return dateStr;
+        }
     };
 
     const handleAddGoal = () => {
@@ -263,6 +277,27 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
         return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
     }, [expenses]);
 
+    const unifiedMonthlyBreakdown = useMemo(() => {
+        const groups: Record<string, { expenses: number; payouts: number }> = {};
+
+        expenses.forEach(e => {
+            const date = new Date(e.date);
+            const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+            if (!groups[key]) groups[key] = { expenses: 0, payouts: 0 };
+            groups[key].expenses += e.amount;
+        });
+
+        payouts.forEach(p => {
+            if (p.status !== 'Received') return;
+            const date = new Date(p.date);
+            const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+            if (!groups[key]) groups[key] = { expenses: 0, payouts: 0 };
+            groups[key].payouts += p.amount;
+        });
+
+        return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+    }, [expenses, payouts]);
+
     // --- Render Helpers ---
     const cardClass = `p-6 rounded-[24px] lg:rounded-[32px] border transition-all ${isDark ? 'bg-[var(--bg-card)]/80 border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-white/80 border-slate-200 shadow-sm'}`;
     const inputClass = `w-full px-4 py-3 rounded-xl border bg-transparent text-sm font-bold outline-none transition-all ${isDark ? 'border-[var(--border-subtle)] focus:border-blue-500 text-white' : 'border-slate-200 focus:border-blue-500 text-slate-900'}`;
@@ -297,15 +332,23 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-500">
                     <div className="lg:col-span-12 space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div className={cardClass + " border-blue-500/20 shadow-[0_0_20px_rgba(59,130,246,0.1)]"}>
+                            <div
+                                onClick={() => setShowCashBreakdown(!showCashBreakdown)}
+                                className={cardClass + ` border-blue-500/20 shadow-[0_0_20px_rgba(59,130,246,0.1)] cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${showCashBreakdown ? 'ring-2 ring-blue-500/50 bg-blue-500/5' : ''}`}
+                            >
                                 <div className="flex justify-between items-start mb-4">
                                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('net_cash', lang)}</span>
-                                    <div className="p-2 bg-emerald-500/10 text-emerald-500 rounded-lg"><Wallet size={16} /></div>
+                                    <div className={`p-2 rounded-lg transition-colors ${showCashBreakdown ? 'bg-blue-600 text-white' : 'bg-emerald-500/10 text-emerald-500'}`}><Wallet size={16} /></div>
                                 </div>
                                 <div className={`text-3xl font-black tracking-tighter ${netBusinessCashValue >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                     {formatValue(netBusinessCashValue)}
                                 </div>
-                                <p className="text-[9px] font-bold text-slate-500 mt-2 uppercase tracking-tight">Realizovaný zisk po zdanění a nákladech (OpEx)</p>
+                                <div className="flex justify-between items-center mt-2">
+                                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-tight">Realizovaný zisk HQ</p>
+                                    <span className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${showCashBreakdown ? 'bg-blue-600 text-white' : 'bg-slate-500/10 text-slate-500'}`}>
+                                        {showCashBreakdown ? 'ZAVŘÍT DETAIL' : 'UKÁZAT DETAIL'}
+                                    </span>
+                                </div>
                             </div>
 
                             <div className={cardClass}>
@@ -336,6 +379,63 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                 <p className="text-[9px] font-bold text-slate-500 mt-2 uppercase tracking-tight">Celkové obdržené výplaty</p>
                             </div>
                         </div>
+
+                        {showCashBreakdown && (
+                            <div className={`p-8 rounded-[40px] border animate-in slide-in-from-top-4 duration-500 mb-8 ${isDark ? 'bg-blue-600/5 border-blue-500/20 shadow-[0_0_40px_rgba(59,130,246,0.1)]' : 'bg-blue-50 border-blue-100 shadow-xl shadow-blue-500/10'}`}>
+                                <div className="flex justify-between items-center mb-8">
+                                    <div className="flex items-center gap-4">
+                                        <div className="p-3 bg-blue-600 rounded-2xl text-white shadow-lg shadow-blue-500/30">
+                                            <TrendingUp size={20} />
+                                        </div>
+                                        <div>
+                                            <h3 className="text-xl font-black italic tracking-tight uppercase">Měsíční Cashflow Analýza</h3>
+                                            <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Podrobné rozdělení nákladů a příjmů</p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowCashBreakdown(false)}
+                                        className="p-3 rounded-full hover:bg-rose-500/10 text-slate-500 hover:text-rose-500 transition-all"
+                                    >
+                                        <X size={24} />
+                                    </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                                    {unifiedMonthlyBreakdown.map(([monthKey, data]) => {
+                                        const [year, month] = monthKey.split('-');
+                                        const monthLabel = new Date(Number(year), Number(month) - 1).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-US', { month: 'long' });
+                                        const netMonth = data.payouts - data.expenses;
+
+                                        return (
+                                            <div key={monthKey} className={`p-6 rounded-3xl border transition-all hover:scale-[1.02] ${isDark ? 'bg-slate-900/60 border-white/5' : 'bg-white border-slate-100 shadow-sm'}`}>
+                                                <div className="flex justify-between items-center mb-4">
+                                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{monthLabel} {year}</p>
+                                                    <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest ${netMonth >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                                        {netMonth >= 0 ? 'PROFIT' : 'BURN'}
+                                                    </span>
+                                                </div>
+                                                <div className="space-y-3">
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="text-[9px] font-bold text-slate-500 uppercase">Příjmy</span>
+                                                        <span className="text-xs font-mono font-black text-emerald-500">+{formatValue(data.payouts)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="text-[9px] font-bold text-slate-500 uppercase">Náklady</span>
+                                                        <span className="text-xs font-mono font-black text-rose-500">-{formatValue(data.expenses)}</span>
+                                                    </div>
+                                                    <div className={`mt-3 pt-3 border-t flex justify-between items-center ${isDark ? 'border-white/5' : 'border-slate-50'}`}>
+                                                        <span className="text-[9px] font-black uppercase text-slate-400">Čistý výsledek</span>
+                                                        <span className={`text-sm font-black font-mono tracking-tighter ${netMonth >= 0 ? 'text-white' : 'text-rose-500'}`}>
+                                                            {formatValue(netMonth)}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
 
                         <div className={cardClass}>
                             <div className="flex justify-between items-center mb-8">
@@ -419,7 +519,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                         ) : (
                                             [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(exp => (
                                                 <tr key={exp.id}>
-                                                    <td className="py-4 text-[10px] font-bold text-slate-400 font-mono italic">{exp.date}</td>
+                                                    <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(exp.date)}</td>
                                                     <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{exp.label}</td>
                                                     <td className="py-4 text-[10px] font-bold text-slate-500 uppercase">{exp.category}</td>
                                                     <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(exp.amount)}</td>
@@ -500,7 +600,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                             className={!isLegacy ? "cursor-pointer hover:bg-white/[0.02] transition-colors" : ""}
                                                             onClick={() => !isLegacy && setEditingPayout(p)}
                                                         >
-                                                            <td className="py-4 text-[10px] font-bold text-slate-400 font-mono italic">{p.date}</td>
+                                                            <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(p.date)}</td>
                                                             <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý'}</td>
                                                             <td className={`py-4 text-xs font-mono font-black text-emerald-500`}>{formatValue(p.amount)}</td>
                                                             <td className="py-4">
@@ -565,7 +665,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                         </div>
                                                     )}
                                                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
-                                                        <p className="text-[8px] font-black text-white/60 uppercase">{p.date}</p>
+                                                        <p className="text-[8px] font-black text-white uppercase">{formatHubDate(p.date)}</p>
                                                         <p className="text-[11px] font-black text-emerald-400 font-mono tracking-tighter">{formatValue(p.amount)}</p>
                                                         <p className="text-[7px] font-black text-white uppercase truncate">{acc?.name || 'Neznámý'}</p>
                                                     </div>

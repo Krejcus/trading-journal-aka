@@ -748,19 +748,18 @@ const App: React.FC = () => {
           return result;
         };
 
-        const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus, dbPayouts] = await Promise.all([
+        const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
           timedFetch('trades', () => storageService.getTrades()),
           timedFetch('accounts', () => storageService.getAccounts()),
           timedFetch('dailyPreps', () => storageService.getDailyPreps()),
           timedFetch('dailyReviews', () => storageService.getDailyReviews()),
           timedFetch('preferences', () => storageService.getPreferences()),
           timedFetch('user', () => storageService.getUser()),
-          timedFetch('weeklyFocus', () => storageService.getWeeklyFocusList()),
-          timedFetch('payouts', () => storageService.getBusinessPayouts())
+          timedFetch('weeklyFocus', () => storageService.getWeeklyFocusList())
         ]);
 
         console.timeEnd('[Perf] TOTAL LOAD');
-        console.log(`[Load] Success! Loaded ${dbTrades?.length || 0} trades, ${dbAccounts?.length || 0} accounts, ${dbPayouts?.length || 0} payouts`);
+        console.log(`[Load] Success! Loaded ${dbTrades?.length || 0} trades, ${dbAccounts?.length || 0} accounts`);
 
         // Update state with fresh data
         setTrades(dbTrades || []);
@@ -779,8 +778,7 @@ const App: React.FC = () => {
         setDailyPreps(dbPreps || []);
         setDailyReviews(dbReviews || []);
         setWeeklyFocusList(dbWeeklyFocus || []);
-        setBusinessPayouts(dbPayouts || []);
-        // Business Hub data (expenses, goals, resources) loaded lazily when entering BusinessHub
+        // Business Hub data (expenses, payouts, goals, resources) loaded lazily when entering BusinessHub
 
         setSyncError(null);
         setLoading(false);
@@ -990,14 +988,29 @@ const App: React.FC = () => {
 
       Promise.all([
         storageService.getBusinessExpenses(),
+        storageService.getBusinessPayouts(),
         storageService.getBusinessGoals(),
         storageService.getBusinessResources()
-      ]).then(([expenses, goals, resources]) => {
+      ]).then(([expenses, payouts, goals, resources]) => {
         setBusinessExpenses(expenses || []);
+        setBusinessPayouts(payouts || []);
         setBusinessGoals(goals || []);
         setBusinessResources(resources || []);
         setIsBusinessDataLoaded(true);
-        console.log(`[LazyLoad] Business Hub data loaded: ${expenses?.length || 0} expenses, ${goals?.length || 0} goals, ${resources?.length || 0} resources`);
+        console.log(`[LazyLoad] Business Hub data loaded: ${expenses?.length || 0} expenses, ${payouts?.length || 0} payouts, ${goals?.length || 0} goals, ${resources?.length || 0} resources`);
+
+        // Prefetch payout images in background (like trade screenshots)
+        if (payouts && payouts.length > 0) {
+          storageService.prefetchPayoutImages().then(imageMap => {
+            if (imageMap.size > 0) {
+              setBusinessPayouts(prev => prev.map(p => {
+                const image = imageMap.get(String(p.id));
+                return image ? { ...p, image } : p;
+              }));
+              console.log(`[LazyLoad] Payout images loaded for ${imageMap.size} payouts`);
+            }
+          }).catch(err => console.warn("[LazyLoad] Payout image prefetch failed:", err));
+        }
       }).catch(err => {
         console.error("[LazyLoad] Failed to load Business Hub data:", err);
       });
@@ -1790,7 +1803,11 @@ const App: React.FC = () => {
 
       if (added.length > 0) {
         const fresh = await storageService.getBusinessPayouts();
-        setBusinessPayouts(fresh);
+        // Merge images back from local state (getBusinessPayouts doesn't fetch images)
+        setBusinessPayouts(fresh.map(fp => {
+          const local = newPayouts.find(np => np.accountId === fp.accountId && np.date === fp.date && np.amount === fp.amount);
+          return local?.image ? { ...fp, image: local.image } : fp;
+        }));
       }
     } catch (err) {
       console.error('[BusinessHub] Failed to sync payouts:', err);
