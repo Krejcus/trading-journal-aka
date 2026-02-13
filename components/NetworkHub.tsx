@@ -26,9 +26,10 @@ interface NetworkHubProps {
    exchangeRates: ExchangeRates | null;
    activeTab: 'share' | 'feed' | 'following' | 'followers' | 'requests' | 'leaderboard';
    onTabChange: (tab: 'share' | 'feed' | 'following' | 'followers' | 'requests' | 'leaderboard') => void;
+   onNetworkNotificationsChange?: (prefs: Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>) => void;
 }
 
-const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates, activeTab, onTabChange: setActiveTab }) => {
+const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates, activeTab, onTabChange: setActiveTab, onNetworkNotificationsChange }) => {
    const isDark = theme !== 'light';
    const [isAirlockOpen, setIsAirlockOpen] = useState(false);
 
@@ -1057,6 +1058,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                             }
                                                          };
                                                          storageService.updateNetworkNotifications(updated);
+                                                         onNetworkNotificationsChange?.(updated);
                                                          return updated;
                                                       });
                                                    }}

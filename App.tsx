@@ -245,6 +245,7 @@ const App: React.FC = () => {
 
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
   const isPreferencesDirty = useRef(false);
+  const networkNotificationsRef = useRef<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }> | null>(null);
   const isJournalDirty = useRef(false);
   const isFetchingRef = useRef(false);
 
@@ -503,6 +504,7 @@ const App: React.FC = () => {
     dashboardMode,
     systemSettings,
     ...(pushSubscriptionRef.current ? { pushSubscription: pushSubscriptionRef.current } : {}),
+    ...(networkNotificationsRef.current ? { networkNotifications: networkNotificationsRef.current } : {}),
   });
 
 
@@ -668,6 +670,7 @@ const App: React.FC = () => {
     if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
     if ((prefs as any).pushSubscription) pushSubscriptionRef.current = (prefs as any).pushSubscription;
+    if ((prefs as any).networkNotifications) networkNotificationsRef.current = (prefs as any).networkNotifications;
   }, []);
 
 
@@ -2269,6 +2272,7 @@ const App: React.FC = () => {
                       exchangeRates={exchangeRates}
                       activeTab={networkActiveTab}
                       onTabChange={setNetworkActiveTab}
+                      onNetworkNotificationsChange={(prefs) => { networkNotificationsRef.current = prefs; }}
                     />
                   )}
 
