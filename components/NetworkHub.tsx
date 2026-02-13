@@ -62,6 +62,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    const [loadingFeed, setLoadingFeed] = useState(false);
    const [feedLoaded, setFeedLoaded] = useState(false);
    const [notifDropdownId, setNotifDropdownId] = useState<string | null>(null);
+   const [notifVersion, setNotifVersion] = useState(0);
 
    // Detail View State
    const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
@@ -1026,7 +1027,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                        {hasAnyNotif ? <Bell size={16} /> : <BellOff size={16} />}
                                     </button>
                                     {notifDropdownId === conn.id && (
-                                       <div className={`absolute right-0 top-11 z-50 p-3 rounded-2xl border shadow-xl min-w-[200px] ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                                       <div onClick={(e) => e.stopPropagation()} className={`absolute right-0 top-11 z-50 p-3 rounded-2xl border shadow-xl min-w-[200px] ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
                                           <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">Notifikace</p>
                                           {[
                                              { key: 'newTrade', label: 'Nové obchody', icon: '📈' },
@@ -1048,11 +1049,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                          }
                                                       };
                                                       await storageService.updateNetworkNotifications(newPrefs);
-                                                      // Force re-render by updating user preferences locally
                                                       if (user?.preferences) {
                                                          user.preferences.networkNotifications = newPrefs;
                                                       }
-                                                      setNotifDropdownId(null);
+                                                      setNotifVersion(v => v + 1);
                                                    }}
                                                    className="rounded border-slate-600 text-blue-600 focus:ring-blue-500"
                                                 />
