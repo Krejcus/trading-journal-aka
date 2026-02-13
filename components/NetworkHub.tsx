@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
    Search, UserPlus, Users, Share2, Shield, Activity,
@@ -107,11 +107,15 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    }, []);
 
    // Close notification dropdown on outside click
+   const notifDropdownRef = useRef<HTMLDivElement>(null);
    useEffect(() => {
       if (!notifDropdownId) return;
-      const handler = () => setNotifDropdownId(null);
-      document.addEventListener('click', handler);
-      return () => document.removeEventListener('click', handler);
+      const handler = (e: MouseEvent) => {
+         if (notifDropdownRef.current && notifDropdownRef.current.contains(e.target as Node)) return;
+         setNotifDropdownId(null);
+      };
+      document.addEventListener('mousedown', handler);
+      return () => document.removeEventListener('mousedown', handler);
    }, [notifDropdownId]);
 
    const handleSearch = async (val: string) => {
@@ -1019,7 +1023,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                        <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest">Sleduji</span>
                                     </div>
                                  </div>
-                                 <div className="relative">
+                                 <div className="relative" ref={notifDropdownId === conn.id ? notifDropdownRef : undefined}>
                                     <button
                                        onClick={(e) => { e.stopPropagation(); setNotifDropdownId(notifDropdownId === conn.id ? null : conn.id); }}
                                        className={`p-2 rounded-xl transition-all ${hasAnyNotif ? 'bg-blue-600/10 text-blue-500' : isDark ? 'bg-[var(--bg-input)] text-slate-600 hover:text-blue-400' : 'bg-slate-100 text-slate-400 hover:text-blue-600'}`}
