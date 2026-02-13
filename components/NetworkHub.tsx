@@ -1057,7 +1057,6 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                                [opt.key]: checked
                                                             }
                                                          };
-                                                         storageService.updateNetworkNotifications(updated);
                                                          onNetworkNotificationsChange?.(updated);
                                                          return updated;
                                                       });

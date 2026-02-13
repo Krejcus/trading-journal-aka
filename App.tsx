@@ -2272,7 +2272,7 @@ const App: React.FC = () => {
                       exchangeRates={exchangeRates}
                       activeTab={networkActiveTab}
                       onTabChange={setNetworkActiveTab}
-                      onNetworkNotificationsChange={(prefs) => { networkNotificationsRef.current = prefs; }}
+                      onNetworkNotificationsChange={(prefs) => { networkNotificationsRef.current = prefs; isPreferencesDirty.current = true; }}
                     />
                   )}
 
