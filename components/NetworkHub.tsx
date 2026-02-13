@@ -1042,21 +1042,22 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                 <input
                                                    type="checkbox"
                                                    checked={notifPrefs?.[opt.key as keyof typeof notifPrefs] || false}
-                                                   onChange={async (e) => {
+                                                   onChange={(e) => {
+                                                      const checked = e.target.checked;
                                                       const newPrefs = {
                                                          ...(user?.preferences?.networkNotifications || {}),
                                                          [targetId]: {
                                                             newTrade: notifPrefs?.newTrade || false,
                                                             newPrep: notifPrefs?.newPrep || false,
                                                             newReview: notifPrefs?.newReview || false,
-                                                            [opt.key]: e.target.checked
+                                                            [opt.key]: checked
                                                          }
                                                       };
-                                                      await storageService.updateNetworkNotifications(newPrefs);
                                                       if (user?.preferences) {
                                                          user.preferences.networkNotifications = newPrefs;
                                                       }
                                                       setNotifVersion(v => v + 1);
+                                                      storageService.updateNetworkNotifications(newPrefs);
                                                    }}
                                                    className="rounded border-slate-600 text-blue-600 focus:ring-blue-500"
                                                 />
