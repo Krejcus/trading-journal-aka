@@ -648,74 +648,70 @@ const ProKpiCard: React.FC<{
       const chartData = gaugeData.filter(d => d.value > 0);
       if (chartData.length === 0) chartData.push({ name: 'Žádná data', value: 1, fill: isDark ? '#334155' : '#e2e8f0', unit: '' });
       return (
-        <div className="flex items-center justify-between w-full h-full pl-2 gap-6">
-          <div className="flex flex-col items-start justify-center h-full min-w-0">
-            <span className="text-3xl lg:text-4xl font-black tracking-tighter leading-none">
-              {displayValue}
-            </span>
+        <div className="flex flex-col items-center w-full">
+          <span className="text-2xl font-black tracking-tighter leading-none mb-1">
+            {displayValue}
+          </span>
+          <div className="h-16 w-full max-w-[140px] relative">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart {...({ overflow: 'visible' } as any)}>
+                <defs>
+                  <linearGradient id="kpiProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
+                  <linearGradient id="kpiLossGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
+                </defs>
+                <RechartsTooltip content={<CustomKpiTooltip theme={theme} />} allowEscapeViewBox={{ x: true, y: true }} />
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="100%"
+                  startAngle={180}
+                  endAngle={0}
+                  innerRadius="60%"
+                  outerRadius="100%"
+                  paddingAngle={3}
+                  dataKey="value"
+                  stroke="none"
+                  {...({ activeIndex, activeShape: renderActiveShape, onMouseEnter: onPieEnter, onMouseLeave: onPieLeave } as any)}
+                >
+                  {chartData.map((entry, index) => {
+                    let fill = entry.fill;
+                    if (fill === COLORS.profit) fill = "url(#kpiProfitGrad)";
+                    if (fill === COLORS.loss) fill = "url(#kpiLossGrad)";
+                    return <Cell key={`cell-${index}`} fill={fill} className="transition-all duration-300" />;
+                  })}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
           </div>
-          <div className="flex flex-col items-center justify-end">
-            <div className="h-16 w-32 relative flex-shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart {...({ overflow: 'visible' } as any)}>
-                  <defs>
-                    <linearGradient id="kpiProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
-                    <linearGradient id="kpiLossGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
-                  </defs>
-                  <RechartsTooltip content={<CustomKpiTooltip theme={theme} />} allowEscapeViewBox={{ x: true, y: true }} />
-                  <Pie
-                    data={chartData}
-                    cx="50%"
-                    cy="100%"
-                    startAngle={180}
-                    endAngle={0}
-                    innerRadius="60%"
-                    outerRadius="100%"
-                    paddingAngle={3}
-                    dataKey="value"
-                    stroke="none"
-                    {...({ activeIndex, activeShape: renderActiveShape, onMouseEnter: onPieEnter, onMouseLeave: onPieLeave } as any)}
-                  >
-                    {chartData.map((entry, index) => {
-                      let fill = entry.fill;
-                      if (fill === COLORS.profit) fill = "url(#kpiProfitGrad)";
-                      if (fill === COLORS.loss) fill = "url(#kpiLossGrad)";
-                      return <Cell key={`cell-${index}`} fill={fill} className="transition-all duration-300" />;
-                    })}
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex gap-1 mt-2">
-              {data.wins !== undefined && (
-                <SmartTooltip text={`Vítězné ${unit.toLowerCase()}`} subtext={`${data.wins} ${unit}`} color={COLORS.profit} theme={theme}>
-                  <div className="relative group" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === COLORS.profit); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
-                    <span className={`px-1.5 py-0.5 rounded-md ${COLORS.bgProfit} ${COLORS.textProfit} text-[9px] font-black border ${COLORS.borderProfit} cursor-help min-w-[24px] text-center block`}>{data.wins}</span>
-                  </div>
-                </SmartTooltip>
-              )}
-              {data.be !== undefined && data.be > 0 && (
-                <SmartTooltip text={`BE ${unit.toLowerCase()}`} subtext={`${data.be} ${unit}`} color="#3b82f6" theme={theme}>
-                  <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === '#3b82f6'); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
-                    <span className="px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-500 text-[9px] font-black border border-blue-500/20 cursor-help min-w-[24px] text-center block">{data.be}</span>
-                  </div>
-                </SmartTooltip>
-              )}
-              {data.losses !== undefined && (
-                <SmartTooltip text={`Ztrátové ${unit.toLowerCase()}`} subtext={`${data.losses} ${unit}`} color={COLORS.loss} theme={theme}>
-                  <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === COLORS.loss); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
-                    <span className={`px-1.5 py-0.5 rounded-md ${COLORS.bgLoss} ${COLORS.textLoss} text-[9px] font-black border ${COLORS.borderLoss} cursor-help min-w-[24px] text-center block`}>{data.losses}</span>
-                  </div>
-                </SmartTooltip>
-              )}
-              {data.missed !== undefined && data.missed > 0 && (
-                <SmartTooltip text={`Zmeškané ${unit.toLowerCase()}`} subtext={`${data.missed} ${unit}`} color="#64748b" theme={theme}>
-                  <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === '#64748b'); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
-                    <span className={`px-1.5 py-0.5 rounded-md bg-slate-500/10 text-slate-500 text-[9px] font-black border border-slate-500/20 cursor-help min-w-[24px] text-center block`}>{data.missed}</span>
-                  </div>
-                </SmartTooltip>
-              )}
-            </div>
+          <div className="flex gap-1 mt-1">
+            {data.wins !== undefined && (
+              <SmartTooltip text={`Vítězné ${unit.toLowerCase()}`} subtext={`${data.wins} ${unit}`} color={COLORS.profit} theme={theme}>
+                <div className="relative group" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === COLORS.profit); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
+                  <span className={`px-1.5 py-0.5 rounded-md ${COLORS.bgProfit} ${COLORS.textProfit} text-[9px] font-black border ${COLORS.borderProfit} cursor-help min-w-[24px] text-center block`}>{data.wins}</span>
+                </div>
+              </SmartTooltip>
+            )}
+            {data.be !== undefined && data.be > 0 && (
+              <SmartTooltip text={`BE ${unit.toLowerCase()}`} subtext={`${data.be} ${unit}`} color="#3b82f6" theme={theme}>
+                <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === '#3b82f6'); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
+                  <span className="px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-500 text-[9px] font-black border border-blue-500/20 cursor-help min-w-[24px] text-center block">{data.be}</span>
+                </div>
+              </SmartTooltip>
+            )}
+            {data.losses !== undefined && (
+              <SmartTooltip text={`Ztrátové ${unit.toLowerCase()}`} subtext={`${data.losses} ${unit}`} color={COLORS.loss} theme={theme}>
+                <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === COLORS.loss); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
+                  <span className={`px-1.5 py-0.5 rounded-md ${COLORS.bgLoss} ${COLORS.textLoss} text-[9px] font-black border ${COLORS.borderLoss} cursor-help min-w-[24px] text-center block`}>{data.losses}</span>
+                </div>
+              </SmartTooltip>
+            )}
+            {data.missed !== undefined && data.missed > 0 && (
+              <SmartTooltip text={`Zmeškané ${unit.toLowerCase()}`} subtext={`${data.missed} ${unit}`} color="#64748b" theme={theme}>
+                <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === '#64748b'); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
+                  <span className={`px-1.5 py-0.5 rounded-md bg-slate-500/10 text-slate-500 text-[9px] font-black border border-slate-500/20 cursor-help min-w-[24px] text-center block`}>{data.missed}</span>
+                </div>
+              </SmartTooltip>
+            )}
           </div>
         </div>
       );
@@ -726,7 +722,7 @@ const ProKpiCard: React.FC<{
       if (chartData.length === 0) chartData.push({ name: 'Žádná data', value: 1, fill: isDark ? '#334155' : '#e2e8f0', unit: '' });
       return (
         <div className="flex flex-col items-center">
-          <div className="h-20 w-20 cursor-pointer relative">
+          <div className="h-16 w-16 lg:h-20 lg:w-20 cursor-pointer relative">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart {...({ overflow: 'visible' } as any)}>
                 <defs>
@@ -1209,7 +1205,7 @@ const Dashboard: React.FC<DashboardProps> = ({
     const widget = layout.find(w => w.id === widgetId);
     if (!widget) return;
 
-    const startWidth = widget.size === 'small' ? 1 : widget.size === 'large' ? 2 : 4;
+    const startWidth = widget.size === 'small' ? 1 : widget.size === 'large' ? 3 : 6;
     setResizingWidget({
       id: widgetId,
       startX: event.clientX,
@@ -1225,15 +1221,15 @@ const Dashboard: React.FC<DashboardProps> = ({
     const handleMouseMove = (e: MouseEvent) => {
       // Width (Columns)
       const deltaX = e.clientX - resizingWidget.startX;
-      const columnWidth = window.innerWidth >= 1024 ? window.innerWidth / 4 : window.innerWidth / 2;
+      const columnWidth = window.innerWidth >= 1024 ? window.innerWidth / 6 : window.innerWidth / 2;
       const columnsChanged = Math.round(deltaX / columnWidth);
 
       let newColumns = resizingWidget.startWidth + columnsChanged;
-      newColumns = Math.max(1, Math.min(4, newColumns));
+      newColumns = Math.max(1, Math.min(6, newColumns));
 
       let newSize: 'small' | 'large' | 'full';
-      if (newColumns === 1) newSize = 'small';
-      else if (newColumns <= 2) newSize = 'large';
+      if (newColumns <= 1) newSize = 'small';
+      else if (newColumns <= 3) newSize = 'large';
       else newSize = 'full';
 
       // Height (RowSpan)
@@ -1445,9 +1441,9 @@ const Dashboard: React.FC<DashboardProps> = ({
             items={currentLayout.map(w => w.id)}
             strategy={rectSortingStrategy}
           >
-            <div className={`grid grid-cols-4 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px]`}>
+            <div className={`grid grid-cols-6 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px]`}>
               {currentLayout.map((widget, idx) => {
-                const gridClass = widget.size === 'small' ? 'col-span-2 lg:col-span-1' : (widget.size === 'large' ? 'col-span-4 lg:col-span-2' : 'col-span-4');
+                const gridClass = widget.size === 'small' ? 'col-span-3 lg:col-span-1' : (widget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6');
                 const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
 
                 return (

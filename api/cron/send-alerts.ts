@@ -298,6 +298,67 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     }
                 }
 
+                // === SOCIAL / NETWORK NOTIFICATIONS ===
+                const netNotifs = prefs.networkNotifications;
+                if (netNotifs && typeof netNotifs === 'object') {
+                    const watchedUserIds = Object.keys(netNotifs).filter(uid => {
+                        const n = netNotifs[uid];
+                        return n && (n.newTrade || n.newPrep || n.newReview);
+                    });
+
+                    if (watchedUserIds.length > 0) {
+                        const fiveMinAgo = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+
+                        // Fetch recent activity from watched users (all tables need created_at column)
+                        const [recentTrades, recentPreps, recentReviews] = await Promise.all([
+                            watchedUserIds.some(uid => netNotifs[uid]?.newTrade)
+                                ? supabase.from('trades').select('user_id, instrument, direction').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newTrade)).gte('created_at', fiveMinAgo).limit(10)
+                                : Promise.resolve({ data: [] }),
+                            watchedUserIds.some(uid => netNotifs[uid]?.newPrep)
+                                ? supabase.from('daily_preps').select('user_id').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newPrep)).gte('created_at', fiveMinAgo).limit(10)
+                                : Promise.resolve({ data: [] }),
+                            watchedUserIds.some(uid => netNotifs[uid]?.newReview)
+                                ? supabase.from('daily_reviews').select('user_id').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newReview)).gte('created_at', fiveMinAgo).limit(10)
+                                : Promise.resolve({ data: [] }),
+                        ]);
+
+                        // Get names for watched users
+                        const watchedProfiles = profiles.filter(p => watchedUserIds.includes(p.id));
+                        const nameMap: Record<string, string> = {};
+                        if (watchedProfiles.length < watchedUserIds.length) {
+                            const { data: extraProfiles } = await supabase.from('profiles').select('id, full_name').in('id', watchedUserIds);
+                            (extraProfiles || []).forEach(p => { nameMap[p.id] = p.full_name || 'Trader'; });
+                        }
+                        watchedProfiles.forEach(p => { nameMap[p.id] = (p as any).full_name || 'Trader'; });
+
+                        // Deduplicate by user (only one alert per type per user per cron run)
+                        const seenTrade = new Set<string>();
+                        const seenPrep = new Set<string>();
+                        const seenReview = new Set<string>();
+
+                        (recentTrades.data || []).forEach((t: any) => {
+                            if (seenTrade.has(t.user_id)) return;
+                            seenTrade.add(t.user_id);
+                            const name = nameMap[t.user_id] || 'Trader';
+                            alerts.push({ title: `📈 ${name} přidal obchod`, body: `${t.direction || ''} ${t.instrument || ''}`.trim(), type: `social-trade-${t.user_id}` });
+                        });
+
+                        (recentPreps.data || []).forEach((p: any) => {
+                            if (seenPrep.has(p.user_id)) return;
+                            seenPrep.add(p.user_id);
+                            const name = nameMap[p.user_id] || 'Trader';
+                            alerts.push({ title: `📋 ${name} dokončil přípravu`, body: 'Nová denní příprava k dispozici.', type: `social-prep-${p.user_id}` });
+                        });
+
+                        (recentReviews.data || []).forEach((r: any) => {
+                            if (seenReview.has(r.user_id)) return;
+                            seenReview.add(r.user_id);
+                            const name = nameMap[r.user_id] || 'Trader';
+                            alerts.push({ title: `📊 ${name} dokončil review`, body: 'Nový denní review k nahlédnutí.', type: `social-review-${r.user_id}` });
+                        });
+                    }
+                }
+
                 // === TEST MODE ===
                 if (settings.testModeEnabled || prefs.testModeEnabled) {
                     alerts.push({ title: `AlphaTrade Debug (${pragueTime})`, body: `Automatické hlášení aktivní.`, type: 'debug' });

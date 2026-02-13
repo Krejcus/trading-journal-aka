@@ -630,7 +630,7 @@ export const storageService = {
 
     if (error) return localAccounts;
 
-    const accounts = data.map(a => ({
+    const allAccounts = data.map(a => ({
       ...a.meta,
       id: a.id,
       name: a.name,
@@ -645,9 +645,42 @@ export const storageService = {
       phase: a.meta?.phase
     }));
 
+    // Only return active (non-archived) accounts
+    const accounts = allAccounts.filter(a => !a.isArchived);
+
     // Cache result
     safeSetItem(localKey, accounts);
     return accounts;
+  },
+
+  // Fetch only archived accounts (lazy-loaded when needed)
+  async getArchivedAccounts(targetUserId?: string): Promise<Account[]> {
+    const userId = targetUserId || await getUserId();
+    if (!userId) return [];
+
+    const { data, error } = await supabase
+      .from('accounts')
+      .select('*')
+      .eq('user_id', userId);
+
+    if (error || !data) return [];
+
+    return data
+      .map(a => ({
+        ...a.meta,
+        id: a.id,
+        name: a.name,
+        initialBalance: a.initial_balance,
+        currency: a.currency,
+        type: a.type,
+        status: a.status,
+        createdAt: a.created_at,
+        isArchived: a.meta?.isArchived,
+        archivedAt: a.meta?.archivedAt,
+        result: a.meta?.result,
+        phase: a.meta?.phase
+      }))
+      .filter(a => a.isArchived === true);
   },
 
   async saveAccounts(accounts: Account[]): Promise<Account[]> {
@@ -1490,6 +1523,15 @@ export const storageService = {
     // Only the receiver (who accepted the request) can modify permissions
     // RLS also enforces this, but defense-in-depth
     await supabase.from('connections').update({ permissions }).eq('id', connectionId).eq('receiver_id', userId);
+  },
+
+  async updateNetworkNotifications(networkNotifications: Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) return;
+    const { data: profile } = await supabase.from('profiles').select('preferences').eq('id', userId).single();
+    const prefs = profile?.preferences || {};
+    prefs.networkNotifications = networkNotifications;
+    await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
   },
 
   async getNetworkActivity(followingIds: string[]): Promise<any[]> {

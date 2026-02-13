@@ -52,7 +52,8 @@ import {
   DollarSign,
   Target,
   Trophy,
-  MessageSquare
+  MessageSquare,
+  Activity
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
@@ -982,6 +983,21 @@ const App: React.FC = () => {
     }
   }, [isInitialLoadDone]);
 
+  // --- LAZY LOADING: Archived Accounts ---
+  const [archivedAccounts, setArchivedAccounts] = useState<Account[]>([]);
+  const [isArchivedLoaded, setIsArchivedLoaded] = useState(false);
+
+  useEffect(() => {
+    if (dashboardMode === 'archive' && session && !isArchivedLoaded) {
+      console.log("[LazyLoad] Loading archived accounts...");
+      storageService.getArchivedAccounts().then(archived => {
+        setArchivedAccounts(archived || []);
+        setIsArchivedLoaded(true);
+        console.log(`[LazyLoad] Loaded ${archived?.length || 0} archived accounts`);
+      }).catch(err => console.error("[LazyLoad] Failed to load archived accounts:", err));
+    }
+  }, [dashboardMode, session, isArchivedLoaded]);
+
   // --- LAZY LOADING: Business Hub Data ---
   // Load expenses, goals, resources only when user enters BusinessHub section
   const [isBusinessDataLoaded, setIsBusinessDataLoaded] = useState(false);
@@ -1096,6 +1112,16 @@ const App: React.FC = () => {
       const timer = setTimeout(() => {
         isSyncingAccounts.current = true;
         storageService.saveAccounts(accounts).then(updatedAccounts => {
+          // If any accounts were just archived, remove them from active state
+          const justArchived = accounts.filter(a => a.isArchived);
+          if (justArchived.length > 0) {
+            const activeOnly = updatedAccounts.filter(a => !a.isArchived);
+            setAccounts(activeOnly);
+            setIsArchivedLoaded(false); // Force re-fetch of archived accounts
+            console.log(`[Accounts] Archived ${justArchived.length} account(s), removed from active state`);
+            return;
+          }
+
           // If IDs changed (e.g. from temp ID to UUID), update local state
           const currentIds = JSON.stringify(accounts.map(a => a.id).sort());
           const newIds = JSON.stringify(updatedAccounts.map(a => a.id).sort());
@@ -1315,10 +1341,8 @@ const App: React.FC = () => {
           .map(a => a.id);
         setFilters(prev => ({ ...prev, accounts: challengeIds }));
       } else if (dashboardMode === 'archive') {
-        // Show only archived accounts (Challenge or Funded) that are archived
-        const archivedIds = accounts
-          .filter(a => a.isArchived)
-          .map(a => a.id);
+        // Show only archived accounts (lazy-loaded separately)
+        const archivedIds = archivedAccounts.map(a => a.id);
         setFilters(prev => ({ ...prev, accounts: archivedIds }));
       }
 
@@ -1326,16 +1350,17 @@ const App: React.FC = () => {
       localStorage.setItem('alphatrade_dash_mode', dashboardMode);
 
     }
-  }, [dashboardMode, accounts, activePage, isInitialLoadDone]);
+  }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone]);
 
 
   const contextAccounts = useMemo(() => {
     if (activePage !== 'dashboard') return accounts;
     if (dashboardMode === 'combined') return accounts;
     if (dashboardMode === 'funded') return accounts.filter(a => (a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live');
-    if (dashboardMode === 'challenge') return accounts.filter(a => a.phase === 'Challenge' || (a.type === 'Funded' && a.isArchived));
+    if (dashboardMode === 'challenge') return accounts.filter(a => a.phase === 'Challenge');
+    if (dashboardMode === 'archive') return archivedAccounts;
     return accounts;
-  }, [accounts, activePage, dashboardMode]);
+  }, [accounts, archivedAccounts, activePage, dashboardMode]);
 
   const activeAccount = useMemo(() => accounts.find(a => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNT, [accounts, activeAccountId]);
 
@@ -1351,7 +1376,7 @@ const App: React.FC = () => {
   const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
   const [businessActiveTab, setBusinessActiveTab] = useState<'financials' | 'goals'>('financials');
   const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
-  const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'following' | 'followers' | 'requests' | 'share'>('following');
+  const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'feed' | 'following' | 'followers' | 'requests' | 'share'>('feed');
 
 
 
@@ -2024,6 +2049,7 @@ const App: React.FC = () => {
             <div className="hidden md:flex flex-1 justify-center">
               <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] shadow-sm">
                 {[
+                  { id: 'feed', label: 'Feed', icon: Activity },
                   { id: 'leaderboard', label: 'Žebříček', icon: Trophy },
                   { id: 'following', label: 'Sledovaní', icon: Users },
                   { id: 'followers', label: 'Sledující', icon: UserIcon },

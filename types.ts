@@ -84,6 +84,11 @@ export interface SocialConnection {
     canSeeReviewNotes?: boolean; // Replaces 'canSeeNotes' logic
     canSeeNotes?: boolean; // Made optional for backward compatibility
     canSeeScreenshots: boolean;
+    notifications?: {
+      newTrade: boolean;
+      newPrep: boolean;
+      newReview: boolean;
+    };
   };
 }
 
@@ -554,6 +559,7 @@ export interface UserPreferences {
   accentColor?: AccentColor;
   systemSettings?: SystemSettings;
   pushSubscription?: any; // Stores the Web Push Subscription object (endpoint, keys)
+  networkNotifications?: Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>;
 }
 
 export interface SystemSettings {

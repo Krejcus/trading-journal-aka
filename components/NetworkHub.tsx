@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
    Search, UserPlus, Users, Share2, Shield, Activity,
    CheckCircle2, AlertTriangle, Loader2, Calendar,
@@ -7,7 +8,7 @@ import {
    TrendingUp, TrendingDown, Clock, ShieldCheck, Zap, X, Trash2, Terminal,
    Globe, Lock, EyeOff, Copy, Check, Plus, AlertCircle, Hourglass, Hash, Tag as TagIcon,
    Eraser, BarChart2, FileText, Sun, Moon, Send, Monitor, Skull, Star,
-   Briefcase, DollarSign, Trophy, Settings
+   Briefcase, DollarSign, Trophy, Settings, Bell, BellOff
 } from 'lucide-react';
 import {
    AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -23,8 +24,8 @@ interface NetworkHubProps {
    emotions: CustomEmotion[];
    user: User;
    exchangeRates: ExchangeRates | null;
-   activeTab: 'share' | 'following' | 'followers' | 'requests' | 'leaderboard';
-   onTabChange: (tab: 'share' | 'following' | 'followers' | 'requests' | 'leaderboard') => void;
+   activeTab: 'share' | 'feed' | 'following' | 'followers' | 'requests' | 'leaderboard';
+   onTabChange: (tab: 'share' | 'feed' | 'following' | 'followers' | 'requests' | 'leaderboard') => void;
 }
 
 const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates, activeTab, onTabChange: setActiveTab }) => {
@@ -55,6 +56,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
    const [leaderboardStats, setLeaderboardStats] = useState<any[]>([]);
    const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
+
+   // Feed State
+   const [feedActivity, setFeedActivity] = useState<any[]>([]);
+   const [loadingFeed, setLoadingFeed] = useState(false);
+   const [feedLoaded, setFeedLoaded] = useState(false);
+   const [notifDropdownId, setNotifDropdownId] = useState<string | null>(null);
 
    // Detail View State
    const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
@@ -97,6 +104,14 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    useEffect(() => {
       loadConnections();
    }, []);
+
+   // Close notification dropdown on outside click
+   useEffect(() => {
+      if (!notifDropdownId) return;
+      const handler = () => setNotifDropdownId(null);
+      document.addEventListener('click', handler);
+      return () => document.removeEventListener('click', handler);
+   }, [notifDropdownId]);
 
    const handleSearch = async (val: string) => {
       setSearchQuery(val);
@@ -184,6 +199,32 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    const outgoingRequests = connections.filter(c => c.sender_id === currentUserId && c.status === 'pending');
    const following = connections.filter(c => c.sender_id === currentUserId && c.status === 'accepted');
    const followers = connections.filter(c => c.receiver_id === currentUserId && c.status === 'accepted');
+
+   const followingIds = useMemo(() => {
+      if (!currentUserId) return [];
+      return [currentUserId, ...following.map(c => c.sender_id === currentUserId ? c.receiver_id : c.sender_id)];
+   }, [currentUserId, following]);
+
+   // Feed loading
+   const loadFeed = async () => {
+      if (followingIds.length === 0) return;
+      setLoadingFeed(true);
+      try {
+         const activity = await storageService.getNetworkActivity(followingIds);
+         setFeedActivity(activity);
+      } catch (err) {
+         console.error('Failed to load feed:', err);
+      } finally {
+         setLoadingFeed(false);
+         setFeedLoaded(true);
+      }
+   };
+
+   useEffect(() => {
+      if (activeTab === 'feed' && followingIds.length > 0 && !feedLoaded && !loadingFeed) {
+         loadFeed();
+      }
+   }, [activeTab, followingIds, feedLoaded, loadingFeed]);
 
    const filteredRemoteTrades = useMemo(() => {
       if (!spectatorData) return [];
@@ -795,8 +836,104 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
             </div>
          )}
 
-         {/* PULSE CONTENT */}
+         {/* FEED TAB */}
+         {activeTab === 'feed' && (
+            <div className="space-y-4">
+               <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><Activity size={14} /> Live Feed</h3>
+                  <button onClick={loadFeed} className={`p-2 rounded-xl transition-all ${isDark ? 'bg-[var(--bg-input)] text-slate-400 hover:text-blue-400' : 'bg-slate-100 text-slate-600 hover:text-blue-600'}`}>
+                     <Loader2 size={14} className={loadingFeed ? 'animate-spin' : ''} />
+                  </button>
+               </div>
 
+               {loadingFeed && feedActivity.length === 0 ? (
+                  <div className="py-20 flex flex-col items-center justify-center opacity-50">
+                     <Loader2 size={40} className="animate-spin text-blue-500 mb-4" />
+                     <p className="text-xs font-black uppercase tracking-widest">Načítám aktivitu...</p>
+                  </div>
+               ) : feedActivity.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-center space-y-6 opacity-60">
+                     <div className={`p-6 rounded-full border ${isDark ? 'bg-[var(--bg-input)] text-slate-600 border-[var(--border-subtle)]' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
+                        <Activity size={48} />
+                     </div>
+                     <div>
+                        <h3 className="text-xl font-black uppercase tracking-widest text-slate-500">Žádná aktivita</h3>
+                        <p className="text-xs text-slate-600 mt-2 max-w-sm mx-auto">Sledujte tradery pro zobrazení jejich aktivity.</p>
+                     </div>
+                  </div>
+               ) : (
+                  <div className="space-y-3">
+                     {feedActivity.map((item, idx) => {
+                        const isTradeItem = item.type === 'trade';
+                        const isPrepItem = item.type === 'prep';
+                        const isReviewItem = item.type === 'review';
+                        const borderColor = isTradeItem ? (item.data?.pnl >= 0 ? 'border-l-emerald-500' : 'border-l-rose-500') : isPrepItem ? 'border-l-blue-500' : 'border-l-amber-500';
+                        const timeStr = (() => {
+                           try {
+                              const d = new Date(item.date);
+                              return d.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+                           } catch { return ''; }
+                        })();
+
+                        return (
+                           <div
+                              key={`${item.type}-${item.id}-${idx}`}
+                              className={`p-4 rounded-2xl border border-l-4 ${borderColor} cursor-pointer transition-all hover:scale-[1.01] ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}
+                              onClick={() => {
+                                 if (isTradeItem) setSelectedTrade(item.data);
+                                 else if (isPrepItem) setSelectedPrep({ id: item.id, date: item.date.split('T')[0], user_id: '', data: item.data });
+                                 else if (isReviewItem) setSelectedReview({ id: item.id, date: item.date.split('T')[0], user_id: '', data: item.data });
+                              }}
+                           >
+                              <div className="flex items-center justify-between">
+                                 <div className="flex items-center gap-3">
+                                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black uppercase text-xs ${isTradeItem ? 'bg-blue-600/10 text-blue-500' : isPrepItem ? 'bg-blue-500/10 text-blue-400' : 'bg-amber-500/10 text-amber-500'}`}>
+                                       {item.user?.name?.substring(0, 2) || '??'}
+                                    </div>
+                                    <div>
+                                       <div className="flex items-center gap-2">
+                                          <span className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.user?.name || 'Trader'}</span>
+                                          {isTradeItem && (
+                                             <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md ${item.data?.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                                {item.data?.direction === 'Long' ? '▲' : '▼'} {item.data?.instrument || ''}
+                                             </span>
+                                          )}
+                                       </div>
+                                       <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                                          {isTradeItem ? 'Nový obchod' : isPrepItem ? (item.meta?.locked ? 'Příprava (zamčeno)' : 'Dokončil přípravu') : 'Dokončil review'}
+                                          <span className="mx-1.5 opacity-30">·</span>
+                                          {timeStr}
+                                       </p>
+                                    </div>
+                                 </div>
+                                 <div className="text-right">
+                                    {isTradeItem && item.meta?.pnlFormat !== 'hidden' && (
+                                       <span className={`text-sm font-black font-mono ${item.data?.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                          {item.meta?.pnlFormat === 'rr'
+                                             ? `${item.data?.pnl >= 0 ? '+' : ''}${item.data?.pnl?.toFixed(2)}R`
+                                             : `${item.data?.pnl >= 0 ? '+' : ''}$${Math.abs(item.data?.pnl || 0).toFixed(0)}`
+                                          }
+                                       </span>
+                                    )}
+                                    {isReviewItem && !item.meta?.statsHidden && item.data?.rating > 0 && (
+                                       <div className="flex items-center gap-0.5">
+                                          {[...Array(5)].map((_, i) => (
+                                             <Star key={i} size={12} className={i < item.data.rating ? 'text-yellow-500 fill-yellow-500' : 'text-slate-700'} />
+                                          ))}
+                                       </div>
+                                    )}
+                                    {isPrepItem && !item.meta?.locked && item.data?.mindsetState && (
+                                       <span className="text-lg">{item.data.mindsetState === 'positive' ? '🟢' : item.data.mindsetState === 'negative' ? '🔴' : '🟡'}</span>
+                                    )}
+                                 </div>
+                              </div>
+                           </div>
+                        );
+                     })}
+                  </div>
+               )}
+            </div>
+         )}
 
          {/* Content Tabs */}
          {activeTab === 'requests' && (
@@ -866,17 +1003,83 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                      {following.map(conn => {
                         const target = conn.sender_id === currentUserId ? conn.receiver : conn.sender;
                         if (!target) return null;
+                        const targetId = conn.sender_id === currentUserId ? conn.receiver_id : conn.sender_id;
+                        const stats = leaderboardStats.find(s => s.id === targetId);
+                        const notifPrefs = user?.preferences?.networkNotifications?.[targetId];
+                        const hasAnyNotif = notifPrefs && (notifPrefs.newTrade || notifPrefs.newPrep || notifPrefs.newReview);
                         return (
-                           <div key={conn.id} className={`group p-6 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                              <div className="flex justify-between items-start mb-6">
-                                 <div className="flex items-center gap-4">
+                           <div key={conn.id} className={`group p-5 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                              {/* Header */}
+                              <div className="flex justify-between items-start mb-4">
+                                 <div className="flex items-center gap-3">
                                     <div className="w-12 h-12 rounded-2xl bg-blue-600/10 text-blue-500 flex items-center justify-center font-black uppercase text-lg">{target.name?.substring(0, 2)}</div>
                                     <div>
-                                       <h4 className={`text-lg font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{target.name}</h4>
+                                       <h4 className={`text-base font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{target.name}</h4>
                                        <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest">Sleduji</span>
                                     </div>
                                  </div>
+                                 <div className="relative">
+                                    <button
+                                       onClick={(e) => { e.stopPropagation(); setNotifDropdownId(notifDropdownId === conn.id ? null : conn.id); }}
+                                       className={`p-2 rounded-xl transition-all ${hasAnyNotif ? 'bg-blue-600/10 text-blue-500' : isDark ? 'bg-[var(--bg-input)] text-slate-600 hover:text-blue-400' : 'bg-slate-100 text-slate-400 hover:text-blue-600'}`}
+                                    >
+                                       {hasAnyNotif ? <Bell size={16} /> : <BellOff size={16} />}
+                                    </button>
+                                    {notifDropdownId === conn.id && (
+                                       <div className={`absolute right-0 top-11 z-50 p-3 rounded-2xl border shadow-xl min-w-[200px] ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                                          <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">Notifikace</p>
+                                          {[
+                                             { key: 'newTrade', label: 'Nové obchody', icon: '📈' },
+                                             { key: 'newPrep', label: 'Přípravy', icon: '📋' },
+                                             { key: 'newReview', label: 'Review', icon: '📊' }
+                                          ].map(opt => (
+                                             <label key={opt.key} className={`flex items-center gap-2 py-2 px-2 rounded-xl cursor-pointer transition-all ${isDark ? 'hover:bg-[var(--bg-input)]' : 'hover:bg-slate-50'}`}>
+                                                <input
+                                                   type="checkbox"
+                                                   checked={notifPrefs?.[opt.key as keyof typeof notifPrefs] || false}
+                                                   onChange={async (e) => {
+                                                      const newPrefs = {
+                                                         ...(user?.preferences?.networkNotifications || {}),
+                                                         [targetId]: {
+                                                            newTrade: notifPrefs?.newTrade || false,
+                                                            newPrep: notifPrefs?.newPrep || false,
+                                                            newReview: notifPrefs?.newReview || false,
+                                                            [opt.key]: e.target.checked
+                                                         }
+                                                      };
+                                                      await storageService.updateNetworkNotifications(newPrefs);
+                                                      // Force re-render by updating user preferences locally
+                                                      if (user?.preferences) {
+                                                         user.preferences.networkNotifications = newPrefs;
+                                                      }
+                                                      setNotifDropdownId(null);
+                                                   }}
+                                                   className="rounded border-slate-600 text-blue-600 focus:ring-blue-500"
+                                                />
+                                                <span className="text-sm">{opt.icon}</span>
+                                                <span className={`text-xs font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{opt.label}</span>
+                                             </label>
+                                          ))}
+                                       </div>
+                                    )}
+                                 </div>
                               </div>
+
+                              {/* Mini Stats */}
+                              {stats && (
+                                 <div className={`grid grid-cols-2 gap-2 mb-4 p-3 rounded-xl ${isDark ? 'bg-[var(--bg-input)]/50' : 'bg-slate-50'}`}>
+                                    <div className="text-center">
+                                       <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Win Rate</p>
+                                       <p className={`text-sm font-black font-mono ${stats.winRate >= 50 ? 'text-emerald-500' : 'text-rose-500'}`}>{stats.winRate.toFixed(0)}%</p>
+                                    </div>
+                                    <div className="text-center">
+                                       <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Obchody</p>
+                                       <p className={`text-sm font-black font-mono ${isDark ? 'text-white' : 'text-slate-900'}`}>{stats.tradeCount}</p>
+                                    </div>
+                                 </div>
+                              )}
+
+                              {/* Actions */}
                               <div className="flex gap-2">
                                  <button
                                     className={`flex-1 py-3 border rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] hover:bg-blue-600 hover:text-white text-slate-400' : 'bg-slate-50 border-slate-200 hover:bg-blue-600 hover:text-white text-slate-600'}`}
@@ -935,439 +1138,493 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
 
          {/* Spectator Mode Overlay */}
-         {isSpectating && (
-            <div className={`fixed inset-0 z-[100] animate-in fade-in duration-500 flex flex-col ${isDark ? 'bg-[var(--bg-page)]' : 'bg-slate-50'}`}>
-               {/* Spectator Header */}
-               <div className={`p-4 border-b flex items-center justify-between ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                  <div className="flex items-center gap-4">
-                     <button
-                        onClick={() => setIsSpectating(false)}
-                        className={`p-2 rounded-xl transition-all ${isDark ? 'bg-[var(--bg-input)] text-slate-400 hover:text-white' : 'bg-slate-100 text-slate-600'}`}
-                     >
-                        <ChevronLeft size={20} />
-                     </button>
-                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-500 flex items-center justify-center text-xs font-black uppercase">{spectatingUser?.name?.substring(0, 2)}</div>
-                        <div>
-                           <div className="flex items-center gap-2">
-                              <h4 className="text-xs font-black text-white uppercase tracking-widest">{spectatingUser?.name}</h4>
-                              <div className="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-500 text-[8px] font-black uppercase border border-emerald-500/20">LIVE SPECTATOR</div>
+         <AnimatePresence>
+            {isSpectating && (
+               <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 20 }}
+                  className={`fixed inset-0 z-[100] flex flex-col ${isDark ? 'bg-slate-950/90' : 'bg-slate-50/90'} backdrop-blur-3xl`}
+               >
+                  {/* Spectator Header */}
+                  <div className={`p-4 border-b flex items-center justify-between ${isDark ? 'bg-slate-900/50 border-white/5' : 'bg-white/50 border-slate-200'}`}>
+                     <div className="flex items-center gap-4">
+                        <button
+                           onClick={() => setIsSpectating(false)}
+                           className={`p-3 rounded-2xl transition-all shadow-lg ${isDark ? 'bg-slate-800 text-slate-400 hover:text-white border border-white/5' : 'bg-white text-slate-600 border border-slate-200'} active:scale-95`}
+                        >
+                           <ChevronLeft size={24} />
+                        </button>
+                        <div className="flex items-center gap-3">
+                           <div className="w-10 h-10 rounded-2xl bg-blue-600/20 text-blue-500 flex items-center justify-center text-sm font-black uppercase shadow-inner">{spectatingUser?.name?.substring(0, 2)}</div>
+                           <div>
+                              <div className="flex items-center gap-2">
+                                 <h4 className={`text-sm font-black uppercase tracking-widest ${isDark ? 'text-white' : 'text-slate-900'}`}>{spectatingUser?.name}</h4>
+                                 <div className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[9px] font-black uppercase border border-emerald-500/20 shadow-sm shadow-emerald-500/10">PRO SPECTATOR</div>
+                              </div>
+                              <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">Zabezpečená relace AlphaNetwork v2.0</p>
                            </div>
-                           <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">Vzdálená relace zabezpečená protokolem AlphaNetwork</p>
                         </div>
                      </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                     <div className={`hidden md:flex items-center gap-6 px-4 py-2 rounded-xl border ${isDark ? 'bg-[var(--bg-input)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                        <div className="text-center">
-                           <p className="text-[8px] text-slate-500 font-black uppercase">Účet</p>
-                           {spectatorData && spectatorData.accounts.length > 1 ? (
-                              <select
-                                 value={activeSpectatorAccountId || ''}
-                                 onChange={(e) => setActiveSpectatorAccountId(e.target.value)}
-                                 className="bg-transparent text-white font-black text-[10px] uppercase outline-none border-none py-1 px-2 cursor-pointer transition-all hover:text-blue-400"
-                              >
-                                 {spectatorData.accounts.map(acc => (
-                                    <option key={acc.id} value={acc.id} className={isDark ? 'bg-[var(--bg-card)] text-white' : 'bg-white text-slate-900'}>
-                                       {acc.name}
-                                    </option>
-                                 ))}
-                              </select>
-                           ) : (
-                              <p className="text-[10px] text-white font-black uppercase">
-                                 {spectatorData?.accounts.find(a => a.id === activeSpectatorAccountId)?.name || 'Neznámý'}
+                     <div className="flex items-center gap-4">
+                        <div className={`hidden md:flex items-center gap-8 px-6 py-2.5 rounded-2xl border ${isDark ? 'bg-slate-800/50 border-white/5 shadow-inner' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
+                           <div className="text-center">
+                              <p className="text-[9px] text-slate-500 font-black uppercase tracking-tighter mb-0.5 opacity-60">Portfolio</p>
+                              {spectatorData && spectatorData.accounts.length > 1 ? (
+                                 <select
+                                    value={activeSpectatorAccountId || ''}
+                                    onChange={(e) => setActiveSpectatorAccountId(e.target.value)}
+                                    className="bg-transparent text-white font-black text-xs uppercase outline-none border-none cursor-pointer transition-all hover:text-blue-400 appearance-none text-center"
+                                 >
+                                    {spectatorData.accounts.map(acc => (
+                                       <option key={acc.id} value={acc.id} className={isDark ? 'bg-slate-900 text-white' : 'bg-white text-slate-900'}>
+                                          {acc.name}
+                                       </option>
+                                    ))}
+                                 </select>
+                              ) : (
+                                 <p className={`text-xs ${isDark ? 'text-white' : 'text-slate-900'} font-black uppercase`}>
+                                    {spectatorData?.accounts.find(a => a.id === activeSpectatorAccountId)?.name || 'Default'}
+                                 </p>
+                              )}
+                           </div>
+                           <div className={`w-px h-8 ${isDark ? 'bg-white/5' : 'bg-slate-200'}`} />
+                           <div className="text-center">
+                              <p className="text-[9px] font-black text-slate-500 uppercase tracking-tighter mb-0.5 opacity-60">Archive</p>
+                              <p className="text-xs text-emerald-400 font-black uppercase tabular-nums">
+                                 {spectatorData?.trades.filter(t => t.accountId === activeSpectatorAccountId).length || 0} Trds
                               </p>
-                           )}
+                           </div>
                         </div>
-                        <div className={`w-px h-6 ${isDark ? 'bg-[var(--border-subtle)]' : 'bg-slate-200'}`} />
-                        <div className="text-center">
-                           <p className="text-[8px] font-black text-slate-500 uppercase">Obchody</p>
-                           <p className="text-[10px] text-emerald-500 font-black uppercase">
-                              {spectatorData?.trades.filter(t => t.accountId === activeSpectatorAccountId).length || 0}
-                           </p>
-                        </div>
+                        <button
+                           onClick={() => setIsSpectating(false)}
+                           className="hidden md:flex px-6 py-3 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] transition-all shadow-xl shadow-rose-900/20 active:scale-95 group items-center gap-2"
+                        >
+                           <LogOut size={16} className="group-hover:-translate-x-1 transition-transform" /> Zavřít Profil
+                        </button>
                      </div>
-                     <button
-                        onClick={() => setIsSpectating(false)}
-                        className="px-4 py-2 bg-rose-500 hover:bg-rose-400 text-white rounded-lg text-[10px] font-black uppercase tracking-widest transition-all"
-                     >
-                        Odpojit relaci
-                     </button>
                   </div>
-               </div>
 
-               {/* Spectator Content */}
-               <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8">
-                  <div className="max-w-7xl mx-auto space-y-8">
+                  {/* Spectator Content */}
+                  <div className="flex-1 overflow-y-auto p-4 md:p-12 scrollbar-hide">
+                     <div className="max-w-7xl mx-auto space-y-12">
 
-                     {/* Internal Spectator Tabs */}
-                     <div className="flex justify-center">
-                        <div className={`p-1 rounded-2xl flex gap-1 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-200 border-slate-300'}`}>
-                           {[
-                              { id: 'overview', label: 'Dnešní přehled', icon: Layout },
-                              { id: 'stats', label: 'Statistiky', icon: Activity }
-                           ].map(tab => (
-                              <button
-                                 key={tab.id}
-                                 onClick={() => setSpectatorTab(tab.id as any)}
-                                 className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${spectatorTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-500 hover:text-slate-300'}`}
-                              >
-                                 <tab.icon size={12} /> {tab.label}
-                              </button>
-                           ))}
-                        </div>
-                     </div>
-
-
-                     {spectatorTab === 'overview' && (
-                        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                           {/* Date Navigation Bar */}
-                           <div className={`p-4 rounded-[24px] border flex items-center justify-between ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                              <button
-                                 onClick={() => {
-                                    const d = new Date(spectatorDate);
-                                    d.setDate(d.getDate() - 1);
-                                    setSpectatorDate(d.toISOString().split('T')[0]);
-                                 }}
-                                 className={`p-2 rounded-xl transition-all ${isDark ? 'hover:bg-[var(--bg-input)] text-slate-400' : 'hover:bg-slate-100 text-slate-600'}`}
-                              >
-                                 <ChevronLeft size={20} />
-                              </button>
-
-                              <div className="flex items-center gap-4">
-                                 <Calendar size={18} className="text-blue-500" />
-                                 <input
-                                    type="date"
-                                    value={spectatorDate}
-                                    onChange={(e) => setSpectatorDate(e.target.value)}
-                                    className={`bg-transparent font-black text-sm outline-none border-b pb-1 ${isDark ? 'text-white border-[var(--border-subtle)]' : 'text-slate-900 border-slate-200'}`}
-                                 />
-                              </div>
-
-                              <button
-                                 onClick={() => {
-                                    const d = new Date(spectatorDate);
-                                    d.setDate(d.getDate() + 1);
-                                    setSpectatorDate(d.toISOString().split('T')[0]);
-                                 }}
-                                 className={`p-2 rounded-xl transition-all ${isDark ? 'hover:bg-[var(--bg-input)] text-slate-400' : 'hover:bg-slate-100 text-slate-600'}`}
-                              >
-                                 <ChevronRight size={20} />
-                              </button>
+                        {/* Internal Spectator Tabs */}
+                        <div className="flex justify-center">
+                           <div className={`p-1 rounded-2xl flex gap-1 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-200 border-slate-300'}`}>
+                              {[
+                                 { id: 'overview', label: 'Dnešní přehled', icon: Layout },
+                                 { id: 'stats', label: 'Statistiky', icon: Activity }
+                              ].map(tab => (
+                                 <button
+                                    key={tab.id}
+                                    onClick={() => setSpectatorTab(tab.id as any)}
+                                    className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${spectatorTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-500 hover:text-slate-300'}`}
+                                 >
+                                    <tab.icon size={12} /> {tab.label}
+                                 </button>
+                              ))}
                            </div>
+                        </div>
 
-                           <div className="space-y-8">
-                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                 <div className={`p-6 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Dnešní PnL</p>
-                                    <span className={`text-xl font-black font-mono tracking-tighter ${dayPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'} ${dayPnL === null ? 'blur-sm select-none opacity-50' : ''}`}>
-                                       {dayPnL !== null ? (
-                                          spectatorData?.meta?.pnlFormat === 'rr'
-                                             ? formatPnL(dayPnL, 'rr', undefined, calculateTotalRR(filteredRemoteTrades), true, user.currency, exchangeRates)
-                                             : `${dayPnL >= 0 ? '+' : ''}$${dayPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                                       ) : 'HIDDEN'}
-                                    </span>
-                                 </div>
-                                 <div
-                                    onClick={() => dayPrep && setSelectedPrep(dayPrep)}
-                                    className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-white border-slate-200 hover:bg-slate-50'} flex items-center justify-between`}
+
+                        {spectatorTab === 'overview' && (
+                           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                              {/* Date Navigation Bar */}
+                              <div className={`p-4 rounded-[24px] border flex items-center justify-between ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                                 <button
+                                    onClick={() => {
+                                       const d = new Date(spectatorDate);
+                                       d.setDate(d.getDate() - 1);
+                                       setSpectatorDate(d.toISOString().split('T')[0]);
+                                    }}
+                                    className={`p-2 rounded-xl transition-all ${isDark ? 'hover:bg-[var(--bg-input)] text-slate-400' : 'hover:bg-slate-100 text-slate-600'}`}
                                  >
-                                    <div>
-                                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Ranní Příprava</p>
-                                       <p className={`text-[10px] font-black uppercase ${dayPrep ? 'text-blue-500' : 'text-slate-600'}`}>
-                                          {dayPrep ? 'DOKONČENA' : 'CHYBÍ'}
-                                       </p>
-                                    </div>
-                                    {dayPrep && <ShieldCheck size={24} className="text-blue-500/40" />}
+                                    <ChevronLeft size={20} />
+                                 </button>
+
+                                 <div className="flex items-center gap-4">
+                                    <Calendar size={18} className="text-blue-500" />
+                                    <input
+                                       type="date"
+                                       value={spectatorDate}
+                                       onChange={(e) => setSpectatorDate(e.target.value)}
+                                       className={`bg-transparent font-black text-sm outline-none border-b pb-1 ${isDark ? 'text-white border-[var(--border-subtle)]' : 'text-slate-900 border-slate-200'}`}
+                                    />
                                  </div>
-                                 <div
-                                    onClick={() => dayReview && setSelectedReview(dayReview)}
-                                    className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-white border-slate-200 hover:bg-slate-50'} flex items-center justify-between`}
+
+                                 <button
+                                    onClick={() => {
+                                       const d = new Date(spectatorDate);
+                                       d.setDate(d.getDate() + 1);
+                                       setSpectatorDate(d.toISOString().split('T')[0]);
+                                    }}
+                                    className={`p-2 rounded-xl transition-all ${isDark ? 'hover:bg-[var(--bg-input)] text-slate-400' : 'hover:bg-slate-100 text-slate-600'}`}
                                  >
-                                    <div>
-                                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Večerní Review</p>
-                                       <p className={`text-[10px] font-black uppercase ${dayReview ? 'text-amber-500' : 'text-slate-600'}`}>
-                                          {dayReview ? 'DOKONČENO' : 'CHYBÍ'}
-                                       </p>
-                                    </div>
-                                    {dayReview && <Brain size={24} className="text-amber-500/40" />}
-                                 </div>
+                                    <ChevronRight size={20} />
+                                 </button>
                               </div>
 
-                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                 {/* Daily Trades List */}
-                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2"><Activity size={14} /> Dnešní obchody</h3>
-                                    <div className="space-y-3">
-                                       {filteredRemoteTrades.length > 0 ? filteredRemoteTrades.map(trade => (
-                                          <div
-                                             key={trade.id}
-                                             onClick={() => {
-                                                setSelectedTrade(trade);
-                                                setModalPnlFormat(spectatorData?.meta?.pnlFormat);
+                              <div className="space-y-8">
+                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className={`p-6 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Dnešní PnL</p>
+                                       <span className={`text-xl font-black font-mono tracking-tighter ${dayPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'} ${dayPnL === null ? 'blur-sm select-none opacity-50' : ''}`}>
+                                          {dayPnL !== null ? (
+                                             spectatorData?.meta?.pnlFormat === 'rr'
+                                                ? formatPnL(dayPnL, 'rr', undefined, calculateTotalRR(filteredRemoteTrades), true, user.currency, exchangeRates)
+                                                : `${dayPnL >= 0 ? '+' : ''}$${dayPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+                                          ) : 'HIDDEN'}
+                                       </span>
+                                    </div>
+                                    <div
+                                       onClick={() => dayPrep && setSelectedPrep(dayPrep)}
+                                       className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-white border-slate-200 hover:bg-slate-50'} flex items-center justify-between`}
+                                    >
+                                       <div>
+                                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Ranní Příprava</p>
+                                          <p className={`text-[10px] font-black uppercase ${dayPrep ? 'text-blue-500' : 'text-slate-600'}`}>
+                                             {dayPrep ? 'DOKONČENA' : 'CHYBÍ'}
+                                          </p>
+                                       </div>
+                                       {dayPrep && <ShieldCheck size={24} className="text-blue-500/40" />}
+                                    </div>
+                                    <div
+                                       onClick={() => dayReview && setSelectedReview(dayReview)}
+                                       className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-white border-slate-200 hover:bg-slate-50'} flex items-center justify-between`}
+                                    >
+                                       <div>
+                                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Večerní Review</p>
+                                          <p className={`text-[10px] font-black uppercase ${dayReview ? 'text-amber-500' : 'text-slate-600'}`}>
+                                             {dayReview ? 'DOKONČENO' : 'CHYBÍ'}
+                                          </p>
+                                       </div>
+                                       {dayReview && <Brain size={24} className="text-amber-500/40" />}
+                                    </div>
+                                 </div>
+
+                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                    {/* Daily Trades List */}
+                                    <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                                       <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2"><Activity size={14} /> Dnešní obchody</h3>
+                                       <div className="space-y-3">
+                                          {filteredRemoteTrades.length > 0 ? filteredRemoteTrades.map(trade => (
+                                             <div
+                                                key={trade.id}
+                                                onClick={() => {
+                                                   setSelectedTrade(trade);
+                                                   setModalPnlFormat(spectatorData?.meta?.pnlFormat);
+                                                }}
+                                                className={`p-4 rounded-xl border flex items-center justify-between cursor-pointer hover:bg-blue-600/5 hover:border-blue-500/20 transition-all ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}
+                                             >
+                                                <div className="flex items-center gap-4">
+                                                   <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-black text-xs ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                                      {spectatorData?.meta?.pnlFormat === 'rr'
+                                                         ? `${trade.pnl >= 0 ? '+' : ''}${trade.pnl}R`
+                                                         : `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl}`}
+                                                   </div>
+                                                   <div>
+                                                      <p className="text-xs font-black text-white">{trade.instrument}</p>
+                                                      <p className="text-[9px] text-slate-500 font-bold uppercase">{trade.signal || 'Bez signálu'}</p>
+                                                   </div>
+                                                </div>
+                                                <div className={`px-3 py-1 rounded-md text-[8px] font-black uppercase border ${trade.direction === 'Long' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
+                                                   {trade.direction}
+                                                </div>
+                                             </div>
+                                          )) : (
+                                             <div className="py-12 text-center opacity-30">
+                                                <Skull size={32} className="mx-auto mb-2" />
+                                                <p className="text-[10px] font-black uppercase tracking-widest">Žádná aktivita v tento den</p>
+                                             </div>
+                                          )}
+                                       </div>
+
+                                       {/* Recent Activity */}
+                                       {(() => {
+                                          const recentTrades = (spectatorData?.trades || [])
+                                             .filter(t => {
+                                                const tDate = t.date.split(' ')[0].split('T')[0];
+                                                return tDate !== spectatorDate && (!activeSpectatorAccountId || t.accountId === activeSpectatorAccountId);
+                                             })
+                                             .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                                             .slice(0, 10);
+
+                                          if (recentTrades.length === 0) return null;
+
+                                          return (
+                                             <div className="mt-6">
+                                                <h4 className="text-[9px] font-black uppercase tracking-widest text-slate-600 mb-3 flex items-center gap-2"><Clock size={12} /> Nedávná aktivita</h4>
+                                                <div className="space-y-2">
+                                                   {recentTrades.map(trade => {
+                                                      const dateStr = (() => {
+                                                         try { return new Date(trade.date).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short' }); } catch { return ''; }
+                                                      })();
+                                                      return (
+                                                         <div
+                                                            key={trade.id}
+                                                            onClick={() => { setSelectedTrade(trade); setModalPnlFormat(spectatorData?.meta?.pnlFormat); }}
+                                                            className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer hover:bg-blue-600/5 transition-all ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/50 border-slate-100'}`}
+                                                         >
+                                                            <div className="flex items-center gap-3">
+                                                               <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-[10px] ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                                                  {spectatorData?.meta?.pnlFormat === 'rr'
+                                                                     ? `${trade.pnl >= 0 ? '+' : ''}${trade.pnl}R`
+                                                                     : `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl}`}
+                                                               </div>
+                                                               <div>
+                                                                  <p className={`text-[11px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</p>
+                                                                  <p className="text-[8px] text-slate-600 font-bold uppercase">{dateStr}</p>
+                                                               </div>
+                                                            </div>
+                                                            <div className={`px-2 py-0.5 rounded text-[7px] font-black uppercase border ${trade.direction === 'Long' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
+                                                               {trade.direction}
+                                                            </div>
+                                                         </div>
+                                                      );
+                                                   })}
+                                                </div>
+                                             </div>
+                                          );
+                                       })()}
+                                    </div>
+
+                                    {/* Calendar Integration */}
+                                    <div className={`h-[750px] overflow-hidden rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5 shadow-2xl shadow-black/40' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/50'} animate-in zoom-in-95 duration-500`}>
+                                       <div className="h-full overflow-y-auto scrollbar-hide p-2">
+                                          <DashboardCalendar
+                                             trades={spectatorData?.trades.filter(t => t.accountId === activeSpectatorAccountId) || []}
+                                             preps={spectatorData?.preps || []}
+                                             reviews={spectatorData?.reviews || []}
+                                             theme={theme}
+                                             accounts={spectatorData?.accounts || []}
+                                             initialBalance={spectatorData?.accounts.find(a => a.id === activeSpectatorAccountId)?.initialBalance || 0}
+                                             emotions={emotions}
+                                             onDayClick={(dateStr) => {
+                                                setSpectatorDate(dateStr);
                                              }}
-                                             className={`p-4 rounded-xl border flex items-center justify-between cursor-pointer hover:bg-blue-600/5 hover:border-blue-500/20 transition-all ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}
-                                          >
-                                             <div className="flex items-center gap-4">
-                                                <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-black text-xs ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                                                   {spectatorData?.meta?.pnlFormat === 'rr'
-                                                      ? `${trade.pnl >= 0 ? '+' : ''}${trade.pnl}R`
-                                                      : `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl}`}
-                                                </div>
-                                                <div>
-                                                   <p className="text-xs font-black text-white">{trade.instrument}</p>
-                                                   <p className="text-[9px] text-slate-500 font-bold uppercase">{trade.signal || 'Bez signálu'}</p>
-                                                </div>
-                                             </div>
-                                             <div className={`px-3 py-1 rounded-md text-[8px] font-black uppercase border ${trade.direction === 'Long' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
-                                                {trade.direction}
-                                             </div>
-                                          </div>
-                                       )) : (
-                                          <div className="py-12 text-center opacity-30">
-                                             <Skull size={32} className="mx-auto mb-2" />
-                                             <p className="text-[10px] font-black uppercase tracking-widest">Žádná aktivita v tento den</p>
-                                          </div>
-                                       )}
-                                    </div>
-                                 </div>
-
-                                 {/* Calendar Integration */}
-                                 <div className={`h-[750px] overflow-hidden rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5 shadow-2xl shadow-black/40' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/50'} animate-in zoom-in-95 duration-500`}>
-                                    <div className="h-full overflow-y-auto scrollbar-hide p-2">
-                                       <DashboardCalendar
-                                          trades={spectatorData?.trades.filter(t => t.accountId === activeSpectatorAccountId) || []}
-                                          preps={spectatorData?.preps || []}
-                                          reviews={spectatorData?.reviews || []}
-                                          theme={theme}
-                                          accounts={spectatorData?.accounts || []}
-                                          initialBalance={spectatorData?.accounts.find(a => a.id === activeSpectatorAccountId)?.initialBalance || 0}
-                                          emotions={emotions}
-                                          onDayClick={(dateStr) => {
-                                             setSpectatorDate(dateStr);
-                                          }}
-                                          pnlFormat={spectatorData?.meta?.pnlFormat}
-                                          user={user}
-                                          exchangeRates={exchangeRates}
-                                       />
+                                             pnlFormat={spectatorData?.meta?.pnlFormat}
+                                             user={user}
+                                             exchangeRates={exchangeRates}
+                                          />
+                                       </div>
                                     </div>
                                  </div>
                               </div>
                            </div>
-                        </div>
-                     )}
+                        )}
 
-                     {spectatorTab === 'stats' && globalCareerStats && (
-                        <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
-                           {/* Master Career Cards */}
-                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
-                                 <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Briefcase size={14} /> Career PnL</p>
-                                 <h3 className={`text-3xl font-black italic tracking-tighter ${globalCareerStats.totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                    {spectatorData?.meta?.pnlFormat === 'rr'
-                                       ? formatPnL(globalCareerStats.totalPnL, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined, true, user.currency, exchangeRates)
-                                       : `$${globalCareerStats.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                                 </h3>
-                                 <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">Total from {globalCareerStats.accountCount} accounts</p>
-                              </div>
-                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl border-emerald-500/10`}>
-                                 <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><DollarSign size={14} className="text-emerald-500" /> Total Payouts</p>
-                                 <h3 className="text-3xl font-black italic tracking-tighter text-emerald-500">
-                                    {spectatorData?.meta?.pnlFormat === 'rr'
-                                       ? formatPnL(globalCareerStats.totalPayouts, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, undefined, true, user.currency, exchangeRates)
-                                       : `$${globalCareerStats.totalPayouts.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                                 </h3>
-                                 <div className="flex items-center gap-2 mt-2">
-                                    <div className="h-1 flex-1 bg-slate-800 rounded-full overflow-hidden">
-                                       <div className="h-full bg-emerald-500" style={{ width: `${Math.min(100, (globalCareerStats.totalPayouts / (globalCareerStats.totalPnL || 1)) * 100)}%` }} />
-                                    </div>
-                                    <span className="text-[8px] font-black text-emerald-500 uppercase">Paid Out</span>
+                        {spectatorTab === 'stats' && globalCareerStats && (
+                           <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
+                              {/* Master Career Cards */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
+                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Briefcase size={14} /> Career PnL</p>
+                                    <h3 className={`text-3xl font-black italic tracking-tighter ${globalCareerStats.totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                       {spectatorData?.meta?.pnlFormat === 'rr'
+                                          ? formatPnL(globalCareerStats.totalPnL, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined, true, user.currency, exchangeRates)
+                                          : `$${globalCareerStats.totalPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                    </h3>
+                                    <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">Total from {globalCareerStats.accountCount} accounts</p>
                                  </div>
-                              </div>
-                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
-                                 <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Trophy size={14} className="text-amber-500" /> Global Winrate</p>
-                                 <h3 className="text-3xl font-black italic tracking-tighter text-white">
-                                    {globalCareerStats.winRate.toFixed(1)}%
-                                 </h3>
-                                 <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">{globalCareerStats.totalTrades} Total Trades</p>
-                              </div>
-                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
-                                 <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Activity size={14} className="text-blue-500" /> Profit Factor</p>
-                                 <h3 className={`text-3xl font-black italic tracking-tighter ${globalCareerStats.profitFactor >= 1.5 ? 'text-emerald-500' : 'text-blue-500'}`}>
-                                    {globalCareerStats.profitFactor.toFixed(2)}
-                                 </h3>
-                                 <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">Efficiency Score</p>
-                              </div>
-                           </div>
-
-                           {/* Consistency & Detailed Metrics */}
-                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white border-slate-200'} space-y-6`}>
-                                 <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><Target size={14} /> Consistency Hub</h3>
-                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
-                                       <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Average RR</p>
-                                       <p className="text-xl font-black text-white font-mono">{globalCareerStats.avgRR.toFixed(2)}R</p>
+                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl border-emerald-500/10`}>
+                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><DollarSign size={14} className="text-emerald-500" /> Total Payouts</p>
+                                    <h3 className="text-3xl font-black italic tracking-tighter text-emerald-500">
+                                       {spectatorData?.meta?.pnlFormat === 'rr'
+                                          ? formatPnL(globalCareerStats.totalPayouts, (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, undefined, true, user.currency, exchangeRates)
+                                          : `$${globalCareerStats.totalPayouts.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                    </h3>
+                                    <div className="flex items-center gap-2 mt-2">
+                                       <div className="h-1 flex-1 bg-slate-800 rounded-full overflow-hidden">
+                                          <div className="h-full bg-emerald-500" style={{ width: `${Math.min(100, (globalCareerStats.totalPayouts / (globalCareerStats.totalPnL || 1)) * 100)}%` }} />
+                                       </div>
+                                       <span className="text-[8px] font-black text-emerald-500 uppercase">Paid Out</span>
                                     </div>
-                                    <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
-                                       <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Day Winrate</p>
-                                       <p className="text-xl font-black text-white font-mono">{globalCareerStats.dayWinRate.toFixed(1)}%</p>
-                                    </div>
-                                    <div className="p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/10">
-                                       <p className="text-[9px] font-black text-emerald-500 uppercase mb-1">Best Trading Day</p>
-                                       <p className="text-xl font-black text-emerald-500 font-mono">{spectatorData?.meta?.pnlFormat === 'rr' ? `+${globalCareerStats.bestDay.pnl}R` : `+$${globalCareerStats.bestDay.pnl.toLocaleString()}`}</p>
-                                       <p className="text-[8px] font-bold text-slate-600 mt-1 uppercase">{globalCareerStats.bestDay.date || '-'}</p>
-                                    </div>
-                                    <div className="p-4 rounded-2xl bg-rose-500/5 border border-rose-500/10">
-                                       <p className="text-[9px] font-black text-rose-500 uppercase mb-1">Worst Trading Day</p>
-                                       <p className="text-xl font-black text-rose-500 font-mono">-{spectatorData?.meta?.pnlFormat === 'rr' ? `${Math.abs(globalCareerStats.worstDay.pnl)}R` : `$${Math.abs(globalCareerStats.worstDay.pnl).toLocaleString()}`}</p>
-                                       <p className="text-[8px] font-bold text-slate-600 mt-1 uppercase">{globalCareerStats.worstDay.date || '-'}</p>
-                                    </div>
+                                 </div>
+                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
+                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Trophy size={14} className="text-amber-500" /> Global Winrate</p>
+                                    <h3 className="text-3xl font-black italic tracking-tighter text-white">
+                                       {globalCareerStats.winRate.toFixed(1)}%
+                                    </h3>
+                                    <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">{globalCareerStats.totalTrades} Total Trades</p>
+                                 </div>
+                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
+                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Activity size={14} className="text-blue-500" /> Profit Factor</p>
+                                    <h3 className={`text-3xl font-black italic tracking-tighter ${globalCareerStats.profitFactor >= 1.5 ? 'text-emerald-500' : 'text-blue-500'}`}>
+                                       {globalCareerStats.profitFactor.toFixed(2)}
+                                    </h3>
+                                    <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">Efficiency Score</p>
                                  </div>
                               </div>
 
-                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white border-slate-200'} space-y-6`}>
-                                 <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><ShieldCheck size={14} /> Account Management</h3>
-                                 <div className="p-6 rounded-[24px] bg-white/5 border border-white/5 flex items-center justify-between">
-                                    <div className="space-y-1">
-                                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Challenge Pass Rate</p>
-                                       <h4 className="text-2xl font-black text-white italic">{globalCareerStats.passRate.toFixed(1)}%</h4>
-                                    </div>
-                                    <div className="text-right">
-                                       <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Pass / Fail</p>
-                                       <div className="flex items-center gap-2">
-                                          <div className={`px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black`}>{spectatorData.accounts.filter(a => a.type === 'Funded').length}</div>
-                                          <div className="w-2 h-0.5 bg-slate-700" />
-                                          <div className={`px-2 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[10px] font-black`}>{spectatorData.accounts.filter(a => a.phase === 'Challenge' && a.status === 'Inactive').length}</div>
+                              {/* Consistency & Detailed Metrics */}
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white border-slate-200'} space-y-6`}>
+                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><Target size={14} /> Consistency Hub</h3>
+                                    <div className="grid grid-cols-2 gap-4">
+                                       <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
+                                          <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Average RR</p>
+                                          <p className="text-xl font-black text-white font-mono">{globalCareerStats.avgRR.toFixed(2)}R</p>
+                                       </div>
+                                       <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
+                                          <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Day Winrate</p>
+                                          <p className="text-xl font-black text-white font-mono">{globalCareerStats.dayWinRate.toFixed(1)}%</p>
+                                       </div>
+                                       <div className="p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/10">
+                                          <p className="text-[9px] font-black text-emerald-500 uppercase mb-1">Best Trading Day</p>
+                                          <p className="text-xl font-black text-emerald-500 font-mono">{spectatorData?.meta?.pnlFormat === 'rr' ? `+${globalCareerStats.bestDay.pnl}R` : `+$${globalCareerStats.bestDay.pnl.toLocaleString()}`}</p>
+                                          <p className="text-[8px] font-bold text-slate-600 mt-1 uppercase">{globalCareerStats.bestDay.date || '-'}</p>
+                                       </div>
+                                       <div className="p-4 rounded-2xl bg-rose-500/5 border border-rose-500/10">
+                                          <p className="text-[9px] font-black text-rose-500 uppercase mb-1">Worst Trading Day</p>
+                                          <p className="text-xl font-black text-rose-500 font-mono">-{spectatorData?.meta?.pnlFormat === 'rr' ? `${Math.abs(globalCareerStats.worstDay.pnl)}R` : `$${Math.abs(globalCareerStats.worstDay.pnl).toLocaleString()}`}</p>
+                                          <p className="text-[8px] font-bold text-slate-600 mt-1 uppercase">{globalCareerStats.worstDay.date || '-'}</p>
                                        </div>
                                     </div>
                                  </div>
 
-                                 <div className={`p-6 rounded-[24px] bg-blue-600/5 border border-blue-500/10 flex items-center justify-between`}>
-                                    <div>
-                                       <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-1">Active Portfolio Value</p>
-                                       <p className="text-xl font-black text-white font-mono">
-                                          {spectatorData?.meta?.pnlFormat === 'rr'
-                                             ? `$${spectatorData.accounts.filter(a => a.status === 'Active').reduce((sum, a) => sum + (a.initialBalance || 0), 0).toLocaleString()}`
-                                             : `$${spectatorData.accounts.filter(a => a.status === 'Active').reduce((sum, a) => sum + (a.initialBalance || 0), 0).toLocaleString()}`}
-                                       </p>
+                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white border-slate-200'} space-y-6`}>
+                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><ShieldCheck size={14} /> Account Management</h3>
+                                    <div className="p-6 rounded-[24px] bg-white/5 border border-white/5 flex items-center justify-between">
+                                       <div className="space-y-1">
+                                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Challenge Pass Rate</p>
+                                          <h4 className="text-2xl font-black text-white italic">{globalCareerStats.passRate.toFixed(1)}%</h4>
+                                       </div>
+                                       <div className="text-right">
+                                          <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Pass / Fail</p>
+                                          <div className="flex items-center gap-2">
+                                             <div className={`px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black`}>{spectatorData.accounts.filter(a => a.type === 'Funded').length}</div>
+                                             <div className="w-2 h-0.5 bg-slate-700" />
+                                             <div className={`px-2 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[10px] font-black`}>{spectatorData.accounts.filter(a => a.phase === 'Challenge' && a.status === 'Inactive').length}</div>
+                                          </div>
+                                       </div>
                                     </div>
-                                    <Globe size={32} className="text-blue-500/20" />
+
+                                    <div className={`p-6 rounded-[24px] bg-blue-600/5 border border-blue-500/10 flex items-center justify-between`}>
+                                       <div>
+                                          <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-1">Active Portfolio Value</p>
+                                          <p className="text-xl font-black text-white font-mono">
+                                             {spectatorData?.meta?.pnlFormat === 'rr'
+                                                ? `$${spectatorData.accounts.filter(a => a.status === 'Active').reduce((sum, a) => sum + (a.initialBalance || 0), 0).toLocaleString()}`
+                                                : `$${spectatorData.accounts.filter(a => a.status === 'Active').reduce((sum, a) => sum + (a.initialBalance || 0), 0).toLocaleString()}`}
+                                          </p>
+                                       </div>
+                                       <Globe size={32} className="text-blue-500/20" />
+                                    </div>
                                  </div>
                               </div>
-                           </div>
 
-                           {/* Global Equity Curve */}
-                           <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
-                              <div className="flex justify-between items-center mb-8">
-                                 <div>
-                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><ArrowUpRight size={14} /> Global Equity Growth</h3>
-                                    <p className="text-[10px] text-slate-500 font-bold uppercase mt-1">Aggregate Performance across all accounts</p>
+                              {/* Global Equity Curve */}
+                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
+                                 <div className="flex justify-between items-center mb-8">
+                                    <div>
+                                       <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><ArrowUpRight size={14} /> Global Equity Growth</h3>
+                                       <p className="text-[10px] text-slate-500 font-bold uppercase mt-1">Aggregate Performance across all accounts</p>
+                                    </div>
+                                    <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black uppercase">
+                                       Career Path
+                                    </div>
                                  </div>
-                                 <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black uppercase">
-                                    Career Path
+                                 <div className="h-[300px] w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                       <AreaChart data={globalEquityCurve}>
+                                          <defs>
+                                             <linearGradient id="colorPnL" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                                                <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                             </linearGradient>
+                                          </defs>
+                                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"} />
+                                          <XAxis
+                                             dataKey="timestamp"
+                                             hide
+                                          />
+                                          <YAxis
+                                             hide
+                                             domain={['auto', 'auto']}
+                                          />
+                                          <Tooltip
+                                             content={({ active, payload }) => {
+                                                if (active && payload && payload.length) {
+                                                   return (
+                                                      <div className={`p-4 rounded-2xl border shadow-2xl ${isDark ? 'bg-slate-950 border-white/10' : 'bg-white border-slate-200'}`}>
+                                                         <p className="text-[10px] font-black text-slate-500 uppercase mb-1">
+                                                            {new Date(payload[0].payload.timestamp).toLocaleString('cs-CZ', {
+                                                               day: 'numeric',
+                                                               month: 'numeric',
+                                                               year: 'numeric',
+                                                               hour: '2-digit',
+                                                               minute: '2-digit'
+                                                            })}
+                                                         </p>
+                                                         <p className={`text-lg font-black italic ${Number(payload[0].value) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                                            {spectatorData?.meta?.pnlFormat === 'rr'
+                                                               ? formatPnL(Number(payload[0].value), (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined, true, user.currency, exchangeRates)
+                                                               : `$${Number(payload[0].value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                                                         </p>
+                                                      </div>
+                                                   );
+                                                }
+                                                return null;
+                                             }}
+                                          />
+                                          <Area
+                                             type="monotone"
+                                             dataKey="pnl"
+                                             stroke="#10b981"
+                                             strokeWidth={4}
+                                             fillOpacity={1}
+                                             fill="url(#colorPnL)"
+                                             animationDuration={1500}
+                                          />
+                                       </AreaChart>
+                                    </ResponsiveContainer>
                                  </div>
                               </div>
-                              <div className="h-[300px] w-full">
-                                 <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={globalEquityCurve}>
-                                       <defs>
-                                          <linearGradient id="colorPnL" x1="0" y1="0" x2="0" y2="1">
-                                             <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                                             <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                                          </linearGradient>
-                                       </defs>
-                                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"} />
-                                       <XAxis
-                                          dataKey="timestamp"
-                                          hide
-                                       />
-                                       <YAxis
-                                          hide
-                                          domain={['auto', 'auto']}
-                                       />
-                                       <Tooltip
-                                          content={({ active, payload }) => {
-                                             if (active && payload && payload.length) {
-                                                return (
-                                                   <div className={`p-4 rounded-2xl border shadow-2xl ${isDark ? 'bg-slate-950 border-white/10' : 'bg-white border-slate-200'}`}>
-                                                      <p className="text-[10px] font-black text-slate-500 uppercase mb-1">
-                                                         {new Date(payload[0].payload.timestamp).toLocaleString('cs-CZ', {
-                                                            day: 'numeric',
-                                                            month: 'numeric',
-                                                            year: 'numeric',
-                                                            hour: '2-digit',
-                                                            minute: '2-digit'
-                                                         })}
-                                                      </p>
-                                                      <p className={`text-lg font-black italic ${Number(payload[0].value) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                                         {spectatorData?.meta?.pnlFormat === 'rr'
-                                                            ? formatPnL(Number(payload[0].value), (spectatorData?.meta?.pnlFormat === 'rr' ? 'rr' : 'usd'), undefined, spectatorData?.meta?.pnlFormat === 'rr' ? calculateTotalRR(spectatorData.trades) : undefined, true, user.currency, exchangeRates)
-                                                            : `$${Number(payload[0].value).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
-                                                      </p>
-                                                   </div>
-                                                );
-                                             }
-                                             return null;
-                                          }}
-                                       />
-                                       <Area
-                                          type="monotone"
-                                          dataKey="pnl"
-                                          stroke="#10b981"
-                                          strokeWidth={4}
-                                          fillOpacity={1}
-                                          fill="url(#colorPnL)"
-                                          animationDuration={1500}
-                                       />
-                                    </AreaChart>
-                                 </ResponsiveContainer>
-                              </div>
-                           </div>
 
-                           {/* Global Directional Bias */}
-                           <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'}`}>
-                              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2 font-black uppercase"><TrendingUp size={14} /> Long vs Short (Global Archive)</h3>
-                              <div className="space-y-6">
-                                 {(() => {
-                                    const longs = spectatorData.trades.filter(t => t.direction === 'Long');
-                                    const shorts = spectatorData.trades.filter(t => t.direction === 'Short');
-                                    const total = spectatorData.trades.length || 1;
-                                    const longPnL = longs.reduce((sum, t) => sum + Number(t.pnl), 0);
-                                    const shortPnL = shorts.reduce((sum, t) => sum + Number(t.pnl), 0);
+                              {/* Global Directional Bias */}
+                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'}`}>
+                                 <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2 font-black uppercase"><TrendingUp size={14} /> Long vs Short (Global Archive)</h3>
+                                 <div className="space-y-6">
+                                    {(() => {
+                                       const longs = spectatorData.trades.filter(t => t.direction === 'Long');
+                                       const shorts = spectatorData.trades.filter(t => t.direction === 'Short');
+                                       const total = spectatorData.trades.length || 1;
+                                       const longPnL = longs.reduce((sum, t) => sum + Number(t.pnl), 0);
+                                       const shortPnL = shorts.reduce((sum, t) => sum + Number(t.pnl), 0);
 
-                                    return (
-                                       <>
-                                          <div className="flex justify-between items-end">
-                                             <div className="space-y-1">
-                                                <p className="text-[8px] font-black text-slate-500 uppercase">Long Performance</p>
-                                                <p className={`text-xl font-black ${longPnL >= 0 ? 'text-blue-500' : 'text-rose-500'}`}>{longs.length} trades (${longPnL.toLocaleString()})</p>
+                                       return (
+                                          <>
+                                             <div className="flex justify-between items-end">
+                                                <div className="space-y-1">
+                                                   <p className="text-[8px] font-black text-slate-500 uppercase">Long Performance</p>
+                                                   <p className={`text-xl font-black ${longPnL >= 0 ? 'text-blue-500' : 'text-rose-500'}`}>{longs.length} trades (${longPnL.toLocaleString()})</p>
+                                                </div>
+                                                <div className="text-right space-y-1">
+                                                   <p className="text-[8px] font-black text-slate-500 uppercase">Short Performance</p>
+                                                   <p className={`text-xl font-black ${shortPnL >= 0 ? 'text-amber-500' : 'text-rose-500'}`}>{shorts.length} trades (${shortPnL.toLocaleString()})</p>
+                                                </div>
                                              </div>
-                                             <div className="text-right space-y-1">
-                                                <p className="text-[8px] font-black text-slate-500 uppercase">Short Performance</p>
-                                                <p className={`text-xl font-black ${shortPnL >= 0 ? 'text-amber-500' : 'text-rose-500'}`}>{shorts.length} trades (${shortPnL.toLocaleString()})</p>
+                                             <div className="h-3 rounded-full bg-slate-800 overflow-hidden flex shadow-inner">
+                                                <div className="bg-gradient-to-r from-blue-600 to-blue-400 h-full border-r border-black/20" style={{ width: `${(longs.length / total) * 100}%` }} />
+                                                <div className="bg-gradient-to-l from-amber-600 to-amber-400 h-full" style={{ width: `${(shorts.length / total) * 100}%` }} />
                                              </div>
-                                          </div>
-                                          <div className="h-3 rounded-full bg-slate-800 overflow-hidden flex shadow-inner">
-                                             <div className="bg-gradient-to-r from-blue-600 to-blue-400 h-full border-r border-black/20" style={{ width: `${(longs.length / total) * 100}%` }} />
-                                             <div className="bg-gradient-to-l from-amber-600 to-amber-400 h-full" style={{ width: `${(shorts.length / total) * 100}%` }} />
-                                          </div>
-                                          <div className="flex justify-between text-[8px] font-black uppercase tracking-widest text-slate-600">
-                                             <span>{(longs.length / total * 100).toFixed(0)}% Buy Bias</span>
-                                             <span>{(shorts.length / total * 100).toFixed(0)}% Sell Bias</span>
-                                          </div>
-                                       </>
-                                    );
-                                 })()}
+                                             <div className="flex justify-between text-[8px] font-black uppercase tracking-widest text-slate-600">
+                                                <span>{(longs.length / total * 100).toFixed(0)}% Buy Bias</span>
+                                                <span>{(shorts.length / total * 100).toFixed(0)}% Sell Bias</span>
+                                             </div>
+                                          </>
+                                       );
+                                    })()}
+                                 </div>
                               </div>
                            </div>
-                        </div>
-                     )}
+                        )}
+                     </div>
                   </div>
-               </div>
-
-            </div>
-         )}
+               </motion.div>
+            )}
+         </AnimatePresence>
 
          {/* Zoom Modal at Root Level for Z-Index consistency */}
          {zoomedImage && (
