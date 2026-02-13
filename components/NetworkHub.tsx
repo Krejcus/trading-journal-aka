@@ -62,7 +62,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    const [loadingFeed, setLoadingFeed] = useState(false);
    const [feedLoaded, setFeedLoaded] = useState(false);
    const [notifDropdownId, setNotifDropdownId] = useState<string | null>(null);
-   const [notifVersion, setNotifVersion] = useState(0);
+   const [localNotifPrefs, setLocalNotifPrefs] = useState<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>>(
+      () => user?.preferences?.networkNotifications || {}
+   );
 
    // Detail View State
    const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
@@ -1010,7 +1012,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         if (!target) return null;
                         const targetId = conn.sender_id === currentUserId ? conn.receiver_id : conn.sender_id;
                         const stats = leaderboardStats.find(s => s.id === targetId);
-                        const notifPrefs = user?.preferences?.networkNotifications?.[targetId];
+                        const notifPrefs = localNotifPrefs[targetId];
                         const hasAnyNotif = notifPrefs && (notifPrefs.newTrade || notifPrefs.newPrep || notifPrefs.newReview);
                         return (
                            <div key={conn.id} className={`group p-5 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
@@ -1044,20 +1046,19 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                    checked={notifPrefs?.[opt.key as keyof typeof notifPrefs] || false}
                                                    onChange={(e) => {
                                                       const checked = e.target.checked;
-                                                      const newPrefs = {
-                                                         ...(user?.preferences?.networkNotifications || {}),
-                                                         [targetId]: {
-                                                            newTrade: notifPrefs?.newTrade || false,
-                                                            newPrep: notifPrefs?.newPrep || false,
-                                                            newReview: notifPrefs?.newReview || false,
-                                                            [opt.key]: checked
-                                                         }
-                                                      };
-                                                      if (user?.preferences) {
-                                                         user.preferences.networkNotifications = newPrefs;
-                                                      }
-                                                      setNotifVersion(v => v + 1);
-                                                      storageService.updateNetworkNotifications(newPrefs);
+                                                      setLocalNotifPrefs(prev => {
+                                                         const updated = {
+                                                            ...prev,
+                                                            [targetId]: {
+                                                               newTrade: prev[targetId]?.newTrade || false,
+                                                               newPrep: prev[targetId]?.newPrep || false,
+                                                               newReview: prev[targetId]?.newReview || false,
+                                                               [opt.key]: checked
+                                                            }
+                                                         };
+                                                         storageService.updateNetworkNotifications(updated);
+                                                         return updated;
+                                                      });
                                                    }}
                                                    className="rounded border-slate-600 text-blue-600 focus:ring-blue-500"
                                                 />
