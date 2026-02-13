@@ -245,7 +245,7 @@ const App: React.FC = () => {
 
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
   const isPreferencesDirty = useRef(false);
-  const networkNotificationsRef = useRef<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }> | null>(null);
+  const [networkNotifications, setNetworkNotifications] = useState<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }> | null>(null);
   const isJournalDirty = useRef(false);
   const isFetchingRef = useRef(false);
 
@@ -504,7 +504,7 @@ const App: React.FC = () => {
     dashboardMode,
     systemSettings,
     ...(pushSubscriptionRef.current ? { pushSubscription: pushSubscriptionRef.current } : {}),
-    ...(networkNotificationsRef.current ? { networkNotifications: networkNotificationsRef.current } : {}),
+    ...(networkNotifications ? { networkNotifications } : {}),
   });
 
 
@@ -670,7 +670,7 @@ const App: React.FC = () => {
     if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
     if ((prefs as any).pushSubscription) pushSubscriptionRef.current = (prefs as any).pushSubscription;
-    if ((prefs as any).networkNotifications) networkNotificationsRef.current = (prefs as any).networkNotifications;
+    if ((prefs as any).networkNotifications) setNetworkNotifications((prefs as any).networkNotifications);
   }, []);
 
 
@@ -1239,7 +1239,7 @@ const App: React.FC = () => {
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, canSave]);
+  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
 
   // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
   // Backup save every 30s if user is still editing
@@ -1285,7 +1285,7 @@ const App: React.FC = () => {
       console.log("[Auto-Save] Periodic auto-save disabled");
       clearInterval(interval);
     };
-  }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, dailyPreps, dailyReviews, weeklyFocusList]);
+  }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
 
   // Flush dirty data to DB when user leaves tab (visibilitychange) or closes browser (beforeunload)
   useEffect(() => {
@@ -1313,7 +1313,7 @@ const App: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', flushDirtyData);
     };
-  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings]);
+  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
 
   // Handle Dashboard Mode Switching
   useEffect(() => {
@@ -2272,7 +2272,7 @@ const App: React.FC = () => {
                       exchangeRates={exchangeRates}
                       activeTab={networkActiveTab}
                       onTabChange={setNetworkActiveTab}
-                      onNetworkNotificationsChange={(prefs) => { networkNotificationsRef.current = prefs; isPreferencesDirty.current = true; }}
+                      onNetworkNotificationsChange={(prefs) => { setNetworkNotifications(prefs); isPreferencesDirty.current = true; }}
                     />
                   )}
 
