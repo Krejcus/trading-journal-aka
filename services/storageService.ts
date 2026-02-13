@@ -1552,10 +1552,18 @@ export const storageService = {
       permissionMap[targetId] = c.permissions || { canSeePnl: false, canSeeNotes: false, canSeeScreenshots: false };
     });
 
+    // Fetch profile names for all followed users
+    const { data: profilesData } = await supabase
+      .from('profiles')
+      .select('id, full_name, avatar_url')
+      .in('id', followingIds);
+    const profileMap: Record<string, { full_name: string; avatar_url: string | null }> = {};
+    (profilesData || []).forEach(p => { profileMap[p.id] = { full_name: p.full_name || 'Neznámý', avatar_url: p.avatar_url }; });
+
     // Fetch recent trades
     const { data: trades } = await supabase
       .from('trades')
-      .select('*, profiles!user_id(full_name, avatar_url)')
+      .select('*')
       .in('user_id', followingIds)
       .order('date', { ascending: false })
       .limit(20);
@@ -1563,7 +1571,7 @@ export const storageService = {
     // Fetch recent reviews
     const { data: reviews } = await supabase
       .from('daily_reviews')
-      .select('*, profiles!user_id(full_name, avatar_url)')
+      .select('*')
       .in('user_id', followingIds)
       .order('date', { ascending: false })
       .limit(10);
@@ -1571,7 +1579,7 @@ export const storageService = {
     // Fetch recent preps
     const { data: preps } = await supabase
       .from('daily_preps')
-      .select('*, profiles!user_id(full_name, avatar_url)')
+      .select('*')
       .in('user_id', followingIds)
       .order('date', { ascending: false })
       .limit(10);
@@ -1603,7 +1611,7 @@ export const storageService = {
           type: 'trade',
           id: t.id,
           date: t.date,
-          user: { name: t.profiles?.full_name || 'Neznámý', avatar: t.profiles?.avatar_url },
+          user: { name: profileMap[t.user_id]?.full_name || 'Neznámý', avatar: profileMap[t.user_id]?.avatar_url },
           data: {
             ...t,
             pnl: perms.pnlFormat !== 'hidden' ? displayPnl : 0,
@@ -1632,7 +1640,7 @@ export const storageService = {
           type: 'review',
           id: r.id,
           date: r.date + 'T20:00:00',
-          user: { name: r.profiles?.full_name || 'Neznámý', avatar: r.profiles?.avatar_url },
+          user: { name: profileMap[r.user_id]?.full_name || 'Neznámý', avatar: profileMap[r.user_id]?.avatar_url },
           data: {
             ...r.data,
             // Stats
@@ -1666,7 +1674,7 @@ export const storageService = {
             type: 'prep',
             id: p.id,
             date: p.date + 'T08:00:00',
-            user: { name: p.profiles?.full_name || 'Neznámý', avatar: p.profiles?.avatar_url },
+            user: { name: profileMap[p.user_id]?.full_name || 'Neznámý', avatar: profileMap[p.user_id]?.avatar_url },
             data: { ...p.data, mindsetState: null, notes: null, scenarios: {} },
             meta: { locked: true }
           };
