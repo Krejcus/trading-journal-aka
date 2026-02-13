@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, WeeklyFocus, PsychoMetricConfig, SessionConfig, SessionAnalysis, GoalResult } from '../types';
 import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimeline from './TacticalTimeline';
+import ImageZoomModal from './ImageZoomModal';
 import { storageService } from '../services/storageService';
 import {
   Coffee,
@@ -91,6 +92,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   const [view, setView] = useState<'timeline' | 'edit-prep' | 'edit-review' | 'edit-weekly'>('timeline');
   const [activeImageField, setActiveImageField] = useState<'bullish' | 'bearish' | 'scenarios' | string | null>(null);
+  const [zoomImg, setZoomImg] = useState<string | null>(null);
 
   const [weeklyReviews, setWeeklyReviews] = useState<WeeklyReview[]>([]);
 
@@ -1372,7 +1374,17 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                                 }`}
                             >
                               {session.image ? (
-                                <img src={session.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+                                <>
+                                  <img src={session.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-300 flex items-center justify-center">
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setZoomImg(session.image!); }}
+                                      className="p-3 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-all shadow-xl opacity-0 group-hover:opacity-100"
+                                    >
+                                      <Maximize2 size={18} />
+                                    </button>
+                                  </div>
+                                </>
                               ) : (
                                 <div className="text-center p-6">
                                   <div className={`w-12 h-12 rounded-full mx-auto mb-4 flex items-center justify-center transition-all duration-500 ${activeImageField === `session_${session.id}` ? 'bg-blue-500 text-white' : 'bg-slate-800/50 text-slate-600'}`}>
@@ -1818,6 +1830,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           </div>
         </div>
       )}
+      {zoomImg && <ImageZoomModal src={zoomImg} onClose={() => setZoomImg(null)} />}
     </div>
   );
 };

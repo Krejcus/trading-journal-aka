@@ -24,6 +24,7 @@ import {
   Trash2
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
+import ImageZoomModal from './ImageZoomModal';
 
 interface TacticalTimelineProps {
   date: string;
@@ -299,10 +300,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
       </div>
 
       {zoomImg && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/95 backdrop-blur-xl p-6 animate-in fade-in duration-300" onClick={() => setZoomImg(null)}>
-          <button className="absolute top-10 right-10 p-4 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all active:scale-90"><X size={32} className="text-white" /></button>
-          <img src={zoomImg} className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl border border-white/10" onClick={e => e.stopPropagation()} />
-        </div>
+        <ImageZoomModal src={zoomImg} onClose={() => setZoomImg(null)} />
       )}
 
       <ConfirmationModal

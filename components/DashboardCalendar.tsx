@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Trade, DailyPrep, DailyReview, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
+import ImageZoomModal from './ImageZoomModal';
 import {
    ChevronLeft,
    ChevronRight,
@@ -595,6 +596,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
    const isDark = theme !== 'light';
    const formattedDate = dateObj.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
    const [zoomImg, setZoomImg] = useState<string | null>(null);
+   const [fullscreenImg, setFullscreenImg] = useState<string | null>(null);
    const [activeTab, setActiveTab] = useState<'narrative' | 'trades'>('narrative');
    const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
@@ -662,13 +664,14 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                      </div>
                   </div>
                   <div className={`flex-1 relative flex flex-col ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
-                     <div className="flex-1 relative overflow-hidden flex items-center justify-center p-4">{screenshots.length > 0 ? (<img src={zoomImg || screenshots[0]} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl" />) : (<div className="text-center opacity-20"><ImageIcon size={64} className="mx-auto mb-4" /><p className="text-xs font-black uppercase tracking-[0.2em]">Visual Data Missing</p></div>)}</div>
+                     <div className="flex-1 relative overflow-hidden flex items-center justify-center p-4 group/mainimg">{screenshots.length > 0 ? (<><img src={zoomImg || screenshots[0]} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl cursor-pointer" onClick={() => setFullscreenImg(zoomImg || screenshots[0])} /><div className="absolute top-6 right-6 opacity-0 group-hover/mainimg:opacity-100 transition-opacity"><button onClick={() => setFullscreenImg(zoomImg || screenshots[0])} className="p-3 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-colors shadow-xl"><Maximize2 size={18} /></button></div></>) : (<div className="text-center opacity-20"><ImageIcon size={64} className="mx-auto mb-4" /><p className="text-xs font-black uppercase tracking-[0.2em]">Visual Data Missing</p></div>)}</div>
                      {screenshots.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto ${isDark ? 'bg-[#0a0f1d] border-white/5' : 'bg-white border-slate-200'}`}>{screenshots.map((src, i) => (<div key={i} onClick={() => setZoomImg(src)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${src === (zoomImg || screenshots[0]) ? 'ring-2 ring-blue-500' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
                   </div>
                </div>
             </div>
          </div>
          {selectedTrade && <TradeDetailOverlay trade={selectedTrade} theme={theme} onClose={() => setSelectedTrade(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat || 'usd'} currency={currency} rates={rates} />}
+         {fullscreenImg && <ImageZoomModal src={fullscreenImg} onClose={() => setFullscreenImg(null)} />}
       </>
    );
 };
@@ -780,7 +783,7 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
                </div>
             </div>
          </div>
-         {isZoomed && images.length > 0 && (<div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/98 backdrop-blur-3xl p-6 animate-in fade-in duration-300" onClick={() => setIsZoomed(false)}><button className="absolute top-10 right-10 p-5 bg-white/5 hover:bg-white/10 rounded-full transition-all border border-white/10 text-white"><X size={40} /></button><img src={images[activeImageIndex]} className="max-w-full max-h-full object-contain rounded-[32px] shadow-[0_0_100px_rgba(59,130,246,0.1)] border border-white/10" onClick={e => e.stopPropagation()} /></div>)}
+         {isZoomed && images.length > 0 && (<ImageZoomModal src={images[activeImageIndex]} onClose={() => setIsZoomed(false)} />)}
       </div>
    );
 };

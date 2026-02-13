@@ -12,6 +12,7 @@ import {
     ShieldCheck, Layers, Wallet
 } from 'lucide-react';
 import { ErrorBoundary } from './ErrorBoundary';
+import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 
 interface TradeDetailModalProps {
@@ -418,10 +419,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
             {/* Zoom Layer */}
             {isZoomed && images.length > 0 && (
-                <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/98 backdrop-blur-3xl p-6 animate-in fade-in duration-300" onClick={() => setIsZoomed(false)}>
-                    <button className="absolute top-10 right-10 p-4 bg-white/10 hover:bg-white/20 rounded-full border border-white/10 text-white transition-all"><X size={28} /></button>
-                    <img src={images[activeImageIndex]} className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl border border-white/10" onClick={e => e.stopPropagation()} />
-                </div>
+                <ImageZoomModal src={images[activeImageIndex]} onClose={() => setIsZoomed(false)} />
             )}
         </ErrorBoundary>
     );

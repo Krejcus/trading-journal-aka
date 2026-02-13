@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 
 import TradeDetailModal from './TradeDetailModal';
+import ImageZoomModal from './ImageZoomModal';
 
 interface TradeHistoryProps {
   trades: Trade[];
@@ -513,11 +514,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       )}
 
       {zoomImage && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/95 backdrop-blur-2xl p-4 animate-in fade-in duration-500" onClick={() => setZoomImage(null)}>
-          <button className="absolute top-8 right-8 p-4 bg-white/5 hover:bg-white/10 rounded-full transition-all text-white border border-white/10 active:scale-90"><X size={32} /></button>
-          <img src={zoomImage} className="max-w-full max-h-full object-contain rounded-[32px] shadow-[0_0_150px_rgba(59,130,246,0.15)] border border-white/5" onClick={e => e.stopPropagation()} />
-          <div className="absolute bottom-10 px-8 py-3 bg-black/60 border border-white/10 rounded-full text-blue-500 text-[10px] font-black uppercase tracking-[0.5em] backdrop-blur-md">ALPHA DATA LOG</div>
-        </div>
+        <ImageZoomModal src={zoomImage} onClose={() => setZoomImage(null)} />
       )}
 
       {selectedTrade && (
