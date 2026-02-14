@@ -893,20 +893,13 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  else if (isReviewItem) setSelectedReview({ id: item.id, date: item.date.split('T')[0], user_id: '', data: item.data });
                               }}
                            >
-                              <div className="flex items-center justify-between">
+                              <div className="flex items-center justify-between mb-1">
                                  <div className="flex items-center gap-3">
                                     <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black uppercase text-xs ${isTradeItem ? 'bg-blue-600/10 text-blue-500' : isPrepItem ? 'bg-blue-500/10 text-blue-400' : 'bg-amber-500/10 text-amber-500'}`}>
                                        {item.user?.name?.substring(0, 2) || '??'}
                                     </div>
                                     <div>
-                                       <div className="flex items-center gap-2">
-                                          <span className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.user?.name || 'Trader'}</span>
-                                          {isTradeItem && (
-                                             <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md ${item.data?.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                                                {item.data?.direction === 'Long' ? '▲' : '▼'} {item.data?.instrument || ''}
-                                             </span>
-                                          )}
-                                       </div>
+                                       <span className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.user?.name || 'Trader'}</span>
                                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
                                           {isTradeItem ? 'Nový obchod' : isPrepItem ? (item.meta?.locked ? 'Příprava (zamčeno)' : 'Dokončil přípravu') : 'Dokončil review'}
                                           <span className="mx-1.5 opacity-30">·</span>
@@ -916,7 +909,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  </div>
                                  <div className="text-right">
                                     {isTradeItem && item.meta?.pnlFormat !== 'hidden' && (
-                                       <span className={`text-sm font-black font-mono ${item.data?.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                       <span className={`text-lg font-black font-mono ${item.data?.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                           {item.meta?.pnlFormat === 'rr'
                                              ? `${item.data?.pnl >= 0 ? '+' : ''}${item.data?.pnl?.toFixed(2)}R`
                                              : `${item.data?.pnl >= 0 ? '+' : ''}$${Math.abs(item.data?.pnl || 0).toFixed(0)}`
@@ -935,6 +928,25 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     )}
                                  </div>
                               </div>
+                              {isTradeItem && (
+                                 <div className="flex items-center gap-2 mt-2 ml-12">
+                                    {item.data?.instrument && (
+                                       <span className={`text-xs font-black px-2 py-0.5 rounded-lg ${isDark ? 'bg-[var(--bg-input)] text-white' : 'bg-slate-100 text-slate-800'}`}>
+                                          {item.data.instrument}
+                                       </span>
+                                    )}
+                                    {item.data?.direction && (
+                                       <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg ${item.data.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                          {item.data.direction === 'Long' ? '▲ Long' : '▼ Short'}
+                                       </span>
+                                    )}
+                                    {item.data?.signal && (
+                                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-lg ${isDark ? 'bg-purple-500/10 text-purple-400' : 'bg-purple-100 text-purple-600'}`}>
+                                          {item.data.signal}
+                                       </span>
+                                    )}
+                                 </div>
+                              )}
                            </div>
                         );
                      })}
