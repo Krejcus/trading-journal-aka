@@ -53,7 +53,9 @@ import {
   Target,
   Trophy,
   MessageSquare,
-  Activity
+  Activity,
+  Brain,
+  Shield
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
@@ -1369,17 +1371,26 @@ const App: React.FC = () => {
 
   const displayBalance = useMemo(() => {
     if (viewMode === 'individual') return activeAccount.initialBalance || 0;
-    // Sum initial balances of all accounts that are in the current context (including masters and copies)
-    return contextAccounts
+
+    // Filter out archived accounts - only use active accounts for balance calculation
+    const activeContextAccounts = contextAccounts.filter(a => a.status === 'Active');
+
+    // If no active accounts, return 0 instead of summing archived accounts
+    if (activeContextAccounts.length === 0) return 0;
+
+    // Sum initial balances of all active accounts that are in the current context
+    return activeContextAccounts
       .reduce((sum, a) => sum + (a.initialBalance || 0), 0);
   }, [contextAccounts, activeAccount, viewMode]);
 
   const [quickNote, setQuickNote] = useState('');
 
   const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
+  const [settingsActiveTab, setSettingsActiveTab] = useState<'psychology' | 'strategy' | 'market' | 'system'>('psychology');
   const [businessActiveTab, setBusinessActiveTab] = useState<'financials' | 'goals'>('financials');
   const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
   const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'feed' | 'following' | 'followers' | 'requests' | 'share'>('feed');
+  const [isNetworkSpectating, setIsNetworkSpectating] = useState(false);
 
 
 
@@ -1977,7 +1988,7 @@ const App: React.FC = () => {
       />
 
       <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-[240px]'}`}>
-        <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-2 flex items-center justify-between transition-all bg-[var(--bg-page)]/30 border-[var(--border-subtle)]`}>
+        <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-2 flex items-center justify-between transition-all bg-[var(--bg-page)]/30 border-[var(--border-subtle)] ${isNetworkSpectating ? 'hidden' : ''}`}>
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <h2 className="text-xl font-black uppercase tracking-tighter">
@@ -1985,7 +1996,7 @@ const App: React.FC = () => {
               {activePage === 'history' && 'Historie obchodu'}
               {activePage === 'journal' && 'Deník'}
               {activePage === 'accounts' && 'Portfolio'}
-              {activePage === 'settings' && 'System Config'}
+              {activePage === 'settings' && 'Nastavení'}
               {activePage === 'network' && 'Síť'}
               {activePage === 'business' && 'Business Hub'}
             </h2>
@@ -1993,7 +2004,7 @@ const App: React.FC = () => {
 
           {activePage === 'journal' && (
             <div className="hidden md:flex flex-1 justify-center">
-              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] shadow-sm">
+              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'daily', label: 'Dnešek', icon: Clock },
                   { id: 'weekly', label: 'Týden', icon: Calendar },
@@ -2002,12 +2013,12 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setJournalActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${journalActiveTab === tab.id ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold uppercase transition-all ${journalActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {journalActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeJournalTab"
-                        className="absolute inset-0 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20 z-0"
+                        className={`absolute inset-0 rounded-xl shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
                     )}
@@ -2022,7 +2033,7 @@ const App: React.FC = () => {
 
           {activePage === 'business' && (
             <div className="hidden md:flex flex-1 justify-center">
-              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] shadow-sm">
+              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'financials', label: 'Finance', icon: DollarSign },
                   { id: 'goals', label: 'Cíle', icon: Target }
@@ -2030,12 +2041,12 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setBusinessActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${businessActiveTab === tab.id ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold uppercase transition-all ${businessActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {businessActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeBusinessTab"
-                        className="absolute inset-0 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20 z-0"
+                        className={`absolute inset-0 rounded-xl shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
                     )}
@@ -2050,7 +2061,7 @@ const App: React.FC = () => {
 
           {activePage === 'network' && (
             <div className="hidden md:flex flex-1 justify-center">
-              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] shadow-sm">
+              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'feed', label: 'Feed', icon: Activity },
                   { id: 'leaderboard', label: 'Žebříček', icon: Trophy },
@@ -2061,12 +2072,42 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setNetworkActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${networkActiveTab === tab.id ? 'text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold uppercase transition-all ${networkActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {networkActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeNetworkTab"
-                        className="absolute inset-0 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/20 z-0"
+                        className={`absolute inset-0 rounded-xl shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
+                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                      />
+                    )}
+                    <span className="relative z-10 flex items-center gap-2">
+                      <tab.icon size={14} /> {tab.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activePage === 'settings' && (
+            <div className="hidden md:flex flex-1 justify-center">
+              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
+                {[
+                  { id: 'psychology', label: 'Psychologie', icon: Brain },
+                  { id: 'strategy', label: 'Strategie', icon: Target },
+                  { id: 'market', label: 'Trh', icon: Clock },
+                  { id: 'system', label: 'Systém', icon: Shield }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setSettingsActiveTab(tab.id as any)}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold uppercase transition-all ${settingsActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+                  >
+                    {settingsActiveTab === tab.id && (
+                      <motion.div
+                        layoutId="activeSettingsTab"
+                        className={`absolute inset-0 rounded-xl shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
                     )}
@@ -2163,7 +2204,7 @@ const App: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                <React.Suspense fallback={<LoadingFallback />}>
+                <React.Suspense fallback={<div className="flex-1" />}>
                   {activePage === 'dashboard' && (
                     <Dashboard
                       stats={filteredStats}
@@ -2282,6 +2323,8 @@ const App: React.FC = () => {
                   {activePage === 'settings' && (
                     <Settings
                       theme={theme}
+                      activeTab={settingsActiveTab}
+                      onTabChange={setSettingsActiveTab}
                       userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); isPreferencesDirty.current = true; }}
                       userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); isPreferencesDirty.current = true; }}
                       htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); isPreferencesDirty.current = true; }}

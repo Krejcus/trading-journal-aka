@@ -63,9 +63,24 @@ BEGIN
             )
         );
 
-    -- 5. CONNECTIONS (Ujistíme se, že i tato politika je v pořádku)
+    -- 5. CONNECTIONS - SELECT
     DROP POLICY IF EXISTS "Users can see their own connections" ON public.connections;
     CREATE POLICY "Users can see their own connections" ON public.connections
         FOR SELECT USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
+
+    -- 6. CONNECTIONS - INSERT (sender can create)
+    DROP POLICY IF EXISTS "Users can send follow requests" ON public.connections;
+    CREATE POLICY "Users can send follow requests" ON public.connections
+        FOR INSERT WITH CHECK (auth.uid() = sender_id);
+
+    -- 7. CONNECTIONS - UPDATE (both sides can update - receiver accepts, sender can mark rejected)
+    DROP POLICY IF EXISTS "Users can update their connections" ON public.connections;
+    CREATE POLICY "Users can update their connections" ON public.connections
+        FOR UPDATE USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
+
+    -- 8. CONNECTIONS - DELETE (both sides can delete)
+    DROP POLICY IF EXISTS "Users can delete their connections" ON public.connections;
+    CREATE POLICY "Users can delete their connections" ON public.connections
+        FOR DELETE USING (auth.uid() = sender_id OR auth.uid() = receiver_id);
 
 END $$;

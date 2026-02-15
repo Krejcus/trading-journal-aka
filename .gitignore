@@ -29,5 +29,6 @@ dist-ssr
 .npm-sandbox
 
 # Large backup files
-backups/*.zip
+backups/
+previews/
 *.zip

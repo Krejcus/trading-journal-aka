@@ -38,6 +38,8 @@ interface SettingsProps {
   onHardRefresh?: () => void;
   accentColor?: string;
   onAccentColorChange?: (color: string) => void;
+  activeTab?: 'psychology' | 'strategy' | 'market' | 'system';
+  onTabChange?: (tab: 'psychology' | 'strategy' | 'market' | 'system') => void;
 }
 
 // Global Helper for Weekly Focus Consistency
@@ -133,9 +135,10 @@ const Settings: React.FC<SettingsProps> = ({
   standardGoals, setStandardGoals,
   onEnableNotifications, appVersion, onHardRefresh,
   accentColor = 'blue',
-  onAccentColorChange
+  onAccentColorChange,
+  activeTab = 'psychology',
+  onTabChange
 }) => {
-  const [activeTab, setActiveTab] = useState<'psychology' | 'strategy' | 'market' | 'system'>('psychology');
   const isDark = theme !== 'light';
 
   // Local State for adding items
@@ -157,7 +160,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [pushDiag, setPushDiag] = useState<{ isStandalone: boolean; isApple: boolean; permission: string; hasActiveSW: boolean; hasActiveSubscription: boolean; ready: boolean } | null>(null);
   useEffect(() => {
     if (activeTab === 'system') {
-      getPushDiagnostics().then(setPushDiag).catch(() => {});
+      getPushDiagnostics().then(setPushDiag).catch(() => { });
     }
   }, [activeTab]);
 
@@ -225,33 +228,6 @@ const Settings: React.FC<SettingsProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto pb-20 space-y-6">
-      {/* Top Navbar Style */}
-      <div className={`p-2 rounded-[28px] border flex flex-wrap items-center justify-center gap-2 ${isDark ? 'bg-black/40 border-white/5 backdrop-blur-3xl' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl'}`}>
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`
-              flex items-center gap-3 px-6 py-2.5 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 border relative group overflow-hidden
-              ${activeTab === tab.id
-                ? 'bg-[var(--text-secondary)] border-[var(--border-active)] text-white shadow-lg shadow-[var(--border-active)]/30'
-                : (isDark
-                  ? 'bg-transparent border-transparent text-slate-500 hover:bg-white/5 hover:text-white'
-                  : 'bg-transparent border-transparent text-[var(--text-muted)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)]')
-              }
-            `}
-          >
-            <tab.icon size={16} className={activeTab === tab.id ? 'animate-pulse' : ''} />
-            <span>{tab.label}</span>
-            {activeTab === tab.id && (
-              <motion.div layoutId="setting-tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-white/30" />
-            )}
-            <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/5 to-white/0 opacity-0 group-hover:opacity-100 -translate-x-full group-hover:translate-x-full transition-all duration-1000"></div>
-          </button>
-        ))}
-      </div>
-
-      {/* Main Content Area */}
       <main className="min-w-0">
         <div className="space-y-6">
           {activeTab === 'psychology' && (
@@ -781,7 +757,7 @@ const Settings: React.FC<SettingsProps> = ({
                         alert(res === 'granted' ? 'Notifikace povoleny!' : 'Notifikace byly zamítnuty v prohlížeči.');
                       }
                       // Refresh diagnostics after action
-                      setTimeout(() => { getPushDiagnostics().then(setPushDiag).catch(() => {}); }, 1000);
+                      setTimeout(() => { getPushDiagnostics().then(setPushDiag).catch(() => { }); }, 1000);
                     }}
                     className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-blue-600/40 hover:bg-blue-500 active:scale-95 transition-all"
                   >
@@ -836,22 +812,24 @@ const Settings: React.FC<SettingsProps> = ({
       />
 
       {/* Emoji Picker Modal */}
-      {emojiPickerTarget && (
-        <EmojiPicker
-          isDark={isDark}
-          onClose={() => setEmojiPickerTarget(null)}
-          onSelect={(emoji) => {
-            const newList = [...weeklyFocusList];
-            const exIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
-            if (exIdx !== -1) {
-              const newGoals = [...newList[exIdx].goals];
-              newGoals[emojiPickerTarget.goalIdx] = { ...newGoals[emojiPickerTarget.goalIdx], emoji };
-              newList[exIdx] = { ...newList[exIdx], goals: newGoals };
-              setWeeklyFocusList(newList);
-            }
-          }}
-        />
-      )}
+      {
+        emojiPickerTarget && (
+          <EmojiPicker
+            isDark={isDark}
+            onClose={() => setEmojiPickerTarget(null)}
+            onSelect={(emoji) => {
+              const newList = [...weeklyFocusList];
+              const exIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
+              if (exIdx !== -1) {
+                const newGoals = [...newList[exIdx].goals];
+                newGoals[emojiPickerTarget.goalIdx] = { ...newGoals[emojiPickerTarget.goalIdx], emoji };
+                newList[exIdx] = { ...newList[exIdx], goals: newGoals };
+                setWeeklyFocusList(newList);
+              }
+            }}
+          />
+        )
+      }
 
       {/* Persistence Notification Toast */}
       <AnimatePresence>

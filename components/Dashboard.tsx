@@ -1,5 +1,5 @@
-
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
 import { formatPnL, calculateTotalRR, formatCurrency } from '../utils/formatPnL';
 import { currencyService, ExchangeRates } from '../services/currencyService';
@@ -794,6 +794,81 @@ const ProKpiCard: React.FC<{
   );
 };
 
+const MobileKpiCarousel: React.FC<{ widgets: DashboardWidgetConfig[], renderWidget: (id: string, config?: DashboardWidgetConfig) => React.ReactNode, theme: 'dark' | 'light' | 'oled' }> = ({ widgets, renderWidget, theme }) => {
+  const [index, setIndex] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const isDark = theme !== 'light';
+  const autoRotateInterval = 5000;
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const resetTimeout = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (isPaused) {
+      resetTimeout();
+      return;
+    }
+
+    resetTimeout();
+    timeoutRef.current = setTimeout(() => {
+      setIndex((prevIndex) => (prevIndex + 1) % widgets.length);
+    }, autoRotateInterval);
+
+    return () => resetTimeout();
+  }, [index, widgets.length, resetTimeout, isPaused]);
+
+  if (widgets.length === 0) return null;
+
+  const extendedWidgets = widgets.length > 1 ? [...widgets, widgets[0]] : widgets;
+
+  return (
+    <div
+      className="lg:hidden w-full relative group mb-6"
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
+      onTouchStart={() => setIsPaused(true)}
+      onTouchEnd={() => setIsPaused(false)}
+    >
+      <div className="overflow-hidden p-2">
+        <motion.div
+          className="flex gap-4"
+          drag="x"
+          dragConstraints={{ left: 0, right: 0 }}
+          onDragStart={() => setIsPaused(true)}
+          onDragEnd={(_, info) => {
+            setIsPaused(false);
+            if (info.offset.x < -50) setIndex((index + 1) % widgets.length);
+            else if (info.offset.x > 50) setIndex((index - 1 + widgets.length) % widgets.length);
+          }}
+          animate={{ x: `calc(-${index * 50}% - ${index * 8}px)` }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+        >
+          {extendedWidgets.map((widget, i) => (
+            <div key={`${widget.id}-${i}`} className="min-w-[calc(50%-8px)]">
+              <div className="h-[185px]">
+                {renderWidget(widget.id, widget)}
+              </div>
+            </div>
+          ))}
+        </motion.div>
+      </div>
+
+      {/* Pagination Dots */}
+      <div className="flex justify-center gap-1.5 mt-2 overflow-x-auto py-1 no-scrollbar">
+        {widgets.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setIndex(i)}
+            className={`w-1.5 h-1.5 rounded-full transition-all duration-300 flex-shrink-0 ${index === i ? 'w-4 bg-blue-600' : (isDark ? 'bg-slate-700' : 'bg-slate-300')}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'oled', pnlDisplayMode: PnLDisplayMode, initialBalance: number, currency: any, rates: any }> = ({ stats, theme, pnlDisplayMode, initialBalance, currency, rates }) => {
   const formatVal = (val: number, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
     return formatPnL(val, mode, bal, rr, sign, currency, rates);
@@ -1065,6 +1140,14 @@ const Dashboard: React.FC<DashboardProps> = ({
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
   allTrades = [], payouts = []
 }) => {
+  const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleResize = () => setIsMobile(window.innerWidth < 1024);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   const isDark = theme !== 'light';
   const lang = user?.language || 'cs';
   const targetCurrency = user?.currency || 'USD';
@@ -1437,51 +1520,61 @@ const Dashboard: React.FC<DashboardProps> = ({
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
+          {isMobile && !isEditing && (
+            <MobileKpiCarousel
+              theme={theme}
+              widgets={currentLayout.filter(w => w.size === 'small' && w.visible !== false)}
+              renderWidget={renderWidget}
+            />
+          )}
+
           <SortableContext
             items={currentLayout.map(w => w.id)}
             strategy={rectSortingStrategy}
           >
             <div className={`grid grid-cols-6 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px]`}>
-              {currentLayout.map((widget, idx) => {
-                const gridClass = widget.size === 'small' ? 'col-span-3 lg:col-span-1' : (widget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6');
-                const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
+              {currentLayout
+                .filter(widget => !(isMobile && !isEditing && widget.size === 'small'))
+                .map((widget, idx) => {
+                  const gridClass = widget.size === 'small' ? 'col-span-3 lg:col-span-1' : (widget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6');
+                  const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
 
-                return (
-                  <SortableWidget
-                    key={widget.id}
-                    id={widget.id}
-                    isEditing={isEditing}
-                    label={widget.label}
-                    gridClass={gridClass}
-                    rowSpanClass={rowSpanClass}
-                    size={widget.size}
-                    rowSpan={widget.rowSpan || 1}
-                    onResizeStart={handleResizeStart}
-                  >
-                    {isEditing && (
-                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto z-40">
-                        {widget.id === 'equity' && (
+                  return (
+                    <SortableWidget
+                      key={widget.id}
+                      id={widget.id}
+                      isEditing={isEditing}
+                      label={widget.label}
+                      gridClass={gridClass}
+                      rowSpanClass={rowSpanClass}
+                      size={widget.size}
+                      rowSpan={widget.rowSpan || 1}
+                      onResizeStart={handleResizeStart}
+                    >
+                      {isEditing && (
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto z-40">
+                          {widget.id === 'equity' && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }}
+                              className={`p-2.5 border rounded-xl shadow-xl transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-900 text-slate-500 border-slate-700'}`}
+                              title="Zlatá křivka"
+                            >
+                              <ShieldCheck size={16} />
+                            </button>
+                          )}
                           <button
-                            onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }}
-                            className={`p-2.5 border rounded-xl shadow-xl transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-900 text-slate-500 border-slate-700'}`}
-                            title="Zlatá křivka"
+                            onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }}
+                            className="p-2.5 bg-rose-600/90 text-white border border-rose-500 rounded-xl hover:bg-rose-500 shadow-xl transition-all backdrop-blur-md"
+                            title="Odstranit"
                           >
-                            <ShieldCheck size={16} />
+                            <Trash2 size={16} />
                           </button>
-                        )}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }}
-                          className="p-2.5 bg-rose-600/90 text-white border border-rose-500 rounded-xl hover:bg-rose-500 shadow-xl transition-all backdrop-blur-md"
-                          title="Odstranit"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    )}
-                    {renderWidget(widget.id, widget)}
-                  </SortableWidget>
-                );
-              })}
+                        </div>
+                      )}
+                      {renderWidget(widget.id, widget)}
+                    </SortableWidget>
+                  );
+                })}
             </div>
           </SortableContext>
           <DragOverlay adjustScale={true} dropAnimation={{

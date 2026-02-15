@@ -1458,8 +1458,8 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return [];
 
-    // Sanitize query: remove PostgREST filter special characters to prevent filter injection
-    const sanitized = query.replace(/[%_().,\\]/g, '').trim();
+    // Sanitize query: remove PostgREST filter special characters (keep . and @ for email search)
+    const sanitized = query.replace(/[%_(),\\]/g, '').trim();
     if (!sanitized || sanitized.length < 2) return [];
 
     const { data, error } = await supabase
@@ -1493,7 +1493,8 @@ export const storageService = {
     const { data, error } = await supabase
       .from('connections')
       .select(`*, sender: profiles!sender_id(id, email, full_name), receiver: profiles!receiver_id(id, email, full_name)`)
-      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+      .in('status', ['pending', 'accepted']);
 
     if (error) return [];
     return (data || []).map(c => ({
@@ -1508,11 +1509,17 @@ export const storageService = {
     if (!userId) throw new Error('Not authenticated');
 
     if (status === 'rejected') {
-      // Both sender and receiver can delete (RLS allows both)
-      await supabase.from('connections').delete().eq('id', connectionId);
+      // First update status to 'rejected' so search filtering works even if DELETE fails
+      await supabase.from('connections').update({ status: 'rejected' }).eq('id', connectionId);
+      // Then try to fully delete the row
+      const { error } = await supabase.from('connections').delete().eq('id', connectionId);
+      if (error) {
+        console.error('Connection delete failed (RLS?), but status was set to rejected:', error.message);
+        // Don't throw - the status update already ensures the connection won't block search
+      }
     } else {
-      // Only receiver can accept (RLS: auth.uid() = receiver_id for UPDATE)
-      await supabase.from('connections').update({ status }).eq('id', connectionId).eq('receiver_id', userId);
+      // Only receiver can accept
+      await supabase.from('connections').update({ status }).eq('id', connectionId);
     }
   },
 
@@ -1521,8 +1528,19 @@ export const storageService = {
     if (!userId) throw new Error('Not authenticated');
 
     // Only the receiver (who accepted the request) can modify permissions
-    // RLS also enforces this, but defense-in-depth
-    await supabase.from('connections').update({ permissions }).eq('id', connectionId).eq('receiver_id', userId);
+    const { error, count } = await supabase
+      .from('connections')
+      .update({ permissions })
+      .eq('id', connectionId)
+      .eq('receiver_id', userId)
+      .select('id', { count: 'exact', head: true });
+
+    if (error) {
+      console.error('[Permissions] Update failed:', error.message);
+    }
+    if (count === 0) {
+      console.warn('[Permissions] No rows updated - you may not be the receiver of this connection');
+    }
   },
 
   async updateNetworkNotifications(networkNotifications: Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>): Promise<void> {
@@ -1539,26 +1557,30 @@ export const storageService = {
 
     const currentUserId = await getUserId();
 
-    // Fetch connections to check permissions (we need to know what WE are allowed to see from THEM)
-    const { data: connections } = await supabase
+    // Fetch connections where WE are the sender (follower) to check what permissions we have
+    const { data: connections, error: connErr } = await supabase
       .from('connections')
       .select('sender_id, receiver_id, permissions')
-      .or(`sender_id.eq.${currentUserId}, receiver_id.eq.${currentUserId} `)
+      .eq('sender_id', currentUserId)
       .eq('status', 'accepted');
 
+    if (connErr) {
+      console.error('[Feed] Connection query failed:', connErr.message);
+    }
+
+    // Build permission map: permissions set by the receiver (data owner) control what we see
     const permissionMap: Record<string, any> = {};
-    connections?.forEach(c => {
-      const targetId = c.sender_id === currentUserId ? c.receiver_id : c.sender_id;
-      permissionMap[targetId] = c.permissions || { canSeePnl: false, canSeeNotes: false, canSeeScreenshots: false };
+    (connections || []).forEach(c => {
+      permissionMap[c.receiver_id] = c.permissions || { canSeePnl: false, canSeeNotes: false, canSeeScreenshots: false };
     });
 
     // Fetch profile names for all followed users
     const { data: profilesData } = await supabase
       .from('profiles')
-      .select('id, full_name, avatar_url')
+      .select('id, full_name, avatar_url, preferences')
       .in('id', followingIds);
-    const profileMap: Record<string, { full_name: string; avatar_url: string | null }> = {};
-    (profilesData || []).forEach(p => { profileMap[p.id] = { full_name: p.full_name || 'Neznámý', avatar_url: p.avatar_url }; });
+    const profileMap: Record<string, { full_name: string; avatar_url: string | null; ironRules?: any[] }> = {};
+    (profilesData || []).forEach(p => { profileMap[p.id] = { full_name: p.full_name || 'Neznámý', avatar_url: p.avatar_url, ironRules: (p.preferences as any)?.ironRules }; });
 
     // Fetch recent trades
     const { data: trades } = await supabase
@@ -1585,7 +1607,15 @@ export const storageService = {
       .limit(10);
 
     const activity = [
-      ...(trades || []).map(t => {
+      ...(trades || []).filter(t => {
+        // Filter by allowed accounts
+        const rawPerms = String(t.user_id) === String(currentUserId) ? null : (permissionMap[t.user_id] as any);
+        const allowed = rawPerms?.allowedAccountIds;
+        if (allowed && allowed.length > 0 && t.accountId) {
+          return allowed.includes(t.accountId);
+        }
+        return true;
+      }).map(t => {
         const isSelf = String(t.user_id) === String(currentUserId);
         const rawPerms = isSelf ? null : (permissionMap[t.user_id] as any);
         const perms = isSelf ? {
@@ -1598,12 +1628,15 @@ export const storageService = {
           canSeeScreenshots: rawPerms?.canSeeScreenshots ?? false
         };
 
+        const jsonb = (typeof t.data === 'object' && t.data !== null) ? t.data : {};
+        const rawPnl = t.pnl ?? jsonb.pnl ?? 0;
+        const rawRisk = jsonb.riskAmount ?? t.riskAmount ?? 0;
+
         let displayPnl = 0;
         if (perms.pnlFormat === 'usd') {
-          displayPnl = t.pnl;
+          displayPnl = rawPnl;
         } else if (perms.pnlFormat === 'rr') {
-          const risk = t.riskAmount || 0;
-          const rr = risk > 0 ? t.pnl / risk : 0;
+          const rr = rawRisk > 0 ? rawPnl / rawRisk : 0;
           displayPnl = parseFloat(rr.toFixed(2));
         }
 
@@ -1613,12 +1646,15 @@ export const storageService = {
           date: t.date,
           user: { name: profileMap[t.user_id]?.full_name || 'Neznámý', avatar: profileMap[t.user_id]?.avatar_url },
           data: {
+            ...jsonb,
             ...t,
             pnl: perms.pnlFormat !== 'hidden' ? displayPnl : 0,
-            riskAmount: perms.pnlFormat === 'rr' ? 1 : t.riskAmount, // Normalize risk for RR display consistency if needed
-            notes: perms.canSeeReviewNotes ? t.notes : null,
-            screenshot: perms.canSeeScreenshots ? t.screenshot : null,
-            screenshots: perms.canSeeScreenshots ? t.screenshots : []
+            riskAmount: perms.pnlFormat === 'rr' ? 1 : rawRisk,
+            entryPrice: jsonb.entryPrice ?? t.entryPrice,
+            exitPrice: jsonb.exitPrice ?? t.exitPrice,
+            notes: perms.canSeeReviewNotes ? (jsonb.notes ?? t.notes) : null,
+            screenshot: perms.canSeeScreenshots ? (jsonb.screenshot ?? t.screenshot) : null,
+            screenshots: perms.canSeeScreenshots ? (jsonb.screenshots ?? t.screenshots) : []
           },
           meta: {
             pnlFormat: perms.pnlFormat
@@ -1640,7 +1676,7 @@ export const storageService = {
           type: 'review',
           id: r.id,
           date: r.date + 'T20:00:00',
-          user: { name: profileMap[r.user_id]?.full_name || 'Neznámý', avatar: profileMap[r.user_id]?.avatar_url },
+          user: { name: profileMap[r.user_id]?.full_name || 'Neznámý', avatar: profileMap[r.user_id]?.avatar_url, ironRules: profileMap[r.user_id]?.ironRules },
           data: {
             ...r.data,
             // Stats
@@ -1667,6 +1703,7 @@ export const storageService = {
         const isSelf = String(p.user_id) === String(currentUserId);
         const rawPerms = isSelf ? null : (permissionMap[p.user_id] as any);
         const canSeePrep = isSelf || (rawPerms?.canSeePrep ?? false);
+        const canSeePrepRituals = isSelf || (rawPerms?.canSeePrepRituals ?? false);
 
         if (!canSeePrep) {
           // Return locked shell
@@ -1680,24 +1717,43 @@ export const storageService = {
           };
         }
 
+        const prepData = { ...p.data };
+        if (!canSeePrepRituals) {
+          prepData.ritualCompletions = undefined;
+          prepData.ruleAdherence = undefined;
+        }
+
         return {
           type: 'prep',
           id: p.id,
           date: p.date + 'T08:00:00',
-          user: { name: p.profiles?.full_name || 'Neznámý', avatar: p.profiles?.avatar_url },
-          data: {
-            ...p.data
-            // Scenarios images might need stripping if canSeeScreenshots is false, 
-            // but Preps usually don't have that toggle in UI section? 
-            // Ah, Prep section has strict "Allow Analysis". If allowed, usually we show it all.
-            // But if we want to be super strict, we could check screenshots too.
-            // For now, simple: strict Prep toggle = All or Nothing for prep content.
-          }
+          user: { name: profileMap[p.user_id]?.full_name || 'Neznámý', avatar: profileMap[p.user_id]?.avatar_url, ironRules: canSeePrepRituals ? profileMap[p.user_id]?.ironRules : undefined },
+          data: prepData,
+          meta: { ritualsHidden: !canSeePrepRituals }
         };
       })
     ];
 
-    return activity.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    // Deduplicate copy trades (same user, instrument, direction, date = likely copy across accounts)
+    const dedupMap = new Map<string, any>();
+    const nonTrades: any[] = [];
+    for (const item of activity) {
+      if (item.type !== 'trade') {
+        nonTrades.push(item);
+        continue;
+      }
+      const key = `${item.data.user_id}_${item.data.instrument}_${item.data.direction}_${item.date}`;
+      if (dedupMap.has(key)) {
+        const existing = dedupMap.get(key);
+        existing.meta.accountCount = (existing.meta.accountCount || 1) + 1;
+      } else {
+        item.meta.accountCount = 1;
+        dedupMap.set(key, item);
+      }
+    }
+    const deduped = [...dedupMap.values(), ...nonTrades];
+
+    return deduped.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   },
 
   async getLeaderboardStats(userIds: string[]): Promise<any[]> {
@@ -1776,10 +1832,14 @@ export const storageService = {
     // 1. Check permissions FIRST - before fetching any data
     let rawPerms: any = null;
     if (!isSelf) {
+      // Find connection where current user is the SENDER (follower) and target is RECEIVER (owner)
+      // Permissions on this connection are set by the receiver (target) and control what we can see
       const { data: connection, error: connErr } = await supabase
         .from('connections')
-        .select('permissions, status')
-        .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${targetUserId}),and(sender_id.eq.${targetUserId},receiver_id.eq.${currentUserId})`)
+        .select('permissions')
+        .eq('sender_id', currentUserId)
+        .eq('receiver_id', targetUserId)
+        .eq('status', 'accepted')
         .maybeSingle();
 
       if (connErr) {
@@ -1788,14 +1848,10 @@ export const storageService = {
       }
 
       if (!connection) {
-        console.warn("[Spectator] No connection found between users");
+        console.warn("[Spectator] No accepted connection found (you → target)");
         return null;
       }
 
-      if (connection.status !== 'accepted') {
-        console.warn("[Spectator] Connection exists but status is:", connection.status);
-        return null;
-      }
       rawPerms = connection.permissions as any;
     }
 
@@ -1803,9 +1859,11 @@ export const storageService = {
     const perms = {
       pnlFormat: isSelf ? 'usd' : (rawPerms?.pnlFormat || (rawPerms?.canSeePnl ? 'usd' : 'hidden')),
       canSeePrep: isSelf || (rawPerms?.canSeePrep ?? false),
+      canSeePrepRituals: isSelf || (rawPerms?.canSeePrepRituals ?? false),
       canSeeReviewStats: isSelf || (rawPerms?.canSeeReviewStats ?? false),
       canSeeReviewNotes: isSelf || (rawPerms?.canSeeReviewNotes ?? false),
-      canSeeScreenshots: isSelf || (rawPerms?.canSeeScreenshots ?? false)
+      canSeeScreenshots: isSelf || (rawPerms?.canSeeScreenshots ?? false),
+      allowedAccountIds: isSelf ? [] : (rawPerms?.allowedAccountIds || []) as string[]
     };
 
     // 3. Fetch only data that permissions allow (minimize network transfer)
@@ -1819,8 +1877,31 @@ export const storageService = {
 
     const [trades, accounts, preps, reviews, prefs] = await Promise.all(fetchPromises);
 
-    // 4. Sanitize TRADES - strip sensitive fields before returning
-    const sanitizedTrades = trades.map((t: Trade) => {
+    // 3b. Fetch screenshots separately if permitted (getTrades() omits them for performance)
+    if (perms.canSeeScreenshots && trades.length > 0) {
+      const tradeIds = trades.map((t: Trade) => t.id);
+      const { data: screenshotData } = await supabase
+        .from('trades')
+        .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
+        .in('id', tradeIds);
+
+      if (screenshotData) {
+        const ssMap = new Map(screenshotData.map((s: any) => [s.id, s]));
+        trades.forEach((t: any) => {
+          const ss = ssMap.get(t.id);
+          if (ss) {
+            t.screenshot = ss.screenshot || undefined;
+            t.screenshots = ss.screenshots || [];
+          }
+        });
+      }
+    }
+
+    // 4. Filter by allowed accounts, then sanitize TRADES
+    const filteredTrades = perms.allowedAccountIds.length > 0
+      ? trades.filter((t: Trade) => perms.allowedAccountIds.includes(t.accountId))
+      : trades;
+    const sanitizedTrades = filteredTrades.map((t: Trade) => {
       let displayPnl = 0;
 
       if (perms.pnlFormat === 'usd') {
@@ -1860,6 +1941,7 @@ export const storageService = {
     // 6. Sanitize PREPS (already empty array if not permitted)
     const sanitizedPreps = preps.map((p: DailyPrep) => ({
       ...p,
+      ritualCompletions: perms.canSeePrepRituals ? p.ritualCompletions : undefined,
       scenarios: {
         ...p.scenarios,
         bullishImage: perms.canSeeScreenshots ? p.scenarios.bullishImage : null,
@@ -1867,8 +1949,11 @@ export const storageService = {
       }
     }));
 
-    // 7. Filter Accounts
-    const sanitizedAccounts = accounts.map((a: Account) => ({
+    // 7. Filter Accounts (by allowed + sanitize balances)
+    const filteredAccounts = perms.allowedAccountIds.length > 0
+      ? accounts.filter((a: Account) => perms.allowedAccountIds.includes(a.id))
+      : accounts;
+    const sanitizedAccounts = filteredAccounts.map((a: Account) => ({
       ...a,
       initialBalance: perms.pnlFormat === 'usd' ? a.initialBalance : 0,
       totalWithdrawals: perms.pnlFormat === 'usd' ? a.totalWithdrawals : 0

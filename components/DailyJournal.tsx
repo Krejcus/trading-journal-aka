@@ -172,7 +172,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     scenarios: { bullish: '', bearish: '', scenarioImages: [], bullishImage: '', bearishImage: '' },
     goals: standardGoals.length > 0 ? [...standardGoals] : [''],
     checklist: { sleptWell: false, planReady: false, disciplineCommitted: false, newsChecked: false },
-    ritualCompletions: rituals.map(r => ({ ruleId: r.id, status: 'Pending' })),
+    ritualCompletions: rituals.map(r => ({ ruleId: r.id, status: 'Pending', label: r.label })),
     mindsetState: '',
     confidence: 5
   });
@@ -186,7 +186,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     rating: 0,
     goalResults: [],
     scenarioResult: 'Range',
-    ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending' })),
+    ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending', label: r.label })),
     weeklyGoalAdherence: [],
     psycho: { metrics: (psychoMetrics || []).reduce((acc, m) => ({ ...acc, [m.id]: 5 }), {}), stressors: '', gratitude: '', notes: '' }
   });
@@ -844,7 +844,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         rating: 0,
         goalResults: initialResults,
         scenarioResult: 'Range',
-        ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending' })),
+        ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending', label: r.label })),
         psycho: { metrics: (psychoMetrics || []).reduce((acc, m) => ({ ...acc, [m.id]: 5 }), {}), stressors: '', gratitude: '', notes: '' }
       });
     }
@@ -855,8 +855,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       const completions = prev.ritualCompletions || [];
       const index = completions.findIndex(c => c.ruleId === ruleId);
       const newCompletions = [...completions];
-      if (index === -1) newCompletions.push({ ruleId, status: 'Pass' });
-      else newCompletions[index] = { ...newCompletions[index], status: newCompletions[index].status === 'Pass' ? 'Pending' : 'Pass' };
+      const label = rituals.find(r => r.id === ruleId)?.label;
+      if (index === -1) newCompletions.push({ ruleId, status: 'Pass', label });
+      else newCompletions[index] = { ...newCompletions[index], status: newCompletions[index].status === 'Pass' ? 'Pending' : 'Pass', label: newCompletions[index].label || label };
       return { ...prev, ritualCompletions: newCompletions };
     });
   };
@@ -866,8 +867,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       const adherence = prev.ruleAdherence || [];
       const index = adherence.findIndex(a => a.ruleId === ruleId);
       const newAdherence = [...adherence];
-      if (index === -1) newAdherence.push({ ruleId, status });
-      else newAdherence[index] = { ...newAdherence[index], status };
+      const label = tradeRules.find(r => r.id === ruleId)?.label;
+      if (index === -1) newAdherence.push({ ruleId, status, label });
+      else newAdherence[index] = { ...newAdherence[index], status, label: newAdherence[index].label || label };
       return { ...prev, ruleAdherence: newAdherence };
     });
   };
@@ -923,7 +925,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
 
       {activeTab === 'daily' && view === 'timeline' ? (
-        <div className="lg:grid lg:grid-cols-[1fr,350px] gap-8 items-start">
+        <div className="lg:grid lg:grid-cols-[1fr_350px] gap-8 items-start">
           {/* Main Column: Header + Timeline */}
           <div className="space-y-8 min-w-0 order-2 lg:order-1">
             <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>

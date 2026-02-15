@@ -55,7 +55,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // Core logic: Sidebar is expanded if either pinned (!isCollapsed) OR hovered (but NOT if we just clicked an item)
     // Professional behavior: Click -> Collapse immediately -> Re-expand on fresh hover
-    const isExpanded = !isCollapsed || (isHovered && !isClicked);
+    const isExpanded = !isCollapsed || (isHovered && !isClicked) || isOpen;
 
     const mainItems = [
         { id: 'dashboard', label: t('dashboard', lang), icon: LayoutDashboard },
@@ -87,7 +87,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             ? (isDark
                 ? 'bg-white/10 border-white/20 text-white shadow-[0_0_20px_rgba(255,255,255,0.1)] shadow-inner'
                 : 'bg-[var(--bg-page)] border-[var(--border-active)] text-[var(--text-primary)] shadow-[0_4px_12px_rgba(15,23,42,0.08)]')
-            : 'bg-transparent border-transparent theme-text-secondary lg:hover:bg-white/5 lg:hover:text-[var(--text-primary)] active:scale-95'
+            : `bg-transparent border-transparent theme-text-secondary ${isDark ? 'lg:hover:bg-white/5' : 'lg:hover:bg-black/5'} lg:hover:text-[var(--text-primary)] active:scale-95`
         }
   `;
 
@@ -280,7 +280,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         onClick={onOpenProfile}
                         className={`
               flex items-center transition-all relative overflow-hidden group cursor-pointer 
-              ${isDark ? 'bg-white/[0.03] border border-white/10 hover:bg-white/[0.05] hover:border-white/20' : 'bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:bg-[var(--bg-page)]'} 
+              ${isDark ? 'bg-white/[0.03] border border-white/10 hover:bg-white/[0.05] hover:border-white/20' : 'bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:bg-black/[0.04] hover:border-[var(--border-active)] hover:shadow-lg'} 
               lg:hover:shadow-2xl active:scale-95 
               ${!isExpanded ? 'w-12 h-12 rounded-full justify-center mx-auto' : 'h-14 rounded-[24px] justify-between px-4 gap-3'}
             `}

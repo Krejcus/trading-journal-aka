@@ -27,9 +27,10 @@ interface NetworkHubProps {
    activeTab: 'share' | 'feed' | 'following' | 'followers' | 'requests' | 'leaderboard';
    onTabChange: (tab: 'share' | 'feed' | 'following' | 'followers' | 'requests' | 'leaderboard') => void;
    onNetworkNotificationsChange?: (prefs: Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>) => void;
+   onSpectatingChange?: (isSpectating: boolean) => void;
 }
 
-const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates, activeTab, onTabChange: setActiveTab, onNetworkNotificationsChange }) => {
+const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates, activeTab, onTabChange: setActiveTab, onNetworkNotificationsChange, onSpectatingChange }) => {
    const isDark = theme !== 'light';
    const [isAirlockOpen, setIsAirlockOpen] = useState(false);
 
@@ -51,6 +52,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
       meta?: { pnlFormat?: 'usd' | 'rr' | 'hidden' } | null;
    } | null>(null);
    const [isSpectating, setIsSpectating] = useState(false);
+   useEffect(() => { onSpectatingChange?.(isSpectating); }, [isSpectating]);
    const [spectatorTab, setSpectatorTab] = useState<'overview' | 'calendar' | 'stats'>('overview');
    const [spectatorDate, setSpectatorDate] = useState(new Date().toISOString().split('T')[0]);
    const [activeSpectatorAccountId, setActiveSpectatorAccountId] = useState<string | null>(null);
@@ -62,6 +64,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    const [feedActivity, setFeedActivity] = useState<any[]>([]);
    const [loadingFeed, setLoadingFeed] = useState(false);
    const [feedLoaded, setFeedLoaded] = useState(false);
+   const [feedFilter, setFeedFilter] = useState<Set<string>>(new Set(['trade', 'prep', 'review']));
    const [notifDropdownId, setNotifDropdownId] = useState<string | null>(null);
    const [localNotifPrefs, setLocalNotifPrefs] = useState<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>>(
       () => user?.preferences?.networkNotifications || {}
@@ -71,8 +74,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
    const [selectedPrep, setSelectedPrep] = useState<DailyPrep | null>(null);
    const [selectedReview, setSelectedReview] = useState<DailyReview | null>(null);
+   const [feedIronRules, setFeedIronRules] = useState<any[] | null>(null);
    const [zoomedImage, setZoomedImage] = useState<string | null>(null);
-   const [editingPermissions, setEditingPermissions] = useState<{ connectionId: string, permissions: { canSeePnl: boolean; pnlFormat?: 'usd' | 'rr' | 'hidden'; canSeePrep?: boolean; canSeeReviewStats?: boolean; canSeeReviewNotes?: boolean; canSeeNotes: boolean; canSeeScreenshots: boolean }, name: string } | null>(null);
+   const [editingPermissions, setEditingPermissions] = useState<{ connectionId: string, permissions: { canSeePnl: boolean; pnlFormat?: 'usd' | 'rr' | 'hidden'; canSeePrep?: boolean; canSeePrepRituals?: boolean; canSeeReviewStats?: boolean; canSeeReviewNotes?: boolean; canSeeNotes: boolean; canSeeScreenshots: boolean; allowedAccountIds?: string[] }, name: string, isAccepting?: boolean } | null>(null);
    const [modalPnlFormat, setModalPnlFormat] = useState<'usd' | 'rr' | 'hidden' | undefined>(undefined);
 
    const loadConnections = async () => {
@@ -82,6 +86,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
             getUserId()
          ]);
          setConnections(data);
+         setFeedLoaded(false); // Reset feed cache so it reloads with fresh permissions
          if (uid) {
             const followingIds = [
                uid,
@@ -130,8 +135,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
       setIsSearching(true);
       try {
          const results = await storageService.searchUsers(val);
-         // Filter out current user AND users with existing connection (pending or accepted)
-         const connectedIds = new Set(connections.map(c => c.sender_id === currentUserId ? c.receiver_id : c.sender_id));
+         // Filter out current user AND users with active connection (pending or accepted)
+         const activeConns = connections.filter(c => c.status === 'pending' || c.status === 'accepted');
+         // Only exclude users where current user already SENT a request (allows following back)
+         const connectedIds = new Set(activeConns.filter(c => c.sender_id === currentUserId).map(c => c.receiver_id));
          setSearchResults(results.filter(u => u.id !== currentUserId && !connectedIds.has(u.id)));
       } finally {
          setIsSearching(false);
@@ -210,7 +217,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
    const followingIds = useMemo(() => {
       if (!currentUserId) return [];
-      return [currentUserId, ...following.map(c => c.sender_id === currentUserId ? c.receiver_id : c.sender_id)];
+      return following.map(c => c.receiver_id);
    }, [currentUserId, following]);
 
    // Feed loading
@@ -229,10 +236,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    };
 
    useEffect(() => {
-      if (activeTab === 'feed' && followingIds.length > 0 && !feedLoaded && !loadingFeed) {
+      if (followingIds.length > 0 && !feedLoaded && !loadingFeed) {
          loadFeed();
       }
-   }, [activeTab, followingIds, feedLoaded, loadingFeed]);
+   }, [followingIds, feedLoaded, loadingFeed]);
 
    const filteredRemoteTrades = useMemo(() => {
       if (!spectatorData) return [];
@@ -466,42 +473,94 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          {selectedPrep && (
             <DetailModal title="RANNÍ ANALÝZA" icon={Sun} onClose={() => setSelectedPrep(null)}>
                <div className="space-y-6">
-                  {/* Bullish Section */}
-                  <div className="space-y-3">
-                     <div className="p-6 rounded-2xl bg-emerald-500/5 border border-emerald-500/10">
-                        <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-2 flex items-center gap-2"><ArrowUpRight size={14} /> Bullish Scénář</p>
-                        <p className="text-sm text-slate-200 leading-relaxed">{selectedPrep.scenarios.bullish || 'Trader nedefinoval bullish scénář.'}</p>
-                     </div>
-                     {selectedPrep.scenarios.bullishImage && (
-                        <div className={`rounded-2xl border overflow-hidden cursor-zoom-in group relative ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                           <img src={selectedPrep.scenarios.bullishImage} alt="Bullish Chart" className="w-full h-auto" />
-                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                              <Search size={24} className="text-white" />
+                  {/* Session-based Analysis Cards */}
+                  {selectedPrep.scenarios?.sessions && selectedPrep.scenarios.sessions.length > 0 ? (
+                     <div className={`grid ${selectedPrep.scenarios.sessions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
+                        {selectedPrep.scenarios.sessions.map((session: any, si: number) => (
+                           <div key={session.id || si} className={`overflow-hidden rounded-[24px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white/40 border-slate-200/50'}`}>
+                              {session.image && (
+                                 <div className="aspect-video relative overflow-hidden group/img cursor-pointer" onClick={(e) => { e.stopPropagation(); setZoomedImage(session.image); }}>
+                                    <img src={session.image} className="w-full h-full object-cover" alt={session.label} />
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition-all">
+                                       <Search size={16} className="text-white" />
+                                    </div>
+                                    <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-md rounded-lg border border-white/10">
+                                       <p className="text-[7px] font-black uppercase text-white tracking-widest">{session.label}</p>
+                                    </div>
+                                 </div>
+                              )}
+                              <div className="p-4">
+                                 {!session.image && (
+                                    <div className="flex items-center gap-2 mb-2">
+                                       <Activity size={10} style={session.color ? { color: session.color } : { color: '#3b82f6' }} />
+                                       <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">{session.label}</span>
+                                    </div>
+                                 )}
+                                 {session.plan ? (
+                                    <p className={`text-[11px] leading-relaxed italic ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>"{session.plan}"</p>
+                                 ) : (
+                                    <p className={`text-[10px] italic ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>Žádný plán.</p>
+                                 )}
+                              </div>
                            </div>
-                        </div>
-                     )}
-                  </div>
-
-                  {/* Bearish Section */}
-                  <div className="space-y-3">
-                     <div className="p-6 rounded-2xl bg-rose-500/5 border border-rose-500/10">
-                        <p className="text-[10px] font-black text-rose-500 uppercase tracking-widest mb-2 flex items-center gap-2"><ArrowDownRight size={14} /> Bearish Scénář</p>
-                        <p className="text-sm text-slate-200 leading-relaxed">{selectedPrep.scenarios.bearish || 'Trader nedefinoval bearish scénář.'}</p>
+                        ))}
                      </div>
-                     {selectedPrep.scenarios.bearishImage && (
-                        <div className={`rounded-2xl border overflow-hidden cursor-zoom-in group relative ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                           <img src={selectedPrep.scenarios.bearishImage} alt="Bearish Chart" className="w-full h-auto" />
-                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                              <Search size={24} className="text-white" />
+                  ) : (
+                     /* Legacy Bullish/Bearish fallback */
+                     <div className="space-y-4">
+                        {selectedPrep.scenarios?.scenarioImages?.length > 0 && (
+                           <div className="grid grid-cols-3 gap-2">
+                              {selectedPrep.scenarios.scenarioImages.map((img: string, i: number) => (
+                                 <div key={i} className="aspect-video rounded-xl overflow-hidden border border-blue-500/20">
+                                    <img src={img} className="w-full h-full object-cover" alt={`Scenario ${i + 1}`} />
+                                 </div>
+                              ))}
                            </div>
-                        </div>
-                     )}
-                  </div>
+                        )}
+                        {(selectedPrep.scenarios?.bullishImage || selectedPrep.scenarios?.bearishImage) && (
+                           <div className="grid grid-cols-2 gap-3">
+                              {selectedPrep.scenarios?.bullishImage && (
+                                 <div className="aspect-video rounded-xl overflow-hidden border border-emerald-500/20">
+                                    <img src={selectedPrep.scenarios.bullishImage} className="w-full h-full object-cover" alt="Bullish" />
+                                 </div>
+                              )}
+                              {selectedPrep.scenarios?.bearishImage && (
+                                 <div className="aspect-video rounded-xl overflow-hidden border border-rose-500/20">
+                                    <img src={selectedPrep.scenarios.bearishImage} className="w-full h-full object-cover" alt="Bearish" />
+                                 </div>
+                              )}
+                           </div>
+                        )}
+                        {selectedPrep.scenarios?.bullish && (
+                           <p className={`text-[10px] italic ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>"Bullish: {selectedPrep.scenarios.bullish}"</p>
+                        )}
+                        {selectedPrep.scenarios?.bearish && (
+                           <p className={`text-[10px] italic ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>"Bearish: {selectedPrep.scenarios.bearish}"</p>
+                        )}
+                     </div>
+                  )}
 
-                  <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                     <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-2"><Clock size={14} /> Myšlenkové nastavení</p>
-                     <p className={`text-sm leading-relaxed italic ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{selectedPrep.mindsetState || 'Žádné doplňující poznámky k přípravě.'}</p>
-                  </div>
+                  {/* Ritual Completions */}
+                  {selectedPrep.ritualCompletions && selectedPrep.ritualCompletions.length > 0 && (
+                     <div className={`p-5 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
+                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2"><ShieldCheck size={14} /> Ranní rituály</p>
+                        <div className="space-y-2">
+                           {selectedPrep.ritualCompletions.map((ritual: any, ri: number) => {
+                              const rules = spectatorData?.preferences?.ironRules || feedIronRules;
+                              const ritualLabel = ritual.label || rules?.find((r: any) => r.id === ritual.ruleId)?.label || ritual.ruleId || 'Rituál';
+                              return (
+                                 <div key={ri} className={`flex items-center justify-between p-2 rounded-lg ${isDark ? 'bg-black/20' : 'bg-white/50'}`}>
+                                    <span className="text-[10px] font-bold text-slate-400 truncate pr-2">{ritualLabel}</span>
+                                    <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${ritual.status === 'Pass' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                       {ritual.status === 'Pass' ? 'Pass' : 'Pending'}
+                                    </span>
+                                 </div>
+                              );
+                           })}
+                        </div>
+                     </div>
+                  )}
+
                </div>
             </DetailModal>
          )}
@@ -527,7 +586,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         <div className="space-y-2">
                            {selectedReview.ruleAdherence && selectedReview.ruleAdherence.length > 0 ? (
                               selectedReview.ruleAdherence.map((rule, idx) => {
-                                 const ruleLabel = spectatorData?.preferences?.ironRules?.find(r => r.id === rule.ruleId)?.label || 'Neznámé pravidlo';
+                                 const reviewRules = spectatorData?.preferences?.ironRules || feedIronRules;
+                                 const ruleLabel = rule.label || reviewRules?.find((r: any) => r.id === rule.ruleId)?.label || 'Neznámé pravidlo';
                                  return (
                                     <div key={idx} className={`flex items-center justify-between p-2 rounded-lg ${isDark ? 'bg-black/20' : 'bg-white/50'}`}>
                                        <span className="text-[10px] font-bold text-slate-400 truncate pr-2">{ruleLabel}</span>
@@ -566,6 +626,23 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                      </div>
                   </div>
 
+                  {/* Goal Results */}
+                  {selectedReview.goalResults && selectedReview.goalResults.length > 0 && (
+                     <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
+                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2"><Target size={14} /> Denní cíle</p>
+                        <div className="space-y-2">
+                           {selectedReview.goalResults.map((gr: any, gi: number) => (
+                              <div key={gi} className={`flex items-center justify-between p-2 rounded-lg ${isDark ? 'bg-black/20' : 'bg-white/50'}`}>
+                                 <span className={`text-[10px] font-bold truncate pr-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{gr.text}</span>
+                                 <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded shrink-0 ${gr.achieved ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                    {gr.achieved ? 'Splněno' : 'Nesplněno'}
+                                 </span>
+                              </div>
+                           ))}
+                        </div>
+                     </div>
+                  )}
+
                   {/* Personal Reflections */}
                   <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
                      <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2"><FileText size={14} /> Reflexe & Poznámky</p>
@@ -591,13 +668,60 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                <div className={`w-full max-w-sm p-6 rounded-[24px] border shadow-2xl animate-in zoom-in-95 duration-200 ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
                   <div className="flex items-start justify-between mb-6">
                      <div>
-                        <h3 className={`text-lg font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>Nastavení soukromí</h3>
-                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">pro: {editingPermissions.name}</p>
+                        <h3 className={`text-lg font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{editingPermissions.isAccepting ? 'Přijmout žádost' : 'Nastavení soukromí'}</h3>
+                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">
+                           {editingPermissions.isAccepting ? `Co uvidí: ${editingPermissions.name}?` : `pro: ${editingPermissions.name}`}
+                        </p>
                      </div>
                      <button onClick={() => setEditingPermissions(null)} className="p-2 rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-900 transition-all dark:hover:bg-white/10 dark:hover:text-white"><X size={20} /></button>
                   </div>
 
                   <div className="space-y-6">
+                     {/* Section: ACCOUNTS */}
+                     {accounts.length > 1 && (
+                        <div className="space-y-3">
+                           <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest pl-1">Viditelné účty</p>
+                           <div className={`p-3 rounded-xl border flex flex-col gap-2 ${isDark ? 'bg-[var(--bg-input)]/30 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
+                              {accounts.filter(a => a.status === 'Active').map(acc => {
+                                 const allowed = editingPermissions.permissions.allowedAccountIds;
+                                 const isAllowed = !allowed || allowed.length === 0 || allowed.includes(acc.id);
+                                 return (
+                                    <label key={acc.id} className={`flex items-center gap-3 py-2 px-2 rounded-xl cursor-pointer transition-all ${isDark ? 'hover:bg-[var(--bg-input)]' : 'hover:bg-slate-50'}`}>
+                                       <input
+                                          type="checkbox"
+                                          checked={isAllowed}
+                                          onChange={(e) => {
+                                             const activeIds = accounts.filter(a => a.status === 'Active').map(a => a.id);
+                                             const current = allowed && allowed.length > 0 ? allowed : activeIds;
+                                             let updated: string[];
+                                             if (e.target.checked) {
+                                                updated = [...current, acc.id];
+                                             } else {
+                                                updated = current.filter(id => id !== acc.id);
+                                                if (updated.length === 0) return; // Must keep at least one
+                                             }
+                                             // If all are selected, store empty array (= all)
+                                             const newAllowed = updated.length === activeIds.length ? [] : updated;
+                                             const newPerms = { ...editingPermissions.permissions, allowedAccountIds: newAllowed };
+                                             setEditingPermissions({ ...editingPermissions, permissions: newPerms });
+                                             if (!editingPermissions.isAccepting) {
+                                                storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                                setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                             }
+                                          }}
+                                          className="rounded border-slate-600 text-blue-600 focus:ring-blue-500"
+                                       />
+                                       <div className="flex items-center gap-2">
+                                          <Briefcase size={14} className={isAllowed ? 'text-blue-500' : 'text-slate-500'} />
+                                          <span className={`text-xs font-bold ${isAllowed ? (isDark ? 'text-white' : 'text-slate-900') : 'text-slate-500'}`}>{acc.name}</span>
+                                       </div>
+                                    </label>
+                                 );
+                              })}
+                           </div>
+                        </div>
+                     )}
+
                      {/* Section: TRADES */}
                      <div className="space-y-3">
                         <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest pl-1">Obchody</p>
@@ -614,6 +738,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                            <div className="grid grid-cols-3 gap-2">
                               {[
                                  { id: 'hidden', label: 'Skryté', icon: EyeOff },
+                                 { id: 'rr', label: 'RR', icon: TrendingUp },
                                  { id: 'usd', label: 'Částka ($)', icon: DollarSign }
                               ].map(mode => (
                                  <button
@@ -626,8 +751,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                           canSeeNotes: editingPermissions.permissions.canSeeReviewNotes ?? false
                                        };
                                        setEditingPermissions({ ...editingPermissions, permissions: newPerms });
-                                       storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
-                                       setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                       if (!editingPermissions.isAccepting) {
+                                          storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                          setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                       }
                                     }}
                                     className={`py-2 rounded-lg text-[10px] font-black uppercase flex flex-col items-center gap-1 transition-all border ${editingPermissions.permissions.pnlFormat === mode.id ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/20' : 'bg-transparent border-transparent text-slate-500 hover:bg-slate-200 dark:hover:bg-white/5'}`}
                                  >
@@ -646,8 +773,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  canSeeNotes: editingPermissions.permissions.canSeeReviewNotes ?? false
                               };
                               setEditingPermissions({ ...editingPermissions, permissions: newPerms });
-                              storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
-                              setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                              if (!editingPermissions.isAccepting) {
+                                 storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                 setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                              }
                            }}
                         >
                            <div className="flex items-center gap-3">
@@ -671,8 +800,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  canSeeNotes: editingPermissions.permissions.canSeeReviewNotes ?? false
                               };
                               setEditingPermissions({ ...editingPermissions, permissions: newPerms });
-                              storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
-                              setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                              if (!editingPermissions.isAccepting) {
+                                 storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                 setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                              }
                            }}
                         >
                            <div className="flex items-center gap-3">
@@ -681,6 +812,28 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                            </div>
                            <div className={`w-8 h-4 rounded-full relative transition-colors ${editingPermissions.permissions.canSeePrep ? 'bg-amber-500' : 'bg-slate-300 dark:bg-white/10'}`}>
                               <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all shadow-sm`} style={{ left: editingPermissions.permissions.canSeePrep ? 'calc(100% - 14px)' : '2px' }} />
+                           </div>
+                        </div>
+                        <div className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${editingPermissions.permissions.canSeePrepRituals ? 'bg-orange-500/10 border-orange-500/30' : 'bg-transparent border-transparent hover:bg-slate-50 dark:hover:bg-white/5'}`}
+                           onClick={() => {
+                              const newPerms = {
+                                 ...editingPermissions.permissions,
+                                 canSeePrepRituals: !editingPermissions.permissions.canSeePrepRituals,
+                                 canSeeNotes: editingPermissions.permissions.canSeeReviewNotes ?? false
+                              };
+                              setEditingPermissions({ ...editingPermissions, permissions: newPerms });
+                              if (!editingPermissions.isAccepting) {
+                                 storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                 setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                              }
+                           }}
+                        >
+                           <div className="flex items-center gap-3">
+                              <div className={`p-1.5 rounded-lg ${editingPermissions.permissions.canSeePrepRituals ? 'bg-orange-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-white/10'}`}><ShieldCheck size={14} /></div>
+                              <span className={`text-xs font-bold ${editingPermissions.permissions.canSeePrepRituals ? 'text-orange-500' : 'text-slate-500'}`}>Rituály & Pravidla</span>
+                           </div>
+                           <div className={`w-8 h-4 rounded-full relative transition-colors ${editingPermissions.permissions.canSeePrepRituals ? 'bg-orange-500' : 'bg-slate-300 dark:bg-white/10'}`}>
+                              <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all shadow-sm`} style={{ left: editingPermissions.permissions.canSeePrepRituals ? 'calc(100% - 14px)' : '2px' }} />
                            </div>
                         </div>
                      </div>
@@ -698,8 +851,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     canSeeNotes: editingPermissions.permissions.canSeeReviewNotes ?? false
                                  };
                                  setEditingPermissions({ ...editingPermissions, permissions: newPerms });
-                                 storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
-                                 setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                 if (!editingPermissions.isAccepting) {
+                                    storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                    setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                 }
                               }}
                            >
                               <div className={`self-start p-1.5 rounded-lg ${editingPermissions.permissions.canSeeReviewStats ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-white/10'}`}><Star size={14} /></div>
@@ -715,8 +870,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     canSeeNotes: !editingPermissions.permissions.canSeeReviewNotes // Sync legacy
                                  };
                                  setEditingPermissions({ ...editingPermissions, permissions: newPerms });
-                                 storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
-                                 setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                 if (!editingPermissions.isAccepting) {
+                                    storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                    setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                 }
                               }}
                            >
                               <div className={`self-start p-1.5 rounded-lg ${editingPermissions.permissions.canSeeReviewNotes ? 'bg-rose-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-white/10'}`}><Brain size={14} /></div>
@@ -727,9 +884,28 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                   </div>
 
                   <div className="mt-6 pt-6 border-t border-slate-100 dark:border-white/5">
-                     <button onClick={() => setEditingPermissions(null)} className="w-full py-3 rounded-xl bg-slate-900 text-white font-black text-xs uppercase tracking-widest hover:bg-slate-800 transition-all dark:bg-white dark:text-slate-900 hover:scale-[1.02]">
-                        Uložit nastavení
-                     </button>
+                     {editingPermissions.isAccepting ? (
+                        <button
+                           onClick={async () => {
+                              try {
+                                 await storageService.updateConnectionStatus(editingPermissions.connectionId, 'accepted');
+                                 await storageService.updateConnectionPermissions(editingPermissions.connectionId, editingPermissions.permissions);
+                                 setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, status: 'accepted', permissions: editingPermissions.permissions } : c));
+                                 loadConnections();
+                                 setEditingPermissions(null);
+                              } catch (err) {
+                                 console.error("Accept failed", err);
+                              }
+                           }}
+                           className="w-full py-3 rounded-xl bg-emerald-600 text-white font-black text-xs uppercase tracking-widest hover:bg-emerald-500 transition-all hover:scale-[1.02] shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
+                        >
+                           <CheckCircle2 size={16} /> Potvrdit a přijmout
+                        </button>
+                     ) : (
+                        <button onClick={() => setEditingPermissions(null)} className="w-full py-3 rounded-xl bg-slate-900 text-white font-black text-xs uppercase tracking-widest hover:bg-slate-800 transition-all dark:bg-white dark:text-slate-900 hover:scale-[1.02]">
+                           Uložit nastavení
+                        </button>
+                     )}
                   </div>
                </div>
             </div>
@@ -853,11 +1029,37 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                      <Loader2 size={14} className={loadingFeed ? 'animate-spin' : ''} />
                   </button>
                </div>
+               <div className="flex items-center gap-2">
+                  {([
+                     { key: 'trade', label: 'Obchody', icon: TrendingUp, color: 'blue' },
+                     { key: 'prep', label: 'Příprava', icon: Sun, color: 'blue' },
+                     { key: 'review', label: 'Review', icon: Moon, color: 'amber' },
+                  ] as const).map(f => {
+                     const active = feedFilter.has(f.key);
+                     return (
+                        <button
+                           key={f.key}
+                           onClick={() => setFeedFilter(prev => {
+                              const next = new Set(prev);
+                              if (next.has(f.key)) { if (next.size > 1) next.delete(f.key); }
+                              else next.add(f.key);
+                              return next;
+                           })}
+                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${active
+                              ? (isDark ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' : 'bg-blue-50 text-blue-600 border border-blue-200')
+                              : (isDark ? 'bg-[var(--bg-input)] text-slate-600 border border-transparent' : 'bg-slate-100 text-slate-400 border border-transparent')
+                              }`}
+                        >
+                           <f.icon size={10} />
+                           {f.label}
+                        </button>
+                     );
+                  })}
+               </div>
 
-               {loadingFeed && feedActivity.length === 0 ? (
-                  <div className="py-20 flex flex-col items-center justify-center opacity-50">
-                     <Loader2 size={40} className="animate-spin text-blue-500 mb-4" />
-                     <p className="text-xs font-black uppercase tracking-widest">Načítám aktivitu...</p>
+               {!feedLoaded ? (
+                  <div className="py-20 flex flex-col items-center justify-center animate-in fade-in duration-500">
+                     <img src="/logos/at_logo_light_clean.png" alt="Načítání..." className="w-20 h-20 object-contain animate-spin" style={{ animationDuration: '2s' }} />
                   </div>
                ) : feedActivity.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center space-y-6 opacity-60">
@@ -870,12 +1072,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                      </div>
                   </div>
                ) : (
-                  <div className="space-y-3">
-                     {feedActivity.map((item, idx) => {
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                     {feedActivity.filter(item => feedFilter.has(item.type)).map((item, idx) => {
                         const isTradeItem = item.type === 'trade';
                         const isPrepItem = item.type === 'prep';
                         const isReviewItem = item.type === 'review';
-                        const borderColor = isTradeItem ? (item.data?.pnl >= 0 ? 'border-l-emerald-500' : 'border-l-rose-500') : isPrepItem ? 'border-l-blue-500' : 'border-l-amber-500';
+                        const isWin = item.data?.pnl >= 0;
                         const timeStr = (() => {
                            try {
                               const d = new Date(item.date);
@@ -883,67 +1085,226 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                            } catch { return ''; }
                         })();
 
+                        // === TRADE CARD (compact vertical layout) ===
+                        if (isTradeItem) {
+                           const glowClass = isWin ? 'neon-border-green neon-glow-green' : 'neon-border-red neon-glow-red';
+                           const pnlColor = isWin ? 'text-emerald-500' : 'text-rose-500';
+                           const hasScreenshot = !!item.data?.screenshot;
+
+                           return (
+                              <div
+                                 key={`trade-${item.id}-${idx}`}
+                                 className={`group relative flex flex-col rounded-[20px] border overflow-hidden cursor-pointer transition-all duration-500 hover:scale-[1.02] ${glowClass} ${isDark ? 'glass-panel' : 'bg-white border-slate-200 shadow-md'}`}
+                                 onClick={() => setSelectedTrade(item.data)}
+                              >
+                                 {/* Screenshot (top) */}
+                                 {hasScreenshot && (
+                                    <div className="relative h-32 w-full overflow-hidden">
+                                       <img
+                                          src={item.data.screenshot}
+                                          alt="Trade screenshot"
+                                          className="w-full h-full object-cover transition-all duration-700 group-hover:scale-105"
+                                          loading="lazy"
+                                       />
+                                       <div className={`absolute inset-0 bg-gradient-to-t ${isDark ? 'from-[rgba(10,15,29,0.8)]' : 'from-white/80'} via-transparent to-transparent`} />
+                                       {/* PnL overlay on screenshot */}
+                                       <div className="absolute bottom-2 right-3">
+                                          {item.meta?.pnlFormat !== 'hidden' ? (
+                                             <span className={`text-lg font-black tracking-tighter font-mono drop-shadow-lg ${pnlColor}`}>
+                                                {item.meta?.pnlFormat === 'rr'
+                                                   ? `${isWin ? '+' : ''}${item.data?.pnl?.toFixed(2)}R`
+                                                   : `${isWin ? '+' : ''}$${Math.abs(item.data?.pnl || 0).toLocaleString()}`
+                                                }
+                                             </span>
+                                          ) : null}
+                                       </div>
+                                    </div>
+                                 )}
+
+                                 {/* Content */}
+                                 <div className="p-4 space-y-2">
+                                    {/* User header + time */}
+                                    <div className="flex items-center justify-between">
+                                       <div className="flex items-center gap-2">
+                                          <div className={`w-6 h-6 rounded-md flex items-center justify-center font-black uppercase text-[8px] ${isDark ? 'bg-blue-600/10 text-blue-500' : 'bg-blue-50 text-blue-600'}`}>
+                                             {item.user?.name?.substring(0, 2) || '??'}
+                                          </div>
+                                          <span className={`text-[11px] font-black ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{item.user?.name || 'Trader'}</span>
+                                       </div>
+                                       <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{timeStr}</span>
+                                    </div>
+
+                                    {/* Instrument + Direction + PnL */}
+                                    <div className="flex items-center justify-between">
+                                       <div className="flex items-center gap-2">
+                                          <h3 className={`text-lg font-black uppercase tracking-tighter truncate leading-none ${isDark ? 'text-white group-hover:text-trade-accent' : 'text-slate-900'} transition-colors duration-300`}>
+                                             {item.data?.instrument || '—'}
+                                          </h3>
+                                          {item.data?.direction && (
+                                             <span className={`px-1.5 py-0.5 rounded text-[7px] font-black uppercase border tracking-tighter ${item.data.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border-rose-500/20'}`}>
+                                                {item.data.direction}
+                                             </span>
+                                          )}
+                                          {item.meta?.accountCount > 1 && (
+                                             <span className={`text-[7px] font-black px-1 py-0.5 rounded border ${isDark ? 'bg-slate-500/10 text-slate-400 border-white/5' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                                                x{item.meta.accountCount}
+                                             </span>
+                                          )}
+                                       </div>
+                                       {/* PnL (when no screenshot) */}
+                                       {!hasScreenshot && (
+                                          <div>
+                                             {item.meta?.pnlFormat !== 'hidden' ? (
+                                                <span className={`text-lg font-black tracking-tighter leading-none font-mono ${pnlColor}`}>
+                                                   {item.meta?.pnlFormat === 'rr'
+                                                      ? `${isWin ? '+' : ''}${item.data?.pnl?.toFixed(2)}R`
+                                                      : `${isWin ? '+' : ''}$${Math.abs(item.data?.pnl || 0).toLocaleString()}`
+                                                   }
+                                                </span>
+                                             ) : (
+                                                <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Skryto</span>
+                                             )}
+                                          </div>
+                                       )}
+                                    </div>
+
+                                    {/* Metadata badges */}
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                       {(() => {
+                                          const DEFAULT_SESSIONS = [
+                                             { name: 'Asia', startTime: '02:00', endTime: '08:00', color: '#64748b' },
+                                             { name: 'London', startTime: '09:00', endTime: '16:00', color: '#3b82f6' },
+                                             { name: 'New York', startTime: '15:30', endTime: '22:00', color: '#f97316' }
+                                          ];
+                                          const ts = item.data?.timestamp;
+                                          let sessionLabel = item.data?.signal || '';
+                                          let sessionColor = '';
+                                          if (ts && (sessionLabel === 'Manuální obchod' || !sessionLabel)) {
+                                             const d = new Date(typeof ts === 'number' ? ts : Date.parse(ts));
+                                             const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+                                             for (let i = DEFAULT_SESSIONS.length - 1; i >= 0; i--) {
+                                                const s = DEFAULT_SESSIONS[i];
+                                                if (hhmm >= s.startTime && hhmm < s.endTime) { sessionLabel = s.name; sessionColor = s.color; break; }
+                                             }
+                                          }
+                                          if (!sessionLabel) return null;
+                                          return (
+                                             <span className="text-[7px] font-black px-1.5 py-0.5 rounded border border-white/5" style={{ backgroundColor: (sessionColor || '#6366f1') + '15', color: sessionColor || '#6366f1' }}>
+                                                {sessionLabel}
+                                             </span>
+                                          );
+                                       })()}
+                                       {item.meta?.pnlFormat !== 'hidden' && item.data?.riskAmount > 0 && item.data?.pnl !== undefined && (
+                                          <span className={`text-[7px] font-black px-1.5 py-0.5 rounded border ${isDark ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' : 'bg-cyan-50 text-cyan-600 border-cyan-200'}`}>
+                                             {item.meta?.pnlFormat === 'rr'
+                                                ? `${item.data.pnl >= 0 ? '+' : ''}${item.data.pnl.toFixed(2)}R`
+                                                : `${(item.data.pnl / item.data.riskAmount) >= 0 ? '+' : ''}${(item.data.pnl / item.data.riskAmount).toFixed(2)}R`
+                                             }
+                                          </span>
+                                       )}
+                                       {item.meta?.pnlFormat !== 'hidden' && item.data?.entryPrice != null && (
+                                          <span className={`text-[7px] font-bold px-1.5 py-0.5 rounded border ${isDark ? 'bg-white/[0.03] text-slate-400 border-white/5' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                                             <span className="font-mono">{Number(item.data.entryPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}</span>
+                                             {item.data?.exitPrice != null && <> <span className="opacity-40">→</span> <span className="font-mono">{Number(item.data.exitPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}</span></>}
+                                          </span>
+                                       )}
+                                    </div>
+                                 </div>
+                              </div>
+                           );
+                        }
+
+                        // === PREP & REVIEW CARDS (compact glass panel) ===
+                        const glowClassPR = isPrepItem ? 'neon-border-blue neon-glow-blue' : 'neon-border-amber neon-glow-amber';
+
                         return (
                            <div
                               key={`${item.type}-${item.id}-${idx}`}
-                              className={`p-4 rounded-2xl border border-l-4 ${borderColor} cursor-pointer transition-all hover:scale-[1.01] ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}
+                              className={`p-4 rounded-[20px] border cursor-pointer transition-all duration-500 hover:scale-[1.02] ${glowClassPR} ${isDark ? 'glass-panel' : 'bg-white border-slate-200 shadow-md'}`}
                               onClick={() => {
-                                 if (isTradeItem) setSelectedTrade(item.data);
-                                 else if (isPrepItem) setSelectedPrep({ id: item.id, date: item.date.split('T')[0], user_id: '', data: item.data });
-                                 else if (isReviewItem) setSelectedReview({ id: item.id, date: item.date.split('T')[0], user_id: '', data: item.data });
+                                 if (isPrepItem) { setFeedIronRules(item.user?.ironRules || null); setSelectedPrep({ id: item.id, date: item.date.split('T')[0], ...item.data }); }
+                                 else if (isReviewItem) { setFeedIronRules(item.user?.ironRules || null); setSelectedReview({ id: item.id, date: item.date.split('T')[0], ...item.data }); }
                               }}
                            >
-                              <div className="flex items-center justify-between mb-1">
-                                 <div className="flex items-center gap-3">
-                                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black uppercase text-xs ${isTradeItem ? 'bg-blue-600/10 text-blue-500' : isPrepItem ? 'bg-blue-500/10 text-blue-400' : 'bg-amber-500/10 text-amber-500'}`}>
+                              <div className="flex items-center justify-between mb-2">
+                                 <div className="flex items-center gap-2">
+                                    <div className={`w-6 h-6 rounded-md flex items-center justify-center font-black uppercase text-[8px] ${isPrepItem ? 'bg-blue-500/10 text-blue-400' : 'bg-amber-500/10 text-amber-500'}`}>
                                        {item.user?.name?.substring(0, 2) || '??'}
                                     </div>
                                     <div>
-                                       <span className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.user?.name || 'Trader'}</span>
-                                       <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
-                                          {isTradeItem ? 'Nový obchod' : isPrepItem ? (item.meta?.locked ? 'Příprava (zamčeno)' : 'Dokončil přípravu') : 'Dokončil review'}
-                                          <span className="mx-1.5 opacity-30">·</span>
-                                          {timeStr}
+                                       <span className={`text-[11px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.user?.name || 'Trader'}</span>
+                                       <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
+                                          {isPrepItem ? (item.meta?.locked ? 'Příprava (zamčeno)' : 'Příprava') : 'Review'}
                                        </p>
                                     </div>
                                  </div>
-                                 <div className="text-right">
-                                    {isTradeItem && item.meta?.pnlFormat !== 'hidden' && (
-                                       <span className={`text-lg font-black font-mono ${item.data?.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                          {item.meta?.pnlFormat === 'rr'
-                                             ? `${item.data?.pnl >= 0 ? '+' : ''}${item.data?.pnl?.toFixed(2)}R`
-                                             : `${item.data?.pnl >= 0 ? '+' : ''}$${Math.abs(item.data?.pnl || 0).toFixed(0)}`
-                                          }
-                                       </span>
-                                    )}
+                                 <div className="flex items-center gap-2">
                                     {isReviewItem && !item.meta?.statsHidden && item.data?.rating > 0 && (
                                        <div className="flex items-center gap-0.5">
                                           {[...Array(5)].map((_, i) => (
-                                             <Star key={i} size={12} className={i < item.data.rating ? 'text-yellow-500 fill-yellow-500' : 'text-slate-700'} />
+                                             <Star key={i} size={10} className={i < item.data.rating ? 'text-yellow-500 fill-yellow-500' : 'text-slate-700'} />
                                           ))}
                                        </div>
                                     )}
                                     {isPrepItem && !item.meta?.locked && item.data?.mindsetState && (
-                                       <span className="text-lg">{item.data.mindsetState === 'positive' ? '🟢' : item.data.mindsetState === 'negative' ? '🔴' : '🟡'}</span>
+                                       <span className="text-sm">{item.data.mindsetState === 'positive' ? '🟢' : item.data.mindsetState === 'negative' ? '🔴' : '🟡'}</span>
                                     )}
+                                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{timeStr}</span>
                                  </div>
                               </div>
-                              {isTradeItem && (
-                                 <div className="flex items-center gap-2 mt-2 ml-12">
-                                    {item.data?.instrument && (
-                                       <span className={`text-xs font-black px-2 py-0.5 rounded-lg ${isDark ? 'bg-[var(--bg-input)] text-white' : 'bg-slate-100 text-slate-800'}`}>
-                                          {item.data.instrument}
+                              {isPrepItem && !item.meta?.locked && (
+                                 <div className="mt-1">
+                                    {(() => {
+                                       const sessions = item.data?.scenarios?.sessions;
+                                       if (sessions && sessions.length > 0) {
+                                          return (
+                                             <div className="flex gap-1.5 overflow-x-auto">
+                                                {sessions.map((s: any, si: number) => (
+                                                   <div key={s.id || si} className={`shrink-0 rounded-lg overflow-hidden border ${isDark ? 'border-white/5' : 'border-slate-200'}`} style={{ width: 110 }}>
+                                                      {s.image ? (
+                                                         <div className="aspect-video relative">
+                                                            <img src={s.image} className="w-full h-full object-cover" alt={s.label} loading="lazy" />
+                                                            <div className="absolute top-0.5 left-0.5 px-1 py-0.5 bg-black/60 backdrop-blur-sm rounded text-[5px] font-black uppercase text-white tracking-widest">{s.label}</div>
+                                                         </div>
+                                                      ) : (
+                                                         <div className={`aspect-video flex items-center justify-center ${isDark ? 'bg-slate-800/50' : 'bg-slate-100'}`}>
+                                                            <span className="text-[7px] font-black uppercase text-slate-500 tracking-widest">{s.label}</span>
+                                                         </div>
+                                                      )}
+                                                   </div>
+                                                ))}
+                                             </div>
+                                          );
+                                       }
+                                       return null;
+                                    })()}
+                                 </div>
+                              )}
+                              {isReviewItem && !item.meta?.statsHidden && (
+                                 <div className="flex items-center gap-1 flex-wrap">
+                                    {item.data?.scenarioResult && (
+                                       <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded border ${item.data.scenarioResult === 'Bullish' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
+                                          item.data.scenarioResult === 'Bearish' ? 'bg-rose-500/10 text-rose-500 border-rose-500/20' :
+                                             item.data.scenarioResult === 'Unpredicted' ? 'bg-orange-500/10 text-orange-500 border-orange-500/20' :
+                                                isDark ? 'bg-slate-700/50 text-slate-400 border-white/5' : 'bg-slate-100 text-slate-600 border-slate-200'
+                                          }`}>
+                                          {item.data.scenarioResult}
                                        </span>
                                     )}
-                                    {item.data?.direction && (
-                                       <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-lg ${item.data.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                                          {item.data.direction === 'Long' ? '▲ Long' : '▼ Short'}
+                                    {item.data?.mistakes?.length > 0 && (
+                                       <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                          {item.data.mistakes.length} {item.data.mistakes.length === 1 ? 'chyba' : item.data.mistakes.length < 5 ? 'chyby' : 'chyb'}
                                        </span>
                                     )}
-                                    {item.data?.signal && (
-                                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-lg ${isDark ? 'bg-purple-500/10 text-purple-400' : 'bg-purple-100 text-purple-600'}`}>
-                                          {item.data.signal}
+                                    {item.data?.ruleAdherence?.length > 0 && (
+                                       <span className={`text-[7px] font-bold px-1.5 py-0.5 rounded border ${isDark ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>
+                                          {item.data.ruleAdherence.filter((r: any) => r.completed).length}/{item.data.ruleAdherence.length}
                                        </span>
+                                    )}
+                                    {!item.meta?.notesHidden && item.data?.mainTakeaway && (
+                                       <p className={`w-full text-[10px] font-bold italic ${isDark ? 'text-slate-400' : 'text-slate-500'} line-clamp-1 mt-1`}>
+                                          "{item.data.mainTakeaway}"
+                                       </p>
                                     )}
                                  </div>
                               )}
@@ -975,7 +1336,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               </div>
                            </div>
                            <div className="flex gap-2">
-                              <button onClick={() => handleRequestAction(req.id, 'accepted')} className="p-2 rounded-lg bg-emerald-500 text-white hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 transition-all"><CheckCircle2 size={20} /></button>
+                              <button onClick={() => setEditingPermissions({
+                                 connectionId: req.id,
+                                 permissions: { canSeePnl: false, pnlFormat: 'hidden', canSeePrep: false, canSeePrepRituals: false, canSeeReviewStats: false, canSeeReviewNotes: false, canSeeNotes: false, canSeeScreenshots: false },
+                                 name: req.sender?.name || 'Trader',
+                                 isAccepting: true
+                              })} className="p-2 rounded-lg bg-emerald-500 text-white hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 transition-all"><CheckCircle2 size={20} /></button>
                               <button onClick={() => handleRequestAction(req.id, 'rejected')} className="p-2 rounded-lg bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all"><X size={20} /></button>
                            </div>
                         </div>
@@ -1298,7 +1664,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     </div>
                                     <div
                                        onClick={() => dayPrep && setSelectedPrep(dayPrep)}
-                                       className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-white border-slate-200 hover:bg-slate-50'} flex items-center justify-between`}
+                                       className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all duration-500 ${dayPrep ? 'neon-border-blue neon-glow-blue' : ''} ${isDark ? 'glass-panel' : 'bg-white border-slate-200 shadow-md'} flex items-center justify-between`}
                                     >
                                        <div>
                                           <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Ranní Příprava</p>
@@ -1310,7 +1676,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     </div>
                                     <div
                                        onClick={() => dayReview && setSelectedReview(dayReview)}
-                                       className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] hover:bg-[var(--bg-page)]' : 'bg-white border-slate-200 hover:bg-slate-50'} flex items-center justify-between`}
+                                       className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all duration-500 ${dayReview ? 'neon-border-amber neon-glow-amber' : ''} ${isDark ? 'glass-panel' : 'bg-white border-slate-200 shadow-md'} flex items-center justify-between`}
                                     >
                                        <div>
                                           <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Večerní Review</p>
@@ -1327,14 +1693,16 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
                                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2"><Activity size={14} /> Dnešní obchody</h3>
                                        <div className="space-y-3">
-                                          {filteredRemoteTrades.length > 0 ? filteredRemoteTrades.map(trade => (
+                                          {filteredRemoteTrades.length > 0 ? filteredRemoteTrades.map(trade => {
+                                             const tradeGlow = trade.pnl >= 0 ? 'neon-border-green neon-glow-green' : 'neon-border-red neon-glow-red';
+                                             return (
                                              <div
                                                 key={trade.id}
                                                 onClick={() => {
                                                    setSelectedTrade(trade);
                                                    setModalPnlFormat(spectatorData?.meta?.pnlFormat);
                                                 }}
-                                                className={`p-4 rounded-xl border flex items-center justify-between cursor-pointer hover:bg-blue-600/5 hover:border-blue-500/20 transition-all ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}
+                                                className={`group p-4 rounded-[20px] border flex items-center justify-between cursor-pointer transition-all duration-500 hover:scale-[1.01] ${tradeGlow} ${isDark ? 'glass-panel' : 'bg-white border-slate-200 shadow-md'}`}
                                              >
                                                 <div className="flex items-center gap-4">
                                                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-black text-xs ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
@@ -1343,7 +1711,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                          : `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl}`}
                                                    </div>
                                                    <div>
-                                                      <p className="text-xs font-black text-white">{trade.instrument}</p>
+                                                      <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</p>
                                                       <p className="text-[9px] text-slate-500 font-bold uppercase">{trade.signal || 'Bez signálu'}</p>
                                                    </div>
                                                 </div>
@@ -1351,7 +1719,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                    {trade.direction}
                                                 </div>
                                              </div>
-                                          )) : (
+                                             );
+                                          }) : (
                                              <div className="py-12 text-center opacity-30">
                                                 <Skull size={32} className="mx-auto mb-2" />
                                                 <p className="text-[10px] font-black uppercase tracking-widest">Žádná aktivita v tento den</p>
@@ -1379,11 +1748,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                       const dateStr = (() => {
                                                          try { return new Date(trade.date).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short' }); } catch { return ''; }
                                                       })();
+                                                      const recentGlow = trade.pnl >= 0 ? 'neon-border-green neon-glow-green' : 'neon-border-red neon-glow-red';
                                                       return (
                                                          <div
                                                             key={trade.id}
                                                             onClick={() => { setSelectedTrade(trade); setModalPnlFormat(spectatorData?.meta?.pnlFormat); }}
-                                                            className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer hover:bg-blue-600/5 transition-all ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50/50 border-slate-100'}`}
+                                                            className={`p-3 rounded-[16px] border flex items-center justify-between cursor-pointer transition-all duration-500 hover:scale-[1.01] ${recentGlow} ${isDark ? 'glass-panel' : 'bg-white border-slate-200 shadow-sm'}`}
                                                          >
                                                             <div className="flex items-center gap-3">
                                                                <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-[10px] ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>

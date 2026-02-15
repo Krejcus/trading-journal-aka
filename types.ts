@@ -80,10 +80,12 @@ export interface SocialConnection {
     canSeePnl: boolean;
     pnlFormat?: 'usd' | 'rr' | 'hidden';
     canSeePrep?: boolean;
+    canSeePrepRituals?: boolean;
     canSeeReviewStats?: boolean;
     canSeeReviewNotes?: boolean; // Replaces 'canSeeNotes' logic
     canSeeNotes?: boolean; // Made optional for backward compatibility
     canSeeScreenshots: boolean;
+    allowedAccountIds?: string[]; // Which accounts follower can see (empty/undefined = all)
     notifications?: {
       newTrade: boolean;
       newPrep: boolean;
@@ -108,6 +110,7 @@ export interface IronRule {
 export interface RuleCompletion {
   ruleId: string;
   status: 'Pass' | 'Fail' | 'Pending';
+  label?: string;
   comment?: string;
 }
 
