@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
    Search, UserPlus, Users, Share2, Shield, Activity,
@@ -255,11 +256,11 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    }, [spectatorData, spectatorDate, activeSpectatorAccountId]);
 
    const dayPrep = useMemo(() =>
-      spectatorData?.preps.find(p => p.date === spectatorDate),
+      spectatorData?.preps.find(p => p.date === spectatorDate && p.completed),
       [spectatorData, spectatorDate]);
 
    const dayReview = useMemo(() =>
-      spectatorData?.reviews.find(r => r.date === spectatorDate),
+      spectatorData?.reviews.find(r => r.date === spectatorDate && r.completed),
       [spectatorData, spectatorDate]);
 
    const globalCareerStats = useMemo(() => {
@@ -349,8 +350,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    };
 
    // Detail Modal Component
-   const DetailModal = ({ title, icon: Icon, onClose, children }: { title: string, icon: any, onClose: () => void, children: React.ReactNode }) => (
-      <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 animate-in fade-in duration-300">
+   const DetailModal = ({ title, icon: Icon, onClose, children }: { title: string, icon: any, onClose: () => void, children: React.ReactNode }) => createPortal(
+      <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 animate-in fade-in duration-300">
          <div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={onClose} />
          <div className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'} animate-in zoom-in-95 duration-300`}>
             <div className={`flex justify-between items-center mb-8 border-b pb-6 ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
@@ -363,7 +364,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
             {children}
          </div>
       </div>
-   );
+   , document.body);
 
    return (
       <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20">
@@ -1522,14 +1523,15 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
 
 
-         {/* Spectator Mode Overlay */}
+         {/* Spectator Mode Overlay - portal to body */}
+         {createPortal(
          <AnimatePresence>
             {isSpectating && (
                <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 20 }}
-                  className={`fixed inset-0 z-[100] flex flex-col ${isDark ? 'bg-slate-950/90' : 'bg-slate-50/90'} backdrop-blur-3xl`}
+                  className={`fixed inset-0 z-[9999] flex flex-col ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}
                >
                   {/* Spectator Header */}
                   <div className={`p-4 border-b flex items-center justify-between ${isDark ? 'bg-slate-900/50 border-white/5' : 'bg-white/50 border-slate-200'}`}>
@@ -2014,6 +2016,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                </motion.div>
             )}
          </AnimatePresence>
+         , document.body)}
 
          {/* Zoom Modal at Root Level for Z-Index consistency */}
          {zoomedImage && (

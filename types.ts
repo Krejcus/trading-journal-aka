@@ -336,6 +336,7 @@ export interface DailyPrep {
   mindsetState: string;
   /** Confidence level (0-100) */
   confidence: number;
+  completed?: boolean;
 }
 
 export interface GoalResult {
@@ -369,6 +370,7 @@ export interface DailyReview {
   ruleAdherence?: RuleCompletion[];
   weeklyGoalAdherence?: RuleCompletion[];
   psycho?: PsychoState;
+  completed?: boolean;
 }
 
 export interface WeeklyGoal {

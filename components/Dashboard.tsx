@@ -825,13 +825,13 @@ const MobileKpiCarousel: React.FC<{ widgets: DashboardWidgetConfig[], renderWidg
 
   return (
     <div
-      className="lg:hidden w-full relative group mb-6"
+      className="lg:hidden w-full relative group"
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
       onTouchStart={() => setIsPaused(true)}
       onTouchEnd={() => setIsPaused(false)}
     >
-      <div className="overflow-hidden p-2">
+      <div className="overflow-hidden py-1">
         <motion.div
           className="flex gap-4"
           drag="x"
@@ -846,24 +846,13 @@ const MobileKpiCarousel: React.FC<{ widgets: DashboardWidgetConfig[], renderWidg
           transition={{ type: "spring", stiffness: 300, damping: 30 }}
         >
           {extendedWidgets.map((widget, i) => (
-            <div key={`${widget.id}-${i}`} className="min-w-[calc(50%-8px)]">
-              <div className="h-[185px]">
+            <div key={`${widget.id}-${i}`} className="min-w-[calc(50%-8px)] pb-1">
+              <div className="h-[215px]">
                 {renderWidget(widget.id, widget)}
               </div>
             </div>
           ))}
         </motion.div>
-      </div>
-
-      {/* Pagination Dots */}
-      <div className="flex justify-center gap-1.5 mt-2 overflow-x-auto py-1 no-scrollbar">
-        {widgets.map((_, i) => (
-          <button
-            key={i}
-            onClick={() => setIndex(i)}
-            className={`w-1.5 h-1.5 rounded-full transition-all duration-300 flex-shrink-0 ${index === i ? 'w-4 bg-blue-600' : (isDark ? 'bg-slate-700' : 'bg-slate-300')}`}
-          />
-        ))}
       </div>
     </div>
   );
@@ -1520,19 +1509,20 @@ const Dashboard: React.FC<DashboardProps> = ({
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          {isMobile && !isEditing && (
-            <MobileKpiCarousel
-              theme={theme}
-              widgets={currentLayout.filter(w => w.size === 'small' && w.visible !== false)}
-              renderWidget={renderWidget}
-            />
-          )}
-
           <SortableContext
             items={currentLayout.map(w => w.id)}
             strategy={rectSortingStrategy}
           >
             <div className={`grid grid-cols-6 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px]`}>
+              {isMobile && !isEditing && (
+                <div className="col-span-6 mb-1">
+                  <MobileKpiCarousel
+                    theme={theme}
+                    widgets={currentLayout.filter(w => w.size === 'small' && w.visible !== false)}
+                    renderWidget={renderWidget}
+                  />
+                </div>
+              )}
               {currentLayout
                 .filter(widget => !(isMobile && !isEditing && widget.size === 'small'))
                 .map((widget, idx) => {
@@ -1642,24 +1632,26 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </aside>
 
-      {selectedTrade && (
-        <TradeDetailModal
-          trade={selectedTrade}
-          accountName={accounts.find(a => a.id === selectedTrade.accountId)?.name || 'Neznámý účet'}
-          theme={theme}
-          onClose={() => setSelectedTradeId(null)}
-          onDelete={() => { if (onDeleteTrade) onDeleteTrade(selectedTrade.id); setSelectedTradeId(null); }}
-          emotions={emotions}
-          onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
-          pnlDisplayMode={pnlDisplayMode}
-          accounts={accounts}
-          initialBalance={stats.initialBalance}
-          user={user}
-          exchangeRates={exchangeRates}
-          allTrades={allTrades.length > 0 ? allTrades : stats.trades}
-        />
-      )}
-    </div>
+      {
+        selectedTrade && (
+          <TradeDetailModal
+            trade={selectedTrade}
+            accountName={accounts.find(a => a.id === selectedTrade.accountId)?.name || 'Neznámý účet'}
+            theme={theme}
+            onClose={() => setSelectedTradeId(null)}
+            onDelete={() => { if (onDeleteTrade) onDeleteTrade(selectedTrade.id); setSelectedTradeId(null); }}
+            emotions={emotions}
+            onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
+            pnlDisplayMode={pnlDisplayMode}
+            accounts={accounts}
+            initialBalance={stats.initialBalance}
+            user={user}
+            exchangeRates={exchangeRates}
+            allTrades={allTrades.length > 0 ? allTrades : stats.trades}
+          />
+        )
+      }
+    </div >
   );
 };
 export default Dashboard;

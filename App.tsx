@@ -1987,7 +1987,7 @@ const App: React.FC = () => {
         }}
       />
 
-      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-[240px]'}`}>
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''}`}>
         <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-2 flex items-center justify-between transition-all bg-[var(--bg-page)]/30 border-[var(--border-subtle)] ${isNetworkSpectating ? 'hidden' : ''}`}>
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
@@ -2184,7 +2184,7 @@ const App: React.FC = () => {
             onRefresh={handleRefreshData}
             disabled={!session || loading}
           >
-            <div className="p-4 lg:p-8 pb-12 flex-1 overflow-x-hidden">
+            <div className={`flex-1 overflow-x-hidden p-4 lg:p-8 pb-12`}>
               {syncError && (
                 <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
                   <AlertTriangle size={16} />
@@ -2314,6 +2314,7 @@ const App: React.FC = () => {
                       activeTab={networkActiveTab}
                       onTabChange={setNetworkActiveTab}
                       onNetworkNotificationsChange={(prefs) => { setNetworkNotifications(prefs); isPreferencesDirty.current = true; }}
+                      onSpectatingChange={setIsNetworkSpectating}
                     />
                   )}
 

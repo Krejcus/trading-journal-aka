@@ -102,6 +102,9 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                   <div className={`flex items-center gap-1.5 mb-1.5`}>
                     <div className={`${isMini ? 'p-1' : 'p-2'} rounded-lg bg-blue-600/10 text-blue-500`}><Coffee size={iconSize} /></div>
                     <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Příprava</h4>
+                    {prep && !prep.completed && !isMini && (
+                      <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">Rozpracováno</span>
+                    )}
                     {prep && onDeletePrep && !isMini && (
                       <button
                         onClick={(e) => {
@@ -254,6 +257,9 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                     <div className="flex items-center gap-1.5">
                       <div className={`${isMini ? 'p-1' : 'p-2'} rounded-lg bg-indigo-600/10 text-indigo-500`}><Moon size={iconSize} /></div>
                       <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Večerní Audit</h4>
+                      {review && !review.completed && !isMini && (
+                        <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">Rozpracováno</span>
+                      )}
                       {review && onDeleteReview && !isMini && (
                         <button
                           onClick={(e) => {

@@ -34,8 +34,8 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
     const sortedDatesForStreak = [...weekdaysOnly].reverse();
 
     for (const date of sortedDatesForStreak) {
-      const hasPrep = preps.some(p => p.date === date);
-      const hasReview = reviews.some(r => r.date === date);
+      const hasPrep = preps.some(p => p.date === date && p.completed);
+      const hasReview = reviews.some(r => r.date === date && r.completed);
       const hasTrades = trades.some(t => t.date.startsWith(date));
       const isToday = date === todayStr;
 
@@ -104,8 +104,8 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
     });
 
     const heatmapData = weekdaysOnly.map(date => {
-      const hasPrep = preps.some(p => p.date === date);
-      const hasReview = reviews.some(r => r.date === date);
+      const hasPrep = preps.some(p => p.date === date && p.completed);
+      const hasReview = reviews.some(r => r.date === date && r.completed);
       const hasTrades = trades.some(t => t.date.startsWith(date));
       let status: 'full' | 'partial' | 'trades-only' | 'none' = 'none';
       if (hasPrep && hasReview) status = 'full';

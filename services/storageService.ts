@@ -1661,7 +1661,7 @@ export const storageService = {
           }
         };
       }),
-      ...(reviews || []).map(r => {
+      ...(reviews || []).filter(r => r.data?.completed).map(r => {
         const isSelf = String(r.user_id) === String(currentUserId);
         const rawPerms = isSelf ? null : (permissionMap[r.user_id] as any);
         const perms = isSelf ? {
@@ -1699,7 +1699,7 @@ export const storageService = {
           }
         };
       }),
-      ...(preps || []).map(p => {
+      ...(preps || []).filter(p => p.data?.completed).map(p => {
         const isSelf = String(p.user_id) === String(currentUserId);
         const rawPerms = isSelf ? null : (permissionMap[p.user_id] as any);
         const canSeePrep = isSelf || (rawPerms?.canSeePrep ?? false);

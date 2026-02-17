@@ -374,23 +374,35 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   // Handle navigation with unsaved changes check
   const handleNavigateWithCheck = useCallback((action: () => void) => {
-    if (hasUnsavedChanges) {
+    const isEditingForm = view === 'edit-prep' || view === 'edit-review';
+    if (hasUnsavedChanges || isEditingForm) {
       setPendingAction(() => action);
       setShowUnsavedWarning(true);
     } else {
       action();
     }
-  }, [hasUnsavedChanges]);
+  }, [hasUnsavedChanges, view]);
 
   // Handle warning dialog actions
   const handleSaveAndProceed = useCallback(() => {
-    handleManualSave();
+    if (view === 'edit-prep') {
+      onSavePrep({ ...prepForm, completed: true });
+    } else if (view === 'edit-review') {
+      onSaveReview({ ...reviewForm, completed: true });
+    } else {
+      handleManualSave();
+    }
+    prepFormDirty.current = false;
+    reviewFormDirty.current = false;
+    setHasUnsavedChanges(false);
     if (pendingAction) pendingAction();
     setShowUnsavedWarning(false);
     setPendingAction(null);
-  }, [handleManualSave, pendingAction]);
+  }, [handleManualSave, pendingAction, view, prepForm, reviewForm, onSavePrep, onSaveReview]);
 
   const handleDiscardAndProceed = useCallback(() => {
+    prepFormDirty.current = false;
+    reviewFormDirty.current = false;
     setHasUnsavedChanges(false);
     if (pendingAction) pendingAction();
     setShowUnsavedWarning(false);
@@ -673,9 +685,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     const disciplinedPnL = validTrades.reduce((s, t) => s + t.pnl, 0);
     const wins = weekTrades.filter(t => t.pnl > 0).length;
 
-    // Counts for Prep/Audit
-    const prepCount = weekPreps.length;
-    const auditCount = weekReviews.length;
+    // Counts for Prep/Audit (only completed ones)
+    const prepCount = weekPreps.filter(p => p.completed).length;
+    const auditCount = weekReviews.filter(r => r.completed).length;
 
     // Session Analytics
     const sessions = { ASIA: 0, LDN: 0, NY: 0 };
@@ -1439,10 +1451,10 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
                   <div className="mt-8 relative z-10">
                     <button
-                      onClick={() => { onSavePrep(prepForm); setView('timeline'); window.scrollTo(0, 0); }}
+                      onClick={() => { onSavePrep({ ...prepForm, completed: true }); prepFormDirty.current = false; setHasUnsavedChanges(false); setView('timeline'); window.scrollTo(0, 0); }}
                       className={`w-full py-5 rounded-[24px] font-black text-[12px] uppercase tracking-[0.3em] text-white shadow-2xl active:scale-95 transition-all duration-500 bg-blue-600 hover:bg-blue-500 shadow-blue-500/30`}
                     >
-                      LOCK IN DAILY PREP
+                      DOKONČIT PŘÍPRAVU
                     </button>
                   </div>
                 </section>
@@ -1583,10 +1595,10 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
                   <div className="mt-6">
                     <button
-                      onClick={() => { onSaveReview(reviewForm); setView('timeline'); window.scrollTo(0, 0); }}
+                      onClick={() => { onSaveReview({ ...reviewForm, completed: true }); reviewFormDirty.current = false; setHasUnsavedChanges(false); setView('timeline'); window.scrollTo(0, 0); }}
                       className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-indigo-500/20 active:scale-95 transition-all"
                     >
-                      UZAVŘÍT AUDIT
+                      DOKONČIT REVIEW
                     </button>
                   </div>
                 </section>
@@ -1820,13 +1832,13 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 <AlertTriangle size={24} className="text-orange-400" />
               </div>
               <div>
-                <h3 className="text-lg font-black">Neuložené změny</h3>
-                <p className="text-sm text-slate-500">Tvoje poznámky ještě nejsou uložené.</p>
+                <h3 className="text-lg font-black">{(view === 'edit-prep' || view === 'edit-review') ? 'Nedokončeno' : 'Neuložené změny'}</h3>
+                <p className="text-sm text-slate-500">{(view === 'edit-prep') ? 'Příprava není dokončená. Chceš ji dokončit?' : (view === 'edit-review') ? 'Review není dokončené. Chceš ho dokončit?' : 'Tvoje poznámky ještě nejsou uložené.'}</p>
               </div>
             </div>
             <div className="flex gap-3">
-              <button onClick={handleSaveAndProceed} className="flex-1 py-3 rounded-2xl bg-green-600 hover:bg-green-500 text-white font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"><Check size={16} /> Uložit</button>
-              <button onClick={handleDiscardAndProceed} className="flex-1 py-3 rounded-2xl bg-red-600/20 hover:bg-red-600/30 text-red-400 font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 border border-red-500/30"><X size={16} /> Zahodit</button>
+              <button onClick={handleSaveAndProceed} className="flex-1 py-3 rounded-2xl bg-green-600 hover:bg-green-500 text-white font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"><Check size={16} /> {(view === 'edit-prep' || view === 'edit-review') ? 'Dokončit' : 'Uložit'}</button>
+              <button onClick={handleDiscardAndProceed} className="flex-1 py-3 rounded-2xl bg-red-600/20 hover:bg-red-600/30 text-red-400 font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 border border-red-500/30"><X size={16} /> Odejít</button>
               <button onClick={handleCancelNavigation} className={`flex-1 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-page)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-input)]' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>Zrušit</button>
             </div>
           </div>

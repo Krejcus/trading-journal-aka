@@ -257,11 +257,13 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 <motion.div variants={itemVariants}>
                   <div className={sectionLabelClass}><Monitor size={10} /> Režim</div>
                   <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
-                    <div
-                      className={`absolute inset-y-0.5 w-[calc(33.33%-2px)] rounded-lg transition-all duration-300 ease-out ${dashboardMode === 'funded' ? `translate-x-0 ${isDark ? 'bg-emerald-500/20 border border-emerald-500/40' : 'bg-emerald-500 text-white shadow-sm'}` :
-                        dashboardMode === 'combined' ? `translate-x-[102%] ${isDark ? 'bg-orange-500/20 border border-orange-500/40' : 'bg-orange-500 text-white shadow-sm'}` :
-                          `translate-x-[204%] ${isDark ? 'bg-blue-500/20 border border-blue-500/40' : 'bg-blue-500 text-white shadow-sm'}`
-                        }`}
+                    <motion.div
+                      animate={{ x: (dashboardMode === 'funded' ? 0 : dashboardMode === 'combined' ? 100 : 200) + '%' }}
+                      transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+                      className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/3)] rounded-lg border ${dashboardMode === 'funded' ? (isDark ? 'bg-emerald-500/20 border-emerald-500/40' : 'bg-emerald-500 shadow-sm') :
+                        dashboardMode === 'combined' ? (isDark ? 'bg-orange-500/20 border-orange-500/40' : 'bg-orange-500 shadow-sm') :
+                          (isDark ? 'bg-blue-500/20 border-blue-500/40' : 'bg-blue-500 shadow-sm')
+                        } ${!isDark ? 'text-white' : ''}`}
                     />
                     {['funded', 'combined', 'challenge'].map((m) => (
                       <button
@@ -280,10 +282,10 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 <motion.div variants={itemVariants}>
                   <div className={sectionLabelClass}><Layers size={10} /> Seskupení</div>
                   <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
-                    <div
-                      className={`absolute inset-y-0.5 w-[calc(50%-2px)] rounded-lg transition-all duration-300 ease-out ${viewMode === 'individual' ? `translate-x-0 ${isDark ? 'bg-white/10 border border-white/10' : 'bg-white shadow-sm font-black'}` :
-                        `translate-x-[102%] ${isDark ? 'bg-white/10 border border-white/10' : 'bg-white shadow-sm font-black'}`
-                        }`}
+                    <motion.div
+                      animate={{ x: (viewMode === 'individual' ? 0 : 100) + '%' }}
+                      transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+                      className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/2)] rounded-lg border ${isDark ? 'bg-white/10 border-white/10' : 'bg-white shadow-sm font-black'}`}
                     />
                     {[{ id: 'individual', label: 'Indiv.' }, { id: 'combined', label: 'Komb.' }].map(v => (
                       <button
@@ -301,11 +303,10 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   <motion.div variants={itemVariants}>
                     <div className={sectionLabelClass}><TrendingUp size={10} /> P&L</div>
                     <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
-                      <div
-                        className={`absolute inset-y-0.5 w-[calc(33.33%-2px)] rounded-lg transition-all duration-300 ease-out ${pnlDisplayMode === 'usd' ? `translate-x-0 ${isDark ? 'bg-indigo-500/20 border border-indigo-500/30' : 'bg-slate-800 text-white'}` :
-                          pnlDisplayMode === 'percent' ? `translate-x-[102%] ${isDark ? 'bg-indigo-500/20 border border-indigo-500/30' : 'bg-slate-800 text-white'}` :
-                            `translate-x-[204%] ${isDark ? 'bg-indigo-500/20 border border-indigo-500/30' : 'bg-slate-800 text-white'}`
-                          }`}
+                      <motion.div
+                        animate={{ x: (pnlDisplayMode === 'usd' ? 0 : pnlDisplayMode === 'percent' ? 100 : 200) + '%' }}
+                        transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+                        className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/3)] rounded-lg border ${isDark ? 'bg-indigo-500/20 border-indigo-500/30' : 'bg-slate-800 text-white'}`}
                       />
                       {[{ id: 'usd', label: '$' }, { id: 'percent', label: '%' }, { id: 'rr', label: 'R' }].map(p => (
                         <button
@@ -324,10 +325,10 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   <motion.div variants={itemVariants}>
                     <div className={sectionLabelClass}><LayoutGrid size={10} /> Zobrazení</div>
                     <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
-                      <div
-                        className={`absolute inset-y-0.5 w-[calc(50%-2px)] rounded-lg transition-all duration-300 ease-out ${historyLayoutMode === 'grid' ? `translate-x-0 ${isDark ? 'bg-white/10 border border-white/10' : 'bg-white shadow-sm font-black'}` :
-                          `translate-x-[102%] ${isDark ? 'bg-white/10 border border-white/10' : 'bg-white shadow-sm font-black'}`
-                          }`}
+                      <motion.div
+                        animate={{ x: (historyLayoutMode === 'grid' ? 0 : 100) + '%' }}
+                        transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+                        className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/2)] rounded-lg border ${isDark ? 'bg-white/10 border-white/10' : 'bg-white shadow-sm font-black'}`}
                       />
                       {[{ id: 'grid', label: 'Mřížka' }, { id: 'table', label: 'Tabulka' }].map(v => (
                         <button
