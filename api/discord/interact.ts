@@ -30,10 +30,15 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
                 if (recentTrades && recentTrades.length > 0) {
                     const tradeText = recentTrades.map(t => {
                         const data = t.data || {};
-                        const screenshots = data.screenshots && data.screenshots.length > 0 ? `Screenshot: ${data.screenshots[0]}` : '';
+                        let screenshots = '';
+                        if (data.screenshots && data.screenshots.length > 0) {
+                            const url = data.screenshots[0];
+                            // Stop Base64 data from crashing Discord markdown chat window!
+                            screenshots = url.startsWith('http') ? `Screenshot: ${url}` : '(Obrázek je v lokálním Base64 formátu, nelze zobrazit)';
+                        }
                         return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'} ${screenshots}`;
                     }).join('\n');
-                    dynamicContext += `Aktuální načtené obchody (posledních 3):\n${tradeText}\n(Použij markdown pro fotky: ![Graf](url))\n`;
+                    dynamicContext += `Aktuální načtené obchody (posledních 3):\n${tradeText}\n(Použij markdown pro fotky: ![Graf](url) POUZE pokud to je začínající na http)\n`;
                 } else {
                     dynamicContext += "Žádné nedávné obchody nenalezeny.\n";
                 }
