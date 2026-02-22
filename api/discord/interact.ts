@@ -77,7 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                     // Fetch recent trades broadly (for the single-trader MVP, we just grab the newest trades across the platform, or we grab the profile that actually HAS trades)
                     const { data: recentTrades, error: tradesErr } = await supabase.from('trades')
-                        .select('*, profiles(full_name, username)')
+                        .select('*')
                         .order('created_at', { ascending: false })
                         .limit(10);
 
