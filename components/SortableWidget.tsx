@@ -46,8 +46,12 @@ const SortableWidget: React.FC<SortableWidgetProps> = ({
       <div
         ref={setNodeRef}
         style={style}
-        className={`${gridClass} ${rowSpanClass} relative h-full rounded-[24px] border-2 border-dashed border-blue-500/50 bg-blue-500/5 z-0`}
-      />
+        className={`${gridClass} ${rowSpanClass} relative h-full rounded-[32px] border-2 border-indigo-500/80 bg-indigo-500/10 z-0 overflow-hidden shadow-[inset_0_0_20px_rgba(99,102,241,0.2)] flex items-center justify-center`}
+      >
+        <div className="text-indigo-400/50 font-black text-xs uppercase tracking-widest pointer-events-none">
+          Upustit zde
+        </div>
+      </div>
     );
   }
 
@@ -74,22 +78,27 @@ const SortableWidget: React.FC<SortableWidgetProps> = ({
           </div>
 
           {/* Edit Actions Wrapper (needs to stopPropagation) */}
-          <div className="pointer-events-auto" onPointerDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
+          <div className="absolute top-4 right-4 z-40 flex items-center gap-2 pointer-events-auto shadow-2xl" onPointerDown={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
             {editActions}
           </div>
 
-          {/* Resize Handle */}
+          {/* Pro Resize Handle with Tooltip */}
           <div
             onPointerDown={(e) => e.stopPropagation()}
             onMouseDown={(e) => {
               e.stopPropagation();
               if (onResizeStart) onResizeStart(id, e);
             }}
-            className="absolute bottom-2 right-2 w-8 h-8 flex items-end justify-end pointer-events-auto cursor-nwse-resize group/resize"
-            title="Resize widget"
+            className="absolute bottom-0 right-0 w-12 h-12 flex items-end justify-end pointer-events-auto cursor-nwse-resize group/resize z-50 p-3"
+            title="Změnit velikost"
           >
-            <div className="w-4 h-4 rounded-br-lg border-r-2 border-b-2 border-blue-500/50 group-hover/resize:border-blue-400 transition-colors relative">
-              <div className="absolute bottom-1 right-1 w-1.5 h-1.5 bg-blue-500/30 rounded-full" />
+            {/* Interactive Badge (Hover) */}
+            <div className="absolute bottom-10 right-2 bg-slate-900 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md opacity-0 group-hover/resize:opacity-100 transition-opacity whitespace-nowrap shadow-xl pointer-events-none tracking-widest">
+              {size === 'small' ? '1x' : size === 'large' ? '3x' : '6x'} × {rowSpan}y
+            </div>
+
+            <div className="w-5 h-5 rounded-br-[20px] rounded-tl-sm border-r-[3px] border-b-[3px] border-indigo-500/50 group-hover/resize:border-indigo-400 transition-colors relative">
+              <div className="absolute bottom-1 right-1 w-2 h-2 rounded-full bg-indigo-500 group-hover/resize:scale-125 transition-transform" />
             </div>
           </div>
         </div>

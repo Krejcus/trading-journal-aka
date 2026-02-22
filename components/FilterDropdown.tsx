@@ -511,14 +511,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 </div>
               </motion.div>
 
-              {setIsDashboardEditing && (
-                <motion.div variants={itemVariants} className={`p-3 rounded-2xl border ${isDark ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-indigo-50 border-indigo-100'}`}>
-                  <button onClick={() => { setIsDashboardEditing(!isDashboardEditing); setIsOpen(false); }} className={`w-full py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all ${isDashboardEditing ? 'bg-indigo-600 text-white' : (isDark ? 'bg-white/5 text-slate-400 border border-white/5 hover:text-slate-200' : 'bg-white text-slate-600 border border-slate-200 shadow-sm')}`}>
-                    {isDashboardEditing ? <Check size={12} /> : <LayoutGrid size={12} />}
-                    <span className="text-[8px] font-black uppercase tracking-widest">{isDashboardEditing ? 'Uložit rozložení' : 'Upravit dashboard'}</span>
-                  </button>
-                </motion.div>
-              )}
+
             </div>
 
             <div className={`px-4 py-3 border-t backdrop-blur-md flex items-center justify-between relative z-10 ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50/50'}`}>

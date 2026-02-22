@@ -1487,9 +1487,14 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
   return (
-    <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${isEditing && isArmoryOpen ? 'lg:pr-[340px]' : ''}`}>
-      <div className="space-y-6 lg:space-y-10 pb-24 relative z-10 w-full overflow-x-hidden">
-        <div className="flex justify-between items-center px-2">
+    <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${isEditing ? 'canvas-grid' : ''}`}>
+      {/* Dim overlay for non-widget content during edit */}
+      {isEditing && (
+        <div className="fixed inset-0 z-0 bg-slate-900/40 dark:bg-black/60 backdrop-blur-[2px] pointer-events-none transition-opacity duration-500" />
+      )}
+
+      <div className={`space-y-6 lg:space-y-10 pb-40 relative z-10 w-full overflow-x-hidden transition-all duration-500 ${isEditing ? 'scale-[0.98] transform origin-top' : ''}`}>
+        <div className="flex justify-between items-center px-4 pt-4">
           <div>
             <div className="flex items-center gap-4">
               {/* MODE SWITCHER */}
@@ -1497,8 +1502,9 @@ const Dashboard: React.FC<DashboardProps> = ({
           </div>
           {isEditing && (
             <div className="flex gap-2">
-              <button onClick={() => setIsArmoryOpen(!isArmoryOpen)} className="lg:hidden p-3 bg-blue-600 text-white rounded-xl font-black text-xs uppercase shadow-lg shadow-blue-500/20"><LayoutTemplate size={18} /></button>
-              <button onClick={onCloseEdit} className="p-3 bg-emerald-600 text-white rounded-xl font-black text-xs uppercase shadow-lg shadow-emerald-500/20"><CheckCircle2 size={18} /></button>
+              <button onClick={onCloseEdit} className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full font-black text-xs uppercase tracking-widest shadow-xl shadow-emerald-500/20 active:scale-95 transition-all flex items-center gap-2">
+                <CheckCircle2 size={16} /> Hotovo
+              </button>
             </div>
           )}
         </div>
@@ -1513,7 +1519,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             items={currentLayout.map(w => w.id)}
             strategy={rectSortingStrategy}
           >
-            <div className={`grid grid-cols-6 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px]`}>
+            <div className={`grid grid-cols-6 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px] md:px-6`}>
               {isMobile && !isEditing && (
                 <div className="col-span-6 mb-1">
                   <MobileKpiCarousel
@@ -1568,69 +1574,61 @@ const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </SortableContext>
           <DragOverlay adjustScale={true} dropAnimation={{
-            duration: 500,
+            duration: 400,
             easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)',
           }}>
             {activeId ? (
-              <div className="w-full h-full opacity-90 cursor-grabbing shadow-2xl scale-102 transition-transform duration-300 ring-4 ring-blue-500/30 rounded-[24px] overflow-hidden">
+              <div className="w-full h-full opacity-95 cursor-grabbing shadow-[0_30px_60px_-15px_rgba(59,130,246,0.3)] scale-[1.02] -rotate-2 transition-transform duration-300 ring-2 ring-blue-500 rounded-[32px] overflow-hidden bg-[var(--bg-card)]">
                 {renderWidget(activeId, layout.find(w => w.id === activeId))}
               </div>
             ) : null}
           </DragOverlay>
         </DndContext>
       </div>
-      <aside className={`fixed top-0 right-0 bottom-0 z-[100] transform transition-all duration-700 ease-in-out shadow-[-20px_0_50px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden ${isEditing && isArmoryOpen ? 'translate-x-0' : 'translate-x-full'} w-full sm:w-[340px] bg-[var(--bg-sidebar)] border-l border-[var(--border-subtle)] backdrop-blur-3xl`}>
-        <div className="p-6 md:p-8 border-b border-slate-800/50 flex flex-col gap-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="p-3 rounded-2xl bg-blue-600 shadow-[0_0_20px_rgba(59,130,246,0.5)] text-white"><LayoutTemplate size={20} /></div>
-              <div><h3 className="text-lg font-black tracking-tight leading-none">ARMORY</h3><p className="text-[9px] font-bold text-slate-500 uppercase mt-1 tracking-widest">Tactical Modules</p></div>
+
+      {/* FLOATING PRO DOCK (Replaces Sidebar) */}
+      <AnimatePresence>
+        {isEditing && (
+          <motion.div
+            initial={{ y: 100, opacity: 0, scale: 0.95 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 100, opacity: 0, scale: 0.95 }}
+            transition={{ type: "spring", stiffness: 400, damping: 30 }}
+            className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] w-[95%] max-w-4xl p-3 md:p-4 rounded-3xl border shadow-2xl backdrop-blur-3xl flex items-center gap-4 ${isDark ? 'bg-[#020617]/80 border-white/10 shadow-black/80' : 'bg-white/90 border-slate-200 shadow-slate-300/50'}`}
+          >
+            <div className="flex-1 overflow-x-auto no-scrollbar flex items-center gap-3 snap-x px-2">
+              {MASTER_WIDGET_LIST.filter(master => !layout.find(w => w.id === master.id)?.visible).length === 0 && (
+                <div className="w-full text-center text-xs font-bold text-slate-500 py-3">Všechny moduly jsou aktivní</div>
+              )}
+              {MASTER_WIDGET_LIST.filter(master => !layout.find(w => w.id === master.id)?.visible).map(master => (
+                <motion.button
+                  whileHover={{ y: -4, scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  key={master.id}
+                  onClick={(e) => { e.stopPropagation(); updateWidgetStatus(master.id, true); }}
+                  className={`snap-center shrink-0 flex flex-col items-center justify-center p-3 w-24 h-24 rounded-2xl border transition-colors group cursor-pointer ${isDark ? 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/10' : 'bg-slate-50 border-slate-200 hover:bg-white hover:shadow-md'}`}
+                  title={master.description}
+                >
+                  <div className={`p-2.5 rounded-xl border mb-2 transition-colors ${isDark ? 'bg-slate-800 border-white/5 text-slate-400 group-hover:text-blue-400' : 'bg-white shadow-sm border-slate-100 text-slate-500 group-hover:text-blue-500'}`}>
+                    {React.cloneElement(master.icon as React.ReactElement<any>, { size: 18 })}
+                  </div>
+                  <span className={`text-[9px] font-black uppercase tracking-tight text-center leading-tight line-clamp-2 ${isDark ? 'text-slate-400 group-hover:text-white' : 'text-slate-600 group-hover:text-slate-900'}`}>{master.label}</span>
+                </motion.button>
+              ))}
             </div>
-            <button onClick={() => setIsArmoryOpen(false)} className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400"><X size={18} /></button>
-          </div>
-          <button onClick={onCloseEdit} className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95"><CheckCircle2 size={18} /> Hotovo</button>
-          <div className="relative"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={16} /><input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Hledat modul..." className={`w-full pl-12 pr-4 py-3 rounded-2xl border transition-all text-sm outline-none ${theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] focus:border-blue-500' : 'bg-white border-slate-200'}`} /></div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-          {(Object.entries(categories)).map(([catName, widgets]) => {
-            const filtered = (widgets as any[]).filter(w => w.label.toLowerCase().includes(searchQuery.toLowerCase()));
-            if (filtered.length === 0) return null;
-            return (
-              <div key={catName} className="space-y-4">
-                <button className="w-full flex items-center justify-between p-2 rounded-xl"><span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2"><Layers size={12} className="text-blue-500" /> {catName}</span></button>
-                <div className="space-y-4 pl-1">
-                  {filtered.map(master => {
-                    const isActive = layout.find(w => w.id === master.id)?.visible;
-                    return (
-                      <div key={master.id} className={`group relative p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 ${isActive ? 'bg-blue-600/10 border-blue-500/30' : (theme !== 'light' ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)] hover:border-slate-700' : 'bg-slate-50 border-slate-200 hover:shadow-sm')}`}>
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div className={`p-2 rounded-xl border shrink-0 transition-colors ${isActive ? 'bg-blue-600 text-white border-blue-500' : 'bg-slate-800 border-white/5 text-slate-500'}`}>
-                            {React.cloneElement(master.icon as React.ReactElement<any>, { size: 16 })}
-                          </div>
-                          <div className="min-w-0">
-                            <h4 className={`text-[10px] font-black uppercase tracking-tight truncate ${isActive ? 'text-blue-400' : (theme !== 'light' ? 'text-white' : 'text-slate-900')}`}>{master.label}</h4>
-                            <p className="text-[7px] font-bold text-slate-500 uppercase tracking-widest truncate">{master.category}</p>
-                          </div>
 
-                          {/* Rich Tooltip via Title (Native) or Custom Tooltip Component if preferred */}
-                          <div className="absolute inset-0 z-10 cursor-help" title={master.description}></div>
-                        </div>
+            <div className="shrink-0 w-px h-16 bg-gradient-to-b from-transparent via-slate-500/20 to-transparent block" />
 
-                        <button
-                          onClick={(e) => { e.stopPropagation(); updateWidgetStatus(master.id, !isActive); }}
-                          className={`relative z-20 w-8 h-8 rounded-lg flex items-center justify-center transition-all active:scale-90 ${isActive ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white' : 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 hover:bg-blue-500'}`}
-                        >
-                          {isActive ? <Trash2 size={14} /> : <Plus size={14} />}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </aside>
+            <div className="shrink-0 pl-2">
+              <button onClick={onCloseEdit} className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/20 flex flex-col items-center justify-center gap-1 hover:scale-105 active:scale-95 transition-all">
+                <CheckCircle2 size={24} />
+                <span className="text-[9px] font-black uppercase tracking-widest">Hotovo</span>
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
 
       {
         selectedTrade && (

@@ -818,4 +818,17 @@ html.light-theme[data-accent="cyan"] .bg-slate-50\/80 {
 html.light-theme[data-accent="cyan"] .border-slate-200,
 html.light-theme[data-accent="cyan"] .border-slate-100 {
   border-color: #22d3ee !important;
+}/* ===== PRO CANVAS GRID ===== */
+.canvas-grid {
+    background-image: radial-gradient(var(--text-muted) 1px, transparent 1px);
+    background-size: 24px 24px;
+    background-position: center;
+}
+
+.oled-theme .canvas-grid {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+}
+
+.light-theme .canvas-grid {
+    background-image: radial-gradient(rgba(0, 0, 0, 0.1) 1px, transparent 1px);
 }

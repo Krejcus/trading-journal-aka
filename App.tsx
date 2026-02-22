@@ -2142,8 +2142,6 @@ const App: React.FC = () => {
                 accounts={contextAccounts}
                 trades={trades}
                 theme={theme}
-                isDashboardEditing={activePage === 'dashboard' ? isDashboardEditing : undefined}
-                setIsDashboardEditing={activePage === 'dashboard' ? setIsDashboardEditing : undefined}
                 dashboardMode={dashboardMode}
                 setDashboardMode={(v) => { setDashboardMode(v); isPreferencesDirty.current = true; }}
                 viewMode={viewMode}
@@ -2153,6 +2151,17 @@ const App: React.FC = () => {
                 historyLayoutMode={activePage === 'history' ? historyLayoutMode : undefined}
                 setHistoryLayoutMode={activePage === 'history' ? setHistoryLayoutMode : undefined}
               />
+
+              {activePage === 'dashboard' && (
+                <button
+                  onClick={() => setIsDashboardEditing(!isDashboardEditing)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl transition-colors border ${isDashboardEditing ? 'bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-500/20' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600 shadow-sm')}`}
+                  title={isDashboardEditing ? "Uložit rozložení" : "Upravit Dashboard"}
+                >
+                  {isDashboardEditing ? <Check size={16} /> : <LayoutGrid size={16} />}
+                  <span className="text-xs font-black uppercase tracking-widest hidden md:inline">{isDashboardEditing ? 'Uložit' : 'Upravit'}</span>
+                </button>
+              )}
 
               {/* Force Refresh Button */}
               <button
