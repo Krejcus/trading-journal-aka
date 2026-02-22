@@ -13,19 +13,26 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         }
 
         const ai = new GoogleGenAI({ apiKey });
-
+        
         const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
+        // Note: process.env works in Edge for Vercel, but let's be absolutely loud about it in logs
         const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
+        
+        console.log("EDGE RUNTIME DEBUG:");
+        console.log("- VITE_SUPABASE_URL exists:", !!supabaseUrl);
+        console.log("- SUPABASE_SERVICE_ROLE_KEY exists:", !!supabaseServiceKey, supabaseServiceKey ? `(starts with ${supabaseServiceKey.substring(0, 10)})` : '');
+        
         let dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\nNebyla nalezena čerstvá data v rychlém kontextu.\n";
 
         if (supabaseServiceKey) {
-            const supabase = createClient(supabaseUrl, supabaseServiceKey);
+            const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+                auth: { persistSession: false }
+            });
             const { data: recentTrades, error: tradesErr } = await supabase.from('trades')
                 .select('*')
                 .order('created_at', { ascending: false })
                 .limit(10);
-
+                
             console.log("Supabase fetch returned trades length:", recentTrades?.length);
             if (tradesErr) console.error("Supabase trades error:", tradesErr);
 
@@ -36,17 +43,21 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
                 netPnl = recentTrades.reduce((acc, trade) => acc + (Number(trade.pnl) || 0), 0);
                 tradeText = recentTrades.map(t => {
                     const data = t.data || {};
-                    const screenshots = data.screenshots && data.screenshots.length > 0
-                        ? `\nScreenshot: ${data.screenshots[0]}`
+                    const screenshots = data.screenshots && data.screenshots.length > 0 
+                        ? `\nScreenshot: ${data.screenshots[0]}` 
                         : '';
                     return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'}${screenshots}`;
                 }).join('\n');
+            } else {
+                tradeText = "Databáze úspěšně odpověděla, ale seznam vrací 0 položek (ověř RLS/klíče!).";
             }
 
             dynamicContext = `\n[SYSTÉMOVÁ DATA - EXTRÉMNÍ PAMĚŤ]\n` +
-                `Aktuální načtené obchody (posledních 10):\n${tradeText}\n\n` +
-                `Celkové PnL z těchto posledních obchodů: $${netPnl.toFixed(2)}\n\n` +
-                `(Pokud trader požádá o ukázání některého obchodu nebo nejlepšího/nejhoršího obchodu, vždy se podívej do dat výše a pro vykreslení screenshotu VŽDY použij Markdown syntaxi takto: ![Graph](URL-ODKAZ) i přesto že to není validní URL struktura. Markdown způsobí bezpečné vykreslení i z Firebase storage v chatu.)\n`;
+            `Aktuální načtené obchody (posledních 10):\n${tradeText}\n\n` +
+            `Celkové PnL z těchto posledních obchodů: $${netPnl.toFixed(2)}\n\n` +
+            `(Pokud trader požádá o ukázání některého obchodu nebo nejlepšího/nejhoršího obchodu, vždy se podívej do dat výše a pro vykreslení screenshotu VŽDY použij Markdown syntaxi takto: ![Graph](URL-ODKAZ) i přesto že to není validní URL struktura. Markdown způsobí bezpečné vykreslení i z Firebase storage v chatu.)\n`;
+        } else {
+             dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\nService Role klíč nebyl nalezen v proměnných!\n";
         }
 
         const response = await ai.models.generateContent({
@@ -61,12 +72,12 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         const text = response.text || "Omlouvám se, jsem teď myšlenkami jinde.";
         // Discord max limit
         const finalContent = text.length > 2000 ? text.substring(0, 1995) + '...' : text;
-
+        
         await sendDiscordFollowup(appId, interactionToken, finalContent);
 
     } catch (err) {
         console.error("AI/Background error:", err);
-        await sendDiscordFollowup(appId, interactionToken, "Chyba při komunikaci s mentorem nebo databází. Podívej se do logů.");
+        await sendDiscordFollowup(appId, interactionToken, "Chyba při komunikaci s mentorem nebo databází. Podívej se do logů Vercelu (Edge Error).");
     }
 }
 
@@ -78,11 +89,12 @@ async function sendDiscordFollowup(appId: string, token: string, content: string
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content })
         });
-    } catch (e) {
+    } catch(e) {
         console.error("Failed to cleanly update Discord message:", e);
     }
 }
 
+// Edge Runtime syntax
 export const config = {
     runtime: 'edge'
 };
@@ -128,9 +140,9 @@ export default async function handler(req: Request, ctx: { waitUntil: (promise: 
             // DISCORD 3-SECOND TIMEOUT FIX:
             // 1. Immediately send DEFERRED response so the UI shows "Alpha Mentor is thinking..."
             // 2. Fire the AI generation in the background without waiting for it to finish.
-
+            
             ctx.waitUntil(processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id));
-
+            
             return new Response(JSON.stringify({
                 type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
             }), {
