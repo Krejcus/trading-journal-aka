@@ -76,10 +76,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
                     // Fetch recent trades broadly (for the single-trader MVP, we just grab the newest trades across the platform, or we grab the profile that actually HAS trades)
-                    const { data: recentTrades } = await supabase.from('trades')
+                    const { data: recentTrades, error: tradesErr } = await supabase.from('trades')
                         .select('*, profiles(full_name, username)')
                         .order('created_at', { ascending: false })
                         .limit(10);
+
+                    console.log("Supabase fetch returned trades length:", recentTrades?.length);
+                    if (tradesErr) console.error("Supabase trades error:", tradesErr);
 
                     let netPnl = 0;
                     let tradeText = "Žádné nedávné obchody.";
