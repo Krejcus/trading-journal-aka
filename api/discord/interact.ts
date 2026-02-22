@@ -18,27 +18,48 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
         let dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\n";
+        let imageToAnalyze: { data: string, mime: string } | null = null;
+        let base64ToAttach: string | null = null;
 
         if (supabaseServiceKey && supabaseUrl) {
             try {
                 const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } });
+
+                // Fetch full trade data including 'data' column which has screenshots
                 const { data: recentTrades, error: tradesErr } = await supabase.from('trades')
                     .select('*')
                     .order('created_at', { ascending: false })
                     .limit(3);
 
                 if (recentTrades && recentTrades.length > 0) {
-                    const tradeText = recentTrades.map(t => {
+                    const tradeText = recentTrades.map((t, index) => {
                         const data = t.data || {};
-                        let screenshots = '';
+                        let screenshotInfo = 'Žádný';
+
                         if (data.screenshots && data.screenshots.length > 0) {
                             const url = data.screenshots[0];
-                            // Stop Base64 data from crashing Discord markdown chat window!
-                            screenshots = url.startsWith('http') ? `Screenshot: ${url}` : '(Obrázek je v lokálním Base64 formátu, nelze zobrazit)';
+                            if (url.startsWith('http')) {
+                                screenshotInfo = `URL: ${url}`;
+                            } else if (url.startsWith('data:image/')) {
+                                screenshotInfo = 'Přiložen k analýze (Base64)';
+                                // If it's the very first trade, we'll try to analyze the image
+                                if (index === 0) {
+                                    const parts = url.split(',');
+                                    if (parts.length === 2) {
+                                        imageToAnalyze = {
+                                            mime: url.match(/data:([^;]+);/)?.[1] || 'image/png',
+                                            data: parts[1]
+                                        };
+                                        base64ToAttach = parts[1];
+                                    }
+                                }
+                            }
                         }
-                        return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'} ${screenshots}`;
+
+                        return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'}, Graf: ${screenshotInfo}`;
                     }).join('\n');
-                    dynamicContext += `Aktuální načtené obchody (posledních 3):\n${tradeText}\n(Použij markdown pro fotky: ![Graf](url) POUZE pokud to je začínající na http)\n`;
+
+                    dynamicContext += `Aktuální načtené obchody (posledních 3):\n${tradeText}\n`;
                 } else {
                     dynamicContext += "Žádné nedávné obchody nenalezeny.\n";
                 }
@@ -51,16 +72,29 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         let finalContent = "Omlouvám se, dnes už na mě byla moc velká zátěž.";
 
         try {
+            const contents: any[] = [
+                { role: 'user', parts: [{ text: ALPHA_SYSTEM_PROMPT }] },
+                { role: 'model', parts: [{ text: "Rozumím. Jsem Alpha Mentor. Vidím tvoje data i grafy." }] }
+            ];
+
+            const userPart: any = { role: 'user', parts: [{ text: dynamicContext + "\n\nTrader Filip se ptá:\n" + userPrompt }] };
+
+            // If we have an image, add it to the Gemini prompt
+            if (imageToAnalyze) {
+                userPart.parts.push({
+                    inline_data: {
+                        mime_type: imageToAnalyze.mime,
+                        data: imageToAnalyze.data
+                    }
+                });
+            }
+
+            contents.push(userPart);
+
             const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [
-                        { role: 'user', parts: [{ text: ALPHA_SYSTEM_PROMPT }] },
-                        { role: 'model', parts: [{ text: "Rozumím. Jsem Alpha Mentor." }] },
-                        { role: 'user', parts: [{ text: dynamicContext + "\n\nTrader Filip se ptá:\n" + userPrompt }] }
-                    ]
-                })
+                body: JSON.stringify({ contents })
             });
 
             if (!aiResponse.ok) {
@@ -77,13 +111,13 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         } catch (apiErr: any) {
             console.error("Raw AI Fetch crash:", apiErr.message);
             if (apiErr.message === "QUOTA_429") {
-                finalContent = "⚠️ **Zpráva od Mentora: Chyba připojení na AI (Kód 429)**\nOmlouvám se Filipe, narazil jsem na Rate Limit od Googlu. Přečerpal jsi bezplatnou kvótu u Gemini API!";
+                finalContent = "⚠️ **Chyba Gemini (Kód 429)**\nNarazil jsem na limit tokenů. Zkuste to za minutu.";
             } else {
-                finalContent = `⚠️ Zpráva od Mentora: Neočekávaná chyba u Googlu: ${apiErr.message}`;
+                finalContent = `⚠️ Chyba AI: ${apiErr.message}`;
             }
         }
 
-        await sendDiscordFollowup(appId, interactionToken, finalContent);
+        await sendDiscordFollowup(appId, interactionToken, finalContent, base64ToAttach);
 
     } catch (err: any) {
         console.error("Global background error:", err);
@@ -91,18 +125,46 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
     }
 }
 
-async function sendDiscordFollowup(appId: string, token: string, content: string) {
+async function sendDiscordFollowup(appId: string, token: string, content: string, base64Image?: string | null) {
     const url = `https://discord.com/api/v10/webhooks/${appId}/${token}/messages/@original`;
+
     try {
-        const res = await fetch(url, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content })
-        });
-        if (!res.ok) console.error("Discord Followup failed:", await res.text());
-        else console.log("Discord Followup SENT successfully.");
+        if (base64Image) {
+            // Multipart/form-data for image attachment
+            const formData = new FormData();
+
+            // Build the payload_json
+            formData.append('payload_json', JSON.stringify({ content }));
+
+            // Convert Base64 to Blob
+            const binary = atob(base64Image);
+            const array = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                array[i] = binary.charCodeAt(i);
+            }
+            const blob = new Blob([array], { type: 'image/png' });
+
+            formData.append('files[0]', blob, 'chart.png');
+
+            const res = await fetch(url, {
+                method: 'PATCH',
+                body: formData
+            });
+
+            if (!res.ok) console.error("Discord Followup (Multipart) failed:", await res.text());
+            else console.log("Discord Followup SENT with attachment.");
+        } else {
+            // Simple JSON followup
+            const res = await fetch(url, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+            if (!res.ok) console.error("Discord Followup failed:", await res.text());
+            else console.log("Discord Followup SENT successfully.");
+        }
     } catch (e) {
-        console.error("Failed to cleanly update Discord message:", e);
+        console.error("Failed to update Discord message:", e);
     }
 }
 
@@ -141,7 +203,6 @@ export default async function handler(req: Request, ctx: any) {
         if (name === 'mentor') {
             const userPrompt = options?.[0]?.value || '';
 
-            // This officially guarantees completion in Vercel Edge before killing the VM.
             ctx.waitUntil(processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id));
 
             return new Response(JSON.stringify({
