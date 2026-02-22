@@ -75,36 +75,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 if (supabaseServiceKey) {
                     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-                    // Fetch generic user profile (assuming single user app for Filip)
-                    const { data: profiles } = await supabase.from('profiles').select('id, full_name, username').limit(1);
-                    const userId = profiles?.[0]?.id;
+                    // Fetch recent trades broadly (for the single-trader MVP, we just grab the newest trades across the platform, or we grab the profile that actually HAS trades)
+                    const { data: recentTrades } = await supabase.from('trades')
+                        .select('*, profiles(full_name, username)')
+                        .order('created_at', { ascending: false })
+                        .limit(10);
 
-                    if (userId) {
-                        const { data: recentTrades } = await supabase.from('trades')
-                            .select('*')
-                            .eq('user_id', userId)
-                            .order('created_at', { ascending: false })
-                            .limit(10);
+                    let netPnl = 0;
+                    let tradeText = "Žádné nedávné obchody.";
 
-                        let netPnl = 0;
-                        let tradeText = "Žádné nedávné obchody.";
-
-                        if (recentTrades && recentTrades.length > 0) {
-                            netPnl = recentTrades.reduce((acc, trade) => acc + (Number(trade.pnl) || 0), 0);
-                            tradeText = recentTrades.map(t => {
-                                const data = t.data || {};
-                                const screenshots = data.screenshots && data.screenshots.length > 0
-                                    ? `\nScreenshot: ${data.screenshots[0]}`
-                                    : '';
-                                return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'}${screenshots}`;
-                            }).join('\n');
-                        }
-
-                        dynamicContext = `\n[SYSTÉMOVÁ DATA - EXTRÉMNÍ PAMĚŤ]\n` +
-                            `Aktuální načtené obchody (posledních 10):\n${tradeText}\n\n` +
-                            `Celkové PnL z těchto posledních obchodů: $${netPnl.toFixed(2)}\n\n` +
-                            `(Pokud trader požádá o ukázání některého obchodu nebo nejlepšího/nejhoršího obchodu, vždy se podívej do dat výše, najdi URL screenshotu a vlož ho do své odpovědi ukrytý v Markdown syntaxi takto: ![Název Grafu](URL-ODKAZ). To způsobí, že se graf na Discordu vykreslí.)\n`;
+                    if (recentTrades && recentTrades.length > 0) {
+                        netPnl = recentTrades.reduce((acc, trade) => acc + (Number(trade.pnl) || 0), 0);
+                        tradeText = recentTrades.map(t => {
+                            const data = t.data || {};
+                            const screenshots = data.screenshots && data.screenshots.length > 0
+                                ? `\nScreenshot: ${data.screenshots[0]}`
+                                : '';
+                            return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'}${screenshots}`;
+                        }).join('\n');
                     }
+
+                    dynamicContext = `\n[SYSTÉMOVÁ DATA - EXTRÉMNÍ PAMĚŤ]\n` +
+                        `Aktuální načtené obchody (posledních 10):\n${tradeText}\n\n` +
+                        `Celkové PnL z těchto posledních obchodů: $${netPnl.toFixed(2)}\n\n` +
+                        `(Pokud trader požádá o ukázání některého obchodu nebo nejlepšího/nejhoršího obchodu, vždy se podívej do dat výše, najdi URL screenshotu a vlož ho do své odpovědi ukrytý v Markdown syntaxi takto: ![Název Grafu](URL-ODKAZ). To způsobí, že se graf na Discordu vykreslí.)\n`;
                 }
 
                 const response = await ai.models.generateContent({
