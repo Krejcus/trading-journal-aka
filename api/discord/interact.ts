@@ -1,4 +1,3 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { verifyKey, InteractionType, InteractionResponseType } from 'discord-interactions';
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
@@ -85,44 +84,38 @@ async function sendDiscordFollowup(appId: string, token: string, content: string
 }
 
 export const config = {
-    api: {
-        bodyParser: false,
-    },
+    runtime: 'edge'
 };
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: Request, ctx: { waitUntil: (promise: Promise<any>) => void }) {
     if (req.method !== 'POST') {
-        return res.status(405).end('Method Not Allowed');
+        return new Response('Method Not Allowed', { status: 405 });
     }
 
-    const signature = req.headers['x-signature-ed25519'] as string;
-    const timestamp = req.headers['x-signature-timestamp'] as string;
+    const signature = req.headers.get('x-signature-ed25519');
+    const timestamp = req.headers.get('x-signature-timestamp');
     const clientPublicKey = process.env.DISCORD_PUBLIC_KEY;
 
     if (!signature || !timestamp || !clientPublicKey) {
-        return res.status(401).end('Missing Signature or Public Key');
+        return new Response('Missing Signature or Public Key', { status: 401 });
     }
 
-    // Get raw body
-    const rawBody = await new Promise<string>((resolve, reject) => {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => resolve(body));
-        req.on('error', reject);
-    });
-
+    const rawBody = await req.text();
     const isValidRequest = await verifyKey(rawBody, signature, timestamp, clientPublicKey);
 
     if (!isValidRequest) {
         console.error('Invalid Request Signature');
-        return res.status(401).end('Bad request signature');
+        return new Response('Bad request signature', { status: 401 });
     }
 
     const interaction = JSON.parse(rawBody);
 
     // Acknowledge PING from Discord
     if (interaction.type === InteractionType.PING) {
-        return res.status(200).json({ type: InteractionResponseType.PONG });
+        return new Response(JSON.stringify({ type: InteractionResponseType.PONG }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        });
     }
 
     // Handle Slash Command
@@ -136,13 +129,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // 1. Immediately send DEFERRED response so the UI shows "Alpha Mentor is thinking..."
             // 2. Fire the AI generation in the background without waiting for it to finish.
 
-            processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id);
+            ctx.waitUntil(processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id));
 
-            return res.status(200).json({
+            return new Response(JSON.stringify({
                 type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
             });
         }
     }
 
-    return res.status(400).end('Unknown Interaction Type');
+    return new Response('Unknown Interaction Type', { status: 400 });
 }
