@@ -96,6 +96,7 @@ import {
   sortableKeyboardCoordinates,
   rectSortingStrategy,
 } from '@dnd-kit/sortable';
+import * as Sortable from './ui/sortable';
 
 const COLORS = {
   profit: '#10b981',
@@ -1486,6 +1487,11 @@ const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  // Generic Sortable change handler
+  const handleSortableChange = (items: DashboardWidgetConfig[]) => {
+    onUpdateLayout(items.map((widget, idx) => ({ ...widget, order: idx })));
+  };
+
   return (
     <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${isEditing ? 'canvas-grid' : ''}`}>
       {/* Subtle dim overlay for non-widget content during edit */}
@@ -1509,81 +1515,85 @@ const Dashboard: React.FC<DashboardProps> = ({
           )}
         </div>
 
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
+        <Sortable.Root
+          value={currentLayout}
+          onValueChange={handleSortableChange}
+          getItemValue={(item) => item.id}
+          orientation="mixed"
+          onDragStart={(e: any) => {
+            setActiveId(e.active.id);
+            setIsDraggingWidget(true);
+          }}
+          onDragEnd={(e: any) => {
+            setActiveId(null);
+            setIsDraggingWidget(false);
+          }}
         >
-          <SortableContext
-            items={currentLayout.map(w => w.id)}
-            strategy={rectSortingStrategy}
-          >
-            <div className={`grid grid-cols-6 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px] md:px-6`}>
-              {isMobile && !isEditing && (
-                <div className="col-span-6 mb-1">
-                  <MobileKpiCarousel
-                    theme={theme}
-                    widgets={currentLayout.filter(w => w.size === 'small' && w.visible !== false)}
-                    renderWidget={renderWidget}
-                  />
-                </div>
-              )}
-              {currentLayout
-                .filter(widget => !(isMobile && !isEditing && widget.size === 'small'))
-                .map((widget, idx) => {
-                  const gridClass = widget.size === 'small' ? 'col-span-3 lg:col-span-1' : (widget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6');
-                  const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
-
-                  return (
-                    <SortableWidget
-                      key={widget.id}
-                      id={widget.id}
-                      isEditing={isEditing}
-                      label={widget.label}
-                      gridClass={gridClass}
-                      rowSpanClass={rowSpanClass}
-                      size={widget.size}
-                      rowSpan={widget.rowSpan || 1}
-                      onResizeStart={handleResizeStart}
-                    >
-                      {isEditing && (
-                        <div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-auto z-40">
-                          {widget.id === 'equity' && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }}
-                              className={`w-8 h-8 flex items-center justify-center border rounded-xl shadow-md transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-white/80 dark:bg-slate-900/80 backdrop-blur-md text-slate-500 border-slate-200 dark:border-slate-700 hover:text-amber-500'}`}
-                              title="Zlatá křivka"
-                            >
-                              <ShieldCheck size={14} />
-                            </button>
-                          )}
-                          <button
-                            onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }}
-                            className="w-8 h-8 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 hover:bg-rose-50 dark:hover:bg-rose-900/30 text-slate-400 hover:text-rose-500 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-500/30 rounded-xl shadow-md transition-all backdrop-blur-md"
-                            title="Odstranit"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      )}
-                      {renderWidget(widget.id, widget)}
-                    </SortableWidget>
-                  );
-                })}
-            </div>
-          </SortableContext>
-          <DragOverlay adjustScale={true} dropAnimation={{
-            duration: 400,
-            easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)',
-          }}>
-            {activeId ? (
-              <div className="w-full h-full opacity-95 cursor-grabbing shadow-[0_30px_60px_-15px_rgba(59,130,246,0.3)] scale-[1.02] -rotate-2 transition-transform duration-300 ring-2 ring-blue-500 rounded-[32px] overflow-hidden bg-[var(--bg-card)]">
-                {renderWidget(activeId, layout.find(w => w.id === activeId))}
+          <Sortable.Content className={`grid grid-cols-6 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px] md:px-6`}>
+            {isMobile && !isEditing && (
+              <div className="col-span-6 mb-1">
+                <MobileKpiCarousel
+                  theme={theme}
+                  widgets={currentLayout.filter(w => w.size === 'small' && w.visible !== false)}
+                  renderWidget={renderWidget}
+                />
               </div>
-            ) : null}
-          </DragOverlay>
-        </DndContext>
+            )}
+            {currentLayout
+              .filter(widget => !(isMobile && !isEditing && widget.size === 'small'))
+              .map((widget) => {
+                const gridClass = widget.size === 'small' ? 'col-span-3 lg:col-span-1' : (widget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6');
+                const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
+
+                return (
+                  <SortableWidget
+                    key={widget.id}
+                    id={widget.id}
+                    isEditing={isEditing}
+                    label={widget.label}
+                    gridClass={gridClass}
+                    rowSpanClass={rowSpanClass}
+                    size={widget.size}
+                    rowSpan={widget.rowSpan || 1}
+                    onResizeStart={handleResizeStart}
+                  >
+                    {isEditing && (
+                      <div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-auto z-40">
+                        {widget.id === 'equity' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }}
+                            className={`w-8 h-8 flex items-center justify-center border rounded-xl shadow-md transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-white/80 dark:bg-slate-900/80 backdrop-blur-md text-slate-500 border-slate-200 dark:border-slate-700 hover:text-amber-500'}`}
+                            title="Zlatá křivka"
+                          >
+                            <ShieldCheck size={14} />
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }}
+                          className="w-8 h-8 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 hover:bg-rose-50 dark:hover:bg-rose-900/30 text-slate-400 hover:text-rose-500 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-500/30 rounded-xl shadow-md transition-all backdrop-blur-md"
+                          title="Odstranit"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    )}
+                    {renderWidget(widget.id, widget)}
+                  </SortableWidget>
+                );
+              })}
+          </Sortable.Content>
+          <Sortable.Overlay>
+            {(params: any) => {
+              const activeId = params?.value || null;
+              if (!activeId) return null;
+              return (
+                <div className="w-full h-full opacity-95 cursor-grabbing shadow-[0_30px_60px_-15px_rgba(59,130,246,0.3)] scale-[1.02] -rotate-2 transition-transform duration-300 ring-2 ring-blue-500 rounded-[32px] overflow-hidden bg-[var(--bg-card)]">
+                  {renderWidget(activeId, layout.find(w => w.id === activeId))}
+                </div>
+              );
+            }}
+          </Sortable.Overlay>
+        </Sortable.Root>
       </div>
 
       {/* FLOATING PRO DOCK (Replaces Sidebar) */}
@@ -1594,7 +1604,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: 100, opacity: 0, scale: 0.95 }}
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
-            className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] w-[95%] max-w-4xl p-3 md:p-4 rounded-3xl border shadow-2xl backdrop-blur-3xl flex items-center gap-4 ${isDark ? 'bg-[#020617]/80 border-white/10 shadow-black/80' : 'bg-white/90 border-slate-200 shadow-slate-300/50'}`}
+            className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] w-[95%] max-w-4xl p-3 md:p-4 rounded-3xl border shadow-2xl backdrop-blur-3xl flex items-center gap-4 ${isDark ? 'bg-slate-800/90 border-slate-700/50 shadow-black/80' : 'bg-white/95 border-slate-200 shadow-slate-300/50'}`}
           >
             <div className="flex-1 overflow-x-auto no-scrollbar flex items-center gap-3 snap-x px-2">
               {MASTER_WIDGET_LIST.filter(master => !layout.find(w => w.id === master.id)?.visible).length === 0 && (
