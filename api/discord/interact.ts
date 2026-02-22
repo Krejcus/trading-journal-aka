@@ -5,118 +5,8 @@ import { ALPHA_SYSTEM_PROMPT } from '../../services/discord/prompt.js';
 
 export const config = {
     api: { bodyParser: false },
-    maxDuration: 60 // Allow up to 60s execution
+    maxDuration: 60
 };
-
-async function processAIInteractionAsync(userPrompt: string, interactionToken: string, appId: string) {
-    try {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            await sendDiscordFollowup(appId, interactionToken, "Chyba: Není nastaven GEMINI_API_KEY.");
-            return;
-        }
-
-        const supabaseUrl = process.env.VITE_SUPABASE_URL;
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-        let dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\n";
-
-        if (supabaseServiceKey && supabaseUrl) {
-            try {
-                const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } });
-                const { data: recentTrades, error: tradesErr } = await supabase.from('trades')
-                    .select('*')
-                    .order('created_at', { ascending: false })
-                    .limit(3); // Keep it ultra low for token limits
-
-                if (recentTrades && recentTrades.length > 0) {
-                    const tradeText = recentTrades.map(t => {
-                        const data = t.data || {};
-                        const screenshots = data.screenshots && data.screenshots.length > 0 ? `Screenshot: ${data.screenshots[0]}` : '';
-                        return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'} ${screenshots}`;
-                    }).join('\n');
-                    dynamicContext += `Aktuální načtené obchody (posledních 3):\n${tradeText}\n(Použij markdown pro fotky: ![Graf](url))\n`;
-                } else {
-                    dynamicContext += "Žádné nedávné obchody nenalezeny.\n";
-                }
-            } catch (e) {
-                console.error("Supabase Error:", e);
-                dynamicContext += "Chyba při stahování dat.\n";
-            }
-        }
-
-        let finalContent = "Omlouvám se, jsem teď myšlenkami jinde.";
-
-        try {
-            const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [
-                        { role: 'user', parts: [{ text: ALPHA_SYSTEM_PROMPT }] },
-                        { role: 'model', parts: [{ text: "Rozumím. Jsem Alpha Mentor." }] },
-                        { role: 'user', parts: [{ text: dynamicContext + "\n\nTrader Filip se ptá:\n" + userPrompt }] }
-                    ]
-                })
-            });
-
-            if (!aiResponse.ok) {
-                const errData = await aiResponse.json();
-                console.error("Gemini Native Fetch Error:", errData);
-                if (aiResponse.status === 429) {
-                    throw new Error("QUOTA_429");
-                }
-                throw new Error("HTTP_ERROR_" + aiResponse.status);
-            }
-
-            const responseData = await aiResponse.json();
-            const text = responseData.candidates?.[0]?.content?.parts?.[0]?.text || "Žádná odpověď z AI.";
-            finalContent = text.length > 2000 ? text.substring(0, 1995) + '...' : text;
-
-        } catch (apiErr: any) {
-            console.error("Raw AI Fetch crash:", apiErr.message);
-            if (apiErr.message === "QUOTA_429") {
-                finalContent = "⚠️ **Chyba (Google 429 - Vyčerpaná kapacita/Tokeny)**\nTvůj Free-Tier Google účet momentálně blokuje dotazy pro vyčerpání slov. Buď chvíli počkej, nebo si ho v Google AI Studio upgraduj.";
-            } else {
-                finalContent = "⚠️ Neočekávaná chyba při komunikaci s Google API (" + apiErr.message + ").";
-            }
-        }
-
-        await sendDiscordFollowup(appId, interactionToken, finalContent);
-
-    } catch (err: any) {
-        console.error("AI/Background error:", err.message || err);
-        let errorMsg = "Při analýze dat došlo k nečekané chybě (Vercel Node). Zkus jednodušší dotaz.";
-
-        if (err.message === "AI_TIMEOUT") {
-            errorMsg = "⚠️ **Časový limit překročen (45s)**\nGoogle AI neodpověděla včas (zřejmě se zacyklila na Rate Limitu). Zkus to prosím za minutu znovu.";
-        } else if (err.status === 429 || (err.message && err.message.includes("429"))) {
-            errorMsg = "⚠️ **Chyba Google AI (Kód 429 - Vyčerpané Tokeny)**\nVyčerpali jsme dostupný Free-limit u Gemini API. Prosím aktivuj si Pay-as-you-go / zkus to za minutu.";
-        } else if (err.status === 503) {
-            errorMsg = "⚠️ **Google AI je aktuálně přetížena (503).**";
-        }
-
-        await sendDiscordFollowup(appId, interactionToken, errorMsg);
-    }
-}
-
-async function sendDiscordFollowup(appId: string, token: string, content: string) {
-    const url = `https://discord.com/api/v10/webhooks/${appId}/${token}/messages/@original`;
-    try {
-        const res = await fetch(url, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content })
-        });
-        if (!res.ok) {
-            console.error("Discord Followup failed:", await res.text());
-        } else {
-            console.log("Discord Followup SENT successfully.");
-        }
-    } catch (e) {
-        console.error("Failed to cleanly update Discord message:", e);
-    }
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
@@ -149,15 +39,83 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (name === 'mentor') {
             const userPrompt = options?.[0]?.value || '';
 
-            // FIRE BACKGROUND ASYNC:
-            processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id);
+            try {
+                // RUNNING EVERYTHING SYNCHRONOUSLY IN UNDER 2.5 SECONDS
+                const apiKey = process.env.GEMINI_API_KEY;
+                if (!apiKey) throw new Error("Missing AI Key");
 
-            // Artificial tiny delay to ensure Vercel Node 18+ registers the background promise before concluding this function
-            await new Promise(resolve => setTimeout(resolve, 500));
+                const supabaseUrl = process.env.VITE_SUPABASE_URL;
+                const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+                
+                let dynamicContext = "\n[SYSTÉMOVÁ DATA]\n";
 
-            return res.status(200).json({
-                type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
-            });
+                if (supabaseServiceKey && supabaseUrl) {
+                    const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } });
+                    // Limit 1 trade to maximize speed!
+                    const { data: recentTrades } = await supabase.from('trades')
+                        .select('*')
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+
+                    if (recentTrades && recentTrades.length > 0) {
+                        const t = recentTrades[0];
+                        const data = t.data || {};
+                        const screenshots = data.screenshots && data.screenshots.length > 0 ? `Screenshot: ${data.screenshots[0]}` : '';
+                        dynamicContext += `Poslední obchod: Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'} ${screenshots}\n(Použij markdown pro fotky: ![Graf](url))\n`;
+                    } else {
+                        dynamicContext += "Žádné nedávné obchody.\n";
+                    }
+                }
+
+                // Call AI with a 2-second timeout guard
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 2000);
+
+                const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                        contents: [
+                            { role: 'user', parts: [{ text: "Jsi Alpha Mentor. Odpovídej stručně. Zhodnoť data obchodu níže. Očekávej max 1 fotografii." }] },
+                            { role: 'user', parts: [{ text: dynamicContext + "\n\nOtázka tradera:\n" + userPrompt }] }
+                        ]
+                    })
+                });
+
+                clearTimeout(timeout);
+
+                if (!aiResponse.ok) {
+                    throw new Error("AI status: " + aiResponse.status);
+                }
+
+                const responseData = await aiResponse.json();
+                let text = responseData.candidates?.[0]?.content?.parts?.[0]?.text || "Žádná odpověď z AI.";
+                text = text.length > 2000 ? text.substring(0, 1995) + '...' : text;
+
+                // WE RETURN THE MESSAGE DIRECTLY IN THE HTTP RESPONSE!
+                // NO DEFERRALS. NO BACKGROUND TASKS. NO TIMEOUTS.
+                return res.status(200).json({
+                    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    data: {
+                        content: text
+                    }
+                });
+
+            } catch (err: any) {
+                console.error("Sync AI error:", err.message);
+                
+                let fallbackMessage = "⚠️ Omlouvám se, server Vercel to nestihl odbavit do 3 vteřin pro Discord nebo padl limit na AI. Jsem online, ale chci příliš mnoho času na přemýšlení.";
+                if (err.name === 'AbortError') fallbackMessage = "⚠️ AI neodpověděla v limitu 2 vteřin (Discord povolí jen 3 vteřiny). Mám asi pomalé vedení u Googlu.";
+                
+                // Return an error directly to the chat
+                return res.status(200).json({
+                    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    data: {
+                        content: fallbackMessage
+                    }
+                });
+            }
         }
     }
 
