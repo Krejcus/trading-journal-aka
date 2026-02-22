@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { waitUntil } from '@vercel/functions';
 import { verifyKey, InteractionType, InteractionResponseType } from 'discord-interactions';
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
@@ -22,14 +23,14 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         }
 
         const ai = new GoogleGenAI({ apiKey });
-        
+
         const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
         const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-        
+
         console.log("SERVERLESS RUNTIME DEBUG:");
         console.log("- VITE_SUPABASE_URL exists:", !!supabaseUrl);
         console.log("- SUPABASE_SERVICE_ROLE_KEY exists:", !!supabaseServiceKey, supabaseServiceKey ? `(starts with ${supabaseServiceKey.substring(0, 10)})` : '');
-        
+
         let dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\nNebyla nalezena čerstvá data v rychlém kontextu.\n";
 
         if (supabaseServiceKey) {
@@ -40,7 +41,7 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
                 .select('*')
                 .order('created_at', { ascending: false })
                 .limit(10);
-                
+
             console.log("Supabase fetch returned trades length:", recentTrades?.length);
             if (tradesErr) console.error("Supabase trades error:", tradesErr);
 
@@ -51,8 +52,8 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
                 netPnl = recentTrades.reduce((acc, trade) => acc + (Number(trade.pnl) || 0), 0);
                 tradeText = recentTrades.map(t => {
                     const data = t.data || {};
-                    const screenshots = data.screenshots && data.screenshots.length > 0 
-                        ? `\nScreenshot: ${data.screenshots[0]}` 
+                    const screenshots = data.screenshots && data.screenshots.length > 0
+                        ? `\nScreenshot: ${data.screenshots[0]}`
                         : '';
                     return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'}${screenshots}`;
                 }).join('\n');
@@ -61,11 +62,11 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
             }
 
             dynamicContext = `\n[SYSTÉMOVÁ DATA - EXTRÉMNÍ PAMĚŤ]\n` +
-            `Aktuální načtené obchody (posledních 10):\n${tradeText}\n\n` +
-            `Celkové PnL z těchto posledních obchodů: $${netPnl.toFixed(2)}\n\n` +
-            `(Pokud trader požádá o ukázání některého obchodu nebo nejlepšího/nejhoršího obchodu, vždy se podívej do dat výše a pro vykreslení screenshotu VŽDY použij Markdown syntaxi takto: ![Graph](URL-ODKAZ) i přesto že to není validní URL struktura. Markdown způsobí bezpečné vykreslení i z Firebase storage v chatu.)\n`;
+                `Aktuální načtené obchody (posledních 10):\n${tradeText}\n\n` +
+                `Celkové PnL z těchto posledních obchodů: $${netPnl.toFixed(2)}\n\n` +
+                `(Pokud trader požádá o ukázání některého obchodu nebo nejlepšího/nejhoršího obchodu, vždy se podívej do dat výše a pro vykreslení screenshotu VŽDY použij Markdown syntaxi takto: ![Graph](URL-ODKAZ) i přesto že to není validní URL struktura. Markdown způsobí bezpečné vykreslení i z Firebase storage v chatu.)\n`;
         } else {
-             dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\nService Role klíč nebyl nalezen v proměnných!\n";
+            dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\nService Role klíč nebyl nalezen v proměnných!\n";
         }
 
         const response = await ai.models.generateContent({
@@ -79,7 +80,7 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
 
         const text = response.text || "Omlouvám se, jsem teď myšlenkami jinde.";
         const finalContent = text.length > 2000 ? text.substring(0, 1995) + '...' : text;
-        
+
         await sendDiscordFollowup(appId, interactionToken, finalContent);
 
     } catch (err) {
@@ -99,7 +100,7 @@ async function sendDiscordFollowup(appId: string, token: string, content: string
         if (!res.ok) {
             console.error("Discord Followup failed:", await res.text());
         }
-    } catch(e) {
+    } catch (e) {
         console.error("Failed to cleanly update Discord message:", e);
     }
 }
@@ -149,14 +150,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // DISCORD 3-SECOND TIMEOUT FIX:
             // The magic here is the `Promise.resolve().then(...)` block or just firing the promise.
             // On standard Node 18 environments for Serverless Functions, we simply don't wait for it.
-            // But we must artificially delay the HTTP response slightly to ensure the Fetch registers.
-            
+            // We use Vercel's native `waitUntil` to cleanly process it in the background!
+
             // Fire background
-            processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id);
-            
-            // Wait 500ms before returning to let the async thread start
-            await new Promise(r => setTimeout(r, 500));
-            
+            waitUntil(processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id));
+
             return res.status(200).json({
                 type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
             });
