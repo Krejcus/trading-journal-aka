@@ -1,12 +1,9 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { waitUntil } from '@vercel/functions';
 import { verifyKey, InteractionType, InteractionResponseType } from 'discord-interactions';
 import { createClient } from '@supabase/supabase-js';
 import { ALPHA_SYSTEM_PROMPT } from '../../services/discord/prompt.js';
 
 export const config = {
-    api: { bodyParser: false },
-    maxDuration: 60
+    runtime: 'edge'
 };
 
 async function processAIInteractionAsync(userPrompt: string, interactionToken: string, appId: string) {
@@ -104,29 +101,33 @@ async function sendDiscordFollowup(appId: string, token: string, content: string
     }
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-    if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
+export default async function handler(req: Request, ctx: any) {
+    if (req.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+    }
 
-    const signature = req.headers['x-signature-ed25519'] as string;
-    const timestamp = req.headers['x-signature-timestamp'] as string;
+    const signature = req.headers.get('x-signature-ed25519');
+    const timestamp = req.headers.get('x-signature-timestamp');
     const clientPublicKey = process.env.DISCORD_PUBLIC_KEY;
 
-    if (!signature || !timestamp || !clientPublicKey) return res.status(401).end('Missing Signature or Public Key');
+    if (!signature || !timestamp || !clientPublicKey) {
+        return new Response('Missing Signature or Public Key', { status: 401 });
+    }
 
-    const rawBody = await new Promise<string>((resolve, reject) => {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => resolve(body));
-        req.on('error', reject);
-    });
-
+    const rawBody = await req.text();
     const isValidRequest = await verifyKey(rawBody, signature, timestamp, clientPublicKey);
-    if (!isValidRequest) return res.status(401).end('Bad request signature');
+
+    if (!isValidRequest) {
+        return new Response('Bad request signature', { status: 401 });
+    }
 
     const interaction = JSON.parse(rawBody);
 
     if (interaction.type === InteractionType.PING) {
-        return res.status(200).json({ type: InteractionResponseType.PONG });
+        return new Response(JSON.stringify({ type: InteractionResponseType.PONG }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        });
     }
 
     if (interaction.type === InteractionType.APPLICATION_COMMAND) {
@@ -135,13 +136,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (name === 'mentor') {
             const userPrompt = options?.[0]?.value || '';
 
-            waitUntil(processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id));
+            // This officially guarantees completion in Vercel Edge before killing the VM.
+            ctx.waitUntil(processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id));
 
-            return res.status(200).json({
+            return new Response(JSON.stringify({
                 type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
             });
         }
     }
 
-    return res.status(400).end('Unknown Interaction Type');
+    return new Response('Unknown Interaction Type', { status: 400 });
 }
