@@ -17,6 +17,7 @@
     "@types/uuid": "^10.0.0",
     "@vercel/node": "^5.5.16",
     "clsx": "^2.1.1",
+    "discord-interactions": "^4.1.0",
     "dotenv": "^17.2.3",
     "framer-motion": "^12.26.2",
     "idb-keyval": "^6.2.2",
