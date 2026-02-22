@@ -1586,9 +1586,22 @@ const Dashboard: React.FC<DashboardProps> = ({
             {(params: any) => {
               const activeId = params?.value || null;
               if (!activeId) return null;
+              const activeWidget = layout.find(w => w.id === activeId);
+              if (!activeWidget) return null;
+
+              const gridClass = activeWidget.size === 'small' ? 'col-span-3 lg:col-span-1' : (activeWidget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6');
+              const rowSpanClass = activeWidget.rowSpan ? (activeWidget.rowSpan === 2 ? 'row-span-2' : activeWidget.rowSpan === 3 ? 'row-span-3' : activeWidget.rowSpan === 4 ? 'row-span-4' : '') : '';
+
               return (
-                <div className="w-full h-full opacity-95 cursor-grabbing shadow-[0_30px_60px_-15px_rgba(59,130,246,0.3)] scale-[1.02] -rotate-2 transition-transform duration-300 ring-2 ring-blue-500 rounded-[32px] overflow-hidden bg-[var(--bg-card)]">
-                  {renderWidget(activeId, layout.find(w => w.id === activeId))}
+                <div className={`${gridClass} ${rowSpanClass}`}>
+                  <div className="w-full h-full opacity-90 cursor-grabbing shadow-[0_40px_80px_-20px_rgba(59,130,246,0.3)] scale-105 -rotate-2 ring-2 ring-blue-500 rounded-[32px] overflow-hidden backdrop-blur-3xl bg-[var(--bg-card)]">
+                    <div className="absolute inset-0 z-20 pointer-events-none rounded-[32px]">
+                      <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest flex items-center gap-2 shadow-xl">
+                        <GripVertical size={12} className="text-white/70" /> {activeWidget.label}
+                      </div>
+                    </div>
+                    {renderWidget(activeId, activeWidget)}
+                  </div>
                 </div>
               );
             }}
