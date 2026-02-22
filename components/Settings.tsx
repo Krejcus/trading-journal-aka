@@ -240,7 +240,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <div key={m.id} className={`flex items-center justify-between p-3.5 rounded-2xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'} group`}>
                         <div className="flex items-center gap-3">
                           <div className="w-2.5 h-2.5 rounded-full shadow-[0_0_8px_currentColor]" style={{ color: m.color, backgroundColor: m.color }} />
-                          <span className="text-[10px] font-black uppercase tracking-widest">{m.label}</span>
+                          <span className="text-[10px] font-black tracking-widest">{m.label}</span>
                         </div>
                         <button onClick={() => setItemToDelete({ id: m.id, type: 'metric' })} className="p-2 text-slate-500 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button>
                       </div>
@@ -257,7 +257,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <SectionHeader icon={AlertOctagon} title="Katalog Chyb" subtitle="Identifikace slabých stránek" color="bg-rose-600" isDark={isDark} />
                   <div className="flex flex-wrap gap-2 mb-6 max-h-[160px] overflow-y-auto custom-scrollbar pr-2">
                     {userMistakes.map(m => (
-                      <div key={m} className={`group flex items-center gap-2 px-4 py-1.5 rounded-full border text-[9px] font-black uppercase transition-all ${isDark ? 'bg-rose-500/5 border-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white' : 'bg-rose-50 border-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white'}`}>
+                      <div key={m} className={`group flex items-center gap-2 px-4 py-1.5 rounded-full border text-[9px] font-black transition-all ${isDark ? 'bg-rose-500/5 border-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white' : 'bg-rose-50 border-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white'}`}>
                         <span>{m}</span>
                         <button onClick={() => { setUserMistakes(prev => prev.filter(x => x !== m)); showToast('Odstraněno'); }} className="opacity-40 group-hover:opacity-100"><X size={12} /></button>
                       </div>
@@ -276,7 +276,7 @@ const Settings: React.FC<SettingsProps> = ({
                   {userEmotions.map(emo => (
                     <div key={emo.id} className={`p-4 rounded-2xl border flex flex-col items-center justify-center gap-2 text-center group transition-all duration-300 hover:translate-y-[-2px] relative ${isDark ? 'bg-white/5 border-white/5 hover:border-purple-500/40 hover:bg-purple-500/5' : 'bg-slate-50 border-slate-100 hover:shadow-md'}`}>
                       <div className="w-1.5 h-1.5 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
-                      <span className="text-[10px] font-black uppercase tracking-tight text-slate-400 group-hover:text-purple-400">{emo.label}</span>
+                      <span className="text-[10px] font-black tracking-tight text-slate-400 group-hover:text-purple-400">{emo.label}</span>
                       <button onClick={() => { setUserEmotions(prev => prev.filter(e => e.id !== emo.id)); showToast('Odstraněno'); }} className="absolute top-2 right-2 p-1 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><X size={10} /></button>
                     </div>
                   ))}
@@ -301,7 +301,7 @@ const Settings: React.FC<SettingsProps> = ({
                           {rule.type === 'ritual' ? <Zap size={20} /> : <ShieldAlert size={20} />}
                         </div>
                         <div>
-                          <p className="text-xs font-black uppercase tracking-tight mb-1">{rule.label}</p>
+                          <p className="text-xs font-black tracking-tight mb-1">{rule.label}</p>
                           <div className="flex items-center gap-2">
                             <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${rule.type === 'ritual' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-blue-500/20 text-blue-400'}`}>
                               {rule.type === 'ritual' ? 'Ritual' : 'Hard Rule'}
@@ -423,7 +423,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <SectionHeader icon={Target} title="Výchozí Cíle Dne" subtitle="Automaticky předvyplněno v deníku" color="bg-orange-600" isDark={isDark} />
                 <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
                   {standardGoals.map(goal => (
-                    <span key={goal} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black uppercase ${isDark ? 'bg-white/5 border-white/10 text-orange-400 group hover:border-orange-500/50' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>
+                    <span key={goal} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black ${isDark ? 'bg-white/5 border-white/10 text-orange-400 group hover:border-orange-500/50' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>
                       {goal}
                       <button onClick={() => { setStandardGoals(standardGoals.filter(x => x !== goal)); showToast('Odstraněno'); }} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
                     </span>
@@ -440,7 +440,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <SectionHeader icon={Activity} title="HTF Confluence" subtitle="Vyšší časové rámce" color="bg-emerald-600" isDark={isDark} />
                   <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
                     {htfOptions.map(opt => (
-                      <span key={opt} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black uppercase ${isDark ? 'bg-white/5 border-white/10 text-emerald-400 group hover:border-emerald-500/50' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`}>
+                      <span key={opt} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black ${isDark ? 'bg-white/5 border-white/10 text-emerald-400 group hover:border-emerald-500/50' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`}>
                         {opt}
                         <button onClick={() => { setHtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
                       </span>
@@ -455,7 +455,7 @@ const Settings: React.FC<SettingsProps> = ({
                   <SectionHeader icon={Monitor} title="LTF Confluence" subtitle="Potvrzení vstupu" color="bg-blue-600" isDark={isDark} />
                   <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
                     {ltfOptions.map(opt => (
-                      <span key={opt} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black uppercase ${isDark ? 'bg-white/5 border-white/10 text-blue-400 hover:border-blue-500/50' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
+                      <span key={opt} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black ${isDark ? 'bg-white/5 border-white/10 text-blue-400 hover:border-blue-500/50' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
                         {opt}
                         <button onClick={() => { setLtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
                       </span>
@@ -507,7 +507,7 @@ const Settings: React.FC<SettingsProps> = ({
                             <input type="color" value={s.color || '#3b82f6'} onChange={e => updateSession(s.id, { color: e.target.value })} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
                             <div className="w-8 h-8 rounded-xl border-2 border-white/10 shadow-lg" style={{ backgroundColor: s.color || '#3b82f6' }} />
                           </div>
-                          <input value={s.name} onChange={e => updateSession(s.id, { name: e.target.value })} className={`flex-1 bg-transparent text-sm font-black uppercase tracking-tighter outline-none border-b border-transparent focus:border-indigo-500 py-1 transition-all ${isDark ? 'text-white' : 'text-slate-900'}`} />
+                          <input value={s.name} onChange={e => updateSession(s.id, { name: e.target.value })} className={`flex-1 bg-transparent text-sm font-black tracking-tighter outline-none border-b border-transparent focus:border-indigo-500 py-1 transition-all ${isDark ? 'text-white' : 'text-slate-900'}`} />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                           <div className="space-y-1.5">

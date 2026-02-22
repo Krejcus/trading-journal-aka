@@ -1157,7 +1157,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                               </div>
 
                               <div className="space-y-1">
-                                <h5 className={`text-[11px] font-black uppercase tracking-widest ${isMastered ? 'text-emerald-500' : 'text-slate-400'}`}>{goal.label}</h5>
+                                <h5 className={`text-[11px] font-black tracking-widest ${isMastered ? 'text-emerald-500' : 'text-slate-400'}`}>{goal.label}</h5>
                                 <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${isMastered ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
                                   {isMastered ? <><Sparkles size={10} /> MASTERED</> : `${goal.count}/5 DAYS`}
                                 </div>
@@ -1227,7 +1227,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                           const val = review.psycho?.metrics?.[metric.id] || 5;
                           return (
                             <div key={metric.id} className={`p-3 rounded-2xl ${theme !== 'light' ? 'bg-[var(--bg-page)]/50' : 'bg-slate-50'}`}>
-                              <p className="text-[8px] font-black uppercase text-slate-500 mb-1">{metric.label}</p>
+                              <p className="text-[8px] font-black text-slate-500 mb-1">{metric.label}</p>
                               <div className="flex items-center gap-2">
                                 <div className={`h-1 flex-1 rounded-full overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-card)]' : 'bg-slate-100'}`}>
                                   <div className="h-full" style={{ width: `${val * 10}% `, backgroundColor: metric.color }} />
@@ -1360,7 +1360,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3">
                                 <div className={`w-2 h-2 rounded-full animate-pulse ${accentColor === 'blue' ? 'bg-blue-400' : accentColor === 'amber' ? 'bg-amber-400' : 'bg-slate-400'}`} />
-                                <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">{session.label} Analysis</span>
+                                <span className="text-[11px] font-black tracking-[0.2em] text-slate-500">{session.label} Analysis</span>
                               </div>
                               {session.image && (
                                 <button
@@ -1583,7 +1583,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                             >
                               <div className="flex items-center gap-3">
                                 <span className={`text-xs ${adherence ? 'filter-none' : 'grayscale opacity-50'}`}>{goal.emoji || '🎯'}</span>
-                                <span className={`text-[10px] font-black uppercase tracking-tight ${adherence ? 'text-white' : 'text-slate-400'}`}>{goal.text}</span>
+                                <span className={`text-[10px] font-black tracking-tight ${adherence ? 'text-white' : 'text-slate-400'}`}>{goal.text}</span>
                               </div>
                               {adherence && <Check size={10} strokeWidth={4} />}
                             </button>

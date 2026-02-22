@@ -2,6 +2,7 @@
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate } from '../types';
 import { supabase } from './supabase';
 import { get, set } from 'idb-keyval';
+import { sendDiscordNotification } from './discord/webhook';
 
 // Helper to validate UUID
 const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -468,6 +469,22 @@ export const storageService = {
     }
 
     await updateCacheTimestamp();
+
+    // Trigger Discord notification for each newly created trade (no ID initially)
+    const newTrades = trades.filter(t => !isUUID(t.id));
+    for (const d of (data || [])) {
+      const isNew = newTrades.some(nt => nt.timestamp === d.data.timestamp || nt.date === d.date);
+      if (isNew) {
+        sendDiscordNotification({
+          ...d.data,
+          id: d.id,
+          instrument: d.instrument,
+          pnl: d.pnl,
+          direction: d.direction
+        }, 'CREATE').catch(console.error);
+      }
+    }
+
     return results;
   },
 
@@ -476,8 +493,21 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
+    // Fetch trade first for notification
+    const { data: tradeData } = await supabase.from('trades').select('*').eq('id', id).eq('user_id', userId).single();
+
     // 1. Delete from Supabase (user_id filter for defense-in-depth)
     const { error } = await supabase.from('trades').delete().eq('id', id).eq('user_id', userId);
+
+    if (!error && tradeData) {
+      sendDiscordNotification({
+        id: tradeData.id,
+        instrument: tradeData.instrument,
+        pnl: tradeData.pnl,
+        direction: tradeData.direction,
+        ...tradeData.data
+      }, 'DELETE').catch(console.error);
+    }
     if (error) throw error;
 
     // 2. Update IndexedDB cache
@@ -1075,7 +1105,7 @@ export const storageService = {
     return (data || []).map((d: any) => {
       // Extra fields stored as JSON in description
       let extra: any = {};
-      try { if (d.description?.startsWith('{')) extra = JSON.parse(d.description); } catch {}
+      try { if (d.description?.startsWith('{')) extra = JSON.parse(d.description); } catch { }
       return {
         id: d.id,
         user_id: d.user_id,
@@ -1216,7 +1246,7 @@ export const storageService = {
             result.set(String(row.id), parsed.image);
           }
         }
-      } catch {}
+      } catch { }
     });
 
     return result;

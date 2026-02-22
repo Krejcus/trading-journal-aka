@@ -134,7 +134,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                                     <Maximize2 size={16} className="text-white" />
                                   </div>
                                   <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-md rounded-lg border border-white/10">
-                                    <p className="text-[7px] font-black uppercase text-white tracking-widest">{session.label}</p>
+                                    <p className="text-[7px] font-black text-white tracking-widest">{session.label}</p>
                                   </div>
                                 </div>
                               )}
@@ -142,7 +142,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                                 {!session.image && (
                                   <div className="flex items-center gap-2 mb-2">
                                     <Activity size={10} className="text-blue-500" />
-                                    <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">{session.label}</span>
+                                    <span className="text-[8px] font-black text-slate-500 tracking-widest">{session.label}</span>
                                   </div>
                                 )}
                                 {session.plan && (
