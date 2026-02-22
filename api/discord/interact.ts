@@ -1,6 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { verifyKey, InteractionType, InteractionResponseType } from 'discord-interactions';
-import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
 import { ALPHA_SYSTEM_PROMPT } from '../../services/discord/prompt.js';
 
@@ -19,7 +18,7 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
 
         const supabaseUrl = process.env.VITE_SUPABASE_URL;
         const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-        
+
         let dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\n";
 
         if (supabaseServiceKey && supabaseUrl) {
@@ -46,31 +45,49 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
             }
         }
 
-        const ai = new GoogleGenAI({ apiKey });
-        
-        // Timeout mechanism to prevent Vercel from killing the function without a reply
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("AI_TIMEOUT")), 45000));
-        
-        const aiPromise = ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: [
-                { role: 'user', parts: [{ text: ALPHA_SYSTEM_PROMPT }] },
-                { role: 'model', parts: [{ text: "Rozumím. Jsem Alpha Mentor." }] },
-                { role: 'user', parts: [{ text: dynamicContext + "\n\nTrader Filip se ptá:\n" + userPrompt }] }
-            ]
-        });
+        let finalContent = "Omlouvám se, jsem teď myšlenkami jinde.";
 
-        const response: any = await Promise.race([aiPromise, timeoutPromise]);
-        
-        const text = response.text || "Omlouvám se, jsem teď myšlenkami jinde.";
-        const finalContent = text.length > 2000 ? text.substring(0, 1995) + '...' : text;
-        
+        try {
+            const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [
+                        { role: 'user', parts: [{ text: ALPHA_SYSTEM_PROMPT }] },
+                        { role: 'model', parts: [{ text: "Rozumím. Jsem Alpha Mentor." }] },
+                        { role: 'user', parts: [{ text: dynamicContext + "\n\nTrader Filip se ptá:\n" + userPrompt }] }
+                    ]
+                })
+            });
+
+            if (!aiResponse.ok) {
+                const errData = await aiResponse.json();
+                console.error("Gemini Native Fetch Error:", errData);
+                if (aiResponse.status === 429) {
+                    throw new Error("QUOTA_429");
+                }
+                throw new Error("HTTP_ERROR_" + aiResponse.status);
+            }
+
+            const responseData = await aiResponse.json();
+            const text = responseData.candidates?.[0]?.content?.parts?.[0]?.text || "Žádná odpověď z AI.";
+            finalContent = text.length > 2000 ? text.substring(0, 1995) + '...' : text;
+
+        } catch (apiErr: any) {
+            console.error("Raw AI Fetch crash:", apiErr.message);
+            if (apiErr.message === "QUOTA_429") {
+                finalContent = "⚠️ **Chyba (Google 429 - Vyčerpaná kapacita/Tokeny)**\nTvůj Free-Tier Google účet momentálně blokuje dotazy pro vyčerpání slov. Buď chvíli počkej, nebo si ho v Google AI Studio upgraduj.";
+            } else {
+                finalContent = "⚠️ Neočekávaná chyba při komunikaci s Google API (" + apiErr.message + ").";
+            }
+        }
+
         await sendDiscordFollowup(appId, interactionToken, finalContent);
 
     } catch (err: any) {
         console.error("AI/Background error:", err.message || err);
         let errorMsg = "Při analýze dat došlo k nečekané chybě (Vercel Node). Zkus jednodušší dotaz.";
-        
+
         if (err.message === "AI_TIMEOUT") {
             errorMsg = "⚠️ **Časový limit překročen (45s)**\nGoogle AI neodpověděla včas (zřejmě se zacyklila na Rate Limitu). Zkus to prosím za minutu znovu.";
         } else if (err.status === 429 || (err.message && err.message.includes("429"))) {
@@ -78,7 +95,7 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         } else if (err.status === 503) {
             errorMsg = "⚠️ **Google AI je aktuálně přetížena (503).**";
         }
-        
+
         await sendDiscordFollowup(appId, interactionToken, errorMsg);
     }
 }
@@ -96,7 +113,7 @@ async function sendDiscordFollowup(appId: string, token: string, content: string
         } else {
             console.log("Discord Followup SENT successfully.");
         }
-    } catch(e) {
+    } catch (e) {
         console.error("Failed to cleanly update Discord message:", e);
     }
 }
@@ -134,7 +151,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             // FIRE BACKGROUND ASYNC:
             processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id);
-            
+
             // Artificial tiny delay to ensure Vercel Node 18+ registers the background promise before concluding this function
             await new Promise(resolve => setTimeout(resolve, 500));
 
