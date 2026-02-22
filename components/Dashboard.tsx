@@ -1489,7 +1489,24 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   // Generic Sortable change handler
   const handleSortableChange = (items: DashboardWidgetConfig[]) => {
-    onUpdateLayout(items.map((widget, idx) => ({ ...widget, order: idx })));
+    // items is the visually reordered currentLayout. We need to save this order map back to the main layout state
+    const orderMap = new Map<string, number>();
+    items.forEach((item, index) => {
+      orderMap.set(item.id, index);
+    });
+
+    // Update main layout with new orders while keeping everything else (like rowSpans or invisible widgets) intact
+    const updatedLayout = layout.map(widget => {
+      if (orderMap.has(widget.id)) {
+        return { ...widget, order: orderMap.get(widget.id)! };
+      }
+      // Widgets not in currentLayout (e.g. invisible) keep their original or pushed back order
+      return { ...widget, order: widget.order !== undefined ? widget.order + items.length : 99 };
+    });
+
+    onUpdateLayout(updatedLayout);
+    setActiveId(null); // Also clear active dragging state specifically here since we removed onDragEnd
+    setIsDraggingWidget(false);
   };
 
   return (
@@ -1520,11 +1537,13 @@ const Dashboard: React.FC<DashboardProps> = ({
           onValueChange={handleSortableChange}
           getItemValue={(item) => item.id}
           orientation="mixed"
+          strategy={rectSortingStrategy}
+          collisionDetection={closestCenter}
           onDragStart={(e: any) => {
             setActiveId(e.active.id);
             setIsDraggingWidget(true);
           }}
-          onDragEnd={(e: any) => {
+          onDragCancel={() => {
             setActiveId(null);
             setIsDraggingWidget(false);
           }}
