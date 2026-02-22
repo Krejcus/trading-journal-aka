@@ -1488,9 +1488,9 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${isEditing ? 'canvas-grid' : ''}`}>
-      {/* Dim overlay for non-widget content during edit */}
+      {/* Subtle dim overlay for non-widget content during edit */}
       {isEditing && (
-        <div className="fixed inset-0 z-0 bg-slate-900/40 dark:bg-black/60 backdrop-blur-[2px] pointer-events-none transition-opacity duration-500" />
+        <div className="fixed inset-0 z-0 bg-slate-900/10 dark:bg-black/40 pointer-events-none transition-opacity duration-500" />
       )}
 
       <div className={`space-y-6 lg:space-y-10 pb-40 relative z-10 w-full overflow-x-hidden transition-all duration-500 ${isEditing ? 'scale-[0.98] transform origin-top' : ''}`}>
@@ -1548,22 +1548,22 @@ const Dashboard: React.FC<DashboardProps> = ({
                       onResizeStart={handleResizeStart}
                     >
                       {isEditing && (
-                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto z-40">
+                        <div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-auto z-40">
                           {widget.id === 'equity' && (
                             <button
                               onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }}
-                              className={`p-2.5 border rounded-xl shadow-xl transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-900 text-slate-500 border-slate-700'}`}
+                              className={`w-8 h-8 flex items-center justify-center border rounded-xl shadow-md transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-white/80 dark:bg-slate-900/80 backdrop-blur-md text-slate-500 border-slate-200 dark:border-slate-700 hover:text-amber-500'}`}
                               title="Zlatá křivka"
                             >
-                              <ShieldCheck size={16} />
+                              <ShieldCheck size={14} />
                             </button>
                           )}
                           <button
                             onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }}
-                            className="p-2.5 bg-rose-600/90 text-white border border-rose-500 rounded-xl hover:bg-rose-500 shadow-xl transition-all backdrop-blur-md"
+                            className="w-8 h-8 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 hover:bg-rose-50 dark:hover:bg-rose-900/30 text-slate-400 hover:text-rose-500 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-500/30 rounded-xl shadow-md transition-all backdrop-blur-md"
                             title="Odstranit"
                           >
-                            <Trash2 size={16} />
+                            <Trash2 size={14} />
                           </button>
                         </div>
                       )}
