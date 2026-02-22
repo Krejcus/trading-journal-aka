@@ -11,20 +11,26 @@ export const sendDiscordNotification = async (trade: Partial<Trade>, action: 'CR
     let color = 3447003; // Blue default
     let title = `Trade ${action}`;
 
+    const pnlValue = trade.pnl || 0;
+    const pnlString = pnlValue > 0 ? `+$${pnlValue.toFixed(2)}` : (pnlValue < 0 ? `-$${Math.abs(pnlValue).toFixed(2)}` : '$0.00');
+    const outcomeEmoji = pnlValue > 0 ? '✅' : (pnlValue < 0 ? '❌' : '⏺️');
+    const instrumentName = trade.instrument || trade.symbol || 'Unknown';
+
     if (action === 'CREATE') {
-        color = trade.pnl && trade.pnl > 0 ? 3066993 : (trade.pnl && trade.pnl < 0 ? 15158332 : 3447003); // Green / Red / Blue
-        title = `New Trade Added: ${trade.symbol}`;
+        color = pnlValue > 0 ? 3066993 : (pnlValue < 0 ? 15158332 : 3447003);
+        title = `${outcomeEmoji} New Trade: ${instrumentName}`;
     } else if (action === 'UPDATE') {
-        color = 16776960; // Yellow
-        title = `Trade Updated: ${trade.symbol}`;
+        color = 16776960;
+        title = `🔄 Trade Updated: ${instrumentName}`;
     } else if (action === 'DELETE') {
-        color = 15158332; // Red
-        title = `Trade Deleted: ${trade.symbol}`;
+        color = 15158332;
+        title = `🗑️ Trade Deleted: ${instrumentName}`;
     }
 
-    const pnlString = trade.pnl !== undefined ? (trade.pnl > 0 ? `+$${trade.pnl}` : `-$${Math.abs(trade.pnl)}`) : 'N/A';
+    const screenshots = (trade as any).screenshots || (trade.screenshot ? [trade.screenshot] : []);
+    const validScreenshot = screenshots.find((s: string) => s && s.startsWith('http'));
 
-    const embed = {
+    const embed: any = {
         title: title,
         color: color,
         fields: [
@@ -47,10 +53,14 @@ export const sendDiscordNotification = async (trade: Partial<Trade>, action: 'CR
         timestamp: new Date().toISOString(),
     };
 
-    const payload = {
-        content: `**Notes:**\n${(trade as any).notes ? (trade as any).notes : 'No notes provided.'}`,
-        embeds: [embed],
+    if (validScreenshot) {
+        embed.image = { url: validScreenshot };
     }
+
+    const payload = {
+        content: trade.notes ? `**Notes:**\n${trade.notes}` : undefined,
+        embeds: [embed],
+    };
 
     try {
         const response = await fetch(webhookUrl, {
