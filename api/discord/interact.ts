@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { verifyKey, InteractionType, InteractionResponseType } from 'discord-interactions';
 import { GoogleGenAI } from '@google/genai';
-import { supabase } from '../../services/supabase';
-import { ALPHA_SYSTEM_PROMPT } from '../../services/discord/prompt';
+import { supabase } from '../../services/supabase.js';
+import { ALPHA_SYSTEM_PROMPT } from '../../services/discord/prompt.js';
 
 export const config = {
     api: {
