@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { verifyKey, InteractionType, InteractionResponseType } from 'discord-interactions';
 import { GoogleGenAI } from '@google/genai';
-import { supabase } from '../../services/supabase.js';
+import { createClient } from '@supabase/supabase-js';
 import { ALPHA_SYSTEM_PROMPT } from '../../services/discord/prompt.js';
 
 export const config = {
@@ -66,17 +66,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                 const ai = new GoogleGenAI({ apiKey });
 
-                // Fetch recent context for the user 
-                // In multi-tenant, we would use interaction.user.id or interaction.member.user.id to find the user in DB
-                // For now, let's fetch the most recent trades broadly if it's a single user app, or just pass a generic context
+                // Init Supabase Service Role Client
+                const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
+                const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
                 let dynamicContext = "\n[SYSTÉMOVÁ DATA - PAMĚŤ]\nNebyla nalezena čerstvá data v rychlém kontextu.\n";
+
+                if (supabaseServiceKey) {
+                    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+                    // Fetch generic user profile (assuming single user app for Filip)
+                    const { data: profiles } = await supabase.from('profiles').select('id, full_name, username').limit(1);
+                    const userId = profiles?.[0]?.id;
+
+                    if (userId) {
+                        const { data: recentTrades } = await supabase.from('trades')
+                            .select('*')
+                            .eq('user_id', userId)
+                            .order('created_at', { ascending: false })
+                            .limit(10);
+
+                        let netPnl = 0;
+                        let tradeText = "Žádné nedávné obchody.";
+
+                        if (recentTrades && recentTrades.length > 0) {
+                            netPnl = recentTrades.reduce((acc, trade) => acc + (Number(trade.pnl) || 0), 0);
+                            tradeText = recentTrades.map(t => {
+                                const data = t.data || {};
+                                const screenshots = data.screenshots && data.screenshots.length > 0
+                                    ? `\nScreenshot: ${data.screenshots[0]}`
+                                    : '';
+                                return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'}${screenshots}`;
+                            }).join('\n');
+                        }
+
+                        dynamicContext = `\n[SYSTÉMOVÁ DATA - EXTRÉMNÍ PAMĚŤ]\n` +
+                            `Aktuální načtené obchody (posledních 10):\n${tradeText}\n\n` +
+                            `Celkové PnL z těchto posledních obchodů: $${netPnl.toFixed(2)}\n\n` +
+                            `(Pokud trader požádá o ukázání některého obchodu nebo nejlepšího/nejhoršího obchodu, vždy se podívej do dat výše, najdi URL screenshotu a vlož ho do své odpovědi ukrytý v Markdown syntaxi takto: ![Název Grafu](URL-ODKAZ). To způsobí, že se graf na Discordu vykreslí.)\n`;
+                    }
+                }
 
                 const response = await ai.models.generateContent({
                     model: 'gemini-2.5-flash',
                     contents: [
                         { role: 'user', parts: [{ text: ALPHA_SYSTEM_PROMPT }] },
-                        { role: 'model', parts: [{ text: "Rozumím. Jsem Alpha Mentor." }] },
+                        { role: 'model', parts: [{ text: "Rozumím. Jsem Alpha Mentor a bedlivě tě sleduji. Jakmile uvidím screenshot obchodu, který chceš ukázat, vykreslím jej v Markdownu." }] },
                         { role: 'user', parts: [{ text: dynamicContext + "\n\nTrader Filip se ptá:\n" + userPrompt }] }
                     ]
                 });
