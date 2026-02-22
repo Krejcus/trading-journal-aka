@@ -1,9 +1,18 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { verifyKey, InteractionType, InteractionResponseType } from 'discord-interactions';
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
 import { ALPHA_SYSTEM_PROMPT } from '../../services/discord/prompt.js';
 
-// Helper function to process AI in the background and reply to Discord later
+// Vercel Serverless Function Configuration
+export const config = {
+    api: {
+        bodyParser: false,
+    },
+    maxDuration: 60, // Force Vercel to allow this function to run for up to 60 seconds
+};
+
+// Start the AI background task
 async function processAIInteractionAsync(userPrompt: string, interactionToken: string, appId: string) {
     try {
         const apiKey = process.env.GEMINI_API_KEY;
@@ -15,10 +24,9 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         const ai = new GoogleGenAI({ apiKey });
         
         const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
-        // Note: process.env works in Edge for Vercel, but let's be absolutely loud about it in logs
         const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
         
-        console.log("EDGE RUNTIME DEBUG:");
+        console.log("SERVERLESS RUNTIME DEBUG:");
         console.log("- VITE_SUPABASE_URL exists:", !!supabaseUrl);
         console.log("- SUPABASE_SERVICE_ROLE_KEY exists:", !!supabaseServiceKey, supabaseServiceKey ? `(starts with ${supabaseServiceKey.substring(0, 10)})` : '');
         
@@ -70,64 +78,65 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
         });
 
         const text = response.text || "Omlouvám se, jsem teď myšlenkami jinde.";
-        // Discord max limit
         const finalContent = text.length > 2000 ? text.substring(0, 1995) + '...' : text;
         
         await sendDiscordFollowup(appId, interactionToken, finalContent);
 
     } catch (err) {
         console.error("AI/Background error:", err);
-        await sendDiscordFollowup(appId, interactionToken, "Chyba při komunikaci s mentorem nebo databází. Podívej se do logů Vercelu (Edge Error).");
+        await sendDiscordFollowup(appId, interactionToken, "Chyba při komunikaci s mentorem nebo databází. Podívej se do logů Vercelu.");
     }
 }
 
 async function sendDiscordFollowup(appId: string, token: string, content: string) {
     const url = `https://discord.com/api/v10/webhooks/${appId}/${token}/messages/@original`;
     try {
-        await fetch(url, {
+        const res = await fetch(url, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content })
         });
+        if (!res.ok) {
+            console.error("Discord Followup failed:", await res.text());
+        }
     } catch(e) {
         console.error("Failed to cleanly update Discord message:", e);
     }
 }
 
-// Edge Runtime syntax
-export const config = {
-    runtime: 'edge'
-};
-
-export default async function handler(req: Request, ctx: { waitUntil: (promise: Promise<any>) => void }) {
+export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== 'POST') {
-        return new Response('Method Not Allowed', { status: 405 });
+        return res.status(405).end('Method Not Allowed');
     }
 
-    const signature = req.headers.get('x-signature-ed25519');
-    const timestamp = req.headers.get('x-signature-timestamp');
+    const signature = req.headers['x-signature-ed25519'] as string;
+    const timestamp = req.headers['x-signature-timestamp'] as string;
     const clientPublicKey = process.env.DISCORD_PUBLIC_KEY;
 
     if (!signature || !timestamp || !clientPublicKey) {
-        return new Response('Missing Signature or Public Key', { status: 401 });
+        return res.status(401).end('Missing Signature or Public Key');
     }
 
-    const rawBody = await req.text();
+    // Get raw body
+    const rawBody = await new Promise<string>((resolve, reject) => {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => resolve(body));
+        req.on('error', reject);
+    });
+
     const isValidRequest = await verifyKey(rawBody, signature, timestamp, clientPublicKey);
 
     if (!isValidRequest) {
         console.error('Invalid Request Signature');
-        return new Response('Bad request signature', { status: 401 });
+        return res.status(401).end('Bad request signature');
     }
 
     const interaction = JSON.parse(rawBody);
 
     // Acknowledge PING from Discord
     if (interaction.type === InteractionType.PING) {
-        return new Response(JSON.stringify({ type: InteractionResponseType.PONG }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' }
-        });
+        return res.status(200).json({ type: InteractionResponseType.PONG });
     }
 
     // Handle Slash Command
@@ -138,19 +147,21 @@ export default async function handler(req: Request, ctx: { waitUntil: (promise: 
             const userPrompt = options?.[0]?.value || '';
 
             // DISCORD 3-SECOND TIMEOUT FIX:
-            // 1. Immediately send DEFERRED response so the UI shows "Alpha Mentor is thinking..."
-            // 2. Fire the AI generation in the background without waiting for it to finish.
+            // The magic here is the `Promise.resolve().then(...)` block or just firing the promise.
+            // On standard Node 18 environments for Serverless Functions, we simply don't wait for it.
+            // But we must artificially delay the HTTP response slightly to ensure the Fetch registers.
             
-            ctx.waitUntil(processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id));
+            // Fire background
+            processAIInteractionAsync(userPrompt, interaction.token, interaction.application_id);
             
-            return new Response(JSON.stringify({
+            // Wait 500ms before returning to let the async thread start
+            await new Promise(r => setTimeout(r, 500));
+            
+            return res.status(200).json({
                 type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
-            }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' }
             });
         }
     }
 
-    return new Response('Unknown Interaction Type', { status: 400 });
+    return res.status(400).end('Unknown Interaction Type');
 }
