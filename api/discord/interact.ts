@@ -25,41 +25,51 @@ async function processAIInteractionAsync(userPrompt: string, interactionToken: s
             try {
                 const supabase = createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } });
 
-                // Fetch full trade data including 'data' column which has screenshots
+                // 1. Get GLOBAL STATS
+                const { count: totalCount } = await supabase.from('trades').select('*', { count: 'exact', head: true });
+                const { data: pnlData } = await supabase.from('trades').select('pnl');
+                const totalPnL = pnlData?.reduce((sum, t) => sum + (t.pnl || 0), 0) || 0;
+
+                // 2. Fetch more recent trades (names/pnl only) for context
                 const { data: recentTrades, error: tradesErr } = await supabase.from('trades')
                     .select('*')
                     .order('created_at', { ascending: false })
-                    .limit(3);
+                    .limit(10);
 
                 if (recentTrades && recentTrades.length > 0) {
+                    dynamicContext += `\nGLOBÁLNÍ STATISTIKY DENÍKU:\n- Celkový počet obchodů v žurnálu: ${totalCount}\n- Celkový čistý PnL: ${totalPnL.toFixed(2)}$\n\nPOSLEDNÍCH 10 OBCHODŮ (Historie):\n`;
+
                     const tradeText = recentTrades.map((t, index) => {
                         const data = t.data || {};
                         let screenshotInfo = 'Žádný';
 
-                        if (data.screenshots && data.screenshots.length > 0) {
+                        // Only process screenshot for the absolute LATEST trade to save vision tokens/memory
+                        if (index === 0 && data.screenshots && data.screenshots.length > 0) {
                             const url = data.screenshots[0];
                             if (url.startsWith('http')) {
                                 screenshotInfo = `URL: ${url}`;
                             } else if (url.startsWith('data:image/')) {
                                 screenshotInfo = 'Přiložen k analýze (Base64)';
-                                // If it's the very first trade, we'll try to analyze the image
-                                if (index === 0) {
-                                    const parts = url.split(',');
-                                    if (parts.length === 2) {
-                                        imageToAnalyze = {
-                                            mime: url.match(/data:([^;]+);/)?.[1] || 'image/png',
-                                            data: parts[1]
-                                        };
-                                        base64ToAttach = parts[1];
-                                    }
+                                const parts = url.split(',');
+                                if (parts.length === 2) {
+                                    imageToAnalyze = {
+                                        mime: url.match(/data:([^;]+);/)?.[1] || 'image/png',
+                                        data: parts[1]
+                                    };
+                                    base64ToAttach = parts[1];
                                 }
                             }
                         }
 
-                        return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'}, Graf: ${screenshotInfo}`;
+                        // Detailed for top 3, summary for the rest
+                        if (index < 3) {
+                            return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Směr: ${t.direction}, Výsledek: ${t.pnl}$, Setup: ${data.setup || 'N/A'}, Graf: ${screenshotInfo}`;
+                        } else {
+                            return `- Datum: ${t.created_at?.split('T')[0]}, Přístroj: ${t.instrument}, Výsledek: ${t.pnl}$`;
+                        }
                     }).join('\n');
 
-                    dynamicContext += `Aktuální načtené obchody (posledních 3):\n${tradeText}\n`;
+                    dynamicContext += `${tradeText}\n`;
                 } else {
                     dynamicContext += "Žádné nedávné obchody nenalezeny.\n";
                 }
