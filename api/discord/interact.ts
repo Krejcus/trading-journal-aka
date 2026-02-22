@@ -31,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         req.on('error', reject);
     });
 
-    const isValidRequest = verifyKey(rawBody, signature, timestamp, clientPublicKey);
+    const isValidRequest = await verifyKey(rawBody, signature, timestamp, clientPublicKey);
 
     if (!isValidRequest) {
         console.error('Invalid Request Signature');
