@@ -10,7 +10,7 @@ interface SortableWidgetProps {
   gridClass: string;
   rowSpanClass: string;
   onResizeStart?: (id: string, event: React.MouseEvent) => void;
-  size: 'small' | 'large' | 'full';
+  size: 'small' | 'medium' | 'large' | 'full';
   rowSpan: number;
 }
 
@@ -64,7 +64,7 @@ const SortableWidget: React.FC<SortableWidgetProps> = ({
             >
               {/* Interactive Badge (Hover) */}
               <div className="absolute bottom-10 right-2 bg-slate-900 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md opacity-0 group-hover/resize:opacity-100 transition-opacity whitespace-nowrap shadow-xl pointer-events-none tracking-widest">
-                {size === 'small' ? '1x' : size === 'large' ? '3x' : '6x'} × {rowSpan}y
+                {size === 'small' ? '1x' : size === 'medium' ? '2x' : size === 'large' ? '3x' : '6x'} × {rowSpan}y
               </div>
 
               <div className="w-5 h-5 rounded-br-[20px] rounded-tl-[10px] border-r-[3px] border-b-[3px] border-slate-300 dark:border-slate-600 group-hover/resize:border-indigo-500 transition-colors relative">

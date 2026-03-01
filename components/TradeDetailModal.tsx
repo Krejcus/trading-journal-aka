@@ -348,6 +348,17 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                 {!activeTrade.emotions?.length && !activeTrade.mistakes?.length && <span className="text-[10px] text-slate-600 italic">No emotional data</span>}
                                             </div>
                                         </div>
+
+                                        {/* Tactical Context */}
+                                        {(activeTrade.htfConfluence?.length || activeTrade.ltfConfluence?.length) && (
+                                            <div className="pt-2">
+                                                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><Monitor size={12} /> Tactical Context</p>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {activeTrade.htfConfluence?.map(c => <span key={c} className="px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-wide">{c}</span>)}
+                                                    {activeTrade.ltfConfluence?.map(c => <span key={c} className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-black uppercase tracking-wide">{c}</span>)}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
 
                                     {/* Notes: Pro Inline Editing */}

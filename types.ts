@@ -519,7 +519,7 @@ export interface DashboardWidgetConfig {
   id: string;
   label: string;
   visible: boolean;
-  size: 'small' | 'large' | 'full';
+  size: 'small' | 'medium' | 'large' | 'full';
   rowSpan?: number;
   order: number;
   showDisciplinedCurve?: boolean;

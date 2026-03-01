@@ -1300,8 +1300,9 @@ const Dashboard: React.FC<DashboardProps> = ({
       let newColumns = resizingWidget.startWidth + columnsChanged;
       newColumns = Math.max(1, Math.min(6, newColumns));
 
-      let newSize: 'small' | 'large' | 'full';
+      let newSize: 'small' | 'medium' | 'large' | 'full';
       if (newColumns <= 1) newSize = 'small';
+      else if (newColumns <= 2) newSize = 'medium';
       else if (newColumns <= 3) newSize = 'large';
       else newSize = 'full';
 
@@ -1561,7 +1562,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             {currentLayout
               .filter(widget => !(isMobile && !isEditing && widget.size === 'small'))
               .map((widget) => {
-                const gridClass = widget.size === 'small' ? 'col-span-3 lg:col-span-1' : (widget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6');
+                const gridClass = widget.size === 'small' ? 'col-span-3 lg:col-span-1' : (widget.size === 'medium' ? 'col-span-3 lg:col-span-2' : (widget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6'));
                 const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
 
                 return (
@@ -1608,7 +1609,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               const activeWidget = layout.find(w => w.id === activeId);
               if (!activeWidget) return null;
 
-              const gridClass = activeWidget.size === 'small' ? 'col-span-3 lg:col-span-1' : (activeWidget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6');
+              const gridClass = activeWidget.size === 'small' ? 'col-span-3 lg:col-span-1' : (activeWidget.size === 'medium' ? 'col-span-3 lg:col-span-2' : (activeWidget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6'));
               const rowSpanClass = activeWidget.rowSpan ? (activeWidget.rowSpan === 2 ? 'row-span-2' : activeWidget.rowSpan === 3 ? 'row-span-3' : activeWidget.rowSpan === 4 ? 'row-span-4' : '') : '';
 
               return (

@@ -748,28 +748,50 @@ const App: React.FC = () => {
         // Pre-warm userId cache so all parallel fetches share it
         await getUserId();
 
-        // ⏱️ PERFORMANCE MEASUREMENT - Individual API calls
+        // ⏱️ PERFORMANCE MEASUREMENT - Individual API calls with TIMEOUT (Safari fix)
         console.time('[Perf] TOTAL LOAD');
 
-        const timedFetch = async <T,>(name: string, fn: () => Promise<T>): Promise<T> => {
+        const timedFetch = async <T,>(name: string, fn: () => Promise<T>, timeoutMs = 15000): Promise<T> => {
           console.time(`[Perf] ${name}`);
-          const result = await fn();
-          console.timeEnd(`[Perf] ${name}`);
-          return result;
+
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`${name} timeout after ${timeoutMs}ms`)), timeoutMs)
+          );
+
+          try {
+            const result = await Promise.race([fn(), timeoutPromise]);
+            console.timeEnd(`[Perf] ${name}`);
+            return result;
+          } catch (error) {
+            console.timeEnd(`[Perf] ${name}`);
+            console.error(`[Perf] ${name} FAILED:`, error);
+            throw error;
+          }
+        };
+
+        // Safari-safe parallel fetch with individual error handling
+        const fetchWithFallback = async <T,>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+          try {
+            return await timedFetch(name, fn);
+          } catch (error) {
+            console.warn(`[Safari Fix] ${name} failed, using fallback:`, error);
+            return fallback;
+          }
         };
 
         const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-          timedFetch('trades', () => storageService.getTrades()),
-          timedFetch('accounts', () => storageService.getAccounts()),
-          timedFetch('dailyPreps', () => storageService.getDailyPreps()),
-          timedFetch('dailyReviews', () => storageService.getDailyReviews()),
-          timedFetch('preferences', () => storageService.getPreferences()),
-          timedFetch('user', () => storageService.getUser()),
-          timedFetch('weeklyFocus', () => storageService.getWeeklyFocusList())
+          fetchWithFallback('trades', () => storageService.getTrades(), []),
+          fetchWithFallback('accounts', () => storageService.getAccounts(), []),
+          fetchWithFallback('dailyPreps', () => storageService.getDailyPreps(), []),
+          fetchWithFallback('dailyReviews', () => storageService.getDailyReviews(), []),
+          fetchWithFallback('preferences', () => storageService.getPreferences(), null),
+          fetchWithFallback('user', () => storageService.getUser(), null),
+          fetchWithFallback('weeklyFocus', () => storageService.getWeeklyFocusList(), [])
         ]);
 
         console.timeEnd('[Perf] TOTAL LOAD');
         console.log(`[Load] Success! Loaded ${dbTrades?.length || 0} trades, ${dbAccounts?.length || 0} accounts`);
+        console.log('[Debug] Loaded accounts:', dbAccounts?.map(a => ({ id: a.id, name: a.name, phase: a.phase, type: a.type })));
 
         // Update state with fresh data
         setTrades(dbTrades || []);
@@ -1491,13 +1513,40 @@ const App: React.FC = () => {
   const baseFilteredTrades = useMemo(() => {
     const now = new Date();
     return displayTrades.filter(t => {
+      // DEBUG: Log Alpha Bridge trades to see why they're filtered
+      const isAlphaBridge = t.signal === 'Alpha Bridge v2';
+
       // Filter by phase based on dashboardMode
+      // ALWAYS use account phase as source of truth, not trade phase
       if (dashboardMode === 'challenge') {
-        const isChallenge = t.phase === 'Challenge' || (!t.phase && accounts.find(a => a.id === t.accountId)?.phase === 'Challenge');
-        if (!isChallenge) return false;
+        const acc = accounts.find(a => a.id === t.accountId);
+        if (isAlphaBridge) console.log('[Filter Debug] Alpha Bridge trade account lookup:', {
+          tradeAccountId: t.accountId,
+          accountFound: !!acc,
+          accountPhase: acc?.phase,
+          accountName: acc?.name,
+          totalAccountsLoaded: accounts.length
+        });
+        const isChallenge = acc?.phase === 'Challenge';
+        if (!isChallenge) {
+          if (isAlphaBridge) console.log('[Filter Debug] Alpha Bridge trade filtered by PHASE (challenge mode):', { tradePhase: t.phase, accountPhase: acc?.phase });
+          return false;
+        }
       } else if (dashboardMode === 'funded') {
-        const isFunded = t.phase === 'Funded' || (!t.phase && (accounts.find(a => a.id === t.accountId)?.type === 'Live' || accounts.find(a => a.id === t.accountId)?.phase === 'Funded'));
-        if (!isFunded) return false;
+        const acc = accounts.find(a => a.id === t.accountId);
+        if (isAlphaBridge) console.log('[Filter Debug] Alpha Bridge trade account lookup:', {
+          tradeAccountId: t.accountId,
+          accountFound: !!acc,
+          accountPhase: acc?.phase,
+          accountType: acc?.type,
+          accountName: acc?.name,
+          totalAccountsLoaded: accounts.length
+        });
+        const isFunded = acc?.type === 'Live' || acc?.phase === 'Funded';
+        if (!isFunded) {
+          if (isAlphaBridge) console.log('[Filter Debug] Alpha Bridge trade filtered by PHASE (funded mode):', { tradePhase: t.phase, accountPhase: acc?.phase });
+          return false;
+        }
       }
 
       const d = new Date(t.date);
@@ -1523,10 +1572,18 @@ const App: React.FC = () => {
           });
         }
       } else {
-        matchAcc = filters.accounts.includes(t.accountId);
+        // In normal mode, empty filter means "show all accounts"
+        if (filters.accounts.length === 0) {
+          matchAcc = true;
+        } else {
+          matchAcc = filters.accounts.includes(t.accountId);
+        }
       }
 
-      const matchDir = filters.directions.includes(t.direction);
+      // Case-insensitive direction matching (SHORT/Short, LONG/Long)
+      const matchDir = filters.directions.some(dir =>
+        dir.toLowerCase() === t.direction?.toLowerCase()
+      );
       const matchStatus = filters.executionStatuses.includes(status);
 
       let matchRes = false;
@@ -1552,8 +1609,33 @@ const App: React.FC = () => {
         if (filters.period === 'year' && diffDays > 365) matchPeriod = false;
       }
 
-      return matchDay && matchHour && matchAcc && matchDir && matchRes && matchPeriod &&
+      const passes = matchDay && matchHour && matchAcc && matchDir && matchRes && matchPeriod &&
         matchStatus && matchHtf && matchLtf && matchMistake;
+
+      // DEBUG: Log why Alpha Bridge trades fail
+      if (isAlphaBridge && !passes) {
+        console.log('[Filter Debug] Alpha Bridge trade FILTERED OUT:', {
+          id: t.id,
+          accountId: t.accountId,
+          direction: t.direction,
+          pnl: t.pnl,
+          phase: t.phase,
+          date: t.date,
+          dayName,
+          hour: h,
+          filters: {
+            matchDay: `${matchDay} (needs: ${filters.days.join(',')})`,
+            matchHour: `${matchHour} (needs: ${filters.hours.join(',')})`,
+            matchAcc: `${matchAcc} (needs: ${filters.accounts.join(',')})`,
+            matchDir: `${matchDir} (has: ${t.direction}, needs: ${filters.directions.join(',')})`,
+            matchRes: `${matchRes} (has pnl: ${t.pnl}, needs: ${filters.outcomes.join(',')})`,
+            matchPeriod: `${matchPeriod} (period: ${filters.period})`,
+            matchStatus: `${matchStatus} (has: ${status}, needs: ${filters.executionStatuses.join(',')})`,
+          }
+        });
+      }
+
+      return passes;
     });
   }, [displayTrades, filters, viewMode, accounts, dashboardMode]);
 
@@ -2151,27 +2233,6 @@ const App: React.FC = () => {
                 historyLayoutMode={activePage === 'history' ? historyLayoutMode : undefined}
                 setHistoryLayoutMode={activePage === 'history' ? setHistoryLayoutMode : undefined}
               />
-
-              {activePage === 'dashboard' && (
-                <button
-                  onClick={() => setIsDashboardEditing(!isDashboardEditing)}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-xl transition-colors border ${isDashboardEditing ? 'bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-500/20' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300' : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600 shadow-sm')}`}
-                  title={isDashboardEditing ? "Uložit rozložení" : "Upravit Dashboard"}
-                >
-                  {isDashboardEditing ? <Check size={16} /> : <LayoutGrid size={16} />}
-                  <span className="text-xs font-black uppercase tracking-widest hidden md:inline">{isDashboardEditing ? 'Uložit' : 'Upravit'}</span>
-                </button>
-              )}
-
-              {/* Force Refresh Button */}
-              <button
-                onClick={() => window.location.reload()}
-                className="flex items-center gap-2 px-3 py-2 bg-[var(--bg-subtle)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)] rounded-lg transition-colors"
-                title="Force Refresh - načíst nejnovější data ze serveru"
-              >
-                <RefreshCw size={16} className="text-[var(--text-secondary)]" />
-                <span className="text-xs text-[var(--text-secondary)] font-medium hidden md:inline">Refresh</span>
-              </button>
 
               <button
                 onClick={() => {

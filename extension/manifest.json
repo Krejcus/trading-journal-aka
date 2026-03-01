@@ -1,0 +1,44 @@
+{
+    "manifest_version": 3,
+    "name": "Alpha Bridge v2",
+    "version": "2.0.0",
+    "description": "Premium Bridge between TradingView and AlphaTrade Mentor",
+    "action": {
+        "default_popup": "index.html"
+    },
+    "content_scripts": [
+        {
+            "js": [
+                "src/content/index.tsx"
+            ],
+            "matches": [
+                "*://*.tradingview.com/*"
+            ]
+        }
+    ],
+    "background": {
+        "service_worker": "src/background/index.ts",
+        "type": "module"
+    },
+    "permissions": [
+        "activeTab",
+        "scripting",
+        "storage",
+        "tabs"
+    ],
+    "host_permissions": [
+        "<all_urls>",
+        "*://*.tradingview.com/*",
+        "http://localhost:3000/*"
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "icons/*"
+            ],
+            "matches": [
+                "<all_urls>"
+            ]
+        }
+    ]
+}

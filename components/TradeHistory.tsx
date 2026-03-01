@@ -39,8 +39,19 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const formatValue = (val: number, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
     return formatPnL(val, mode, bal, rr, sign, targetCurrency, exchangeRates);
   };
+
+  // Get account phase for a trade (account is source of truth, not trade.phase)
+  const getTradePhase = (trade: Trade): string | null => {
+    const account = accounts.find(a => a.id === trade.accountId);
+    return account?.phase || trade.phase || null;
+  };
+
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
+
+  // --- MULTI-SELECT STATE ---
+  const [selectedTradeIds, setSelectedTradeIds] = useState<Set<string | number>>(new Set());
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
 
   // --- INFINITE SCROLL STATE ---
   const PAGE_SIZE = 20;
@@ -83,6 +94,41 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     [sortedTrades, visibleCount]
   );
   const hasMore = visibleCount < sortedTrades.length;
+
+  // --- MULTI-SELECT HANDLERS ---
+  const toggleTradeSelection = (tradeId: string | number) => {
+    setSelectedTradeIds(prev => {
+      const next = new Set(prev);
+      if (next.has(tradeId)) {
+        next.delete(tradeId);
+      } else {
+        next.add(tradeId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedTradeIds.size === visibleTrades.length) {
+      setSelectedTradeIds(new Set());
+    } else {
+      setSelectedTradeIds(new Set(visibleTrades.map(t => t.id)));
+    }
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedTradeIds.size === 0) return;
+    if (!confirm(`Opravdu chcete smazat ${selectedTradeIds.size} obchodů?`)) return;
+
+    selectedTradeIds.forEach(id => onDelete(id));
+    setSelectedTradeIds(new Set());
+    setIsMultiSelectMode(false);
+  };
+
+  const clearSelection = () => {
+    setSelectedTradeIds(new Set());
+    setIsMultiSelectMode(false);
+  };
 
   // Reset visible count when trades change (e.g., filter applied)
   useEffect(() => {
@@ -180,6 +226,47 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20 pt-4">
 
+      {/* Multi-Select Toolbar */}
+      <div className="flex items-center gap-3 mb-4 px-2">
+        <button
+          onClick={() => {
+            if (isMultiSelectMode) {
+              clearSelection();
+            } else {
+              setIsMultiSelectMode(true);
+            }
+          }}
+          className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${
+            isMultiSelectMode
+              ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+              : 'bg-slate-700/50 text-slate-300 border border-slate-600/30 hover:bg-slate-600/50'
+          }`}
+        >
+          {isMultiSelectMode ? 'Zrušit výběr' : 'Vybrat více'}
+        </button>
+
+        {isMultiSelectMode && (
+          <>
+            <button
+              onClick={toggleSelectAll}
+              className="px-4 py-2 rounded-lg font-bold text-sm bg-slate-700/50 text-slate-300 border border-slate-600/30 hover:bg-slate-600/50 transition-all"
+            >
+              {selectedTradeIds.size === visibleTrades.length ? 'Zrušit vše' : 'Vybrat vše'}
+            </button>
+
+            {selectedTradeIds.size > 0 && (
+              <button
+                onClick={handleDeleteSelected}
+                className="px-4 py-2 rounded-lg font-bold text-sm bg-rose-500/20 text-rose-400 border border-rose-500/30 hover:bg-rose-500/30 transition-all flex items-center gap-2"
+              >
+                <Trash2 size={16} />
+                Smazat vybrané ({selectedTradeIds.size})
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
       {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
           {visibleTrades.map((trade) => {
@@ -221,9 +308,29 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             return (
               <div
                 key={trade.id}
-                onClick={() => setSelectedTrade(trade)}
-                className={`group relative flex flex-col md:flex-row h-auto md:h-56 rounded-[24px] border overflow-hidden transition-all duration-500 cursor-pointer ${glowClass} glass-panel hover:scale-[1.01]`}
+                onClick={() => !isMultiSelectMode && setSelectedTrade(trade)}
+                className={`group relative flex flex-col md:flex-row h-auto md:h-56 rounded-[24px] border overflow-hidden transition-all duration-500 cursor-pointer ${glowClass} glass-panel hover:scale-[1.01] ${
+                  selectedTradeIds.has(trade.id) ? 'ring-2 ring-cyan-400' : ''
+                }`}
               >
+                {/* Multi-Select Checkbox */}
+                {isMultiSelectMode && (
+                  <div
+                    className="absolute top-3 left-3 z-20"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleTradeSelection(trade.id);
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedTradeIds.has(trade.id)}
+                      onChange={() => {}}
+                      className="w-5 h-5 cursor-pointer accent-cyan-500"
+                    />
+                  </div>
+                )}
+
                 <div className="absolute top-2 right-4 opacity-5 pointer-events-none">
                   <span className="text-[8px] font-mono font-bold tracking-widest uppercase">System.Alpha.v4.0</span>
                 </div>
@@ -243,12 +350,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         <Calendar size={8} className="text-slate-500" />
                         <span className="text-[9px] font-mono font-bold text-slate-500">{formatTradeDate(trade.date).date}</span>
                       </div>
-                      {trade.phase && (
-                        <span className={`px-1.5 py-0.5 rounded text-[7px] font-black tracking-widest border ${trade.phase === 'Funded'
+                      {getTradePhase(trade) && (
+                        <span className={`px-1.5 py-0.5 rounded text-[7px] font-black tracking-widest border ${getTradePhase(trade) === 'Funded'
                           ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
                           : 'bg-amber-500/10 text-amber-500 border-amber-500/20'
                           }`}>
-                          {trade.phase.toUpperCase()}
+                          {getTradePhase(trade)!.toUpperCase()}
                         </span>
                       )}
                     </div>
@@ -357,6 +464,16 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className={`${theme !== 'light' ? 'bg-white/[0.03]' : 'bg-slate-50'} border-b ${theme !== 'light' ? 'border-white/10' : 'border-slate-200'}`}>
+                  {isMultiSelectMode && (
+                    <th className="px-4 py-4 w-12">
+                      <input
+                        type="checkbox"
+                        checked={selectedTradeIds.size === visibleTrades.length && visibleTrades.length > 0}
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 cursor-pointer accent-cyan-500"
+                      />
+                    </th>
+                  )}
                   <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Vizual</th>
                   <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Instrument</th>
                   <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Typ</th>
@@ -393,9 +510,28 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   return (
                     <tr
                       key={trade.id}
-                      onClick={() => setSelectedTrade(trade)}
-                      className={`group hover:bg-white/[0.03] transition-colors cursor-pointer border-b ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'}`}
+                      onClick={() => !isMultiSelectMode && setSelectedTrade(trade)}
+                      className={`group hover:bg-white/[0.03] transition-colors cursor-pointer border-b ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'} ${
+                        selectedTradeIds.has(trade.id) ? 'bg-cyan-500/10 ring-1 ring-cyan-400' : ''
+                      }`}
                     >
+                      {isMultiSelectMode && (
+                        <td className="px-4 py-3 w-12">
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleTradeSelection(trade.id);
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedTradeIds.has(trade.id)}
+                              onChange={() => {}}
+                              className="w-4 h-4 cursor-pointer accent-cyan-500"
+                            />
+                          </div>
+                        </td>
+                      )}
                       <td className="px-6 py-3">
                         <div className="w-12 h-12 rounded-lg border border-white/10 overflow-hidden bg-white/5 flex items-center justify-center relative">
                           {tableScreenshot ? (
@@ -419,7 +555,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       <td className="px-6 py-3">
                         <div className="flex flex-col">
                           <span className={`text-sm font-black uppercase tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</span>
-                          <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{trade.phase || 'Standard'}</span>
+                          <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{getTradePhase(trade) || 'Standard'}</span>
                         </div>
                       </td>
                       <td className="px-6 py-3">
