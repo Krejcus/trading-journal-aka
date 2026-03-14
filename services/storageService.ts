@@ -51,6 +51,126 @@ const updateCacheTimestamp = async () => {
 };
 
 export const storageService = {
+
+  // Single RPC call to load all dashboard data at once (replaces 7 parallel HTTP requests)
+  async getDashboardData(): Promise<{
+    trades: Trade[]; accounts: Account[]; preps: DailyPrep[];
+    reviews: DailyReview[]; preferences: UserPreferences | null;
+    user: User | null; weeklyFocus: WeeklyFocus[];
+  }> {
+    const { data, error } = await supabase.rpc('get_dashboard_data');
+    if (error) { console.error('[RPC] get_dashboard_data error:', error); throw error; }
+    const raw = data as any;
+
+    const trades = (raw.trades || []).map((t: any) => {
+      const d = t.data || {};
+      return {
+        id: t.id, userId: t.user_id, accountId: t.account_id, instrument: t.instrument,
+        pnl: t.pnl, direction: t.direction, date: t.date, timestamp: t.timestamp,
+        drawings: [], isPublic: t.is_public, createdAt: t.created_at,
+        setup: d.setup, mistake: d.mistake, notes: d.notes, tags: d.tags,
+        runUp: d.runUp ? Number(d.runUp) : undefined,
+        drawdown: d.drawdown ? Number(d.drawdown) : undefined,
+        riskAmount: d.riskAmount ? Number(d.riskAmount) : undefined,
+        targetAmount: d.targetAmount ? Number(d.targetAmount) : undefined,
+        entryPrice: d.entryPrice ? Number(d.entryPrice) : undefined,
+        exitPrice: d.exitPrice ? Number(d.exitPrice) : undefined,
+        stopLoss: d.stopLoss ? Number(d.stopLoss) : undefined,
+        takeProfit: d.takeProfit ? Number(d.takeProfit) : undefined,
+        quantity: d.quantity ? Number(d.quantity) : undefined,
+        signal: d.signal, session: d.session,
+        confidence: d.confidence ? Number(d.confidence) : undefined,
+        rr: d.rr ? Number(d.rr) : undefined,
+        duration: d.duration,
+        durationMinutes: d.durationMinutes ? Number(d.durationMinutes) : 0,
+        isValid: d.isValid === 'true' || d.isValid === true,
+        groupId: d.groupId, phase: d.phase,
+        htfConfluence: d.htfConfluence, ltfConfluence: d.ltfConfluence,
+        mistakes: d.mistakes, emotions: d.emotions,
+        planAdherence: d.planAdherence, executionStatus: d.executionStatus,
+        screenshot: undefined, screenshots: undefined,
+        miniViewRange: d.miniViewRange, miniViewLayout: d.miniViewLayout,
+        miniViewSecondaryRange: d.miniViewSecondaryRange,
+        miniViewSecondaryTimeframe: d.miniViewSecondaryTimeframe,
+        data: {}
+      };
+    }) as Trade[];
+
+    const allAccounts = (raw.accounts || []).map((a: any) => ({
+      ...a.meta, id: a.id, name: a.name, initialBalance: a.initial_balance,
+      currency: a.currency, type: a.type, status: a.status, createdAt: a.created_at,
+      isArchived: a.meta?.isArchived, archivedAt: a.meta?.archivedAt,
+      result: a.meta?.result, phase: a.meta?.phase
+    }));
+    const accounts = allAccounts.filter((a: any) => !a.isArchived) as Account[];
+
+    const preps = (raw.daily_preps || []).map((d: any) => ({ ...d.data, id: d.id, date: d.date })) as DailyPrep[];
+    const reviews = (raw.daily_reviews || []).map((d: any) => ({ ...d.data, id: d.id, date: d.date })) as DailyReview[];
+
+    const user = raw.user ? {
+      id: raw.user.id, email: raw.user.email || '',
+      name: raw.user.full_name || '', avatar: raw.user.avatar_url
+    } as User : null;
+
+    const preferences = raw.preferences || null;
+
+    const weeklyFocus = (raw.weekly_focus || []).map((d: any) => {
+      const goals = (d.goals || []).map((g: any, i: number) =>
+        typeof g === 'string' ? { id: `g_${i}`, text: g, emoji: storageService.predictEmoji(g) } : g
+      );
+      return { id: d.id, weekISO: d.week_iso, goals };
+    }) as WeeklyFocus[];
+
+    // Update caches so individual methods stay fresh
+    const userId = raw.user?.id;
+    if (userId) {
+      set(`alphatrade_trades_${userId}`, trades);
+      set(`alphatrade_daily_preps_${userId}`, preps);
+      set(`alphatrade_daily_reviews_${userId}`, reviews);
+      set(`alphatrade_user_profile_${userId}`, user);
+      safeSetItem(`alphatrade_accounts_${userId}`, accounts);
+      if (preferences) safeSetItem(`alphatrade_preferences_${userId}`, preferences);
+      set(`alphatrade_weekly_focus_${userId}`, weeklyFocus);
+    }
+
+    return { trades, accounts, preps, reviews, preferences, user, weeklyFocus };
+  },
+
+  // Read all dashboard data from IndexedDB/localStorage cache (instant, no network)
+  async getCachedDashboardData(userId: string): Promise<{
+    trades: Trade[]; accounts: Account[]; preps: DailyPrep[];
+    reviews: DailyReview[]; preferences: UserPreferences | null;
+    user: User | null; weeklyFocus: WeeklyFocus[];
+  } | null> {
+    try {
+      const [trades, preps, reviews, user, weeklyFocus] = await Promise.all([
+        get(`alphatrade_trades_${userId}`),
+        get(`alphatrade_daily_preps_${userId}`),
+        get(`alphatrade_daily_reviews_${userId}`),
+        get(`alphatrade_user_profile_${userId}`),
+        get(`alphatrade_weekly_focus_${userId}`)
+      ]);
+      // Require user data to consider cache valid
+      if (!user) return null;
+      const accountsRaw = localStorage.getItem(`alphatrade_accounts_${userId}`);
+      const accounts = accountsRaw ? JSON.parse(accountsRaw) : [];
+      const prefsRaw = localStorage.getItem(`alphatrade_preferences_${userId}`);
+      const preferences = prefsRaw ? JSON.parse(prefsRaw) : null;
+      return {
+        trades: (trades || []) as Trade[],
+        accounts: accounts as Account[],
+        preps: (preps || []) as DailyPrep[],
+        reviews: (reviews || []) as DailyReview[],
+        preferences,
+        user: user as User,
+        weeklyFocus: (weeklyFocus || []) as WeeklyFocus[]
+      };
+    } catch (e) {
+      console.warn('[Cache] getCachedDashboardData failed:', e);
+      return null;
+    }
+  },
+
   // User Profile
   async getCachedUser(): Promise<User | null> {
     const userId = await getUserId();

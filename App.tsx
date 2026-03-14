@@ -738,56 +738,100 @@ const App: React.FC = () => {
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
-      // --- SIMPLE RELIABLE LOADING: Server-First ---
-      console.log("[Load] Starting simple server data load...");
+      // --- CACHE-FIRST LOADING: Instant from IndexedDB, then background refresh ---
+      console.time('[Perf] CACHE READ');
+      const cached = await storageService.getCachedDashboardData(session.user.id);
+      console.timeEnd('[Perf] CACHE READ');
+
+      if (cached) {
+        console.log(`[Load] Cache hit! ${cached.trades.length} trades, ${cached.accounts.length} accounts loaded instantly`);
+        setTrades(cached.trades || []);
+        if (cached.accounts && cached.accounts.length > 0) {
+          setAccounts(cached.accounts);
+          const activeId = storageService.getActiveAccountId();
+          setActiveAccountId(activeId || cached.accounts[0].id);
+        } else {
+          setAccounts([DEFAULT_ACCOUNT]);
+          setActiveAccountId(DEFAULT_ACCOUNT.id);
+        }
+        if (cached.user) setCurrentUser(cached.user);
+        if (cached.preferences) applyPreferences(cached.preferences);
+        setDailyPreps(cached.preps || []);
+        setDailyReviews(cached.reviews || []);
+        setWeeklyFocusList(cached.weeklyFocus || []);
+        setSyncError(null);
+        setLoading(false);
+        setIsInitialLoadDone(true);
+        isFetchingRef.current = false;
+        clearTimeout(safetyTimer);
+
+        // Background refresh — silently sync with server
+        storageService.getDashboardData().then(fresh => {
+          console.log(`[Load] Background refresh done: ${fresh.trades.length} trades`);
+          setTrades(fresh.trades || []);
+          if (fresh.accounts && fresh.accounts.length > 0) setAccounts(fresh.accounts);
+          if (fresh.user) setCurrentUser(fresh.user);
+          if (fresh.preferences) applyPreferences(fresh.preferences);
+          setDailyPreps(fresh.preps || []);
+          setDailyReviews(fresh.reviews || []);
+          setWeeklyFocusList(fresh.weeklyFocus || []);
+        }).catch(err => console.warn('[Load] Background refresh failed:', err));
+        return;
+      }
+
+      // --- NO CACHE (first visit): Blocking server load ---
+      console.log("[Load] No cache, loading from server...");
       setInitStatus("Načítám data...");
 
       try {
-        // OPTIMIZED: Fetch critical data first, Business Hub data is loaded lazily
-
-        // Pre-warm userId cache so all parallel fetches share it
-        await getUserId();
-
-        // ⏱️ PERFORMANCE MEASUREMENT - Individual API calls with TIMEOUT (Safari fix)
+        // OPTIMIZED: Single RPC call replaces 7 parallel HTTP requests
         console.time('[Perf] TOTAL LOAD');
 
-        const timedFetch = async <T,>(name: string, fn: () => Promise<T>, timeoutMs = 15000): Promise<T> => {
-          console.time(`[Perf] ${name}`);
+        let dbTrades: Trade[] = [];
+        let dbAccounts: Account[] = [];
+        let dbPreps: DailyPrep[] = [];
+        let dbReviews: DailyReview[] = [];
+        let dbPrefs: UserPreferences | null = null;
+        let dbUser: User | null = null;
+        let dbWeeklyFocus: WeeklyFocus[] = [];
 
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`${name} timeout after ${timeoutMs}ms`)), timeoutMs)
-          );
+        try {
+          console.time('[Perf] dashboardRPC');
+          const result = await Promise.race([
+            storageService.getDashboardData(),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('RPC timeout')), 15000))
+          ]);
+          console.timeEnd('[Perf] dashboardRPC');
 
-          try {
-            const result = await Promise.race([fn(), timeoutPromise]);
-            console.timeEnd(`[Perf] ${name}`);
-            return result;
-          } catch (error) {
-            console.timeEnd(`[Perf] ${name}`);
-            console.error(`[Perf] ${name} FAILED:`, error);
-            throw error;
-          }
-        };
-
-        // Safari-safe parallel fetch with individual error handling
-        const fetchWithFallback = async <T,>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
-          try {
-            return await timedFetch(name, fn);
-          } catch (error) {
-            console.warn(`[Safari Fix] ${name} failed, using fallback:`, error);
-            return fallback;
-          }
-        };
-
-        const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
-          fetchWithFallback('trades', () => storageService.getTrades(), []),
-          fetchWithFallback('accounts', () => storageService.getAccounts(), []),
-          fetchWithFallback('dailyPreps', () => storageService.getDailyPreps(), []),
-          fetchWithFallback('dailyReviews', () => storageService.getDailyReviews(), []),
-          fetchWithFallback('preferences', () => storageService.getPreferences(), null),
-          fetchWithFallback('user', () => storageService.getUser(), null),
-          fetchWithFallback('weeklyFocus', () => storageService.getWeeklyFocusList(), [])
-        ]);
+          dbTrades = result.trades;
+          dbAccounts = result.accounts;
+          dbPreps = result.preps;
+          dbReviews = result.reviews;
+          dbPrefs = result.preferences;
+          dbUser = result.user;
+          dbWeeklyFocus = result.weeklyFocus;
+        } catch (rpcErr) {
+          console.timeEnd('[Perf] dashboardRPC');
+          console.warn('[Load] RPC failed, falling back to parallel queries:', rpcErr);
+          await getUserId();
+          const fb = async <T,>(n: string, fn: () => Promise<T>, d: T): Promise<T> => {
+            try {
+              console.time(`[Perf] ${n}`);
+              const r = await Promise.race([fn(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${n} timeout`)), 15000))]);
+              console.timeEnd(`[Perf] ${n}`);
+              return r;
+            } catch (e) { console.timeEnd(`[Perf] ${n}`); console.warn(`[Fallback] ${n} failed:`, e); return d; }
+          };
+          [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
+            fb('trades', () => storageService.getTrades(), []),
+            fb('accounts', () => storageService.getAccounts(), []),
+            fb('dailyPreps', () => storageService.getDailyPreps(), []),
+            fb('dailyReviews', () => storageService.getDailyReviews(), []),
+            fb('preferences', () => storageService.getPreferences(), null),
+            fb('user', () => storageService.getUser(), null),
+            fb('weeklyFocus', () => storageService.getWeeklyFocusList(), [])
+          ]);
+        }
 
         console.timeEnd('[Perf] TOTAL LOAD');
         console.log(`[Load] Success! Loaded ${dbTrades?.length || 0} trades, ${dbAccounts?.length || 0} accounts`);
@@ -1367,6 +1411,11 @@ const App: React.FC = () => {
           .filter(a => a.type === 'Funded' && a.phase === 'Challenge')
           .map(a => a.id);
         setFilters(prev => ({ ...prev, accounts: challengeIds }));
+      } else if (dashboardMode === 'backtesting') {
+        const backtestIds = accounts
+          .filter(a => a.type === 'Backtest')
+          .map(a => a.id);
+        setFilters(prev => ({ ...prev, accounts: backtestIds }));
       } else if (dashboardMode === 'archive') {
         // Show only archived accounts (lazy-loaded separately)
         const archivedIds = archivedAccounts.map(a => a.id);
@@ -1384,7 +1433,8 @@ const App: React.FC = () => {
     if (activePage !== 'dashboard') return accounts;
     if (dashboardMode === 'combined') return accounts;
     if (dashboardMode === 'funded') return accounts.filter(a => (a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live');
-    if (dashboardMode === 'challenge') return accounts.filter(a => a.phase === 'Challenge');
+    if (dashboardMode === 'challenge') return accounts.filter(a => a.type === 'Funded' && a.phase === 'Challenge');
+    if (dashboardMode === 'backtesting') return accounts.filter(a => a.type === 'Backtest');
     if (dashboardMode === 'archive') return archivedAccounts;
     return accounts;
   }, [accounts, archivedAccounts, activePage, dashboardMode]);
@@ -1520,31 +1570,20 @@ const App: React.FC = () => {
       // ALWAYS use account phase as source of truth, not trade phase
       if (dashboardMode === 'challenge') {
         const acc = accounts.find(a => a.id === t.accountId);
-        if (isAlphaBridge) console.log('[Filter Debug] Alpha Bridge trade account lookup:', {
-          tradeAccountId: t.accountId,
-          accountFound: !!acc,
-          accountPhase: acc?.phase,
-          accountName: acc?.name,
-          totalAccountsLoaded: accounts.length
-        });
         const isChallenge = acc?.phase === 'Challenge';
         if (!isChallenge) {
-          if (isAlphaBridge) console.log('[Filter Debug] Alpha Bridge trade filtered by PHASE (challenge mode):', { tradePhase: t.phase, accountPhase: acc?.phase });
+          return false;
+        }
+      } else if (dashboardMode === 'backtesting') {
+        const acc = accounts.find(a => a.id === t.accountId);
+        const isBacktest = acc?.type === 'Backtest';
+        if (!isBacktest) {
           return false;
         }
       } else if (dashboardMode === 'funded') {
         const acc = accounts.find(a => a.id === t.accountId);
-        if (isAlphaBridge) console.log('[Filter Debug] Alpha Bridge trade account lookup:', {
-          tradeAccountId: t.accountId,
-          accountFound: !!acc,
-          accountPhase: acc?.phase,
-          accountType: acc?.type,
-          accountName: acc?.name,
-          totalAccountsLoaded: accounts.length
-        });
         const isFunded = acc?.type === 'Live' || acc?.phase === 'Funded';
         if (!isFunded) {
-          if (isAlphaBridge) console.log('[Filter Debug] Alpha Bridge trade filtered by PHASE (funded mode):', { tradePhase: t.phase, accountPhase: acc?.phase });
           return false;
         }
       }
@@ -1601,7 +1640,7 @@ const App: React.FC = () => {
         (t.mistakes?.some(m => filters.mistakes.includes(m)) || false);
 
       let matchPeriod = true;
-      if (filters.period !== 'all') {
+      if (dashboardMode !== 'backtesting' && filters.period !== 'all') {
         const diffDays = (now.getTime() - d.getTime()) / (1000 * 3600 * 24);
         if (filters.period === 'week' && diffDays > 7) matchPeriod = false;
         if (filters.period === 'month' && diffDays > 30) matchPeriod = false;
@@ -1611,29 +1650,6 @@ const App: React.FC = () => {
 
       const passes = matchDay && matchHour && matchAcc && matchDir && matchRes && matchPeriod &&
         matchStatus && matchHtf && matchLtf && matchMistake;
-
-      // DEBUG: Log why Alpha Bridge trades fail
-      if (isAlphaBridge && !passes) {
-        console.log('[Filter Debug] Alpha Bridge trade FILTERED OUT:', {
-          id: t.id,
-          accountId: t.accountId,
-          direction: t.direction,
-          pnl: t.pnl,
-          phase: t.phase,
-          date: t.date,
-          dayName,
-          hour: h,
-          filters: {
-            matchDay: `${matchDay} (needs: ${filters.days.join(',')})`,
-            matchHour: `${matchHour} (needs: ${filters.hours.join(',')})`,
-            matchAcc: `${matchAcc} (needs: ${filters.accounts.join(',')})`,
-            matchDir: `${matchDir} (has: ${t.direction}, needs: ${filters.directions.join(',')})`,
-            matchRes: `${matchRes} (has pnl: ${t.pnl}, needs: ${filters.outcomes.join(',')})`,
-            matchPeriod: `${matchPeriod} (period: ${filters.period})`,
-            matchStatus: `${matchStatus} (has: ${status}, needs: ${filters.executionStatuses.join(',')})`,
-          }
-        });
-      }
 
       return passes;
     });
@@ -2209,10 +2225,10 @@ const App: React.FC = () => {
               <div className="flex items-center gap-2.5">
                 <div className="relative flex h-2 w-2">
                   <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' : 'hidden'}`}></span>
-                  <span className={`relative inline-flex rounded-full h-2 w-2 ${dashboardMode === 'funded' ? 'bg-emerald-500' : dashboardMode === 'challenge' ? 'bg-blue-500' : 'bg-orange-500'}`}></span>
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${dashboardMode === 'funded' ? 'bg-emerald-500' : dashboardMode === 'challenge' ? 'bg-blue-500' : dashboardMode === 'backtesting' ? 'bg-violet-500' : 'bg-orange-500'}`}></span>
                 </div>
-                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${dashboardMode === 'funded' ? 'text-emerald-400' : dashboardMode === 'challenge' ? 'text-blue-400' : 'text-orange-400'}`}>
-                  {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : 'All'}
+                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${dashboardMode === 'funded' ? 'text-emerald-400' : dashboardMode === 'challenge' ? 'text-blue-400' : dashboardMode === 'backtesting' ? 'text-violet-400' : 'text-orange-400'}`}>
+                  {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : dashboardMode === 'backtesting' ? 'Backtesting' : 'All'}
                 </span>
               </div>
             </div>

@@ -139,7 +139,7 @@ export interface Account {
 
 export type PnLDisplayMode = 'usd' | 'percent' | 'rr';
 
-export type DashboardMode = 'funded' | 'challenge' | 'combined' | 'archive';
+export type DashboardMode = 'funded' | 'challenge' | 'combined' | 'archive' | 'backtesting';
 
 export interface TradeFilters {
   days: string[];

@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 interface Account {
     id: string;
     name: string;
+    type?: string;
     phase?: string;
     parentAccountId?: string;
     parent_account_id?: string; // Fallback for DB casing
@@ -48,10 +49,21 @@ export function AccountList({ onSelectionChange }: { onSelectionChange: (selecte
 
                 setAccounts(formattedAccounts as Account[]);
 
-                // Auto-select master accounts by default
-                const masters = formattedAccounts.filter(a => !a.parentAccountId);
-                const defaults = masters.map(m => m.id);
-                console.log('[AlphaBridge AccountList] ✅ Auto-selected master accounts:', defaults);
+                // On FX Replay: auto-select Backtest accounts; otherwise select master accounts
+                const isFXReplay = window.location.hostname.includes('fxreplay.com');
+                let defaults: string[];
+
+                if (isFXReplay) {
+                    const backtestAccounts = formattedAccounts.filter((a: any) => a.type === 'Backtest' || a.meta?.type === 'Backtest');
+                    defaults = backtestAccounts.map((a: any) => a.id);
+                    // Removed fallback to all masters if no backtest accounts exist, as per instruction
+                    console.log('[AlphaBridge AccountList] 🧪 FX Replay detected, auto-selected Backtest accounts:', defaults);
+                } else {
+                    const masters = formattedAccounts.filter((a: any) => !a.parentAccountId);
+                    defaults = masters.map(m => m.id);
+                    console.log('[AlphaBridge AccountList] ✅ Auto-selected master accounts:', defaults);
+                }
+
                 setSelectedIds(defaults);
                 onSelectionChange(defaults);
 

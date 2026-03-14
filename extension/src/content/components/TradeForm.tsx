@@ -46,6 +46,35 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
     const [submitStatus, setSubmitStatus] = useState<{ text: string, type: 'info' | 'success' | 'error' } | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [isPreviewing, setIsPreviewing] = useState(false);
+    const [lightboxOpen, setLightboxOpen] = useState(false);
+
+    // Inject fullscreen lightbox into document.body to escape Shadow DOM
+    useEffect(() => {
+        if (!lightboxOpen || !previewUrl) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'alpha-bridge-lightbox';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.96);display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
+        
+        const img = document.createElement('img');
+        img.src = previewUrl;
+        img.style.cssText = 'max-width:100vw;max-height:100vh;width:100%;height:100%;object-fit:contain;display:block;';
+        img.onclick = (e) => e.stopPropagation();
+        
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '\u2715';
+        closeBtn.style.cssText = 'position:fixed;top:16px;right:16px;background:rgba(0,0,0,0.7);border:1px solid rgba(255,255,255,0.3);border-radius:50%;width:40px;height:40px;cursor:pointer;color:white;font-size:22px;display:flex;align-items:center;justify-content:center;z-index:2147483648;';
+        
+        const close = () => { setLightboxOpen(false); };
+        overlay.onclick = close;
+        closeBtn.onclick = close;
+        
+        overlay.appendChild(img);
+        overlay.appendChild(closeBtn);
+        document.body.appendChild(overlay);
+        
+        return () => { document.body.removeChild(overlay); };
+    }, [lightboxOpen, previewUrl]);
 
     const updateField = (field: string) => (val: string) => {
         setTrade(prev => ({ ...prev, [field]: val }));
@@ -172,7 +201,45 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                 }
 
                 const imageUrl = response.dataUrl;
-                const chartArea = document.querySelector('.layout__area--center');
+
+                const isFXReplay = window.location.hostname.includes('fxreplay.com');
+                let chartArea: Element | null = null;
+                
+                if (isFXReplay) {
+                    const iframes = Array.from(document.querySelectorAll('iframe'));
+                    
+                    if (iframes.length > 0) {
+                        // Calculate bounding box encompassing ALL iframes
+                        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                        
+                        iframes.forEach(iframe => {
+                            const rect = iframe.getBoundingClientRect();
+                            if (rect.width > 100 && rect.height > 100) { // Ignore hidden/tiny iframes
+                                minX = Math.min(minX, rect.left);
+                                minY = Math.min(minY, rect.top);
+                                maxX = Math.max(maxX, rect.right);
+                                maxY = Math.max(maxY, rect.bottom);
+                            }
+                        });
+
+                        if (minX < Infinity) {
+                            const trimTop = 45;
+                            const trimBottom = 35;
+                            const trimRight = 55;
+                            const trimLeft = 60;
+                            chartArea = {
+                                getBoundingClientRect: () => new DOMRect(minX + trimLeft, minY + trimTop, maxX - minX - trimRight - trimLeft, maxY - minY - trimTop - trimBottom)
+                            } as unknown as Element;
+                        }
+                    }
+                    
+                    if (!chartArea) {
+                        chartArea = document.querySelector('#chart-container') || document.querySelector('div[class*="chart"]') || document.querySelector('main');
+                    }
+                } else {
+                    chartArea = document.querySelector('.layout__area--center');
+                }
+
                 const rect = chartArea ? chartArea.getBoundingClientRect() : new DOMRect(0, 0, window.innerWidth, window.innerHeight);
                 const croppedImageUrl = await cropImage(imageUrl, rect);
 
@@ -190,6 +257,17 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
     const handleSubmit = async () => {
         if (selectedAccounts.length === 0) {
             setSubmitStatus({ text: "Vyberte alespoň jeden účet!", type: 'error' });
+            return;
+        }
+
+        const entryDayStr = trade.entryDate;
+        const entryDateObj = new Date(entryDayStr);
+        const exitDayStr = trade.exitDate;
+        const exitDateObj = new Date(exitDayStr);
+
+        if (entryDateObj.getDay() === 0 || entryDateObj.getDay() === 6 || exitDateObj.getDay() === 0 || exitDateObj.getDay() === 6) {
+            setSubmitStatus({ text: "Nelze zadat obchod s víkendovým datem!", type: 'error' });
+            setIsSubmitting(false);
             return;
         }
 
@@ -213,6 +291,42 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
 
             // 3. Clear focus from TV to hide floating UI
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27 }));
+
+            // 3.5 Specific FX Replay Hack: Try to close their "Long Position / Short Position" modal if it's open
+            if (window.location.hostname.includes('fxreplay.com') || window.location.hostname.includes('tradingview')) {
+                const tryCloseDialog = (doc: Document) => {
+                    // Method 1: Target specifically standard TV dialog close buttons (`[data-name="close"]`)
+                    const closeBtn = doc.querySelector('[data-name="close"], button[class*="close"], svg[class*="close"]');
+                    if (closeBtn) {
+                        if (closeBtn.tagName === 'svg' && closeBtn.parentElement) {
+                            (closeBtn.parentElement as HTMLElement).click();
+                        } else {
+                            (closeBtn as HTMLElement).click();
+                        }
+                    } else {
+                        // Method 2: Text based "Cancel"
+                        const cancelButtons = Array.from(doc.querySelectorAll('span, button')).filter(b => b.textContent?.trim().toLowerCase() === 'cancel' || b.textContent?.trim().toLowerCase() === 'zrušit');
+                        if (cancelButtons.length > 0) {
+                            (cancelButtons[cancelButtons.length - 1] as HTMLElement).click(); 
+                        }
+                    }
+                };
+
+                try {
+                    tryCloseDialog(document);
+                    
+                    // Look inside FX Replay iframes
+                    document.querySelectorAll('iframe').forEach(iframe => {
+                        try {
+                            if (iframe.contentDocument) {
+                                tryCloseDialog(iframe.contentDocument);
+                            }
+                        } catch(e) { /* Ignore CORS */ }
+                    });
+                } catch (e) {
+                    // Ignore errors in UI closing attempts
+                }
+            }
 
             // Small delay to ensure DOM repaints without Sidebar
             await new Promise(resolve => setTimeout(resolve, 800));
@@ -242,10 +356,51 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
 
             if (!croppedImageUrl) {
                 const imageUrl = response.dataUrl;
-                const chartArea = document.querySelector('.layout__area--center');
+
+                // Determine chart area based on platform
+                const isFXReplay = window.location.hostname.includes('fxreplay.com') || window.location.hostname.includes('tradingview');
+                let chartArea: Element | null = null;
+                
+                if (isFXReplay) {
+                    const iframes = Array.from(document.querySelectorAll('iframe'));
+                    
+                    if (iframes.length > 0) {
+                        // Calculate bounding box encompassing ALL iframes
+                        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                        
+                        iframes.forEach(iframe => {
+                            const rect = iframe.getBoundingClientRect();
+                            if (rect.width > 100 && rect.height > 100) { // Ignore hidden/tiny iframes
+                                minX = Math.min(minX, rect.left);
+                                minY = Math.min(minY, rect.top);
+                                maxX = Math.max(maxX, rect.right);
+                                maxY = Math.max(maxY, rect.bottom);
+                            }
+                        });
+
+                        if (minX < Infinity) {
+                            const trimTop = 45;
+                            const trimBottom = 35;
+                            const trimRight = 90;
+                            const trimLeft = 60;
+                            chartArea = {
+                                getBoundingClientRect: () => new DOMRect(minX + trimLeft, minY + trimTop, maxX - minX - trimRight - trimLeft, maxY - minY - trimTop - trimBottom)
+                            } as unknown as Element;
+                        }
+                    }
+                    
+                    if (!chartArea) {
+                        chartArea = document.querySelector('#chart-container') || document.querySelector('div[class*="chart"]') || document.querySelector('.tv-chart-container') || document.querySelector('main');
+                    }
+                } else {
+                    // TradingView standard chart area
+                    chartArea = document.querySelector('.layout__area--center');
+                }
+
                 const rect = chartArea ? chartArea.getBoundingClientRect() : new DOMRect(0, 0, window.innerWidth, window.innerHeight);
                 croppedImageUrl = await cropImage(imageUrl, rect);
             }
+
 
             // 4. Calculate final values
             const entry = parseFloat(trade.entry) || null;
@@ -563,9 +718,17 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                             <XCircle size={14} />
                         </button>
                     </div>
-                    <img src={previewUrl} alt="Preview" className="w-full h-auto block" />
+                    <img
+                        src={previewUrl}
+                        alt="Preview"
+                        className="w-full h-auto block cursor-zoom-in"
+                        onClick={() => setLightboxOpen(true)}
+                        title="Klikněte pro zobrazení v plné velikosti"
+                    />
                 </div>
             )}
+
+            {/* Lightbox is injected into document.body via useEffect to escape Shadow DOM */}
 
             <div className="flex gap-2">
                 <Button onClick={handlePreview} disabled={isPreviewing || isSubmitting} className={`flex-[0.35] border transition-colors shadow-sm font-bold text-xs ${theme === 'dark' ? '!bg-slate-800 !text-slate-200 hover:!bg-slate-700 border-slate-700/50' : '!bg-white !text-slate-700 hover:!bg-slate-50 border-slate-300'}`}>

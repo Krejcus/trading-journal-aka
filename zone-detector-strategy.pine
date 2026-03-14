@@ -1,0 +1,793 @@
+//@version=6
+indicator("Zone Detector", shorttitle="Zones", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ════════════════════════════════════════════════════════════════════════════
+
+// 📊 FVG
+showFVG            = input.bool(true, "FVG",            inline="fvg",  group="📊 FVG")
+fvgBullColor       = input.color(color.new(#2196F3, 70), "Bull",       inline="fvg",  group="📊 FVG")
+fvgBearColor       = input.color(color.new(#FF9800, 70), "Bear",       inline="fvg",  group="📊 FVG")
+fvgMitigatedTransp = input.int(93, "Mitig %", minval=80, maxval=98,    inline="fvg2", group="📊 FVG")
+fvgMaxCount        = input.int(10, "Max",     minval=1,  maxval=30,    inline="fvg2", group="📊 FVG")
+fvgLabelText       = input.string("", "Text",                           inline="fvg3", group="📊 FVG")
+fvgLabelSize       = input.string("small", "Vel.", options=["tiny","small","normal"], inline="fvg3", group="📊 FVG")
+fvgLabelColor      = input.color(color.white, "Barva",                  inline="fvg3", group="📊 FVG")
+
+// 📊 HTF FVG
+showHTFFVG            = input.bool(true, "HTF FVG",    inline="htffvg",  group="📊 HTF FVG")
+htfFvgTimeframe       = input.timeframe("15", "TF",    inline="htffvg",  group="📊 HTF FVG", tooltip="15m = tvůj HTF bias timeframe")
+htfFvgBullColor       = input.color(color.new(#9C27B0, 60), "Bull",    inline="htffvg",  group="📊 HTF FVG")
+htfFvgBearColor       = input.color(color.new(#FF5722, 60), "Bear",    inline="htffvg",  group="📊 HTF FVG")
+htfFvgMitigatedTransp = input.int(90, "Mitig %", minval=80, maxval=98, inline="htffvg2", group="📊 HTF FVG")
+htfFvgMaxCount        = input.int(5,  "Max",  minval=1, maxval=20,     inline="htffvg2", group="📊 HTF FVG")
+htfFvgLabelText       = input.string("HTF", "Text",                    inline="htffvg3", group="📊 HTF FVG")
+htfFvgLabelSize       = input.string("small", "Vel.", options=["tiny","small","normal"], inline="htffvg3", group="📊 HTF FVG")
+htfFvgLabelColor      = input.color(color.white, "Barva",               inline="htffvg3", group="📊 HTF FVG")
+
+// 🎯 CISD Entry Model
+showCISD       = input.bool(true,  "CISD Setup",    inline="cisd",  group="🎯 CISD")
+cisdBearColor  = input.color(color.new(#FF5252, 0),  "↓ Bear",      inline="cisd",  group="🎯 CISD")
+cisdBullColor  = input.color(color.new(#00E676, 0),  "↑ Bull",      inline="cisd",  group="🎯 CISD")
+cisdEntryColor = input.color(color.new(#FFEB3B, 0),  "Entry",        inline="cisd2", group="🎯 CISD")
+cisdSlColor    = input.color(color.new(#FF6B00, 0),  "SL",           inline="cisd2", group="🎯 CISD")
+cisdTpColor    = input.color(color.new(#00E676, 0),  "TP",           inline="cisd2", group="🎯 CISD")
+cisdTpRatio    = input.float(2.0, "TP R:R", minval=0.5, step=0.5,   inline="cisd3", group="🎯 CISD")
+cisdBoxTransp  = input.int(85, "Box %", minval=50, maxval=95,        inline="cisd3", group="🎯 CISD")
+
+// ════════════════════════════════════════════════════════════════════════════
+
+type FVGData
+    box   bx
+    label lbl
+    float top
+    float bottom
+    bool  isBull
+    bool  mitigated
+    bool  touched
+    int   touchBar
+    int   createBar
+    int   invalidBar
+    int   touchCount  // počet dotyků zóny
+    bool  wasInside   // cena byla uvnitř na předchozím baru (pro počítání nových vstupů)
+
+// ════════════════════════════════════════════════════════════════════════════
+// � FAIR VALUE GAP (FVG) – aktuální timeframe
+// ════════════════════════════════════════════════════════════════════════════
+
+var FVGData[] fvgArray = array.new<FVGData>()
+
+bullishFVG = low > high[2]
+bearishFVG = high < low[2]
+
+color fvgBullTouched = color.new(fvgBullColor, 85)
+color fvgBearTouched = color.new(fvgBearColor, 85)
+fvgSize = fvgLabelSize == "tiny" ? size.tiny : fvgLabelSize == "small" ? size.small : size.normal
+
+if showFVG and barstate.isconfirmed
+    if bullishFVG
+        fvgTop    = low
+        fvgBottom = high[2]
+        newBox = box.new(bar_index - 1, fvgTop, bar_index + 20, fvgBottom,
+             bgcolor=fvgBullColor, border_color=na, border_width=0)
+        label newLbl = na
+        if fvgLabelText != ""
+            newLbl := label.new(bar_index + 15, (fvgTop + fvgBottom) / 2, fvgLabelText,
+                 style=label.style_label_left, textcolor=fvgLabelColor, size=fvgSize, color=na)
+        array.push(fvgArray, FVGData.new(newBox, newLbl, fvgTop, fvgBottom, true, false, false, 0, bar_index, 0, 0, false))
+
+    if bearishFVG
+        fvgTop    = low[2]
+        fvgBottom = high
+        newBox = box.new(bar_index - 1, fvgTop, bar_index + 20, fvgBottom,
+             bgcolor=fvgBearColor, border_color=na, border_width=0)
+        label newLbl = na
+        if fvgLabelText != ""
+            newLbl := label.new(bar_index + 15, (fvgTop + fvgBottom) / 2, fvgLabelText,
+                 style=label.style_label_left, textcolor=fvgLabelColor, size=fvgSize, color=na)
+        array.push(fvgArray, FVGData.new(newBox, newLbl, fvgTop, fvgBottom, false, false, false, 0, bar_index, 0, 0, false))
+
+    while array.size(fvgArray) > fvgMaxCount * 2
+        oldFVG = array.shift(fvgArray)
+        box.delete(oldFVG.bx)
+        label.delete(oldFVG.lbl)
+
+if showFVG and array.size(fvgArray) > 0
+    for i = array.size(fvgArray) - 1 to 0
+        fvg = array.get(fvgArray, i)
+        bool needsUpdate = false
+        if fvg.mitigated
+            if fvg.invalidBar > 0
+                box.set_right(fvg.bx, fvg.invalidBar)
+            continue
+        bool invalidated = fvg.isBull ? (close < fvg.bottom) : (close > fvg.top)
+        if bar_index > fvg.createBar + 1 and invalidated
+            fvg.mitigated  := true
+            fvg.invalidBar := bar_index
+            box.set_right(fvg.bx, bar_index)
+            box.set_bgcolor(fvg.bx, color.new(color.gray, fvgMitigatedTransp))
+            label.delete(fvg.lbl)
+            needsUpdate := true
+        else if not fvg.mitigated
+            box.set_right(fvg.bx, bar_index + 20)
+            if not na(fvg.lbl)
+                label.set_x(fvg.lbl, bar_index + 15)
+            if not fvg.touched and bar_index > fvg.createBar + 1
+                if high >= fvg.bottom and low <= fvg.top
+                    fvg.touched := true
+                    box.set_bgcolor(fvg.bx, fvg.isBull ? fvgBullTouched : fvgBearTouched)
+                    needsUpdate := true
+        if needsUpdate
+            array.set(fvgArray, i, fvg)
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📊 HTF FAIR VALUE GAP – vyšší timeframe
+// ════════════════════════════════════════════════════════════════════════════
+
+var FVGData[] htfFvgArray = array.new<FVGData>()
+
+// Načíst HTF data – detekce FVG probíhá až po uzavření HTF svíčky (newHtfBar)
+[htfHigh, htfLow, htfClose, htfHighPrev2, htfLowPrev2, htfTime] = request.security(
+     syminfo.tickerid, htfFvgTimeframe, [high, low, close, high[2], low[2], time],
+     lookahead=barmerge.lookahead_off)
+
+// Nová HTF svíčka = první LTF svíčka po uzavření předchozí HTF svíčky
+bool newHtfBar = ta.change(htfTime) != 0
+
+// FVG podmínky na základě předchozí (uzavřené) HTF svíčky
+htfBullishFVG = newHtfBar and htfLow[1] > htfHighPrev2[1]
+htfBearishFVG = newHtfBar and htfHigh[1] < htfLowPrev2[1]
+
+color htfFvgBullTouched = color.new(htfFvgBullColor, 85)
+color htfFvgBearTouched = color.new(htfFvgBearColor, 85)
+htfFvgSize = htfFvgLabelSize == "tiny" ? size.tiny : htfFvgLabelSize == "small" ? size.small : size.normal
+
+var float lastHtfBullTop    = na
+var float lastHtfBearBottom = na
+
+if showHTFFVG
+    if htfBullishFVG
+        htfFvgTop    = htfLow[1]
+        htfFvgBottom = htfHighPrev2[1]
+        if na(lastHtfBullTop) or htfFvgTop != lastHtfBullTop
+            lastHtfBullTop := htfFvgTop
+            newBox = box.new(bar_index - 1, htfFvgTop, bar_index + 20, htfFvgBottom,
+                 bgcolor=htfFvgBullColor, border_color=na, border_width=0)
+            label newLbl = na
+            if htfFvgLabelText != ""
+                newLbl := label.new(bar_index + 15, (htfFvgTop + htfFvgBottom) / 2, htfFvgLabelText,
+                     style=label.style_label_left, textcolor=htfFvgLabelColor, size=htfFvgSize, color=na)
+            array.push(htfFvgArray, FVGData.new(newBox, newLbl, htfFvgTop, htfFvgBottom, true, false, false, 0, bar_index, 0, 0, false))
+            // 🔔 Alert – nová Bullish HTF FVG
+            alert(
+                 "🟢 HTF BULL FVG – NOVÁ ZÓNA\n" +
+                 "━━━━━━━━━━━━━━━━━━━━\n" +
+                 "📍 " + str.tostring(htfFvgTop, format.mintick) + " – " + str.tostring(htfFvgBottom, format.mintick) + "\n" +
+                 "📊 " + syminfo.ticker + " | " + htfFvgTimeframe + "m TF\n" +
+                 "💡 Čerstvá zóna – sleduj LTF reakci",
+                 alert.freq_once_per_bar)
+
+    if htfBearishFVG
+        htfFvgTop    = htfLowPrev2[1]
+        htfFvgBottom = htfHigh[1]
+        if na(lastHtfBearBottom) or htfFvgBottom != lastHtfBearBottom
+            lastHtfBearBottom := htfFvgBottom
+            newBox = box.new(bar_index - 1, htfFvgTop, bar_index + 20, htfFvgBottom,
+                 bgcolor=htfFvgBearColor, border_color=na, border_width=0)
+            label newLbl = na
+            if htfFvgLabelText != ""
+                newLbl := label.new(bar_index + 15, (htfFvgTop + htfFvgBottom) / 2, htfFvgLabelText,
+                     style=label.style_label_left, textcolor=htfFvgLabelColor, size=htfFvgSize, color=na)
+            array.push(htfFvgArray, FVGData.new(newBox, newLbl, htfFvgTop, htfFvgBottom, false, false, false, 0, bar_index, 0, 0, false))
+            // 🔔 Alert – nová Bearish HTF FVG
+            alert(
+                 "🔴 HTF BEAR FVG – NOVÁ ZÓNA\n" +
+                 "━━━━━━━━━━━━━━━━━━━━\n" +
+                 "📍 " + str.tostring(htfFvgTop, format.mintick) + " – " + str.tostring(htfFvgBottom, format.mintick) + "\n" +
+                 "📊 " + syminfo.ticker + " | " + htfFvgTimeframe + "m TF\n" +
+                 "💡 Čerstvá zóna – sleduj LTF reakci",
+                 alert.freq_once_per_bar)
+
+    while array.size(htfFvgArray) > htfFvgMaxCount * 2
+        oldFVG = array.shift(htfFvgArray)
+        box.delete(oldFVG.bx)
+        label.delete(oldFVG.lbl)
+
+if showHTFFVG and array.size(htfFvgArray) > 0
+    for i = array.size(htfFvgArray) - 1 to 0
+        fvg = array.get(htfFvgArray, i)
+        bool needsUpdate = false
+        if fvg.mitigated
+            if fvg.invalidBar > 0
+                box.set_right(fvg.bx, fvg.invalidBar)
+            continue
+        // Invalidace pouze na základě uzavřené HTF svíčky (ne LTF close)
+        bool invalidated = false
+        if newHtfBar
+            invalidated := fvg.isBull ? (htfClose[1] < fvg.bottom) : (htfClose[1] > fvg.top)
+        if bar_index > fvg.createBar + 1 and invalidated
+            fvg.mitigated  := true
+            fvg.invalidBar := bar_index
+            box.set_right(fvg.bx, bar_index)
+            box.set_bgcolor(fvg.bx, color.new(color.gray, htfFvgMitigatedTransp))
+            label.delete(fvg.lbl)
+            needsUpdate := true
+        else if not fvg.mitigated
+            box.set_right(fvg.bx, bar_index + 20)
+            if not na(fvg.lbl)
+                label.set_x(fvg.lbl, bar_index + 15)
+            // Detekce VSTUPU do zóny (nový dotyk = cena přišla zvenku dovnitř)
+            bool insideNow = bar_index > fvg.createBar + 1 and high >= fvg.bottom and low <= fvg.top
+            if insideNow and not fvg.wasInside
+                // Nový vstup do zóny – zvyšit počítadlo
+                fvg.touchCount += 1
+                fvg.wasInside  := true
+                fvg.touched    := true
+                // Vizuální změna barvy při dotyku
+                box.set_bgcolor(fvg.bx, fvg.isBull ? htfFvgBullTouched : htfFvgBearTouched)
+                // Popis kvality zóny podle počtu dotyků
+                touchLabel = fvg.touchCount == 1 ? str.tostring(fvg.touchCount) + ". DOTYK  🎯" : fvg.touchCount == 2 ? str.tostring(fvg.touchCount) + ". DOTYK  ⚠️" : str.tostring(fvg.touchCount) + ". DOTYK  🚨"
+                touchNote  = fvg.touchCount == 1 ? "Čerstvá zóna – velká pravděpodobnost reakce" : fvg.touchCount == 2 ? "Zóna slábne – opatrně" : "Vícenásobný dotyk – zóna vyčerpána"
+                dirEmoji   = fvg.isBull ? "🟢" : "🔴"
+                dirText    = fvg.isBull ? "BULL" : "BEAR"
+                // 🔔 Alert – dotyk HTF FVG
+                alert(
+                     dirEmoji + " HTF " + dirText + " FVG – " + touchLabel + "\n" +
+                     "━━━━━━━━━━━━━━━━━━━━\n" +
+                     "📍 " + str.tostring(fvg.top, format.mintick) + " – " + str.tostring(fvg.bottom, format.mintick) + "\n" +
+                     "📊 " + syminfo.ticker + " | " + htfFvgTimeframe + "m TF\n" +
+                     "💡 " + touchNote,
+                     alert.freq_once_per_bar)
+                needsUpdate := true
+            else if not insideNow and fvg.wasInside
+                // Cena opustila zónu – reset pro detekci dalšího vstupu
+                fvg.wasInside := false
+                needsUpdate   := true
+        if needsUpdate
+            array.set(htfFvgArray, i, fvg)
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🎯 CISD (Change In State of Delivery) ENTRY MODEL
+// ════════════════════════════════════════════════════════════════════════════
+// Logika:
+//  Aktivace: cena se DOTKNE HTF FVG → CISD mode se zapne (latch)
+//  Zůstává aktivní i po odchodu z FVG (reakce na zónu přichází PO dotyku)
+//  SHORT: close < open poslední bull svíčky → entry + SL
+//  LONG: close > open poslední bear svíčky → entry + SL
+//  Reset: cena vezme high/low CISD svíčky NEBO nový opačný HTF FVG dotyk
+
+// ── Context: dotyk aktivní HTF FVG (latch) ────────────────────────────────────
+bool touchingBullHTFFVG = false
+bool touchingBearHTFFVG = false
+if array.size(htfFvgArray) > 0
+    for j = 0 to array.size(htfFvgArray) - 1
+        fvg = array.get(htfFvgArray, j)
+        if not fvg.mitigated and high >= fvg.bottom and low <= fvg.top
+            if fvg.isBull
+                touchingBullHTFFVG := true
+            else
+                touchingBearHTFFVG := true
+
+// Latch: jednou aktivovaný CISD mode zůstává dokud není resetován
+var bool cisdShortActive = false
+var bool cisdLongActive  = false
+
+// Aktivace: cena se dotkla Bear HTF FVG → zapni short CISD
+if touchingBearHTFFVG and not cisdShortActive
+    cisdShortActive := true
+    // Resetuj long CISD pokud běží (přepnutí směru)
+    cisdLongActive := false
+
+// Aktivace: cena se dotkla Bull HTF FVG → zapni long CISD
+if touchingBullHTFFVG and not cisdLongActive
+    cisdLongActive  := true
+    cisdShortActive := false
+
+// ── Sledování poslední bullish / bearish svíčky ze všech předchozích (synchronně) ──
+var float lastBullO = na
+var float lastBullC = na
+var float lastBullH = na
+var float lastBullL = na
+var float lastBearO = na
+var float lastBearC = na
+var float lastBearH = na
+var float lastBearL = na
+
+if close[1] > open[1]
+    lastBullO := open[1]
+    lastBullC := close[1]
+    lastBullH := high[1]
+    lastBullL := low[1]
+if close[1] < open[1]
+    lastBearO := open[1]
+    lastBearC := close[1]
+    lastBearH := high[1]
+    lastBearL := low[1]
+
+// ── CISD Trade State ────────────────────────────────────────────────────────────
+// States: 0=idle, 1=searching (kandidat), 2=pending (LIMIT waiting), 3=active (filled), 4=closed
+var int   cisdTradeState  = 0
+var bool  cisdTradeIsLong = false
+var float cisdEntryLvl    = na
+var float cisdSlLvl       = na
+var float cisdTpLvl       = na
+var int   cisdTriggerBar  = na
+
+// Drawing elements
+var line  shortCisdLine  = na
+var line  shortEntryLine = na
+var line  shortSlLine    = na
+var line  shortTpLine    = na
+var label shortCisdLbl   = na
+var label shortEntryLbl  = na
+var label shortSlLbl     = na
+var label shortTpLbl     = na
+var box   shortProfitBox = na
+var box   shortRiskBox   = na
+var float shortCisdH     = na
+var float shortMoveHigh  = na
+var float shortFrozenO   = na
+var float shortFrozenH   = na
+var bool  shortTriggered = false
+
+var line  longCisdLine   = na
+var line  longEntryLine  = na
+var line  longSlLine     = na
+var line  longTpLine     = na
+var label longCisdLbl    = na
+var label longEntryLbl   = na
+var label longSlLbl      = na
+var label longTpLbl      = na
+var box   longProfitBox  = na
+var box   longRiskBox    = na
+var float longCisdL      = na
+var float longMoveLow    = na
+var float longFrozenO    = na
+var float longFrozenL    = na
+var bool  longTriggered  = false
+
+// Helper: vyčistit short CISD stav
+f_resetShortCISD() =>
+    line.delete(shortCisdLine)
+    line.delete(shortEntryLine)
+    line.delete(shortSlLine)
+    line.delete(shortTpLine)
+    label.delete(shortCisdLbl)
+    label.delete(shortEntryLbl)
+    label.delete(shortSlLbl)
+    label.delete(shortTpLbl)
+    box.delete(shortProfitBox)
+    box.delete(shortRiskBox)
+
+f_resetLongCISD() =>
+    line.delete(longCisdLine)
+    line.delete(longEntryLine)
+    line.delete(longSlLine)
+    line.delete(longTpLine)
+    label.delete(longCisdLbl)
+    label.delete(longEntryLbl)
+    label.delete(longSlLbl)
+    label.delete(longTpLbl)
+    box.delete(longProfitBox)
+    box.delete(longRiskBox)
+
+// ── CISD TRADE MANAGEMENT (active trade tracking) ─────────────────────────────
+// State 2 (pending LIMIT) → check if price hits entry level or misses
+if cisdTradeState == 2
+    if not cisdTradeIsLong
+        // SHORT pending: cena musí jít nahoru na entry (limit sell)
+        if high >= cisdEntryLvl
+            cisdTradeState := 3
+            if not na(shortEntryLbl)
+                label.set_text(shortEntryLbl, "🔒 Active")
+                label.set_textcolor(shortEntryLbl, cisdEntryColor)
+        else if low <= cisdTpLvl
+            // Missed trade: hitlo TP dřív než nafilovalo Entry
+            cisdTradeState   := 0
+            shortTriggered   := false
+            cisdShortActive  := false
+            shortCisdH       := na
+            shortMoveHigh    := na
+            shortFrozenO     := na
+            shortFrozenH     := na
+            cisdEntryLvl     := na
+            cisdSlLvl        := na
+            cisdTpLvl        := na
+            f_resetShortCISD()
+            shortEntryLine   := na
+            shortSlLine      := na
+            shortTpLine      := na
+            shortEntryLbl    := na
+            shortSlLbl       := na
+            shortTpLbl       := na
+            shortProfitBox   := na
+            shortRiskBox     := na
+    else
+        // LONG pending: cena musí jít dolů na entry (limit buy)
+        if low <= cisdEntryLvl
+            cisdTradeState := 3
+            if not na(longEntryLbl)
+                label.set_text(longEntryLbl, "🔒 Active")
+                label.set_textcolor(longEntryLbl, cisdEntryColor)
+        else if high >= cisdTpLvl
+            // Missed trade: hitlo TP dřív než nafilovalo Entry
+            cisdTradeState   := 0
+            longTriggered    := false
+            cisdLongActive   := false
+            longCisdL        := na
+            longMoveLow      := na
+            longFrozenO      := na
+            longFrozenL      := na
+            cisdEntryLvl     := na
+            cisdSlLvl        := na
+            cisdTpLvl        := na
+            f_resetLongCISD()
+            longEntryLine    := na
+            longSlLine       := na
+            longTpLine       := na
+            longEntryLbl     := na
+            longSlLbl        := na
+            longTpLbl        := na
+            longProfitBox    := na
+            longRiskBox      := na
+
+// State 3 (active trade) → check SL/TP hit on the same or next bar
+if cisdTradeState == 3
+    if not cisdTradeIsLong
+        // SHORT active: check SL (nahoře) and TP (dole)
+        bool hitSL = high >= cisdSlLvl
+        bool hitTP = low <= cisdTpLvl
+        if hitSL or hitTP
+            // Trim boxy na aktuálním baru
+            if not na(shortProfitBox)
+                box.set_right(shortProfitBox, bar_index)
+            if not na(shortRiskBox)
+                box.set_right(shortRiskBox, bar_index)
+            if not na(shortEntryLine)
+                line.set_x2(shortEntryLine, bar_index)
+            if not na(shortSlLine)
+                line.set_x2(shortSlLine, bar_index)
+            if not na(shortTpLine)
+                line.set_x2(shortTpLine, bar_index)
+            
+            // Popísek výsledku
+            if hitTP
+                label.set_text(shortEntryLbl, "✅ TP")
+                label.set_textcolor(shortEntryLbl, cisdTpColor)
+                if not na(shortProfitBox)
+                    box.set_bgcolor(shortProfitBox, color.new(cisdTpColor, 50))
+                    box.set_bgcolor(shortRiskBox, color.new(cisdSlColor, 95))
+            else
+                label.set_text(shortEntryLbl, "❌ SL")
+                label.set_textcolor(shortEntryLbl, cisdSlColor)
+                if not na(shortRiskBox)
+                    box.set_bgcolor(shortRiskBox, color.new(cisdSlColor, 50))
+                    box.set_bgcolor(shortProfitBox, color.new(cisdTpColor, 95))
+            label.set_x(shortEntryLbl, bar_index)
+            
+            // Kompletní reset proměnných, aby systém mohl hledat další trade
+            cisdTradeState   := 0
+            shortTriggered   := false
+            cisdShortActive  := false
+            shortCisdH       := na
+            shortMoveHigh    := na
+            shortFrozenO     := na
+            shortFrozenH     := na
+            cisdEntryLvl     := na
+            cisdSlLvl        := na
+            cisdTpLvl        := na
+            // Nullify reference, aby se nemazaly vizuály na grafu později
+            shortEntryLine   := na
+            shortSlLine      := na
+            shortTpLine      := na
+            shortEntryLbl    := na
+            shortSlLbl       := na
+            shortTpLbl       := na
+            shortProfitBox   := na
+            shortRiskBox     := na
+
+    else
+        // LONG active: check SL (dole) and TP (nahoře)
+        bool hitSL = low <= cisdSlLvl
+        bool hitTP = high >= cisdTpLvl
+        if hitSL or hitTP
+            if not na(longProfitBox)
+                box.set_right(longProfitBox, bar_index)
+            if not na(longRiskBox)
+                box.set_right(longRiskBox, bar_index)
+            if not na(longEntryLine)
+                line.set_x2(longEntryLine, bar_index)
+            if not na(longSlLine)
+                line.set_x2(longSlLine, bar_index)
+            if not na(longTpLine)
+                line.set_x2(longTpLine, bar_index)
+                
+            if hitTP
+                label.set_text(longEntryLbl, "✅ TP")
+                label.set_textcolor(longEntryLbl, cisdTpColor)
+                if not na(longProfitBox)
+                    box.set_bgcolor(longProfitBox, color.new(cisdTpColor, 50))
+                    box.set_bgcolor(longRiskBox, color.new(cisdSlColor, 95))
+            else
+                label.set_text(longEntryLbl, "❌ SL")
+                label.set_textcolor(longEntryLbl, cisdSlColor)
+                if not na(longRiskBox)
+                    box.set_bgcolor(longRiskBox, color.new(cisdSlColor, 50))
+                    box.set_bgcolor(longProfitBox, color.new(cisdTpColor, 95))
+            label.set_x(longEntryLbl, bar_index)
+            
+            cisdTradeState   := 0
+            longTriggered    := false
+            cisdLongActive   := false
+            longCisdL        := na
+            longMoveLow      := na
+            longFrozenO      := na
+            longFrozenL      := na
+            cisdEntryLvl     := na
+            cisdSlLvl        := na
+            cisdTpLvl        := na
+            longEntryLine    := na
+            longSlLine       := na
+            longTpLine       := na
+            longEntryLbl     := na
+            longSlLbl        := na
+            longTpLbl        := na
+            longProfitBox    := na
+            longRiskBox      := na
+
+// Block new CISD searches while trade is pending or active
+bool cisdTradeBlocked = cisdTradeState >= 2
+
+// Extend active trade visuals
+if cisdTradeState >= 2
+    if not cisdTradeIsLong
+        if not na(shortEntryLine)
+            line.set_x2(shortEntryLine, bar_index + 20)
+        if not na(shortSlLine)
+            line.set_x2(shortSlLine, bar_index + 20)
+        if not na(shortTpLine)
+            line.set_x2(shortTpLine, bar_index + 20)
+        if not na(shortEntryLbl)
+            label.set_x(shortEntryLbl, bar_index + 20)
+        if not na(shortSlLbl)
+            label.set_x(shortSlLbl, bar_index + 20)
+        if not na(shortTpLbl)
+            label.set_x(shortTpLbl, bar_index + 20)
+        if not na(shortProfitBox)
+            box.set_right(shortProfitBox, bar_index + 20)
+        if not na(shortRiskBox)
+            box.set_right(shortRiskBox, bar_index + 20)
+    else
+        if not na(longEntryLine)
+            line.set_x2(longEntryLine, bar_index + 20)
+        if not na(longSlLine)
+            line.set_x2(longSlLine, bar_index + 20)
+        if not na(longTpLine)
+            line.set_x2(longTpLine, bar_index + 20)
+        if not na(longEntryLbl)
+            label.set_x(longEntryLbl, bar_index + 20)
+        if not na(longSlLbl)
+            label.set_x(longSlLbl, bar_index + 20)
+        if not na(longTpLbl)
+            label.set_x(longTpLbl, bar_index + 20)
+        if not na(longProfitBox)
+            box.set_right(longProfitBox, bar_index + 20)
+        if not na(longRiskBox)
+            box.set_right(longRiskBox, bar_index + 20)
+
+// ── SHORT CISD – poslední BEARISH svíčka PŘED TOPEM ─────────────────────────────
+if showCISD and cisdShortActive and not cisdTradeBlocked
+    if na(shortMoveHigh) or high > shortMoveHigh
+        shortMoveHigh := high
+        if close > open and not na(lastBearC)
+            shortFrozenO := lastBearC
+            shortFrozenH := lastBearH
+
+    if not shortTriggered and not na(shortFrozenO)
+        if na(shortCisdLine)
+            shortCisdLine := line.new(bar_index, shortFrozenO, bar_index + 30, shortFrozenO,
+                 color=cisdBearColor, width=1, style=line.style_dashed)
+            shortCisdLbl  := label.new(bar_index + 30, shortFrozenO, "CISD",
+                 style=label.style_label_left, textcolor=cisdBearColor, size=size.tiny, color=na)
+        else
+            line.set_y1(shortCisdLine, shortFrozenO)
+            line.set_y2(shortCisdLine, shortFrozenO)
+            line.set_x2(shortCisdLine, bar_index + 30)
+            label.set_xy(shortCisdLbl, bar_index + 30, shortFrozenO)
+
+        // Trigger: close < close zmražené bearish svíčky = CISD potvrzen
+        if barstate.isconfirmed and close < shortFrozenO
+            shortTriggered := true
+            shortCisdH     := shortFrozenH
+            entryLvl        = shortFrozenO
+            slLvl           = entryLvl + 0.79 * (shortMoveHigh - entryLvl)
+            float riskDist  = math.abs(slLvl - entryLvl)
+            float tpLvl     = entryLvl - riskDist * cisdTpRatio
+
+            // Save trade levels
+            cisdTradeState   := 2
+            cisdTradeIsLong  := false
+            cisdEntryLvl     := entryLvl
+            cisdSlLvl        := slLvl
+            cisdTpLvl        := tpLvl
+            cisdTriggerBar   := bar_index
+
+            // Entry line + label (LIMIT)
+            shortEntryLine := line.new(bar_index, entryLvl, bar_index + 60, entryLvl,
+                 color=cisdEntryColor, width=2, style=line.style_solid)
+            shortEntryLbl  := label.new(bar_index + 60, entryLvl, "⏳ Limit",
+                 style=label.style_label_left, textcolor=cisdEntryColor, size=size.tiny, color=na)
+            // SL line + label
+            shortSlLine    := line.new(bar_index, slLvl, bar_index + 60, slLvl,
+                 color=cisdSlColor, width=1, style=line.style_dashed)
+            shortSlLbl     := label.new(bar_index + 60, slLvl, "SL",
+                 style=label.style_label_left, textcolor=cisdSlColor, size=size.tiny, color=na)
+            // TP line + label
+            shortTpLine    := line.new(bar_index, tpLvl, bar_index + 60, tpLvl,
+                 color=cisdTpColor, width=1, style=line.style_dashed)
+            shortTpLbl     := label.new(bar_index + 60, tpLvl, "🎯 TP",
+                 style=label.style_label_left, textcolor=cisdTpColor, size=size.tiny, color=na)
+            // R/R Boxes: SHORT = profit below entry, risk above entry
+            shortProfitBox := box.new(bar_index, entryLvl, bar_index + 60, tpLvl,
+                 bgcolor=color.new(cisdTpColor, cisdBoxTransp), border_color=na)
+            shortRiskBox   := box.new(bar_index, slLvl, bar_index + 60, entryLvl,
+                 bgcolor=color.new(cisdSlColor, cisdBoxTransp), border_color=na)
+
+            line.delete(shortCisdLine)
+            label.delete(shortCisdLbl)
+            shortCisdLine := na
+            shortCisdLbl  := na
+
+    else if shortTriggered and cisdTradeState < 2
+        if not na(shortEntryLine)
+            line.set_x2(shortEntryLine, bar_index + 30)
+            label.set_x(shortEntryLbl, bar_index + 30)
+        if not na(shortSlLine)
+            line.set_x2(shortSlLine, bar_index + 30)
+            label.set_x(shortSlLbl, bar_index + 30)
+        // Reset: cena vzala high CISD svíčky
+        if barstate.isconfirmed and not na(shortCisdH) and high > shortCisdH
+            shortTriggered  := false
+            f_resetShortCISD()
+            shortEntryLine  := na
+            shortSlLine     := na
+            shortTpLine     := na
+            shortCisdLine   := na
+            shortCisdLbl    := na
+            shortEntryLbl   := na
+            shortSlLbl      := na
+            shortTpLbl      := na
+            shortProfitBox  := na
+            shortRiskBox    := na
+            shortCisdH      := na
+            shortMoveHigh   := high
+            shortFrozenO    := lastBearC
+            shortFrozenH    := lastBearH
+
+// Reset short CISD pokud byl deaktivován (přepnutí na long)
+if not cisdShortActive and (not na(shortCisdLine) or shortTriggered)
+    if cisdTradeState < 3
+        f_resetShortCISD()  // Smazat linky pokud to bylo jen hledání nebo pending LIMIT
+    cisdTradeState  := 0
+    shortTriggered  := false
+    shortCisdH      := na
+    shortMoveHigh   := na
+    shortFrozenO    := na
+    shortFrozenH    := na
+    shortCisdLine   := na
+    shortEntryLine  := na
+    shortSlLine     := na
+    shortTpLine     := na
+    shortCisdLbl    := na
+    shortEntryLbl   := na
+    shortSlLbl      := na
+    shortTpLbl      := na
+    shortProfitBox  := na
+    shortRiskBox    := na
+
+// ── LONG CISD – poslední BULLISH svíčka PŘED BOTTOMEM ───────────────────────────
+if showCISD and cisdLongActive and not cisdTradeBlocked
+    if na(longMoveLow) or low < longMoveLow
+        longMoveLow := low
+        if close < open and not na(lastBullC)
+            longFrozenO := lastBullC
+            longFrozenL := lastBullL
+
+    if not longTriggered and not na(longFrozenO)
+        if na(longCisdLine)
+            longCisdLine := line.new(bar_index, longFrozenO, bar_index + 30, longFrozenO,
+                 color=cisdBullColor, width=1, style=line.style_dashed)
+            longCisdLbl  := label.new(bar_index + 30, longFrozenO, "CISD",
+                 style=label.style_label_left, textcolor=cisdBullColor, size=size.tiny, color=na)
+        else
+            line.set_y1(longCisdLine, longFrozenO)
+            line.set_y2(longCisdLine, longFrozenO)
+            line.set_x2(longCisdLine, bar_index + 30)
+            label.set_xy(longCisdLbl, bar_index + 30, longFrozenO)
+
+        // Trigger: close > close zmražené bullish svíčky = CISD potvrzen
+        if barstate.isconfirmed and close > longFrozenO
+            longTriggered := true
+            longCisdL     := longFrozenL
+            entryLvl       = longFrozenO
+            slLvl          = entryLvl - 0.79 * (entryLvl - longMoveLow)
+            float riskDist = math.abs(entryLvl - slLvl)
+            float tpLvl    = entryLvl + riskDist * cisdTpRatio
+
+            cisdTradeState   := 2
+            cisdTradeIsLong  := true
+            cisdEntryLvl     := entryLvl
+            cisdSlLvl        := slLvl
+            cisdTpLvl        := tpLvl
+            cisdTriggerBar   := bar_index
+
+            longEntryLine := line.new(bar_index, entryLvl, bar_index + 60, entryLvl,
+                 color=cisdEntryColor, width=2, style=line.style_solid)
+            longEntryLbl  := label.new(bar_index + 60, entryLvl, "⏳ Limit",
+                 style=label.style_label_left, textcolor=cisdEntryColor, size=size.tiny, color=na)
+            longSlLine    := line.new(bar_index, slLvl, bar_index + 60, slLvl,
+                 color=cisdSlColor, width=1, style=line.style_dashed)
+            longSlLbl     := label.new(bar_index + 60, slLvl, "SL",
+                 style=label.style_label_left, textcolor=cisdSlColor, size=size.tiny, color=na)
+            longTpLine    := line.new(bar_index, tpLvl, bar_index + 60, tpLvl,
+                 color=cisdTpColor, width=1, style=line.style_dashed)
+            longTpLbl     := label.new(bar_index + 60, tpLvl, "🎯 TP",
+                 style=label.style_label_left, textcolor=cisdTpColor, size=size.tiny, color=na)
+            // R/R Boxes: LONG = profit above entry, risk below entry
+            longProfitBox := box.new(bar_index, tpLvl, bar_index + 60, entryLvl,
+                 bgcolor=color.new(cisdTpColor, cisdBoxTransp), border_color=na)
+            longRiskBox   := box.new(bar_index, entryLvl, bar_index + 60, slLvl,
+                 bgcolor=color.new(cisdSlColor, cisdBoxTransp), border_color=na)
+
+            line.delete(longCisdLine)
+            label.delete(longCisdLbl)
+            longCisdLine := na
+            longCisdLbl  := na
+
+    else if longTriggered and cisdTradeState < 2
+        if not na(longEntryLine)
+            line.set_x2(longEntryLine, bar_index + 30)
+            label.set_x(longEntryLbl, bar_index + 30)
+        if not na(longSlLine)
+            line.set_x2(longSlLine, bar_index + 30)
+            label.set_x(longSlLbl, bar_index + 30)
+        // Reset: cena vzala low CISD svíčky
+        if barstate.isconfirmed and not na(longCisdL) and low < longCisdL
+            longTriggered := false
+            f_resetLongCISD()
+            longEntryLine := na
+            longSlLine    := na
+            longTpLine    := na
+            longCisdLine  := na
+            longCisdLbl   := na
+            longEntryLbl  := na
+            longSlLbl     := na
+            longTpLbl     := na
+            longProfitBox := na
+            longRiskBox   := na
+            longCisdL     := na
+            longMoveLow   := low
+            longFrozenO   := lastBullC
+            longFrozenL   := lastBullL
+
+// Reset long CISD pokud byl deaktivován
+if not cisdLongActive and (not na(longCisdLine) or longTriggered)
+    if cisdTradeState < 3
+        f_resetLongCISD()
+    cisdTradeState  := 0
+    longTriggered   := false
+    longCisdL       := na
+    longMoveLow     := na
+    longFrozenO     := na
+    longFrozenL     := na
+    longCisdLine    := na
+    longEntryLine   := na
+    longSlLine      := na
+    longTpLine      := na
+    longCisdLbl     := na
+    longEntryLbl    := na
+    longSlLbl       := na
+    longTpLbl       := na
+    longProfitBox   := na
+    longRiskBox     := na

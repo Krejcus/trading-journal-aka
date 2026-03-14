@@ -404,12 +404,12 @@ const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light
   return (
     <div className="p-5 rounded-[24px] flex flex-col justify-between h-full relative overflow-visible transition-all hover:scale-[1.02] hover:shadow-xl glass-panel">
       <div className="flex justify-between items-start mb-2">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+        <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
           Discipline Streak
           <SmartTooltip text="Info" subtext="Počet po sobě jdoucích obchodních dní bez nevalidního obchodu (isValid = false)." theme={theme}>
             <div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div>
           </SmartTooltip>
-        </p>
+        </div>
         <div className="p-1.5 rounded-lg theme-card theme-border theme-text-secondary">
           <div className={`${currentStreak >= 7 ? 'bg-orange-500/20 text-orange-500' : 'bg-slate-500/20 text-slate-500'} p-1 rounded-lg`}>
             <Flame size={14} />
@@ -776,10 +776,10 @@ const ProKpiCard: React.FC<{
   return (
     <div className="p-5 rounded-[24px] flex flex-col justify-between h-full relative overflow-visible transition-all hover:scale-[1.02] hover:shadow-xl glass-panel">
       <div className="flex justify-between items-start mb-2">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+        <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
           {label}
           {info && <SmartTooltip text="Info" subtext={info} theme={theme}><div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div></SmartTooltip>}
-        </p>
+        </div>
         {icon && <div className="p-1.5 rounded-lg theme-card theme-border theme-text-secondary">{icon}</div>}
       </div>
       <div className="flex-1 flex flex-col items-center justify-center min-h-[60px]">

@@ -258,20 +258,27 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   <div className={sectionLabelClass}><Monitor size={10} /> Režim</div>
                   <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
                     <motion.div
-                      animate={{ x: (dashboardMode === 'funded' ? 0 : dashboardMode === 'combined' ? 100 : 200) + '%' }}
+                      animate={{ x: (dashboardMode === 'funded' ? 0 : dashboardMode === 'combined' ? 100 : dashboardMode === 'challenge' ? 200 : 300) + '%' }}
                       transition={{ type: 'spring', stiffness: 400, damping: 35 }}
-                      className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/3)] rounded-lg border ${dashboardMode === 'funded' ? (isDark ? 'bg-emerald-500/20 border-emerald-500/40' : 'bg-emerald-500 shadow-sm') :
+                      className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/4)] rounded-lg border ${
+                        dashboardMode === 'funded' ? (isDark ? 'bg-emerald-500/20 border-emerald-500/40' : 'bg-emerald-500 shadow-sm') :
                         dashboardMode === 'combined' ? (isDark ? 'bg-orange-500/20 border-orange-500/40' : 'bg-orange-500 shadow-sm') :
-                          (isDark ? 'bg-blue-500/20 border-blue-500/40' : 'bg-blue-500 shadow-sm')
-                        } ${!isDark ? 'text-white' : ''}`}
+                        dashboardMode === 'backtesting' ? (isDark ? 'bg-violet-500/20 border-violet-500/40' : 'bg-violet-500 shadow-sm') :
+                        (isDark ? 'bg-blue-500/20 border-blue-500/40' : 'bg-blue-500 shadow-sm')
+                      } ${!isDark ? 'text-white' : ''}`}
                     />
-                    {['funded', 'combined', 'challenge'].map((m) => (
+                    {['funded', 'combined', 'challenge', 'backtesting'].map((m) => (
                       <button
                         key={m}
                         onClick={() => setDashboardMode(m as DashboardMode)}
-                        className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${dashboardMode === m ? (isDark ? (m === 'funded' ? 'text-emerald-400' : m === 'combined' ? 'text-orange-400' : 'text-blue-400') : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
+                        className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${
+                          dashboardMode === m
+                            ? (isDark
+                              ? m === 'funded' ? 'text-emerald-400' : m === 'combined' ? 'text-orange-400' : m === 'backtesting' ? 'text-violet-400' : 'text-blue-400'
+                              : 'text-white')
+                            : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
                       >
-                        {m === 'combined' ? 'Vše' : m}
+                        {m === 'combined' ? 'Vše' : m === 'backtesting' ? 'BT' : m}
                       </button>
                     ))}
                   </div>

@@ -17,7 +17,8 @@ import {
   Link,
   TrendingUp,
   LayoutGrid,
-  Calendar
+  Calendar,
+  FlaskConical
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import PayoutModal from './PayoutModal';
@@ -292,6 +293,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     if (result === 'Passed') return <Trophy className="text-emerald-500" size={size} />;
     if (result === 'Failed') return <Skull className="text-rose-500" size={size} />;
     if (status === 'Inactive') return <Skull className="text-slate-600" size={size} />;
+    if (type === 'Backtest') return <FlaskConical className="text-violet-400" size={size} />;
     if (phase === 'Challenge') return <Trophy className="text-amber-500" size={size} />;
     if (phase === 'Funded') return <Crown className="text-purple-500" size={size} />;
     return <Activity className="text-emerald-500" size={size} />;
@@ -306,6 +308,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     const grossWithdrawals = accPayouts.reduce((sum, p) => sum + (p.grossAmount || p.amount), 0);
     const accumulatedChallengePnL = acc.accumulatedChallengePnL || 0;
     const isChallenge = (acc.phase || 'Challenge') === 'Challenge';
+    const isBacktest = acc.type === 'Backtest';
     const currentPlatformBalance = acc.initialBalance + totalPnL - accumulatedChallengePnL - grossWithdrawals;
     const performanceColor = totalPnL >= 0 ? 'emerald' : 'rose';
 
@@ -336,7 +339,10 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                   {isSlave && <span className="px-1.5 py-0.5 rounded-md bg-blue-500/10 text-[8px] font-black text-blue-500 uppercase flex items-center gap-1 flex-shrink-0"><Link size={8} /> Copy</span>}
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5 whitespace-nowrap overflow-hidden text-[8px] font-black uppercase tracking-widest text-slate-500">
-                  <span className={`${acc.phase === 'Funded' ? 'text-purple-500' : 'text-amber-500'}`}>{acc.phase || 'Challenge'}</span>
+                  {isBacktest
+                    ? <span className="text-violet-400">Backtesting</span>
+                    : <span className={`${acc.phase === 'Funded' ? 'text-purple-500' : 'text-amber-500'}`}>{acc.phase || 'Challenge'}</span>
+                  }
                 </div>
               </div>
             </div>
@@ -370,7 +376,12 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           </div>
 
           <div className={`${isSlave ? 'mt-3 pt-3' : 'mt-4 pt-4'} border-t border-white/5`}>
-            {isChallenge && acc.status === 'Active' ? (
+            {isBacktest ? (
+              <div className="flex items-center justify-between">
+                <span className="text-[8px] font-black uppercase text-violet-400">Backtest účet</span>
+                <span className="text-[8px] font-black text-slate-500">{accTrades.length} obchodů</span>
+              </div>
+            ) : isChallenge && acc.status === 'Active' ? (
               <div className="flex items-center gap-4">
                 <div className="flex-1">
                   <div className="flex justify-between items-center mb-1">
@@ -466,12 +477,37 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       {isAdding && (
         <div className={`p-8 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
           <div className="flex items-center gap-3 mb-6"><div className="p-2 bg-blue-600/10 text-blue-500 rounded-xl"><Activity size={20} /></div><h3 className="text-lg font-black italic uppercase">Nový obchodní účet</h3></div>
+          
+          {/* Account type selector */}
+          <div className="flex gap-3 mb-6">
+            <button
+              onClick={() => setNewAccount({ ...newAccount, type: 'Funded', phase: 'Challenge' })}
+              className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border ${
+                newAccount.type !== 'Backtest' ? 'bg-blue-600/20 border-blue-500/40 text-blue-400' : (theme !== 'light' ? 'border-white/10 text-slate-500' : 'border-slate-200 text-slate-400')
+              }`}
+            >
+              <Trophy size={14} className="inline mr-1" /> Funded / Challenge
+            </button>
+            <button
+              onClick={() => setNewAccount({ ...newAccount, type: 'Backtest', phase: undefined, challengeCost: 0, profitSplit: 100 })}
+              className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border ${
+                newAccount.type === 'Backtest' ? 'bg-violet-600/20 border-violet-500/40 text-violet-400' : (theme !== 'light' ? 'border-white/10 text-slate-500' : 'border-slate-200 text-slate-400')
+              }`}
+            >
+              <FlaskConical size={14} className="inline mr-1" /> Backtesting
+            </button>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-5 mb-8">
-            <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Název účtu</label><input type="text" value={newAccount.name} onChange={e => setNewAccount({ ...newAccount, name: e.target.value })} className={inputClass} placeholder="Např. MyFunded 100k" /></div>
-            <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Fáze</label><select value={newAccount.phase} onChange={e => setNewAccount({ ...newAccount, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select></div>
+            <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Název účtu</label><input type="text" value={newAccount.name} onChange={e => setNewAccount({ ...newAccount, name: e.target.value })} className={inputClass} placeholder="Např. FX Replay BT" /></div>
             <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Počáteční Balance ($)</label><input type="number" value={newAccount.initialBalance} onChange={e => setNewAccount({ ...newAccount, initialBalance: Number(e.target.value) })} className={inputClass} /></div>
-            <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-rose-500 tracking-widest">Cena Pořízení ($)</label><input type="number" value={newAccount.challengeCost} onChange={e => setNewAccount({ ...newAccount, challengeCost: Number(e.target.value) })} className={`${inputClass} border-rose-500/20`} /></div>
-            <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-emerald-500 tracking-widest">Profit Split (%)</label><input type="number" value={newAccount.profitSplit} onChange={e => setNewAccount({ ...newAccount, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
+            {newAccount.type !== 'Backtest' && (
+              <>
+                <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Fáze</label><select value={newAccount.phase} onChange={e => setNewAccount({ ...newAccount, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select></div>
+                <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-rose-500 tracking-widest">Cena Pořízení ($)</label><input type="number" value={newAccount.challengeCost} onChange={e => setNewAccount({ ...newAccount, challengeCost: Number(e.target.value) })} className={`${inputClass} border-rose-500/20`} /></div>
+                <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-emerald-500 tracking-widest">Profit Split (%)</label><input type="number" value={newAccount.profitSplit} onChange={e => setNewAccount({ ...newAccount, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
+              </>
+            )}
           </div>
           <div className="flex justify-end gap-3"><button onClick={() => setIsAdding(false)} className="px-6 py-2.5 rounded-xl font-black uppercase text-[10px] text-slate-500 tracking-widest hover:text-slate-300">Zrušit</button><button onClick={handleAddAccount} className="px-8 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest shadow-lg active:scale-95 transition-all">Aktivovat</button></div>
         </div>

@@ -12,7 +12,8 @@
                 "src/content/index.tsx"
             ],
             "matches": [
-                "*://*.tradingview.com/*"
+                "*://*.tradingview.com/*",
+                "*://app.fxreplay.com/*"
             ]
         }
     ],

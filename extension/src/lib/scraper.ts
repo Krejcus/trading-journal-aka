@@ -12,9 +12,40 @@ export interface ScrapedData {
 }
 
 export function scrapeTradingView(): ScrapedData {
+    // Extract symbol: on FX Replay the page title starts with "FX", so we look inside iframes
+    let rawSymbol = '';
+    
+    if (window.location.hostname.includes('fxreplay.com')) {
+        // Try to get a proper ticker from the TradingView iframe
+        try {
+            const iframes = document.querySelectorAll('iframe');
+            for (const iframe of Array.from(iframes)) {
+                const doc = iframe.contentDocument;
+                if (!doc) continue;
+                // Look for TV's symbol element inside the iframe
+                const symbolEl = doc.querySelector('.chart-widget-header__symbol, [class*="symbol"], [class*="ticker"]');
+                if (symbolEl && symbolEl.textContent) {
+                    rawSymbol = symbolEl.textContent.trim().split(' ')[0].replace(/[^a-zA-Z0-9!]/g, '');
+                    break;
+                }
+                // Fallback: parse iframe's page title (first segment before " · " or space)
+                if (doc.title && !doc.title.toLowerCase().includes('tradingview') && !doc.title.toLowerCase().includes('fx replay')) {
+                    const fromTitle = doc.title.split(' · ')[0].split(' - ')[0].split(' ')[0];
+                    if (fromTitle && fromTitle.length > 1) {
+                        rawSymbol = fromTitle.replace(/[^a-zA-Z0-9!]/g, '');
+                        break;
+                    }
+                }
+            }
+        } catch (e) { /* Ignore CORS */ }
+        // If nothing found, keep rawSymbol as '' so TradeForm keeps the user's current value
+    } else {
+        rawSymbol = document.title.split(' ')[0] || 'Unknown';
+    }
+
     const result: ScrapedData = {
         success: false,
-        symbol: (document.title.split(' ')[0] || "Unknown").replace(/[^a-zA-Z0-9!]/g, ''),
+        symbol: rawSymbol.replace(/[^a-zA-Z0-9!]/g, ''),
         data: {},
         trace: []
     };
@@ -37,6 +68,17 @@ export function scrapeTradingView(): ScrapedData {
                     for (const child of Array.from(node.shadowRoot.children)) queue.push(child);
                 }
 
+                if (node.tagName === 'IFRAME') {
+                    try {
+                        const iframeDoc = (node as HTMLIFrameElement).contentDocument;
+                        if (iframeDoc && iframeDoc.body) {
+                            queue.push(iframeDoc.body);
+                        }
+                    } catch (e) {
+                        // Ignore CORS issues with cross-origin iframes
+                    }
+                }
+
                 if (node.children) {
                     for (const child of Array.from(node.children)) queue.push(child);
                 }
@@ -46,44 +88,56 @@ export function scrapeTradingView(): ScrapedData {
         const elementsWithText = allNodes.filter(el => (el as HTMLElement).innerText && (el as HTMLElement).innerText.length < 50);
         const inputs = allNodes.filter(el => el.tagName === 'INPUT' && ((el as HTMLInputElement).type === 'text' || (el as HTMLInputElement).type === 'number')) as HTMLInputElement[];
 
-        const findValueWithContext = (labelKeywords: string[], contextKeywords: string[] = []): number | null => {
-            for (const labelEl of elementsWithText) {
-                const txt = (labelEl as HTMLElement).innerText.toLowerCase();
-                if (!labelKeywords.some(kw => txt.includes(kw))) continue;
+            const findValueWithContext = (labelKeywords: string[], contextKeywords: string[] = []): number | null => {
+                for (const labelEl of elementsWithText) {
+                    const txt = (labelEl as HTMLElement).innerText.toLowerCase().trim();
+                    // Zpřesněné hledání labelů
+                    if (!labelKeywords.some(kw => txt === kw || txt === kw + ":" || txt.startsWith(kw))) continue;
 
-                const labelRect = labelEl.getBoundingClientRect();
-                if (labelRect.height === 0) continue;
+                    const labelRect = labelEl.getBoundingClientRect();
+                    if (labelRect.height === 0) continue;
 
-                if (contextKeywords.length > 0) {
-                    const headerContext = elementsWithText.filter(el => {
-                        const r = el.getBoundingClientRect();
-                        return r.bottom < labelRect.top && r.bottom > labelRect.top - 150 &&
-                            Math.abs(r.left - labelRect.left) < 150;
+                    if (contextKeywords.length > 0) {
+                        const headerContext = elementsWithText.filter(el => {
+                            const r = el.getBoundingClientRect();
+                            return r.bottom < labelRect.top && r.bottom > labelRect.top - 150 &&
+                                Math.abs(r.left - labelRect.left) < 150;
+                        });
+                        const combinedContext = headerContext.map(h => (h as HTMLElement).innerText.toLowerCase()).join(" ");
+                        if (!contextKeywords.some(kw => combinedContext.includes(kw))) continue;
+                    }
+
+                    // Hledání nejbližšího inputu - FX Replay & TV layout
+                    const nearbyInputs = inputs.filter(inp => {
+                        const inpRect = inp.getBoundingClientRect();
+                        const labelCenter = labelRect.top + labelRect.height / 2;
+                        const inpCenter = inpRect.top + inpRect.height / 2;
+                        
+                        // Extrémně zpřísněná vertikální tolerance na úroveň stejného řádku
+                        return Math.abs(labelCenter - inpCenter) < 15 &&
+                            inpRect.left > labelRect.left - 20 &&
+                            inpRect.left < labelRect.left + 500;
                     });
-                    const combinedContext = headerContext.map(h => (h as HTMLElement).innerText.toLowerCase()).join(" ");
-                    if (!contextKeywords.some(kw => combinedContext.includes(kw))) continue;
+                    
+                    // Seřadit lokální inputy zleva doprava
+                    nearbyInputs.sort((a,b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+                    if (nearbyInputs.length > 0 && nearbyInputs[0].value) {
+                        const val = nearbyInputs[0].value.trim().replace(/,/g, '').replace(/!/g, ''); // Fix FX Replay format e.g. "22,232.2!"
+                        const parsed = parseFloat(val);
+                        if (!isNaN(parsed)) return parsed;
+                    }
                 }
+                return null;
+            };
 
-                const nearbyInput = inputs.find(inp => {
-                    const inpRect = inp.getBoundingClientRect();
-                    return Math.abs(labelRect.top - inpRect.top) < 30 &&
-                        inpRect.left > labelRect.left &&
-                        inpRect.left < labelRect.left + 350;
-                });
-
-                if (nearbyInput && nearbyInput.value) {
-                    const val = nearbyInput.value.trim().replace(',', '.');
-                    const parsed = parseFloat(val);
-                    if (!isNaN(parsed)) return parsed;
-                }
-            }
-            return null;
-        };
-
-        result.data.risk = findValueWithContext(["risk", "riziko"], ["account", "účet"]);
-        result.data.entry = findValueWithContext(["entry", "vstup", "vstupní"]);
-        result.data.tp = findValueWithContext(["price", "cena"], ["profit", "zisk", "target", "cíl"]);
-        result.data.sl = findValueWithContext(["price", "cena"], ["stop", "ztráta", "loss"]);
+            // Extrakce hodnot primárně podle přesných, unikátních TV/FXR textů
+            result.data.risk = findValueWithContext(["risk", "riziko", "risk in %"]) || findValueWithContext(["risk", "riziko"], ["account", "účet"]);
+            result.data.entry = findValueWithContext(["entry price", "vstupní cena", "entry", "vstup"]);
+            // FX Replay = "Price" under "Profit level" / TV = "Price" next to "Profit"
+            result.data.tp = findValueWithContext(["price", "cena"], ["profit level", "profit", "zisk", "target", "cíl"]);
+            // FX Replay = "Price" under "Stop level" / TV = "Price" next to "Stop"
+            result.data.sl = findValueWithContext(["price", "cena"], ["stop level", "stop", "ztráta", "loss"]);
 
         const directionHeader = elementsWithText.find(el => {
             const t = (el as HTMLElement).innerText.toLowerCase();
@@ -94,8 +148,9 @@ export function scrapeTradingView(): ScrapedData {
             const t = (directionHeader as HTMLElement).innerText.toLowerCase();
             result.data.direction = (t.includes("short") || t.includes("krátká")) ? "SHORT" : "LONG";
         } else {
+            // Backup search for FX Replay which might not have "Position" in the UI header but just LONG/SHORT buttons
             const fullText = document.body.innerText.toLowerCase();
-            result.data.direction = (fullText.includes("short position") || fullText.includes("krátká pozice")) ? "SHORT" : "LONG";
+            result.data.direction = (fullText.includes("short position") || fullText.includes("krátká pozice") || document.querySelector('.tv-dialog__section--title')?.textContent?.toLowerCase().includes("short")) ? "SHORT" : "LONG";
         }
 
         if (result.data.risk) result.trace.push(`R:${result.data.risk}`);
