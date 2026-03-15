@@ -361,54 +361,48 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
 
             setSubmitStatus({ text: "💾 Screenshot OK. Ukládám data...", type: 'info' });
 
-            let croppedImageUrl = previewUrl;
-
-            if (!croppedImageUrl) {
-                const imageUrl = response.dataUrl;
-
-                // Determine chart area based on platform
-                const isFXReplay = window.location.hostname.includes('fxreplay.com') || window.location.hostname.includes('tradingview');
-                let chartArea: Element | null = null;
+            const imageUrl = response.dataUrl;
+            const isFXReplay = window.location.hostname.includes('fxreplay.com');
+            let chartArea: Element | null = null;
+            
+            if (isFXReplay) {
+                const iframes = Array.from(document.querySelectorAll('iframe'));
                 
-                if (isFXReplay) {
-                    const iframes = Array.from(document.querySelectorAll('iframe'));
+                if (iframes.length > 0) {
+                    // Calculate bounding box encompassing ALL iframes
+                    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
                     
-                    if (iframes.length > 0) {
-                        // Calculate bounding box encompassing ALL iframes
-                        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                        
-                        iframes.forEach(iframe => {
-                            const rect = iframe.getBoundingClientRect();
-                            if (rect.width > 100 && rect.height > 100) { // Ignore hidden/tiny iframes
-                                minX = Math.min(minX, rect.left);
-                                minY = Math.min(minY, rect.top);
-                                maxX = Math.max(maxX, rect.right);
-                                maxY = Math.max(maxY, rect.bottom);
-                            }
-                        });
-
-                        if (minX < Infinity) {
-                            const trimTop = 45;
-                            const trimBottom = 35;
-                            const trimRight = 90;
-                            const trimLeft = 60;
-                            chartArea = {
-                                getBoundingClientRect: () => new DOMRect(minX + trimLeft, minY + trimTop, maxX - minX - trimRight - trimLeft, maxY - minY - trimTop - trimBottom)
-                            } as unknown as Element;
+                    iframes.forEach(iframe => {
+                        const rect = iframe.getBoundingClientRect();
+                        if (rect.width > 100 && rect.height > 100) { // Ignore hidden/tiny iframes
+                            minX = Math.min(minX, rect.left);
+                            minY = Math.min(minY, rect.top);
+                            maxX = Math.max(maxX, rect.right);
+                            maxY = Math.max(maxY, rect.bottom);
                         }
-                    }
-                    
-                    if (!chartArea) {
-                        chartArea = document.querySelector('#chart-container') || document.querySelector('div[class*="chart"]') || document.querySelector('.tv-chart-container') || document.querySelector('main');
-                    }
-                } else {
-                    // TradingView standard chart area
-                    chartArea = document.querySelector('.layout__area--center');
-                }
+                    });
 
-                const rect = chartArea ? chartArea.getBoundingClientRect() : new DOMRect(0, 0, window.innerWidth, window.innerHeight);
-                croppedImageUrl = await cropImage(imageUrl, rect);
+                    if (minX < Infinity) {
+                        const trimTop = 45;
+                        const trimBottom = 35;
+                        const trimRight = 55;
+                        const trimLeft = 60;
+                        chartArea = {
+                            getBoundingClientRect: () => new DOMRect(minX + trimLeft, minY + trimTop, maxX - minX - trimRight - trimLeft, maxY - minY - trimTop - trimBottom)
+                        } as unknown as Element;
+                    }
+                }
+                
+                if (!chartArea) {
+                    chartArea = document.querySelector('#chart-container') || document.querySelector('div[class*="chart"]') || document.querySelector('.tv-chart-container') || document.querySelector('main');
+                }
+            } else {
+                // TradingView standard chart area
+                chartArea = document.querySelector('.layout__area--center');
             }
+
+            const rect = chartArea ? chartArea.getBoundingClientRect() : new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+            const croppedImageUrl = await cropImage(imageUrl, rect);
 
 
             // 4. Calculate final values
