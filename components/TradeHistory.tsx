@@ -361,7 +361,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                             getTradePhase(trade) === 'Funded'
                               ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
                               : getTradePhase(trade) === 'Backtesting'
-                                ? 'bg-violet-500/10 text-violet-400 border-violet-500/20'
+                                ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
                                 : 'bg-amber-500/10 text-amber-500 border-amber-500/20'
                           }`}>
                           {getTradePhase(trade)!.toUpperCase()}
