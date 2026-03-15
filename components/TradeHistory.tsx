@@ -26,6 +26,10 @@ interface TradeHistoryProps {
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
   allTrades?: Trade[];
   viewMode: 'grid' | 'table';
+  pnlDisplayMode?: PnLDisplayMode;
+  initialBalance?: number;
+  user: User;
+  exchangeRates: ExchangeRates;
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
@@ -43,6 +47,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // Get account phase for a trade (account is source of truth, not trade.phase)
   const getTradePhase = (trade: Trade): string | null => {
     const account = accounts.find(a => a.id === trade.accountId);
+    if (account?.type === 'Backtest') return 'Backtesting';
     return account?.phase || trade.phase || null;
   };
 
@@ -160,9 +165,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // --- LAZY SCREENSHOT LOADING ---
   const loadScreenshots = useCallback(async (tradesToLoad: Trade[]) => {
     // Filter to trades that have UUID ids, no cached screenshot, and aren't already loading
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const missing = tradesToLoad.filter(t =>
       typeof t.id === 'string' &&
-      t.id.includes('-') &&
+      uuidRegex.test(t.id) &&
       !t.screenshot &&
       !screenshotCache.has(String(t.id)) &&
       !loadingScreenshotsRef.current.has(String(t.id))
@@ -351,9 +357,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         <span className="text-[9px] font-mono font-bold text-slate-500">{formatTradeDate(trade.date).date}</span>
                       </div>
                       {getTradePhase(trade) && (
-                        <span className={`px-1.5 py-0.5 rounded text-[7px] font-black tracking-widest border ${getTradePhase(trade) === 'Funded'
-                          ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
-                          : 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                        <span className={`px-1.5 py-0.5 rounded text-[7px] font-black tracking-widest border ${
+                            getTradePhase(trade) === 'Funded'
+                              ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                              : getTradePhase(trade) === 'Backtesting'
+                                ? 'bg-violet-500/10 text-violet-400 border-violet-500/20'
+                                : 'bg-amber-500/10 text-amber-500 border-amber-500/20'
                           }`}>
                           {getTradePhase(trade)!.toUpperCase()}
                         </span>
