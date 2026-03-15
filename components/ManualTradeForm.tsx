@@ -191,13 +191,22 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     e.preventDefault();
 
     // Weekend validation
-    const entryDate = new Date(formData.entryDate);
-    const exitDate = new Date(formData.exitDate);
+    const isWeekend = (dateStr: string) => {
+      // Manual form date is YYYY-MM-DDTHH:mm
+      const datePart = dateStr.split('T')[0];
+      const parts = datePart.split('-');
+      if (parts.length === 3) {
+        const year = parseInt(parts[0]);
+        const month = parseInt(parts[1]) - 1;
+        const day = parseInt(parts[2]);
+        const date = new Date(year, month, day);
+        return !isNaN(date.getTime()) && (date.getDay() === 0 || date.getDay() === 6);
+      }
+      const d = new Date(dateStr);
+      return !isNaN(d.getTime()) && (d.getDay() === 0 || d.getDay() === 6);
+    };
 
-    const isEntryWeekend = entryDate.getDay() === 0 || entryDate.getDay() === 6;
-    const isExitWeekend = exitDate.getDay() === 0 || exitDate.getDay() === 6;
-
-    if (isEntryWeekend || isExitWeekend) {
+    if (isWeekend(formData.entryDate) || isWeekend(formData.exitDate)) {
       setValidationError("Burza je o víkendu zavřená. Vyberte prosím pracovní den.");
       setTimeout(() => setValidationError(null), 5000);
       return;

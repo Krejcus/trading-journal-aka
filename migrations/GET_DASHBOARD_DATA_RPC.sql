@@ -55,7 +55,9 @@ BEGIN
           'timestamp', t.timestamp,
           'is_public', t.is_public,
           'created_at', t.created_at,
-          'data', t.data - 'screenshot' - 'screenshots'
+          'data', t.data - 'screenshot' - 'screenshots',
+          'screenshot_url', t.data->>'screenshot',
+          'screenshots_urls', t.data->'screenshots'
         ) ORDER BY t.timestamp DESC
       )
       FROM trades t WHERE t.user_id = v_user_id

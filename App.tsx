@@ -1014,17 +1014,7 @@ const App: React.FC = () => {
       console.log("[Prefetch] Preloading DailyJournal for instant access...");
       import('./components/DailyJournal');
 
-      // Prefetch trade screenshots in background so TradeHistory has them ready
-      console.log("[Prefetch] Prefetching trade screenshots in background...");
-      storageService.prefetchAllScreenshots().then(screenshotMap => {
-        if (screenshotMap.size > 0) {
-          setTrades(prev => prev.map(t => {
-            const cached = screenshotMap.get(String(t.id));
-            return cached?.screenshot ? { ...t, screenshot: cached.screenshot } : t;
-          }));
-          console.log(`[Prefetch] Screenshots loaded for ${screenshotMap.size} trades`);
-        }
-      }).catch(err => console.warn("[Prefetch] Screenshot prefetch failed:", err));
+      // Screenshots now come with the RPC response — no separate prefetch needed
 
       // Verify push subscription is still valid (iOS can silently expire it)
       storageService.getPreferences().then(async (savedPrefs) => {
@@ -1075,8 +1065,25 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (activePage === 'business' && session && !isBusinessDataLoaded) {
-      console.log("[LazyLoad] Loading Business Hub data...");
+      const userId = session.user.id;
 
+      // Cache-first: show cached data instantly, then refresh in background
+      try {
+        const ce = localStorage.getItem(`alphatrade_biz_expenses_${userId}`);
+        const cp = localStorage.getItem(`alphatrade_biz_payouts_${userId}`);
+        const cg = localStorage.getItem(`alphatrade_biz_goals_${userId}`);
+        const cr = localStorage.getItem(`alphatrade_biz_resources_${userId}`);
+        if (ce) {
+          setBusinessExpenses(JSON.parse(ce));
+          setBusinessPayouts(cp ? JSON.parse(cp) : []);
+          setBusinessGoals(cg ? JSON.parse(cg) : []);
+          setBusinessResources(cr ? JSON.parse(cr) : []);
+          setIsBusinessDataLoaded(true);
+          console.log("[LazyLoad] Business Hub loaded from cache");
+        }
+      } catch {}
+
+      // Always fetch fresh data (background if cache hit, blocking if not)
       Promise.all([
         storageService.getBusinessExpenses(),
         storageService.getBusinessPayouts(),
@@ -1088,9 +1095,16 @@ const App: React.FC = () => {
         setBusinessGoals(goals || []);
         setBusinessResources(resources || []);
         setIsBusinessDataLoaded(true);
-        console.log(`[LazyLoad] Business Hub data loaded: ${expenses?.length || 0} expenses, ${payouts?.length || 0} payouts, ${goals?.length || 0} goals, ${resources?.length || 0} resources`);
 
-        // Prefetch payout images in background (like trade screenshots)
+        // Cache for next visit
+        try {
+          localStorage.setItem(`alphatrade_biz_expenses_${userId}`, JSON.stringify(expenses || []));
+          localStorage.setItem(`alphatrade_biz_payouts_${userId}`, JSON.stringify(payouts || []));
+          localStorage.setItem(`alphatrade_biz_goals_${userId}`, JSON.stringify(goals || []));
+          localStorage.setItem(`alphatrade_biz_resources_${userId}`, JSON.stringify(resources || []));
+        } catch {}
+
+        // Prefetch payout images in background
         if (payouts && payouts.length > 0) {
           storageService.prefetchPayoutImages().then(imageMap => {
             if (imageMap.size > 0) {
@@ -1098,9 +1112,8 @@ const App: React.FC = () => {
                 const image = imageMap.get(String(p.id));
                 return image ? { ...p, image } : p;
               }));
-              console.log(`[LazyLoad] Payout images loaded for ${imageMap.size} payouts`);
             }
-          }).catch(err => console.warn("[LazyLoad] Payout image prefetch failed:", err));
+          }).catch(() => {});
         }
       }).catch(err => {
         console.error("[LazyLoad] Failed to load Business Hub data:", err);
@@ -1570,7 +1583,7 @@ const App: React.FC = () => {
       // ALWAYS use account phase as source of truth, not trade phase
       if (dashboardMode === 'challenge') {
         const acc = accounts.find(a => a.id === t.accountId);
-        const isChallenge = acc?.phase === 'Challenge';
+        const isChallenge = acc?.type === 'Funded' && acc?.phase === 'Challenge';
         if (!isChallenge) {
           return false;
         }
@@ -1582,7 +1595,7 @@ const App: React.FC = () => {
         }
       } else if (dashboardMode === 'funded') {
         const acc = accounts.find(a => a.id === t.accountId);
-        const isFunded = acc?.type === 'Live' || acc?.phase === 'Funded';
+        const isFunded = acc?.type === 'Live' || (acc?.type === 'Funded' && acc?.phase === 'Funded');
         if (!isFunded) {
           return false;
         }
@@ -2234,12 +2247,29 @@ const App: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-3">
+              {activePage === 'dashboard' && (
+                <button
+                  onClick={() => setIsDashboardEditing(!isDashboardEditing)}
+                  className={`p-2 rounded-xl border transition-all ${
+                    isDashboardEditing
+                      ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-500/20'
+                      : (theme !== 'light'
+                        ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white'
+                        : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-600 shadow-sm')
+                  }`}
+                  title={isDashboardEditing ? 'Uložit rozložení' : 'Upravit Dashboard'}
+                >
+                  {isDashboardEditing ? <Check size={20} /> : <LayoutGrid size={20} />}
+                </button>
+              )}
               <FilterDropdown
                 filters={filters}
                 setFilters={setFilters}
                 accounts={contextAccounts}
                 trades={trades}
                 theme={theme}
+                isDashboardEditing={activePage === 'dashboard' ? isDashboardEditing : undefined}
+                setIsDashboardEditing={activePage === 'dashboard' ? setIsDashboardEditing : undefined}
                 dashboardMode={dashboardMode}
                 setDashboardMode={(v) => { setDashboardMode(v); isPreferencesDirty.current = true; }}
                 viewMode={viewMode}

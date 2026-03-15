@@ -260,13 +260,22 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
             return;
         }
 
-        const entryDayStr = trade.entryDate;
-        const entryDateObj = new Date(entryDayStr);
-        const exitDayStr = trade.exitDate;
-        const exitDateObj = new Date(exitDayStr);
+        const isWeekend = (dateStr: string | undefined) => {
+            if (!dateStr) return false;
+            const parts = dateStr.split('-');
+            if (parts.length === 3) {
+                const year = parseInt(parts[0]);
+                const month = parseInt(parts[1]) - 1;
+                const day = parseInt(parts[2]);
+                const date = new Date(year, month, day);
+                return !isNaN(date.getTime()) && (date.getDay() === 0 || date.getDay() === 6);
+            }
+            const d = new Date(dateStr);
+            return !isNaN(d.getTime()) && (d.getDay() === 0 || d.getDay() === 6);
+        };
 
-        if (entryDateObj.getDay() === 0 || entryDateObj.getDay() === 6 || exitDateObj.getDay() === 0 || exitDateObj.getDay() === 6) {
-            setSubmitStatus({ text: "Nelze zadat obchod s víkendovým datem!", type: 'error' });
+        if (isWeekend(trade.entryDate) || isWeekend(trade.exitDate)) {
+            setSubmitStatus({ text: "Obchod nelze zadat o víkendu! Vyberte pracovní den.", type: 'error' });
             setIsSubmitting(false);
             return;
         }

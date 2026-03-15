@@ -163,7 +163,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       totalWithdrawals: 0,
       totalGrossWithdrawals: 0,
       profitSplit: Number(newAccount.profitSplit) || 90,
-      phase: newAccount.phase as any || 'Challenge',
+      phase: newAccount.type === 'Backtest' ? undefined : (newAccount.phase as any || 'Challenge'),
       accumulatedChallengePnL: 0,
       type: newAccount.type as any,
       status: 'Active',

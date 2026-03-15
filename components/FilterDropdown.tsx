@@ -523,12 +523,29 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
 
             <div className={`px-4 py-3 border-t backdrop-blur-md flex items-center justify-between relative z-10 ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50/50'}`}>
               <span className={`text-[8px] font-black uppercase tracking-widest ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>{activeFilterCount} aktivních</span>
-              <button
-                onClick={() => setIsOpen(false)}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95"
-              >
-                Hotovo
-              </button>
+              <div className="flex items-center gap-2">
+                {setIsDashboardEditing && (
+                  <button
+                    onClick={() => { setIsDashboardEditing(!isDashboardEditing); setIsOpen(false); }}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
+                      isDashboardEditing
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
+                        : (isDark
+                          ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                          : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600 shadow-sm')
+                    }`}
+                  >
+                    {isDashboardEditing ? <Check size={12} /> : <LayoutGrid size={12} />}
+                    {isDashboardEditing ? 'Uložit' : 'Upravit'}
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsOpen(false)}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95"
+                >
+                  Hotovo
+                </button>
+              </div>
             </div>
           </motion.div>
         </>

@@ -88,7 +88,8 @@ export const storageService = {
         htfConfluence: d.htfConfluence, ltfConfluence: d.ltfConfluence,
         mistakes: d.mistakes, emotions: d.emotions,
         planAdherence: d.planAdherence, executionStatus: d.executionStatus,
-        screenshot: undefined, screenshots: undefined,
+        screenshot: t.screenshot_url || undefined,
+        screenshots: t.screenshots_urls || undefined,
         miniViewRange: d.miniViewRange, miniViewLayout: d.miniViewLayout,
         miniViewSecondaryRange: d.miniViewSecondaryRange,
         miniViewSecondaryTimeframe: d.miniViewSecondaryTimeframe,
@@ -664,7 +665,7 @@ export const storageService = {
     };
   },
 
-  // Batch fetch screenshots for multiple trades (used by TradeHistory infinite scroll)
+  // Batch fetch screenshots for multiple trades (fallback for trades not loaded via RPC)
   async getTradeScreenshots(tradeIds: string[]): Promise<Map<string, { screenshot?: string; screenshots?: string[] }>> {
     const result = new Map<string, { screenshot?: string; screenshots?: string[] }>();
     if (tradeIds.length === 0) return result;
@@ -672,20 +673,27 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return result;
 
-    const { data, error } = await supabase
-      .from('trades')
-      .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
-      .in('id', tradeIds)
-      .eq('user_id', userId);
+    try {
+      const { data, error } = await supabase
+        .from('trades')
+        .select('id, data')
+        .in('id', tradeIds)
+        .eq('user_id', userId);
 
-    if (error || !data) return result;
+      if (error || !data) return result;
 
-    data.forEach((row: any) => {
-      result.set(row.id, {
-        screenshot: row.screenshot || undefined,
-        screenshots: row.screenshots || undefined
+      data.forEach((row: any) => {
+        const d = row.data || {};
+        if (d.screenshot) {
+          result.set(row.id, {
+            screenshot: d.screenshot,
+            screenshots: d.screenshots || undefined
+          });
+        }
       });
-    });
+    } catch (err) {
+      // Silently fail — screenshots are non-critical and usually come from RPC
+    }
 
     return result;
   },
@@ -696,19 +704,23 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return result;
 
-    const { data, error } = await supabase
-      .from('trades')
-      .select('id, screenshot:data->>screenshot')
-      .eq('user_id', userId)
-      .not('data->>screenshot', 'is', null);
+    try {
+      const { data, error } = await supabase
+        .from('trades')
+        .select('id, data')
+        .eq('user_id', userId);
 
-    if (error || !data) return result;
+      if (error || !data) return result;
 
-    data.forEach((row: any) => {
-      if (row.screenshot) {
-        result.set(row.id, { screenshot: row.screenshot });
-      }
-    });
+      data.forEach((row: any) => {
+        const d = row.data || {};
+        if (d.screenshot) {
+          result.set(row.id, { screenshot: d.screenshot });
+        }
+      });
+    } catch (err) {
+      // Silently fail
+    }
 
     return result;
   },

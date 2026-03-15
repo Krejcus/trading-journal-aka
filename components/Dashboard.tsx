@@ -653,8 +653,8 @@ const ProKpiCard: React.FC<{
           <span className="text-2xl font-black tracking-tighter leading-none mb-1">
             {displayValue}
           </span>
-          <div className="h-16 w-full max-w-[140px] relative">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-16 w-full max-w-[140px] min-w-[1px] min-h-[1px] relative">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <PieChart {...({ overflow: 'visible' } as any)}>
                 <defs>
                   <linearGradient id="kpiProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
@@ -723,8 +723,8 @@ const ProKpiCard: React.FC<{
       if (chartData.length === 0) chartData.push({ name: 'Žádná data', value: 1, fill: isDark ? '#334155' : '#e2e8f0', unit: '' });
       return (
         <div className="flex flex-col items-center">
-          <div className="h-16 w-16 lg:h-20 lg:w-20 cursor-pointer relative">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-16 w-16 lg:h-20 lg:w-20 min-w-[1px] min-h-[1px] cursor-pointer relative">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <PieChart {...({ overflow: 'visible' } as any)}>
                 <defs>
                   <linearGradient id="donutProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
@@ -1000,7 +1000,7 @@ const HourlyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | '
         </div>
       </div>
       <div className="w-full h-[260px] mt-auto relative">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           <BarChart
             data={data}
             stackOffset="sign"
@@ -1041,7 +1041,7 @@ const DailyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | 'o
         </h3>
       </div>
       <div className="w-full h-[260px] mt-auto relative">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           <BarChart
             layout="vertical"
             data={tradingDays}
