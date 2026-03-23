@@ -500,7 +500,7 @@ const Settings: React.FC<SettingsProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                   {sessions.map(s => (
-                    <div key={s.id} className={`p-6 rounded-[32px] border relative transition-all duration-300 hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:border-indigo-500/40' : 'bg-white border-slate-100 hover:shadow-xl'}`}>
+                    <div key={s.id} className={`p-6 rounded-[32px] border relative group transition-all duration-300 hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:border-indigo-500/40' : 'bg-white border-slate-100 hover:shadow-xl'}`}>
                       <div className="space-y-5">
                         <div className="flex items-center gap-3">
                           <div className="relative group shrink-0">

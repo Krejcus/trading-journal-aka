@@ -1034,6 +1034,26 @@ export const storageService = {
     return dbPreps;
   },
 
+  async saveSinglePrep(prep: DailyPrep): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) return;
+    const { error } = await supabase.from('daily_preps').upsert({ user_id: userId, date: prep.date, data: prep }, { onConflict: 'user_id,date' });
+    if (error) throw error;
+    // Update IDB cache
+    const cached = await get<DailyPrep[]>(`alphatrade_daily_preps_${userId}`) || [];
+    await set(`alphatrade_daily_preps_${userId}`, [...cached.filter(p => p.date !== prep.date), prep]);
+  },
+
+  async saveSingleReview(review: DailyReview): Promise<void> {
+    const userId = await getUserId();
+    if (!userId) return;
+    const { error } = await supabase.from('daily_reviews').upsert({ user_id: userId, date: review.date, data: review }, { onConflict: 'user_id,date' });
+    if (error) throw error;
+    // Update IDB cache
+    const cached = await get<DailyReview[]>(`alphatrade_daily_reviews_${userId}`) || [];
+    await set(`alphatrade_daily_reviews_${userId}`, [...cached.filter(r => r.date !== review.date), review]);
+  },
+
   async saveDailyPreps(preps: DailyPrep[]): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;

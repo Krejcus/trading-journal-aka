@@ -296,7 +296,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
    const DAY_LABELS = ['Po', 'Út', 'St', 'Čt', 'Pá', 'Týden'];
 
    return (
-      <div className={`rounded-[32px] border shadow-sm overflow-hidden transition-all flex flex-col h-full ${theme === 'oled' ? 'bg-black border-white/10 shadow-none' :
+      <div className={`rounded-[32px] border shadow-sm overflow-visible transition-all flex flex-col h-full ${theme === 'oled' ? 'bg-black border-white/10 shadow-none' :
          theme === 'dark' ? 'bg-[#0a0f1d]/90 border-white/5 shadow-2xl backdrop-blur-xl' :
             'bg-white border-slate-200'
          }`}>
@@ -341,9 +341,9 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
             ))}
          </div>
 
-         <div className="p-4 space-y-3 flex-1 overflow-y-auto no-scrollbar">
+         <div className="p-4 flex-1 min-h-0 flex flex-col gap-2">
             {gridRows.map((row, rIdx) => (
-               <div key={rIdx} className="grid grid-cols-6 gap-3">
+               <div key={rIdx} className="grid grid-cols-6 gap-2 flex-1 min-h-0">
                   {row.map((cell, cIdx) => (
                      <CalendarCell key={cIdx} cell={cell} theme={theme} maxPnL={maxDayPnL} onDayClick={onDayClick} onWeekClick={onWeekClick} pnlFormat={pnlFormat as PnLDisplayMode} accounts={accounts} initialBalance={initialBalance} currency={currency} rates={rates} />
                   ))}
@@ -358,12 +358,12 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
-   if (cell.type === 'empty') return <div className="aspect-square opacity-0"></div>;
+   if (cell.type === 'empty') return <div className="opacity-0"></div>;
    if (cell.type === 'summary') {
       const week = cell.summaryData!;
       const { pnl, weekIndex } = week;
       return (
-         <div onClick={() => onWeekClick(week)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center p-2 border transition-all cursor-pointer relative overflow-hidden group hover:ring-2 hover:ring-blue-500/50 ${theme === 'oled' ? 'bg-black border-white/10 text-slate-400 hover:bg-white/5' :
+         <div onClick={() => onWeekClick(week)} className={`rounded-2xl flex flex-col items-center justify-center p-2 border transition-all cursor-pointer relative overflow-hidden group hover:ring-2 hover:ring-blue-500/50 ${theme === 'oled' ? 'bg-black border-white/10 text-slate-400 hover:bg-white/5' :
             theme === 'dark' ? 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10' :
                'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
             }`}>
@@ -391,7 +391,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
       borderClass = day.pnl >= 0 ? 'border-emerald-500/30' : 'border-rose-500/30';
    }
    return (
-      <div onClick={() => onDayClick(day)} className={`aspect-square rounded-2xl p-2 md:p-3 flex flex-col justify-between cursor-pointer border relative overflow-hidden transition-all group hover:ring-2 hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black hover:bg-white/5 shadow-none' :
+      <div onClick={() => onDayClick(day)} className={`rounded-2xl p-2 md:p-3 flex flex-col justify-between cursor-pointer border relative overflow-hidden transition-all group hover:ring-2 hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black hover:bg-white/5 shadow-none' :
          theme === 'dark' ? 'bg-white/5 hover:bg-white/10' :
             'bg-white shadow-sm hover:shadow-md'
          }`} style={bgStyle}>

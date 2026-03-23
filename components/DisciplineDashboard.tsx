@@ -127,7 +127,7 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
   };
 
   return (
-    <div className={`p-5 rounded-[32px] border transition-all flex flex-col overflow-visible ${theme === 'oled' ? 'bg-black border-white/10' :
+    <div className={`p-5 rounded-[32px] border transition-all flex flex-col h-full overflow-hidden ${theme === 'oled' ? 'bg-black border-white/10' :
       theme === 'dark' ? 'bg-[var(--bg-card)]/90 border-[var(--border-subtle)] backdrop-blur-xl' :
         'bg-white border-slate-200 shadow-sm'
       }`}>

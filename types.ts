@@ -357,6 +357,13 @@ export interface PsychoState {
   notes: string;
 }
 
+export interface SessionBreakdown {
+  sessionId: string;
+  sessionLabel: string;
+  notes: string;
+  screenshot?: string;
+}
+
 export interface DailyReview {
   id: string;
   date: string;
@@ -370,6 +377,7 @@ export interface DailyReview {
   ruleAdherence?: RuleCompletion[];
   weeklyGoalAdherence?: RuleCompletion[];
   psycho?: PsychoState;
+  sessionBreakdowns?: SessionBreakdown[];
   completed?: boolean;
 }
 
@@ -519,9 +527,20 @@ export interface DashboardWidgetConfig {
   id: string;
   label: string;
   visible: boolean;
-  size: 'small' | 'medium' | 'large' | 'full';
+  // react-grid-layout position
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minW?: number;
+  minH?: number;
+  maxW?: number;
+  maxH?: number;
+  // Legacy (for migration from old format)
+  size?: 'small' | 'medium' | 'large' | 'full';
   rowSpan?: number;
-  order: number;
+  order?: number;
+  // Widget metadata
   showDisciplinedCurve?: boolean;
 }
 

@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
 import { formatPnL, calculateTotalRR, formatCurrency } from '../utils/formatPnL';
@@ -15,7 +16,6 @@ import {
   BarChart3,
   LayoutGrid,
   Trophy,
-  GripVertical,
   Zap,
   Target,
   Plus,
@@ -78,25 +78,14 @@ interface DashboardProps {
 
 // ... MASTER_WIDGET_LIST update ...
 import TradeDetailModal from './TradeDetailModal';
-import SortableWidget from './SortableWidget';
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
-  DragStartEvent,
-  DragOverlay,
-} from '@dnd-kit/core';
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  rectSortingStrategy,
-} from '@dnd-kit/sortable';
-import * as Sortable from './ui/sortable';
+import WidgetEditOverlay from './WidgetEditOverlay';
+import { Responsive as ResponsiveGridLayout, useContainerWidth } from 'react-grid-layout';
+import type { Layout, LayoutItem } from 'react-grid-layout';
+
+// react-grid-layout configuration
+const GRID_BREAKPOINTS = { lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 };
+const GRID_COLS = { lg: 12, md: 12, sm: 6, xs: 4, xxs: 2 };
+const GRID_ROW_HEIGHT = 80;
 
 const COLORS = {
   profit: '#10b981',
@@ -126,7 +115,7 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
 
   const current = initial + stats.totalPnL - totalWithdrawals;
   const target = initial * 1.10; // 10% Profit Target
-  const progress = Math.min(100, Math.max(0, ((current - initial) / (target - initial)) * 100));
+  const progress = target === initial ? 0 : Math.min(100, Math.max(0, ((current - initial) / (target - initial)) * 100));
   const remaining = target - current;
   const isPassed = current >= target;
   const color = isPassed ? COLORS.profit : '#3b82f6';
@@ -169,51 +158,56 @@ const SmartTooltip: React.FC<{
   subtext?: string;
   theme: 'dark' | 'light' | 'oled';
   color?: string;
-  className?: string; // Allow custom classes
-  style?: React.CSSProperties; // Allow custom styles
+  className?: string;
+  style?: React.CSSProperties;
 }> = ({ children, text, subtext, theme, color, className, style }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const containerRef = React.useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ isFlipped: false, isRight: false });
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
 
-  const checkPosition = () => {
-    if (containerRef.current) {
-      const rect = containerRef.current.getBoundingClientRect();
-      const isFlipped = rect.top < 250; // Flip to bottom if close to top
-      const isRight = rect.right > window.innerWidth - 150; // Shift left if close to right edge
-      setPos({ isFlipped, isRight });
-    }
-  };
+  useLayoutEffect(() => {
+    if (!isOpen || !triggerRef.current || !tooltipRef.current) return;
+    const tr = triggerRef.current.getBoundingClientRect();
+    const tt = tooltipRef.current.getBoundingClientRect();
+
+    const fitsAbove = tr.top > tt.height + 16;
+    const top = fitsAbove ? tr.top - tt.height - 12 : tr.bottom + 12;
+    let left = tr.left + tr.width / 2 - tt.width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - tt.width - 8));
+
+    tooltipRef.current.style.top = `${top}px`;
+    tooltipRef.current.style.left = `${left}px`;
+    requestAnimationFrame(() => {
+      if (tooltipRef.current) {
+        tooltipRef.current.style.opacity = '1';
+        tooltipRef.current.style.transform = 'scale(1)';
+      }
+    });
+  }, [isOpen]);
 
   return (
     <div
-      className={`relative inline-block ${className || ''}`}
+      className={`inline-block ${className || ''}`}
       style={style}
-      ref={containerRef}
-      onMouseEnter={() => { checkPosition(); setIsOpen(true); }}
+      ref={triggerRef}
+      onMouseEnter={() => setIsOpen(true)}
       onMouseLeave={() => setIsOpen(false)}
     >
       {children}
-      <div
-        className={`absolute p-3 rounded-2xl border shadow-2xl backdrop-blur-2xl z-[9999] w-48 transition-all duration-200 pointer-events-none theme-card theme-border
-          ${isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}
-          ${pos.isFlipped ? 'top-full mt-3' : 'bottom-full mb-3'}
-          ${pos.isRight ? 'right-0' : 'left-1/2 -translate-x-1/2'}
-          ${!pos.isFlipped && !isOpen ? 'translate-y-2' : ''}
-          ${pos.isFlipped && !isOpen ? '-translate-y-2' : ''}
-        `}
-      >
-        <div className="flex flex-col items-center gap-1">
-          {color && <div className="w-2 h-2 rounded-full mb-1" style={{ backgroundColor: color }}></div>}
-          <div className="text-[10px] font-black uppercase tracking-widest opacity-60 text-center text-wrap">{text}</div>
-          {subtext && <div className="text-sm font-black text-center text-wrap">{subtext}</div>}
-        </div>
-        {/* Arrow */}
-        <div className={`absolute w-0 h-0 border-8 border-transparent ${pos.isRight ? 'hidden' : 'left-1/2 -translate-x-1/2 ' + (pos.isFlipped
-          ? `bottom-full border-b-[var(--glass-border)] ${theme === 'light' ? 'border-b-white' : ''}`
-          : `top-full border-t-[var(--glass-border)] ${theme === 'light' ? 'border-t-white' : ''}`)
-          }`}></div>
-      </div>
+      {isOpen && createPortal(
+        <div
+          ref={tooltipRef}
+          style={{ opacity: 0, transform: 'scale(0.95)' }}
+          className="fixed p-3 rounded-2xl border shadow-2xl backdrop-blur-2xl z-[9999] w-48 pointer-events-none theme-card theme-border transition-all duration-200"
+        >
+          <div className="flex flex-col items-center gap-1">
+            {color && <div className="w-2 h-2 rounded-full mb-1" style={{ backgroundColor: color }}></div>}
+            <div className="text-[10px] font-black uppercase tracking-widest opacity-60 text-center text-wrap">{text}</div>
+            {subtext && <div className="text-sm font-black text-center text-wrap">{subtext}</div>}
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };
@@ -410,11 +404,6 @@ const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light
             <div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div>
           </SmartTooltip>
         </div>
-        <div className="p-1.5 rounded-lg theme-card theme-border theme-text-secondary">
-          <div className={`${currentStreak >= 7 ? 'bg-orange-500/20 text-orange-500' : 'bg-slate-500/20 text-slate-500'} p-1 rounded-lg`}>
-            <Flame size={14} />
-          </div>
-        </div>
       </div>
       <div className="flex-1 flex flex-col items-center justify-center gap-2">
         <div className={`w-20 h-20 rounded-full border-[5px] ${color.ring} flex items-center justify-center shadow-lg ${color.glow} transition-all duration-500`}>
@@ -451,8 +440,6 @@ const MASTER_WIDGET_LIST = [
   { id: 'kpi_profit_factor', label: 'Profit factor', category: 'KPIs', icon: <BarChart3 size={18} />, description: 'Poměr hrubých zisků a ztrát.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>19.89</div>, defaultRowSpan: 1 },
   { id: 'kpi_day_winrate', label: 'Day win %', category: 'KPIs', icon: <CalendarIcon size={18} />, description: 'Procento ziskových obchodních dnů.', preview: <div className="text-purple-500 font-black text-xl">62.15%</div>, defaultRowSpan: 1 },
   { id: 'kpi_max_drawdown', label: 'Max Drawdown', category: 'KPIs', icon: <TrendingDown size={18} />, description: 'Největší propad kapitálu.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>12.4%</div>, defaultRowSpan: 1 },
-  { id: 'kpi_avg_win', label: 'Average Win', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Průměrný zisk na vítězný trade.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>$450</div>, defaultRowSpan: 1 },
-  { id: 'kpi_avg_loss', label: 'Average Loss', category: 'KPIs', icon: <ArrowDown size={18} />, description: 'Průměrná ztráta na trade.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>$320</div>, defaultRowSpan: 1 },
   { id: 'discipline', label: 'Rituály & Disciplína', category: 'Chování', icon: <Brain size={18} />, description: 'Sleduje tvé ranní a večerní rituály.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 2 },
   { id: 'winners_losers', label: 'Výhry a Prohry', category: 'Analýza', icon: <TrendingUp size={18} />, description: 'Statistické srovnání zisků a ztrát.', preview: <div className="flex gap-1"><div className={`w-4 h-4 ${COLORS.bgProfit} ${COLORS.borderProfit} border rounded`} /><div className={`w-4 h-4 ${COLORS.bgLoss} ${COLORS.borderLoss} border rounded`} /></div>, defaultRowSpan: 2 },
   { id: 'monthly_performance', label: 'Měsíční Výkonnost', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Měsíční přehled ziskovosti s heatmapou.', preview: <div className="grid grid-cols-4 gap-0.5"><div className="w-2 h-2 bg-emerald-500/40" /><div className="w-2 h-2 bg-emerald-500/80" /><div className="w-2 h-2 bg-emerald-500/20" /><div className="w-2 h-2 bg-rose-500/40" /></div>, defaultRowSpan: 2 },
@@ -463,21 +450,32 @@ const MASTER_WIDGET_LIST = [
   { id: 'calendar', label: 'Obchodní Kalendář', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Denní zisky v kalendáři.', preview: <div className={`${COLORS.textProfit} font-black text-xs`}>Green Month</div>, defaultRowSpan: 3 },
 ];
 
+/** Clamp a Recharts tooltip to the viewport */
+function useTooltipClamp(ref: React.RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.transform = 'translateX(-50%)';
+    const rect = el.getBoundingClientRect();
+    const pad = 8;
+    if (rect.left < pad) {
+      el.style.transform = `translateX(${-rect.width / 2 + (pad - rect.left)}px)`;
+    } else if (rect.right > window.innerWidth - pad) {
+      el.style.transform = `translateX(${-rect.width / 2 - (rect.right - window.innerWidth + pad)}px)`;
+    }
+  });
+}
+
 const CustomKpiTooltip = (props: any) => {
-  const { active, payload, theme, coordinate, viewBox } = props;
+  const { active, payload, theme } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  useTooltipClamp(ref);
   if (active && payload && payload.length) {
     const data = payload[0].payload;
-    const isDark = theme !== 'light';
-
-    // Safety check for values
     const value = payload[0].value ?? 0;
 
-    // Vertical flipping logic (if too close to top, shift down)
-    const isTopSide = (coordinate?.y || 0) < 180;
-    const isRightSide = (coordinate?.x || 0) > (viewBox?.width || 0) * 0.7;
-
     return (
-      <div className={`px-3 py-2 rounded-xl border shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-200 z-[9999] pointer-events-none theme-card theme-border transition-transform ${isTopSide ? 'translate-y-[80%]' : '-translate-y-[80%]'} ${isRightSide ? '-translate-x-[105%]' : ''}`}>
+      <div ref={ref} className="px-3 py-2 rounded-xl border shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-200 z-[9999] pointer-events-none theme-card theme-border">
         <p className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-50">{data.name || data.label}</p>
         <p className="text-xs font-black flex items-center gap-2">
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: data.fill || payload[0].color }}></span>
@@ -491,18 +489,16 @@ const CustomKpiTooltip = (props: any) => {
 
 const CustomEdgeTooltip = (props: any) => {
   const { active, payload, label, theme } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  useTooltipClamp(ref);
   if (active && payload && payload.length) {
     const data = payload[0].payload;
-    const isDark = theme !== 'light';
     const profit = data.profit || 0;
     const loss = Math.abs(data.loss || 0);
     const net = profit - loss;
-    // Identify if the tooltip is likely to clip on the right
-    const { coordinate, viewBox } = props as any;
-    const isRightSide = (coordinate?.x || 0) > (viewBox?.width || 0) * 0.6; // Shift left if past 60% of width
 
     return (
-      <div className={`p-4 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 min-w-[180px] z-[1000] pointer-events-none transition-transform ${isRightSide ? '-translate-x-[105%]' : ''} ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
+      <div ref={ref} className={`p-4 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 min-w-[180px] z-[1000] pointer-events-none ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
         theme === 'dark' ? 'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-white' :
           'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-[var(--text-primary)]'
         }`}>
@@ -780,7 +776,6 @@ const ProKpiCard: React.FC<{
           {label}
           {info && <SmartTooltip text="Info" subtext={info} theme={theme}><div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div></SmartTooltip>}
         </div>
-        {icon && <div className="p-1.5 rounded-lg theme-card theme-border theme-text-secondary">{icon}</div>}
       </div>
       <div className="flex-1 flex flex-col items-center justify-center min-h-[60px]">
         {type === 'text' && (
@@ -881,7 +876,7 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
     </div>
   );
   return (
-    <div className="p-6 rounded-[32px] transition-all relative h-full flex flex-col justify-between overflow-visible glass-panel">
+    <div className="p-6 rounded-[32px] transition-all relative h-full flex flex-col justify-between overflow-hidden glass-panel">
       <div className="flex justify-between items-center mb-6">
         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
           <TrendingUp size={16} className="text-emerald-500" /> Výhry a Prohry
@@ -933,7 +928,7 @@ const PerformanceByMonthWidget: React.FC<{ monthlyData: MonthlyData[], theme: 'd
     }
   };
   return (
-    <div className="p-6 rounded-[32px] glass-panel">
+    <div className="p-6 rounded-[32px] h-full flex flex-col overflow-hidden glass-panel">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
           Měsíční Výkonnost
@@ -988,7 +983,7 @@ const HourlyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | '
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   return (
-    <div className="p-6 rounded-[32px] flex flex-col min-h-[380px] overflow-visible glass-panel">
+    <div className="p-6 rounded-[32px] flex flex-col h-full overflow-visible glass-panel">
       <div className="flex justify-between items-center mb-8">
         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
           <Clock size={16} className="text-blue-500" /> Hodinový Výkon
@@ -999,15 +994,12 @@ const HourlyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | '
           <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-rose-500"></div> Loss</div>
         </div>
       </div>
-      <div className="w-full h-[260px] mt-auto relative">
+      <div className="w-full flex-1 min-h-0 mt-auto relative">
         <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           <BarChart
             data={data}
             stackOffset="sign"
             margin={{ top: 10, right: 10, left: -20, bottom: 5 }}
-            onMouseMove={(state) => {
-              if (state.activeTooltipIndex !== undefined) setActiveIndex(Number(state.activeTooltipIndex));
-            }}
             onMouseLeave={() => setActiveIndex(null)}
           >
             <defs>
@@ -1017,10 +1009,10 @@ const HourlyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | '
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-subtle)" opacity={0.6} />
             <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#64748b', fontWeight: 'black' }} />
             <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={(val) => `$${Math.abs(val)}`} />
-            <RechartsTooltip content={<CustomEdgeTooltip theme={theme} />} cursor={false} allowEscapeViewBox={{ x: true, y: true }} />
+            <RechartsTooltip content={<CustomEdgeTooltip theme={theme} />} cursor={false} allowEscapeViewBox={{ x: true, y: true }} active={activeIndex !== null} />
             <ReferenceLine y={0} stroke={theme !== 'light' ? 'var(--text-muted)' : '#cbd5e1'} strokeWidth={1} />
-            <Bar dataKey="profit" stackId="a" fill="url(#hourlyProfitGrad)" radius={[8, 8, 0, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="horizontal" />} isAnimationActive={false} />
-            <Bar dataKey="loss" stackId="a" fill="url(#hourlyLossGrad)" radius={[8, 8, 0, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="horizontal" />} isAnimationActive={false} />
+            <Bar dataKey="profit" stackId="a" fill="url(#hourlyProfitGrad)" radius={[8, 8, 0, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="horizontal" />} isAnimationActive={false} onMouseEnter={(_: any, idx: number) => setActiveIndex(idx)} onMouseLeave={() => setActiveIndex(null)} />
+            <Bar dataKey="loss" stackId="a" fill="url(#hourlyLossGrad)" radius={[8, 8, 0, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="horizontal" />} isAnimationActive={false} onMouseEnter={(_: any, idx: number) => setActiveIndex(idx)} onMouseLeave={() => setActiveIndex(null)} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -1032,24 +1024,28 @@ const DailyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | 'o
   const tradingDays = data.filter(d => d.label !== 'So' && d.label !== 'Ne');
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
+  // Calculate dynamic domain to center 0 and scale bars to utilize full width
+  const maxAbsPnL = Math.max(
+    ...tradingDays.map(d => Math.abs(d.profit || 0)),
+    ...tradingDays.map(d => Math.abs(d.loss || 0)),
+    1
+  );
+
   return (
-    <div className="p-6 rounded-[32px] flex flex-col min-h-[380px] overflow-visible glass-panel">
+    <div className="p-6 rounded-[32px] flex flex-col h-full overflow-visible glass-panel">
       <div className="flex justify-between items-center mb-8">
         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
           <CalendarIcon size={16} className="text-indigo-500" /> Denní Výkon
           <InfoIcon text="Které dny v týdnu jsou pro vaši strategii nejziskovější? Pomáhá identifikovat dny pro zvýšení nebo snížení expozice." theme={theme} />
         </h3>
       </div>
-      <div className="w-full h-[260px] mt-auto relative">
+      <div className="w-full flex-1 min-h-0 mt-auto relative">
         <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           <BarChart
             layout="vertical"
             data={tradingDays}
             stackOffset="sign"
             margin={{ top: 5, right: 50, left: 10, bottom: 5 }}
-            onMouseMove={(state) => {
-              if (state.activeTooltipIndex !== undefined) setActiveIndex(Number(state.activeTooltipIndex));
-            }}
             onMouseLeave={() => setActiveIndex(null)}
           >
             <defs>
@@ -1057,14 +1053,25 @@ const DailyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | 'o
               <linearGradient id="dailyLossGrad" x1="1" y1="0" x2="0" y2="0"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border-subtle)" opacity={0.6} />
-            <XAxis type="number" hide />
+            <XAxis type="number" hide domain={[-maxAbsPnL, maxAbsPnL]} />
             <YAxis dataKey="label" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b', fontWeight: 'black' }} width={40} />
-            <RechartsTooltip content={<CustomEdgeTooltip theme={theme} />} cursor={false} allowEscapeViewBox={{ x: true, y: true }} />
+            <RechartsTooltip content={<CustomEdgeTooltip theme={theme} />} cursor={false} allowEscapeViewBox={{ x: true, y: true }} active={activeIndex !== null} />
             <ReferenceLine x={0} stroke={theme !== 'light' ? 'var(--text-muted)' : '#cbd5e1'} strokeWidth={1} />
-            <Bar dataKey="profit" stackId="a" fill="url(#dailyProfitGrad)" radius={[0, 8, 8, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="vertical" />} isAnimationActive={false}>
-              <LabelList dataKey="winRate" position="right" content={(props: any) => <text x={props.x + props.width + 5} y={props.y + props.height / 2 + 4} fill="#64748b" fontSize="9" fontWeight="black" textAnchor="start">{props.value.toFixed(0)}%</text>} />
+
+            <Bar dataKey="profit" stackId="a" fill="url(#dailyProfitGrad)" radius={[0, 10, 10, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="vertical" />} isAnimationActive={false} onMouseEnter={(_: any, idx: number) => setActiveIndex(idx)} onMouseLeave={() => setActiveIndex(null)}>
+              <LabelList dataKey="winRate" position="right" content={(props: any) => {
+                const { y, height, value } = props;
+                return (
+                  <g>
+                    <text x="98%" y={y + height / 2 + 5} fill="#64748b" fontSize="10" fontWeight="black" textAnchor="end">
+                      {value.toFixed(0)}%
+                    </text>
+                  </g>
+                );
+              }} />
             </Bar>
-            <Bar dataKey="loss" stackId="a" fill="url(#dailyLossGrad)" radius={[0, 8, 8, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="vertical" />} isAnimationActive={false} />
+
+            <Bar dataKey="loss" stackId="a" fill="url(#dailyLossGrad)" radius={[0, 10, 10, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="vertical" />} isAnimationActive={false} onMouseEnter={(_: any, idx: number) => setActiveIndex(idx)} onMouseLeave={() => setActiveIndex(null)} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -1153,22 +1160,12 @@ const Dashboard: React.FC<DashboardProps> = ({
   // Check if we need to auto-inject the Challenge widget when in Challenge mode
   useEffect(() => {
     if (dashboardMode === 'challenge' && !layout.some(w => w.id === 'challenge_target')) {
-      // Auto-inject if not present
-      onUpdateLayout([{ id: 'challenge_target', label: 'Challenge Cíl', visible: true, size: 'large', order: 0 }, ...layout]);
+      onUpdateLayout([{ id: 'challenge_target', label: 'Challenge Cíl', visible: true, x: 0, y: 0, w: 6, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 }, ...layout]);
     }
   }, [dashboardMode, layout, onUpdateLayout]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isArmoryOpen, setIsArmoryOpen] = useState(false);
   const [selectedTradeId, setSelectedTradeId] = useState<string | number | null>(null);
-  const [isDraggingWidget, setIsDraggingWidget] = useState(false);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [resizingWidget, setResizingWidget] = useState<{
-    id: string;
-    startX: number;
-    startY: number;
-    startWidth: number;
-    startHeight: number;
-  } | null>(null);
 
   const selectedTrade = useMemo(() => {
     if (!selectedTradeId) return null;
@@ -1180,10 +1177,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   }, [isEditing]);
   const currentLayout = useMemo(() => {
     return [...layout].filter(w => w.visible).map(w => {
-      if (w.rowSpan) return w;
+      if (w.h) return w;
       const master = MASTER_WIDGET_LIST.find(m => m.id === w.id);
-      return { ...w, rowSpan: (master as any)?.defaultRowSpan || 1 };
-    }).sort((a, b) => (a.order || 0) - (b.order || 0));
+      return { ...w, h: (master as any)?.defaultRowSpan || 1, w: w.w || 4, x: w.x || 0, y: w.y || 0 };
+    }).sort((a, b) => (a.y - b.y) || (a.x - b.x));
   }, [layout]);
   const categories = useMemo(() => {
     const cats: Record<string, any[]> = {};
@@ -1196,31 +1193,29 @@ const Dashboard: React.FC<DashboardProps> = ({
   const updateWidgetStatus = (id: string, visible: boolean) => {
     const exists = layout.some(w => w.id === id);
     if (exists) {
-      onUpdateLayout(layout.map(w => w.id === id ? { ...w, visible, order: visible ? layout.length : w.order } : w));
+      onUpdateLayout(layout.map(w => w.id === id ? { ...w, visible } : w));
     } else {
       const template = MASTER_WIDGET_LIST.find(m => m.id === id);
       if (template) {
+        const isKpi = (template as any).defaultRowSpan === 1;
+        const defaultW = isKpi ? 2 : 6;
+        const defaultH = isKpi ? 2 : 4;
         onUpdateLayout([...layout, {
           id: template.id,
           label: template.label,
           visible: true,
-          size: template.id.startsWith('kpi_') || template.id === 'challenge_target' ? 'small' : 'large',
-          rowSpan: (template as any).defaultRowSpan || 1,
-          order: layout.length
+          x: 0,
+          y: Infinity,
+          w: defaultW,
+          h: defaultH,
+          minW: isKpi ? 2 : 4,
+          minH: isKpi ? 2 : 3,
+          maxW: isKpi ? 6 : 12,
+          maxH: isKpi ? 4 : 8,
         }]);
       }
     }
     if (visible && window.innerWidth < 1024) setIsArmoryOpen(false);
-  };
-  const toggleWidgetHeight = (id: string) => {
-    onUpdateLayout(layout.map(w => {
-      if (w.id === id) {
-        let nextSpan = (w.rowSpan || 1) + 1;
-        if (nextSpan > 4) nextSpan = 1;
-        return { ...w, rowSpan: nextSpan };
-      }
-      return w;
-    }));
   };
   const toggleDisciplinedCurve = (id: string) => {
     onUpdateLayout(layout.map(w => {
@@ -1231,106 +1226,43 @@ const Dashboard: React.FC<DashboardProps> = ({
     }));
   };
 
-  // Drag & Drop sensors
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
+  // react-grid-layout: width measurement
+  const { width: containerWidth, containerRef, mounted: widthMounted } = useContainerWidth({ initialWidth: 1280 });
 
-  // Handle drag start event
-  const handleDragStart = (event: DragStartEvent) => {
-    setIsDraggingWidget(true);
-    setActiveId(event.active.id as string);
-  };
+  // react-grid-layout: convert DashboardWidgetConfig[] to Layout
+  const rglLayouts = useMemo(() => {
+    const lgLayout: LayoutItem[] = currentLayout.map(widget => ({
+      i: widget.id,
+      x: widget.x,
+      y: widget.y,
+      w: widget.w,
+      h: widget.h,
+      minW: widget.minW,
+      minH: widget.minH,
+      maxW: widget.maxW,
+      maxH: widget.maxH,
+      static: !isEditing,
+    }));
 
-  // Handle drag end event
-  const handleDragEnd = (event: DragEndEvent) => {
-    setIsDraggingWidget(false);
-    setActiveId(null);
-    const { active, over } = event;
+    return {
+      lg: lgLayout,
+      md: lgLayout,
+      sm: lgLayout.map(item => ({ ...item, w: Math.min(item.w, 6) })),
+      xs: lgLayout.map(item => ({ ...item, w: Math.min(item.w, 4), static: true })),
+      xxs: lgLayout.map(item => ({ ...item, x: 0, w: 2, static: true })),
+    };
+  }, [currentLayout, isEditing]);
 
-    if (!over || active.id === over.id) return;
-
-    const oldIndex = currentLayout.findIndex((w) => w.id === active.id);
-    const newIndex = currentLayout.findIndex((w) => w.id === over.id);
-
-    if (oldIndex === -1 || newIndex === -1) return;
-
-    // Create new order for all widgets
-    const reorderedLayout = arrayMove(currentLayout, oldIndex, newIndex);
-
-    // Update order values
-    const newLayout = layout.map(widget => {
-      const newPosition = reorderedLayout.findIndex(w => w.id === widget.id);
-      if (newPosition !== -1) {
-        return { ...widget, order: newPosition };
-      }
-      return widget;
+  // react-grid-layout: handle layout changes from drag/resize
+  const handleRglLayoutChange = useCallback((newLayout: Layout) => {
+    if (!isEditing) return;
+    const updatedConfigs = layout.map(config => {
+      const rglItem = newLayout.find(item => item.i === config.id);
+      if (!rglItem) return config;
+      return { ...config, x: rglItem.x, y: rglItem.y, w: rglItem.w, h: rglItem.h };
     });
-
-    onUpdateLayout(newLayout);
-  };
-
-  // Resize handlers
-  const handleResizeStart = (widgetId: string, event: React.MouseEvent) => {
-    const widget = layout.find(w => w.id === widgetId);
-    if (!widget) return;
-
-    const startWidth = widget.size === 'small' ? 1 : widget.size === 'large' ? 3 : 6;
-    setResizingWidget({
-      id: widgetId,
-      startX: event.clientX,
-      startY: event.clientY,
-      startWidth,
-      startHeight: widget.rowSpan || 1,
-    });
-  };
-
-  useEffect(() => {
-    if (!resizingWidget) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      // Width (Columns)
-      const deltaX = e.clientX - resizingWidget.startX;
-      const columnWidth = window.innerWidth >= 1024 ? window.innerWidth / 6 : window.innerWidth / 2;
-      const columnsChanged = Math.round(deltaX / columnWidth);
-
-      let newColumns = resizingWidget.startWidth + columnsChanged;
-      newColumns = Math.max(1, Math.min(6, newColumns));
-
-      let newSize: 'small' | 'medium' | 'large' | 'full';
-      if (newColumns <= 1) newSize = 'small';
-      else if (newColumns <= 2) newSize = 'medium';
-      else if (newColumns <= 3) newSize = 'large';
-      else newSize = 'full';
-
-      // Height (RowSpan)
-      const deltaY = e.clientY - resizingWidget.startY;
-      const rowHeight = 180; // Approximate base row height from auto-rows-[minmax(180px,auto)]
-      const rowsChanged = Math.round(deltaY / rowHeight);
-      let newRowSpan = resizingWidget.startHeight + rowsChanged;
-      newRowSpan = Math.max(1, Math.min(4, newRowSpan));
-
-      // Update widget size and height
-      onUpdateLayout(layout.map(w =>
-        w.id === resizingWidget.id ? { ...w, size: newSize, rowSpan: newRowSpan } : w
-      ));
-    };
-
-    const handleMouseUp = () => {
-      setResizingWidget(null);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [resizingWidget, layout, onUpdateLayout]);
+    onUpdateLayout(updatedConfigs);
+  }, [isEditing, layout, onUpdateLayout]);
 
   const renderWidget = (id: string, config?: DashboardWidgetConfig) => {
     switch (id) {
@@ -1358,28 +1290,6 @@ const Dashboard: React.FC<DashboardProps> = ({
             value={formatValue(stats.maxDrawdown, pnlDisplayMode, stats.initialBalance, drawdownRr, false)}
             icon={<div className={`${COLORS.bgLoss} ${COLORS.textLoss} p-1 rounded-lg`}><AlertTriangle size={14} /></div>}
             info="Největší propad kapitálu z vrcholu (peak-to-trough). Důležité pro řízení rizika a psychiku."
-          />
-        );
-      }
-      case 'kpi_avg_win': {
-        return (
-          <ProKpiCard
-            theme={theme}
-            label="Average Win"
-            value={formatPnL(stats.avgWin, pnlDisplayMode, stats.initialBalance, stats.avgWinPct / (stats.avgRisk || 1), true, targetCurrency, exchangeRates)}
-            icon={<div className={`${COLORS.bgProfit} ${COLORS.textProfit} p-1 rounded-lg`}><ArrowUp size={14} /></div>}
-            info="Průměrný dolarový zisk na jeden vítězný obchod."
-          />
-        );
-      }
-      case 'kpi_avg_loss': {
-        return (
-          <ProKpiCard
-            theme={theme}
-            label="Average Loss"
-            value={formatPnL(-stats.avgLoss, pnlDisplayMode, stats.initialBalance, -stats.avgLossPct / (stats.avgRisk || 1), true, targetCurrency, exchangeRates)}
-            icon={<div className={`${COLORS.bgLoss} ${COLORS.textLoss} p-1 rounded-lg`}><ArrowDown size={14} /></div>}
-            info="Průměrná dolarová ztráta na jeden trade."
           />
         );
       }
@@ -1483,32 +1393,11 @@ const Dashboard: React.FC<DashboardProps> = ({
           onTradeClick={(id) => setSelectedTradeId(id)}
         />
       );
-      case 'calendar': return <div className="h-full flex flex-col overflow-hidden"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} /></div>;
+      case 'calendar': return <div className="h-full flex flex-col"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} /></div>;
       default: return null;
     }
   };
 
-  // Generic Sortable change handler
-  const handleSortableChange = (items: DashboardWidgetConfig[]) => {
-    // items is the visually reordered currentLayout. We need to save this order map back to the main layout state
-    const orderMap = new Map<string, number>();
-    items.forEach((item, index) => {
-      orderMap.set(item.id, index);
-    });
-
-    // Update main layout with new orders while keeping everything else (like rowSpans or invisible widgets) intact
-    const updatedLayout = layout.map(widget => {
-      if (orderMap.has(widget.id)) {
-        return { ...widget, order: orderMap.get(widget.id)! };
-      }
-      // Widgets not in currentLayout (e.g. invisible) keep their original or pushed back order
-      return { ...widget, order: widget.order !== undefined ? widget.order + items.length : 99 };
-    });
-
-    onUpdateLayout(updatedLayout);
-    setActiveId(null); // Also clear active dragging state specifically here since we removed onDragEnd
-    setIsDraggingWidget(false);
-  };
 
   return (
     <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${isEditing ? 'canvas-grid' : ''}`}>
@@ -1517,7 +1406,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         <div className="fixed inset-0 z-0 bg-slate-900/10 dark:bg-black/40 pointer-events-none transition-opacity duration-500" />
       )}
 
-      <div className={`space-y-6 lg:space-y-10 pb-40 relative z-10 w-full overflow-x-hidden transition-all duration-500 ${isEditing ? 'scale-[0.98] transform origin-top' : ''}`}>
+      <div className={`space-y-6 lg:space-y-10 pb-40 relative z-10 w-full transition-all duration-500 ${isEditing ? 'scale-[0.98] transform origin-top' : ''}`}>
         <div className="flex justify-between items-center px-4 pt-4">
           <div>
             <div className="flex items-center gap-4">
@@ -1533,100 +1422,51 @@ const Dashboard: React.FC<DashboardProps> = ({
           )}
         </div>
 
-        <Sortable.Root
-          value={currentLayout}
-          onValueChange={handleSortableChange}
-          getItemValue={(item) => item.id}
-          orientation="mixed"
-          strategy={rectSortingStrategy}
-          collisionDetection={closestCenter}
-          onDragStart={(e: any) => {
-            setActiveId(e.active.id);
-            setIsDraggingWidget(true);
-          }}
-          onDragCancel={() => {
-            setActiveId(null);
-            setIsDraggingWidget(false);
-          }}
-        >
-          <Sortable.Content className={`grid grid-cols-6 gap-3 lg:gap-6 auto-rows-[minmax(180px,auto)] ${!isDraggingWidget ? 'grid-flow-dense' : ''} w-full overflow-x-hidden p-2 rounded-[32px] md:px-6`}>
-            {isMobile && !isEditing && (
-              <div className="col-span-6 mb-1">
-                <MobileKpiCarousel
-                  theme={theme}
-                  widgets={currentLayout.filter(w => w.size === 'small' && w.visible !== false)}
-                  renderWidget={renderWidget}
-                />
-              </div>
-            )}
-            {currentLayout
-              .filter(widget => !(isMobile && !isEditing && widget.size === 'small'))
-              .map((widget) => {
-                const gridClass = widget.size === 'small' ? 'col-span-3 lg:col-span-1' : (widget.size === 'medium' ? 'col-span-3 lg:col-span-2' : (widget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6'));
-                const rowSpanClass = widget.rowSpan ? (widget.rowSpan === 2 ? 'row-span-2' : widget.rowSpan === 3 ? 'row-span-3' : widget.rowSpan === 4 ? 'row-span-4' : '') : '';
-
-                return (
-                  <SortableWidget
-                    key={widget.id}
-                    id={widget.id}
-                    isEditing={isEditing}
-                    label={widget.label}
-                    gridClass={gridClass}
-                    rowSpanClass={rowSpanClass}
-                    size={widget.size}
-                    rowSpan={widget.rowSpan || 1}
-                    onResizeStart={handleResizeStart}
-                  >
+        <div ref={containerRef} className={`w-full p-2 md:px-6 rounded-[32px] ${isEditing ? 'pt-6' : ''}`}>
+          {isMobile && !isEditing && (
+            <div className="mb-1">
+              <MobileKpiCarousel
+                theme={theme}
+                widgets={currentLayout.filter(w => w.w <= 4 && w.visible !== false)}
+                renderWidget={renderWidget}
+              />
+            </div>
+          )}
+          {widthMounted && (
+            <ResponsiveGridLayout
+              className={`layout ${isEditing ? 'editing' : ''}`}
+              width={containerWidth}
+              layouts={rglLayouts}
+              breakpoints={GRID_BREAKPOINTS}
+              cols={GRID_COLS}
+              rowHeight={GRID_ROW_HEIGHT}
+              margin={[16, 16] as [number, number]}
+              dragConfig={{ enabled: isEditing }}
+              resizeConfig={{ enabled: isEditing, handles: ['se'] }}
+              onLayoutChange={handleRglLayoutChange}
+              autoSize
+            >
+              {currentLayout
+                .filter(widget => !(isMobile && !isEditing && widget.w <= 4))
+                .map(widget => (
+                  <div key={widget.id} className="h-full">
                     {isEditing && (
-                      <div className="absolute top-4 right-4 flex items-center gap-2 pointer-events-auto z-40">
-                        {widget.id === 'equity' && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); toggleDisciplinedCurve(widget.id); }}
-                            className={`w-8 h-8 flex items-center justify-center border rounded-xl shadow-md transition-all ${widget.showDisciplinedCurve ? 'bg-amber-600 text-white border-amber-500' : 'bg-white/80 dark:bg-slate-900/80 backdrop-blur-md text-slate-500 border-slate-200 dark:border-slate-700 hover:text-amber-500'}`}
-                            title="Zlatá křivka"
-                          >
-                            <ShieldCheck size={14} />
-                          </button>
-                        )}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); updateWidgetStatus(widget.id, false); }}
-                          className="w-8 h-8 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 hover:bg-rose-50 dark:hover:bg-rose-900/30 text-slate-400 hover:text-rose-500 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-500/30 rounded-xl shadow-md transition-all backdrop-blur-md"
-                          title="Odstranit"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
+                      <WidgetEditOverlay
+                        id={widget.id}
+                        label={widget.label}
+                        showDisciplinedCurve={widget.showDisciplinedCurve}
+                        onRemove={() => updateWidgetStatus(widget.id, false)}
+                        onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
+                      />
                     )}
-                    {renderWidget(widget.id, widget)}
-                  </SortableWidget>
-                );
-              })}
-          </Sortable.Content>
-          <Sortable.Overlay>
-            {(params: any) => {
-              const activeId = params?.value || null;
-              if (!activeId) return null;
-              const activeWidget = layout.find(w => w.id === activeId);
-              if (!activeWidget) return null;
-
-              const gridClass = activeWidget.size === 'small' ? 'col-span-3 lg:col-span-1' : (activeWidget.size === 'medium' ? 'col-span-3 lg:col-span-2' : (activeWidget.size === 'large' ? 'col-span-6 lg:col-span-3' : 'col-span-6'));
-              const rowSpanClass = activeWidget.rowSpan ? (activeWidget.rowSpan === 2 ? 'row-span-2' : activeWidget.rowSpan === 3 ? 'row-span-3' : activeWidget.rowSpan === 4 ? 'row-span-4' : '') : '';
-
-              return (
-                <div className={`${gridClass} ${rowSpanClass}`}>
-                  <div className="w-full h-full opacity-90 cursor-grabbing shadow-[0_40px_80px_-20px_rgba(59,130,246,0.3)] scale-105 -rotate-2 ring-2 ring-blue-500 rounded-[32px] overflow-hidden backdrop-blur-3xl bg-[var(--bg-card)]">
-                    <div className="absolute inset-0 z-20 pointer-events-none rounded-[32px]">
-                      <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest flex items-center gap-2 shadow-xl">
-                        <GripVertical size={12} className="text-white/70" /> {activeWidget.label}
-                      </div>
+                    <div className={isEditing ? 'h-full opacity-60 pointer-events-none select-none' : 'h-full'}>
+                      {renderWidget(widget.id, widget)}
                     </div>
-                    {renderWidget(activeId, activeWidget)}
                   </div>
-                </div>
-              );
-            }}
-          </Sortable.Overlay>
-        </Sortable.Root>
+                ))}
+            </ResponsiveGridLayout>
+          )}
+        </div>
       </div>
 
       {/* FLOATING PRO DOCK (Replaces Sidebar) */}

@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useLayoutEffect } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ReferenceLine, LabelList, Line
@@ -36,8 +36,27 @@ interface CustomTooltipProps {
   theme: 'dark' | 'light' | 'oled';
 }
 
+/** Clamp a Recharts tooltip to the viewport using useLayoutEffect */
+function useTooltipClamp(ref: React.RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Reset to measure natural position from Recharts wrapper
+    el.style.transform = 'translateX(-50%)';
+    const rect = el.getBoundingClientRect();
+    const pad = 8;
+    if (rect.left < pad) {
+      el.style.transform = `translateX(${-rect.width / 2 + (pad - rect.left)}px)`;
+    } else if (rect.right > window.innerWidth - pad) {
+      el.style.transform = `translateX(${-rect.width / 2 - (rect.right - window.innerWidth + pad)}px)`;
+    }
+  });
+}
+
 const CustomEquityTooltip = (props: any) => {
   const { active, payload, label, theme, coordinate, viewBox } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  useTooltipClamp(ref);
   if (!active || !payload || !payload.length) return null;
 
   const data = payload[0].payload;
@@ -48,13 +67,8 @@ const CustomEquityTooltip = (props: any) => {
 
   const validVal = payload.find((p: any) => p.dataKey === 'validEquity')?.value;
 
-  // Edge detection
-  const isRightSide = (coordinate?.x || 0) > (viewBox?.width || 0) * 0.7;
-  const isLeftSide = (coordinate?.x || 0) < (viewBox?.width || 0) * 0.15;
-
   return (
-    <div className={`border p-4 rounded-2xl shadow-2xl z-[1000] backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 pointer-events-none transition-transform 
-      ${isRightSide ? '-translate-x-[105%]' : isLeftSide ? 'translate-x-[5%]' : '-translate-x-1/2'} 
+    <div ref={ref} className={`border p-4 rounded-2xl shadow-2xl z-[1000] backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 pointer-events-none
       ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
         theme === 'dark' ? 'bg-[#0f172a]/95 border-slate-700 text-white' :
           'bg-white/95 border-slate-200 text-slate-900'
@@ -112,7 +126,9 @@ const CustomEquityTooltip = (props: any) => {
 
 
 const CustomBarTooltip = (props: any) => {
-  const { active, payload, label, theme, coordinate, viewBox } = props;
+  const { active, payload, label, theme } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  useTooltipClamp(ref);
   if (!active || !payload || !payload.length) return null;
 
   const data = payload[0].payload;
@@ -124,12 +140,8 @@ const CustomBarTooltip = (props: any) => {
   const winRate = data.winRate || 0;
   const count = data.trades || 0;
 
-  const isRightSide = (coordinate?.x || 0) > (viewBox?.width || 0) * 0.7;
-  const isLeftSide = (coordinate?.x || 0) < (viewBox?.width || 0) * 0.15;
-
   return (
-    <div className={`border p-4 rounded-lg shadow-xl z-[1000] min-w-[200px] transition-transform 
-      ${isRightSide ? '-translate-x-[105%]' : isLeftSide ? 'translate-x-[5%]' : '-translate-x-1/2'} 
+    <div ref={ref} className={`border p-4 rounded-lg shadow-xl z-[1000] min-w-[200px]
       ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
         theme === 'dark' ? 'bg-[#0f172a] border-slate-700 text-white' :
           'bg-white border-slate-200 text-slate-900'
@@ -239,11 +251,11 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
   const off = getGradientOffset();
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 h-full">
 
       {/* 1. EQUITY CURVE */}
       {!onlyDistribution && (
-        <div className="p-6 rounded-[32px] transition-all overflow-visible glass-panel">
+        <div className="p-6 rounded-[32px] transition-all overflow-hidden h-full flex flex-col glass-panel">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
             <div>
               <h3 className={`text-xs font-black uppercase tracking-widest flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
@@ -273,7 +285,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
             </div>
           </div>
 
-          <div className="h-[350px] w-full min-w-[1px] min-h-[1px]" style={{ outline: 'none' }}>
+          <div className="flex-1 min-h-0 w-full min-w-[1px]" style={{ outline: 'none' }}>
             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <AreaChart
                 data={equityData}

@@ -209,6 +209,17 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     setReviewForm(action);
   };
 
+  const handleUpdateBreakdown = useCallback((sessionId: string, sessionLabel: string, notes: string, screenshot?: string) => {
+    editReviewForm((prev: DailyReview) => {
+      const existing = prev.sessionBreakdowns || [];
+      const idx = existing.findIndex(b => b.sessionId === sessionId);
+      const updated = idx >= 0
+        ? existing.map((b, i) => i === idx ? { ...b, notes, screenshot } : b)
+        : [...existing, { sessionId, sessionLabel, notes, screenshot }];
+      return { ...prev, sessionBreakdowns: updated };
+    });
+  }, []);
+
   useEffect(() => { lastPrepForm.current = prepForm; }, [prepForm]);
   useEffect(() => { lastReviewForm.current = reviewForm; }, [reviewForm]);
 
@@ -217,27 +228,34 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     return () => {
       const p = lastPrepForm.current;
       const r = lastReviewForm.current;
-      const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length;
-      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes;
+      const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
+      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim());
 
       if (!isPrepEmpty) onSavePrep(p);
       if (!isReviewEmpty) onSaveReview(r);
     };
   }, []);
 
-  // Flush pending journal data when browser tab is closed/refreshed
+  // Flush pending journal data when browser tab is closed/refreshed or hidden
   useEffect(() => {
     const flushOnClose = () => {
       const p = lastPrepForm.current;
       const r = lastReviewForm.current;
-      const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length;
-      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes;
+      const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
+      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim());
 
       if (!isPrepEmpty) onSavePrep(p);
       if (!isReviewEmpty) onSaveReview(r);
     };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushOnClose();
+    };
     window.addEventListener('beforeunload', flushOnClose);
-    return () => window.removeEventListener('beforeunload', flushOnClose);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', flushOnClose);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [onSavePrep, onSaveReview]);
 
   // Current Week Focus Helper - Harmonized with Settings.tsx
@@ -281,7 +299,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     if (!saved || normalizePrep(prepForm) !== normalizePrep(saved)) {
       // Don't auto-save a brand new prep if it's still empty
       if (!saved) {
-        const isEmpty = !prepForm.scenarios.bullish && !prepForm.scenarios.bearish && !prepForm.mindsetState && !prepForm.scenarios.scenarioImages?.length;
+        const isEmpty = !prepForm.scenarios.bullish && !prepForm.scenarios.bearish && !prepForm.mindsetState && !prepForm.scenarios.scenarioImages?.length && !prepForm.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !prepForm.ritualCompletions?.some(r => r.status === 'Pass');
         if (isEmpty) return;
       }
 
@@ -319,7 +337,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     if (!saved || JSON.stringify(reviewForm) !== JSON.stringify(saved)) {
       // Don't auto-save a brand new review if it's still empty
       if (!saved) {
-        const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes;
+        const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes && !reviewForm.psycho?.stressors?.trim() && !reviewForm.psycho?.gratitude?.trim() && !reviewForm.ruleAdherence?.some(a => a.status !== 'Pending') && !reviewForm.sessionBreakdowns?.some(b => b.notes?.trim());
         if (isEmpty) return;
       }
 
@@ -762,7 +780,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     // 1. Force save the PREVIOUS date's form if it changed and not empty
     if (lastPrepForm.current.date && lastPrepForm.current.date !== selectedDate) {
       const p = lastPrepForm.current;
-      const isEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length;
+      const isEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
       if (!isEmpty) onSavePrep(p);
     }
 
@@ -777,23 +795,32 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           { id: 'session1', label: 'Session 1', plan: '', image: '' }
         ];
 
-      const mergedSessions = (currentPrep.scenarios.sessions || configSessions).map(stored => {
-        const configMatch = sessions.find(s => s.id === stored.id);
-        return configMatch ? { ...stored, label: configMatch.name, color: configMatch.color } : stored;
-      });
+      const storedSessions = currentPrep.scenarios.sessions || configSessions;
+      // Keep only sessions that still exist in config, sync labels/colors
+      const mergedSessions = storedSessions
+        .filter(stored => sessions.some(s => s.id === stored.id))
+        .map(stored => {
+          const configMatch = sessions.find(s => s.id === stored.id)!;
+          return { ...stored, label: configMatch.name, color: configMatch.color };
+        });
+      // Add new sessions from config that aren't in stored prep yet
+      const newFromConfig = sessions
+        .filter(s => !mergedSessions.some(m => m.id === s.id))
+        .map(s => ({ id: s.id, label: s.name, plan: '', image: '', color: s.color }));
 
+      const allSessions = [...mergedSessions, ...newFromConfig];
       setPrepForm({
         ...currentPrep,
         bias: currentPrep.bias || 'Neutral',
         scenarios: {
           ...currentPrep.scenarios,
-          sessions: mergedSessions
+          sessions: allSessions
         }
       });
 
-      // Set initial tab if not set
-      if (!activeSessionTab && mergedSessions.length) {
-        setActiveSessionTab(mergedSessions[0].id);
+      // Set initial tab or reset if current tab was deleted
+      if (allSessions.length && (!activeSessionTab || !allSessions.some(s => s.id === activeSessionTab))) {
+        setActiveSessionTab(allSessions[0].id);
       }
     } else {
       // Intelligently initialize sessions based on preferences
@@ -829,22 +856,29 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     }
   }, [currentPrep, selectedDate, standardGoals, sessions]);
 
+  const prevSelectedDateRef = useRef(selectedDate);
   useEffect(() => {
-    // 1. Force save the PREVIOUS date's review if it changed and not empty
-    if (lastReviewForm.current.date && lastReviewForm.current.date !== selectedDate) {
+    const dateActuallyChanged = prevSelectedDateRef.current !== selectedDate;
+    prevSelectedDateRef.current = selectedDate;
+
+    // 1. Force save the PREVIOUS date's review if date changed and not empty
+    if (dateActuallyChanged && lastReviewForm.current.date && lastReviewForm.current.date !== selectedDate) {
       const r = lastReviewForm.current;
-      const isEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes;
+      const isEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim());
       if (!isEmpty) onSaveReview(r);
     }
 
-    // 2. Load the new date's review
-    skipAutoSaveReview.current = true;
-    reviewFormDirty.current = false;
+    // 2. Load the new date's review — only reset dirty flags when actually loading new data
     if (currentReview) {
       if (reviewForm.date !== selectedDate || (currentReview.id && reviewForm.id !== currentReview.id)) {
+        skipAutoSaveReview.current = true;
+        reviewFormDirty.current = false;
         setReviewForm(currentReview);
       }
-    } else {
+      // else: same date & ID, just a reference change from save round-trip → do NOT reset dirty flags
+    } else if (dateActuallyChanged) {
+      skipAutoSaveReview.current = true;
+      reviewFormDirty.current = false;
       const initialPrep = currentPrep || (lastPrepForm.current.date === selectedDate ? lastPrepForm.current : undefined);
       const initialResults: GoalResult[] = initialPrep?.goals?.filter(g => g && g.trim() !== '').map(g => ({ text: g, achieved: true })) || [];
       setReviewForm({
@@ -971,6 +1005,21 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               onEditReview={() => setView('edit-review')}
               onDeletePrep={onDeletePrep}
               onDeleteReview={onDeleteReview}
+              sessions={sessions}
+              sessionBreakdowns={reviewForm.sessionBreakdowns}
+              onUpdateBreakdown={handleUpdateBreakdown}
+              prepForm={prepForm}
+              reviewForm={reviewForm}
+              editPrepForm={editPrepForm as any}
+              editReviewForm={editReviewForm as any}
+              onSavePrep={onSavePrep}
+              onSaveReview={onSaveReview}
+              rituals={rituals}
+              tradeRules={tradeRules}
+              psychoMetrics={psychoMetrics}
+              currentWeekFocus={currentWeekFocus}
+              isSaving={isSaving}
+              lastSaved={lastSaved}
             />
           </div>
 
@@ -1053,6 +1102,21 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               onEditReview={() => setView('edit-review')}
               onDeletePrep={onDeletePrep}
               onDeleteReview={onDeleteReview}
+              sessions={sessions}
+              sessionBreakdowns={reviewForm.sessionBreakdowns}
+              onUpdateBreakdown={handleUpdateBreakdown}
+              prepForm={prepForm}
+              reviewForm={reviewForm}
+              editPrepForm={editPrepForm as any}
+              editReviewForm={editReviewForm as any}
+              onSavePrep={onSavePrep}
+              onSaveReview={onSaveReview}
+              rituals={rituals}
+              tradeRules={tradeRules}
+              psychoMetrics={psychoMetrics}
+              currentWeekFocus={currentWeekFocus}
+              isSaving={isSaving}
+              lastSaved={lastSaved}
             />
           )}
         </>
@@ -1281,8 +1345,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         </div>
       )}
 
-      {/* EDIT FORMS */}
-      {(view === 'edit-prep' || view === 'edit-review') && (
+      {/* EDIT FORMS — now rendered inline in TacticalTimeline */}
+      {false && (
         <div className="max-w-7xl mx-auto animate-in slide-in-from-right-4 duration-500">
           {view === 'edit-prep' && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">

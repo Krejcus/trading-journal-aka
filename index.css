@@ -1,3 +1,5 @@
+@import "react-grid-layout/css/styles.css";
+@import "react-resizable/css/styles.css";
 @import "tailwindcss";
 
 @theme {
@@ -831,4 +833,40 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 
 .light-theme .canvas-grid {
     background-image: radial-gradient(rgba(0, 0, 0, 0.1) 1px, transparent 1px);
+}
+
+/* ===== REACT-GRID-LAYOUT OVERRIDES ===== */
+.react-grid-item {
+  overflow: visible !important;
+}
+
+.react-grid-item.react-grid-placeholder {
+  background: #6366f1 !important;
+  opacity: 0.15 !important;
+  border-radius: 24px;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  border-right-color: rgba(255, 255, 255, 0.4) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.4) !important;
+}
+
+.light-theme .react-grid-item > .react-resizable-handle::after {
+  border-right-color: rgba(0, 0, 0, 0.3) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.3) !important;
+}
+
+.react-grid-layout:not(.editing) .react-resizable-handle {
+  display: none !important;
+}
+
+.react-grid-item.react-draggable-dragging {
+  z-index: 100;
+  opacity: 0.85;
+  box-shadow: 0 20px 60px -15px rgba(99, 102, 241, 0.3);
+  border-radius: 24px;
+}
+
+.react-grid-layout.editing .react-grid-item {
+  transition: none !important;
 }

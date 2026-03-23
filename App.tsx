@@ -79,13 +79,66 @@ const DEFAULT_ACCOUNT: Account = {
   instrumentFees: { 'NQ': 2.8, 'MNQ': 0.74 }
 };
 
+// Widget min/max constraints for react-grid-layout
+const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: number; maxH: number }> = {
+  avg_win_loss: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  streak: { minW: 4, minH: 2, maxW: 6, maxH: 4 },
+  discipline_streak: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  challenge_target: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  kpi_pnl: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  kpi_winrate: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  kpi_execution_rate: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  kpi_profit_factor: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  kpi_day_winrate: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  kpi_max_drawdown: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  kpi_avg_win: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  kpi_avg_loss: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  discipline: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  winners_losers: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  monthly_performance: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  equity: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  session_performance: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  hourly_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  daily_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  calendar: { minW: 6, minH: 5, maxW: 12, maxH: 10 },
+};
+
+const SIZE_TO_W: Record<string, number> = { small: 2, medium: 4, large: 6, full: 12 };
+
+function migrateOldLayout(oldLayout: DashboardWidgetConfig[]): DashboardWidgetConfig[] {
+  const sorted = [...oldLayout].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const COLS = 12;
+  let cursorX = 0;
+  let cursorY = 0;
+  let rowMaxH = 0;
+
+  return sorted.map(widget => {
+    const w = SIZE_TO_W[widget.size || 'medium'] || 4;
+    const h = (widget.rowSpan || 1) * 2; // multiply by 2 for rowHeight=80
+    const constraints = WIDGET_CONSTRAINTS[widget.id] || { minW: 2, minH: 2, maxW: 12, maxH: 8 };
+
+    if (cursorX + w > COLS) {
+      cursorX = 0;
+      cursorY += rowMaxH;
+      rowMaxH = 0;
+    }
+
+    const x = cursorX;
+    const y = cursorY;
+    cursorX += w;
+    rowMaxH = Math.max(rowMaxH, h);
+
+    return { ...widget, x, y, w, h, ...constraints };
+  });
+}
+
 const DEFAULT_WIDGETS: DashboardWidgetConfig[] = [
-  { id: 'kpi_pnl', label: 'Net P&L', visible: true, size: 'small', order: 0 },
-  { id: 'kpi_winrate', label: 'Win Rate', visible: true, size: 'small', order: 1 },
-  { id: 'kpi_profit_factor', label: 'Profit Factor', visible: true, size: 'small', order: 2 },
-  { id: 'discipline', label: 'Disciplína', visible: true, size: 'full', order: 3 },
-  { id: 'equity', label: 'Equity Curve', visible: true, size: 'large', order: 4 },
-  { id: 'calendar', label: 'Kalendář', visible: true, size: 'large', order: 5 },
+  { id: 'kpi_pnl', label: 'Net P&L', visible: true, x: 0, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  { id: 'kpi_winrate', label: 'Win Rate', visible: true, x: 2, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  { id: 'kpi_profit_factor', label: 'Profit Factor', visible: true, x: 4, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  { id: 'discipline', label: 'Disciplína', visible: true, x: 0, y: 2, w: 12, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  { id: 'equity', label: 'Equity Curve', visible: true, x: 0, y: 6, w: 6, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  { id: 'calendar', label: 'Kalendář', visible: true, x: 6, y: 6, w: 6, h: 6, minW: 6, minH: 5, maxW: 12, maxH: 10 },
 ];
 
 const DEFAULT_SESSIONS: SessionConfig[] = [
@@ -267,7 +320,7 @@ const App: React.FC = () => {
     } else if (shareId) {
       storageService.getTradeById(shareId).then(trade => {
         if (trade) setSharedTrade(trade);
-      });
+      }).catch(err => console.warn('[Share] Failed to load shared trade:', err));
     }
   }, []);
 
@@ -627,14 +680,28 @@ const App: React.FC = () => {
   const [exchangeRates, setExchangeRates] = useState<ExchangeRates | null>(null);
   const lastLoadedSessionId = React.useRef<string | null>(null);
 
+  // Track in-flight single-record saves to avoid duplicate requests
+  const savingPrepDate = useRef<string | null>(null);
+  const savingReviewDate = useRef<string | null>(null);
+
   const handleSavePrep = useCallback((prep: DailyPrep) => {
     isJournalDirty.current = true;
     setDailyPreps(prev => [...prev.filter(p => p.date !== prep.date), prep]);
+    // Immediately persist this single prep to Supabase (fire-and-forget)
+    if (savingPrepDate.current !== prep.date) {
+      savingPrepDate.current = prep.date;
+      storageService.saveSinglePrep(prep).catch(e => console.warn('[Save] Prep failed:', e)).finally(() => { savingPrepDate.current = null; });
+    }
   }, []);
 
   const handleSaveReview = useCallback((rev: DailyReview) => {
     isJournalDirty.current = true;
     setDailyReviews(prev => [...prev.filter(r => r.date !== rev.date), rev]);
+    // Immediately persist this single review to Supabase (fire-and-forget)
+    if (savingReviewDate.current !== rev.date) {
+      savingReviewDate.current = rev.date;
+      storageService.saveSingleReview(rev).catch(e => console.warn('[Save] Review failed:', e)).finally(() => { savingReviewDate.current = null; });
+    }
   }, []);
 
   const applyPreferences = useCallback((prefs: UserPreferences) => {
@@ -646,7 +713,24 @@ const App: React.FC = () => {
     if (prefs.emotions) setUserEmotions(prefs.emotions);
     if (prefs.standardMistakes) setUserMistakes(prefs.standardMistakes);
     if (prefs.standardGoals) setStandardGoals(prefs.standardGoals);
-    if (prefs.dashboardLayout) setDashboardLayout(prefs.dashboardLayout);
+    if (prefs.dashboardLayout) {
+      const dl = prefs.dashboardLayout;
+      const isOld = dl.length > 0 && (dl[0] as any).x === undefined && (dl[0] as any).size !== undefined;
+      if (isOld) {
+        setDashboardLayout(migrateOldLayout(dl));
+      } else {
+        // Detect layouts saved with old rowHeight=160 (all h values ≤ 4) and double them
+        const needsHeightMigration = dl.length > 0 && dl.every(w => (w.h || 0) <= 4);
+        if (needsHeightMigration) {
+          setDashboardLayout(dl.map(w => {
+            const c = WIDGET_CONSTRAINTS[w.id] || { minW: 2, minH: 2, maxW: 12, maxH: 8 };
+            return { ...w, h: (w.h || 2) * 2, ...c };
+          }));
+        } else {
+          setDashboardLayout(dl);
+        }
+      }
+    }
     if (prefs.sessions) {
       const migratedSessions = (prefs.sessions as any[]).map(s => ({
         ...s,
@@ -691,7 +775,7 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    currencyService.getRates().then(setExchangeRates);
+    currencyService.getRates().then(setExchangeRates).catch(err => console.warn('[Currency] Failed to fetch rates:', err));
   }, []);
 
   useEffect(() => {
@@ -2247,21 +2331,6 @@ const App: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-3">
-              {activePage === 'dashboard' && (
-                <button
-                  onClick={() => setIsDashboardEditing(!isDashboardEditing)}
-                  className={`p-2 rounded-xl border transition-all ${
-                    isDashboardEditing
-                      ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-500/20'
-                      : (theme !== 'light'
-                        ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white'
-                        : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-600 shadow-sm')
-                  }`}
-                  title={isDashboardEditing ? 'Uložit rozložení' : 'Upravit Dashboard'}
-                >
-                  {isDashboardEditing ? <Check size={20} /> : <LayoutGrid size={20} />}
-                </button>
-              )}
               <FilterDropdown
                 filters={filters}
                 setFilters={setFilters}
