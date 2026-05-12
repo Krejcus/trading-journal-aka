@@ -70,7 +70,7 @@ const CustomEquityTooltip = (props: any) => {
   return (
     <div ref={ref} className={`border p-4 rounded-2xl shadow-2xl z-[1000] backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 pointer-events-none
       ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
-        theme === 'dark' ? 'bg-[#0f172a]/95 border-slate-700 text-white' :
+        theme === 'dark' ? 'bg-theme-page-95 border-slate-700 text-white' :
           'bg-white/95 border-slate-200 text-slate-900'
       }`}>
       <p className={`text-[10px] font-black uppercase tracking-widest mb-2 opacity-50`}>{label}</p>
@@ -143,7 +143,7 @@ const CustomBarTooltip = (props: any) => {
   return (
     <div ref={ref} className={`border p-4 rounded-lg shadow-xl z-[1000] min-w-[200px]
       ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
-        theme === 'dark' ? 'bg-[#0f172a] border-slate-700 text-white' :
+        theme === 'dark' ? 'bg-theme-card border-slate-700 text-white' :
           'bg-white border-slate-200 text-slate-900'
       }`}>
       <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-700/50">
@@ -383,7 +383,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
       {!onlyEquity && (
         <div className="space-y-8">
           <div className={`p-6 rounded-[32px] border ${theme === 'oled' ? 'bg-black border-white/10' :
-            theme === 'dark' ? 'bg-[#0a0f1d]/90 border-white/5 backdrop-blur-xl' :
+            theme === 'dark' ? 'bg-theme-card-90 border-white/5 backdrop-blur-xl' :
               'bg-white border-slate-200 shadow-sm'
             }`}>
             <div className="flex justify-between items-center mb-6">
@@ -412,7 +412,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
           </div>
 
           <div className={`p-6 rounded-[32px] border ${theme === 'oled' ? 'bg-black border-white/10' :
-            theme === 'dark' ? 'bg-[#0a0f1d]/90 border-white/5 backdrop-blur-xl' :
+            theme === 'dark' ? 'bg-theme-card-90 border-white/5 backdrop-blur-xl' :
               'bg-white border-slate-200 shadow-sm'
             }`}>
             <div className="flex justify-between items-center mb-6">

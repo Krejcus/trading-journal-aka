@@ -33,7 +33,7 @@ const PerformanceCalendar: React.FC<PerformanceCalendarProps> = ({ calendarData,
         const monthName = dateObj.toLocaleString('cs-CZ', { month: 'long', year: 'numeric' });
 
         return (
-          <div key={key} className={`rounded-[32px] p-6 border transition-colors ${theme !== 'light' ? 'bg-[#0a0f1d]/90 border-white/5 backdrop-blur-xl' : 'bg-white border-slate-200 shadow-sm'
+          <div key={key} className={`rounded-[32px] p-6 border transition-colors ${theme !== 'light' ? 'bg-theme-card-90 border-white/5 backdrop-blur-xl' : 'bg-white border-slate-200 shadow-sm'
             }`}>
             <div className="flex justify-between items-center mb-4">
               <h4 className={`text-xl font-black capitalize tracking-tighter ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{monthName}</h4>

@@ -396,7 +396,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
                         className="pl-10 bg-black/20"
                         required
                       />
-                      <User className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within/input:text-blue-400 transition-colors" size={16} />
+                      <User className="absolute left-3 inset-y-0 my-auto h-4 w-4 text-white/30 group-focus-within/input:text-blue-400 transition-colors" />
                     </div>
                   </div>
                 )}
@@ -418,7 +418,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
                         className="pl-10 bg-black/20"
                         required
                       />
-                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within/input:text-blue-400 transition-colors" size={16} />
+                      <Mail className="absolute left-3 inset-y-0 my-auto h-4 w-4 text-white/30 group-focus-within/input:text-blue-400 transition-colors" />
                     </div>
                   </div>
                 )}
@@ -439,11 +439,11 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
                         className="pl-10 pr-10 bg-black/20"
                         required
                       />
-                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within/input:text-blue-400 transition-colors" size={16} />
+                      <Lock className="absolute left-3 inset-y-0 my-auto h-4 w-4 text-white/30 group-focus-within/input:text-blue-400 transition-colors" />
                       <button
                         type="button"
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowPassword(!showPassword); }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer hover:text-white transition-colors text-white/50 z-20 p-2"
+                        className="absolute right-3 inset-y-0 my-auto h-4 cursor-pointer hover:text-white transition-colors text-white/50 z-20 flex items-center"
                       >
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
@@ -476,7 +476,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
                       <div className="w-full border-t border-white/10"></div>
                     </div>
                     <div className="relative flex justify-center text-[10px] uppercase tracking-widest">
-                      <span className="bg-[#05050a] px-2 text-white/30 backdrop-blur-xl">Nebo</span>
+                      <span className="bg-[#05050a] px-2 text-white/30 backdrop-blur-xl">+</span>
                     </div>
                   </div>
 

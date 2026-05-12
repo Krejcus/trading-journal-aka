@@ -84,6 +84,17 @@ body {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
+/* Theme-aware background helpers (respects dark / oled / light themes) */
+.bg-theme-page    { background-color: var(--bg-page); }
+.bg-theme-card    { background-color: var(--bg-card); }
+.bg-theme-card-90 { background-color: color-mix(in srgb, var(--bg-card) 90%, transparent); }
+.bg-theme-card-80 { background-color: color-mix(in srgb, var(--bg-card) 80%, transparent); }
+.bg-theme-card-60 { background-color: color-mix(in srgb, var(--bg-card) 60%, transparent); }
+.bg-theme-card-50 { background-color: color-mix(in srgb, var(--bg-card) 50%, transparent); }
+.bg-theme-card-40 { background-color: color-mix(in srgb, var(--bg-card) 40%, transparent); }
+.bg-theme-page-95 { background-color: color-mix(in srgb, var(--bg-page) 95%, transparent); }
+.bg-theme-page-90 { background-color: color-mix(in srgb, var(--bg-page) 90%, transparent); }
+
 /* Custom Glass Panels */
 .glass-panel {
   background: var(--glass-bg);

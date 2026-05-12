@@ -36,7 +36,7 @@ const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade, theme }) => {
    );
 
    return (
-      <div className="min-h-screen bg-[#020617] text-slate-200 font-sans flex flex-col items-center justify-center p-4 md:p-8">
+      <div className="min-h-screen bg-theme-page text-slate-200 font-sans flex flex-col items-center justify-center p-4 md:p-8">
 
          {/* Brand Header */}
          <div className="mb-8 text-center animate-in fade-in slide-in-from-top-4 duration-700">
@@ -46,7 +46,7 @@ const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade, theme }) => {
             <h1 className="text-3xl font-black tracking-tighter italic text-white">ALPHATRADE <span className="text-slate-600">SNAPSHOT</span></h1>
          </div>
 
-         <div className="w-full max-w-5xl rounded-[32px] overflow-hidden shadow-2xl flex flex-col border border-white/10 bg-[#0a0f1d] animate-in zoom-in-95 duration-500">
+         <div className="w-full max-w-5xl rounded-[32px] overflow-hidden shadow-2xl flex flex-col border border-white/10 bg-theme-card animate-in zoom-in-95 duration-500">
 
             {/* Header */}
             <div className="h-24 shrink-0 border-b border-white/5 bg-[#0F172A]/50 backdrop-blur-xl flex items-center justify-between px-8">

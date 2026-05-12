@@ -297,10 +297,28 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
 
    return (
       <div className={`rounded-[32px] border shadow-sm overflow-visible transition-all flex flex-col h-full ${theme === 'oled' ? 'bg-black border-white/10 shadow-none' :
-         theme === 'dark' ? 'bg-[#0a0f1d]/90 border-white/5 shadow-2xl backdrop-blur-xl' :
+         theme === 'dark' ? 'bg-theme-card-90 border-white/5 shadow-2xl backdrop-blur-xl' :
             'bg-white border-slate-200'
          }`}>
-         <div className={`px-6 py-6 border-b flex flex-col md:flex-row justify-between md:items-center gap-4 ${theme !== 'light' ? 'border-white/5' : 'border-slate-100 bg-slate-50/80'}`}>
+         {/* Mobile compact header */}
+         <div className={`px-4 pt-4 pb-3 md:hidden border-b ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'}`}>
+            <div className="flex items-center justify-between">
+               <div className="flex items-center gap-2 select-none">
+                  <button onClick={onPrev} disabled={!canPrev} className={`w-8 h-8 flex items-center justify-center rounded-xl transition-all active:scale-90 ${!canPrev ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/8 text-slate-300' : 'bg-slate-100')}`}><ChevronLeft size={16} /></button>
+                  <span className={`text-base font-black capitalize tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{monthName}</span>
+                  <button onClick={onNext} disabled={!canNext} className={`w-8 h-8 flex items-center justify-center rounded-xl transition-all active:scale-90 ${!canNext ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/8 text-slate-300' : 'bg-slate-100')}`}><ChevronRight size={16} /></button>
+               </div>
+               <div className="flex flex-col items-end">
+                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Měsíční PnL</span>
+                  <span className={`text-lg font-mono font-black tracking-tighter leading-tight ${totalMonthPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                     {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
+                  </span>
+               </div>
+            </div>
+         </div>
+
+         {/* Desktop header */}
+         <div className={`hidden md:flex px-6 py-6 border-b flex-row justify-between items-center gap-4 ${theme !== 'light' ? 'border-white/5' : 'border-slate-100 bg-slate-50/80'}`}>
             <div className="flex flex-col gap-4">
                <h3 className={`text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2 ${theme !== 'light' ? 'text-slate-400' : 'text-slate-500'}`}>
                   <LayoutGrid size={14} className="text-blue-500" /> Obchodní Kalendář
@@ -312,25 +330,17 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
                   <button onClick={onNext} disabled={!canNext} className={`p-1.5 rounded-xl transition-all ${!canNext ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5' : 'bg-slate-100 hover:bg-slate-200')}`}><ChevronRight size={18} /></button>
                </div>
             </div>
-            <div className={`flex flex-col items-end gap-1 px-5 py-3 rounded-2xl border ${theme === 'oled' ? 'bg-black border-white/10' :
-               theme === 'dark' ? 'bg-slate-900/50 border-white/5' :
-                  'bg-white border-slate-200'
-               }`}>
+            <div className={`flex flex-col items-end gap-1 px-5 py-3 rounded-2xl border ${theme === 'oled' ? 'bg-black border-white/10' : theme === 'dark' ? 'bg-slate-900/50 border-white/5' : 'bg-white border-slate-200'}`}>
                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-500">Měsíční PnL</span>
                <span className={`text-2xl font-mono font-black tracking-tighter ${totalMonthPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                  {formatVal(
-                     totalMonthPnl,
-                     pnlFormat as PnLDisplayMode,
-                     initialBalance,
-                     pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined
-                  )}
+                  {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                </span>
             </div>
          </div>
 
-         <div className="grid grid-cols-6 gap-3 p-4 pb-0">
+         <div className="grid grid-cols-6 gap-1.5 md:gap-3 px-3 md:px-4 pt-3 md:pt-4 pb-0">
             {DAY_LABELS.map((label, idx) => (
-               <div key={label} className={`py-2 rounded-xl text-center text-[10px] font-black uppercase tracking-widest border transition-colors ${idx === 5
+               <div key={label} className={`py-1.5 md:py-2 rounded-xl text-center text-[9px] md:text-[10px] font-black uppercase tracking-widest border transition-colors ${idx === 5
                   ? 'text-blue-500 bg-blue-500/5 border-blue-500/20'
                   : (theme === 'oled' ? 'text-slate-500 bg-black border-white/10' :
                      theme === 'dark' ? 'text-slate-500 bg-white/5 border-white/5' :
@@ -341,7 +351,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
             ))}
          </div>
 
-         <div className="p-4 flex-1 min-h-0 flex flex-col gap-2">
+         <div className="px-3 md:px-4 pb-3 md:pb-4 pt-2 flex-1 min-h-0 flex flex-col gap-1.5 md:gap-2">
             {gridRows.map((row, rIdx) => (
                <div key={rIdx} className="grid grid-cols-6 gap-2 flex-1 min-h-0">
                   {row.map((cell, cIdx) => (
@@ -352,6 +362,16 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
          </div>
       </div>
    );
+};
+
+const formatPnLCompact = (val: number, mode: PnLDisplayMode): string => {
+   if (mode === 'rr') return `${val >= 0 ? '+' : ''}${val.toFixed(1)}R`;
+   if (mode === 'pct') return `${val >= 0 ? '+' : ''}${val.toFixed(1)}%`;
+   const abs = Math.abs(val);
+   const sign = val >= 0 ? '+' : '-';
+   if (abs >= 10000) return `${sign}$${(abs / 1000).toFixed(0)}k`;
+   if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
+   return `${sign}$${abs.toFixed(0)}`;
 };
 
 const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled'; maxPnL: number; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number; currency: any, rates: any }> = ({ cell, theme, maxPnL, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance, currency, rates }) => {
@@ -368,14 +388,9 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
                'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
             }`}>
             <div className={`absolute top-0 w-full h-1 ${pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-            <span className="text-[8px] font-black uppercase tracking-widest opacity-60 mb-1">T{weekIndex}</span>
-            <span className={`font-bold font-mono text-xs md:text-sm ${pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-               {formatVal(
-                  pnl,
-                  pnlFormat,
-                  initialBalance,
-                  pnlFormat === 'rr' ? calculateTotalRR(week.days.flatMap(d => d.trades)) : undefined
-               )}
+            <span className="text-[8px] font-black uppercase tracking-widest opacity-60 mb-0.5">T{weekIndex}</span>
+            <span className={`font-black font-mono text-[11px] md:text-sm leading-tight ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+               {formatPnLCompact(pnl, pnlFormat)}
             </span>
             <div className="absolute inset-0 bg-blue-500/0 group-hover:bg-blue-500/5 transition-colors duration-200" />
          </div>
@@ -390,29 +405,30 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
       bgStyle = { backgroundColor: `rgba(${color}, ${intensity})` };
       borderClass = day.pnl >= 0 ? 'border-emerald-500/30' : 'border-rose-500/30';
    }
+   const pnlCompact = day.hasTrades ? formatPnLCompact(day.pnl, pnlFormat) : null;
+   const textColor = intensity > 0.6 ? 'text-white' : (day.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400');
    return (
-      <div onClick={() => onDayClick(day)} className={`rounded-2xl p-2 md:p-3 flex flex-col justify-between cursor-pointer border relative overflow-hidden transition-all group hover:ring-2 hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black hover:bg-white/5 shadow-none' :
-         theme === 'dark' ? 'bg-white/5 hover:bg-white/10' :
-            'bg-white shadow-sm hover:shadow-md'
-         }`} style={bgStyle}>
-         <div className="absolute top-2 left-2 flex gap-1">
-            {day.hasPrep && <div className={`w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_5px_rgba(59,130,246,0.8)]`} />}
-            {day.hasReview && <div className={`w-1.5 h-1.5 rounded-full bg-indigo-500 shadow-[0_0_5px_rgba(99,102,241,0.8)]`} />}
+      <div onClick={() => onDayClick(day)} className={`rounded-xl md:rounded-2xl p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black shadow-none' : theme === 'dark' ? 'bg-white/5' : 'bg-white shadow-sm'}`} style={bgStyle}>
+         {/* Day number */}
+         <div className="flex justify-end">
+            <span className={`font-mono text-[9px] md:text-xs font-black leading-none ${!day.hasTrades ? (theme !== 'light' ? 'text-slate-600' : 'text-slate-300') : (intensity > 0.5 ? 'text-white/70' : (theme !== 'light' ? 'text-slate-400' : 'text-slate-500'))}`}>{day.dayNum}</span>
          </div>
-         <div className="flex justify-end items-start"><span className={`font-mono text-xs font-black ${!day.hasTrades && (theme !== 'light' ? 'text-slate-700' : 'text-slate-300')}`}>{day.dayNum}</span></div>
-         <div className="flex-1 flex items-center justify-center">
-            {day.hasTrades ? (
-               <span className={`font-bold text-sm md:text-base tracking-tighter ${intensity > 0.6 ? 'text-white' : (day.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>
-                  {formatVal(
-                     day.pnl,
-                     pnlFormat,
-                     initialBalance,
-                     pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined
-                  )}
+         {/* PNL centered — compact k-format on mobile */}
+         <div className="flex-1 flex items-center justify-center py-0.5">
+            {pnlCompact && (
+               <span className={`font-black text-[11px] md:text-sm tracking-tight leading-none text-center ${textColor}`}>
+                  {pnlCompact}
                </span>
-            ) : null}
+            )}
          </div>
-         <div className="absolute inset-0 bg-white/0 group-hover:bg-white/5 transition-colors duration-200" />
+         {/* Prep / Review dots at bottom */}
+         {(day.hasPrep || day.hasReview) && (
+            <div className="flex gap-0.5 justify-center pb-0.5">
+               {day.hasPrep && <div className="w-1 h-1 rounded-full bg-blue-400 shadow-[0_0_4px_rgba(96,165,250,0.9)]" />}
+               {day.hasReview && <div className="w-1 h-1 rounded-full bg-violet-400 shadow-[0_0_4px_rgba(167,139,250,0.9)]" />}
+            </div>
+         )}
+         <div className="absolute inset-0 bg-white/0 hover:bg-white/5 transition-colors duration-200" />
       </div>
    );
 };
@@ -478,9 +494,9 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
 
    return (
       <>
-         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xl animate-in fade-in duration-300">
-            <div className={`w-full max-w-6xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-[#0a0f1d] border-white/10' : 'bg-white border-slate-200'}`}>
-               <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 ${isDark ? 'border-white/5 bg-[#0a0f1d]' : 'bg-white border-slate-100'}`}>
+         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-theme-page-95 backdrop-blur-xl animate-in fade-in duration-300">
+            <div className={`w-full max-w-6xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200'}`}>
+               <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 ${isDark ? 'border-white/5 bg-theme-card' : 'bg-white border-slate-100'}`}>
                   <div className="flex items-center gap-4">
                      <div className="p-2.5 rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-500/20"><CalendarIcon size={20} /></div>
                      <div>
@@ -543,7 +559,7 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                         {activeTab === 'overview' ? (
                            <div className="space-y-2">
                               {week.days.map((day) => (
-                                 <div key={day.dateStr} className={`p-4 rounded-2xl border flex items-center justify-between transition-all hover:scale-[1.01] ${isDark ? 'bg-[#0a0f1d] border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
+                                 <div key={day.dateStr} className={`p-4 rounded-2xl border flex items-center justify-between transition-all hover:scale-[1.01] ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
                                     <div className="flex items-center gap-4">
                                        <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center border font-black ${day.hasTrades ? (day.pnl >= 0 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500') : (isDark ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-400')}`}>
                                           <span className="text-[10px] uppercase leading-none">{day.dateObj.toLocaleString('cs-CZ', { weekday: 'short' })}</span>
@@ -563,7 +579,7 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                         ) : (
                            <div className="space-y-2">
                               {allWeekTrades.length > 0 ? allWeekTrades.map((trade) => (
-                                 <div key={trade.id} onClick={() => setSelectedTrade(trade)} className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] hover:border-blue-500/30 ${isDark ? 'bg-[#0a0f1d] border-white/5' : 'bg-white border-slate-200'} ${trade.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
+                                 <div key={trade.id} onClick={() => setSelectedTrade(trade)} className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] hover:border-blue-500/30 ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'} ${trade.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
                                     <div className="flex items-center gap-3">
                                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center border ${trade.executionStatus === 'Missed' ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' : (trade.pnl >= 0 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500')}`}>{trade.executionStatus === 'Missed' ? <Clock size={16} /> : (trade.direction === 'Long' ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />)}</div>
                                        <div>
@@ -611,9 +627,9 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
 
    return (
       <>
-         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xl animate-in fade-in duration-300">
-            <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-[#0a0f1d] border-white/10' : 'bg-white border-slate-200'}`}>
-               <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 ${isDark ? 'border-white/5 bg-[#0a0f1d]' : 'bg-white border-slate-100'}`}>
+         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-theme-page-95 backdrop-blur-xl animate-in fade-in duration-300">
+            <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200'}`}>
+               <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 ${isDark ? 'border-white/5 bg-theme-card' : 'bg-white border-slate-100'}`}>
                   <div className="flex items-center gap-4">
                      <div className={`p-2.5 rounded-xl text-white shadow-lg ${hasTrades ? (pnl >= 0 ? 'bg-emerald-500 shadow-emerald-500/20' : 'bg-rose-500 shadow-rose-500/20') : 'bg-slate-700'}`}>
                         <Activity size={20} />
@@ -665,7 +681,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                   </div>
                   <div className={`flex-1 relative flex flex-col ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
                      <div className="flex-1 relative overflow-hidden flex items-center justify-center p-4 group/mainimg">{screenshots.length > 0 ? (<><img src={zoomImg || screenshots[0]} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl cursor-pointer" onClick={() => setFullscreenImg(zoomImg || screenshots[0])} /><div className="absolute top-6 right-6 opacity-0 group-hover/mainimg:opacity-100 transition-opacity"><button onClick={() => setFullscreenImg(zoomImg || screenshots[0])} className="p-3 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-colors shadow-xl"><Maximize2 size={18} /></button></div></>) : (<div className="text-center opacity-20"><ImageIcon size={64} className="mx-auto mb-4" /><p className="text-xs font-black uppercase tracking-[0.2em]">Visual Data Missing</p></div>)}</div>
-                     {screenshots.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto ${isDark ? 'bg-[#0a0f1d] border-white/5' : 'bg-white border-slate-200'}`}>{screenshots.map((src, i) => (<div key={i} onClick={() => setZoomImg(src)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${src === (zoomImg || screenshots[0]) ? 'ring-2 ring-blue-500' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
+                     {screenshots.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'}`}>{screenshots.map((src, i) => (<div key={i} onClick={() => setZoomImg(src)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${src === (zoomImg || screenshots[0]) ? 'ring-2 ring-blue-500' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
                   </div>
                </div>
             </div>
@@ -709,9 +725,9 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
    );
 
    return (
-      <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xl animate-in fade-in duration-300">
-         <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-[#0a0f1d] border-white/10' : 'bg-white border-slate-200'}`}>
-            <div className={`h-20 shrink-0 border-b flex items-center justify-between px-6 lg:px-8 ${isDark ? 'border-white/5 bg-[#0a0f1d]' : 'bg-white border-slate-100'}`}>
+      <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-theme-page-95 backdrop-blur-xl animate-in fade-in duration-300">
+         <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200'}`}>
+            <div className={`h-20 shrink-0 border-b flex items-center justify-between px-6 lg:px-8 ${isDark ? 'border-white/5 bg-theme-card' : 'bg-white border-slate-100'}`}>
                <div className="flex items-center gap-6">
                   <div className={`px-3 py-1.5 rounded-lg border flex items-center gap-2 ${directionColor}`}>
                      {isMissed ? <Clock size={14} /> : (trade.direction === 'Long' ? <ArrowUpRight size={14} strokeWidth={3} /> : <ArrowDownRight size={14} strokeWidth={3} />)}
@@ -728,7 +744,7 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
 
             <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
                <div className={`w-full lg:w-[30%] flex flex-col overflow-y-auto custom-scrollbar border-r ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                  <div className={`grid grid-cols-2 border-b ${isDark ? 'border-white/5 bg-[#0a0f1d]' : 'border-slate-200 bg-white'}`}>
+                  <div className={`grid grid-cols-2 border-b ${isDark ? 'border-white/5 bg-theme-card' : 'border-slate-200 bg-white'}`}>
                      <MetricCell label="Entry Price" value={entryPrice || '-'} />
                      <MetricCell label="Exit Price" value={exitPrice || '-'} />
                      <MetricCell label="Stop Loss" value={stopLoss || '-'} color="text-rose-500" />
@@ -779,7 +795,7 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
                         </div>
                      )}
                   </div>
-                  {images.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto ${isDark ? 'bg-[#0a0f1d] border-white/5' : 'bg-white border-slate-200'}`}>{images.map((src, i) => (<div key={i} onClick={() => setActiveImageIndex(i)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${activeImageIndex === i ? 'ring-2 ring-blue-500 opacity-100' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
+                  {images.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'}`}>{images.map((src, i) => (<div key={i} onClick={() => setActiveImageIndex(i)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${activeImageIndex === i ? 'ring-2 ring-blue-500 opacity-100' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
                </div>
             </div>
          </div>

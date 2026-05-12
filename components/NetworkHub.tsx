@@ -921,7 +921,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                type="text"
                value={searchQuery}
                onChange={(e) => handleSearch(e.target.value)}
-               placeholder="Vyhledat tradera podle e-mailu nebo jména..."
+               placeholder="Hledat tradera..."
                className="w-full pl-14 pr-6 py-5 rounded-[24px] border outline-none font-bold text-sm transition-all shadow-xl theme-input focus:border-blue-500/50"
             />
             {isSearching && <div className="absolute inset-y-0 right-6 flex items-center"><div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>}
@@ -1531,7 +1531,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 20 }}
-                  className={`fixed inset-0 z-[9999] flex flex-col ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}
+                  className={`fixed inset-0 z-[9999] flex flex-col ${isDark ? 'bg-theme-page' : 'bg-slate-50'}`}
                >
                   {/* Spectator Header */}
                   <div className={`p-4 border-b flex items-center justify-between ${isDark ? 'bg-slate-900/50 border-white/5' : 'bg-white/50 border-slate-200'}`}>
@@ -1938,7 +1938,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                              content={({ active, payload }) => {
                                                 if (active && payload && payload.length) {
                                                    return (
-                                                      <div className={`p-4 rounded-2xl border shadow-2xl ${isDark ? 'bg-slate-950 border-white/10' : 'bg-white border-slate-200'}`}>
+                                                      <div className={`p-4 rounded-2xl border shadow-2xl ${isDark ? 'bg-theme-page border-white/10' : 'bg-white border-slate-200'}`}>
                                                          <p className="text-[10px] font-black text-slate-500 uppercase mb-1">
                                                             {new Date(payload[0].payload.timestamp).toLocaleString('cs-CZ', {
                                                                day: 'numeric',

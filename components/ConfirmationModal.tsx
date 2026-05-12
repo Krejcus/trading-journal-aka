@@ -94,7 +94,7 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
                     initial="hidden"
                     animate="visible"
                     exit="exit"
-                    className={`relative w-full max-w-md overflow-hidden rounded-[32px] border ${styles.border} ${styles.glow} flex flex-col ${isDark ? 'bg-[#0a0f1d] text-white' : 'bg-white text-slate-900'
+                    className={`relative w-full max-w-md overflow-hidden rounded-[32px] border ${styles.border} ${styles.glow} flex flex-col ${isDark ? 'bg-theme-card text-white' : 'bg-white text-slate-900'
                         }`}
                     style={{ perspective: '1000px' }}
                 >

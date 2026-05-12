@@ -16,6 +16,7 @@ const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
 
 import Sidebar from './components/Sidebar';
+import BottomNav from './components/BottomNav';
 import FilterDropdown from './components/FilterDropdown';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
@@ -91,8 +92,6 @@ const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: num
   kpi_profit_factor: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   kpi_day_winrate: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   kpi_max_drawdown: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
-  kpi_avg_win: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
-  kpi_avg_loss: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   discipline: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   winners_losers: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   monthly_performance: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
@@ -676,32 +675,71 @@ const App: React.FC = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [isDashboardEditing, setIsDashboardEditing] = useState(false);
+  const [isMobileEditing, setIsMobileEditing] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [exchangeRates, setExchangeRates] = useState<ExchangeRates | null>(null);
   const lastLoadedSessionId = React.useRef<string | null>(null);
 
-  // Track in-flight single-record saves to avoid duplicate requests
+  // Track in-flight saves + pending queue to prevent race conditions
   const savingPrepDate = useRef<string | null>(null);
   const savingReviewDate = useRef<string | null>(null);
+  const pendingPrepSave = useRef<DailyPrep | null>(null);
+  const pendingReviewSave = useRef<DailyReview | null>(null);
 
-  const handleSavePrep = useCallback((prep: DailyPrep) => {
+  const handleSavePrep = useCallback((prep: DailyPrep): Promise<void> => {
     isJournalDirty.current = true;
     setDailyPreps(prev => [...prev.filter(p => p.date !== prep.date), prep]);
-    // Immediately persist this single prep to Supabase (fire-and-forget)
-    if (savingPrepDate.current !== prep.date) {
-      savingPrepDate.current = prep.date;
-      storageService.saveSinglePrep(prep).catch(e => console.warn('[Save] Prep failed:', e)).finally(() => { savingPrepDate.current = null; });
+
+    if (savingPrepDate.current === prep.date) {
+      // In-flight save for this date — queue latest version, resolve immediately
+      pendingPrepSave.current = prep;
+      return Promise.resolve();
     }
+
+    savingPrepDate.current = prep.date;
+    return storageService.saveSinglePrep(prep)
+      .catch(e => {
+        console.warn('[Save] Prep failed:', e);
+        setSyncError('Nepodařilo se uložit ranní přípravu.');
+        throw e;
+      })
+      .finally(() => {
+        savingPrepDate.current = null;
+        // Flush pending save if a newer version arrived while we were in-flight
+        if (pendingPrepSave.current?.date === prep.date) {
+          const pending = pendingPrepSave.current;
+          pendingPrepSave.current = null;
+          handleSavePrep(pending).catch(() => {});
+        }
+      });
   }, []);
 
-  const handleSaveReview = useCallback((rev: DailyReview) => {
+  const handleSaveReview = useCallback((rev: DailyReview): Promise<void> => {
     isJournalDirty.current = true;
     setDailyReviews(prev => [...prev.filter(r => r.date !== rev.date), rev]);
-    // Immediately persist this single review to Supabase (fire-and-forget)
-    if (savingReviewDate.current !== rev.date) {
-      savingReviewDate.current = rev.date;
-      storageService.saveSingleReview(rev).catch(e => console.warn('[Save] Review failed:', e)).finally(() => { savingReviewDate.current = null; });
+
+    if (savingReviewDate.current === rev.date) {
+      // In-flight save for this date — queue latest version, resolve immediately
+      pendingReviewSave.current = rev;
+      return Promise.resolve();
     }
+
+    savingReviewDate.current = rev.date;
+    return storageService.saveSingleReview(rev)
+      .catch(e => {
+        console.warn('[Save] Review failed:', e);
+        setSyncError('Nepodařilo se uložit večerní audit.');
+        throw e;
+      })
+      .finally(() => {
+        savingReviewDate.current = null;
+        // Flush pending save if a newer version arrived while we were in-flight
+        if (pendingReviewSave.current?.date === rev.date) {
+          const pending = pendingReviewSave.current;
+          pendingReviewSave.current = null;
+          handleSaveReview(pending).catch(() => {});
+        }
+      });
   }, []);
 
   const applyPreferences = useCallback((prefs: UserPreferences) => {
@@ -849,16 +887,19 @@ const App: React.FC = () => {
         isFetchingRef.current = false;
         clearTimeout(safetyTimer);
 
-        // Background refresh — silently sync with server
+        // Background refresh — silently sync with server, only update if data changed
         storageService.getDashboardData().then(fresh => {
           console.log(`[Load] Background refresh done: ${fresh.trades.length} trades`);
-          setTrades(fresh.trades || []);
-          if (fresh.accounts && fresh.accounts.length > 0) setAccounts(fresh.accounts);
+          // Guard: only setState if counts differ to avoid re-rendering with identical data
+          setTrades(prev => fresh.trades.length !== prev.length ? (fresh.trades || []) : prev);
+          if (fresh.accounts && fresh.accounts.length > 0) {
+            setAccounts(prev => fresh.accounts.length !== prev.length ? fresh.accounts : prev);
+          }
           if (fresh.user) setCurrentUser(fresh.user);
           if (fresh.preferences) applyPreferences(fresh.preferences);
-          setDailyPreps(fresh.preps || []);
-          setDailyReviews(fresh.reviews || []);
-          setWeeklyFocusList(fresh.weeklyFocus || []);
+          setDailyPreps(prev => fresh.preps.length !== prev.length ? (fresh.preps || []) : prev);
+          setDailyReviews(prev => fresh.reviews.length !== prev.length ? (fresh.reviews || []) : prev);
+          setWeeklyFocusList(prev => fresh.weeklyFocus.length !== prev.length ? (fresh.weeklyFocus || []) : prev);
         }).catch(err => console.warn('[Load] Background refresh failed:', err));
         return;
       }
@@ -1015,6 +1056,11 @@ const App: React.FC = () => {
                   const newTrades = [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
                   return newTrades;
                 });
+
+                // Refresh accounts so balance/stats stay current after new trade
+                storageService.getAccounts().then(freshAccounts => {
+                  if (freshAccounts.length > 0) setAccounts(freshAccounts);
+                }).catch(() => {});
 
                 try {
                   const { addTradeToCache } = await import('./services/cacheHelper');
@@ -1174,10 +1220,14 @@ const App: React.FC = () => {
         storageService.getBusinessGoals(),
         storageService.getBusinessResources()
       ]).then(([expenses, payouts, goals, resources]) => {
-        setBusinessExpenses(expenses || []);
-        setBusinessPayouts(payouts || []);
-        setBusinessGoals(goals || []);
-        setBusinessResources(resources || []);
+        // Guard: only update state if data actually changed (prevents flicker when cache == server)
+        const stableSet = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>, next: T[]) => {
+          setter(prev => JSON.stringify(next) === JSON.stringify(prev) ? prev : next);
+        };
+        stableSet(setBusinessExpenses, expenses || []);
+        stableSet(setBusinessPayouts, payouts || []);
+        stableSet(setBusinessGoals, goals || []);
+        stableSet(setBusinessResources, resources || []);
         setIsBusinessDataLoaded(true);
 
         // Cache for next visit
@@ -2159,33 +2209,44 @@ const App: React.FC = () => {
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
-      <Sidebar
+      {/* Sidebar — pouze desktop */}
+      <div className="hidden lg:block">
+        <Sidebar
+          activePage={activePage}
+          setActivePage={setActivePage}
+          isOpen={isSidebarOpen}
+          setIsOpen={setIsSidebarOpen}
+          isCollapsed={isSidebarCollapsed}
+          setIsCollapsed={setIsSidebarCollapsed}
+          theme={theme}
+          onAddTrade={handleTryAddTrade}
+          user={currentUser}
+          onLogout={async () => {
+            localStorage.clear();
+            await supabase.auth.signOut();
+            setSession(null);
+            window.location.reload();
+          }}
+          onOpenProfile={() => setIsProfileOpen(true)}
+          onNavigate={(page) => {
+            setActivePage(page);
+            setIsSidebarOpen(false);
+          }}
+        />
+      </div>
+
+      {/* Bottom navigation — pouze mobil */}
+      <BottomNav
         activePage={activePage}
-        setActivePage={setActivePage}
-        isOpen={isSidebarOpen}
-        setIsOpen={setIsSidebarOpen}
-        isCollapsed={isSidebarCollapsed}
-        setIsCollapsed={setIsSidebarCollapsed}
-        theme={theme}
+        onNavigate={(page) => setActivePage(page)}
         onAddTrade={handleTryAddTrade}
-        user={currentUser}
-        onLogout={async () => {
-          localStorage.clear(); // CRITICAL: Clear dirty local data
-          await supabase.auth.signOut();
-          setSession(null);
-          window.location.reload(); // Force a clean state
-        }}
-        onOpenProfile={() => setIsProfileOpen(true)}
-        onNavigate={(page) => {
-          setActivePage(page);
-          setIsSidebarOpen(false);
-        }}
+        theme={theme}
       />
 
-      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''}`}>
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
         <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-2 flex items-center justify-between transition-all bg-[var(--bg-page)]/30 border-[var(--border-subtle)] ${isNetworkSpectating ? 'hidden' : ''}`}>
           <div className="flex items-center gap-4">
-            <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
+            <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <h2 className="text-xl font-black uppercase tracking-tighter">
               {activePage === 'dashboard' && 'Dashboard'}
               {activePage === 'history' && 'Historie obchodu'}
@@ -2331,7 +2392,7 @@ const App: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-3">
-              <FilterDropdown
+<FilterDropdown
                 filters={filters}
                 setFilters={setFilters}
                 accounts={contextAccounts}
@@ -2339,6 +2400,8 @@ const App: React.FC = () => {
                 theme={theme}
                 isDashboardEditing={activePage === 'dashboard' ? isDashboardEditing : undefined}
                 setIsDashboardEditing={activePage === 'dashboard' ? setIsDashboardEditing : undefined}
+                isMobileEditing={activePage === 'dashboard' ? isMobileEditing : undefined}
+                setIsMobileEditing={activePage === 'dashboard' ? setIsMobileEditing : undefined}
                 dashboardMode={dashboardMode}
                 setDashboardMode={(v) => { setDashboardMode(v); isPreferencesDirty.current = true; }}
                 viewMode={viewMode}
@@ -2356,7 +2419,7 @@ const App: React.FC = () => {
                   else if (theme === 'light') newTheme = 'oled';
                   setTheme(newTheme);
                 }}
-                className={`p-2 rounded-xl border transition-all ${theme !== 'light' ? 'bg-white/5 border-white/10 hover:bg-white/10 text-white' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm'}`}
+                className={`p-3 rounded-xl border transition-all ${theme !== 'light' ? 'bg-white/5 border-white/10 hover:bg-white/10 text-white' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm'}`}
               >
                 {theme === 'light' ? <Sun size={20} /> : (theme === 'oled' ? <Zap size={20} className="text-blue-500" /> : <Moon size={20} />)}
               </button>
@@ -2414,6 +2477,8 @@ const App: React.FC = () => {
                       exchangeRates={exchangeRates}
                       allTrades={trades}
                       payouts={businessPayouts}
+                      isMobileEditing={isMobileEditing}
+                      setIsMobileEditing={setIsMobileEditing}
                     />
                   )}
 

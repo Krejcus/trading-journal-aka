@@ -28,6 +28,7 @@ import {
   Search,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   LineChart,
   ArrowUp,
   ArrowDown,
@@ -70,6 +71,8 @@ interface DashboardProps {
   exchangeRates: ExchangeRates | null;
   allTrades?: Trade[];
   payouts?: BusinessPayout[];
+  isMobileEditing?: boolean;
+  setIsMobileEditing?: (v: boolean) => void;
 }
 
 // ... existing imports ...
@@ -290,14 +293,14 @@ const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'ole
   const getStreakColor = (val: number) => val > 0 ? 'text-emerald-500 border-emerald-500' : val < 0 ? 'text-rose-500 border-rose-500' : 'text-slate-500 border-slate-700';
 
   return (
-    <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col justify-between">
+    <div className="p-6 rounded-[32px] glass-panel flex flex-col">
       <div className="flex justify-between items-start mb-4">
         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
           Current streak <InfoIcon text="Aktuální série ziskových/ztrátových dnů a obchodů." theme={theme} />
         </h3>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 flex-1">
+      <div className="grid grid-cols-2 gap-4">
         {/* DAYS STREAK */}
         <div className="flex items-center gap-3">
           <SmartTooltip text="Denní série" subtext={dayStreak > 0 ? `${dayStreak} ziskových dní v řadě` : `${Math.abs(dayStreak)} ztrátových dní v řadě`} theme={theme}>
@@ -935,11 +938,11 @@ const PerformanceByMonthWidget: React.FC<{ monthlyData: MonthlyData[], theme: 'd
           <InfoIcon text="Měsíční přehled vaší ziskovosti. Intenzita barvy odpovídá velikosti zisku nebo ztráty." theme={theme} />
         </h3>
         <div className="flex gap-4 items-center">
-          <div className={`flex ${isDark ? 'bg-slate-950/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[9px] font-black uppercase`}>
+          <div className={`flex ${isDark ? 'bg-theme-page/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[9px] font-black uppercase`}>
             <button onClick={() => setView('individual')} className={`px-2 py-1 rounded ${view === 'individual' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>Individual</button>
             <button onClick={() => setView('accum')} className={`px-2 py-1 rounded ${view === 'accum' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>Accum</button>
           </div>
-          <div className={`flex ${isDark ? 'bg-slate-950/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[9px] font-black uppercase`}>
+          <div className={`flex ${isDark ? 'bg-theme-page/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[9px] font-black uppercase`}>
             <button onClick={() => setUnit('pct')} className={`px-2 py-1 rounded ${unit === 'pct' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>% Gain</button>
             <button onClick={() => setUnit('val')} className={`px-2 py-1 rounded ${unit === 'val' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>$ Value</button>
           </div>
@@ -1135,9 +1138,12 @@ const Dashboard: React.FC<DashboardProps> = ({
   stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout,
   isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
-  allTrades = [], payouts = []
+  allTrades = [], payouts = [],
+  isMobileEditing: isMobileEditingProp = false, setIsMobileEditing: setIsMobileEditingProp
 }) => {
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
+  const isMobileEditing = isMobileEditingProp;
+  const setIsMobileEditing = setIsMobileEditingProp ?? (() => {});
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1222,6 +1228,22 @@ const Dashboard: React.FC<DashboardProps> = ({
       if (w.id === id) {
         return { ...w, showDisciplinedCurve: !w.showDisciplinedCurve };
       }
+      return w;
+    }));
+  };
+
+  const moveMobileWidget = (id: string, direction: 'up' | 'down') => {
+    const sorted = [...layout].filter(w => w.visible).sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    const idx = sorted.findIndex(w => w.id === id);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const aY = sorted[idx].y;
+    const bY = sorted[swapIdx].y;
+    const newY = aY === bY ? (direction === 'up' ? aY - 1 : aY + 1) : bY;
+    const swapNewY = aY === bY ? aY : aY;
+    onUpdateLayout(layout.map(w => {
+      if (w.id === sorted[idx].id) return { ...w, y: newY };
+      if (w.id === sorted[swapIdx].id) return { ...w, y: swapNewY };
       return w;
     }));
   };
@@ -1407,7 +1429,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       )}
 
       <div className={`space-y-6 lg:space-y-10 pb-40 relative z-10 w-full transition-all duration-500 ${isEditing ? 'scale-[0.98] transform origin-top' : ''}`}>
-        <div className="flex justify-between items-center px-4 pt-4">
+        <div className={`flex justify-between items-center px-4 pt-4 ${!isEditing ? 'hidden lg:flex' : ''}`}>
           <div>
             <div className="flex items-center gap-4">
               {/* MODE SWITCHER */}
@@ -1423,16 +1445,90 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         <div ref={containerRef} className={`w-full p-2 md:px-6 rounded-[32px] ${isEditing ? 'pt-6' : ''}`}>
-          {isMobile && !isEditing && (
-            <div className="mb-1">
-              <MobileKpiCarousel
-                theme={theme}
-                widgets={currentLayout.filter(w => w.w <= 4 && w.visible !== false)}
-                renderWidget={renderWidget}
-              />
-            </div>
-          )}
-          {widthMounted && (
+          {/* Mobile: jednoduchý vertikální seznam, KPI widgety ve dvojicích vedle sebe */}
+          {isMobile && !isEditing && (() => {
+            const chartHeights: Record<string, number> = {
+              equity: 340, hourly_edge: 320, daily_edge: 320, monthly_performance: 320, calendar: 520,
+              streak: 180,
+            };
+            const wiggleAnimate = isMobileEditing
+              ? { rotate: [0, -1.5, 1.5, -1.5, 0], scale: [1, 1.01, 1.01, 1.01, 1] }
+              : { rotate: 0 as number, scale: 1 };
+            const wiggleTransition = isMobileEditing
+              ? { duration: 0.45, repeat: Infinity, repeatDelay: 1.2, ease: 'easeInOut' as const }
+              : { duration: 0.2 };
+            const editClass = isMobileEditing
+              ? 'ring-2 ring-emerald-500/40 rounded-2xl shadow-[0_0_16px_rgba(16,185,129,0.15)]'
+              : '';
+
+            // Only pure ProKpiCard widgets (single number + label) can be paired side-by-side.
+            // Complex widgets (streak has 2 circles, avg_win_loss has bar chart, etc.) stay full-width.
+            const PAIRABLE_KPI_IDS = new Set([
+              'kpi_pnl', 'kpi_winrate', 'kpi_profit_factor', 'kpi_day_winrate',
+              'kpi_max_drawdown', 'kpi_execution_rate',
+            ]);
+
+            // Pre-compute visible items with their metadata
+            const items = currentLayout.flatMap(widget => {
+              const content = renderWidget(widget.id, widget);
+              if (content == null) return [];
+              const master = MASTER_WIDGET_LIST.find(m => m.id === widget.id);
+              const rowSpan = master?.defaultRowSpan ?? 2;
+              // isKpi = can be paired: only simple ProKpiCard widgets, not complex ones
+              const isKpi = rowSpan === 1 && PAIRABLE_KPI_IDS.has(widget.id);
+              return [{ widget, content, isKpi }];
+            });
+
+            // Global KPI pairing: collect all pairable KPI indices first, pair them up globally.
+            // This ensures KPIs get paired even when separated by full-width widgets.
+            const kpiIndices = items.reduce<number[]>((acc, item, idx) => {
+              if (item.isKpi) acc.push(idx);
+              return acc;
+            }, []);
+            // Build pairs: (first-kpi-index, second-kpi-index | null)
+            const kpiPairMap = new Map<number, number | null>();
+            for (let k = 0; k < kpiIndices.length; k += 2) {
+              kpiPairMap.set(kpiIndices[k], kpiIndices[k + 1] ?? null);
+              if (kpiIndices[k + 1] != null) kpiPairMap.set(kpiIndices[k + 1], -1); // -1 = "skip, already used"
+            }
+
+            const rows: React.ReactNode[] = [];
+            items.forEach((item, idx) => {
+              const pairInfo = kpiPairMap.get(idx);
+
+              if (pairInfo === -1) return; // second of a pair — already rendered
+
+              if (item.isKpi && pairInfo != null) {
+                // First of a pair → render grid-cols-2
+                const second = items[pairInfo];
+                rows.push(
+                  <div key={`kpi-pair-${item.widget.id}-${second.widget.id}`} className="grid grid-cols-2 gap-3">
+                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                      {item.content}
+                    </motion.div>
+                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                      {second.content}
+                    </motion.div>
+                  </div>
+                );
+              } else {
+                // Unpaired KPI (odd count) or full-width widget
+                const fixedHeight = chartHeights[item.widget.id];
+                const style = item.isKpi
+                  ? { minHeight: 160 }
+                  : fixedHeight ? { height: fixedHeight } : { minHeight: 260 };
+                rows.push(
+                  <motion.div key={item.widget.id} style={style} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                    {item.content}
+                  </motion.div>
+                );
+              }
+            });
+            return <div className="flex flex-col gap-4 px-2">{rows}</div>;
+          })()}
+
+          {/* Desktop: react-grid-layout */}
+          {(!isMobile || isEditing) && widthMounted && (
             <ResponsiveGridLayout
               className={`layout ${isEditing ? 'editing' : ''}`}
               width={containerWidth}
@@ -1446,28 +1542,121 @@ const Dashboard: React.FC<DashboardProps> = ({
               onLayoutChange={handleRglLayoutChange}
               autoSize
             >
-              {currentLayout
-                .filter(widget => !(isMobile && !isEditing && widget.w <= 4))
-                .map(widget => (
-                  <div key={widget.id} className="h-full">
-                    {isEditing && (
-                      <WidgetEditOverlay
-                        id={widget.id}
-                        label={widget.label}
-                        showDisciplinedCurve={widget.showDisciplinedCurve}
-                        onRemove={() => updateWidgetStatus(widget.id, false)}
-                        onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
-                      />
-                    )}
-                    <div className={isEditing ? 'h-full opacity-60 pointer-events-none select-none' : 'h-full'}>
-                      {renderWidget(widget.id, widget)}
-                    </div>
+              {currentLayout.map(widget => (
+                <div key={widget.id} className="h-full">
+                  {isEditing && (
+                    <WidgetEditOverlay
+                      id={widget.id}
+                      label={widget.label}
+                      showDisciplinedCurve={widget.showDisciplinedCurve}
+                      onRemove={() => updateWidgetStatus(widget.id, false)}
+                      onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
+                    />
+                  )}
+                  <div className={isEditing ? 'h-full opacity-60 pointer-events-none select-none' : 'h-full'}>
+                    {renderWidget(widget.id, widget)}
                   </div>
-                ))}
+                </div>
+              ))}
             </ResponsiveGridLayout>
           )}
         </div>
       </div>
+
+
+      {/* Mobile Edit Bottom Sheet */}
+      <AnimatePresence>
+        {isMobileEditing && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm lg:hidden"
+              onClick={() => setIsMobileEditing(false)}
+            />
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+              className={`fixed bottom-0 left-0 right-0 z-[110] rounded-t-3xl border-t max-h-[85vh] flex flex-col lg:hidden ${isDark ? 'bg-[#0d0d14] border-white/10' : 'bg-white border-slate-200'}`}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-white/5 shrink-0">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-widest">Upravit dashboard</h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Zapni/vypni widgety a změň pořadí</p>
+                </div>
+                <button
+                  onClick={() => setIsMobileEditing(false)}
+                  className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-[11px] font-black uppercase tracking-widest"
+                >
+                  Hotovo
+                </button>
+              </div>
+
+              {/* Widget list */}
+              <div className="overflow-y-auto flex-1 px-4 py-3 flex flex-col gap-2">
+                <AnimatePresence initial={false}>
+                {[...layout].sort((a, b) => (a.y - b.y) || (a.x - b.x)).map((widget, idx, arr) => {
+                  const master = MASTER_WIDGET_LIST.find(m => m.id === widget.id);
+                  const isVisible = widget.visible !== false;
+                  const visibleArr = arr.filter(w => w.visible !== false);
+                  const visibleIdx = visibleArr.findIndex(w => w.id === widget.id);
+                  return (
+                    <motion.div
+                      key={widget.id}
+                      layout
+                      layoutId={`medit-${widget.id}`}
+                      initial={{ opacity: 0, scale: 0.96 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.96 }}
+                      transition={{ type: 'spring', stiffness: 500, damping: 40 }}
+                      className={`flex items-center gap-3 px-4 py-3 rounded-2xl border ${isVisible ? (isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200') : (isDark ? 'bg-transparent border-white/5 opacity-50' : 'bg-transparent border-slate-100 opacity-50')}`}
+                    >
+                      {/* Toggle */}
+                      <button
+                        onClick={() => updateWidgetStatus(widget.id, !isVisible)}
+                        className={`w-10 h-6 rounded-full border transition-all flex items-center shrink-0 ${isVisible ? 'bg-emerald-500 border-emerald-500 justify-end' : (isDark ? 'bg-white/10 border-white/20 justify-start' : 'bg-slate-200 border-slate-300 justify-start')}`}
+                      >
+                        <div className="w-4 h-4 rounded-full bg-white mx-1 shadow-sm" />
+                      </button>
+
+                      {/* Icon + Label */}
+                      <div className={`p-1.5 rounded-lg ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
+                        {master && React.cloneElement(master.icon as React.ReactElement<any>, { size: 14 })}
+                      </div>
+                      <span className="text-xs font-bold flex-1">{widget.label}</span>
+
+                      {/* Up/Down */}
+                      {isVisible && (
+                        <div className="flex gap-1 shrink-0">
+                          <button
+                            onClick={() => moveMobileWidget(widget.id, 'up')}
+                            disabled={visibleIdx === 0}
+                            className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${visibleIdx === 0 ? 'opacity-20' : (isDark ? 'bg-white/10 hover:bg-white/20 active:scale-90' : 'bg-slate-100 hover:bg-slate-200 active:scale-90')}`}
+                          >
+                            <ChevronUp size={14} />
+                          </button>
+                          <button
+                            onClick={() => moveMobileWidget(widget.id, 'down')}
+                            disabled={visibleIdx === visibleArr.length - 1}
+                            className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${visibleIdx === visibleArr.length - 1 ? 'opacity-20' : (isDark ? 'bg-white/10 hover:bg-white/20 active:scale-90' : 'bg-slate-100 hover:bg-slate-200 active:scale-90')}`}
+                          >
+                            <ChevronDown size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </motion.div>
+                  );
+                })}
+                </AnimatePresence>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* FLOATING PRO DOCK (Replaces Sidebar) */}
       <AnimatePresence>

@@ -14,6 +14,14 @@ import { ErrorBoundary } from './ErrorBoundary';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 
+interface PropertyProps {
+    label: string;
+    value: string | number;
+    subValue?: string;
+    color?: string;
+    icon?: any;
+}
+
 interface TradeDetailModalProps {
     trade: Trade;
     accountName: string;
@@ -198,7 +206,14 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     const getEmotionDetails = (emoId: string) => emotions.find(e => e.id === emoId) || { label: emoId, icon: '' };
 
-    const Property = ({ label, value, subValue, color, icon: Icon }: { label: string, value: string | number, subValue?: string, color?: string, icon?: any }) => (
+    const [imageLoadError, setImageLoadError] = useState(false);
+
+    // Reset error state when switching images
+    useEffect(() => { setImageLoadError(false); }, [activeImageIndex]);
+    // Reset error state when trade changes
+    useEffect(() => { setImageLoadError(false); }, [activeTrade.id]);
+
+    const Property = ({ label, value, subValue, color, icon: Icon }: PropertyProps) => (
         <div className={`py-4 px-1 group/prop border-b ${isDark ? 'border-white/[0.03]' : 'border-slate-100'} last:border-0`}>
             <div className="flex items-center gap-2 mb-1.5 opacity-40 group-hover/prop:opacity-60 transition-opacity">
                 {Icon && <Icon size={10} className="text-slate-400" />}
@@ -240,7 +255,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="absolute inset-0 bg-[#020617]/95 backdrop-blur-2xl"
+                    className="absolute inset-0 bg-theme-page-95 backdrop-blur-2xl"
                     onClick={onClose}
                 />
 
@@ -248,20 +263,20 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     initial={{ opacity: 0, scale: 0.95, y: 20 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                    className={`relative w-full max-w-[1600px] h-full lg:h-[85vh] rounded-none md:rounded-[40px] overflow-hidden shadow-[0_0_100px_rgba(0,0,0,0.8)] flex flex-col border ${isDark ? 'bg-[#0a0f1d]/80 border-white/10' : 'bg-white/90 border-slate-200'}`}
+                    className={`relative w-full max-w-[1600px] h-full lg:h-[85vh] rounded-none md:rounded-[40px] overflow-hidden shadow-[0_0_100px_rgba(0,0,0,0.8)] flex flex-col border ${isDark ? 'bg-theme-card-80 border-white/10' : 'bg-white/90 border-slate-200'}`}
                 >
                     {/* Header */}
-                    <div className={`h-20 shrink-0 border-b flex items-center justify-between px-6 md:px-10 z-20 ${isDark ? 'border-white/5 bg-[#0a0f1d]/50' : 'bg-white/50 border-slate-100'} backdrop-blur-md`}>
-                        <div className="flex items-center gap-8">
-                            <div className="flex items-center gap-4">
-                                <h2 className={`text-2xl font-black tracking-tighter uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</h2>
-                                <div className={`px-3 py-1 rounded-full border flex items-center gap-2 ${directionColor}`}>
-                                    {isMissed ? <Clock size={12} /> : (trade.direction === 'Long' ? <ArrowUpRight size={14} strokeWidth={3} /> : <ArrowDownRight size={14} strokeWidth={3} />)}
-                                    <span className="text-[10px] font-black uppercase tracking-widest">{isMissed ? 'MISSED' : trade.direction}</span>
+                    <div className={`h-14 lg:h-20 shrink-0 border-b flex items-center justify-between px-4 md:px-10 z-20 ${isDark ? 'border-white/5 bg-theme-card-50' : 'bg-white/50 border-slate-100'} backdrop-blur-md`}>
+                        <div className="flex items-center gap-3 lg:gap-8 min-w-0">
+                            <div className="flex items-center gap-2 lg:gap-4 min-w-0">
+                                <h2 className={`text-lg lg:text-2xl font-black tracking-tighter uppercase truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</h2>
+                                <div className={`px-2 lg:px-3 py-1 rounded-full border flex items-center gap-1.5 shrink-0 ${directionColor}`}>
+                                    {isMissed ? <Clock size={11} /> : (trade.direction === 'Long' ? <ArrowUpRight size={12} strokeWidth={3} /> : <ArrowDownRight size={12} strokeWidth={3} />)}
+                                    <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{isMissed ? 'MISSED' : trade.direction}</span>
                                 </div>
                             </div>
-                            <div className="h-8 w-px bg-white/10 hidden md:block" />
-                            <div className="hidden md:flex flex-col">
+                            <div className="h-6 w-px bg-white/10 hidden lg:block" />
+                            <div className="hidden lg:flex flex-col">
                                 <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Transaction Date</p>
                                 <p className={`text-[11px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                                     {trade.date ? new Date(trade.date).toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
@@ -269,25 +284,26 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
                         </div>
 
-                        <div className="flex items-center gap-3">
-                            <div className="hidden sm:flex items-center gap-1 bg-white/5 p-1 rounded-2xl border border-white/5 mr-4">
-                                <button onClick={onPrev} disabled={!hasPrev} className={`p-2 rounded-xl transition-all ${!hasPrev ? 'opacity-10 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronLeft size={20} /></button>
-                                <button onClick={onNext} disabled={!hasNext} className={`p-2 rounded-xl transition-all ${!hasNext ? 'opacity-10 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
+                        <div className="flex items-center gap-1.5 lg:gap-3">
+                            {/* Prev/Next — visible on all screen sizes */}
+                            <div className="flex items-center gap-0.5 bg-white/5 p-0.5 rounded-xl border border-white/5">
+                                <button onClick={onPrev} disabled={!hasPrev} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasPrev ? 'opacity-10 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronLeft size={16} /></button>
+                                <button onClick={onNext} disabled={!hasNext} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasNext ? 'opacity-10 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={16} /></button>
                             </div>
-                            <button onClick={handleShare} className={`p-3 rounded-2xl transition-all ${shareCopied ? 'bg-emerald-500/20 text-emerald-500' : 'bg-white/5 text-white hover:bg-white/10'}`}>{shareCopied ? <Check size={20} /> : <Share2 size={20} />}</button>
-                            <button onClick={(e) => { e.stopPropagation(); setIsDeleteModalOpen(true); }} className="p-3 rounded-2xl bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all"><Trash2 size={20} /></button>
-                            <button onClick={onClose} className={`p-3 rounded-full transition-all ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-slate-100 text-slate-600'}`}><X size={24} /></button>
+                            <button onClick={handleShare} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${shareCopied ? 'bg-emerald-500/20 text-emerald-500' : 'bg-white/5 text-white hover:bg-white/10'}`}>{shareCopied ? <Check size={16} /> : <Share2 size={16} />}</button>
+                            <button onClick={(e) => { e.stopPropagation(); setIsDeleteModalOpen(true); }} className="p-2 lg:p-3 rounded-xl lg:rounded-2xl bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all"><Trash2 size={16} /></button>
+                            <button onClick={onClose} className={`p-2 lg:p-3 rounded-full transition-all ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-slate-100 text-slate-600'}`}><X size={20} /></button>
                         </div>
                     </div>
 
                     <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
-                        {/* LEFT SIDEPANEL: Property Sheet */}
-                        <div className={`w-full lg:w-[400px] shrink-0 border-b lg:border-b-0 lg:border-r flex flex-col z-10 ${isDark ? 'border-white/5 bg-[#0a0f1d]/40' : 'border-slate-100 bg-slate-50/40'} backdrop-blur-xl overflow-y-auto no-scrollbar`}>
+                        {/* LEFT SIDEPANEL: Property Sheet — second on mobile (order-2), first on desktop */}
+                        <div className={`order-2 lg:order-1 w-full lg:w-[400px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/40'} backdrop-blur-xl overflow-y-auto no-scrollbar`}>
                             {/* Dominant PnL Card */}
-                            <div className="p-8 border-b border-white/5">
-                                <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-3">Profit / Loss</p>
+                            <div className="p-4 lg:p-8 border-b border-white/5">
+                                <p className="text-[9px] lg:text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2 lg:mb-3">Profit / Loss</p>
                                 <div className="flex items-end justify-between gap-4">
-                                    <h3 className={`text-5xl font-black font-mono tracking-tighter leading-none ${pnlColor}`}>{formattedPnL}</h3>
+                                    <h3 className={`text-4xl lg:text-5xl font-black font-mono tracking-tighter leading-none ${pnlColor}`}>{formattedPnL}</h3>
                                     <div className="flex flex-col items-end">
                                         <span className={`text-sm font-black font-mono ${realRRR >= 1 ? 'text-emerald-500' : 'text-slate-500'}`}>{isFinite(realRRR) ? realRRR.toFixed(2) : '0.00'} R</span>
                                         <span className="text-[8px] font-bold text-slate-600 uppercase tracking-widest leading-none mt-1">Reward/Risk</span>
@@ -296,7 +312,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
 
                             {/* Bento Properties */}
-                            <div className="p-8 space-y-2">
+                            <div className="p-4 lg:p-8 space-y-2">
                                 <div className="grid grid-cols-2 gap-x-8">
                                     <Property label="ENTRY" value={entryPrice || '—'} icon={Target} />
                                     <Property label="EXIT" value={exitPrice || '—'} icon={ArrowRight} />
@@ -398,23 +414,30 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
                         </div>
 
-                        {/* RIGHT: THE CANVAS (Screenshot) */}
-                        <div className={`flex-1 relative group overflow-hidden ${isDark ? 'bg-black/40' : 'bg-slate-100/50'}`}>
+                        {/* RIGHT: THE CANVAS (Screenshot) — first on mobile (order-1), second on desktop */}
+                        <div className={`order-1 lg:order-2 shrink-0 lg:flex-1 relative group overflow-hidden ${isDark ? 'bg-black/40' : 'bg-slate-100/50'}`}>
+                            {/* Loading spinner while fetching full trade details */}
+                            {isLoadingDetails && (
+                                <div className="w-full py-16 lg:absolute lg:inset-0 flex items-center justify-center z-10">
+                                    <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" />
+                                </div>
+                            )}
                             <AnimatePresence mode="wait">
-                                {images.length > 0 ? (
+                                {!isLoadingDetails && (images.length > 0 && !imageLoadError) ? (
                                     <motion.div
                                         key={images[activeImageIndex]}
                                         initial={{ opacity: 0, scale: 0.98 }}
                                         animate={{ opacity: 1, scale: 1 }}
                                         exit={{ opacity: 0, scale: 1.02 }}
                                         transition={{ duration: 0.4, ease: "easeOut" }}
-                                        className="w-full h-full flex items-center justify-center p-8 lg:p-16"
+                                        className="w-full lg:h-full lg:flex lg:items-center lg:justify-center lg:p-10"
                                     >
-                                        <div className="relative max-w-full max-h-full">
+                                        <div className="relative w-full lg:max-w-full lg:max-h-full">
                                             <img
                                                 src={images[activeImageIndex]}
-                                                className="max-w-full max-h-full object-contain rounded-3xl shadow-[0_50px_100px_-20px_rgba(0,0,0,0.6)] cursor-zoom-in group-hover:scale-[1.02] transition-transform duration-700"
+                                                className="w-full h-auto lg:h-full lg:object-contain lg:rounded-2xl lg:shadow-[0_50px_100px_-20px_rgba(0,0,0,0.6)] cursor-zoom-in"
                                                 onClick={() => setIsZoomed(true)}
+                                                onError={() => setImageLoadError(true)}
                                             />
                                             {/* Floating Zoom Button */}
                                             <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
@@ -424,15 +447,20 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                             </div>
                                         </div>
                                     </motion.div>
-                                ) : (
-                                    <div className="w-full h-full flex flex-col items-center justify-center opacity-10 text-slate-500 p-20 text-center">
-                                        <div className="p-10 rounded-[40px] border-2 border-dashed border-slate-500">
-                                            <ImageIcon size={64} strokeWidth={1} />
+                                ) : !isLoadingDetails ? (
+                                    <div className="w-full lg:h-full flex flex-col items-center justify-center opacity-20 text-slate-500 p-8 lg:p-20 text-center">
+                                        <div className="p-6 lg:p-10 rounded-[30px] lg:rounded-[40px] border-2 border-dashed border-slate-500">
+                                            <ImageIcon size={36} strokeWidth={1} className="lg:hidden" />
+                                            <ImageIcon size={64} strokeWidth={1} className="hidden lg:block" />
                                         </div>
-                                        <p className="text-xl font-black uppercase tracking-[0.4em] mt-10">NO VISUAL DATA</p>
-                                        <p className="text-[10px] font-bold mt-2 opacity-60">Visual evidence not submitted for this transaction.</p>
+                                        <p className="text-sm lg:text-xl font-black uppercase tracking-[0.3em] lg:tracking-[0.4em] mt-6 lg:mt-10">
+                                            {imageLoadError ? 'CHYBA NAČÍTÁNÍ' : 'NO VISUAL DATA'}
+                                        </p>
+                                        <p className="text-[9px] font-bold mt-1.5 opacity-60 hidden lg:block">
+                                            {imageLoadError ? 'Obrázek se nepodařilo načíst.' : 'Visual evidence not submitted for this transaction.'}
+                                        </p>
                                     </div>
-                                )}
+                                ) : null}
                             </AnimatePresence>
 
                             {/* Floating Navigation Pill */}

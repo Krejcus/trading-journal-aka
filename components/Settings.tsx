@@ -106,7 +106,7 @@ const InputField = ({ value, onChange, placeholder, onKeyDown, icon: Icon, type 
 );
 
 const Card = ({ children, className = "", isDark }: any) => (
-  <div className={`p-6 rounded-[32px] border ${isDark ? 'bg-[#0a0f1d]/60 border-white/5 shadow-2xl backdrop-blur-xl' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm backdrop-blur-md'} ${className}`}>
+  <div className={`p-6 rounded-[32px] border ${isDark ? 'bg-theme-card-60 border-white/5 shadow-2xl backdrop-blur-xl' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm backdrop-blur-md'} ${className}`}>
     {children}
   </div>
 );

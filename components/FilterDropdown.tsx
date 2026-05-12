@@ -13,6 +13,8 @@ interface FilterDropdownProps {
   theme: 'dark' | 'light' | 'oled';
   isDashboardEditing?: boolean;
   setIsDashboardEditing?: (val: boolean) => void;
+  isMobileEditing?: boolean;
+  setIsMobileEditing?: (val: boolean) => void;
   dashboardMode?: DashboardMode;
   setDashboardMode?: (mode: DashboardMode) => void;
   viewMode: 'individual' | 'combined';
@@ -34,6 +36,8 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   theme,
   isDashboardEditing,
   setIsDashboardEditing,
+  isMobileEditing,
+  setIsMobileEditing,
   dashboardMode,
   setDashboardMode,
   viewMode,
@@ -219,7 +223,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
             }
             ref={panelRef}
             className={`fixed inset-x-0 bottom-0 top-auto sm:relative sm:inset-auto w-full sm:w-[320px] md:w-[400px] overflow-hidden border-t sm:border z-[1000] backdrop-blur-3xl rounded-t-[32px] sm:rounded-[24px] max-h-[85vh] sm:max-h-[80vh] flex flex-col ${isDark
-              ? 'bg-[#020617]/90 border-white/10 shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.5)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]'
+              ? 'bg-theme-page-90 border-white/10 shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.5)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]'
               : 'bg-white/95 border-slate-200 shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.05)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.1)]'
               }`}
           >
@@ -524,10 +528,11 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
             <div className={`px-4 py-3 border-t backdrop-blur-md flex items-center justify-between relative z-10 ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50/50'}`}>
               <span className={`text-[8px] font-black uppercase tracking-widest ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>{activeFilterCount} aktivních</span>
               <div className="flex items-center gap-2">
+                {/* Desktop: edit grid layout */}
                 {setIsDashboardEditing && (
                   <button
                     onClick={() => { setIsDashboardEditing(!isDashboardEditing); setIsOpen(false); }}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
+                    className={`hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
                       isDashboardEditing
                         ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
                         : (isDark
@@ -537,6 +542,22 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   >
                     {isDashboardEditing ? <Check size={12} /> : <LayoutGrid size={12} />}
                     {isDashboardEditing ? 'Uložit' : 'Upravit'}
+                  </button>
+                )}
+                {/* Mobile: edit widget list */}
+                {setIsMobileEditing && (
+                  <button
+                    onClick={() => { setIsMobileEditing(!isMobileEditing); setIsOpen(false); }}
+                    className={`flex md:hidden items-center gap-1.5 px-3 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
+                      isMobileEditing
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
+                        : (isDark
+                          ? 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                          : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600 shadow-sm')
+                    }`}
+                  >
+                    {isMobileEditing ? <Check size={12} /> : <LayoutGrid size={12} />}
+                    {isMobileEditing ? 'Uložit' : 'Upravit'}
                   </button>
                 )}
                 <button

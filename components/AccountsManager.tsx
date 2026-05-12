@@ -426,7 +426,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      <section className={`px-6 py-4 rounded-[24px] border flex flex-col lg:flex-row justify-between items-center gap-6 ${theme !== 'light' ? 'bg-slate-950/40 border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
+      <section className={`px-6 py-4 rounded-[24px] border flex flex-col lg:flex-row justify-between items-center gap-6 ${theme !== 'light' ? 'bg-theme-page/40 border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
         <div className="flex gap-8 items-center">
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded-xl ${theme !== 'light' ? 'bg-rose-500/10 text-rose-500' : 'bg-rose-50 text-rose-500'}`}><TrendingUp size={16} /></div>

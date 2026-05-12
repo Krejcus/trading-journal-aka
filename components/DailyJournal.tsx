@@ -69,8 +69,8 @@ interface DailyJournalProps {
   trades: Trade[];
   preps: DailyPrep[];
   reviews: DailyReview[];
-  onSavePrep: (prep: DailyPrep) => void;
-  onSaveReview: (review: DailyReview) => void;
+  onSavePrep: (prep: DailyPrep) => Promise<void> | void;
+  onSaveReview: (review: DailyReview) => Promise<void> | void;
   onDeletePrep?: (date: string) => void;
   onDeleteReview?: (date: string) => void;
   standardGoals: string[];
@@ -306,16 +306,20 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       setHasUnsavedChanges(true);
       setSaveStatus('saving');
       setIsSaving(true);
-      const timer = setTimeout(() => {
-        onSavePrep(prepForm);
-        prepFormDirty.current = false;
-        setLastSaved(new Date());
-        setIsSaving(false);
-        setHasUnsavedChanges(false);
-        setSaveStatus('saved');
-        // Reset to idle after 2s
-        setTimeout(() => setSaveStatus('idle'), 2000);
-      }, 500); // Reduced from 1000ms to 500ms
+      const timer = setTimeout(async () => {
+        try {
+          await onSavePrep(prepForm);
+          prepFormDirty.current = false;
+          setLastSaved(new Date());
+          setHasUnsavedChanges(false);
+          setSaveStatus('saved');
+          setTimeout(() => setSaveStatus('idle'), 2000);
+        } catch {
+          setSaveStatus('error');
+        } finally {
+          setIsSaving(false);
+        }
+      }, 500);
 
       return () => clearTimeout(timer);
     }
@@ -344,15 +348,19 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       setHasUnsavedChanges(true);
       setSaveStatus('saving');
       setIsSaving(true);
-      const timer = setTimeout(() => {
-        onSaveReview(reviewForm);
-        reviewFormDirty.current = false;
-        setLastSaved(new Date());
-        setIsSaving(false);
-        setHasUnsavedChanges(false);
-        setSaveStatus('saved');
-        // Reset to idle after 2s
-        setTimeout(() => setSaveStatus('idle'), 2000);
+      const timer = setTimeout(async () => {
+        try {
+          await onSaveReview(reviewForm);
+          reviewFormDirty.current = false;
+          setLastSaved(new Date());
+          setHasUnsavedChanges(false);
+          setSaveStatus('saved');
+          setTimeout(() => setSaveStatus('idle'), 2000);
+        } catch {
+          setSaveStatus('error');
+        } finally {
+          setIsSaving(false);
+        }
       }, 500);
 
       return () => clearTimeout(timer);
@@ -375,19 +383,22 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   };
 
   // Manual immediate save (bypasses debounce)
-  const handleManualSave = useCallback(() => {
+  const handleManualSave = useCallback(async () => {
     setSaveStatus('saving');
     setIsSaving(true);
-
-    // Save both prep and review immediately
-    onSavePrep(prepForm);
-    onSaveReview(reviewForm);
-
-    setLastSaved(new Date());
-    setIsSaving(false);
-    setHasUnsavedChanges(false);
-    setSaveStatus('saved');
-    setTimeout(() => setSaveStatus('idle'), 2000);
+    try {
+      await Promise.all([onSavePrep(prepForm), onSaveReview(reviewForm)]);
+      prepFormDirty.current = false;
+      reviewFormDirty.current = false;
+      setLastSaved(new Date());
+      setHasUnsavedChanges(false);
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    } catch {
+      setSaveStatus('error');
+    } finally {
+      setIsSaving(false);
+    }
   }, [prepForm, reviewForm, onSavePrep, onSaveReview]);
 
   // Handle navigation with unsaved changes check
@@ -928,6 +939,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         if (items[i].type.indexOf('image') !== -1) {
           const blob = items[i].getAsFile();
           if (blob) {
+            const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB
+            if (blob.size > MAX_IMAGE_BYTES) {
+              alert(`Obrázek je příliš velký (${(blob.size / 1024 / 1024).toFixed(1)} MB). Maximální velikost je 4 MB.`);
+              return;
+            }
             const reader = new FileReader();
             reader.onloadend = () => {
               const base64 = reader.result as string;
@@ -973,14 +989,14 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       {activeTab === 'daily' && view === 'timeline' ? (
         <div className="lg:grid lg:grid-cols-[1fr_350px] gap-8 items-start">
           {/* Main Column: Header + Timeline */}
-          <div className="space-y-8 min-w-0 order-2 lg:order-1">
-            <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+          <div className="space-y-3 lg:space-y-8 min-w-0 order-2 lg:order-1">
+            <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-3 border-b pb-3 lg:pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
               <div className="space-y-2">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
-                  <h2 className="text-3xl md:text-5xl font-black tracking-tighter italic flex items-center gap-4">
+                  <h2 className="hidden lg:inline-flex text-3xl md:text-5xl font-black tracking-tighter italic items-center gap-4">
                     DENNÍ PŘEHLED
                   </h2>
-                  <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner">
+                  <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner self-start">
                     <button onClick={() => navigateDate('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90"><ChevronLeft size={20} /></button>
                     <div className="px-3 py-1 text-center min-w-[100px]">
                       <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">Taktický Datum</p>
@@ -1073,15 +1089,19 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                       ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
                       : saveStatus === 'saved'
                         ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                        : hasUnsavedChanges
-                          ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-400'
-                          : 'bg-[var(--bg-card)] text-slate-500 border border-[var(--border-subtle)] opacity-50 cursor-not-allowed'
+                        : saveStatus === 'error'
+                          ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                          : hasUnsavedChanges
+                            ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20 hover:bg-orange-400'
+                            : 'bg-[var(--bg-card)] text-slate-500 border border-[var(--border-subtle)] opacity-50 cursor-not-allowed'
                       }`}
                   >
                     {saveStatus === 'saving' ? (
                       <><Loader2 size={14} className="animate-spin" /> Ukládám...</>
                     ) : saveStatus === 'saved' ? (
                       <><Check size={14} /> Uloženo</>
+                    ) : saveStatus === 'error' ? (
+                      <><AlertTriangle size={14} /> Chyba uložení</>
                     ) : (
                       <><Save size={14} /> Uložit</>
                     )}
@@ -1447,7 +1467,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                               className={`relative aspect-video rounded-3xl border-2 border-dashed overflow-hidden transition-all duration-500 flex flex-col items-center justify-center cursor-pointer ${activeImageField === `session_${session.id}`
                                 ? 'border-blue-500 bg-blue-500/5 ring-8 ring-blue-500/5'
                                 : theme !== 'light'
-                                  ? 'border-slate-800/50 bg-slate-950/20 group-hover:bg-slate-900/40'
+                                  ? 'border-slate-800/50 bg-theme-card-40 group-hover:bg-slate-900/40'
                                   : 'border-slate-200 bg-slate-50 group-hover:bg-slate-100/50 shadow-inner'
                                 }`}
                             >
@@ -1491,7 +1511,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                                 }
                               }))}
                               placeholder="Tvůj plán pro tuto seanci..."
-                              className={`w-full flex-1 min-h-[220px] rounded-3xl p-6 border focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/30 text-sm leading-relaxed transition-all placeholder:text-slate-500 ${theme !== 'light' ? 'bg-slate-950/20 border-slate-800/50 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700 shadow-inner'}`}
+                              className={`w-full flex-1 min-h-[220px] rounded-3xl p-6 border focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/30 text-sm leading-relaxed transition-all placeholder:text-slate-500 ${theme !== 'light' ? 'bg-theme-card-40 border-slate-800/50 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700 shadow-inner'}`}
                             />
                           </div>
                         </div>

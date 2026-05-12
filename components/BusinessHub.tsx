@@ -421,37 +421,35 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
                             <div className={cardClass}>
-                                <div className="flex justify-between items-center mb-8">
+                                <div className="flex flex-col gap-3 mb-8">
                                     <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
                                         <Layers size={16} className="text-blue-500" /> {t('operating_expenses', lang)}
                                     </h3>
-                                    <div className="flex items-center gap-4">
-                                        <div className="flex items-center gap-4">
-                                            <div className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-lg shadow-blue-500/5' : 'bg-blue-50 border-blue-100 shadow-sm'}`}>
-                                                <div className="p-2 bg-blue-500/20 text-blue-500 rounded-xl">
-                                                    <Zap size={14} />
-                                                </div>
-                                                <div>
-                                                    <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Tento měsíc</p>
-                                                    <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(expensesThisMonthValue)}</p>
-                                                </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <div className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-lg shadow-blue-500/5' : 'bg-blue-50 border-blue-100 shadow-sm'}`}>
+                                            <div className="p-2 bg-blue-500/20 text-blue-500 rounded-xl">
+                                                <Zap size={14} />
                                             </div>
-                                            <div
-                                                onClick={() => setShowMonthlyExpenseBreakdown(!showMonthlyExpenseBreakdown)}
-                                                className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border cursor-pointer transition-all hover:scale-105 active:scale-95 ${showMonthlyExpenseBreakdown ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : (isDark ? 'bg-slate-500/5 border-slate-500/20' : 'bg-slate-50 border-slate-100')}`}
-                                            >
-                                                <div className={`p-2 rounded-xl ${showMonthlyExpenseBreakdown ? 'bg-white/20 text-white' : 'bg-slate-500/20 text-slate-500'}`}>
-                                                    <Layers size={14} />
-                                                </div>
-                                                <div>
-                                                    <p className={`text-[8px] font-black uppercase tracking-widest ${showMonthlyExpenseBreakdown ? 'text-blue-100' : 'text-slate-500'}`}>Dohromady</p>
-                                                    <p className={`text-xs font-black`}>{formatValue(normalizedTotalExpenses)}</p>
-                                                </div>
+                                            <div>
+                                                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Tento měsíc</p>
+                                                <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(expensesThisMonthValue)}</p>
+                                            </div>
+                                        </div>
+                                        <div
+                                            onClick={() => setShowMonthlyExpenseBreakdown(!showMonthlyExpenseBreakdown)}
+                                            className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border cursor-pointer transition-all hover:scale-105 active:scale-95 ${showMonthlyExpenseBreakdown ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : (isDark ? 'bg-slate-500/5 border-slate-500/20' : 'bg-slate-50 border-slate-100')}`}
+                                        >
+                                            <div className={`p-2 rounded-xl ${showMonthlyExpenseBreakdown ? 'bg-white/20 text-white' : 'bg-slate-500/20 text-slate-500'}`}>
+                                                <Layers size={14} />
+                                            </div>
+                                            <div>
+                                                <p className={`text-[8px] font-black uppercase tracking-widest ${showMonthlyExpenseBreakdown ? 'text-blue-100' : 'text-slate-500'}`}>Dohromady</p>
+                                                <p className={`text-xs font-black`}>{formatValue(normalizedTotalExpenses)}</p>
                                             </div>
                                         </div>
                                         <button
                                             onClick={() => setIsAddingExpense(true)}
-                                            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-500/20"
+                                            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-500/20 whitespace-nowrap"
                                         >
                                             <Plus size={16} /> {t('add_expense', lang)}
                                         </button>

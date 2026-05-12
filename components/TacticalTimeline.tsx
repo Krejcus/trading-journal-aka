@@ -497,11 +497,11 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
   };
 
   return (
-    <div className={`relative ${isMini ? 'py-3 px-1' : 'py-10 px-4'}`}>
+    <div className={`relative ${isMini ? 'py-3 px-1' : 'py-4 px-2 lg:py-10 lg:px-4'}`}>
       {/* Central Line */}
       <div className={`absolute ${isMini ? 'left-4' : 'left-10 lg:left-1/2'} top-0 bottom-0 w-px ${isMini ? '' : '-translate-x-1/2'} ${isDark ? 'bg-[var(--border-subtle)]' : 'bg-slate-200'}`}></div>
 
-      <div className={isMini ? 'space-y-4' : 'space-y-12'}>
+      <div className={isMini ? 'space-y-4' : 'space-y-6 lg:space-y-12'}>
 
         {/* ====== PREP CARD ====== */}
         <div className={`relative flex items-center ${isMini ? 'justify-start' : 'lg:justify-center'}`}>
@@ -548,7 +548,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
               {/* Collapsed — preview */}
               {!isPrepExpanded && !isMini && prep && (
                 <div className="mt-3 space-y-4">
-                  <div className={`grid ${prep.scenarios.sessions && prep.scenarios.sessions.length > 1 ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
+                  <div className={`grid ${prep.scenarios.sessions && prep.scenarios.sessions.length > 1 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'} gap-3`}>
                     {prep.scenarios.sessions?.map((session, i) => (
                       <div key={session.id || i} className={`group/session overflow-hidden rounded-[24px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white/40 border-slate-200/50'}`}>
                         {session.image && (
@@ -622,7 +622,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                             </button>
                           )}
                         </div>
-                        <div className={`aspect-video rounded-2xl border-2 border-dashed overflow-hidden flex items-center justify-center ${session.image ? '' : isDark ? 'border-slate-800/50 bg-slate-950/20' : 'border-slate-200 bg-slate-50'}`}>
+                        <div className={`aspect-video rounded-2xl border-2 border-dashed overflow-hidden flex items-center justify-center ${session.image ? '' : isDark ? 'border-slate-800/50 bg-theme-card-40' : 'border-slate-200 bg-slate-50'}`}>
                           {session.image ? (
                             <div className="relative w-full h-full group/pimg">
                               <img src={session.image} className="w-full h-full object-cover" />
@@ -652,7 +652,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                             scenarios: { ...prev.scenarios, sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, plan: e.target.value } : s) }
                           }))}
                           placeholder="Tvůj plán pro tuto seanci..."
-                          className={`w-full flex-1 min-h-[160px] rounded-2xl p-4 border text-sm leading-relaxed transition-all placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-blue-500/20 ${isDark ? 'bg-slate-950/20 border-slate-800/50 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
+                          className={`w-full flex-1 min-h-[160px] rounded-2xl p-4 border text-sm leading-relaxed transition-all placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-blue-500/20 ${isDark ? 'bg-theme-card-40 border-slate-800/50 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
                         />
                       </div>
                     </div>
@@ -742,7 +742,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
                 {/* Expanded — sessions side by side with prep info + trades + breakdown */}
                 {isBreakdownExpanded && (
-                  <div className={`mt-6 grid gap-4 ${sessionGroups.length >= 3 ? 'grid-cols-3' : sessionGroups.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                  <div className={`mt-6 grid gap-4 ${sessionGroups.length >= 3 ? 'grid-cols-1 sm:grid-cols-3' : sessionGroups.length === 2 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
                     {sessionGroups.map(group => {
                       const sessionColor = group.session.color || '#6366f1';
                       return (
