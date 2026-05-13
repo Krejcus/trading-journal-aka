@@ -665,34 +665,45 @@ export const storageService = {
     };
   },
 
-  // Batch fetch screenshots for multiple trades (fallback for trades not loaded via RPC)
+  // Batch fetch screenshots for multiple trades.
+  // Uses targeted column selectors instead of fetching the whole data blob,
+  // which avoids loading megabytes of unrelated JSON per trade.
   async getTradeScreenshots(tradeIds: string[]): Promise<Map<string, { screenshot?: string; screenshots?: string[] }>> {
     const result = new Map<string, { screenshot?: string; screenshots?: string[] }>();
     if (tradeIds.length === 0) return result;
 
     const userId = await getUserId();
-    if (!userId) return result;
+    if (!userId) {
+      console.warn('[Screenshots] No userId — skipping fetch');
+      return result;
+    }
 
     try {
       const { data, error } = await supabase
         .from('trades')
-        .select('id, data')
+        .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
         .in('id', tradeIds)
         .eq('user_id', userId);
 
-      if (error || !data) return result;
+      if (error) {
+        console.error('[Screenshots] Supabase fetch error:', error.message);
+        return result;
+      }
+      if (!data) return result;
 
       data.forEach((row: any) => {
-        const d = row.data || {};
-        if (d.screenshot) {
-          result.set(row.id, {
-            screenshot: d.screenshot,
-            screenshots: d.screenshots || undefined
-          });
+        const screenshot: string | undefined = row.screenshot || undefined;
+        // screenshots stored as JSONB array — Supabase returns it already parsed
+        const screenshots: string[] | undefined = Array.isArray(row.screenshots) && row.screenshots.length > 0
+          ? row.screenshots
+          : undefined;
+
+        if (screenshot || screenshots) {
+          result.set(row.id, { screenshot, screenshots });
         }
       });
     } catch (err) {
-      // Silently fail — screenshots are non-critical and usually come from RPC
+      console.error('[Screenshots] Unexpected error during fetch:', err);
     }
 
     return result;

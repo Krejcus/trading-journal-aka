@@ -66,9 +66,23 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
   // --- LAZY SCREENSHOT CACHE ---
   const [screenshotCache, setScreenshotCache] = useState<Map<string, { screenshot?: string; screenshots?: string[] }>>(new Map());
+  // Ref mirror of screenshotCache — avoids stale closure in stable callbacks
+  const screenshotCacheRef = useRef<Map<string, { screenshot?: string; screenshots?: string[] }>>(new Map());
   const loadingScreenshotsRef = useRef<Set<string>>(new Set());
+  // Tracks IDs we've already attempted to fetch (even if no screenshot was found)
+  // This prevents re-fetching "no screenshot" trades every time the cache updates
+  const fetchedIdsRef = useRef<Set<string>>(new Set());
   const [loadedImages, setLoadedImages] = useState<Set<string>>(new Set());
   const [errorImages, setErrorImages] = useState<Set<string>>(new Set());
+
+  // Keep ref in sync with state (synchronously inside setState so ref is always current)
+  const updateScreenshotCache = useCallback((updater: (prev: Map<string, { screenshot?: string; screenshots?: string[] }>) => Map<string, { screenshot?: string; screenshots?: string[] }>) => {
+    setScreenshotCache(prev => {
+      const next = updater(prev);
+      screenshotCacheRef.current = next;
+      return next;
+    });
+  }, []);
 
   const handleImageLoad = (id: string) => {
     setLoadedImages(prev => {
@@ -84,18 +98,18 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       next.add(id);
       return next;
     });
-    // Try to fetch fresh base64 from DB — the stored URL may have expired
+    // Retry: fetch fresh screenshot from DB — may have been a transient error or expired URL
     if (loadingScreenshotsRef.current.has(id)) return;
     loadingScreenshotsRef.current.add(id);
     storageService.getTradeScreenshots([id]).then(results => {
       const fresh = results.get(id);
       if (fresh?.screenshot) {
-        setScreenshotCache(prev => {
+        updateScreenshotCache(prev => {
           const next = new Map(prev);
           next.set(id, fresh);
           return next;
         });
-        // Clear the error so the img re-renders with the fresh base64 src
+        // Clear error flag so the img re-renders with fresh src
         setErrorImages(prev => {
           const next = new Set(prev);
           next.delete(id);
@@ -170,6 +184,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     setVisibleCount(PAGE_SIZE);
     setLoadedImages(new Set());
     setErrorImages(new Set());
+    // Reset fetched tracking so new trade set gets fresh screenshots
+    fetchedIdsRef.current = new Set();
   }, [trades.length]);
 
   // --- INTERSECTION OBSERVER: Load more on scroll ---
@@ -195,15 +211,20 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   }, [hasMore, isLoadingMore, sortedTrades.length]);
 
   // --- LAZY SCREENSHOT LOADING ---
+  // STABLE callback — uses refs only (no state deps), never recreated.
+  // This breaks the stale-closure re-fetch loop: screenshotCache state changes
+  // no longer cause loadScreenshots to be recreated and the effect to re-fire.
+  const SCREENSHOT_BATCH = 5;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
   const loadScreenshots = useCallback(async (tradesToLoad: Trade[]) => {
-    // Filter to trades that have UUID ids, no cached screenshot, and aren't already loading
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const missing = tradesToLoad.filter(t =>
       typeof t.id === 'string' &&
       uuidRegex.test(t.id) &&
-      !t.screenshot &&
-      !screenshotCache.has(String(t.id)) &&
-      !loadingScreenshotsRef.current.has(String(t.id))
+      !t.screenshot &&                                    // skip trades that already carry screenshot inline
+      !screenshotCacheRef.current.has(String(t.id)) &&   // skip already cached
+      !fetchedIdsRef.current.has(String(t.id)) &&        // skip already attempted (even if empty result)
+      !loadingScreenshotsRef.current.has(String(t.id))   // skip currently in-flight
     );
 
     if (missing.length === 0) return;
@@ -211,40 +232,53 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     const ids = missing.map(t => String(t.id));
     ids.forEach(id => loadingScreenshotsRef.current.add(id));
 
-    try {
-      const results = await storageService.getTradeScreenshots(ids);
-      setScreenshotCache(prev => {
-        const next = new Map(prev);
-        results.forEach((value, key) => {
-          if (value.screenshot) next.set(key, value);
+    // Fetch in small batches to avoid heavy payloads timing out
+    for (let i = 0; i < ids.length; i += SCREENSHOT_BATCH) {
+      const batch = ids.slice(i, i + SCREENSHOT_BATCH);
+      try {
+        const results = await storageService.getTradeScreenshots(batch);
+        if (results.size > 0) {
+          updateScreenshotCache(prev => {
+            const next = new Map(prev);
+            results.forEach((value, key) => {
+              if (value.screenshot) next.set(key, value);
+            });
+            return next;
+          });
+        }
+      } catch (err) {
+        console.error('[Screenshots] Batch fetch failed, will retry on next render:', err);
+        // Remove from fetchedIds so they can be retried
+        batch.forEach(id => fetchedIdsRef.current.delete(id));
+      } finally {
+        batch.forEach(id => {
+          loadingScreenshotsRef.current.delete(id);
+          fetchedIdsRef.current.add(id); // Mark as attempted regardless of result
         });
-        return next;
-      });
-    } catch (err) {
-      console.error('[Screenshots] Failed to load batch:', err);
-    } finally {
-      ids.forEach(id => loadingScreenshotsRef.current.delete(id));
+      }
     }
-  }, [screenshotCache]);
+  }, []); // Stable — no state deps, uses refs
 
-  // Trigger screenshot loading when visible trades change
+  // Trigger screenshot loading only when visibleTrades actually changes
+  // loadScreenshots is stable ([] deps) so this effect only fires on scroll/filter
   useEffect(() => {
     if (visibleTrades.length > 0) {
       loadScreenshots(visibleTrades);
     }
   }, [visibleTrades, loadScreenshots]);
 
-  // Helper: get screenshot for a trade (prefer fresh cache/base64 over potentially-expired URL)
-  const getScreenshot = useCallback((trade: Trade): string | undefined => {
-    const cached = screenshotCache.get(String(trade.id))?.screenshot;
-    if (cached) return cached;
-    return trade.screenshot;
-  }, [screenshotCache]);
+  // Helper: get screenshot for a trade (prefer cache over inline field)
+  // Uses screenshotCache STATE (not ref) so React re-renders when cache updates
+  const getScreenshot = (trade: Trade): string | undefined => {
+    return screenshotCache.get(String(trade.id))?.screenshot || trade.screenshot || undefined;
+  };
 
-  const getScreenshots = useCallback((trade: Trade): string[] | undefined => {
+  const getScreenshots = (trade: Trade): string[] | undefined => {
+    const cached = screenshotCache.get(String(trade.id))?.screenshots;
+    if (cached && cached.length > 0) return cached;
     if (trade.screenshots && trade.screenshots.length > 0) return trade.screenshots;
-    return screenshotCache.get(String(trade.id))?.screenshots;
-  }, [screenshotCache]);
+    return undefined;
+  };
 
   const formatTradeDate = (dateStr: string) => {
     const d = new Date(dateStr);
