@@ -20,7 +20,21 @@ interface PropertyProps {
     subValue?: string;
     color?: string;
     icon?: any;
+    isDark?: boolean;
 }
+
+const Property = React.memo(({ label, value, subValue, color, icon: Icon, isDark = true }: PropertyProps) => (
+    <div className={`py-4 px-1 group/prop border-b ${isDark ? 'border-white/[0.03]' : 'border-slate-100'} last:border-0`}>
+        <div className="flex items-center gap-2 mb-1.5 opacity-40 group-hover/prop:opacity-60 transition-opacity">
+            {Icon && <Icon size={10} className="text-slate-400" />}
+            <span className="text-[8px] font-black uppercase tracking-[0.2em]">{label}</span>
+        </div>
+        <div>
+            <span className={`text-[13px] font-black font-mono tracking-tighter ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
+            {subValue && <p className="text-[8px] font-bold text-slate-500 mt-0.5 uppercase tracking-wide opacity-60">{subValue}</p>}
+        </div>
+    </div>
+));
 
 interface TradeDetailModalProps {
     trade: Trade;
@@ -218,18 +232,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     // Reset error state when trade changes
     useEffect(() => { setImageLoadError(false); }, [activeTrade.id]);
 
-    const Property = ({ label, value, subValue, color, icon: Icon }: PropertyProps) => (
-        <div className={`py-4 px-1 group/prop border-b ${isDark ? 'border-white/[0.03]' : 'border-slate-100'} last:border-0`}>
-            <div className="flex items-center gap-2 mb-1.5 opacity-40 group-hover/prop:opacity-60 transition-opacity">
-                {Icon && <Icon size={10} className="text-slate-400" />}
-                <span className="text-[8px] font-black uppercase tracking-[0.2em]">{label}</span>
-            </div>
-            <div>
-                <span className={`text-[13px] font-black font-mono tracking-tighter ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
-                {subValue && <p className="text-[8px] font-bold text-slate-500 mt-0.5 uppercase tracking-wide opacity-60">{subValue}</p>}
-            </div>
-        </div>
-    );
 
     const handleShare = async () => {
         let url = '';
@@ -322,12 +324,12 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             {/* Bento Properties */}
                             <div className="p-4 lg:p-8 space-y-2">
                                 <div className="grid grid-cols-2 gap-x-8">
-                                    <Property label="ENTRY" value={entryPrice || '—'} icon={Target} />
-                                    <Property label="EXIT" value={exitPrice || '—'} icon={ArrowRight} />
-                                    <Property label="STOP LOSS" value={stopLoss || '—'} color="text-rose-500/80" icon={ShieldCheck} />
-                                    <Property label="TAKE PROFIT" value={takeProfit || '—'} color="text-emerald-500/80" icon={Zap} />
-                                    <Property label="POSITION" value={activeTrade.positionSize || 1} icon={Layers} />
-                                    <Property label="HOLD TIME" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} />
+                                    <Property label="ENTRY" value={entryPrice || '—'} icon={Target} isDark={isDark} />
+                                    <Property label="EXIT" value={exitPrice || '—'} icon={ArrowRight} isDark={isDark} />
+                                    <Property label="STOP LOSS" value={stopLoss || '—'} color="text-rose-500/80" icon={ShieldCheck} isDark={isDark} />
+                                    <Property label="TAKE PROFIT" value={takeProfit || '—'} color="text-emerald-500/80" icon={Zap} isDark={isDark} />
+                                    <Property label="POSITION" value={activeTrade.positionSize || 1} icon={Layers} isDark={isDark} />
+                                    <Property label="HOLD TIME" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} isDark={isDark} />
                                 </div>
 
                                 <div className="pt-6 space-y-6">

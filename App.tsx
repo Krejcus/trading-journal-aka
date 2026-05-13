@@ -22,6 +22,7 @@ import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
 import { PullToRefresh } from './components/PullToRefresh';
 import ConfirmationModal from './components/ConfirmationModal';
+import AIChat from './components/AIChat';
 import SharedTradeView from './components/SharedTradeView';
 import { currencyService, ExchangeRates } from './services/currencyService';
 import { t } from './services/translations';
@@ -2734,6 +2735,22 @@ const App: React.FC = () => {
         message="Opravdu chcete smazat VŠECHNY obchody z tohoto účtu? Tato akce je nevratná a data budou trvale odstraněna z cloudu."
         theme={theme}
       />
+
+      {/* AI Coach — floating chat */}
+      {!sharedTrade && isInitialLoadDone && (
+        <AIChat
+          trades={trades}
+          accounts={accounts}
+          ironRules={ironRules}
+          playbookItems={playbookItems}
+          dailyPreps={dailyPreps}
+          dailyReviews={dailyReviews}
+          theme={theme}
+          onOpenTrade={(trade) => {
+            setActivePage('history');
+          }}
+        />
+      )}
     </div >
   );
 };
