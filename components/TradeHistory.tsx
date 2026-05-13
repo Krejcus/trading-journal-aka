@@ -15,6 +15,7 @@ import {
 
 import TradeDetailModal from './TradeDetailModal';
 import ImageZoomModal from './ImageZoomModal';
+import ConfirmationModal from './ConfirmationModal';
 
 interface TradeHistoryProps {
   trades: Trade[];
@@ -52,11 +53,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   };
 
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
-  const [zoomImage, setZoomImage] = useState<string | null>(null);
+  const [zoomImage, setZoomImage] = useState<{ images: string[]; index: number } | null>(null);
 
   // --- MULTI-SELECT STATE ---
   const [selectedTradeIds, setSelectedTradeIds] = useState<Set<string | number>>(new Set());
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
   // --- INFINITE SCROLL STATE ---
   const PAGE_SIZE = 20;
@@ -167,11 +169,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
   const handleDeleteSelected = () => {
     if (selectedTradeIds.size === 0) return;
-    if (!confirm(`Opravdu chcete smazat ${selectedTradeIds.size} obchodů?`)) return;
+    setBulkDeleteConfirmOpen(true);
+  };
 
+  const confirmDeleteSelected = () => {
     selectedTradeIds.forEach(id => onDelete(id));
     setSelectedTradeIds(new Set());
     setIsMultiSelectMode(false);
+    setBulkDeleteConfirmOpen(false);
   };
 
   const clearSelection = () => {
@@ -179,14 +184,24 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     setIsMultiSelectMode(false);
   };
 
-  // Reset visible count when trades change (e.g., filter applied)
+  // Fingerprint of first 20 trade IDs — catches filter/sort changes even when count doesn't change
+  const tradesFingerprint = useMemo(
+    () => trades.slice(0, 20).map(t => t.id).join(','),
+    [trades]
+  );
+
+  // Reset visible count when trades change (e.g., filter applied, sort changed)
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-    setLoadedImages(new Set());
+    // NOTE: Do NOT reset loadedImages here. When background refresh fires with a different
+    // fingerprint, setLoadedImages(new Set()) clears already-loaded IDs. But since the img
+    // elements keep the same src (same base64 data), React won't remount them and onLoad
+    // won't re-fire — leaving images permanently stuck at opacity-0 behind the skeleton.
+    // New trade IDs not yet in loadedImages naturally show the skeleton until onLoad fires.
     setErrorImages(new Set());
     // Reset fetched tracking so new trade set gets fresh screenshots
     fetchedIdsRef.current = new Set();
-  }, [trades.length]);
+  }, [tradesFingerprint]);
 
   // --- INTERSECTION OBSERVER: Load more on scroll ---
   useEffect(() => {
@@ -235,8 +250,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     // Fetch in small batches to avoid heavy payloads timing out
     for (let i = 0; i < ids.length; i += SCREENSHOT_BATCH) {
       const batch = ids.slice(i, i + SCREENSHOT_BATCH);
+      // queryRan = true means the DB query actually executed (userId was available).
+      // Only mark as "fetched" when queryRan — if auth wasn't ready, leave IDs
+      // out of fetchedIdsRef so they'll be retried on the next trigger.
+      let queryRan = false;
       try {
         const results = await storageService.getTradeScreenshots(batch);
+        queryRan = true; // resolving (even empty) means auth was ready and query ran
         if (results.size > 0) {
           updateScreenshotCache(prev => {
             const next = new Map(prev);
@@ -247,24 +267,31 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           });
         }
       } catch (err) {
-        console.error('[Screenshots] Batch fetch failed, will retry on next render:', err);
-        // Remove from fetchedIds so they can be retried
-        batch.forEach(id => fetchedIdsRef.current.delete(id));
+        // queryRan stays false — auth wasn't ready or network error → will retry
+        console.error('[Screenshots] Batch fetch failed, will retry:', err);
       } finally {
         batch.forEach(id => {
           loadingScreenshotsRef.current.delete(id);
-          fetchedIdsRef.current.add(id); // Mark as attempted regardless of result
+          // Only mark as done if the query actually ran against the DB.
+          // If auth wasn't ready (threw), leave out so next trigger retries.
+          if (queryRan) fetchedIdsRef.current.add(id);
         });
       }
     }
   }, []); // Stable — no state deps, uses refs
 
-  // Trigger screenshot loading only when visibleTrades actually changes
-  // loadScreenshots is stable ([] deps) so this effect only fires on scroll/filter
+  // Trigger screenshot loading when visibleTrades changes.
+  // loadScreenshots is stable ([] deps) so this only fires on actual changes.
+  // On fresh load, if auth isn't ready yet, a 1-second retry fires to catch
+  // the case where IndexedDB served cached trades before Supabase session initialized.
   useEffect(() => {
-    if (visibleTrades.length > 0) {
-      loadScreenshots(visibleTrades);
-    }
+    if (visibleTrades.length === 0) return;
+    loadScreenshots(visibleTrades);
+    // Retry after 1s for the "auth not ready on first render" case:
+    // If all IDs were skipped due to missing userId, fetchedIdsRef won't have them
+    // and this retry will succeed once the session is established.
+    const retryTimer = setTimeout(() => loadScreenshots(visibleTrades), 1200);
+    return () => clearTimeout(retryTimer);
   }, [visibleTrades, loadScreenshots]);
 
   // Helper: get screenshot for a trade (prefer cache over inline field)
@@ -299,6 +326,18 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20 pt-4">
 
+      <ConfirmationModal
+        isOpen={bulkDeleteConfirmOpen}
+        onClose={() => setBulkDeleteConfirmOpen(false)}
+        onConfirm={confirmDeleteSelected}
+        title={`Smazat ${selectedTradeIds.size} obchodů`}
+        message={`Opravdu chcete smazat ${selectedTradeIds.size} vybraných obchodů? Tato akce je nevratná.`}
+        confirmText="Smazat"
+        cancelText="Zrušit"
+        variant="danger"
+        theme={theme}
+      />
+
       {/* Multi-Select Toolbar */}
       <div className="flex items-center gap-3 mb-4 px-2">
         <button
@@ -312,7 +351,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${
             isMultiSelectMode
               ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-              : 'bg-slate-700/50 text-slate-300 border border-slate-600/30 hover:bg-slate-600/50'
+              : theme === 'light'
+                ? 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200'
+                : 'bg-slate-700/50 text-slate-300 border border-slate-600/30 hover:bg-slate-600/50'
           }`}
         >
           {isMultiSelectMode ? 'Zrušit výběr' : 'Vybrat více'}
@@ -322,7 +363,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           <>
             <button
               onClick={toggleSelectAll}
-              className="px-4 py-2 rounded-lg font-bold text-sm bg-slate-700/50 text-slate-300 border border-slate-600/30 hover:bg-slate-600/50 transition-all"
+              className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${theme === 'light' ? 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200' : 'bg-slate-700/50 text-slate-300 border border-slate-600/30 hover:bg-slate-600/50'}`}
             >
               {selectedTradeIds.size === visibleTrades.length ? 'Zrušit vše' : 'Vybrat vše'}
             </button>
@@ -499,7 +540,20 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   {tradeScreenshot ? (
                     <div
                       className="w-full h-full relative group/img"
-                      onClick={(e) => { e.stopPropagation(); setZoomImage(tradeScreenshot); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Sestavit flat pole všech screenshotů ze všech viditelných obchodů
+                        const allImgs: string[] = [];
+                        let startIndex = 0;
+                        visibleTrades.forEach(t => {
+                          const tScreenshots = getScreenshots(t);
+                          const tScreenshot = getScreenshot(t);
+                          const tImgs = tScreenshots && tScreenshots.length > 0 ? tScreenshots : (tScreenshot ? [tScreenshot] : []);
+                          if (t.id === trade.id) startIndex = allImgs.length;
+                          allImgs.push(...tImgs);
+                        });
+                        if (allImgs.length > 0) setZoomImage({ images: allImgs, index: startIndex });
+                      }}
                     >
                       {!isImageLoaded && !errorImages.has(String(trade.id)) && (
                         <div className={`absolute inset-0 animate-pulse bg-slate-800/20 backdrop-blur-sm flex items-center justify-center z-10`}>
@@ -737,7 +791,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       )}
 
       {zoomImage && (
-        <ImageZoomModal src={zoomImage} onClose={() => setZoomImage(null)} />
+        <ImageZoomModal images={zoomImage.images} initialIndex={zoomImage.index} onClose={() => setZoomImage(null)} />
       )}
 
       {selectedTrade && (

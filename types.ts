@@ -66,6 +66,7 @@ export interface User {
   language?: 'cs' | 'en';
   currency?: 'USD' | 'CZK' | 'EUR';
   timezone?: string;
+  preferences?: Record<string, any>; // extended preferences (networkNotifications etc.)
 }
 
 export interface SocialConnection {
@@ -463,14 +464,22 @@ export interface PlaybookItem {
 
 export interface BusinessGoal {
   id: string;
-  user_id: string;
-  title: string;
+  user_id?: string;
+  title?: string;
   description?: string;
   target_amount?: number;
   deadline?: string;
   status?: string;
   created_at?: string;
   updated_at?: string;
+  // Fields used by BusinessHub component
+  type?: string;
+  metric?: string;
+  label?: string;
+  target?: number;
+  current?: number;
+  category?: string;
+  logs?: Array<{ date: string; value?: number; amount?: number; note?: string }>;
 }
 
 export interface ConstitutionRule {

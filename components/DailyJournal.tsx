@@ -129,6 +129,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Unsaved changes warning
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
@@ -136,6 +137,13 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   const rituals = useMemo(() => ironRules.filter(r => r.type === 'ritual'), [ironRules]);
   const tradeRules = useMemo(() => ironRules.filter(r => r.type === 'trading'), [ironRules]);
+
+  // Cleanup save-status timer on unmount to avoid setState on unmounted component
+  useEffect(() => {
+    return () => {
+      if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+    };
+  }, []);
 
   const groupedTrades = useMemo(() => {
     const groups: { [key: string]: Trade[] } = {};
@@ -313,7 +321,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           setLastSaved(new Date());
           setHasUnsavedChanges(false);
           setSaveStatus('saved');
-          setTimeout(() => setSaveStatus('idle'), 2000);
+          if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+          saveStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
         } catch {
           setSaveStatus('error');
         } finally {
@@ -355,7 +364,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           setLastSaved(new Date());
           setHasUnsavedChanges(false);
           setSaveStatus('saved');
-          setTimeout(() => setSaveStatus('idle'), 2000);
+          if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+          saveStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
         } catch {
           setSaveStatus('error');
         } finally {
@@ -444,10 +454,17 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   }, []);
 
   useEffect(() => {
+    let mounted = true;
     const loadExtra = async () => {
-      setWeeklyReviews(await storageService.getWeeklyReviews());
+      try {
+        const data = await storageService.getWeeklyReviews();
+        if (mounted) setWeeklyReviews(data);
+      } catch (err) {
+        console.warn('[DailyJournal] Failed to load weekly reviews:', err);
+      }
     };
     loadExtra();
+    return () => { mounted = false; };
   }, []);
 
   // --- EXPORT LOGIC ---
@@ -984,6 +1001,27 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   return (
     <div className="space-y-6 lg:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20">
+
+      {/* Mobilní přepínač tabů — skrytý na md+ kde je přepínač v headeru */}
+      <div className="flex md:hidden w-full p-1 rounded-2xl border gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
+        {([
+          { id: 'daily', label: 'Dnešek' },
+          { id: 'weekly', label: 'Týden' },
+          { id: 'archives', label: 'Deník' }
+        ] as const).map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => onTabChange(tab.id)}
+            className={`relative flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+              activeTab === tab.id
+                ? (theme !== 'light' ? 'bg-slate-700/60 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm border border-slate-200/60')
+                : (theme !== 'light' ? 'text-slate-500' : 'text-slate-400')
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
 
       {activeTab === 'daily' && view === 'timeline' ? (

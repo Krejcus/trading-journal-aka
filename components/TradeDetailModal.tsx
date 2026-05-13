@@ -83,23 +83,28 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     useEffect(() => {
         setFullTrade(trade);
+        // If parent trade already has screenshot data, use it directly (no extra DB call)
         if (trade.screenshot || (trade.screenshots && trade.screenshots.length > 0)) return;
+        let cancelled = false;
         const loadFull = async () => {
             if (isLoadingDetails) return;
             setIsLoadingDetails(true);
             try {
                 if (trade.id) {
                     const detailed = await storageService.getTradeById(String(trade.id));
-                    if (detailed) setFullTrade(detailed);
+                    if (detailed && !cancelled) setFullTrade(detailed);
                 }
             } catch (e) {
                 console.error("Failed to load full trade details", e);
             } finally {
-                setIsLoadingDetails(false);
+                if (!cancelled) setIsLoadingDetails(false);
             }
         };
         loadFull();
-    }, [trade.id]);
+        return () => { cancelled = true; };
+    // Include screenshot/screenshots: if parent refreshes with new screenshot data, update fullTrade
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [trade.id, trade.screenshot, trade.screenshots]);
 
     const groupTrades = useMemo(() => {
         if (!allTrades.length) return [activeTrade];
@@ -196,7 +201,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     };
 
     const timeRange = `${formatTime(tradeEntryTime)} - ${formatTime(exitTime)}`;
-    const holdTime = activeTrade.duration || (Math.round(safeValue(activeTrade.durationMinutes || activeTrade.duration_minutes)) + 'm');
+    const holdTime = activeTrade.duration || (Math.round(safeValue(activeTrade.durationMinutes ?? (activeTrade as any).duration_minutes)) + 'm');
     const status = activeTrade.executionStatus || (activeTrade.isValid === false ? 'Invalid' : 'Valid');
     const isMissed = status === 'Missed';
     const isWin = pnl >= 0;
@@ -235,7 +240,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                 url = `${window.location.origin}${window.location.pathname}?shareId=${trade.id}`;
             } else {
                 const shareableTrade = { ...trade, screenshot: null, screenshots: [] };
-                const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(shareableTrade))));
+                // Modern Unicode-safe encode: UTF-8 string → bytes → base64
+                const jsonStr = JSON.stringify(shareableTrade);
+                const bytes = new TextEncoder().encode(jsonStr);
+                const encoded = btoa(String.fromCharCode(...bytes));
                 url = `${window.location.origin}${window.location.pathname}?share=${encoded}`;
             }
             await navigator.clipboard.writeText(url);
@@ -526,7 +534,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             </div>
 
             {isZoomed && images.length > 0 && (
-                <ImageZoomModal src={images[activeImageIndex]} onClose={() => setIsZoomed(false)} />
+                <ImageZoomModal images={images} initialIndex={activeImageIndex} onClose={() => setIsZoomed(false)} />
             )}
         </ErrorBoundary>
     );

@@ -137,7 +137,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     const handleAddGoal = () => {
         if (!newGoal.label || !newGoal.target) return;
         const goal: BusinessGoal = {
-            id: `goal_${Date.now()}`,
+            id: crypto.randomUUID(),
             type: (newGoal.type as any) || 'Monthly',
             metric: (newGoal.metric as any) || 'PnL',
             label: newGoal.label,
@@ -186,7 +186,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
             }
             return g;
         });
-        onUpdateGoals(newGoals);
+        onUpdateGoals(newGoals as BusinessGoal[]);
         setUpdatingGoalId(null);
         setIncrementValue(0);
     };
@@ -194,7 +194,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     const handleAddExpense = () => {
         if (!newExpense.label || !newExpense.amount) return;
         const exp: BusinessExpense = {
-            id: `exp_${Date.now()}`,
+            id: crypto.randomUUID(),
             label: newExpense.label,
             category: (newExpense.category as any) || 'Other',
             amount: Number(newExpense.amount),
@@ -308,7 +308,25 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     return (
         <div className="space-y-8 pb-32 max-w-[1400px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700 pt-4">
 
-            {/* Remove StrategicHub tab content completely */}
+            {/* Mobilní přepínač tabů */}
+            <div className="flex md:hidden w-full p-1 rounded-2xl border gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
+                {([
+                    { id: 'financials', label: 'Finance' },
+                    { id: 'goals', label: 'Cíle' }
+                ] as const).map(tab => (
+                    <button
+                        key={tab.id}
+                        onClick={() => onTabChange(tab.id)}
+                        className={`relative flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+                            activeTab === tab.id
+                                ? (theme !== 'light' ? 'bg-slate-700/60 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm border border-slate-200/60')
+                                : (theme !== 'light' ? 'text-slate-500' : 'text-slate-400')
+                        }`}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
+            </div>
 
             {activeTab === 'financials' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-500">

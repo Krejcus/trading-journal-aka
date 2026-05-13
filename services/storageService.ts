@@ -10,6 +10,18 @@ const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-
 let cachedUserId: string | null = null;
 let lastSessionCheck = 0;
 
+// Invalidate cache on auth state changes (logout, user switch) to prevent stale userId
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_OUT' || event === 'USER_UPDATED' || !session) {
+    cachedUserId = null;
+    lastSessionCheck = 0;
+  } else if (session?.user?.id && session.user.id !== cachedUserId) {
+    // User changed — update cache immediately
+    cachedUserId = session.user.id;
+    lastSessionCheck = Date.now();
+  }
+});
+
 export const getUserId = async () => {
   // Use cache if it's less than 30 seconds old
   if (cachedUserId && Date.now() - lastSessionCheck < 30000) {
@@ -23,17 +35,33 @@ export const getUserId = async () => {
 };
 
 // Safe LocalStorage helper to prevent QuotaExceededError from crashing the app
+// On quota exceeded: evict the largest non-essential cached key, then retry once
 const safeSetItem = (key: string, value: any) => {
   try {
     const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
     localStorage.setItem(key, stringValue);
   } catch (e: any) {
     if (e.name === 'QuotaExceededError' || e.code === 22) {
-      console.warn(`[Storage] LocalStorage quota exceeded for key: ${key}. Background data will still load from server.`);
-      // Optional: Clear some specific large keys to make room for critical data
-      if (key.includes('trades')) {
-        // If we can't even save limited trades, maybe clear all trades cache to be safe
-        // but only if it's not the current key we are trying to save
+      console.warn(`[Storage] LocalStorage quota exceeded for key: ${key}. Evicting largest cached entry…`);
+      try {
+        // Find the largest alphatrade_ cache key (excluding the one we're trying to save)
+        let largestKey: string | null = null;
+        let largestSize = 0;
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || k === key || !k.startsWith('alphatrade_')) continue;
+          const len = (localStorage.getItem(k) || '').length;
+          if (len > largestSize) { largestSize = len; largestKey = k; }
+        }
+        if (largestKey) {
+          localStorage.removeItem(largestKey);
+          console.warn(`[Storage] Evicted ${largestKey} (${(largestSize / 1024).toFixed(1)} KB)`);
+          // Retry once after eviction
+          const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+          localStorage.setItem(key, stringValue);
+        }
+      } catch (retryErr) {
+        console.error(`[Storage] Still failed after eviction, giving up:`, retryErr);
       }
     } else {
       console.error(`[Storage] Failed to save to LocalStorage:`, e);
@@ -428,8 +456,9 @@ export const storageService = {
       .single();
 
     if (getErr || !current) {
-      console.error("Failed to fetch trade for update:", getErr);
-      return;
+      const msg = getErr?.message || 'Trade not found';
+      console.error("Failed to fetch trade for update:", msg);
+      throw new Error(`Nepodařilo se načíst obchod před uložením: ${msg}`);
     }
 
     const updatedData = {
@@ -501,14 +530,21 @@ export const storageService = {
       .map(t => String(t.id));
 
     const screenshotMap = new Map<string, { screenshot?: string; screenshots?: string[] }>();
+    // Track which IDs we failed to verify — these will be excluded from upsert to prevent data loss
+    const screenshotFetchFailed = new Set<string>();
 
     if (existingIdsWithoutScreenshots.length > 0) {
       try {
-        const { data: screenshotRows } = await supabase
+        const { data: screenshotRows, error: ssErr } = await supabase
           .from('trades')
           .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
           .in('id', existingIdsWithoutScreenshots)
           .eq('user_id', userId);
+
+        if (ssErr) throw ssErr;
+
+        // Build a set of IDs that were returned by the DB (even with no screenshot)
+        const returnedIds = new Set((screenshotRows || []).map((r: any) => String(r.id)));
 
         screenshotRows?.forEach((row: any) => {
           if (row.screenshot || (row.screenshots && row.screenshots.length > 0)) {
@@ -518,12 +554,26 @@ export const storageService = {
             });
           }
         });
+
+        // Any ID we asked about but didn't get back is suspicious — skip it to be safe
+        existingIdsWithoutScreenshots.forEach(id => {
+          if (!returnedIds.has(id)) screenshotFetchFailed.add(id);
+        });
       } catch (err) {
-        console.error('[saveTrades] Failed to fetch existing screenshots:', err);
+        // Network error or DB error — mark ALL existing trades as unsafe to upsert
+        // (new trades with no ID are fine, they can't have screenshots yet)
+        console.error('[saveTrades] Screenshot fetch failed — skipping existing trades to prevent data loss:', err);
+        existingIdsWithoutScreenshots.forEach(id => screenshotFetchFailed.add(id));
       }
     }
 
     const tradesToUpsert = trades.map(t => {
+      // Skip trades where screenshot fetch failed — safer to skip than risk wiping screenshots
+      if (screenshotFetchFailed.has(String(t.id))) {
+        console.warn(`[saveTrades] Skipping trade ${t.id} — could not verify screenshots`);
+        return null;
+      }
+
       const realAccId = isUUID(t.accountId) ? t.accountId : (dbAccounts?.[0]?.id);
       if (!realAccId) return null;
 
@@ -674,8 +724,8 @@ export const storageService = {
 
     const userId = await getUserId();
     if (!userId) {
-      console.warn('[Screenshots] No userId — skipping fetch');
-      return result;
+      // Throw so caller knows auth wasn't ready and can retry (vs. "no screenshots found")
+      throw new Error('AUTH_NOT_READY');
     }
 
     try {
@@ -716,21 +766,25 @@ export const storageService = {
     if (!userId) return result;
 
     try {
+      // Use targeted selectors — avoids loading the entire data JSONB blob per trade
       const { data, error } = await supabase
         .from('trades')
-        .select('id, data')
+        .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
         .eq('user_id', userId);
 
       if (error || !data) return result;
 
       data.forEach((row: any) => {
-        const d = row.data || {};
-        if (d.screenshot) {
-          result.set(row.id, { screenshot: d.screenshot });
+        const screenshot: string | undefined = row.screenshot || undefined;
+        const screenshots: string[] | undefined = Array.isArray(row.screenshots) && row.screenshots.length > 0
+          ? row.screenshots
+          : undefined;
+        if (screenshot || screenshots) {
+          result.set(row.id, { screenshot, screenshots });
         }
       });
     } catch (err) {
-      // Silently fail
+      console.warn('[prefetchAllScreenshots] Failed:', err);
     }
 
     return result;
@@ -832,12 +886,13 @@ export const storageService = {
 
   async saveAccounts(accounts: Account[]): Promise<Account[]> {
     const userId = await getUserId();
-
-    // Save to local storage immediately with userId-scoped key
     const localKey = userId ? `alphatrade_accounts_${userId}` : 'alphatrade_accounts';
-    safeSetItem(localKey, accounts);
 
-    if (!userId || accounts.length === 0) return accounts;
+    // If not logged in, save locally and return (no DB)
+    if (!userId || accounts.length === 0) {
+      safeSetItem(localKey, accounts);
+      return accounts;
+    }
 
     const existingAccounts = accounts.filter(a => isUUID(a.id));
     const newAccounts = accounts.filter(a => !isUUID(a.id));
@@ -1240,9 +1295,9 @@ export const storageService = {
     }
 
     return (data || []).map((d: any) => {
-      // Extra fields stored as JSON in description
+      // Extra fields stored as JSON in description — try parse regardless of first char
       let extra: any = {};
-      try { if (d.description?.startsWith('{')) extra = JSON.parse(d.description); } catch { }
+      try { extra = JSON.parse(d.description); } catch { /* plain text description, extra stays {} */ }
       return {
         id: d.id,
         user_id: d.user_id,

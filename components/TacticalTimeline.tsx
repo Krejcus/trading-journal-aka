@@ -512,18 +512,20 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
             <div className={`${padding} ${rounded} border transition-all ${prep ? (isDark ? 'bg-blue-600/5 border-blue-500/20 shadow-lg shadow-blue-500/5' : 'bg-blue-50 border-blue-200 shadow-sm') : (isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200')}`}>
               {/* Header — click to expand/collapse */}
               <div
-                className="flex items-center justify-between cursor-pointer"
+                className="flex items-center justify-between gap-2 cursor-pointer"
                 onClick={() => canInlineEdit ? setIsPrepExpanded(!isPrepExpanded) : onEditPrep()}
               >
-                <div className="flex items-center gap-1.5">
-                  <div className={`${isMini ? 'p-1' : 'p-2'} rounded-lg bg-blue-600/10 text-blue-500`}><Coffee size={iconSize} /></div>
-                  <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Příprava</h4>
-                  {prep && !prep.completed && !isMini && (
-                    <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">Rozpracováno</span>
-                  )}
-                  {isMini && <span className="text-[6px] text-slate-600 font-mono ml-auto">08:00</span>}
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <div className={`${isMini ? 'p-1' : 'p-2'} rounded-lg bg-blue-600/10 text-blue-500 flex-shrink-0`}><Coffee size={iconSize} /></div>
+                  <div className="min-w-0">
+                    <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Příprava</h4>
+                    {prep && !prep.completed && !isMini && (
+                      <span className="inline-block mt-0.5 px-2 py-0.5 rounded-md text-[7px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">Rozpracováno</span>
+                    )}
+                    {isMini && <span className="text-[6px] text-slate-600 font-mono">08:00</span>}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-shrink-0">
                   {!isMini && isPrepExpanded && isSaving && (
                     <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-blue-500/10 text-blue-500 animate-pulse">
                       <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
@@ -718,19 +720,21 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
               }`}>
                 {/* Header — click to expand/collapse */}
                 <div
-                  className="flex items-center justify-between cursor-pointer"
+                  className="flex items-center justify-between gap-2 cursor-pointer"
                   onClick={() => setIsBreakdownExpanded(!isBreakdownExpanded)}
                 >
-                  <div className="flex items-center gap-1.5">
-                    <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500"><BarChart3 size={iconSize} /></div>
-                    <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Session Breakdown</h4>
-                    {breakdownCount > 0 && (
-                      <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                        {breakdownCount}/{sessionGroups.length}
-                      </span>
-                    )}
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500 flex-shrink-0"><BarChart3 size={iconSize} /></div>
+                    <div className="min-w-0">
+                      <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Session Breakdown</h4>
+                      {breakdownCount > 0 && (
+                        <span className="inline-block mt-0.5 px-2 py-0.5 rounded-md text-[7px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                          {breakdownCount}/{sessionGroups.length}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-shrink-0">
                     {dayStats && (
                       <span className={`text-sm font-black font-mono ${dayStats.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                         ${dayStats.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -850,25 +854,20 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
             <div className={`${padding} ${rounded} border transition-all ${review ? (isDark ? 'bg-indigo-600/5 border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'bg-indigo-50 border-indigo-200 shadow-sm') : (isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200')}`}>
               {/* Header — click to expand/collapse */}
               <div
-                className="flex items-center justify-between cursor-pointer"
+                className="flex items-center justify-between gap-2 cursor-pointer"
                 onClick={() => canInlineEdit ? setIsReviewExpanded(!isReviewExpanded) : onEditReview()}
               >
-                <div className="flex items-center gap-1.5">
-                  <div className={`${isMini ? 'p-1' : 'p-2'} rounded-lg bg-indigo-600/10 text-indigo-500`}><Moon size={iconSize} /></div>
-                  <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Večerní Audit</h4>
-                  {review && !review.completed && !isMini && (
-                    <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">Rozpracováno</span>
-                  )}
-                  {isMini && <span className="text-[6px] text-slate-600 font-mono ml-auto">18:00</span>}
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <div className={`${isMini ? 'p-1' : 'p-2'} rounded-lg bg-indigo-600/10 text-indigo-500 flex-shrink-0`}><Moon size={iconSize} /></div>
+                  <div className="min-w-0">
+                    <h4 className={`${textTitle} font-black uppercase tracking-widest`}>Večerní Audit</h4>
+                    {review && !review.completed && !isMini && (
+                      <span className="inline-block mt-0.5 px-2 py-0.5 rounded-md text-[7px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">Rozpracováno</span>
+                    )}
+                    {isMini && <span className="text-[6px] text-slate-600 font-mono">18:00</span>}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {review && !isMini && (
-                    <div className="flex gap-1">
-                      {[1, 2, 3, 4, 5].map(s => (
-                        <div key={s} className={`w-2 h-2 rounded-full ${s <= review.rating ? 'bg-yellow-500' : isDark ? 'bg-slate-800' : 'bg-slate-300'}`} />
-                      ))}
-                    </div>
-                  )}
+                <div className="flex items-center gap-2 flex-shrink-0">
                   {!isMini && isReviewExpanded && isSaving && (
                     <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-blue-500/10 text-blue-500 animate-pulse">
                       <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />

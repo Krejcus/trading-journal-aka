@@ -881,3 +881,13 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 .react-grid-layout.editing .react-grid-item {
   transition: none !important;
 }
+
+/* ImageZoomModal slide animations */
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(40px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0)    scale(1); }
+}
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-40px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0)     scale(1); }
+}

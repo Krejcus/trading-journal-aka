@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -15,7 +15,8 @@ import {
    AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { storageService, getUserId } from '../services/storageService';
-import { User, SocialConnection, UserSearch, Trade, DailyPrep, DailyReview, Account, CustomEmotion, UserPreferences, ExchangeRates } from '../types';
+import { User, SocialConnection, UserSearch, Trade, DailyPrep, DailyReview, Account, CustomEmotion, UserPreferences } from '../types';
+import { ExchangeRates } from '../services/currencyService';
 import DashboardCalendar from './DashboardCalendar';
 import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
 
@@ -77,15 +78,38 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    const [selectedReview, setSelectedReview] = useState<DailyReview | null>(null);
    const [feedIronRules, setFeedIronRules] = useState<any[] | null>(null);
    const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+   const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      setToastMsg({ text, type });
+      toastTimerRef.current = setTimeout(() => setToastMsg(null), 3000);
+   }, []);
    const [editingPermissions, setEditingPermissions] = useState<{ connectionId: string, permissions: { canSeePnl: boolean; pnlFormat?: 'usd' | 'rr' | 'hidden'; canSeePrep?: boolean; canSeePrepRituals?: boolean; canSeeReviewStats?: boolean; canSeeReviewNotes?: boolean; canSeeNotes: boolean; canSeeScreenshots: boolean; allowedAccountIds?: string[] }, name: string, isAccepting?: boolean } | null>(null);
    const [modalPnlFormat, setModalPnlFormat] = useState<'usd' | 'rr' | 'hidden' | undefined>(undefined);
 
-   const loadConnections = async () => {
+   // Safe wrapper: optimistic update + rollback on failure
+   const updatePermissionsSafe = useCallback(async (
+     connectionId: string,
+     newPerms: any,
+     prevConnections: typeof connections
+   ) => {
+     try {
+       await storageService.updateConnectionPermissions(connectionId, newPerms);
+     } catch (err) {
+       console.error('[NetworkHub] Failed to update permissions, rolling back:', err);
+       setConnections(prevConnections);
+     }
+   }, []);
+
+   const loadConnections = useCallback(async () => {
+      let mounted = true;
       try {
          const [data, uid] = await Promise.all([
             storageService.getConnections(),
             getUserId()
          ]);
+         if (!mounted) return;
          setConnections(data);
          setFeedLoaded(false); // Reset feed cache so it reloads with fresh permissions
          if (uid) {
@@ -100,6 +124,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
             const stats = await storageService.getLeaderboardStats(followingIds);
 
+            if (!mounted) return;
             setLeaderboardStats(stats);
             setLoadingLeaderboard(false);
          }
@@ -107,13 +132,14 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
       } catch (err) {
          console.error("Failed to load network data", err);
       } finally {
-         setLoading(false);
+         if (mounted) setLoading(false);
       }
-   };
+      return () => { mounted = false; };
+   }, []);
 
    useEffect(() => {
       loadConnections();
-   }, []);
+   }, [loadConnections]);
 
    // Close notification dropdown on outside click
    const notifDropdownRef = useRef<HTMLDivElement>(null);
@@ -152,9 +178,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          setSearchQuery('');
          setSearchResults([]);
          loadConnections();
-         alert("Žádost o sledování byla odeslána.");
+         showToast("Žádost o sledování byla odeslána.", "success");
       } catch (err: any) {
-         alert(err.message || "Chyba při odesílání žádosti.");
+         showToast(err.message || "Chyba při odesílání žádosti.", "error");
       }
    };
 
@@ -203,7 +229,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          setSpectatorDate(new Date().toISOString().split('T')[0]);
       } catch (err) {
          console.error("Failed to enter spectator mode:", err);
-         alert("Nepodařilo se načíst data tradera.\n\nMožné příčiny:\n• Protistrana ještě nepřijala vaši žádost o sledování\n• Spojení bylo zrušeno\n• Zkuste obnovit stránku");
+         showToast("Nepodařilo se načíst data tradera. Zkuste to znovu nebo obnovte stránku.", "error");
          setIsSpectating(false);
       } finally {
          setLoading(false);
@@ -222,7 +248,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    }, [currentUserId, following]);
 
    // Feed loading
-   const loadFeed = async () => {
+   const loadFeed = useCallback(async () => {
       if (followingIds.length === 0) return;
       setLoadingFeed(true);
       try {
@@ -234,13 +260,13 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          setLoadingFeed(false);
          setFeedLoaded(true);
       }
-   };
+   }, [followingIds]);
 
    useEffect(() => {
       if (followingIds.length > 0 && !feedLoaded && !loadingFeed) {
          loadFeed();
       }
-   }, [followingIds, feedLoaded, loadingFeed]);
+   }, [followingIds, feedLoaded, loadingFeed, loadFeed]);
 
    const filteredRemoteTrades = useMemo(() => {
       if (!spectatorData) return [];
@@ -346,7 +372,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
    const copyToClipboard = (url: string) => {
       navigator.clipboard.writeText(url);
-      alert("Odkaz zkopírován do schránky!");
+      showToast("Odkaz zkopírován do schránky!", "success");
    };
 
    // Detail Modal Component
@@ -368,6 +394,36 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
    return (
       <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20">
+
+         {/* Toast notification */}
+         {toastMsg && (
+            <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] px-4 py-3 rounded-2xl text-sm font-semibold shadow-xl flex items-center gap-2 transition-all ${toastMsg.type === 'error' ? 'bg-red-500 text-white' : 'bg-emerald-500 text-white'}`}>
+               {toastMsg.text}
+            </div>
+         )}
+
+         {/* Mobilní přepínač tabů */}
+         <div className="flex md:hidden w-full p-1 rounded-2xl border gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm overflow-x-auto">
+            {([
+               { id: 'feed', label: 'Feed' },
+               { id: 'leaderboard', label: 'Žebříček' },
+               { id: 'following', label: 'Sleduji' },
+               { id: 'followers', label: 'Sledující' },
+               { id: 'requests', label: 'Žádosti' }
+            ] as const).map(tab => (
+               <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex-shrink-0 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+                     activeTab === tab.id
+                        ? (theme !== 'light' ? 'bg-slate-700/60 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm border border-slate-200/60')
+                        : (theme !== 'light' ? 'text-slate-500' : 'text-slate-400')
+                  }`}
+               >
+                  {tab.label}
+               </button>
+            ))}
+         </div>
 
          {/* Detail Modals */}
          {selectedTrade && (() => {
@@ -706,8 +762,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                              const newPerms = { ...editingPermissions.permissions, allowedAccountIds: newAllowed };
                                              setEditingPermissions({ ...editingPermissions, permissions: newPerms });
                                              if (!editingPermissions.isAccepting) {
-                                                storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                                const snap = connections;
                                                 setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                                updatePermissionsSafe(editingPermissions.connectionId, newPerms, snap);
                                              }
                                           }}
                                           className="rounded border-slate-600 text-blue-600 focus:ring-blue-500"
@@ -753,8 +810,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                        };
                                        setEditingPermissions({ ...editingPermissions, permissions: newPerms });
                                        if (!editingPermissions.isAccepting) {
-                                          storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                          const snap = connections;
                                           setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                          updatePermissionsSafe(editingPermissions.connectionId, newPerms, snap);
                                        }
                                     }}
                                     className={`py-2 rounded-lg text-[10px] font-black uppercase flex flex-col items-center gap-1 transition-all border ${editingPermissions.permissions.pnlFormat === mode.id ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/20' : 'bg-transparent border-transparent text-slate-500 hover:bg-slate-200 dark:hover:bg-white/5'}`}
@@ -775,8 +833,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               };
                               setEditingPermissions({ ...editingPermissions, permissions: newPerms });
                               if (!editingPermissions.isAccepting) {
-                                 storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                 const snap = connections;
                                  setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                 updatePermissionsSafe(editingPermissions.connectionId, newPerms, snap);
                               }
                            }}
                         >
@@ -802,8 +861,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               };
                               setEditingPermissions({ ...editingPermissions, permissions: newPerms });
                               if (!editingPermissions.isAccepting) {
-                                 storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                 const snap = connections;
                                  setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                 updatePermissionsSafe(editingPermissions.connectionId, newPerms, snap);
                               }
                            }}
                         >
@@ -824,8 +884,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               };
                               setEditingPermissions({ ...editingPermissions, permissions: newPerms });
                               if (!editingPermissions.isAccepting) {
-                                 storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                 const snap = connections;
                                  setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                 updatePermissionsSafe(editingPermissions.connectionId, newPerms, snap);
                               }
                            }}
                         >
@@ -853,8 +914,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  };
                                  setEditingPermissions({ ...editingPermissions, permissions: newPerms });
                                  if (!editingPermissions.isAccepting) {
-                                    storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                    const snap = connections;
                                     setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                    updatePermissionsSafe(editingPermissions.connectionId, newPerms, snap);
                                  }
                               }}
                            >
@@ -872,8 +934,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  };
                                  setEditingPermissions({ ...editingPermissions, permissions: newPerms });
                                  if (!editingPermissions.isAccepting) {
-                                    storageService.updateConnectionPermissions(editingPermissions.connectionId, newPerms);
+                                    const snap = connections;
                                     setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, permissions: newPerms } : c));
+                                    updatePermissionsSafe(editingPermissions.connectionId, newPerms, snap);
                                  }
                               }}
                            >
@@ -1505,7 +1568,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               <button
                                  onClick={() => setEditingPermissions({
                                     connectionId: conn.id,
-                                    permissions: conn.permissions || { canSeePnl: false, canSeeNotes: false, canSeeScreenshots: false },
+                                    permissions: conn.permissions ? { ...conn.permissions, canSeeNotes: conn.permissions.canSeeNotes ?? false } : { canSeePnl: false, canSeeNotes: false, canSeeScreenshots: false },
                                     name: conn.sender?.name || 'Trader'
                                  })}
                                  className={`p-2 rounded-xl transition-all ${isDark ? 'bg-[var(--bg-input)] text-slate-400 hover:text-blue-400' : 'bg-slate-100 text-slate-600 hover:text-blue-600'}`}
@@ -1794,7 +1857,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                              onDayClick={(dateStr) => {
                                                 setSpectatorDate(dateStr);
                                              }}
-                                             pnlFormat={spectatorData?.meta?.pnlFormat}
+                                             pnlFormat={spectatorData?.meta?.pnlFormat as any}
                                              user={user}
                                              exchangeRates={exchangeRates}
                                           />

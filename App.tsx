@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion";
 import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
 import { storageService, getUserId } from './services/storageService';
-import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint } from './types';
+import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
@@ -28,7 +28,7 @@ import { t } from './services/translations';
 import { GuardianIntervention, GuardianOverlay, DebtCollector } from './components/GuardianSystem';
 import { getGuardianState, GuardianState } from './utils/guardianLogic';
 import { requestNotificationPermission, sendLocalNotification } from './utils/notificationHelper';
-import { subscribeUserToPush, verifyAndRefreshSubscription } from './utils/pushManager';
+// pushManager import removed — push notifications deferred to native app
 import {
   Sun,
   Moon,
@@ -60,6 +60,7 @@ import {
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
+import type { Session } from '@supabase/supabase-js';
 
 const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
 
@@ -219,7 +220,7 @@ const LoadingFallback = () => (
 );
 
 const App: React.FC = () => {
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
   const [isInitialLoadDone, setIsInitialLoadDone] = useState(false);
@@ -267,6 +268,7 @@ const App: React.FC = () => {
         setLoading(false);
         setIsInitialLoadDone(false);
         lastLoadedSessionId.current = null;
+        setLoadedUserId(null);
 
         // Reset all data states to prevent leakage to next user
         setTrades([]);
@@ -283,7 +285,9 @@ const App: React.FC = () => {
         setPlaybookItems([]);
 
         // Reset flags
-        isJournalDirty.current = false;
+        isPrepsDirty.current = false;
+        isReviewsDirty.current = false;
+        isWeeklyFocusDirty.current = false;
         isPreferencesDirty.current = false;
 
         // Optional: clear entire localStorage on logout for ultimate safety
@@ -300,7 +304,9 @@ const App: React.FC = () => {
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
   const isPreferencesDirty = useRef(false);
   const [networkNotifications, setNetworkNotifications] = useState<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }> | null>(null);
-  const isJournalDirty = useRef(false);
+  const isPrepsDirty = useRef(false);
+  const isReviewsDirty = useRef(false);
+  const isWeeklyFocusDirty = useRef(false);
   const isFetchingRef = useRef(false);
 
   useEffect(() => {
@@ -310,7 +316,9 @@ const App: React.FC = () => {
 
     if (shareData) {
       try {
-        const jsonStr = decodeURIComponent(escape(atob(shareData)));
+        // Modern Unicode-safe decode: base64 → bytes → UTF-8 string
+        const bytes = Uint8Array.from(atob(shareData), c => c.charCodeAt(0));
+        const jsonStr = new TextDecoder().decode(bytes);
         const trade = JSON.parse(jsonStr);
         setSharedTrade(trade);
       } catch (e) {
@@ -377,7 +385,7 @@ const App: React.FC = () => {
 
   const [weeklyFocusList, setWeeklyFocusList] = useState<WeeklyFocus[]>([]);
 
-  const [systemSettings, setSystemSettings] = useState<any>({
+  const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     sessionAlertsEnabled: true,
     sessionStartAlert15m: true,
     sessionStartAlertExact: true,
@@ -393,8 +401,6 @@ const App: React.FC = () => {
     morningWakeUpDebtAlert: true
   });
 
-  // Preserve pushSubscription across preference saves (it's not in React state)
-  const pushSubscriptionRef = useRef<any>(null);
 
   const [guardian, setGuardian] = useState<GuardianState>({
     isCriticalAlert: false,
@@ -499,25 +505,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleApplyNotificationPermission = async () => {
-    const granted = await requestNotificationPermission();
-    if (granted) {
-      try {
-        const sub = await subscribeUserToPush();
-
-        if (sub && (sub as any).endpoint) {
-          pushSubscriptionRef.current = sub;
-          const currentPrefs = currentUserPreferences();
-          await storageService.savePreferences(currentPrefs as any);
-          alert("✅ HOTOVO!\nNotifikace na pozadí byly úspěšně aktivovány.");
-        }
-      } catch (err: any) {
-        alert("❌ CHYBA AKTIVACE:\n" + err.message);
-      }
-    } else {
-      alert("⚠️ Oznámení nejsou v prohlížeči povolena.");
-    }
-  };
 
   const handleHardRefresh = async () => {
     if (confirm("Opravdu chcete vyčistit mezipaměť a restartovat aplikaci?")) {
@@ -557,7 +544,6 @@ const App: React.FC = () => {
     theme,
     dashboardMode,
     systemSettings,
-    ...(pushSubscriptionRef.current ? { pushSubscription: pushSubscriptionRef.current } : {}),
     ...(networkNotifications ? { networkNotifications } : {}),
   });
 
@@ -679,6 +665,7 @@ const App: React.FC = () => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [exchangeRates, setExchangeRates] = useState<ExchangeRates | null>(null);
   const lastLoadedSessionId = React.useRef<string | null>(null);
+  const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
 
   // Track in-flight saves + pending queue to prevent race conditions
   const savingPrepDate = useRef<string | null>(null);
@@ -687,7 +674,7 @@ const App: React.FC = () => {
   const pendingReviewSave = useRef<DailyReview | null>(null);
 
   const handleSavePrep = useCallback((prep: DailyPrep): Promise<void> => {
-    isJournalDirty.current = true;
+    isPrepsDirty.current = true;
     setDailyPreps(prev => [...prev.filter(p => p.date !== prep.date), prep]);
 
     if (savingPrepDate.current === prep.date) {
@@ -715,7 +702,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleSaveReview = useCallback((rev: DailyReview): Promise<void> => {
-    isJournalDirty.current = true;
+    isReviewsDirty.current = true;
     setDailyReviews(prev => [...prev.filter(r => r.date !== rev.date), rev]);
 
     if (savingReviewDate.current === rev.date) {
@@ -793,7 +780,6 @@ const App: React.FC = () => {
     // Theme is applied only on initial load (useState initializer).
     if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
-    if ((prefs as any).pushSubscription) pushSubscriptionRef.current = (prefs as any).pushSubscription;
     if ((prefs as any).networkNotifications) setNetworkNotifications((prefs as any).networkNotifications);
   }, []);
 
@@ -831,6 +817,7 @@ const App: React.FC = () => {
 
       isFetchingRef.current = true;
       lastLoadedSessionId.current = session?.user?.id || null;
+      setLoadedUserId(session?.user?.id || null);
 
       // Safety timeout in case everything hangs
       const safetyTimer = setTimeout(() => {
@@ -887,19 +874,31 @@ const App: React.FC = () => {
         isFetchingRef.current = false;
         clearTimeout(safetyTimer);
 
-        // Background refresh — silently sync with server, only update if data changed
+        // Background refresh — silently sync with server, only update if data actually changed
+        // Fingerprint checks both count AND content (catches edits without add/delete)
+        const fingerprintTrades = (t: Trade[]) => t.map(x => `${x.id}:${x.pnl}:${x.timestamp}`).join('|');
+        const fingerprintSimple = (arr: any[]) => arr.map(x => x.id ?? x.date).join('|');
         storageService.getDashboardData().then(fresh => {
           console.log(`[Load] Background refresh done: ${fresh.trades.length} trades`);
-          // Guard: only setState if counts differ to avoid re-rendering with identical data
-          setTrades(prev => fresh.trades.length !== prev.length ? (fresh.trades || []) : prev);
+          setTrades(prev =>
+            fingerprintTrades(fresh.trades) !== fingerprintTrades(prev) ? (fresh.trades || []) : prev
+          );
           if (fresh.accounts && fresh.accounts.length > 0) {
-            setAccounts(prev => fresh.accounts.length !== prev.length ? fresh.accounts : prev);
+            setAccounts(prev =>
+              fingerprintSimple(fresh.accounts) !== fingerprintSimple(prev) ? fresh.accounts : prev
+            );
           }
           if (fresh.user) setCurrentUser(fresh.user);
           if (fresh.preferences) applyPreferences(fresh.preferences);
-          setDailyPreps(prev => fresh.preps.length !== prev.length ? (fresh.preps || []) : prev);
-          setDailyReviews(prev => fresh.reviews.length !== prev.length ? (fresh.reviews || []) : prev);
-          setWeeklyFocusList(prev => fresh.weeklyFocus.length !== prev.length ? (fresh.weeklyFocus || []) : prev);
+          setDailyPreps(prev =>
+            fingerprintSimple(fresh.preps) !== fingerprintSimple(prev) ? (fresh.preps || []) : prev
+          );
+          setDailyReviews(prev =>
+            fingerprintSimple(fresh.reviews) !== fingerprintSimple(prev) ? (fresh.reviews || []) : prev
+          );
+          setWeeklyFocusList(prev =>
+            fingerprintSimple(fresh.weeklyFocus) !== fingerprintSimple(prev) ? (fresh.weeklyFocus || []) : prev
+          );
         }).catch(err => console.warn('[Load] Background refresh failed:', err));
         return;
       }
@@ -1047,35 +1046,44 @@ const App: React.FC = () => {
           async (payload) => {
             console.log("[Realtime] Trade change detected:", payload.eventType);
 
+            // Helper: parse raw DB row into Trade (same mapping as getTradeById)
+            const parseRealtimeTrade = (raw: any): Trade => ({
+              ...(raw.data || {}),
+              id: raw.id,
+              accountId: raw.account_id,
+              instrument: raw.instrument,
+              pnl: raw.pnl,
+              direction: raw.direction,
+              date: raw.date,
+              timestamp: raw.timestamp,
+              drawings: raw.drawings || raw.data?.drawings || [],
+              isPublic: raw.is_public,
+              createdAt: raw.created_at,
+            });
+
             if (payload.eventType === 'INSERT') {
-              const raw = payload.new;
-              const fullTrade = await storageService.getTradeById(raw.id);
-              if (fullTrade) {
-                setTrades(prev => {
-                  if (prev.some(t => t.id === fullTrade.id)) return prev;
-                  const newTrades = [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
-                  return newTrades;
-                });
+              const fullTrade = parseRealtimeTrade(payload.new);
+              setTrades(prev => {
+                if (prev.some(t => t.id === fullTrade.id)) return prev;
+                return [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
+              });
 
-                // Refresh accounts so balance/stats stay current after new trade
-                storageService.getAccounts().then(freshAccounts => {
-                  if (freshAccounts.length > 0) setAccounts(freshAccounts);
-                }).catch(() => {});
+              // Refresh accounts so balance/stats stay current after new trade
+              storageService.getAccounts().then(freshAccounts => {
+                if (freshAccounts.length > 0) setAccounts(freshAccounts);
+              }).catch(() => {});
 
-                try {
-                  const { addTradeToCache } = await import('./services/cacheHelper');
-                  await addTradeToCache(fullTrade);
-                  console.log('[Realtime] Trade added to cache for persistence');
-                } catch (err) {
-                  console.error('[Realtime] Failed to update cache:', err);
-                }
+              try {
+                const { addTradeToCache } = await import('./services/cacheHelper');
+                await addTradeToCache(fullTrade);
+                console.log('[Realtime] Trade added to cache for persistence');
+              } catch (err) {
+                console.error('[Realtime] Failed to update cache:', err);
               }
             } else if (payload.eventType === 'UPDATE') {
-              const raw = payload.new;
-              const fullTrade = await storageService.getTradeById(raw.id);
-              if (fullTrade) {
-                setTrades(prev => prev.map(t => t.id === fullTrade.id ? fullTrade : t));
-              }
+              // Payload contains full updated row — no extra DB round-trip needed
+              const fullTrade = parseRealtimeTrade(payload.new);
+              setTrades(prev => prev.map(t => t.id === fullTrade.id ? fullTrade : t));
             } else if (payload.eventType === 'DELETE') {
               setTrades(prev => prev.filter(t => t.id !== payload.old.id));
             }
@@ -1146,24 +1154,6 @@ const App: React.FC = () => {
 
       // Screenshots now come with the RPC response — no separate prefetch needed
 
-      // Verify push subscription is still valid (iOS can silently expire it)
-      storageService.getPreferences().then(async (savedPrefs) => {
-        const savedSub = (savedPrefs as any)?.pushSubscription;
-        if (savedSub) pushSubscriptionRef.current = savedSub;
-        if (!savedSub) return; // User never enabled notifications
-        const result = await verifyAndRefreshSubscription(savedSub);
-        if (result?.changed && result.subscription?.endpoint) {
-          console.log('[Push] Subscription refreshed, saving to DB...');
-          pushSubscriptionRef.current = result.subscription;
-          const prefs = currentUserPreferences();
-          await storageService.savePreferences(prefs as any);
-        } else if (result && !result.changed) {
-          pushSubscriptionRef.current = result.subscription;
-        } else if (!result) {
-          console.log('[Push] Subscription could not be verified (permission revoked or SW missing)');
-        }
-      }).catch(err => console.warn('[Push] Subscription verify failed:', err));
-
       // Less critical modules - prefetch after small delay
       const prefetchTimer = setTimeout(() => {
         console.log("[Prefetch] Prefetching secondary modules...");
@@ -1221,8 +1211,11 @@ const App: React.FC = () => {
         storageService.getBusinessResources()
       ]).then(([expenses, payouts, goals, resources]) => {
         // Guard: only update state if data actually changed (prevents flicker when cache == server)
+        // Using length + id+amount fingerprint avoids expensive JSON.stringify on objects with large fields (e.g. images)
+        const fingerprint = (arr: any[]) =>
+          arr.length + '|' + arr.map(x => `${x.id ?? ''}:${x.amount ?? x.target ?? x.updatedAt ?? ''}`).join(',');
         const stableSet = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>, next: T[]) => {
-          setter(prev => JSON.stringify(next) === JSON.stringify(prev) ? prev : next);
+          setter(prev => fingerprint(next) === fingerprint(prev) ? prev : next);
         };
         stableSet(setBusinessExpenses, expenses || []);
         stableSet(setBusinessPayouts, payouts || []);
@@ -1273,7 +1266,7 @@ const App: React.FC = () => {
       console.log("[Cross-device] Tab refocused after", Math.round(elapsed / 1000), "s — syncing...");
 
       try {
-        if (!isJournalDirty.current) {
+        if (!isPrepsDirty.current && !isReviewsDirty.current) {
           const [freshPreps, freshReviews] = await Promise.all([
             storageService.getDailyPreps(),
             storageService.getDailyReviews(),
@@ -1370,18 +1363,19 @@ const App: React.FC = () => {
 
 
   // Security check: Ensure we don't save if there's a session mismatch or no session
+  // loadedUserId mirrors lastLoadedSessionId.current as proper state so useMemo recalculates on change
   const canSave = useMemo(() => {
-    return !sharedTrade && !!session && isInitialLoadDone && session.user?.id === lastLoadedSessionId.current;
-  }, [sharedTrade, session, isInitialLoadDone, lastLoadedSessionId.current]);
+    return !sharedTrade && !!session && isInitialLoadDone && session.user?.id === loadedUserId;
+  }, [sharedTrade, session, isInitialLoadDone, loadedUserId]);
 
   useEffect(() => {
-    if (canSave && isJournalDirty.current) {
+    if (canSave && isPrepsDirty.current) {
       const timer = setTimeout(() => {
-        isJournalDirty.current = false;
+        isPrepsDirty.current = false;
 
         storageService.saveDailyPreps(dailyPreps).catch(err => {
           console.error("[Journal] DailyPreps save failed:", err);
-          isJournalDirty.current = true;
+          isPrepsDirty.current = true;
         });
       }, 2000);
       return () => clearTimeout(timer);
@@ -1389,13 +1383,13 @@ const App: React.FC = () => {
   }, [dailyPreps, canSave]);
 
   useEffect(() => {
-    if (canSave && isJournalDirty.current) {
+    if (canSave && isReviewsDirty.current) {
       const timer = setTimeout(() => {
-        isJournalDirty.current = false;
+        isReviewsDirty.current = false;
 
         storageService.saveDailyReviews(dailyReviews).catch(err => {
           console.error("[Journal] DailyReviews save failed:", err);
-          isJournalDirty.current = true;
+          isReviewsDirty.current = true;
         });
       }, 2000);
       return () => clearTimeout(timer);
@@ -1405,15 +1399,15 @@ const App: React.FC = () => {
   useEffect(() => { if (canSave) storageService.setActiveAccountId(activeAccountId); }, [activeAccountId, canSave]);
 
   useEffect(() => {
-    if (canSave && isJournalDirty.current && weeklyFocusList.length > 0) {
+    if (canSave && isWeeklyFocusDirty.current && weeklyFocusList.length > 0) {
       const timer = setTimeout(() => {
-        isJournalDirty.current = false;
+        isWeeklyFocusDirty.current = false;
 
         // Convert forEach to Promise.all for better error handling
         Promise.all(weeklyFocusList.map(wf => storageService.saveWeeklyFocus(wf)))
           .catch(err => {
             console.error("[Journal] WeeklyFocus save failed:", err);
-            isJournalDirty.current = true;
+            isWeeklyFocusDirty.current = true;
           });
       }, 5000);
       return () => clearTimeout(timer);
@@ -1477,21 +1471,27 @@ const App: React.FC = () => {
         });
       }
 
-      // Journal data (daily preps/reviews)
-      if (isJournalDirty.current) {
-        console.log("[Auto-Save] Periodic journal save triggered");
-        const wasJournalDirty = isJournalDirty.current;
-        isJournalDirty.current = false;
+      // Journal data (daily preps/reviews/weeklyFocus) — each flag is independent
+      const wasPreps = isPrepsDirty.current;
+      const wasReviews = isReviewsDirty.current;
+      const wasWeekly = isWeeklyFocusDirty.current;
+      if (wasPreps || wasReviews || wasWeekly) {
+        console.log("[Auto-Save] Periodic journal save triggered", { wasPreps, wasReviews, wasWeekly });
+        isPrepsDirty.current = false;
+        isReviewsDirty.current = false;
+        isWeeklyFocusDirty.current = false;
 
         Promise.all([
-          storageService.saveDailyPreps(dailyPreps),
-          storageService.saveDailyReviews(dailyReviews),
-          weeklyFocusList.length > 0
+          wasPreps ? storageService.saveDailyPreps(dailyPreps) : Promise.resolve(),
+          wasReviews ? storageService.saveDailyReviews(dailyReviews) : Promise.resolve(),
+          wasWeekly && weeklyFocusList.length > 0
             ? Promise.all(weeklyFocusList.map(wf => storageService.saveWeeklyFocus(wf)))
             : Promise.resolve()
         ]).catch(err => {
           console.error("[Auto-Save] Periodic journal save failed:", err);
-          if (wasJournalDirty) isJournalDirty.current = true;
+          if (wasPreps) isPrepsDirty.current = true;
+          if (wasReviews) isReviewsDirty.current = true;
+          if (wasWeekly) isWeeklyFocusDirty.current = true;
         });
       }
     }, 30000); // 30 seconds
@@ -1507,10 +1507,18 @@ const App: React.FC = () => {
     if (!canSave) return;
 
     const flushDirtyData = () => {
-      if (isJournalDirty.current) {
-        isJournalDirty.current = false;
-        storageService.saveDailyPreps(dailyPreps).catch(() => { isJournalDirty.current = true; });
-        storageService.saveDailyReviews(dailyReviews).catch(() => { isJournalDirty.current = true; });
+      if (isPrepsDirty.current) {
+        isPrepsDirty.current = false;
+        storageService.saveDailyPreps(dailyPreps).catch(() => { isPrepsDirty.current = true; });
+      }
+      if (isReviewsDirty.current) {
+        isReviewsDirty.current = false;
+        storageService.saveDailyReviews(dailyReviews).catch(() => { isReviewsDirty.current = true; });
+      }
+      if (isWeeklyFocusDirty.current && weeklyFocusList.length > 0) {
+        isWeeklyFocusDirty.current = false;
+        Promise.all(weeklyFocusList.map(wf => storageService.saveWeeklyFocus(wf)))
+          .catch(() => { isWeeklyFocusDirty.current = true; });
       }
       if (isPreferencesDirty.current) {
         isPreferencesDirty.current = false;
@@ -1686,10 +1694,8 @@ const App: React.FC = () => {
         setAccounts(dbAccounts);
       }
 
-      if (!isJournalDirty.current) {
-        setDailyPreps(dbPreps || []);
-        setDailyReviews(dbReviews || []);
-      }
+      if (!isPrepsDirty.current) setDailyPreps(dbPreps || []);
+      if (!isReviewsDirty.current) setDailyReviews(dbReviews || []);
       setWeeklyFocusList(dbWeeklyFocus || []);
 
       // Refresh Business Hub data
@@ -1705,7 +1711,7 @@ const App: React.FC = () => {
       console.error('[Refresh] Error:', error);
       throw error; // Re-throw to show error in Pull-to-Refresh
     }
-  }, [session, isJournalDirty, isPreferencesDirty]);
+  }, [session, isPrepsDirty, isReviewsDirty, isWeeklyFocusDirty, isPreferencesDirty]);
 
   const baseFilteredTrades = useMemo(() => {
     const now = new Date();
@@ -1907,26 +1913,36 @@ const App: React.FC = () => {
     setIsManualEntryOpen(false);
   };
 
-  const handleUpdateTrades = (updatedTrades: Trade[]) => {
+  const handleUpdateTrades = useCallback((updatedTrades: Trade[]) => {
+    const snapshot = trades;
     setTrades(updatedTrades);
-    // Force immediate save to persist "stamps" like 'Challenge' phase
-    storageService.saveTrades(updatedTrades).then(() => {
-      console.log("Trades force-saved successfully");
-    }).catch(err => {
-      console.error("Failed to force-save trades", err);
-      setSyncError("Nepodařilo se uložit změny obchodů.");
-    });
-  };
+    // Use per-trade updateTrade to avoid bulk saveTrades overwriting screenshot data
+    Promise.all(updatedTrades.map(t => storageService.updateTrade(t.id as string, t)))
+      .then(() => console.log("Trades force-saved successfully"))
+      .catch(err => {
+        console.error("Failed to force-save trades", err);
+        setTrades(snapshot);
+        setSyncError("Nepodařilo se uložit změny obchodů.");
+      });
+  }, [trades]);
 
   const handleUpdateTrade = useCallback((tradeId: string | number, updates: Partial<Trade>) => {
-    // Update local state immediately (optimistic)
-    setTrades(prev => prev.map(t => t.id === tradeId ? { ...t, ...updates } : t));
+    // Snapshot stavu před optimistickou aktualizací pro případ rollbacku
+    let snapshot: Trade | undefined;
+    setTrades(prev => {
+      snapshot = prev.find(t => t.id === tradeId);
+      return prev.map(t => t.id === tradeId ? { ...t, ...updates } : t);
+    });
 
     // Persist only the changed trade to DB (not ALL trades — prevents screenshot data loss)
     if (typeof tradeId === 'string' && tradeId.includes('-')) {
       storageService.updateTrade(tradeId, updates).catch(err => {
         console.error("Failed to persist trade update:", err);
-        setSyncError("Nepodařilo se uložit změny obchodu.");
+        setSyncError("Nepodařilo se uložit změny obchodu. Změny byly vráceny zpět.");
+        // Rollback optimistické aktualizace — vrať původní data
+        if (snapshot) {
+          setTrades(prev => prev.map(t => t.id === tradeId ? snapshot! : t));
+        }
       });
     }
   }, []);
@@ -1985,36 +2001,43 @@ const App: React.FC = () => {
   }, [accounts, trades, activeAccountId]);
 
   const handleDeleteTrade = async (id: number | string) => {
-    try {
-      const idsToDelete: (string | number)[] = [];
+    const idsToDelete: (string | number)[] = [];
 
-      if (typeof id === 'string' && id.startsWith('combined_')) {
-        const groupId = id.replace('combined_', '');
-        const groupTrades = trades.filter(t => t.groupId === groupId);
-        idsToDelete.push(...groupTrades.map(t => t.id));
-      } else {
-        const tradeToDelete = trades.find(t => t.id === id);
-        if (!tradeToDelete) return;
-        idsToDelete.push(id);
-
-        // If it's a master, delete all copies too
-        if (tradeToDelete.isMaster) {
-          const copies = trades.filter(t => t.masterTradeId === id).map(t => t.id);
-          idsToDelete.push(...copies);
-        }
+    if (typeof id === 'string' && id.startsWith('combined_')) {
+      const groupId = id.replace('combined_', '');
+      const groupTrades = trades.filter(t => t.groupId === groupId);
+      idsToDelete.push(...groupTrades.map(t => t.id));
+    } else {
+      const tradeToDelete = trades.find(t => t.id === id);
+      if (!tradeToDelete) return;
+      // Přeskočit non-UUID ID (combined_, numerické) — deleteTrade je tiše ignoruje
+      if (!isUUID(String(id))) {
+        console.warn(`[DeleteTrade] Skipping non-UUID id: ${id}`);
+        setSyncError("Tento obchod nelze smazat — nemá platné ID.");
+        return;
       }
+      idsToDelete.push(id);
+      if (tradeToDelete.isMaster) {
+        const copies = trades.filter(t => t.masterTradeId === id).map(t => t.id);
+        idsToDelete.push(...copies);
+      }
+    }
 
-      if (idsToDelete.length === 0) return;
+    if (idsToDelete.length === 0) return;
 
-      // 1. Update local state
-      setTrades(prev => prev.filter(t => !idsToDelete.includes(t.id)));
+    // Snapshot pro rollback
+    const snapshot = trades;
+    setTrades(prev => prev.filter(t => !idsToDelete.includes(t.id)));
 
-      // 2. Clear from Supabase
+    try {
       for (const tradeId of idsToDelete) {
         await storageService.deleteTrade(tradeId as string);
       }
     } catch (err) {
       console.error("Failed to delete trade:", err);
+      // Rollback — vrátit původní stav
+      setTrades(snapshot);
+      setSyncError("Nepodařilo se smazat obchod. Zkus to znovu.");
     }
   };
 
@@ -2023,13 +2046,14 @@ const App: React.FC = () => {
   };
 
   const executeClearTrades = async () => {
+    const snapshot = trades;
+    setTrades(prev => prev.filter(t => t.accountId !== activeAccountId));
     try {
-      // Only clear trades for the ACTIVE account from state (not all accounts)
-      setTrades(prev => prev.filter(t => t.accountId !== activeAccountId));
       await storageService.clearTrades(activeAccountId);
     } catch (err) {
       console.error("Failed to clear trades:", err);
-      setSyncError("Nepodařilo se smazat obchody.");
+      setTrades(snapshot); // Rollback
+      setSyncError("Nepodařilo se smazat obchody. Zkus to znovu.");
     }
   };
   // --- BUSINESS HUB PERSISTENCE HANDLERS ---
@@ -2082,7 +2106,9 @@ const App: React.FC = () => {
       const removed = prev.filter(pp => !newPayouts.some(np => np.id === pp.id));
       const updated = newPayouts.filter(np => {
         const old = prev.find(pp => pp.id === np.id);
-        return old && JSON.stringify(old) !== JSON.stringify(np);
+        if (!old) return false;
+        // Compare metadata only — skip base64 image field to avoid slow serialization
+        return old.amount !== np.amount || old.date !== np.date || old.accountId !== np.accountId || old.notes !== np.notes;
       });
 
       for (const p of added) {
@@ -2586,12 +2612,11 @@ const App: React.FC = () => {
                       psychoMetrics={psychoMetrics}
                       setPsychoMetrics={(v) => { setPsychoMetrics(v); isPreferencesDirty.current = true; }}
                       weeklyFocusList={weeklyFocusList}
-                      setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isJournalDirty.current = true; }}
+                      setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isWeeklyFocusDirty.current = true; }}
                       systemSettings={systemSettings}
-                      setSystemSettings={(v: any) => { setSystemSettings(v); isPreferencesDirty.current = true; }}
+                      setSystemSettings={(v: SystemSettings) => { setSystemSettings(v); isPreferencesDirty.current = true; }}
                       standardGoals={standardGoals}
                       setStandardGoals={(v) => { setStandardGoals(v); isPreferencesDirty.current = true; }}
-                      onEnableNotifications={handleApplyNotificationPermission}
                       appVersion={APP_VERSION}
                       onHardRefresh={handleHardRefresh}
                       accentColor={accentColor}
