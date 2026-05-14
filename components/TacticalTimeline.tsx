@@ -660,6 +660,59 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                     </div>
                   ))}
 
+                  {/* Market Bias */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <TrendingUp size={14} className={prepForm.bias === 'Bullish' ? 'text-emerald-500' : prepForm.bias === 'Bearish' ? 'text-rose-500' : 'text-slate-500'} />
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Market Bias</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['Bullish', 'Neutral', 'Bearish'] as const).map(b => {
+                        const isActive = prepForm.bias === b;
+                        const activeStyle = b === 'Bullish' ? 'bg-emerald-600 border-emerald-500 text-white shadow-emerald-600/20' : b === 'Bearish' ? 'bg-rose-600 border-rose-500 text-white shadow-rose-600/20' : 'bg-slate-600 border-slate-500 text-white shadow-slate-600/20';
+                        const inactiveStyle = isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400 hover:text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100';
+                        const emoji = { Bullish: '🐂', Neutral: '⚖️', Bearish: '🐻' };
+                        return (
+                          <button
+                            key={b}
+                            onClick={() => editPrepForm!(prev => ({ ...prev, bias: b }))}
+                            className={`py-2.5 rounded-xl border font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center gap-1 shadow-lg ${isActive ? activeStyle : inactiveStyle}`}
+                          >
+                            <span>{emoji[b]}</span>
+                            <span>{b}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Confidence slider */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Brain size={14} className="text-violet-500" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sebevědomí</span>
+                      </div>
+                      <span className={`text-sm font-black tabular-nums ${(prepForm.confidence ?? 50) >= 70 ? 'text-emerald-400' : (prepForm.confidence ?? 50) >= 40 ? 'text-amber-400' : 'text-rose-400'}`}>
+                        {prepForm.confidence ?? 50}%
+                      </span>
+                    </div>
+                    <input
+                      type="range" min="0" max="100" step="5"
+                      value={prepForm.confidence ?? 50}
+                      onChange={(e) => editPrepForm!(prev => ({ ...prev, confidence: Number(e.target.value) }))}
+                      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
+                      style={{
+                        accentColor: (prepForm.confidence ?? 50) >= 70 ? '#10b981' : (prepForm.confidence ?? 50) >= 40 ? '#f59e0b' : '#f43f5e',
+                        background: `linear-gradient(to right, ${(prepForm.confidence ?? 50) >= 70 ? '#10b981' : (prepForm.confidence ?? 50) >= 40 ? '#f59e0b' : '#f43f5e'} ${prepForm.confidence ?? 50}%, ${isDark ? '#1e293b' : '#e2e8f0'} ${prepForm.confidence ?? 50}%)`
+                      }}
+                    />
+                    <div className="flex justify-between mt-1">
+                      <span className="text-[8px] text-slate-600">Špatný den</span>
+                      <span className="text-[8px] text-slate-600">Top forma</span>
+                    </div>
+                  </div>
+
                   {/* Rituals checklist */}
                   {rituals && rituals.length > 0 && (
                     <div>
