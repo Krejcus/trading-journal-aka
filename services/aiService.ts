@@ -81,9 +81,14 @@ export function buildTraderContext(ctx: TraderContext): string {
         const lines = [`--- ${p.date} ---`];
         if (p.bias) lines.push(`Bias: ${p.bias}`);
         if (p.mindsetState) lines.push(`Mindset: ${p.mindsetState}`);
-        if (p.confidence != null) lines.push(`Sebevědomí: ${p.confidence}%`);
-        const cl = p.checklist;
-        if (cl) lines.push(`Checklist: Spánek=${yn(cl.sleptWell)} | Plán=${yn(cl.planReady)} | Disciplína=${yn(cl.disciplineCommitted)} | Zprávy=${yn(cl.newsChecked)}`);
+        if (p.confidence != null) lines.push(`Sebevědomí před seancí: ${p.confidence}%`);
+        // Ranní rituály (uživatelsky definované) — to co uživatel reálně zaškrtl
+        if (p.ritualCompletions?.length) {
+          const done    = p.ritualCompletions.filter(r => r.status === 'Pass').map(r => r.label || r.ruleId);
+          const pending = p.ritualCompletions.filter(r => r.status !== 'Pass').map(r => r.label || r.ruleId);
+          if (done.length)    lines.push(`Rituály splněné: ${done.join(', ')}`);
+          if (pending.length) lines.push(`Rituály nesplněné: ${pending.join(', ')}`);
+        }
         if (p.goals?.length) lines.push(`Cíle: ${p.goals.join(', ')}`);
         const sc = p.scenarios;
         if (sc?.bullish) lines.push(`Bullish scénář: ${sc.bullish}`);

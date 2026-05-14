@@ -294,7 +294,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     scenarios: { bullish: p.scenarios.bullish || '', bearish: p.scenarios.bearish || '', scenarioImages: p.scenarios.scenarioImages || [] },
     goals: p.goals || [], checklist: p.checklist,
     ritualCompletions: p.ritualCompletions || [],
-    mindsetState: p.mindsetState || '', confidence: p.confidence ?? 5
+    mindsetState: p.mindsetState || '', confidence: p.confidence ?? 50
   });
 
   // Auto-save Logic for Prep
@@ -882,7 +882,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           newsChecked: false
         },
         mindsetState: '',
-        confidence: 80
+        confidence: 50
       });
       if (!activeSessionTab && initialSessions.length) {
         setActiveSessionTab(initialSessions[0].id);
@@ -1615,6 +1615,41 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                         </button>
                       );
                     })}
+                  </div>
+                </section>
+
+                {/* Confidence slider */}
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                  <div className="flex items-center gap-4 mb-5">
+                    <div className="p-3 rounded-2xl bg-violet-500/10 text-violet-500"><Brain size={20} /></div>
+                    <div>
+                      <h3 className="text-xl font-black italic uppercase">SEBEVĚDOMÍ</h3>
+                      <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Jak se dnes cítíš?</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[10px] font-bold text-slate-500">0%</span>
+                    <span className={`text-3xl font-black tabular-nums ${prepForm.confidence >= 70 ? 'text-emerald-400' : prepForm.confidence >= 40 ? 'text-amber-400' : 'text-rose-400'}`}>
+                      {prepForm.confidence}%
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-500">100%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={prepForm.confidence}
+                    onChange={(e) => editPrepForm(prev => ({ ...prev, confidence: Number(e.target.value) }))}
+                    className="w-full h-2 rounded-lg appearance-none cursor-pointer"
+                    style={{
+                      accentColor: prepForm.confidence >= 70 ? '#10b981' : prepForm.confidence >= 40 ? '#f59e0b' : '#f43f5e',
+                      background: `linear-gradient(to right, ${prepForm.confidence >= 70 ? '#10b981' : prepForm.confidence >= 40 ? '#f59e0b' : '#f43f5e'} ${prepForm.confidence}%, ${theme !== 'light' ? '#1e293b' : '#e2e8f0'} ${prepForm.confidence}%)`
+                    }}
+                  />
+                  <div className="flex justify-between mt-2">
+                    <span className="text-[9px] text-slate-600">Špatný den</span>
+                    <span className="text-[9px] text-slate-600">Top forma</span>
                   </div>
                 </section>
 
