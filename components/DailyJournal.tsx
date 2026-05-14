@@ -1588,8 +1588,43 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 </section>
               </div>
 
-              {/* Right Column: Preattack Rituals */}
+              {/* Right Column: Bias + Rituals + Confidence */}
               <div className="lg:col-span-4 space-y-6 order-1 lg:order-2">
+
+                {/* Market Bias selector */}
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                  <div className="flex items-center gap-3 mb-5">
+                    <div className={`p-3 rounded-2xl ${prepForm.bias === 'Bullish' ? 'bg-emerald-500/10 text-emerald-500' : prepForm.bias === 'Bearish' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-400'}`}>
+                      <TrendingUp size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-black italic uppercase">MARKET BIAS</h3>
+                      <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Dnešní tržní pohled</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['Bullish', 'Neutral', 'Bearish'] as const).map(b => {
+                      const isActive = prepForm.bias === b;
+                      const colors = {
+                        Bullish: isActive ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-600/25' : (theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500 hover:border-emerald-500/30 hover:text-emerald-400' : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-emerald-300 hover:text-emerald-600'),
+                        Neutral:  isActive ? 'bg-slate-600 border-slate-500 text-white shadow-lg shadow-slate-600/25' : (theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500 hover:border-slate-500 hover:text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-slate-400 hover:text-slate-600'),
+                        Bearish:  isActive ? 'bg-rose-600 border-rose-500 text-white shadow-lg shadow-rose-600/25' : (theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500 hover:border-rose-500/30 hover:text-rose-400' : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-rose-300 hover:text-rose-600'),
+                      };
+                      const emoji = { Bullish: '🐂', Neutral: '⚖️', Bearish: '🐻' };
+                      return (
+                        <button
+                          key={b}
+                          onClick={() => editPrepForm(prev => ({ ...prev, bias: b }))}
+                          className={`py-3 rounded-2xl border font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center gap-1 ${colors[b]}`}
+                        >
+                          <span className="text-lg">{emoji[b]}</span>
+                          <span>{b}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+
                 <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-4">
