@@ -1,0 +1,343 @@
+import React from 'react';
+import {
+  LineChart, Line, BarChart, Bar, Cell,
+  XAxis, YAxis, Tooltip, Legend,
+  ResponsiveContainer, ReferenceLine,
+} from 'recharts';
+import type { Trade, DailyPrep, DailyReview } from '../types';
+import type { ChartSpec } from '../services/aiService';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const COLORS = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#f43f5e', '#06b6d4', '#f97316'];
+
+const WEEKDAY_NAMES: Record<number, string> = {
+  1: 'Pondělí', 2: 'Úterý', 3: 'Středa', 4: 'Čtvrtek',
+  5: 'Pátek', 6: 'Sobota', 0: 'Neděle',
+};
+
+const METRIC_FORMATTER: Record<string, (v: number) => string> = {
+  cumPnl:   v => `$${v}`,
+  pnl:      v => `$${v}`,
+  winrate:  v => `${v}%`,
+  count:    v => `${v}`,
+  avgPnl:   v => `$${v}`,
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getDimensionKey(
+  trade: Trade,
+  dim: string,
+  prepDates: Set<string>,
+  reviewDates: Set<string>,
+): string | null {
+  switch (dim) {
+    case 'session':    return trade.session || null;
+    case 'signal':     return trade.signal || null;
+    case 'direction':  return trade.direction || null;
+    case 'instrument': return trade.instrument || null;
+    case 'weekday': {
+      if (!trade.date) return null;
+      return WEEKDAY_NAMES[new Date(trade.date).getDay()] ?? null;
+    }
+    case 'violations':
+      return (trade.mistakes?.length ?? 0) > 0 ? 'S chybami' : 'Čistě';
+    case 'hasPrep':
+      return prepDates.has(trade.date?.slice(0, 10) ?? '') ? 'S přípravou' : 'Bez přípravy';
+    case 'hasReview':
+      return reviewDates.has(trade.date?.slice(0, 10) ?? '') ? 'S auditem' : 'Bez auditu';
+    default: return null;
+  }
+}
+
+function applyFilter(trades: Trade[], filter?: ChartSpec['filter']): Trade[] {
+  if (!filter) return trades;
+  return trades.filter(t => {
+    const val = (t as any)[filter.field];
+    switch (filter.op) {
+      case 'eq': return String(val) === String(filter.value);
+      case 'gt': return Number(val) > Number(filter.value);
+      case 'lt': return Number(val) < Number(filter.value);
+      default:   return true;
+    }
+  });
+}
+
+function computeMetric(grpTrades: Trade[], metric: string): number {
+  if (grpTrades.length === 0) return 0;
+  switch (metric) {
+    case 'pnl':
+    case 'cumPnl':
+      return parseFloat(grpTrades.reduce((s, t) => s + t.pnl, 0).toFixed(2));
+    case 'winrate':
+      return Math.round(grpTrades.filter(t => t.pnl > 0).length / grpTrades.length * 100);
+    case 'count':
+      return grpTrades.length;
+    case 'avgPnl':
+      return parseFloat((grpTrades.reduce((s, t) => s + t.pnl, 0) / grpTrades.length).toFixed(2));
+    default: return 0;
+  }
+}
+
+function buildGroupMap(
+  trades: Trade[],
+  dim: string,
+  prepDates: Set<string>,
+  reviewDates: Set<string>,
+): Map<string, Trade[]> {
+  if (dim === 'one_per_day') {
+    const sorted = [...trades].sort((a, b) =>
+      new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
+    const seenDays = new Set<string>();
+    const firstPerDay: Trade[] = [];
+    for (const t of sorted) {
+      const day = t.date?.slice(0, 10) ?? '';
+      if (!seenDays.has(day)) { seenDays.add(day); firstPerDay.push(t); }
+    }
+    return new Map([['Všechny obchody', sorted], ['Max 1/den', firstPerDay]]);
+  }
+
+  const map = new Map<string, Trade[]>();
+  const nullTrades: Trade[] = [];
+  for (const trade of trades) {
+    const key = getDimensionKey(trade, dim, prepDates, reviewDates);
+    if (key === null) { nullTrades.push(trade); continue; }
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(trade);
+  }
+  // "Ostatní" jen pro dimenze kde null znamená chybějící data
+  const noOthers = new Set(['violations', 'hasPrep', 'hasReview', 'direction', 'one_per_day']);
+  if (nullTrades.length >= 3 && !noOthers.has(dim)) {
+    map.set('Ostatní', nullTrades);
+  }
+  return map;
+}
+
+// ─── DynamicChart ─────────────────────────────────────────────────────────────
+
+interface Props {
+  spec: ChartSpec;
+  trades: Trade[];
+  dailyPreps?: DailyPrep[];
+  dailyReviews?: DailyReview[];
+}
+
+export const DynamicChart: React.FC<Props> = ({
+  spec, trades, dailyPreps = [], dailyReviews = [],
+}) => {
+  const prepDates   = React.useMemo(() => new Set(dailyPreps.map(p => p.date?.slice(0, 10) ?? '')),   [dailyPreps]);
+  const reviewDates = React.useMemo(() => new Set(dailyReviews.map(r => r.date?.slice(0, 10) ?? '')), [dailyReviews]);
+
+  const filtered  = React.useMemo(() => applyFilter(trades, spec.filter), [trades, spec.filter]);
+  const groupMap  = React.useMemo(() => buildGroupMap(filtered, spec.x, prepDates, reviewDates), [filtered, spec.x, prepDates, reviewDates]);
+  const groupNames = Array.from(groupMap.keys());
+
+  const title = spec.title ?? `${spec.y} / ${spec.x}`;
+  const fmt   = METRIC_FORMATTER[spec.y] ?? (v => `${v}`);
+
+  if (groupNames.length === 0) {
+    return (
+      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 my-2 flex items-center justify-center h-[180px]">
+        <span className="text-xs text-[var(--text-secondary)]">Žádná data pro tento graf</span>
+      </div>
+    );
+  }
+
+  // ── BAR CHART ──────────────────────────────────────────────────────────────
+  if (spec.type === 'bar') {
+    let barData = groupNames.map((name, idx) => ({
+      name,
+      value: computeMetric(groupMap.get(name)!, spec.y),
+      count: groupMap.get(name)!.length,
+      color: COLORS[idx % COLORS.length],
+    }));
+    if (spec.sort === 'desc') barData = [...barData].sort((a, b) => b.value - a.value);
+    if (spec.sort === 'asc')  barData = [...barData].sort((a, b) => a.value - b.value);
+
+    return (
+      <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 my-2">
+        <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] mb-3">
+          {title}
+        </div>
+        <div style={{ height: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={barData} margin={{ top: 4, right: 4, bottom: barData.length > 4 ? 30 : 20, left: 0 }}>
+              <XAxis
+                dataKey="name"
+                tick={{ fontSize: 9, fill: 'var(--text-secondary)' }}
+                axisLine={false}
+                tickLine={false}
+                interval={0}
+                angle={barData.length > 4 ? -30 : 0}
+                textAnchor={barData.length > 4 ? 'end' : 'middle'}
+              />
+              <YAxis
+                width={55}
+                tickFormatter={fmt}
+                tick={{ fontSize: 10, fill: 'var(--text-secondary)' }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <Tooltip
+                formatter={(value: number, _name: string, props: any) => [fmt(value), props.payload.name]}
+                contentStyle={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '8px',
+                  fontSize: '11px',
+                }}
+                labelStyle={{ display: 'none' }}
+              />
+              <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" />
+              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                {barData.map((entry, idx) => (
+                  <Cell key={idx} fill={entry.value >= 0 ? entry.color : '#f43f5e'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {barData.map(s => (
+            <div key={s.name} className="flex items-center gap-1.5 px-2 py-1 rounded-xl border border-[var(--border-subtle)] text-[9px]">
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: s.color }} />
+              <span className="font-bold text-[var(--text-primary)]">{s.name}</span>
+              <span className={`font-mono font-black ${s.value >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{fmt(s.value)}</span>
+              <span className="text-[var(--text-secondary)]">{s.count} obch.</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── LINE CHART (equity curves — date-synchronized timeline) ──────────────
+  // Sesbíráme všechna unikátní data ze všech skupin a seřadíme je chronologicky.
+  // Každá skupina postupuje po téže časové ose — kdyz nemá obchod v daný den,
+  // "nese" poslední hodnotu dopředu (flat line). Výsledek: obě křivky jsou
+  // synchronizované a lze porovnat výkon ve stejném časovém období.
+
+  const allDates = Array.from(new Set(
+    [...groupMap.values()].flatMap(ts =>
+      ts.map(t => t.date?.slice(0, 10) ?? '').filter(Boolean),
+    ),
+  )).sort();
+
+  // Pro každou skupinu: datum → kumulativní PnL po všech obchodech toho dne
+  const groupDatePnl = new Map<string, Map<string, number>>();
+  for (const [name, groupTrades] of groupMap.entries()) {
+    const sorted = [...groupTrades].sort((a, b) =>
+      new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
+    let running = 0;
+    const datePnl = new Map<string, number>();
+    for (const t of sorted) {
+      running += t.pnl;
+      datePnl.set(t.date?.slice(0, 10) ?? '', parseFloat(running.toFixed(2)));
+    }
+    groupDatePnl.set(name, datePnl);
+  }
+
+  // Sestavíme chartData — pro každé datum neseme hodnotu dopředu (carry-forward)
+  const chartData: Record<string, any>[] = [];
+  const lastValues = new Map<string, number>(groupNames.map(n => [n, 0]));
+  for (const date of allDates) {
+    const row: Record<string, any> = { date };
+    for (const name of groupNames) {
+      const dp = groupDatePnl.get(name)!;
+      if (dp.has(date)) lastValues.set(name, dp.get(date)!);
+      row[name] = lastValues.get(name)!;
+    }
+    chartData.push(row);
+  }
+
+  // Finální statistiky skupin
+  const lineStats = groupNames.map(name => {
+    const grpTrades = groupMap.get(name)!;
+    const finalPnl  = lastValues.get(name) ?? 0;
+    const wins      = grpTrades.filter(t => t.pnl > 0).length;
+    const winRate   = grpTrades.length > 0 ? Math.round(wins / grpTrades.length * 100) : 0;
+    return { name, finalPnl, count: grpTrades.length, winRate };
+  });
+
+  // Inteligentní interval pro popisky osy X — max ~6 labelů
+  const xInterval = Math.max(0, Math.floor(allDates.length / 6) - 1);
+  const fmtDate = (d: string) => {
+    const dt = new Date(d);
+    return `${dt.getDate()}.${dt.getMonth() + 1}.`;
+  };
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 my-2">
+      <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] mb-3">
+        {title}
+      </div>
+      <div style={{ height: 240 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 4, right: 4, bottom: 20, left: 0 }}>
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 9, fill: 'var(--text-secondary)' }}
+              axisLine={false}
+              tickLine={false}
+              interval={xInterval}
+              tickFormatter={fmtDate}
+            />
+            <YAxis
+              width={55}
+              tickFormatter={fmt}
+              tick={{ fontSize: 10, fill: 'var(--text-secondary)' }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip
+              formatter={(value: number) => [fmt(value), '']}
+              labelFormatter={(label: string) => fmtDate(label)}
+              contentStyle={{
+                backgroundColor: 'var(--bg-card)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '8px',
+                fontSize: '11px',
+              }}
+              labelStyle={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}
+            />
+            <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '8px' }} />
+            <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" />
+            {groupNames.map((name, idx) => (
+              <Line
+                key={name}
+                type="monotone"
+                dataKey={name}
+                stroke={COLORS[idx % COLORS.length]}
+                strokeWidth={2}
+                dot={false}
+                connectNulls={false}
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {lineStats.map((s, idx) => {
+          const isPos = s.finalPnl >= 0;
+          return (
+            <div key={s.name} className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[10px]">
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
+              <span className="font-bold text-[var(--text-primary)]">{s.name}</span>
+              <span className={`font-mono font-black ${isPos ? 'text-emerald-500' : 'text-rose-500'}`}>
+                {isPos ? '+' : ''}${s.finalPnl.toFixed(0)}
+              </span>
+              <span className="text-[var(--text-secondary)]">{s.count} obchodů</span>
+              <span className="text-[var(--text-secondary)]">{s.winRate}% WR</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+export default DynamicChart;

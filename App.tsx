@@ -14,6 +14,7 @@ const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
+const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
 
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
@@ -22,7 +23,7 @@ import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
 import { PullToRefresh } from './components/PullToRefresh';
 import ConfirmationModal from './components/ConfirmationModal';
-import AIChat from './components/AIChat';
+import TradeDetailModal from './components/TradeDetailModal';
 import SharedTradeView from './components/SharedTradeView';
 import { currencyService, ExchangeRates } from './services/currencyService';
 import { t } from './services/translations';
@@ -303,6 +304,9 @@ const App: React.FC = () => {
   }, []);
 
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
+  const [aiChatTrade, setAiChatTrade] = useState<Trade | null>(null);
+  const [aiActiveConvId, setAiActiveConvId] = useState<string | undefined>(undefined);
+  const [journalTargetDate, setJournalTargetDate] = useState<string | undefined>(undefined);
   const isPreferencesDirty = useRef(false);
   const [networkNotifications, setNetworkNotifications] = useState<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }> | null>(null);
   const isPrepsDirty = useRef(false);
@@ -2282,6 +2286,7 @@ const App: React.FC = () => {
               {activePage === 'settings' && 'Nastavení'}
               {activePage === 'network' && 'Síť'}
               {activePage === 'business' && 'Business Hub'}
+              {activePage === 'ai' && 'AI Coach'}
             </h2>
           </div>
 
@@ -2454,12 +2459,35 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto no-scrollbar">
+        {/* AI Coach — renders directly in <main>, bypasses PullToRefresh/scroll container */}
+        {activePage === 'ai' && (
+          <div className="flex-1 overflow-hidden h-full">
+            <React.Suspense fallback={<div className="flex-1" />}>
+              <AICoachPage
+                trades={trades}
+                accounts={accounts}
+                ironRules={ironRules}
+                playbookItems={playbookItems}
+                dailyPreps={dailyPreps}
+                dailyReviews={dailyReviews}
+                theme={theme}
+                initialConversationId={aiActiveConvId}
+                onOpenTrade={(trade) => setAiChatTrade(trade)}
+                onOpenJournal={(date) => {
+                  setJournalTargetDate(date);
+                  setActivePage('journal');
+                }}
+              />
+            </React.Suspense>
+          </div>
+        )}
+
+        <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''}`}>
           <PullToRefresh
             onRefresh={handleRefreshData}
             disabled={!session || loading}
           >
-            <div className={`flex-1 overflow-x-hidden p-4 lg:p-8 pb-12`}>
+            <div className="flex-1 overflow-x-hidden p-4 lg:p-8 pb-12">
               {syncError && (
                 <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
                   <AlertTriangle size={16} />
@@ -2561,6 +2589,7 @@ const App: React.FC = () => {
                       activeTab={journalActiveTab}
                       onTabChange={setJournalActiveTab}
                       sessions={sessions}
+                      initialDate={journalTargetDate}
                     />
                   )}
 
@@ -2656,6 +2685,7 @@ const App: React.FC = () => {
                     />
                   )}
 
+
                 </React.Suspense>
               )}
             </div>
@@ -2736,19 +2766,23 @@ const App: React.FC = () => {
         theme={theme}
       />
 
-      {/* AI Coach — floating chat */}
-      {!sharedTrade && isInitialLoadDone && (
-        <AIChat
-          trades={trades}
+
+      {/* Trade detail otevřený z AI Chatu */}
+      {aiChatTrade && (
+        <TradeDetailModal
+          trade={aiChatTrade}
+          accountName={accounts.find(a => String(a.id) === String(aiChatTrade.accountId))?.name ?? accounts[0]?.name ?? ''}
+          theme={theme as 'dark' | 'light' | 'oled'}
+          onClose={() => setAiChatTrade(null)}
+          onDelete={() => { handleDeleteTrade(aiChatTrade.id); setAiChatTrade(null); }}
+          emotions={userEmotions}
+          onUpdateTrade={(updates) => handleUpdateTrade(aiChatTrade.id, updates)}
+          pnlDisplayMode={pnlDisplayMode}
           accounts={accounts}
-          ironRules={ironRules}
-          playbookItems={playbookItems}
-          dailyPreps={dailyPreps}
-          dailyReviews={dailyReviews}
-          theme={theme}
-          onOpenTrade={(trade) => {
-            setActivePage('history');
-          }}
+          initialBalance={displayBalance}
+          user={currentUser ?? undefined}
+          exchangeRates={exchangeRates}
+          allTrades={trades}
         />
       )}
     </div >

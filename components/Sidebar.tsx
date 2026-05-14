@@ -14,7 +14,8 @@ import {
     ChevronRight,
     Plus,
     Globe,
-    Briefcase
+    Briefcase,
+    Bot,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User } from '../types';
@@ -62,6 +63,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         { id: 'history', label: t('history', lang) || 'Historie', icon: History },
         { id: 'journal', label: t('journal', lang), icon: BookOpen },
         { id: 'business', label: t('business', lang), icon: Briefcase },
+        { id: 'ai', label: 'AI Coach', icon: Bot },
     ];
 
     const secondaryItems = [

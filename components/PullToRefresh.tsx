@@ -306,7 +306,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
                 )}
             </AnimatePresence>
 
-            {/* Scrollable Content */}
+            {/* Scrollable Content — overflow-hidden when disabled so children manage their own scroll */}
             <div
                 ref={containerRef}
                 className="flex-1 overflow-y-auto overscroll-none"

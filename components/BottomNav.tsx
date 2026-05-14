@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, History, BookOpen, Briefcase, Plus, MoreHorizontal, Globe, Wallet, Settings, X } from 'lucide-react';
+import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase } from 'lucide-react';
 
 interface BottomNavProps {
   activePage: string;
@@ -17,10 +17,11 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'history', label: 'Historie', icon: History },
     { id: 'journal', label: 'Deník', icon: BookOpen },
-    { id: 'business', label: 'Byznys', icon: Briefcase },
+    { id: 'ai', label: 'AI', icon: Bot },
   ];
 
   const moreItems = [
+    { id: 'business', label: 'Byznys', icon: Briefcase },
     { id: 'network', label: 'Síť', icon: Globe },
     { id: 'accounts', label: 'Účty', icon: Wallet },
     { id: 'settings', label: 'Nastavení', icon: Settings },

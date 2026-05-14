@@ -1,5 +1,5 @@
 
-import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate } from '../types';
+import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate, AIConversation } from '../types';
 import { supabase } from './supabase';
 import { get, set } from 'idb-keyval';
 
@@ -2219,5 +2219,72 @@ export const storageService = {
     const templates: DrawingTemplate[] = (prefs as any).drawingTemplates || [];
     const filtered = templates.filter(t => t.id !== templateId);
     await this.savePreferences({ ...prefs, drawingTemplates: filtered } as any);
-  }
+  },
+
+  async getConversations(): Promise<AIConversation[]> {
+    const userId = await getUserId();
+    if (!userId) return [];
+    const { data, error } = await supabase
+      .from('ai_conversations')
+      .select('*')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false });
+    if (error) { console.error('[AI] getConversations:', error); return []; }
+    return data ?? [];
+  },
+
+  async createConversation(title = 'Nová konverzace'): Promise<AIConversation | null> {
+    const userId = await getUserId();
+    if (!userId) {
+      console.error('[AI] createConversation: no userId');
+      return null;
+    }
+
+    // Try inserting with category (column may or may not exist)
+    let { data, error } = await supabase
+      .from('ai_conversations')
+      .insert({ user_id: userId, title, category: 'general' })
+      .select()
+      .single();
+
+    // If category column doesn't exist yet, retry without it
+    if (error && (error.message.includes('category') || error.code === '42703')) {
+      console.warn('[AI] category column missing, retrying without it');
+      ({ data, error } = await supabase
+        .from('ai_conversations')
+        .insert({ user_id: userId, title })
+        .select()
+        .single());
+    }
+
+    if (error) {
+      console.error('[AI] createConversation error:', error.message, error.code);
+      throw new Error(error.message); // throw so callers can show UI feedback
+    }
+
+    return { ...data, category: (data.category ?? 'general') as AIConversation['category'] };
+  },
+
+  async updateConversation(id: string, updates: { title?: string; category?: AIConversation['category'] }): Promise<void> {
+    await supabase.from('ai_conversations').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id);
+  },
+
+  async deleteConversation(id: string): Promise<void> {
+    await supabase.from('ai_conversations').delete().eq('id', id);
+  },
+
+  async getMessages(conversationId: string): Promise<{ id: string; role: string; content: string; created_at: string }[]> {
+    const { data, error } = await supabase
+      .from('ai_messages')
+      .select('id, role, content, created_at')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true });
+    if (error) { console.error('[AI] getMessages:', error); return []; }
+    return data ?? [];
+  },
+
+  async appendMessage(conversationId: string, role: 'user' | 'assistant', content: string): Promise<void> {
+    await supabase.from('ai_messages').insert({ conversation_id: conversationId, role, content });
+    await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversationId);
+  },
 };

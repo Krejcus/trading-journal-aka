@@ -81,14 +81,20 @@ interface DailyJournalProps {
   activeTab: 'daily' | 'weekly' | 'archives';
   onTabChange: (tab: 'daily' | 'weekly' | 'archives') => void;
   sessions?: SessionConfig[];
+  initialDate?: string; // Přeskočit na konkrétní datum (z AI Chatu)
 }
 
 const DailyJournal: React.FC<DailyJournalProps> = ({
-  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = []
+  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = [], initialDate
 }) => {
   const getToday = () => new Date().toLocaleDateString('en-CA');
-  const [selectedDate, setSelectedDate] = useState(getToday());
+  const [selectedDate, setSelectedDate] = useState(initialDate ?? getToday());
   const today = getToday();
+
+  // Přeskočit na datum z AI Chatu
+  useEffect(() => {
+    if (initialDate) setSelectedDate(initialDate);
+  }, [initialDate]);
 
   const [view, setView] = useState<'timeline' | 'edit-prep' | 'edit-review' | 'edit-weekly'>('timeline');
   const [activeImageField, setActiveImageField] = useState<'bullish' | 'bearish' | 'scenarios' | string | null>(null);

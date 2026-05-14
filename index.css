@@ -891,3 +891,9 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
   from { opacity: 0; transform: translateX(-40px) scale(0.97); }
   to   { opacity: 1; transform: translateX(0)     scale(1); }
 }
+
+/* AI typewriter cursor blink */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}

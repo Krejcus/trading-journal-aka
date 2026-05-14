@@ -614,6 +614,15 @@ export interface SystemSettings {
 
 
 
+export interface AIConversation {
+  id: string;
+  user_id?: string;
+  title: string;
+  category: 'general' | 'analysis' | 'report';
+  created_at: string;
+  updated_at: string;
+}
+
 export interface SharedLinkConfig {
   id: string;
   name: string;
