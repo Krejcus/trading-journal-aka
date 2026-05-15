@@ -610,7 +610,41 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
                   {/* Active session editor */}
                   {prepForm.scenarios.sessions?.filter(s => s.id === activeSessionTab).map(session => (
-                    <div key={session.id} className={`p-5 rounded-2xl border flex flex-col xl:flex-row gap-5 ${isDark ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-100'}`}>
+                    <div key={session.id} className={`p-5 rounded-2xl border flex flex-col gap-4 ${isDark ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-100'}`}>
+
+                      {/* Per-session Bias */}
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <TrendingUp size={12} className={session.bias === 'Bullish' ? 'text-emerald-500' : session.bias === 'Bearish' ? 'text-rose-500' : 'text-slate-500'} />
+                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">{session.label} Bias</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          {(['Bullish', 'Neutral', 'Bearish'] as const).map(b => {
+                            const isActive = (session.bias ?? 'Neutral') === b;
+                            const activeStyle = b === 'Bullish' ? 'bg-emerald-600 border-emerald-500 text-white' : b === 'Bearish' ? 'bg-rose-600 border-rose-500 text-white' : 'bg-slate-600 border-slate-500 text-white';
+                            const inactiveStyle = isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400 hover:text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100';
+                            const emoji = { Bullish: '🐂', Neutral: '⚖️', Bearish: '🐻' };
+                            return (
+                              <button
+                                key={b}
+                                onClick={() => editPrepForm!(prev => ({
+                                  ...prev,
+                                  scenarios: {
+                                    ...prev.scenarios,
+                                    sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, bias: b } : s)
+                                  }
+                                }))}
+                                className={`py-2 rounded-xl border font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center gap-0.5 ${isActive ? activeStyle : inactiveStyle}`}
+                              >
+                                <span className="text-sm">{emoji[b]}</span>
+                                <span>{b}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col xl:flex-row gap-5">
                       {/* Screenshot */}
                       <div className="w-full xl:w-1/2 space-y-3">
                         <div className="flex items-center justify-between">
@@ -657,34 +691,9 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                           className={`w-full flex-1 min-h-[160px] rounded-2xl p-4 border text-sm leading-relaxed transition-all placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-blue-500/20 ${isDark ? 'bg-theme-card-40 border-slate-800/50 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
                         />
                       </div>
+                      </div>{/* end xl:flex-row */}
                     </div>
                   ))}
-
-                  {/* Market Bias */}
-                  <div>
-                    <div className="flex items-center gap-2 mb-3">
-                      <TrendingUp size={14} className={prepForm.bias === 'Bullish' ? 'text-emerald-500' : prepForm.bias === 'Bearish' ? 'text-rose-500' : 'text-slate-500'} />
-                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Market Bias</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(['Bullish', 'Neutral', 'Bearish'] as const).map(b => {
-                        const isActive = prepForm.bias === b;
-                        const activeStyle = b === 'Bullish' ? 'bg-emerald-600 border-emerald-500 text-white shadow-emerald-600/20' : b === 'Bearish' ? 'bg-rose-600 border-rose-500 text-white shadow-rose-600/20' : 'bg-slate-600 border-slate-500 text-white shadow-slate-600/20';
-                        const inactiveStyle = isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400 hover:text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100';
-                        const emoji = { Bullish: '🐂', Neutral: '⚖️', Bearish: '🐻' };
-                        return (
-                          <button
-                            key={b}
-                            onClick={() => editPrepForm!(prev => ({ ...prev, bias: b }))}
-                            className={`py-2.5 rounded-xl border font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center gap-1 shadow-lg ${isActive ? activeStyle : inactiveStyle}`}
-                          >
-                            <span>{emoji[b]}</span>
-                            <span>{b}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
 
                   {/* Confidence slider */}
                   <div>

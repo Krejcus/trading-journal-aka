@@ -312,6 +312,7 @@ export interface SessionAnalysis {
   image?: string;
   plan: string;
   color?: string;
+  bias?: 'Bullish' | 'Neutral' | 'Bearish';
 }
 
 export interface DailyPrep {

@@ -290,8 +290,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   // Normalize prep for comparison (strips undefined, normalizes empty arrays/strings)
   const normalizePrep = (p: DailyPrep) => JSON.stringify({
-    id: p.id, date: p.date,
-    scenarios: { bullish: p.scenarios.bullish || '', bearish: p.scenarios.bearish || '', scenarioImages: p.scenarios.scenarioImages || [] },
+    id: p.id, date: p.date, bias: p.bias || '',
+    scenarios: {
+      bullish: p.scenarios.bullish || '', bearish: p.scenarios.bearish || '',
+      scenarioImages: p.scenarios.scenarioImages || [],
+      sessions: (p.scenarios.sessions || []).map(s => ({ id: s.id, plan: s.plan || '', image: s.image || '', bias: s.bias || '' })),
+    },
     goals: p.goals || [], checklist: p.checklist,
     ritualCompletions: p.ritualCompletions || [],
     mindsetState: p.mindsetState || '', confidence: p.confidence ?? 50

@@ -95,7 +95,10 @@ export function buildTraderContext(ctx: TraderContext): string {
         if (sc?.bearish) lines.push(`Bearish scénář: ${sc.bearish}`);
         if (sc?.sessions?.length) {
           sc.sessions.forEach(s => {
-            if (s.plan) lines.push(`Session ${s.label || s.id}: ${s.plan}`);
+            const parts = [];
+            if (s.bias) parts.push(`Bias: ${s.bias}`);
+            if (s.plan) parts.push(s.plan);
+            if (parts.length) lines.push(`Session ${s.label || s.id}: ${parts.join(' | ')}`);
           });
         }
         return lines.join('\n');
