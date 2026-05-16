@@ -33,3 +33,4 @@ dist-ssr
 backups/
 previews/
 *.zip
+migrate-screenshots.mjs
