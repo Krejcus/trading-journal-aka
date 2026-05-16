@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { normalizeTrades, calculateStats, findBadExits } from './services/analysis';
+import { normalizeTrades, calculateStats } from './services/analysis';
 import { storageService, getUserId } from './services/storageService';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
@@ -162,8 +162,6 @@ const DEFAULT_ROADMAP: CareerCheckpoint[] = [
   { id: 'cp_150', label: 'Finální Verdikt', dayTarget: 150, description: 'Rozhodnutí o budoucnosti tradingu', status: 'locked', criteria: [{ label: 'Max DD < 10%', metric: 'dd', condition: '<', targetValue: 10 }], rules: DEFAULT_CONSTITUTION }
 ];
 
-
-
 const aggregateTrades = (trades: Trade[], accounts: Account[]): Trade[] => {
   const groups = new Map<string, Trade[]>();
   const independent: Trade[] = [];
@@ -231,12 +229,9 @@ const App: React.FC = () => {
   const [showRetry, setShowRetry] = useState(false);
 
   useEffect(() => {
-    console.log("[Auth] Starting initialization...");
 
     setInitStatus("Kontrola přihlášení...");
-    console.log("[Auth] Calling getSession()...");
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
-      console.log(`[Auth] getSession result: ${activeSession ? 'Logged in' : 'No session'}`);
       if (activeSession) {
         setSession(activeSession);
         setInitStatus("Načítám data...");
@@ -250,7 +245,6 @@ const App: React.FC = () => {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, activeSession) => {
-      console.log(`[Auth] Auth state change: ${event}, Session: ${activeSession ? 'Yes' : 'No'}`);
 
       if (activeSession) {
         // Only trigger session update if it's actually different to avoid loops
@@ -265,7 +259,6 @@ const App: React.FC = () => {
       }
 
       if (event === 'SIGNED_OUT') {
-        console.log("[Auth] User signed out, resetting all state.");
         setSession(null);
         setLoading(false);
         setIsInitialLoadDone(false);
@@ -298,7 +291,6 @@ const App: React.FC = () => {
     });
 
     return () => {
-      console.log("[Auth] Cleaning up subscription");
       subscription.unsubscribe();
     };
   }, []);
@@ -406,7 +398,6 @@ const App: React.FC = () => {
     morningWakeUpDebtAlert: true
   });
 
-
   const [guardian, setGuardian] = useState<GuardianState>({
     isCriticalAlert: false,
     isPrepMissing: true,
@@ -510,7 +501,6 @@ const App: React.FC = () => {
     }
   };
 
-
   const handleHardRefresh = async () => {
     if (confirm("Opravdu chcete vyčistit mezipaměť a restartovat aplikaci?")) {
       if ('serviceWorker' in navigator) {
@@ -551,7 +541,6 @@ const App: React.FC = () => {
     systemSettings,
     ...(networkNotifications ? { networkNotifications } : {}),
   });
-
 
   const [activePage, setActivePage] = useState('dashboard');
   const [isClearTradesModalOpen, setIsClearTradesModalOpen] = useState(false);
@@ -736,7 +725,6 @@ const App: React.FC = () => {
 
   const applyPreferences = useCallback((prefs: UserPreferences) => {
     if (isPreferencesDirty.current) {
-      console.log("[Sync] Skipping preferences sync (dirty state)");
       return;
     }
 
@@ -745,19 +733,21 @@ const App: React.FC = () => {
     if (prefs.standardGoals) setStandardGoals(prefs.standardGoals);
     if (prefs.dashboardLayout) {
       const dl = prefs.dashboardLayout;
-      const isOld = dl.length > 0 && (dl[0] as any).x === undefined && (dl[0] as any).size !== undefined;
+      // Remove any widget IDs that no longer exist in the app (orphaned widgets show as empty boxes)
+      const validDl = dl.filter(w => w.id in WIDGET_CONSTRAINTS);
+      const isOld = validDl.length > 0 && (validDl[0] as any).x === undefined && (validDl[0] as any).size !== undefined;
       if (isOld) {
-        setDashboardLayout(migrateOldLayout(dl));
+        setDashboardLayout(migrateOldLayout(validDl));
       } else {
         // Detect layouts saved with old rowHeight=160 (all h values ≤ 4) and double them
-        const needsHeightMigration = dl.length > 0 && dl.every(w => (w.h || 0) <= 4);
+        const needsHeightMigration = validDl.length > 0 && validDl.every(w => (w.h || 0) <= 4);
         if (needsHeightMigration) {
-          setDashboardLayout(dl.map(w => {
+          setDashboardLayout(validDl.map(w => {
             const c = WIDGET_CONSTRAINTS[w.id] || { minW: 2, minH: 2, maxW: 12, maxH: 8 };
             return { ...w, h: (w.h || 2) * 2, ...c };
           }));
         } else {
-          setDashboardLayout(dl);
+          setDashboardLayout(validDl);
         }
       }
     }
@@ -787,7 +777,6 @@ const App: React.FC = () => {
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
     if ((prefs as any).networkNotifications) setNetworkNotifications((prefs as any).networkNotifications);
   }, []);
-
 
   const [filters, setFilters] = useState<TradeFilters>({
     days: ['Po', 'Út', 'St', 'Čt', 'Pá'],
@@ -845,20 +834,15 @@ const App: React.FC = () => {
 
         keysToRemove.forEach(k => {
           localStorage.removeItem(k);
-          console.log(`[Safety] Removed old user data: ${k}`);
         });
 
-        console.log(`[Safety] Cleaned ${keysToRemove.length} old user keys (selective cleanup)`);
       }
       localStorage.setItem('alphatrade_last_session_user', session.user.id);
 
       // --- CACHE-FIRST LOADING: Instant from IndexedDB, then background refresh ---
-      console.time('[Perf] CACHE READ');
       const cached = await storageService.getCachedDashboardData(session.user.id);
-      console.timeEnd('[Perf] CACHE READ');
 
       if (cached) {
-        console.log(`[Load] Cache hit! ${cached.trades.length} trades, ${cached.accounts.length} accounts loaded instantly`);
         setTrades(cached.trades || []);
         if (cached.accounts && cached.accounts.length > 0) {
           setAccounts(cached.accounts);
@@ -884,7 +868,6 @@ const App: React.FC = () => {
         const fingerprintTrades = (t: Trade[]) => t.map(x => `${x.id}:${x.pnl}:${x.timestamp}`).join('|');
         const fingerprintSimple = (arr: any[]) => arr.map(x => x.id ?? x.date).join('|');
         storageService.getDashboardData().then(fresh => {
-          console.log(`[Load] Background refresh done: ${fresh.trades.length} trades`);
           setTrades(prev =>
             fingerprintTrades(fresh.trades) !== fingerprintTrades(prev) ? (fresh.trades || []) : prev
           );
@@ -909,12 +892,10 @@ const App: React.FC = () => {
       }
 
       // --- NO CACHE (first visit): Blocking server load ---
-      console.log("[Load] No cache, loading from server...");
       setInitStatus("Načítám data...");
 
       try {
         // OPTIMIZED: Single RPC call replaces 7 parallel HTTP requests
-        console.time('[Perf] TOTAL LOAD');
 
         let dbTrades: Trade[] = [];
         let dbAccounts: Account[] = [];
@@ -925,12 +906,10 @@ const App: React.FC = () => {
         let dbWeeklyFocus: WeeklyFocus[] = [];
 
         try {
-          console.time('[Perf] dashboardRPC');
           const result = await Promise.race([
             storageService.getDashboardData(),
             new Promise<never>((_, rej) => setTimeout(() => rej(new Error('RPC timeout')), 15000))
           ]);
-          console.timeEnd('[Perf] dashboardRPC');
 
           dbTrades = result.trades;
           dbAccounts = result.accounts;
@@ -940,16 +919,12 @@ const App: React.FC = () => {
           dbUser = result.user;
           dbWeeklyFocus = result.weeklyFocus;
         } catch (rpcErr) {
-          console.timeEnd('[Perf] dashboardRPC');
           console.warn('[Load] RPC failed, falling back to parallel queries:', rpcErr);
           await getUserId();
           const fb = async <T,>(n: string, fn: () => Promise<T>, d: T): Promise<T> => {
             try {
-              console.time(`[Perf] ${n}`);
-              const r = await Promise.race([fn(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${n} timeout`)), 15000))]);
-              console.timeEnd(`[Perf] ${n}`);
-              return r;
-            } catch (e) { console.timeEnd(`[Perf] ${n}`); console.warn(`[Fallback] ${n} failed:`, e); return d; }
+              return await Promise.race([fn(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${n} timeout`)), 15000))]);
+            } catch (e) { console.warn(`[Fallback] ${n} failed:`, e); return d; }
           };
           [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus] = await Promise.all([
             fb('trades', () => storageService.getTrades(), []),
@@ -962,9 +937,6 @@ const App: React.FC = () => {
           ]);
         }
 
-        console.timeEnd('[Perf] TOTAL LOAD');
-        console.log(`[Load] Success! Loaded ${dbTrades?.length || 0} trades, ${dbAccounts?.length || 0} accounts`);
-        console.log('[Debug] Loaded accounts:', dbAccounts?.map(a => ({ id: a.id, name: a.name, phase: a.phase, type: a.type })));
 
         // Update state with fresh data
         setTrades(dbTrades || []);
@@ -1013,7 +985,6 @@ const App: React.FC = () => {
 
     // Helper to apply preferences to state
 
-
     if (session) {
       // If we switched users, we might still have old data in state
       // Load will overwrite it, but let's be safe
@@ -1036,7 +1007,6 @@ const App: React.FC = () => {
 
     // Delay Realtime subscription to avoid WebSocket connection attempts blocking initial REST calls
     const realtimeTimer = setTimeout(() => {
-      console.log("[Realtime] Setting up trades subscription (delayed start)...");
 
       const tradesChannel = supabase
         .channel('public:trades')
@@ -1049,7 +1019,6 @@ const App: React.FC = () => {
             filter: `user_id=eq.${session.user.id}`
           },
           async (payload) => {
-            console.log("[Realtime] Trade change detected:", payload.eventType);
 
             // Helper: parse raw DB row into Trade (same mapping as getTradeById)
             const parseRealtimeTrade = (raw: any): Trade => ({
@@ -1081,7 +1050,6 @@ const App: React.FC = () => {
               try {
                 const { addTradeToCache } = await import('./services/cacheHelper');
                 await addTradeToCache(fullTrade);
-                console.log('[Realtime] Trade added to cache for persistence');
               } catch (err) {
                 console.error('[Realtime] Failed to update cache:', err);
               }
@@ -1095,7 +1063,6 @@ const App: React.FC = () => {
           }
         )
         .subscribe((status) => {
-          console.log("[Realtime] Subscription status:", status);
           if (status === 'CHANNEL_ERROR') {
             console.warn('[Realtime] WebSocket connection failed. Falling back to REST API only.');
           }
@@ -1107,7 +1074,6 @@ const App: React.FC = () => {
     return () => {
       clearTimeout(realtimeTimer);
       if (realtimeChannelRef.current) {
-        console.log("[Realtime] Cleaning up trades subscription");
         supabase.removeChannel(realtimeChannelRef.current);
         realtimeChannelRef.current = null;
       }
@@ -1125,11 +1091,8 @@ const App: React.FC = () => {
 
       // Ignore if we're currently editing (dirty state)
       if (isPreferencesDirty.current) {
-        console.log("[Cross-tab] Ignoring sync during local edit");
         return;
       }
-
-      console.log("[Cross-tab] Detected preferences change in another tab");
 
       // Debounce to avoid multiple rapid syncs
       setTimeout(async () => {
@@ -1137,7 +1100,6 @@ const App: React.FC = () => {
           const freshPrefs = await storageService.getPreferences();
           if (freshPrefs) {
             applyPreferences(freshPrefs);
-            console.log("[Cross-tab] Synced preferences from other tab");
           }
         } catch (err) {
           console.error("[Cross-tab] Sync failed:", err);
@@ -1154,14 +1116,12 @@ const App: React.FC = () => {
   useEffect(() => {
     if (isInitialLoadDone) {
       // DailyJournal is frequently accessed - preload immediately
-      console.log("[Prefetch] Preloading DailyJournal for instant access...");
       import('./components/DailyJournal');
 
       // Screenshots now come with the RPC response — no separate prefetch needed
 
       // Less critical modules - prefetch after small delay
       const prefetchTimer = setTimeout(() => {
-        console.log("[Prefetch] Prefetching secondary modules...");
         import('./components/Settings');
         import('./components/BusinessHub');
       }, 2000);
@@ -1175,11 +1135,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (dashboardMode === 'archive' && session && !isArchivedLoaded) {
-      console.log("[LazyLoad] Loading archived accounts...");
       storageService.getArchivedAccounts().then(archived => {
         setArchivedAccounts(archived || []);
         setIsArchivedLoaded(true);
-        console.log(`[LazyLoad] Loaded ${archived?.length || 0} archived accounts`);
       }).catch(err => console.error("[LazyLoad] Failed to load archived accounts:", err));
     }
   }, [dashboardMode, session, isArchivedLoaded]);
@@ -1204,7 +1162,6 @@ const App: React.FC = () => {
           setBusinessGoals(cg ? JSON.parse(cg) : []);
           setBusinessResources(cr ? JSON.parse(cr) : []);
           setIsBusinessDataLoaded(true);
-          console.log("[LazyLoad] Business Hub loaded from cache");
         }
       } catch {}
 
@@ -1268,8 +1225,6 @@ const App: React.FC = () => {
       const elapsed = Date.now() - lastVisibleAt.current;
       if (elapsed < 30000) return; // Skip if tab was hidden < 30s
 
-      console.log("[Cross-device] Tab refocused after", Math.round(elapsed / 1000), "s — syncing...");
-
       try {
         if (!isPrepsDirty.current && !isReviewsDirty.current) {
           const [freshPreps, freshReviews] = await Promise.all([
@@ -1299,7 +1254,6 @@ const App: React.FC = () => {
           setBusinessResources(resources || []);
         }
 
-        console.log("[Cross-device] Sync complete");
       } catch (err) {
         console.error("[Cross-device] Sync failed:", err);
       }
@@ -1334,7 +1288,6 @@ const App: React.FC = () => {
             const activeOnly = updatedAccounts.filter(a => !a.isArchived);
             setAccounts(activeOnly);
             setIsArchivedLoaded(false); // Force re-fetch of archived accounts
-            console.log(`[Accounts] Archived ${justArchived.length} account(s), removed from active state`);
             return;
           }
 
@@ -1364,8 +1317,6 @@ const App: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [accounts, sharedTrade, session, isInitialLoadDone]);
-
-
 
   // Security check: Ensure we don't save if there's a session mismatch or no session
   // loadedUserId mirrors lastLoadedSessionId.current as proper state so useMemo recalculates on change
@@ -1461,12 +1412,9 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!canSave) return;
 
-    console.log("[Auto-Save] Periodic auto-save enabled (30s interval)");
-
     const interval = setInterval(() => {
       // Only save if there are pending changes
       if (isPreferencesDirty.current) {
-        console.log("[Auto-Save] Periodic preferences save triggered");
         isPreferencesDirty.current = false;
 
         // Business Hub data excluded - saved to dedicated tables, not preferences
@@ -1481,7 +1429,6 @@ const App: React.FC = () => {
       const wasReviews = isReviewsDirty.current;
       const wasWeekly = isWeeklyFocusDirty.current;
       if (wasPreps || wasReviews || wasWeekly) {
-        console.log("[Auto-Save] Periodic journal save triggered", { wasPreps, wasReviews, wasWeekly });
         isPrepsDirty.current = false;
         isReviewsDirty.current = false;
         isWeeklyFocusDirty.current = false;
@@ -1502,7 +1449,6 @@ const App: React.FC = () => {
     }, 30000); // 30 seconds
 
     return () => {
-      console.log("[Auto-Save] Periodic auto-save disabled");
       clearInterval(interval);
     };
   }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
@@ -1588,7 +1534,6 @@ const App: React.FC = () => {
     }
   }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone]);
 
-
   const contextAccounts = useMemo(() => {
     if (activePage !== 'dashboard') return accounts;
     if (dashboardMode === 'combined') return accounts;
@@ -1623,9 +1568,6 @@ const App: React.FC = () => {
   const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
   const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'feed' | 'following' | 'followers' | 'requests' | 'share'>('feed');
   const [isNetworkSpectating, setIsNetworkSpectating] = useState(false);
-
-
-
 
   const displayTrades = useMemo(() => {
     if (viewMode === 'individual') return trades;
@@ -1672,7 +1614,6 @@ const App: React.FC = () => {
     if (!session) return;
 
     try {
-      console.log('[Refresh] Starting data refresh...');
 
       const [dbTrades, dbAccounts, dbPreps, dbReviews, dbPrefs, dbUser, dbWeeklyFocus, dbPayouts, dbExpenses, dbGoals, dbResources] = await Promise.all([
         storageService.getTrades(),
@@ -1687,8 +1628,6 @@ const App: React.FC = () => {
         storageService.getBusinessGoals(),
         storageService.getBusinessResources()
       ]);
-
-      console.log('[Refresh] Data received, updating state...');
 
       if (dbUser) setCurrentUser(dbUser);
 
@@ -1711,7 +1650,6 @@ const App: React.FC = () => {
 
       if (dbPrefs) applyPreferences(dbPrefs);
 
-      console.log('[Refresh] Refresh complete!');
     } catch (error) {
       console.error('[Refresh] Error:', error);
       throw error; // Re-throw to show error in Pull-to-Refresh
@@ -1826,15 +1764,10 @@ const App: React.FC = () => {
     }
   }, [filteredDisplayTrades, displayBalance]);
 
-  const badExits = useMemo(() => findBadExits(filteredDisplayTrades), [filteredDisplayTrades]);
-
-
-
   const handleUpdateUser = async (updatedUser: User) => {
     setCurrentUser(updatedUser);
     try {
       await storageService.saveUser(updatedUser);
-      console.log("Profile saved successfully");
     } catch (err) {
       console.error("Failed to save profile", err);
       setSyncError("Nepodařilo se uložit profil.");
@@ -1859,7 +1792,6 @@ const App: React.FC = () => {
     storageService.saveTrades(uniqueTrades).then(saved => {
       if (saved && saved.length > 0) {
         setTrades(saved);
-        console.log(`[FileUpload] Saved ${saved.length} trades to Supabase`);
       }
     }).catch(err => {
       console.error("[FileUpload] Failed to save imported trades:", err);
@@ -1885,14 +1817,12 @@ const App: React.FC = () => {
             const isPartOfGroup = t.id === groupKey || t.masterTradeId === groupKey;
             return !isPartOfGroup;
           });
-          console.log(`[Dedup] Removed master/copy group with key: ${groupKey}`);
         }
         // Check for bulk-entry group
         else if (firstNewTrade.groupId) {
           const groupId = firstNewTrade.groupId;
           // Remove all trades with this groupId
           updated = updated.filter(t => t.groupId !== groupId);
-          console.log(`[Dedup] Removed bulk group: ${groupId}`);
         }
       }
 
@@ -1923,7 +1853,7 @@ const App: React.FC = () => {
     setTrades(updatedTrades);
     // Use per-trade updateTrade to avoid bulk saveTrades overwriting screenshot data
     Promise.all(updatedTrades.map(t => storageService.updateTrade(t.id as string, t)))
-      .then(() => console.log("Trades force-saved successfully"))
+      
       .catch(err => {
         console.error("Failed to force-save trades", err);
         setTrades(snapshot);
@@ -2232,7 +2162,6 @@ const App: React.FC = () => {
     return <Auth onLogin={(user) => { }} theme={theme} />;
   }
 
-
   return (
     <div
       className="h-screen font-sans flex overflow-hidden transition-colors duration-300 bg-[var(--bg-page)] text-[var(--text-primary)]"
@@ -2407,7 +2336,6 @@ const App: React.FC = () => {
               </div>
             </div>
           )}
-
 
           <div className="flex items-center gap-6">
             {/* Dashboard Mode Status - Clean Text Design */}
@@ -2624,9 +2552,6 @@ const App: React.FC = () => {
                     />
                   )}
 
-
-
-
                   {activePage === 'settings' && (
                     <Settings
                       theme={theme}
@@ -2684,7 +2609,6 @@ const App: React.FC = () => {
                       onTabChange={setBusinessActiveTab}
                     />
                   )}
-
 
                 </React.Suspense>
               )}
@@ -2765,7 +2689,6 @@ const App: React.FC = () => {
         message="Opravdu chcete smazat VŠECHNY obchody z tohoto účtu? Tato akce je nevratná a data budou trvale odstraněna z cloudu."
         theme={theme}
       />
-
 
       {/* Trade detail otevřený z AI Chatu */}
       {aiChatTrade && (

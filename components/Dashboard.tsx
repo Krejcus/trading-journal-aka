@@ -293,14 +293,14 @@ const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'ole
   const getStreakColor = (val: number) => val > 0 ? 'text-emerald-500 border-emerald-500' : val < 0 ? 'text-rose-500 border-rose-500' : 'text-slate-500 border-slate-700';
 
   return (
-    <div className="p-6 rounded-[32px] glass-panel flex flex-col">
+    <div className="p-6 rounded-[32px] glass-panel flex flex-col h-full">
       <div className="flex justify-between items-start mb-4">
         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
           Current streak <InfoIcon text="Aktuální série ziskových/ztrátových dnů a obchodů." theme={theme} />
         </h3>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-4 flex-1 content-center">
         {/* DAYS STREAK */}
         <div className="flex items-center gap-3">
           <SmartTooltip text="Denní série" subtext={dayStreak > 0 ? `${dayStreak} ziskových dní v řadě` : `${Math.abs(dayStreak)} ztrátových dní v řadě`} theme={theme}>
@@ -399,9 +399,9 @@ const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light
   const fireCount = currentStreak >= 30 ? 3 : currentStreak >= 14 ? 2 : currentStreak >= 7 ? 1 : 0;
 
   return (
-    <div className="p-5 rounded-[24px] flex flex-col justify-between h-full relative overflow-visible transition-all hover:scale-[1.02] hover:shadow-xl glass-panel">
+    <div className="p-5 rounded-[24px] flex flex-col justify-between h-full relative overflow-hidden glass-panel">
       <div className="flex justify-between items-start mb-2">
-        <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+        <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5 whitespace-nowrap">
           Discipline Streak
           <SmartTooltip text="Info" subtext="Počet po sobě jdoucích obchodních dní bez nevalidního obchodu (isValid = false)." theme={theme}>
             <div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div>
@@ -453,86 +453,83 @@ const MASTER_WIDGET_LIST = [
   { id: 'calendar', label: 'Obchodní Kalendář', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Denní zisky v kalendáři.', preview: <div className={`${COLORS.textProfit} font-black text-xs`}>Green Month</div>, defaultRowSpan: 3 },
 ];
 
-/** Clamp a Recharts tooltip to the viewport */
-function useTooltipClamp(ref: React.RefObject<HTMLDivElement | null>) {
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.transform = 'translateX(-50%)';
-    const rect = el.getBoundingClientRect();
-    const pad = 8;
-    if (rect.left < pad) {
-      el.style.transform = `translateX(${-rect.width / 2 + (pad - rect.left)}px)`;
-    } else if (rect.right > window.innerWidth - pad) {
-      el.style.transform = `translateX(${-rect.width / 2 - (rect.right - window.innerWidth + pad)}px)`;
-    }
-  });
+// Module-level mouse tracker — no re-renders, just reads position at tooltip render time
+let _mx = 0, _my = 0;
+if (typeof window !== 'undefined') {
+  window.addEventListener('mousemove', (e) => { _mx = e.clientX; _my = e.clientY; }, { passive: true });
+}
+
+function chartTooltipStyle(width = 200): React.CSSProperties {
+  const pad = 12;
+  const showLeft = _mx > window.innerWidth * 0.55;
+  return {
+    position: 'fixed',
+    left: showLeft ? Math.max(pad, _mx - width - 16) : Math.min(_mx + 16, window.innerWidth - width - pad),
+    top: Math.max(pad, Math.min(_my - 60, window.innerHeight - 200)),
+    zIndex: 9999,
+    pointerEvents: 'none',
+    width,
+  };
 }
 
 const CustomKpiTooltip = (props: any) => {
-  const { active, payload, theme } = props;
-  const ref = useRef<HTMLDivElement>(null);
-  useTooltipClamp(ref);
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    const value = payload[0].value ?? 0;
+  const { active, payload } = props;
+  if (!active || !payload?.length) return null;
+  const data = payload[0].payload;
+  const value = payload[0].value ?? 0;
 
-    return (
-      <div ref={ref} className="px-3 py-2 rounded-xl border shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-200 z-[9999] pointer-events-none theme-card theme-border">
-        <p className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-50">{data.name || data.label}</p>
-        <p className="text-xs font-black flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: data.fill || payload[0].color }}></span>
-          {value > 0 ? '+' : value < 0 ? '-' : ''}{Number(Math.abs(value)).toLocaleString(undefined, { maximumFractionDigits: 0 })} {data.unit || '$'}
-        </p>
-      </div>
-    );
-  }
-  return null;
+  return createPortal(
+    <div style={chartTooltipStyle(180)} className="px-3 py-2 rounded-xl border shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-150 theme-card theme-border">
+      <p className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-50">{data.name || data.label}</p>
+      <p className="text-xs font-black flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: data.fill || payload[0].color }}></span>
+        {value > 0 ? '+' : value < 0 ? '-' : ''}{Number(Math.abs(value)).toLocaleString(undefined, { maximumFractionDigits: 0 })} {data.unit || '$'}
+      </p>
+    </div>,
+    document.body
+  );
 };
 
 const CustomEdgeTooltip = (props: any) => {
   const { active, payload, label, theme } = props;
-  const ref = useRef<HTMLDivElement>(null);
-  useTooltipClamp(ref);
-  if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    const profit = data.profit || 0;
-    const loss = Math.abs(data.loss || 0);
-    const net = profit - loss;
+  if (!active || !payload?.length) return null;
+  const data = payload[0].payload;
+  const profit = data.profit || 0;
+  const loss = Math.abs(data.loss || 0);
+  const net = profit - loss;
 
-    return (
-      <div ref={ref} className={`p-4 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 min-w-[180px] z-[1000] pointer-events-none ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
-        theme === 'dark' ? 'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-white' :
-          'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-[var(--text-primary)]'
-        }`}>
-        <div className={`flex justify-between items-center mb-3 pb-2 border-b ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-          <span className="font-black text-sm uppercase tracking-tight">{label}</span>
-          <span className="text-[10px] font-bold text-slate-500">{data.trades} Trades</span>
+  return createPortal(
+    <div style={chartTooltipStyle(200)} className={`p-4 rounded-2xl border shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
+      theme === 'dark' ? 'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-white' :
+        'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-[var(--text-primary)]'
+      }`}>
+      <div className={`flex justify-between items-center mb-3 pb-2 border-b ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+        <span className="font-black text-sm uppercase tracking-tight">{label}</span>
+        <span className="text-[10px] font-bold text-slate-500">{data.trades} Trades</span>
+      </div>
+      <div className="space-y-1.5">
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-slate-500 font-medium">Hrubý zisk:</span>
+          <span className={`${COLORS.textProfit} font-black`}>+${profit.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
         </div>
-        <div className="space-y-1.5">
-          <div className="flex justify-between items-center text-xs">
-            <span className="text-slate-500 font-medium">Hrubý zisk:</span>
-            <span className={`${COLORS.textProfit} font-black`}>+${profit.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-          </div>
-          <div className="flex justify-between items-center text-xs">
-            <span className="text-slate-500 font-medium">Hrubá ztráta:</span>
-            <span className={`${COLORS.textLoss} font-black`}>-${loss.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-          </div>
-          <div className={`flex justify-between items-center pt-2 mt-1 border-t ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-            <span className="text-[10px] font-black uppercase text-slate-400">Čisté PnL:</span>
-            <p className={`text-sm font-black font-mono ${net >= 0 ? COLORS.textProfit : COLORS.textLoss}`}>
-              {net >= 0 ? '+' : '-'}${Math.abs(net).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            </p>
-          </div>
-          <div className="flex justify-between items-center mt-1">
-            <span className="text-[9px] font-black uppercase text-slate-500">Win Rate:</span>
-            <span className="text-xs font-black text-blue-500">{(data.winRate || 0).toFixed(1)}%</span>
-          </div>
+        <div className="flex justify-between items-center text-xs">
+          <span className="text-slate-500 font-medium">Hrubá ztráta:</span>
+          <span className={`${COLORS.textLoss} font-black`}>-${loss.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+        </div>
+        <div className={`flex justify-between items-center pt-2 mt-1 border-t ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+          <span className="text-[10px] font-black uppercase text-slate-400">Čisté PnL:</span>
+          <p className={`text-sm font-black font-mono ${net >= 0 ? COLORS.textProfit : COLORS.textLoss}`}>
+            {net >= 0 ? '+' : '-'}${Math.abs(net).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </p>
+        </div>
+        <div className="flex justify-between items-center mt-1">
+          <span className="text-[9px] font-black uppercase text-slate-500">Win Rate:</span>
+          <span className="text-xs font-black text-blue-500">{(data.winRate || 0).toFixed(1)}%</span>
         </div>
       </div>
-    );
-  }
-  return null;
+    </div>,
+    document.body
+  );
 };
 
 const renderActiveShape = (props: any) => {
@@ -659,7 +656,7 @@ const ProKpiCard: React.FC<{
                   <linearGradient id="kpiProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
                   <linearGradient id="kpiLossGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
                 </defs>
-                <RechartsTooltip content={<CustomKpiTooltip theme={theme} />} allowEscapeViewBox={{ x: true, y: true }} />
+                <RechartsTooltip content={<CustomKpiTooltip theme={theme} />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
                 <Pie
                   data={chartData}
                   cx="50%"
@@ -729,7 +726,7 @@ const ProKpiCard: React.FC<{
                   <linearGradient id="donutProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
                   <linearGradient id="donutLossGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
                 </defs>
-                <RechartsTooltip content={<CustomKpiTooltip theme={theme} />} allowEscapeViewBox={{ x: true, y: true }} />
+                <RechartsTooltip content={<CustomKpiTooltip theme={theme} />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
                 <Pie
                   data={chartData}
                   cx="50%"
@@ -1012,7 +1009,7 @@ const HourlyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | '
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-subtle)" opacity={0.6} />
             <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#64748b', fontWeight: 'black' }} />
             <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={(val) => `$${Math.abs(val)}`} />
-            <RechartsTooltip content={<CustomEdgeTooltip theme={theme} />} cursor={false} allowEscapeViewBox={{ x: true, y: true }} active={activeIndex !== null} />
+            <RechartsTooltip content={<CustomEdgeTooltip theme={theme} />} cursor={false} active={activeIndex !== null} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
             <ReferenceLine y={0} stroke={theme !== 'light' ? 'var(--text-muted)' : '#cbd5e1'} strokeWidth={1} />
             <Bar dataKey="profit" stackId="a" fill="url(#hourlyProfitGrad)" radius={[8, 8, 0, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="horizontal" />} isAnimationActive={false} onMouseEnter={(_: any, idx: number) => setActiveIndex(idx)} onMouseLeave={() => setActiveIndex(null)} />
             <Bar dataKey="loss" stackId="a" fill="url(#hourlyLossGrad)" radius={[8, 8, 0, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="horizontal" />} isAnimationActive={false} onMouseEnter={(_: any, idx: number) => setActiveIndex(idx)} onMouseLeave={() => setActiveIndex(null)} />
@@ -1058,7 +1055,7 @@ const DailyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | 'o
             <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border-subtle)" opacity={0.6} />
             <XAxis type="number" hide domain={[-maxAbsPnL, maxAbsPnL]} />
             <YAxis dataKey="label" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b', fontWeight: 'black' }} width={40} />
-            <RechartsTooltip content={<CustomEdgeTooltip theme={theme} />} cursor={false} allowEscapeViewBox={{ x: true, y: true }} active={activeIndex !== null} />
+            <RechartsTooltip content={<CustomEdgeTooltip theme={theme} />} cursor={false} active={activeIndex !== null} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
             <ReferenceLine x={0} stroke={theme !== 'light' ? 'var(--text-muted)' : '#cbd5e1'} strokeWidth={1} />
 
             <Bar dataKey="profit" stackId="a" fill="url(#dailyProfitGrad)" radius={[0, 10, 10, 0]} shape={(props: any) => <CustomActiveBar {...props} activeIndex={activeIndex} layout="vertical" />} isAnimationActive={false} onMouseEnter={(_: any, idx: number) => setActiveIndex(idx)} onMouseLeave={() => setActiveIndex(null)}>
@@ -1449,7 +1446,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           {isMobile && !isEditing && (() => {
             const chartHeights: Record<string, number> = {
               equity: 340, hourly_edge: 320, daily_edge: 320, monthly_performance: 320, calendar: 520,
-              streak: 180,
+              streak: 180, avg_win_loss: 140,
             };
             const wiggleAnimate = isMobileEditing
               ? { rotate: [0, -1.5, 1.5, -1.5, 0], scale: [1, 1.01, 1.01, 1.01, 1] }
@@ -1465,7 +1462,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             // Complex widgets (streak has 2 circles, avg_win_loss has bar chart, etc.) stay full-width.
             const PAIRABLE_KPI_IDS = new Set([
               'kpi_pnl', 'kpi_winrate', 'kpi_profit_factor', 'kpi_day_winrate',
-              'kpi_max_drawdown', 'kpi_execution_rate',
+              'kpi_max_drawdown', 'kpi_execution_rate', 'discipline_streak',
             ]);
 
             // Pre-compute visible items with their metadata

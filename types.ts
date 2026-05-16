@@ -201,6 +201,7 @@ export interface Trade {
   isMaster?: boolean; // If this is the source trade for a copy group
   masterTradeId?: string | number; // ID of the master trade if this is a copy
   phase?: 'Challenge' | 'Funded';
+  accountCount?: number; // How many accounts this trade was copied to (social feed dedup)
   miniViewRange?: { from: number; to: number };
   miniViewLayout?: 'single' | 'split';
   miniViewSecondaryRange?: { from: number; to: number };

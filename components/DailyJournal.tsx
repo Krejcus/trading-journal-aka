@@ -243,7 +243,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       const p = lastPrepForm.current;
       const r = lastReviewForm.current;
       const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
-      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim());
+      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim()) && !r.goalResults?.some(g => g.achieved) && !r.weeklyGoalAdherence?.some(a => a.status !== 'Pending');
 
       if (!isPrepEmpty) onSavePrep(p);
       if (!isReviewEmpty) onSaveReview(r);
@@ -256,7 +256,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       const p = lastPrepForm.current;
       const r = lastReviewForm.current;
       const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
-      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim());
+      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim()) && !r.goalResults?.some(g => g.achieved) && !r.weeklyGoalAdherence?.some(a => a.status !== 'Pending');
 
       if (!isPrepEmpty) onSavePrep(p);
       if (!isReviewEmpty) onSaveReview(r);
@@ -293,12 +293,34 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     id: p.id, date: p.date, bias: p.bias || '',
     scenarios: {
       bullish: p.scenarios.bullish || '', bearish: p.scenarios.bearish || '',
+      bullishImage: p.scenarios.bullishImage || '',
+      bearishImage: p.scenarios.bearishImage || '',
       scenarioImages: p.scenarios.scenarioImages || [],
-      sessions: (p.scenarios.sessions || []).map(s => ({ id: s.id, plan: s.plan || '', image: s.image || '', bias: s.bias || '' })),
+      sessions: (p.scenarios.sessions || []).map(s => ({ id: s.id, label: s.label || '', color: s.color || '', plan: s.plan || '', image: s.image || '', bias: s.bias || '' })),
     },
     goals: p.goals || [], checklist: p.checklist,
     ritualCompletions: p.ritualCompletions || [],
     mindsetState: p.mindsetState || '', confidence: p.confidence ?? 50
+  });
+
+  // Normalize review for comparison (prevents save loops from JSON.stringify field-order differences)
+  const normalizeReview = (r: DailyReview) => JSON.stringify({
+    date: r.date,
+    mainTakeaway: r.mainTakeaway || '',
+    lessons: r.lessons || '',
+    rating: r.rating ?? 0,
+    scenarioResult: r.scenarioResult || '',
+    mistakes: r.mistakes || [],
+    goalResults: (r.goalResults || []).map(g => ({ text: g.text || '', achieved: !!g.achieved })),
+    ruleAdherence: (r.ruleAdherence || []).map(a => ({ ruleId: a.ruleId, status: a.status, label: a.label || '' })),
+    weeklyGoalAdherence: (r.weeklyGoalAdherence || []).map(a => ({ ruleId: a.ruleId, status: a.status, label: a.label || '' })),
+    sessionBreakdowns: (r.sessionBreakdowns || []).map(b => ({ sessionId: b.sessionId, notes: b.notes || '', screenshot: b.screenshot || '' })),
+    psycho: {
+      stressors: r.psycho?.stressors || '',
+      gratitude: r.psycho?.gratitude || '',
+      notes: r.psycho?.notes || '',
+      metrics: r.psycho?.metrics || {},
+    }
   });
 
   // Auto-save Logic for Prep
@@ -357,7 +379,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
     // Check if form is actually different from saved prop
     const saved = reviews.find(r => r.date === reviewForm.date);
-    if (!saved || JSON.stringify(reviewForm) !== JSON.stringify(saved)) {
+    if (!saved || normalizeReview(reviewForm) !== normalizeReview(saved)) {
       // Don't auto-save a brand new review if it's still empty
       if (!saved) {
         const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes && !reviewForm.psycho?.stressors?.trim() && !reviewForm.psycho?.gratitude?.trim() && !reviewForm.ruleAdherence?.some(a => a.status !== 'Pending') && !reviewForm.sessionBreakdowns?.some(b => b.notes?.trim());
@@ -433,14 +455,16 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   }, [hasUnsavedChanges, view]);
 
   // Handle warning dialog actions
-  const handleSaveAndProceed = useCallback(() => {
-    if (view === 'edit-prep') {
-      onSavePrep({ ...prepForm, completed: true });
-    } else if (view === 'edit-review') {
-      onSaveReview({ ...reviewForm, completed: true });
-    } else {
-      handleManualSave();
-    }
+  const handleSaveAndProceed = useCallback(async () => {
+    try {
+      if (view === 'edit-prep') {
+        await onSavePrep({ ...prepForm, completed: true });
+      } else if (view === 'edit-review') {
+        await onSaveReview({ ...reviewForm, completed: true });
+      } else {
+        await handleManualSave();
+      }
+    } catch { /* save failed, proceed anyway */ }
     prepFormDirty.current = false;
     reviewFormDirty.current = false;
     setHasUnsavedChanges(false);
@@ -815,11 +839,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const currentReview = useMemo(() => reviews.find(r => r.date === selectedDate), [reviews, selectedDate]);
 
   useEffect(() => {
-    // 1. Force save the PREVIOUS date's form if it changed and not empty
-    if (lastPrepForm.current.date && lastPrepForm.current.date !== selectedDate) {
+    // 1. Force save the PREVIOUS date's form if it was dirty and not empty
+    if (lastPrepForm.current.date && lastPrepForm.current.date !== selectedDate && prepFormDirty.current) {
       const p = lastPrepForm.current;
       const isEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
-      if (!isEmpty) onSavePrep(p);
+      if (!isEmpty) void onSavePrep(p);
     }
 
     // 2. Load the new date's form
@@ -899,11 +923,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     const dateActuallyChanged = prevSelectedDateRef.current !== selectedDate;
     prevSelectedDateRef.current = selectedDate;
 
-    // 1. Force save the PREVIOUS date's review if date changed and not empty
-    if (dateActuallyChanged && lastReviewForm.current.date && lastReviewForm.current.date !== selectedDate) {
+    // 1. Force save the PREVIOUS date's review if date changed, was dirty, and not empty
+    if (dateActuallyChanged && lastReviewForm.current.date && lastReviewForm.current.date !== selectedDate && reviewFormDirty.current) {
       const r = lastReviewForm.current;
       const isEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim());
-      if (!isEmpty) onSaveReview(r);
+      if (!isEmpty) void onSaveReview(r);
     }
 
     // 2. Load the new date's review — only reset dirty flags when actually loading new data

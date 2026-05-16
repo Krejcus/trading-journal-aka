@@ -1,11 +1,31 @@
 
-import React, { useState, useRef, useLayoutEffect } from 'react';
+import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ReferenceLine, LabelList, Line
 } from 'recharts';
 import { TradeStats } from '../types';
 import { Info, Calendar, Clock, ShieldCheck, Activity } from 'lucide-react';
+
+// Module-level mouse tracker shared with Dashboard — position at render time, no re-renders
+let _mx = 0, _my = 0;
+if (typeof window !== 'undefined') {
+  window.addEventListener('mousemove', (e) => { _mx = e.clientX; _my = e.clientY; }, { passive: true });
+}
+
+function chartTooltipStyle(width = 220): React.CSSProperties {
+  const pad = 12;
+  const showLeft = _mx > window.innerWidth * 0.55;
+  return {
+    position: 'fixed',
+    left: showLeft ? Math.max(pad, _mx - width - 16) : Math.min(_mx + 16, window.innerWidth - width - pad),
+    top: Math.max(pad, Math.min(_my - 60, window.innerHeight - 260)),
+    zIndex: 9999,
+    pointerEvents: 'none',
+    width,
+  };
+}
 
 interface ChartsProps {
   stats: TradeStats;
@@ -36,27 +56,8 @@ interface CustomTooltipProps {
   theme: 'dark' | 'light' | 'oled';
 }
 
-/** Clamp a Recharts tooltip to the viewport using useLayoutEffect */
-function useTooltipClamp(ref: React.RefObject<HTMLDivElement | null>) {
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    // Reset to measure natural position from Recharts wrapper
-    el.style.transform = 'translateX(-50%)';
-    const rect = el.getBoundingClientRect();
-    const pad = 8;
-    if (rect.left < pad) {
-      el.style.transform = `translateX(${-rect.width / 2 + (pad - rect.left)}px)`;
-    } else if (rect.right > window.innerWidth - pad) {
-      el.style.transform = `translateX(${-rect.width / 2 - (rect.right - window.innerWidth + pad)}px)`;
-    }
-  });
-}
-
 const CustomEquityTooltip = (props: any) => {
-  const { active, payload, label, theme, coordinate, viewBox } = props;
-  const ref = useRef<HTMLDivElement>(null);
-  useTooltipClamp(ref);
+  const { active, payload, label, theme } = props;
   if (!active || !payload || !payload.length) return null;
 
   const data = payload[0].payload;
@@ -64,17 +65,15 @@ const CustomEquityTooltip = (props: any) => {
   const initial = data?.initial ?? 0;
   const isPositive = val >= initial;
   const trade = data?.trade;
-
   const validVal = payload.find((p: any) => p.dataKey === 'validEquity')?.value;
 
-  return (
-    <div ref={ref} className={`border p-4 rounded-2xl shadow-2xl z-[1000] backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 pointer-events-none
+  return createPortal(
+    <div style={chartTooltipStyle(230)} className={`border p-4 rounded-2xl shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150
       ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
         theme === 'dark' ? 'bg-theme-page-95 border-slate-700 text-white' :
           'bg-white/95 border-slate-200 text-slate-900'
       }`}>
-      <p className={`text-[10px] font-black uppercase tracking-widest mb-2 opacity-50`}>{label}</p>
-
+      <p className="text-[10px] font-black uppercase tracking-widest mb-2 opacity-50">{label}</p>
       <div className="space-y-3">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -85,7 +84,6 @@ const CustomEquityTooltip = (props: any) => {
             ${Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}
           </p>
         </div>
-
         {trade && (
           <div className="pt-2 border-t border-white/5">
             <div className="flex items-center justify-between gap-4">
@@ -104,14 +102,13 @@ const CustomEquityTooltip = (props: any) => {
             </div>
           </div>
         )}
-
         {validVal != null && (
           <div className="pt-2 border-t border-white/5">
             <div className="flex items-center gap-2 mb-1">
               <div className="w-1.5 h-1.5 rounded-full bg-amber-400"></div>
               <span className="text-[10px] font-black uppercase tracking-tight text-amber-500/80">Disciplinovaná</span>
             </div>
-            <p className={`font-black text-lg leading-none text-amber-400`}>
+            <p className="font-black text-lg leading-none text-amber-400">
               ${Number(validVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </p>
           </div>
@@ -120,15 +117,14 @@ const CustomEquityTooltip = (props: any) => {
       {trade && (
         <p className="mt-3 text-[8px] font-black text-blue-500 uppercase tracking-widest animate-pulse">Click for details</p>
       )}
-    </div>
+    </div>,
+    document.body
   );
 };
 
 
 const CustomBarTooltip = (props: any) => {
   const { active, payload, label, theme } = props;
-  const ref = useRef<HTMLDivElement>(null);
-  useTooltipClamp(ref);
   if (!active || !payload || !payload.length) return null;
 
   const data = payload[0].payload;
@@ -140,8 +136,8 @@ const CustomBarTooltip = (props: any) => {
   const winRate = data.winRate || 0;
   const count = data.trades || 0;
 
-  return (
-    <div ref={ref} className={`border p-4 rounded-lg shadow-xl z-[1000] min-w-[200px]
+  return createPortal(
+    <div style={chartTooltipStyle(220)} className={`border p-4 rounded-lg shadow-xl
       ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
         theme === 'dark' ? 'bg-theme-card border-slate-700 text-white' :
           'bg-white border-slate-200 text-slate-900'
@@ -170,7 +166,8 @@ const CustomBarTooltip = (props: any) => {
           <span className="font-bold text-blue-400">{Number(winRate).toFixed(1)}%</span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -255,7 +252,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
 
       {/* 1. EQUITY CURVE */}
       {!onlyDistribution && (
-        <div className="p-6 rounded-[32px] transition-all overflow-hidden h-full flex flex-col glass-panel">
+        <div className="p-6 rounded-[32px] transition-all overflow-visible h-full flex flex-col glass-panel">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
             <div>
               <h3 className={`text-xs font-black uppercase tracking-widest flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
@@ -328,7 +325,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   domain={['auto', 'auto']}
                   tick={{ fontSize: 10, fontStyle: 'italic', fontWeight: 'bold' }}
                 />
-                <Tooltip content={<CustomEquityTooltip theme={theme} />} cursor={{ stroke: axisColor, strokeDasharray: '5 5' }} allowEscapeViewBox={{ x: true, y: true }} />
+                <Tooltip content={<CustomEquityTooltip theme={theme} />} cursor={{ stroke: axisColor, strokeDasharray: '5 5' }} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
 
                 <ReferenceLine
                   y={initialCap}
@@ -402,7 +399,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} opacity={0.05} />
                   <XAxis dataKey="label" interval={0} stroke={axisColor} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 'bold' }} dy={10} />
                   <YAxis stroke={axisColor} axisLine={false} tickLine={false} tickFormatter={(val) => `$${Math.abs(val) >= 1000 ? (val / 1000).toFixed(1) + 'k' : val}`} tick={{ fontSize: 10 }} />
-                  <Tooltip content={<CustomBarTooltip theme={theme} />} cursor={{ fill: theme !== 'light' ? '#334155' : '#e2e8f0', opacity: 0.1 }} allowEscapeViewBox={{ x: true, y: true }} />
+                  <Tooltip content={<CustomBarTooltip theme={theme} />} cursor={{ fill: theme !== 'light' ? '#334155' : '#e2e8f0', opacity: 0.1 }} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
                   <ReferenceLine y={0} stroke={axisColor} />
                   <Bar dataKey="profit" stackId="hour" fill="url(#profitGradientV)" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="loss" stackId="hour" fill="url(#lossGradientV)" radius={[4, 4, 0, 0]} />
@@ -430,7 +427,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={true} stroke={gridColor} opacity={0.05} />
                   <XAxis type="number" stroke={axisColor} axisLine={false} tickLine={false} tickFormatter={(val) => `$${Math.abs(val) >= 1000 ? (val / 1000).toFixed(0) + 'k' : val}`} />
                   <YAxis dataKey="label" type="category" stroke={axisColor} axisLine={false} tickLine={false} width={40} tick={{ fontWeight: 'bold', fontSize: 10 }} />
-                  <Tooltip content={<CustomBarTooltip theme={theme} />} cursor={{ fill: theme !== 'light' ? '#334155' : '#e2e8f0', opacity: 0.1 }} allowEscapeViewBox={{ x: true, y: true }} />
+                  <Tooltip content={<CustomBarTooltip theme={theme} />} cursor={{ fill: theme !== 'light' ? '#334155' : '#e2e8f0', opacity: 0.1 }} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
                   <ReferenceLine x={0} stroke={axisColor} />
                   <Bar dataKey="loss" stackId="stack" fill="url(#lossGradientH)" radius={[0, 8, 8, 0]} />
                   <Bar dataKey="profit" stackId="stack" fill="url(#profitGradientH)" radius={[0, 8, 8, 0]}>

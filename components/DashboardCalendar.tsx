@@ -366,7 +366,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
 
 const formatPnLCompact = (val: number, mode: PnLDisplayMode): string => {
    if (mode === 'rr') return `${val >= 0 ? '+' : ''}${val.toFixed(1)}R`;
-   if (mode === 'pct') return `${val >= 0 ? '+' : ''}${val.toFixed(1)}%`;
+   if (mode === 'percent') return `${val >= 0 ? '+' : ''}${val.toFixed(1)}%`;
    const abs = Math.abs(val);
    const sign = val >= 0 ? '+' : '-';
    if (abs >= 10000) return `${sign}$${(abs / 1000).toFixed(0)}k`;

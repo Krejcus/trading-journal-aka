@@ -862,6 +862,32 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
   border-bottom-color: rgba(255, 255, 255, 0.4) !important;
 }
 
+/* ===== RECHARTS OVERRIDES ===== */
+.recharts-wrapper,
+.recharts-surface {
+  overflow: visible !important;
+}
+.recharts-tooltip-wrapper {
+  z-index: 9999 !important;
+  overflow: visible !important;
+}
+/* Remove browser focus outline on chart click */
+.recharts-wrapper:focus,
+.recharts-wrapper:focus-visible,
+.recharts-surface:focus,
+.recharts-surface:focus-visible,
+.recharts-wrapper *:focus,
+.recharts-wrapper *:focus-visible {
+  outline: none !important;
+}
+/* Remove focus outline from widget containers on click */
+[class*="glass-panel"]:focus,
+[class*="glass-panel"]:focus-visible,
+[class*="glass-panel"] *:focus,
+[class*="glass-panel"] *:focus-visible {
+  outline: none !important;
+}
+
 .light-theme .react-grid-item > .react-resizable-handle::after {
   border-right-color: rgba(0, 0, 0, 0.3) !important;
   border-bottom-color: rgba(0, 0, 0, 0.3) !important;

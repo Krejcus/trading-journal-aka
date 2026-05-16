@@ -342,7 +342,11 @@ export const storageService = {
         miniViewLayout:data->>miniViewLayout,
         miniViewSecondaryRange:data->>miniViewSecondaryRange,
         miniViewSecondaryTimeframe:data->>miniViewSecondaryTimeframe,
-        durationMinutes:data->>durationMinutes
+        durationMinutes:data->>durationMinutes,
+        positionSize:data->>positionSize,
+        isMaster:data->>isMaster,
+        masterTradeId:data->>masterTradeId,
+        entryTime:data->>entryTime
       `)
       .eq('user_id', userId)
       .order('timestamp', { ascending: false });
@@ -400,6 +404,10 @@ export const storageService = {
       miniViewLayout: t.miniViewLayout,
       miniViewSecondaryRange: t.miniViewSecondaryRange,
       miniViewSecondaryTimeframe: t.miniViewSecondaryTimeframe,
+      positionSize: t.positionSize ? Number(t.positionSize) : undefined,
+      isMaster: t.isMaster === 'true' || t.isMaster === true,
+      masterTradeId: t.masterTradeId || undefined,
+      entryTime: t.entryTime ? Number(t.entryTime) : undefined,
 
       // We don't carry the full blob anymore to save memory
       data: {}
@@ -440,7 +448,6 @@ export const storageService = {
       t.id === tradeId ? { ...t, drawings } : t
     );
     await set(localKey, updatedTrades);
-    console.log(`[UpdateDrawings] Updated drawings for trade ${tradeId} in cache`);
   },
 
   async updateTrade(tradeId: string | number, updates: Partial<Trade>): Promise<void> {
@@ -498,7 +505,6 @@ export const storageService = {
       t.id === tradeId ? { ...t, ...updates } : t
     );
     await set(localKey, updatedTrades);
-    console.log(`[UpdateTrade] Updated trade ${tradeId} in cache`);
   },
 
   async saveTrades(trades: Trade[]): Promise<Trade[]> {
@@ -658,7 +664,6 @@ export const storageService = {
     const cachedTrades: Trade[] = await get(localKey) || [];
     const updatedTrades = cachedTrades.filter(t => t.id !== id);
     await set(localKey, updatedTrades);
-    console.log(`[DeleteTrade] Removed trade ${id} from cache`);
   },
 
   async clearTrades(accountId?: string): Promise<void> {
@@ -678,11 +683,9 @@ export const storageService = {
       const cachedTrades: Trade[] = await get(localKey) || [];
       const filteredTrades = cachedTrades.filter(t => t.accountId !== accountId);
       await set(localKey, filteredTrades);
-      console.log(`[ClearTrades] Removed trades for account ${accountId} from cache`);
     } else {
       // Full clear - remove all trades
       await set(localKey, []);
-      console.log(`[ClearTrades] Cleared all trades from cache`);
     }
   },
 
@@ -807,8 +810,6 @@ export const storageService = {
 
   async getAccounts(targetUserId?: string): Promise<Account[]> {
     const userId = targetUserId || await getUserId();
-
-    console.log('[Main App] 🔑 Loading accounts for user ID:', userId);
 
     // Fast local storage fallback - always use userId-scoped key
     const localKey = userId ? `alphatrade_accounts_${userId}` : 'alphatrade_accounts';
@@ -1052,12 +1053,14 @@ export const storageService = {
       safeSetItem(localKey, prefs);
       return;
     }
-    safeSetItem(localKey, prefs);
+    // Write to Supabase FIRST — if it fails, don't update the local cache so state stays consistent
     const { error } = await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
     if (error) {
       console.error("[savePreferences] DB error:", error);
       throw error;
     }
+    // Persist to localStorage only after confirmed DB write
+    safeSetItem(localKey, prefs);
     await updateCacheTimestamp();
   },
 
@@ -1276,6 +1279,17 @@ export const storageService = {
       }, { onConflict: 'user_id,week_iso' });
 
     if (error) throw error;
+
+    // Update IDB cache so getCachedDashboardData stays fresh
+    try {
+      const cached: WeeklyFocus[] = await get(`alphatrade_weekly_focus_${userId}`) || [];
+      const updated = cached.some(f => f.weekISO === focus.weekISO)
+        ? cached.map(f => f.weekISO === focus.weekISO ? focus : f)
+        : [...cached, focus];
+      await set(`alphatrade_weekly_focus_${userId}`, updated);
+    } catch (cacheErr) {
+      console.warn('[saveWeeklyFocus] IDB cache update failed (non-fatal):', cacheErr);
+    }
   },
 
   // Business Hub
@@ -1750,17 +1764,17 @@ export const storageService = {
     if (!userId) throw new Error('Not authenticated');
 
     // Only the receiver (who accepted the request) can modify permissions
-    const { error, count } = await supabase
+    const { data: updatedRows, error } = await supabase
       .from('connections')
       .update({ permissions })
       .eq('id', connectionId)
       .eq('receiver_id', userId)
-      .select('id', { count: 'exact', head: true });
+      .select('id');
 
     if (error) {
       console.error('[Permissions] Update failed:', error.message);
     }
-    if (count === 0) {
+    if (!updatedRows || updatedRows.length === 0) {
       console.warn('[Permissions] No rows updated - you may not be the receiver of this connection');
     }
   },
@@ -1967,9 +1981,9 @@ export const storageService = {
       const key = `${item.data.user_id}_${item.data.instrument}_${item.data.direction}_${item.date}`;
       if (dedupMap.has(key)) {
         const existing = dedupMap.get(key);
-        existing.meta.accountCount = (existing.meta.accountCount || 1) + 1;
+        (existing.meta as any).accountCount = ((existing.meta as any).accountCount || 1) + 1;
       } else {
-        item.meta.accountCount = 1;
+        (item.meta as any).accountCount = 1;
         dedupMap.set(key, item);
       }
     }
