@@ -6,7 +6,6 @@ import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimeline from './TacticalTimeline';
 import ImageZoomModal from './ImageZoomModal';
 import WeeklyOverview from './WeeklyOverview';
-import DayStoryboard from './DayStoryboard';
 import { storageService } from '../services/storageService';
 import {
   Coffee,
@@ -1124,29 +1123,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 </p>
               </div>
             </div>
-
-            <DayStoryboard
-              date={selectedDate}
-              today={today}
-              trades={currentTrades}
-              prep={currentPrep}
-              review={currentReview}
-              sessions={sessions}
-              ironRules={ironRules}
-              isDark={theme !== 'light'}
-              onStageClick={(stage) => {
-                // Trigger autoExpand to open relevant section in TacticalTimeline
-                if (stage === 'prep' || stage === 'session' || stage === 'rituals') {
-                  setAutoExpand('prep');
-                } else if (stage === 'audit') {
-                  setAutoExpand('review');
-                }
-                // Scroll to TacticalTimeline area
-                requestAnimationFrame(() => {
-                  document.getElementById('tactical-timeline-anchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                });
-              }}
-            />
 
             <div id="tactical-timeline-anchor" />
             <TacticalTimeline

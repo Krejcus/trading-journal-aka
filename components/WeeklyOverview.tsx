@@ -760,7 +760,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                               {sessTrades.map(t => (
                                 <button
                                   key={t.id}
-                                  onClick={() => onOpenTrade?.(t.id)}
+                                  onClick={() => onOpenTrade?.(String(t.id))}
                                   className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-black transition-all active:scale-95 ${t.pnl > 0 ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' : t.pnl < 0 ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20' : 'bg-slate-500/10 text-slate-400'}`}
                                 >
                                   <span>{t.instrument}</span>
@@ -795,7 +795,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                   return (
                     <button
                       key={t.id}
-                      onClick={() => onOpenTrade?.(t.id)}
+                      onClick={() => onOpenTrade?.(String(t.id))}
                       className={`w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl text-left transition-all active:scale-[0.99] ${isDark ? 'bg-white/[0.02] hover:bg-white/5' : 'bg-slate-50 hover:bg-slate-100'}`}
                     >
                       <div className="flex items-center gap-2.5 flex-1 min-w-0">
@@ -824,8 +824,8 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                         <p className={`text-[13px] font-black ${t.pnl > 0 ? 'text-emerald-500' : t.pnl < 0 ? 'text-rose-500' : 'text-slate-500'}`}>
                           {t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </p>
-                        {t.rMultiple !== undefined && t.rMultiple !== null && (
-                          <p className="text-[9px] font-bold text-slate-500">{t.rMultiple > 0 ? '+' : ''}{t.rMultiple.toFixed(2)}R</p>
+                        {t.riskAmount && t.riskAmount > 0 && (
+                          <p className="text-[9px] font-bold text-slate-500">{(t.pnl / t.riskAmount) > 0 ? '+' : ''}{(t.pnl / t.riskAmount).toFixed(2)}R</p>
                         )}
                       </div>
                     </button>

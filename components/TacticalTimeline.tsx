@@ -640,7 +640,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                                 </span>
                               )}
                               {session.bias && (
-                                <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${session.bias === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : session.bias === 'Short' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-500'}`}>
+                                <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${session.bias === 'Bullish' ? 'bg-emerald-500/10 text-emerald-500' : session.bias === 'Bearish' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-500'}`}>
                                   {session.bias}
                                 </span>
                               )}
