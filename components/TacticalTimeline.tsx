@@ -67,6 +67,10 @@ interface TacticalTimelineProps {
   currentWeekFocus?: { goals: WeekFocusGoal[] } | null;
   isSaving?: boolean;
   lastSaved?: Date | null;
+  /** Pokud nastavené, otevře prep/review v expanded edit módu při mountu */
+  autoExpand?: 'prep' | 'review' | null;
+  /** Callback poté co byl autoExpand aplikován — pro vyčištění stavu v rodiči */
+  onAutoExpandConsumed?: () => void;
 }
 
 // Inline breakdown editor component
@@ -298,7 +302,7 @@ const BreakdownCard: React.FC<{
   );
 };
 
-const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review, trades, theme, onEditPrep, onEditReview, onDeletePrep, onDeleteReview, isMini = false, sessions, sessionBreakdowns, onUpdateBreakdown, prepForm, reviewForm, editPrepForm, editReviewForm, onSavePrep, onSaveReview, rituals, tradeRules, psychoMetrics, currentWeekFocus, isSaving, lastSaved }) => {
+const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review, trades, theme, onEditPrep, onEditReview, onDeletePrep, onDeleteReview, isMini = false, sessions, sessionBreakdowns, onUpdateBreakdown, prepForm, reviewForm, editPrepForm, editReviewForm, onSavePrep, onSaveReview, rituals, tradeRules, psychoMetrics, currentWeekFocus, isSaving, lastSaved, autoExpand, onAutoExpandConsumed }) => {
   const isDark = theme !== 'light';
   const [zoomImg, setZoomImg] = useState<string | null>(null);
   const [isDeletingPrep, setIsDeletingPrep] = useState(false);
@@ -306,6 +310,17 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
   const [isBreakdownExpanded, setIsBreakdownExpanded] = useState(false);
   const [isPrepExpanded, setIsPrepExpanded] = useState(false);
   const [isReviewExpanded, setIsReviewExpanded] = useState(false);
+
+  // Reaguj na autoExpand signál — otevři prep nebo review když rodič požádá
+  useEffect(() => {
+    if (autoExpand === 'prep') {
+      setIsPrepExpanded(true);
+      onAutoExpandConsumed?.();
+    } else if (autoExpand === 'review') {
+      setIsReviewExpanded(true);
+      onAutoExpandConsumed?.();
+    }
+  }, [autoExpand, onAutoExpandConsumed]);
   const [activeSessionTab, setActiveSessionTab] = useState<string | null>(null);
   const [quickNote, setQuickNote] = useState('');
 
@@ -465,15 +480,15 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
     const isPlaceholderTime = time === '01:00' || time === '00:00';
 
     return (
-      <div className={`relative flex items-center ${isMini ? 'justify-start' : 'lg:justify-center'} ${!isMini && altSide ? 'lg:flex-row-reverse' : ''}`}>
+      <div className="relative flex items-center">
         {/* Timeline Dot */}
-        <div className={`absolute ${isMini ? 'left-4' : 'left-10 lg:left-1/2'} -translate-x-1/2 ${isMini ? 'w-1.5 h-1.5' : 'w-4 h-4'} rounded-full border-2 flex items-center justify-center transition-all duration-500 ${trade.pnl >= 0 ? 'bg-emerald-500 border-black/50' : 'bg-rose-500 border-black/50'}`}>
+        <div className={`absolute ${isMini ? 'left-4' : 'left-10'} -translate-x-1/2 ${isMini ? 'w-1.5 h-1.5' : 'w-4 h-4'} rounded-full border-2 flex items-center justify-center transition-all duration-500 ${trade.pnl >= 0 ? 'bg-emerald-500 border-black/50' : 'bg-rose-500 border-black/50'}`}>
           {!isMini && !isPlaceholderTime && <div className="absolute -top-6 text-[9px] font-black uppercase text-slate-500 tracking-widest whitespace-nowrap">{time}</div>}
         </div>
 
-        <div className={`relative z-[1] ${isMini ? 'w-full pl-7' : 'w-full lg:w-[45%] pl-16 lg:pl-0'} ${!isMini && altSide ? 'lg:pr-12 lg:text-right' : 'lg:pl-12'}`}>
+        <div className={`relative z-[1] w-full ${isMini ? 'pl-7' : 'pl-16'}`}>
           <div className={`group ${padding} ${rounded} border transition-all hover:shadow-xl hover:scale-[1.01] ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-            <div className={`flex items-center justify-between ${isMini ? 'mb-1.5' : 'mb-4'} ${!isMini && altSide ? 'lg:flex-row-reverse' : ''}`}>
+            <div className={`flex items-center justify-between ${isMini ? 'mb-1.5' : 'mb-4'}`}>
               <div className="flex items-center gap-1">
                 <span className={`${isMini ? 'px-1 py-0.5' : 'px-2 py-0.5'} rounded-lg text-[6px] md:text-[7px] font-black uppercase ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
                   {trade.direction}
@@ -525,17 +540,17 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
   return (
     <div className={`relative ${isMini ? 'py-3 px-1' : 'py-4 px-2 lg:py-10 lg:px-4'}`}>
-      {/* Central Line */}
-      <div className={`absolute ${isMini ? 'left-4' : 'left-10 lg:left-1/2'} top-0 bottom-0 w-px ${isMini ? '' : '-translate-x-1/2'} ${isDark ? 'bg-[var(--border-subtle)]' : 'bg-slate-200'}`}></div>
+      {/* Vertical Line — vždy vlevo */}
+      <div className={`absolute ${isMini ? 'left-4' : 'left-10'} top-0 bottom-0 w-px ${isDark ? 'bg-[var(--border-subtle)]' : 'bg-slate-200'}`}></div>
 
       <div className={isMini ? 'space-y-4' : 'space-y-6 lg:space-y-12'}>
 
         {/* ====== PREP CARD ====== */}
-        <div className={`relative flex items-center ${isMini ? 'justify-start' : 'lg:justify-center'}`}>
-          <div className={`absolute ${isMini ? 'left-4' : 'left-10 lg:left-1/2'} -translate-x-1/2 ${isMini ? 'w-1.5 h-1.5' : 'w-4 h-4'} rounded-full border-2 flex items-center justify-center transition-all duration-500 bg-blue-600 border-black/50 ${isPrepExpanded ? 'lg:opacity-0 lg:scale-0' : ''}`}>
+        <div className="relative flex items-center">
+          <div className={`absolute ${isMini ? 'left-4' : 'left-10'} -translate-x-1/2 ${isMini ? 'w-1.5 h-1.5' : 'w-4 h-4'} rounded-full border-2 flex items-center justify-center transition-all duration-500 bg-blue-600 border-black/50`}>
             {!isMini && <div className="absolute -top-6 text-[9px] font-black uppercase text-slate-500 tracking-widest whitespace-nowrap">08:00</div>}
           </div>
-          <div className={`relative z-[1] transition-all duration-500 ease-in-out ${isMini ? 'w-full pl-7' : isPrepExpanded ? 'w-full pl-16 lg:pl-12 lg:pr-4' : 'w-full lg:w-[45%] pl-16 lg:pl-0 lg:pl-12'}`}>
+          <div className={`relative z-[1] w-full ${isMini ? 'pl-7' : 'pl-16 lg:pl-16'}`}>
             <div className={`${padding} ${rounded} border transition-all ${prep ? (isDark ? 'bg-blue-600/5 border-blue-500/20 shadow-lg shadow-blue-500/5' : 'bg-blue-50 border-blue-200 shadow-sm') : (isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200')}`}>
               {/* Header — click to expand/collapse */}
               <div
@@ -576,25 +591,70 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
               {/* Collapsed — preview */}
               {!isPrepExpanded && !isMini && prep && (
-                <div className="mt-3 space-y-4">
-                  <div className={`grid ${prep.scenarios.sessions && prep.scenarios.sessions.length > 1 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'} gap-3`}>
-                    {prep.scenarios.sessions?.map((session, i) => (
-                      <div key={session.id || i} className={`group/session overflow-hidden rounded-[24px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white/40 border-slate-200/50'}`}>
-                        {session.image && (
-                          <div className="aspect-video relative overflow-hidden group/img cursor-pointer" onClick={(e) => { e.stopPropagation(); setZoomImg(session.image!); }}>
-                            <img src={session.image} className="w-full h-full object-cover" />
-                            <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-md rounded-lg border border-white/10">
-                              <p className="text-[7px] font-black text-white tracking-widest">{session.label}</p>
+                <div className="mt-3 space-y-3">
+                  {prep.scenarios.sessions?.map((session, i) => {
+                    // Match session config to get time range & active state
+                    const sessConfig = sessions?.find(s => s.id === session.id);
+                    const now = new Date();
+                    let isActive = false;
+                    let timeLabel = '';
+                    if (sessConfig?.startTime && sessConfig?.endTime) {
+                      timeLabel = `${sessConfig.startTime}–${sessConfig.endTime}`;
+                      const [sh, sm] = sessConfig.startTime.split(':').map(Number);
+                      const [eh, em] = sessConfig.endTime.split(':').map(Number);
+                      const startMin = sh * 60 + sm;
+                      const endMin = eh * 60 + em;
+                      const nowMin = now.getHours() * 60 + now.getMinutes();
+                      // Active only if today's date matches
+                      isActive = date === now.toLocaleDateString('en-CA') && nowMin >= startMin && nowMin <= endMin;
+                    }
+                    return (
+                      <div
+                        key={session.id || i}
+                        className={`group/session overflow-hidden rounded-2xl border transition-all ${isActive
+                          ? 'border-blue-500/50 shadow-[0_0_24px_rgba(59,130,246,0.2)] bg-blue-500/[0.04]'
+                          : isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white/40 border-slate-200/50'
+                        }`}
+                        style={{ borderLeftWidth: 3, borderLeftColor: session.color || sessConfig?.color || '#6366f1' }}
+                      >
+                        <div className="flex gap-3 p-3">
+                          {/* Image left (compact) */}
+                          {session.image && (
+                            <div
+                              className="relative w-24 sm:w-32 h-20 sm:h-24 rounded-lg overflow-hidden shrink-0 cursor-pointer"
+                              onClick={(e) => { e.stopPropagation(); setZoomImg(session.image!); }}
+                            >
+                              <img src={session.image} className="w-full h-full object-cover" />
                             </div>
+                          )}
+                          {/* Text right (full width) */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                              <span className={`text-[9px] font-black uppercase tracking-widest ${isActive ? 'text-blue-400' : isDark ? 'text-slate-300' : 'text-slate-700'}`}>{session.label}</span>
+                              {timeLabel && (
+                                <span className="text-[8px] font-black text-slate-500">{timeLabel}</span>
+                              )}
+                              {isActive && (
+                                <span className="px-1.5 py-0.5 bg-blue-500 text-white rounded text-[7px] font-black uppercase tracking-widest animate-pulse">
+                                  NOW
+                                </span>
+                              )}
+                              {session.bias && (
+                                <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${session.bias === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : session.bias === 'Short' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-500'}`}>
+                                  {session.bias}
+                                </span>
+                              )}
+                            </div>
+                            {session.plan ? (
+                              <p className={`text-[11px] leading-relaxed italic ${isDark ? 'text-slate-300' : 'text-slate-600'} line-clamp-3`}>"{session.plan}"</p>
+                            ) : (
+                              <p className="text-[10px] text-slate-500 italic">Bez plánu pro tuto session</p>
+                            )}
                           </div>
-                        )}
-                        <div className="p-4">
-                          {!session.image && <div className="flex items-center gap-2 mb-2"><Activity size={10} className="text-blue-500" /><span className="text-[8px] font-black text-slate-500 tracking-widest">{session.label}</span></div>}
-                          {session.plan && <p className={`text-[10px] leading-relaxed italic ${isDark ? 'text-slate-400' : 'text-slate-600'} line-clamp-4`}>"{session.plan}"</p>}
                         </div>
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })}
                 </div>
               )}
               {!isPrepExpanded && isMini && prep && (
@@ -797,11 +857,11 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
         {/* ====== SESSION BREAKDOWN CARD (single card for all sessions) ====== */}
         {sessionGroups && !isMini && (
-          <div className={`relative flex items-center lg:justify-center`}>
-            <div className={`absolute left-10 lg:left-1/2 -translate-x-1/2 w-4 h-4 rounded-full border-2 border-black/50 bg-amber-500 flex items-center justify-center transition-all duration-500 ${isBreakdownExpanded ? 'lg:opacity-0 lg:scale-0' : ''}`}>
+          <div className="relative flex items-center">
+            <div className="absolute left-10 -translate-x-1/2 w-4 h-4 rounded-full border-2 border-black/50 bg-amber-500 flex items-center justify-center">
               <div className="absolute -top-6 text-[9px] font-black uppercase text-slate-500 tracking-widest whitespace-nowrap">Breakdown</div>
             </div>
-            <div className={`relative z-[1] w-full pl-16 lg:pl-12 transition-all duration-500 ease-in-out ${isBreakdownExpanded ? 'lg:pr-4' : 'lg:w-[45%]'}`}>
+            <div className="relative z-[1] w-full pl-16">
               <div className={`${padding} ${rounded} border transition-all ${
                 breakdownCount > 0
                   ? (isDark ? 'bg-amber-600/5 border-amber-500/20 shadow-lg shadow-amber-500/5' : 'bg-amber-50 border-amber-200 shadow-sm')
@@ -935,11 +995,11 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
         )}
 
         {/* ====== REVIEW CARD ====== */}
-        <div className={`relative flex items-center ${isMini ? 'justify-start' : 'lg:justify-center'}`}>
-          <div className={`absolute ${isMini ? 'left-4' : 'left-10 lg:left-1/2'} -translate-x-1/2 ${isMini ? 'w-1.5 h-1.5' : 'w-4 h-4'} rounded-full border-2 flex items-center justify-center transition-all duration-500 bg-indigo-600 border-black/50 ${isReviewExpanded ? 'lg:opacity-0 lg:scale-0' : ''}`}>
+        <div className="relative flex items-center">
+          <div className={`absolute ${isMini ? 'left-4' : 'left-10'} -translate-x-1/2 ${isMini ? 'w-1.5 h-1.5' : 'w-4 h-4'} rounded-full border-2 flex items-center justify-center transition-all duration-500 bg-indigo-600 border-black/50`}>
             {!isMini && <div className="absolute -top-6 text-[9px] font-black uppercase text-slate-500 tracking-widest whitespace-nowrap">18:00</div>}
           </div>
-          <div className={`relative z-[1] transition-all duration-500 ease-in-out ${isMini ? 'w-full pl-7' : isReviewExpanded ? 'w-full pl-16 lg:pl-12 lg:pr-4' : 'w-full lg:w-[45%] pl-16 lg:pl-0 lg:pl-12'}`}>
+          <div className={`relative z-[1] w-full ${isMini ? 'pl-7' : 'pl-16 lg:pl-16'}`}>
             <div className={`${padding} ${rounded} border transition-all ${review ? (isDark ? 'bg-indigo-600/5 border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'bg-indigo-50 border-indigo-200 shadow-sm') : (isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200')}`}>
               {/* Header — click to expand/collapse */}
               <div

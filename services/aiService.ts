@@ -311,8 +311,36 @@ export async function streamAIResponse(
 
   const tradesText = formatTradesForAI(allTrades, 100);
 
+  // ── Dnešní datum + týdenní kontext ────────────────────────────────────────
+  const now = new Date();
+  const todayISO = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
+  const weekday = now.toLocaleDateString('cs-CZ', { weekday: 'long' });
+  // Monday-anchored "current week" range
+  const day = now.getDay(); // 0=Sun
+  const daysFromMonday = day === 0 ? 6 : day - 1;
+  const monday = new Date(now);
+  monday.setDate(monday.getDate() - daysFromMonday);
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+  const mondayISO = monday.toLocaleDateString('en-CA');
+  const fridayISO = friday.toLocaleDateString('en-CA');
+  const lastMonday = new Date(monday); lastMonday.setDate(monday.getDate() - 7);
+  const lastFriday = new Date(friday); lastFriday.setDate(friday.getDate() - 7);
+  const lastMondayISO = lastMonday.toLocaleDateString('en-CA');
+  const lastFridayISO = lastFriday.toLocaleDateString('en-CA');
+
   const systemPrompt = `Jsi AI trading coach specializovaný na analýzu výkonu traderů. Komunikuješ v češtině, stručně a konkrétně.
 Máš KOMPLETNÍ přístup ke všem datům tradera — odpovídej vždy na základě jeho skutečných dat.
+
+=== ČASOVÝ KONTEXT (KRITICKÉ) ===
+DNES: ${todayISO} (${weekday})
+AKTUÁLNÍ TÝDEN: ${mondayISO} až ${fridayISO} (Po–Pá)
+MINULÝ TÝDEN: ${lastMondayISO} až ${lastFridayISO}
+
+Pravidlo: Když uživatel říká "tento týden", "aktuální týden" nebo "tenhle týden", filtruj POUZE obchody/přípravy/audity s datumy v rozmezí ${mondayISO}–${fridayISO}.
+Když říká "minulý týden", filtruj POUZE rozmezí ${lastMondayISO}–${lastFridayISO}.
+NIKDY neuváděj obchody mimo požadovaný rozsah. Pokud žádné obchody v rozsahu nejsou, řekni to upřímně ("V tomto týdnu žádné obchody").
+NIKDY si nevymýšlej datumy ani je neaproximuj — používej pouze data co reálně vidíš v seznamu obchodů níže.
 
 VIZUÁLNÍ KARTY — POVINNÉ PRAVIDLO:
 Kdykoliv zmiňuješ konkrétní příprav, audit nebo obchod — VŽDY vlož příslušný marker. NIKDY nepřepisuj data z příprav nebo auditů jako text — místo toho použij kartu.

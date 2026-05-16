@@ -189,37 +189,23 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
         {/* Divider */}
         <div className={`h-px w-full ${theme !== 'light' ? 'bg-[var(--border-subtle)]' : 'bg-slate-100'}`}></div>
 
-        {/* Bottom Section: Compact Elite Trackers - Grid for Sidebar */}
+        {/* Bottom Section: Kompaktní rule streak list */}
         <div className="flex-1">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1.5">
             {Object.entries(stats.ruleStreaks).map(([id, data]: [string, any]) => {
               const isActive = data.streak > 0;
               const colorHex = data.type === 'ritual' ? '#3b82f6' : '#f59e0b'; // Blue vs Amber
-              const circumference = 2 * Math.PI * 22; // r=22 -> ~138
-              const offset = circumference - (Math.min(1, data.streak / 10) * circumference);
 
               return (
-                <div key={id} className={`p-2.5 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition-all hover:bg-[var(--text-primary)]/5 ${theme !== 'light' ? 'bg-[var(--bg-page)]/30 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'
+                <div key={id} className={`flex items-center gap-2 p-2 rounded-lg border transition-all hover:bg-[var(--text-primary)]/5 ${theme !== 'light' ? 'bg-[var(--bg-page)]/30 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'
                   }`}>
-                  {/* Mini Ring */}
-                  <div className="relative w-8 h-8 flex items-center justify-center">
-                    <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 50 50">
-                      <circle cx="25" cy="25" r="22" fill="none" stroke={theme !== 'light' ? 'var(--bg-card)' : '#cbd5e1'} strokeWidth="4" />
-                      <circle
-                        cx="25" cy="25" r="22" fill="none"
-                        stroke={isActive ? colorHex : 'transparent'}
-                        strokeWidth="4"
-                        strokeDasharray={circumference}
-                        strokeDashoffset={isActive ? offset : circumference}
-                        strokeLinecap="round"
-                        className="transition-all duration-1000 ease-out"
-                      />
-                    </svg>
-                    <span className={`text-xs font-black tracking-tighter ${isActive ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : 'text-slate-600'}`}>{data.streak}</span>
+                  {/* Streak number */}
+                  <div className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${isActive ? '' : 'opacity-40'}`} style={{ backgroundColor: isActive ? `${colorHex}20` : (theme !== 'light' ? 'var(--bg-card)' : '#e2e8f0') }}>
+                    <span className={`text-[10px] font-black tracking-tighter`} style={{ color: isActive ? colorHex : '#94a3b8' }}>{data.streak}</span>
                   </div>
 
                   {/* Label */}
-                  <p className="text-[6px] font-black uppercase text-slate-500 text-center leading-tight line-clamp-2 px-1 h-4 flex items-center">
+                  <p className={`text-[9px] font-black uppercase tracking-tighter leading-tight flex-1 min-w-0 truncate ${isActive ? (theme !== 'light' ? 'text-slate-200' : 'text-slate-700') : 'text-slate-500'}`}>
                     {data.label}
                   </p>
                 </div>

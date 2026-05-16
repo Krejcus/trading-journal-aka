@@ -5,6 +5,8 @@ import { DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, 
 import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimeline from './TacticalTimeline';
 import ImageZoomModal from './ImageZoomModal';
+import WeeklyOverview from './WeeklyOverview';
+import DayStoryboard from './DayStoryboard';
 import { storageService } from '../services/storageService';
 import {
   Coffee,
@@ -97,6 +99,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   }, [initialDate]);
 
   const [view, setView] = useState<'timeline' | 'edit-prep' | 'edit-review' | 'edit-weekly'>('timeline');
+  // Auto-expand signál pro TacticalTimeline (klik z týdenního přehledu)
+  const [autoExpand, setAutoExpand] = useState<'prep' | 'review' | null>(null);
   const [activeImageField, setActiveImageField] = useState<'bullish' | 'bearish' | 'scenarios' | string | null>(null);
   const [zoomImg, setZoomImg] = useState<string | null>(null);
 
@@ -1097,7 +1101,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
 
       {activeTab === 'daily' && view === 'timeline' ? (
-        <div className="lg:grid lg:grid-cols-[1fr_350px] gap-8 items-start">
+        <div className="lg:grid lg:grid-cols-[1fr_56px] gap-4 items-start">
           {/* Main Column: Header + Timeline */}
           <div className="space-y-3 lg:space-y-8 min-w-0 order-2 lg:order-1">
             <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-3 border-b pb-3 lg:pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
@@ -1121,12 +1125,38 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               </div>
             </div>
 
+            <DayStoryboard
+              date={selectedDate}
+              today={today}
+              trades={currentTrades}
+              prep={currentPrep}
+              review={currentReview}
+              sessions={sessions}
+              ironRules={ironRules}
+              isDark={theme !== 'light'}
+              onStageClick={(stage) => {
+                // Trigger autoExpand to open relevant section in TacticalTimeline
+                if (stage === 'prep' || stage === 'session' || stage === 'rituals') {
+                  setAutoExpand('prep');
+                } else if (stage === 'audit') {
+                  setAutoExpand('review');
+                }
+                // Scroll to TacticalTimeline area
+                requestAnimationFrame(() => {
+                  document.getElementById('tactical-timeline-anchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+              }}
+            />
+
+            <div id="tactical-timeline-anchor" />
             <TacticalTimeline
               date={selectedDate}
               prep={currentPrep}
               review={currentReview}
               trades={currentTrades}
               theme={theme}
+              autoExpand={autoExpand}
+              onAutoExpandConsumed={() => setAutoExpand(null)}
               onEditPrep={() => setView('edit-prep')}
               onEditReview={() => setView('edit-review')}
               onDeletePrep={onDeletePrep}
@@ -1149,9 +1179,74 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             />
           </div>
 
-          {/* Sidebar: Stats */}
-          <div className="lg:sticky lg:top-24 space-y-6 order-1 lg:order-2">
-            <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={groupedTrades} ironRules={ironRules} />
+          {/* Sidebar: Stats — slim s hover expand */}
+          <div className="lg:sticky lg:top-24 order-1 lg:order-2 group/disc relative">
+            {/* Slim collapsed view — streak + mini heatmap */}
+            <div className="lg:flex hidden flex-col items-center gap-2 p-2 rounded-2xl border bg-[var(--bg-card)]/60 border-[var(--border-subtle)] backdrop-blur-md cursor-pointer transition-all group-hover/disc:opacity-0 group-hover/disc:pointer-events-none">
+              {(() => {
+                // Vypočti streak + heatmap pro posledních 20 weekday dní
+                const todayDate = new Date(today);
+                let streak = 0;
+                for (let i = 0; i < 30; i++) {
+                  const d = new Date(todayDate); d.setDate(d.getDate() - i);
+                  const ds = d.toLocaleDateString('en-CA');
+                  const prep = preps.find(p => p.date === ds);
+                  const review = reviews.find(r => r.date === ds);
+                  if (prep?.completed && review?.completed) streak++;
+                  else if (i > 0) break; // dnes se počítá i pokud není dokončeno
+                }
+                // Heatmap: posledních 20 weekday dní (Po–Pá)
+                const heatmapDays: { ds: string; status: 'full' | 'partial' | 'trades-only' | 'none' }[] = [];
+                let cursor = new Date(todayDate);
+                while (heatmapDays.length < 20) {
+                  const dow = cursor.getDay();
+                  if (dow !== 0 && dow !== 6) {
+                    const ds = cursor.toLocaleDateString('en-CA');
+                    const hasPrep = preps.some(p => p.date === ds && p.completed);
+                    const hasReview = reviews.some(r => r.date === ds && r.completed);
+                    const hasTrades = groupedTrades.some(t => t.date.startsWith(ds));
+                    let status: 'full' | 'partial' | 'trades-only' | 'none' = 'none';
+                    if (hasPrep && hasReview) status = 'full';
+                    else if (hasPrep || hasReview) status = 'partial';
+                    else if (hasTrades) status = 'trades-only';
+                    heatmapDays.unshift({ ds, status });
+                  }
+                  cursor.setDate(cursor.getDate() - 1);
+                }
+                const colorClass = (s: string) => s === 'full' ? 'bg-emerald-500' : s === 'partial' ? 'bg-amber-500' : s === 'trades-only' ? 'bg-rose-500' : (theme !== 'light' ? 'bg-white/5' : 'bg-slate-200');
+                return (
+                  <>
+                    <div className="text-[7px] font-black uppercase tracking-widest text-slate-500">Score</div>
+                    <div className="w-9 h-9 rounded-full border-[3px] border-slate-200 dark:border-slate-700 flex items-center justify-center">
+                      <span className="text-xs font-black text-blue-500">{streak}</span>
+                    </div>
+                    <div className="text-[7px] font-black uppercase text-orange-500 tracking-widest">🔥 streak</div>
+
+                    {/* Mini heatmap 2×10 */}
+                    <div className="grid grid-cols-2 gap-0.5 mt-1 w-full px-1" title="Posledních 20 obchodních dní">
+                      {heatmapDays.map((d, i) => (
+                        <div
+                          key={i}
+                          title={d.ds}
+                          className={`aspect-square w-full rounded-[2px] ${colorClass(d.status)}`}
+                        />
+                      ))}
+                    </div>
+                    <div className="mt-1 text-[7px] font-black text-slate-400 tracking-tighter">HOVER →</div>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Expanded full dashboard — viditelné na hover */}
+            <div className="hidden lg:block absolute right-0 top-0 w-[320px] opacity-0 group-hover/disc:opacity-100 pointer-events-none group-hover/disc:pointer-events-auto transition-opacity duration-200 z-50 shadow-2xl rounded-2xl">
+              <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={groupedTrades} ironRules={ironRules} />
+            </div>
+
+            {/* Mobile: rovnou plně viditelné */}
+            <div className="lg:hidden">
+              <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={groupedTrades} ironRules={ironRules} />
+            </div>
           </div>
         </div>
       ) : (
@@ -1228,6 +1323,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               review={currentReview}
               trades={currentTrades}
               theme={theme}
+              autoExpand={autoExpand}
+              onAutoExpandConsumed={() => setAutoExpand(null)}
               onEditPrep={() => setView('edit-prep')}
               onEditReview={() => setView('edit-review')}
               onDeletePrep={onDeletePrep}
@@ -1253,144 +1350,44 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       )}
 
       {activeTab === 'weekly' && view === 'timeline' && (
-        <div className="space-y-8 animate-in fade-in duration-500">
-          {/* Mobile optimized weekly grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-            {currentWeekInfo.days.map((dateStr) => {
-              const dayTrades = groupedTrades.filter(t => t.date.startsWith(dateStr));
-              const dayPrep = preps.find(p => p.date === dateStr);
-              const dayReview = reviews.find(r => r.date === dateStr);
-              return (
-                <div key={dateStr} className={`rounded-[28px] border overflow-hidden transition-all flex flex-col h-full ${theme !== 'light' ? 'bg-[var(--bg-card)]/60 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-                  <div className={`p-4 border-b flex justify-between items-center shrink-0 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-50'}`}>
-                    <div>
-                      <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">{new Date(dateStr).toLocaleString('cs-CZ', { weekday: 'long' })}</p>
-                      <p className="text-[9px] font-bold text-slate-400">{dateStr}</p>
-                    </div>
-                    {dateStr === today && <span className="px-2 py-0.5 bg-blue-600 rounded-lg text-[7px] font-black uppercase text-white shadow-lg shadow-blue-500/20">Dnes</span>}
-                  </div>
-                  <div className="flex-1 overflow-y-auto custom-scrollbar no-scrollbar max-h-[400px]">
-                    <TacticalTimeline
-                      date={dateStr}
-                      prep={dayPrep}
-                      review={dayReview}
-                      trades={dayTrades}
-                      theme={theme}
-                      onEditPrep={() => { setSelectedDate(dateStr); setView('edit-prep'); onTabChange('daily'); }}
-                      onEditReview={() => { setSelectedDate(dateStr); setView('edit-review'); onTabChange('daily'); }}
-                      onDeletePrep={onDeletePrep}
-                      onDeleteReview={onDeleteReview}
-                      isMini={true}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Summary Section */}
-          <div className={`p-6 md:p-10 rounded-[40px] border relative overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-xl'}`}>
-            <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 md:gap-12">
-
-              <div className="lg:col-span-6 space-y-8 md:space-y-12">
-                <div className="space-y-6">
-                  <p className="text-[10px] font-black uppercase text-blue-500 tracking-[0.2em] flex items-center gap-2"><Layers size={14} /> Weekly Alpha Metrics</p>
-                  <div className="grid grid-cols-2 gap-y-6 md:gap-y-8 gap-x-6">
-                    <div><p className="text-[9px] font-bold text-slate-500 uppercase mb-1">Skutečné PnL</p><p className={`text-2xl md:text-3xl font-black ${weeklyStats.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>${weeklyStats.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p></div>
-                    <div><p className="text-[9px] font-bold text-slate-500 uppercase mb-1">Disciplinované</p><p className={`text-2xl md:text-3xl font-black text-blue-500`}>${weeklyStats.disciplinedPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p></div>
-                    <div><p className="text-[9px] font-bold text-slate-500 uppercase mb-1">Exekuce</p><div className="flex items-center gap-2"><p className="text-xl font-black text-white">{weeklyStats.validCount}/{weeklyStats.count}</p></div></div>
-                    <div><p className="text-[9px] font-bold text-slate-500 uppercase mb-1">Win Rate</p><p className="text-xl font-black text-white">{weeklyStats.wr.toFixed(1)}%</p></div>
-
-                    <div className="col-span-2 grid grid-cols-2 gap-3">
-                      <div className="p-3 rounded-2xl bg-blue-600/5 border border-blue-500/10"><p className="text-[8px] font-black text-slate-500 uppercase mb-1 flex items-center gap-1"><Sun size={10} /> Ranní Hub</p><p className="text-lg font-black text-blue-400">{weeklyStats.prepCount}/5</p></div>
-                      <div className={`p-3 rounded-2xl ${weeklyStats.auditCount === 5 ? 'bg-emerald-600/5 border-emerald-500/10' : 'bg-indigo-600/5 border-indigo-500/10'}`}><p className="text-[8px] font-black text-slate-500 uppercase mb-1 flex items-center gap-1"><Moon size={10} /> Večerní Hub</p><p className="text-lg font-black text-indigo-400">{weeklyStats.auditCount}/5</p></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="lg:col-span-6 space-y-6 md:space-y-8">
-                <p className="text-[10px] font-black uppercase text-amber-500 tracking-[0.2em] flex items-center gap-2"><Target size={14} /> Iron Rule Progress</p>
-                <div className="space-y-5">
-                  {weeklyStats.ritualCompliance.map((ritual, idx) => (
-                    <div key={idx} className="space-y-2">
-                      <div className="flex justify-between text-[10px] font-black uppercase tracking-tighter">
-                        <span className="text-slate-400 truncate pr-2">{ritual.label}</span>
-                        <span className={ritual.count >= 4 ? 'text-emerald-500' : 'text-blue-500'}>{ritual.count}/5</span>
-                      </div>
-                      <div className={`h-1.5 w-full rounded-full overflow-hidden flex gap-0.5 p-0.5 ${theme !== 'light' ? 'bg-[var(--bg-page)]/50' : 'bg-slate-100'}`}>
-                        {[...Array(5)].map((_, i) => (
-                          <div key={i} className={`flex-1 rounded-full ${i < ritual.count ? 'bg-blue-600 shadow-[0_0_8px_rgba(37,99,235,0.4)]' : (theme !== 'light' ? 'bg-[var(--border-subtle)]' : 'bg-slate-200')}`} />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Weekly Focus Adherence List */}
-                {weeklyStats.weeklyGoalStats && weeklyStats.weeklyGoalStats.length > 0 && (
-                  <div className="space-y-6">
-                    <p className="text-[10px] font-black uppercase text-emerald-500 tracking-[0.2em] flex items-center gap-2"><ClipboardCheck size={14} /> Weekly Focus Mastery</p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {weeklyStats.weeklyGoalStats.map((goal: any, idx: number) => {
-                        const isMastered = goal.count === 5;
-                        return (
-                          <div
-                            key={idx}
-                            className={`relative p-6 rounded-[40px] border overflow-hidden transition-all duration-700 group hover:scale-[1.02] ${isMastered
-                              ? 'bg-emerald-500/10 border-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.15)]Scale'
-                              : (theme !== 'light' ? 'bg-[var(--bg-input)]/20 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100 shadow-sm')
-                              }`}
-                          >
-                            {/* Pulse for Mastered */}
-                            {isMastered && <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent animate-pulse" />}
-
-                            <div className="relative z-10 flex flex-col items-center text-center gap-4">
-                              <div className={`text-6xl transition-all duration-1000 transform ${goal.count === 0 ? 'grayscale opacity-20 scale-90' : 'grayscale-0 opacity-100 scale-110'} ${isMastered ? 'drop-shadow-[0_0_20px_rgba(16,185,129,0.8)] animate-bounce-slow' : ''}`}>
-                                {goal.emoji || '🎯'}
-                              </div>
-
-                              <div className="space-y-1">
-                                <h5 className={`text-[11px] font-black tracking-widest ${isMastered ? 'text-emerald-500' : 'text-slate-400'}`}>{goal.label}</h5>
-                                <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${isMastered ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
-                                  {isMastered ? <><Sparkles size={10} /> MASTERED</> : `${goal.count}/5 DAYS`}
-                                </div>
-                              </div>
-
-                              <div className="flex gap-2.5">
-                                {[...Array(5)].map((_, i) => (
-                                  <div
-                                    key={i}
-                                    className={`w-2.5 h-2.5 rounded-full transition-all duration-700 ${i < goal.count
-                                      ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]'
-                                      : (theme !== 'light' ? 'bg-slate-800' : 'bg-slate-200')
-                                      }`}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                <div className={`pt-6 border-t grid grid-cols-2 gap-4 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                  <div>
-                    <p className="text-[9px] font-black uppercase text-rose-500 mb-1">Errors</p>
-                    <p className="text-3xl font-black text-rose-500">{weeklyStats.totalMistakes}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[9px] font-black uppercase text-emerald-500 mb-1">Goals</p>
-                    <p className="text-3xl font-black text-emerald-500">{weeklyStats.goalsAchieved}</p>
-                  </div>
-                </div>
-              </div>
-
-
-            </div>
-          </div>
-        </div>
+        <WeeklyOverview
+          weekDays={currentWeekInfo.days}
+          weekNumber={currentWeekInfo.weekNumber}
+          trades={groupedTrades}
+          preps={preps}
+          reviews={reviews}
+          ironRules={ironRules}
+          psychoMetrics={psychoMetrics}
+          sessions={sessions}
+          weeklyFocus={currentWeekFocus}
+          theme={theme}
+          today={today}
+          onEditPrep={(date) => {
+            // Pre-load prep data synchronously to prevent empty form flash
+            const targetPrep = preps.find(p => p.date === date);
+            if (targetPrep) {
+              skipAutoSavePrep.current = true;
+              prepFormDirty.current = false;
+              setPrepForm(targetPrep);
+            }
+            setSelectedDate(date);
+            setView('timeline'); // zůstaneme na timeline — TacticalTimeline rozbalí prep inline
+            setAutoExpand('prep');
+            onTabChange('daily');
+          }}
+          onEditReview={(date) => {
+            const targetReview = reviews.find(r => r.date === date);
+            if (targetReview) {
+              skipAutoSaveReview.current = true;
+              reviewFormDirty.current = false;
+              setReviewForm(targetReview);
+            }
+            setSelectedDate(date);
+            setView('timeline');
+            setAutoExpand('review');
+            onTabChange('daily');
+          }}
+        />
       )}
 
       {activeTab === 'archives' && (

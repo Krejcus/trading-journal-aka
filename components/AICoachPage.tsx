@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, Send, Loader2, Sparkles, X } from 'lucide-react';
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation } from '../types';
-import { streamAIResponse, buildTraderContext, type AIMessage } from '../services/aiService';
+import { streamAIResponse, buildTraderContext, parseAllRefs, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
 import { MessageBubble, type ExtendedMessage } from './AICards';
 import TradeDetailModal from './TradeDetailModal';
@@ -150,15 +150,40 @@ const AICoachPage: React.FC<Props> = ({
     }
     setLoadingConv(true);
     storageService.getMessages(activeConvId).then(dbMessages => {
-      const mapped: ExtendedMessage[] = dbMessages.map(m => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }));
+      const mapped: ExtendedMessage[] = dbMessages.map(m => {
+        const base: ExtendedMessage = {
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        };
+        // Rehydratuj karty z markerů v contentu (assistant zprávy)
+        if (m.role === 'assistant') {
+          const refs = parseAllRefs(m.content);
+          if (refs.tradeIds.length) {
+            base.tradeCards = refs.tradeIds
+              .map(id => trades.find(t => String(t.id) === id))
+              .filter(Boolean) as Trade[];
+          }
+          if (refs.prepDates.length) {
+            base.prepCards = refs.prepDates
+              .map(d => dailyPreps.find(p => p.date === d))
+              .filter(Boolean) as DailyPrep[];
+          }
+          if (refs.reviewDates.length) {
+            base.reviewCards = refs.reviewDates
+              .map(d => dailyReviews.find(r => r.date === d))
+              .filter(Boolean) as DailyReview[];
+          }
+          if (refs.charts.length) {
+            base.chartSpecs = refs.charts;
+          }
+        }
+        return base;
+      });
       setMessages(mapped);
       if (mapped.length > 0) firstMessageSentRef.current = true;
       setLoadingConv(false);
     });
-  }, [activeConvId]);
+  }, [activeConvId, trades, dailyPreps, dailyReviews]);
 
   // Scroll to bottom when a new message is added
   useEffect(() => {
