@@ -1,5 +1,6 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { storageService } from '../services/storageService';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Trash2, Plus, Brain, X, Target,
@@ -156,6 +157,11 @@ const Settings: React.FC<SettingsProps> = ({
   const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'metric' | 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
   const [toast, setToast] = useState<{ message: string, id: number } | null>(null);
 
+  // Screenshot migration state
+  const [migrating, setMigrating] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState<{ done: number; total: number } | null>(null);
+  const [migrationResult, setMigrationResult] = useState<{ migrated: number; skipped: number; failed: number } | null>(null);
+
   // Push notification diagnostics
   const [pushDiag, setPushDiag] = useState<{ isStandalone: boolean; isApple: boolean; permission: string; hasActiveSW: boolean; hasActiveSubscription: boolean; ready: boolean } | null>(null);
   useEffect(() => {
@@ -170,6 +176,23 @@ const Settings: React.FC<SettingsProps> = ({
       setToast(prev => prev?.message === message ? null : prev);
     }, 2000);
   };
+
+  const handleMigrateScreenshots = useCallback(async () => {
+    setMigrating(true);
+    setMigrationResult(null);
+    setMigrationProgress({ done: 0, total: 0 });
+    try {
+      const result = await storageService.migrateScreenshotsToStorage((done, total) => {
+        setMigrationProgress({ done, total });
+      });
+      setMigrationResult(result);
+      showToast(`Hotovo — ${result.migrated} screenshotů přesunuto`);
+    } catch (e: any) {
+      showToast('Migrace selhala: ' + (e?.message || 'Neznámá chyba'));
+    } finally {
+      setMigrating(false);
+    }
+  }, [showToast]);
 
   // Weekly Focus Logic with standardized helper
   const [selectedWeek, setSelectedWeek] = useState(() => getWeekISOString(new Date()));
@@ -708,6 +731,49 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                 </Card>
               </div>
+
+              {/* Screenshot Migration Card */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Shield} title="Migrace Screenshotů" subtitle="Přesun obrázků do cloudu" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
+                <p className={`text-xs mb-4 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Screenshoty obchodů uložené přímo v databázi způsobují vysoké Disk IO zatížení. Kliknutím přesunete všechny obrázky do Supabase Storage — URL jsou uloženy místo raw dat, výkon se výrazně zlepší.
+                </p>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={handleMigrateScreenshots}
+                    disabled={migrating}
+                    className={`flex items-center gap-3 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all self-start ${migrating
+                      ? 'opacity-50 cursor-not-allowed bg-blue-600/20 text-blue-400 border border-blue-500/20'
+                      : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20'
+                    }`}
+                  >
+                    {migrating && (
+                      <div className="w-3 h-3 rounded-full border border-blue-300 border-t-transparent animate-spin" />
+                    )}
+                    {migrating ? 'Migruji...' : 'Migrovat screenshoty do cloudu'}
+                  </button>
+                  {migrating && migrationProgress && migrationProgress.total > 0 && (
+                    <div className="space-y-1">
+                      <div className={`text-[10px] font-bold ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                        {migrationProgress.done} / {migrationProgress.total} screenshotů
+                      </div>
+                      <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-white/5' : 'bg-slate-200'}`}>
+                        <div
+                          className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                          style={{ width: `${Math.round((migrationProgress.done / migrationProgress.total) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {migrationResult && (
+                    <div className={`flex gap-4 p-3 rounded-2xl text-[10px] font-bold ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+                      <span className="text-emerald-400">✓ {migrationResult.migrated} přesunuto</span>
+                      <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>↷ {migrationResult.skipped} přeskočeno</span>
+                      {migrationResult.failed > 0 && <span className="text-rose-400">✗ {migrationResult.failed} selhalo</span>}
+                    </div>
+                  )}
+                </div>
+              </Card>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Debug / Test Mode */}

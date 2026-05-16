@@ -1,5 +1,6 @@
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { storageService } from '../services/storageService';
 import {
   X, Save, Tag, Wallet, Target,
   Brain, Zap, Layers, CheckCircle2,
@@ -76,6 +77,23 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     executionStatus: 'Valid' as 'Valid' | 'Invalid' | 'Missed'
   });
 
+  const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
+  // Temp ID for storage path before trade is saved
+  const tempTradeIdRef = useRef(`temp_${Date.now()}`);
+
+  const uploadAndStore = useCallback(async (base64: string) => {
+    setUploadingScreenshot(true);
+    try {
+      const url = await storageService.uploadScreenshot(base64, tempTradeIdRef.current);
+      setFormData(prev => ({ ...prev, screenshots: [...prev.screenshots, url] }));
+    } catch {
+      // Fallback: store base64 if upload fails (will be migrated later)
+      setFormData(prev => ({ ...prev, screenshots: [...prev.screenshots, base64] }));
+    } finally {
+      setUploadingScreenshot(false);
+    }
+  }, []);
+
   const handlePaste = useCallback((e: ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (items) {
@@ -84,19 +102,13 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
           const blob = items[i].getAsFile();
           if (blob) {
             const reader = new FileReader();
-            reader.onloadend = () => {
-              const base64 = reader.result as string;
-              setFormData(prev => ({
-                ...prev,
-                screenshots: [...prev.screenshots, base64]
-              }));
-            };
+            reader.onloadend = () => uploadAndStore(reader.result as string);
             reader.readAsDataURL(blob);
           }
         }
       }
     }
-  }, []);
+  }, [uploadAndStore]);
 
   useEffect(() => {
     window.addEventListener('paste', handlePaste);
@@ -180,9 +192,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData(prev => ({ ...prev, screenshots: [...prev.screenshots, reader.result as string] }));
-      };
+      reader.onloadend = () => uploadAndStore(reader.result as string);
       reader.readAsDataURL(file);
     }
   };
@@ -487,6 +497,12 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
                 <div className="space-y-4">
                   <h3 className={pilarHeaderClass}><ImageIcon size={12} /> 04 Evidence</h3>
+                  {uploadingScreenshot && (
+                    <div className="flex items-center gap-2 text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2">
+                      <div className="w-3 h-3 rounded-full border border-blue-400 border-t-transparent animate-spin" />
+                      Nahrávám screenshot...
+                    </div>
+                  )}
                   {formData.screenshots.length > 0 ? (
                     <div className="grid grid-cols-2 gap-2">
                       {formData.screenshots.map((src, index) => (

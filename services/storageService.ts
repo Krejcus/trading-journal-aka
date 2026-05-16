@@ -346,7 +346,9 @@ export const storageService = {
         positionSize:data->>positionSize,
         isMaster:data->>isMaster,
         masterTradeId:data->>masterTradeId,
-        entryTime:data->>entryTime
+        entryTime:data->>entryTime,
+        screenshot:data->>screenshot,
+        screenshots:data->screenshots
       `)
       .eq('user_id', userId)
       .order('timestamp', { ascending: false });
@@ -398,8 +400,9 @@ export const storageService = {
       emotions: t.emotions,
       planAdherence: t.planAdherence,
       executionStatus: t.executionStatus,
-      screenshot: undefined,
-      screenshots: undefined,
+      // Include screenshot URLs (small strings, not base64 blobs — safe to include always)
+      screenshot: t.screenshot && !String(t.screenshot).startsWith('data:') ? t.screenshot : undefined,
+      screenshots: t.screenshots?.filter((s: string) => s && !String(s).startsWith('data:')) || undefined,
       miniViewRange: t.miniViewRange,
       miniViewLayout: t.miniViewLayout,
       miniViewSecondaryRange: t.miniViewSecondaryRange,
@@ -2300,5 +2303,83 @@ export const storageService = {
   async appendMessage(conversationId: string, role: 'user' | 'assistant', content: string): Promise<void> {
     await supabase.from('ai_messages').insert({ conversation_id: conversationId, role, content });
     await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversationId);
+  },
+
+  // ─── SCREENSHOT STORAGE MIGRATION ────────────────────────────────────────
+
+  /** Upload a base64 data URL to Supabase Storage and return the public URL */
+  async uploadScreenshot(base64DataUrl: string, tradeId: string | number): Promise<string> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+    const isBase64 = base64DataUrl.startsWith('data:');
+    if (!isBase64) return base64DataUrl; // Already a URL — return as-is
+    const base64 = base64DataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const byteChars = atob(base64);
+    const buffer = new Uint8Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) buffer[i] = byteChars.charCodeAt(i);
+    const ext = base64DataUrl.includes('image/png') ? 'png' : 'jpg';
+    const fileName = `${userId}/${tradeId}_${Date.now()}.${ext}`;
+    const { error } = await supabase.storage.from('trade-images').upload(fileName, buffer, {
+      contentType: `image/${ext}`, upsert: true
+    });
+    if (error) throw error;
+    return supabase.storage.from('trade-images').getPublicUrl(fileName).data.publicUrl;
+  },
+
+  /** One-time migration: upload all base64 screenshots to Storage, replace with URLs in DB */
+  async migrateScreenshotsToStorage(
+    onProgress?: (done: number, total: number, current: string) => void
+  ): Promise<{ migrated: number; skipped: number; failed: number }> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
+    // Fetch ALL trades with full data (including screenshots)
+    const { data, error } = await supabase
+      .from('trades')
+      .select('id, data')
+      .eq('user_id', userId);
+    if (error) throw error;
+
+    const toMigrate = (data || []).filter((t: any) =>
+      (t.data?.screenshot && String(t.data.screenshot).startsWith('data:')) ||
+      (t.data?.screenshots && t.data.screenshots.some((s: string) => String(s).startsWith('data:')))
+    );
+
+    let migrated = 0, skipped = 0, failed = 0;
+
+    for (let i = 0; i < toMigrate.length; i++) {
+      const row = toMigrate[i];
+      const tradeData = { ...row.data };
+      onProgress?.(i, toMigrate.length, String(row.id));
+      try {
+        // Migrate primary screenshot
+        if (tradeData.screenshot?.startsWith('data:')) {
+          tradeData.screenshot = await storageService.uploadScreenshot(tradeData.screenshot, row.id);
+        }
+        // Migrate screenshots array
+        if (tradeData.screenshots?.length) {
+          tradeData.screenshots = await Promise.all(
+            tradeData.screenshots.map((s: string) =>
+              s.startsWith('data:') ? storageService.uploadScreenshot(s, row.id) : Promise.resolve(s)
+            )
+          );
+        }
+        // Update DB row with URLs instead of base64
+        const { error: updateErr } = await supabase
+          .from('trades')
+          .update({ data: tradeData })
+          .eq('id', row.id)
+          .eq('user_id', userId);
+        if (updateErr) throw updateErr;
+        migrated++;
+      } catch (e) {
+        console.error(`[Migration] Failed for trade ${row.id}:`, e);
+        failed++;
+      }
+    }
+
+    skipped = (data?.length || 0) - toMigrate.length;
+    onProgress?.(toMigrate.length, toMigrate.length, 'done');
+    return { migrated, skipped, failed };
   },
 };
