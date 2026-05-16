@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import ImageZoomModal from './ImageZoomModal';
+import { storageService } from '../services/storageService';
 
 interface WeekFocusGoal {
   text: string;
@@ -159,10 +160,20 @@ const BreakdownCard: React.FC<{
 
   const processFile = (file: File) => {
     const reader = new FileReader();
-    reader.onloadend = () => {
+    reader.onloadend = async () => {
       const base64 = reader.result as string;
+      // Optimistic: show base64 immediately
       setScreenshot(base64);
-      onUpdate(text, base64);
+      // Upload to Storage in background, then replace with URL
+      try {
+        const url = await storageService.uploadScreenshot(base64, `review_${Date.now()}`);
+        setScreenshot(url);
+        onUpdate(text, url);
+      } catch (e) {
+        // Fallback: keep base64 if upload fails (will be migrated later)
+        console.warn('[TacticalTimeline] Upload failed, keeping base64:', e);
+        onUpdate(text, base64);
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -359,8 +370,9 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
           const blob = items[i].getAsFile();
           if (blob) {
             const reader = new FileReader();
-            reader.onloadend = () => {
+            reader.onloadend = async () => {
               const base64 = reader.result as string;
+              // Optimistic: zobrazit base64 hned
               editPrepForm(prev => ({
                 ...prev,
                 scenarios: {
@@ -370,6 +382,21 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                   )
                 }
               }));
+              // Upload to Storage v pozadí, potom nahradit URL
+              try {
+                const url = await storageService.uploadScreenshot(base64, `prep_sess_${activeSessionTab}_${Date.now()}`);
+                editPrepForm(prev => ({
+                  ...prev,
+                  scenarios: {
+                    ...prev.scenarios,
+                    sessions: prev.scenarios.sessions?.map(s =>
+                      s.id === activeSessionTab ? { ...s, image: url } : s
+                    )
+                  }
+                }));
+              } catch (e) {
+                console.warn('[TacticalTimeline prep] Upload failed, keeping base64:', e);
+              }
             };
             reader.readAsDataURL(blob);
           }

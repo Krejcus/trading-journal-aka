@@ -252,7 +252,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   // Flush pending journal data when browser tab is closed/refreshed or hidden
   useEffect(() => {
-    const flushOnClose = () => {
+    const flushOnClose = (e?: BeforeUnloadEvent) => {
       const p = lastPrepForm.current;
       const r = lastReviewForm.current;
       const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
@@ -260,6 +260,13 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
       if (!isPrepEmpty) onSavePrep(p);
       if (!isReviewEmpty) onSaveReview(r);
+
+      // CRITICAL: pokud má uživatel neuložené změny, zabraň zavření tabu — save běží na pozadí ale prohlížeč se vypne dřív
+      if (e && (hasUnsavedChanges || prepFormDirty.current || reviewFormDirty.current)) {
+        e.preventDefault();
+        e.returnValue = 'Máš neuložené změny v deníku. Opravdu chceš odejít?';
+        return e.returnValue;
+      }
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') flushOnClose();
@@ -270,7 +277,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       window.removeEventListener('beforeunload', flushOnClose);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [onSavePrep, onSaveReview]);
+  }, [onSavePrep, onSaveReview, hasUnsavedChanges]);
 
   // Current Week Focus Helper - Harmonized with Settings.tsx
   const getSelectedWeekISO = (dateStr: string) => {
@@ -996,29 +1003,60 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               return;
             }
             const reader = new FileReader();
-            reader.onloadend = () => {
+            reader.onloadend = async () => {
               const base64 = reader.result as string;
-              if (activeImageField === 'scenarios') {
-                editPrepForm(prev => ({
-                  ...prev,
-                  scenarios: {
-                    ...prev.scenarios,
-                    scenarioImages: [...(prev.scenarios.scenarioImages || []), base64]
-                  }
-                }));
-              } else if (activeImageField?.startsWith('session_')) {
-                const sessionId = activeImageField.replace('session_', '');
-                editPrepForm(prev => ({
-                  ...prev,
-                  scenarios: {
-                    ...prev.scenarios,
-                    sessions: prev.scenarios.sessions?.map(s =>
-                      s.id === sessionId ? { ...s, image: base64 } : s
-                    )
-                  }
-                }));
-              } else {
-                editPrepForm(prev => ({ ...prev, scenarios: { ...prev.scenarios, [activeImageField === 'bullish' ? 'bullishImage' : 'bearishImage']: base64 } }));
+              // Optimistic: zobraz base64 hned aby uživatel viděl obrázek okamžitě
+              const showBase64 = (b64: string) => {
+                if (activeImageField === 'scenarios') {
+                  editPrepForm(prev => ({
+                    ...prev,
+                    scenarios: { ...prev.scenarios, scenarioImages: [...(prev.scenarios.scenarioImages || []), b64] }
+                  }));
+                } else if (activeImageField?.startsWith('session_')) {
+                  const sessionId = activeImageField.replace('session_', '');
+                  editPrepForm(prev => ({
+                    ...prev,
+                    scenarios: {
+                      ...prev.scenarios,
+                      sessions: prev.scenarios.sessions?.map(s => s.id === sessionId ? { ...s, image: b64 } : s)
+                    }
+                  }));
+                } else {
+                  editPrepForm(prev => ({ ...prev, scenarios: { ...prev.scenarios, [activeImageField === 'bullish' ? 'bullishImage' : 'bearishImage']: b64 } }));
+                }
+              };
+              const replaceWithUrl = (url: string) => {
+                if (activeImageField === 'scenarios') {
+                  editPrepForm(prev => ({
+                    ...prev,
+                    scenarios: {
+                      ...prev.scenarios,
+                      // Nahraď poslední base64 (právě vložený) za URL
+                      scenarioImages: (prev.scenarios.scenarioImages || []).map((img, idx, arr) =>
+                        idx === arr.length - 1 && img === base64 ? url : img
+                      )
+                    }
+                  }));
+                } else if (activeImageField?.startsWith('session_')) {
+                  const sessionId = activeImageField.replace('session_', '');
+                  editPrepForm(prev => ({
+                    ...prev,
+                    scenarios: {
+                      ...prev.scenarios,
+                      sessions: prev.scenarios.sessions?.map(s => s.id === sessionId ? { ...s, image: url } : s)
+                    }
+                  }));
+                } else {
+                  editPrepForm(prev => ({ ...prev, scenarios: { ...prev.scenarios, [activeImageField === 'bullish' ? 'bullishImage' : 'bearishImage']: url } }));
+                }
+              };
+
+              showBase64(base64);
+              try {
+                const url = await storageService.uploadScreenshot(base64, `prep_${activeImageField}_${Date.now()}`);
+                replaceWithUrl(url);
+              } catch (e) {
+                console.warn('[DailyJournal] Upload failed, keeping base64:', e);
               }
             };
             reader.readAsDataURL(blob);

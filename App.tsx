@@ -667,6 +667,28 @@ const App: React.FC = () => {
   const pendingPrepSave = useRef<DailyPrep | null>(null);
   const pendingReviewSave = useRef<DailyReview | null>(null);
 
+  // Retry helper s exponential backoff — kritické pro deník, aby data nezmizely při dočasném výpadku Supabase
+  const saveWithRetry = useCallback(async <T,>(
+    fn: () => Promise<T>,
+    label: string,
+    maxAttempts = 4
+  ): Promise<T> => {
+    const delays = [0, 1500, 4000, 10000]; // 0s, 1.5s, 4s, 10s
+    let lastErr: any;
+    for (let i = 0; i < maxAttempts; i++) {
+      if (delays[i] > 0) await new Promise(r => setTimeout(r, delays[i]));
+      try {
+        const result = await fn();
+        if (i > 0) console.log(`[Save] ${label} succeeded on attempt ${i + 1}`);
+        return result;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`[Save] ${label} attempt ${i + 1}/${maxAttempts} failed:`, (e as any)?.message || e);
+      }
+    }
+    throw lastErr;
+  }, []);
+
   const handleSavePrep = useCallback((prep: DailyPrep): Promise<void> => {
     isPrepsDirty.current = true;
     setDailyPreps(prev => [...prev.filter(p => p.date !== prep.date), prep]);
@@ -678,10 +700,16 @@ const App: React.FC = () => {
     }
 
     savingPrepDate.current = prep.date;
-    return storageService.saveSinglePrep(prep)
+    // Použij vždy NEJNOVĚJŠÍ verzi (pendingPrepSave) — předchází ztrátě dat při rychlém typování
+    const latestPrep = () => pendingPrepSave.current?.date === prep.date ? pendingPrepSave.current : prep;
+    return saveWithRetry(() => storageService.saveSinglePrep(latestPrep()!), `Prep ${prep.date}`)
+      .then(() => {
+        // Úspěch — vyčisti error pokud byl předtím nastavený
+        setSyncError(prev => prev === 'Nepodařilo se uložit ranní přípravu.' ? null : prev);
+      })
       .catch(e => {
-        console.warn('[Save] Prep failed:', e);
-        setSyncError('Nepodařilo se uložit ranní přípravu.');
+        console.error('[Save] Prep FAILED after retries:', e);
+        setSyncError('⚠️ Ranní příprava se nepodařila uložit. Zkus to znova nebo zkontroluj síť/Supabase.');
         throw e;
       })
       .finally(() => {
@@ -693,7 +721,7 @@ const App: React.FC = () => {
           handleSavePrep(pending).catch(() => {});
         }
       });
-  }, []);
+  }, [saveWithRetry]);
 
   const handleSaveReview = useCallback((rev: DailyReview): Promise<void> => {
     isReviewsDirty.current = true;
@@ -706,10 +734,14 @@ const App: React.FC = () => {
     }
 
     savingReviewDate.current = rev.date;
-    return storageService.saveSingleReview(rev)
+    const latestRev = () => pendingReviewSave.current?.date === rev.date ? pendingReviewSave.current : rev;
+    return saveWithRetry(() => storageService.saveSingleReview(latestRev()!), `Review ${rev.date}`)
+      .then(() => {
+        setSyncError(prev => prev === 'Nepodařilo se uložit večerní audit.' ? null : prev);
+      })
       .catch(e => {
-        console.warn('[Save] Review failed:', e);
-        setSyncError('Nepodařilo se uložit večerní audit.');
+        console.error('[Save] Review FAILED after retries:', e);
+        setSyncError('⚠️ Večerní audit se nepodařil uložit. Zkus to znova nebo zkontroluj síť/Supabase.');
         throw e;
       })
       .finally(() => {
@@ -721,7 +753,7 @@ const App: React.FC = () => {
           handleSaveReview(pending).catch(() => {});
         }
       });
-  }, []);
+  }, [saveWithRetry]);
 
   const applyPreferences = useCallback((prefs: UserPreferences) => {
     if (isPreferencesDirty.current) {
