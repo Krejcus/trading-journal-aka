@@ -674,10 +674,10 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
               {/* Expanded — inline editing form */}
               {isPrepExpanded && canInlineEdit && prepForm && (
-                <div className="mt-6 space-y-6">
-                  {/* Session tabs */}
+                <div className="mt-4 space-y-3">
+                  {/* Session tabs — slim compact */}
                   {prepForm.scenarios.sessions && prepForm.scenarios.sessions.length > 1 && (
-                    <div className={`flex items-center p-1 rounded-2xl border ${isDark ? 'bg-black/40 border-slate-800' : 'bg-slate-100 border-slate-200'}`}>
+                    <div className={`inline-flex items-center p-0.5 rounded-xl border gap-0.5 ${isDark ? 'bg-black/40 border-slate-800' : 'bg-slate-100 border-slate-200'}`}>
                       {prepForm.scenarios.sessions.map(session => {
                         const isActive = activeSessionTab === session.id;
                         const sessionColor = session.color || '#3b82f6';
@@ -685,7 +685,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                           <button
                             key={session.id}
                             onClick={() => setActiveSessionTab(session.id)}
-                            className={`flex-1 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${isActive ? 'text-white shadow-lg' : 'text-slate-500 hover:text-slate-400'}`}
+                            className={`px-4 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${isActive ? 'text-white shadow-md' : 'text-slate-500 hover:text-slate-400'}`}
                             style={isActive ? { backgroundColor: sessionColor } : undefined}
                           >
                             {session.label}
@@ -695,128 +695,105 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                     </div>
                   )}
 
-                  {/* Active session editor */}
+                  {/* Active session editor — compact 2-col */}
                   {prepForm.scenarios.sessions?.filter(s => s.id === activeSessionTab).map(session => (
-                    <div key={session.id} className={`p-5 rounded-2xl border flex flex-col gap-4 ${isDark ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-100'}`}>
+                    <div key={session.id} className="grid grid-cols-[1fr_260px] gap-3">
 
-                      {/* Per-session Bias */}
-                      <div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <TrendingUp size={12} className={session.bias === 'Bullish' ? 'text-emerald-500' : session.bias === 'Bearish' ? 'text-rose-500' : 'text-slate-500'} />
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">{session.label} Bias</span>
+                      {/* LEFT: bias row + textarea */}
+                      <div className="flex flex-col gap-2">
+                        {/* Bias — compact inline pills */}
+                        <div className="flex items-center gap-2">
+                          <TrendingUp size={11} className={`shrink-0 ${session.bias === 'Bullish' ? 'text-emerald-500' : session.bias === 'Bearish' ? 'text-rose-500' : 'text-slate-500'}`} />
+                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 shrink-0">{session.label} Bias</span>
+                          <div className="flex gap-1 ml-1">
+                            {(['Bullish', 'Neutral', 'Bearish'] as const).map(b => {
+                              const isAct = (session.bias ?? 'Neutral') === b;
+                              const activeStyle = b === 'Bullish' ? 'bg-emerald-500 border-emerald-400 text-white' : b === 'Bearish' ? 'bg-rose-500 border-rose-400 text-white' : 'bg-slate-500 border-slate-400 text-white';
+                              const inactiveStyle = isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400 hover:text-slate-200' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50';
+                              const emoji = { Bullish: '🐂', Neutral: '⚖️', Bearish: '🐻' };
+                              return (
+                                <button
+                                  key={b}
+                                  onClick={() => editPrepForm!(prev => ({
+                                    ...prev,
+                                    scenarios: { ...prev.scenarios, sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, bias: b } : s) }
+                                  }))}
+                                  className={`px-2.5 py-1 rounded-lg border text-[8px] font-black uppercase tracking-wide transition-all active:scale-95 flex items-center gap-1 ${isAct ? activeStyle : inactiveStyle}`}
+                                >
+                                  <span>{emoji[b]}</span>
+                                  <span>{b}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-2">
-                          {(['Bullish', 'Neutral', 'Bearish'] as const).map(b => {
-                            const isActive = (session.bias ?? 'Neutral') === b;
-                            const activeStyle = b === 'Bullish' ? 'bg-emerald-600 border-emerald-500 text-white' : b === 'Bearish' ? 'bg-rose-600 border-rose-500 text-white' : 'bg-slate-600 border-slate-500 text-white';
-                            const inactiveStyle = isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400 hover:text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100';
-                            const emoji = { Bullish: '🐂', Neutral: '⚖️', Bearish: '🐻' };
-                            return (
-                              <button
-                                key={b}
-                                onClick={() => editPrepForm!(prev => ({
-                                  ...prev,
-                                  scenarios: {
-                                    ...prev.scenarios,
-                                    sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, bias: b } : s)
-                                  }
-                                }))}
-                                className={`py-2 rounded-xl border font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center gap-0.5 ${isActive ? activeStyle : inactiveStyle}`}
-                              >
-                                <span className="text-sm">{emoji[b]}</span>
-                                <span>{b}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
 
-                      <div className="flex flex-col xl:flex-row gap-5">
-                      {/* Screenshot */}
-                      <div className="w-full xl:w-1/2 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[9px] font-black tracking-widest text-slate-500">{session.label} Analysis</span>
-                          {session.image && (
-                            <button
-                              onClick={() => editPrepForm!(prev => ({ ...prev, scenarios: { ...prev.scenarios, sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, image: '' } : s) } }))}
-                              className="px-2 py-1 bg-rose-500/10 text-rose-500 rounded-lg text-[8px] font-black uppercase hover:bg-rose-500 hover:text-white transition-all"
-                            >
-                              Clear
-                            </button>
-                          )}
-                        </div>
-                        <div className={`aspect-video rounded-2xl border-2 border-dashed overflow-hidden flex items-center justify-center ${session.image ? '' : isDark ? 'border-slate-800/50 bg-theme-card-40' : 'border-slate-200 bg-slate-50'}`}>
-                          {session.image ? (
-                            <div className="relative w-full h-full group/pimg">
-                              <img src={session.image} className="w-full h-full object-cover" />
-                              <div className="absolute inset-0 bg-black/0 group-hover/pimg:bg-black/30 transition-all flex items-center justify-center">
-                                <button onClick={() => setZoomImg(session.image!)} className="p-2 rounded-xl bg-black/50 text-white opacity-0 group-hover/pimg:opacity-100 transition-all"><Maximize2 size={14} /></button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="text-center p-4">
-                              <ImageIcon size={20} className={`mx-auto mb-2 ${isDark ? 'text-slate-600' : 'text-slate-400'}`} />
-                              <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest">CTRL+V to paste</p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Game plan textarea */}
-                      <div className="w-full xl:w-1/2 flex flex-col">
-                        <div className="flex items-center gap-2 mb-3 opacity-50">
-                          <FileText size={12} className="text-slate-500" />
-                          <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Tactical Game Plan</span>
-                        </div>
+                        {/* Textarea */}
                         <textarea
                           value={session.plan}
                           onChange={(e) => editPrepForm!(prev => ({
                             ...prev,
                             scenarios: { ...prev.scenarios, sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, plan: e.target.value } : s) }
                           }))}
-                          placeholder="Tvůj plán pro tuto seanci..."
-                          className={`w-full flex-1 min-h-[160px] rounded-2xl p-4 border text-sm leading-relaxed transition-all placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-blue-500/20 ${isDark ? 'bg-theme-card-40 border-slate-800/50 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
+                          placeholder="Tactical game plan pro tuto seanci..."
+                          className={`w-full flex-1 min-h-[130px] rounded-xl p-3 border text-[12px] leading-relaxed transition-all placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-blue-500/20 resize-none ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
                         />
                       </div>
-                      </div>{/* end xl:flex-row */}
+
+                      {/* RIGHT: screenshot */}
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">{session.label} Chart</span>
+                          {session.image && (
+                            <button
+                              onClick={() => editPrepForm!(prev => ({ ...prev, scenarios: { ...prev.scenarios, sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, image: '' } : s) } }))}
+                              className="px-1.5 py-0.5 bg-rose-500/10 text-rose-500 rounded text-[7px] font-black uppercase hover:bg-rose-500 hover:text-white transition-all"
+                            >Clear</button>
+                          )}
+                        </div>
+                        <div className={`flex-1 rounded-xl border-2 border-dashed overflow-hidden flex items-center justify-center min-h-[148px] ${session.image ? 'border-transparent' : isDark ? 'border-slate-700 bg-white/[0.02]' : 'border-slate-200 bg-slate-50'}`}>
+                          {session.image ? (
+                            <div className="relative w-full h-full group/pimg">
+                              <img src={session.image} className="w-full h-full object-cover" />
+                              <div className="absolute inset-0 bg-black/0 group-hover/pimg:bg-black/40 transition-all flex items-center justify-center">
+                                <button onClick={() => setZoomImg(session.image!)} className="p-1.5 rounded-lg bg-black/60 text-white opacity-0 group-hover/pimg:opacity-100 transition-all"><Maximize2 size={12} /></button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-center p-3">
+                              <ImageIcon size={16} className={`mx-auto mb-1.5 ${isDark ? 'text-slate-600' : 'text-slate-400'}`} />
+                              <p className="text-[7px] font-black uppercase text-slate-500 tracking-widest">CTRL+V to paste</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   ))}
 
-                  {/* Confidence slider */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <Brain size={14} className="text-violet-500" />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Sebevědomí</span>
-                      </div>
-                      <span className={`text-sm font-black tabular-nums ${(prepForm.confidence ?? 50) >= 70 ? 'text-emerald-400' : (prepForm.confidence ?? 50) >= 40 ? 'text-amber-400' : 'text-rose-400'}`}>
+                  {/* Bottom bar: confidence + rituals + button */}
+                  <div className={`flex flex-col gap-2 pt-2 border-t ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
+                    {/* Confidence inline */}
+                    <div className="flex items-center gap-3">
+                      <Brain size={11} className="text-violet-500 shrink-0" />
+                      <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 shrink-0 w-20">Sebevědomí</span>
+                      <input
+                        type="range" min="0" max="100" step="5"
+                        value={prepForm.confidence ?? 50}
+                        onChange={(e) => editPrepForm!(prev => ({ ...prev, confidence: Number(e.target.value) }))}
+                        className="flex-1 h-1.5 rounded-lg appearance-none cursor-pointer"
+                        style={{
+                          accentColor: (prepForm.confidence ?? 50) >= 70 ? '#10b981' : (prepForm.confidence ?? 50) >= 40 ? '#f59e0b' : '#f43f5e',
+                          background: `linear-gradient(to right, ${(prepForm.confidence ?? 50) >= 70 ? '#10b981' : (prepForm.confidence ?? 50) >= 40 ? '#f59e0b' : '#f43f5e'} ${prepForm.confidence ?? 50}%, ${isDark ? '#334155' : '#e2e8f0'} ${prepForm.confidence ?? 50}%)`
+                        }}
+                      />
+                      <span className={`text-[11px] font-black tabular-nums w-8 text-right shrink-0 ${(prepForm.confidence ?? 50) >= 70 ? 'text-emerald-400' : (prepForm.confidence ?? 50) >= 40 ? 'text-amber-400' : 'text-rose-400'}`}>
                         {prepForm.confidence ?? 50}%
                       </span>
                     </div>
-                    <input
-                      type="range" min="0" max="100" step="5"
-                      value={prepForm.confidence ?? 50}
-                      onChange={(e) => editPrepForm!(prev => ({ ...prev, confidence: Number(e.target.value) }))}
-                      className="w-full h-2 rounded-lg appearance-none cursor-pointer"
-                      style={{
-                        accentColor: (prepForm.confidence ?? 50) >= 70 ? '#10b981' : (prepForm.confidence ?? 50) >= 40 ? '#f59e0b' : '#f43f5e',
-                        background: `linear-gradient(to right, ${(prepForm.confidence ?? 50) >= 70 ? '#10b981' : (prepForm.confidence ?? 50) >= 40 ? '#f59e0b' : '#f43f5e'} ${prepForm.confidence ?? 50}%, ${isDark ? '#1e293b' : '#e2e8f0'} ${prepForm.confidence ?? 50}%)`
-                      }}
-                    />
-                    <div className="flex justify-between mt-1">
-                      <span className="text-[8px] text-slate-600">Špatný den</span>
-                      <span className="text-[8px] text-slate-600">Top forma</span>
-                    </div>
-                  </div>
 
-                  {/* Rituals checklist */}
-                  {rituals && rituals.length > 0 && (
-                    <div>
-                      <div className="flex items-center gap-2 mb-3">
-                        <Zap size={14} className="text-blue-500" />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Ranní Checklist</span>
-                      </div>
-                      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+                    {/* Rituals — compact chips */}
+                    {rituals && rituals.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
                         {rituals.map(ritual => {
                           const comp = prepForm.ritualCompletions?.find(c => c.ruleId === ritual.id);
                           const isDone = comp?.status === 'Pass';
@@ -824,24 +801,24 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                             <button
                               key={ritual.id}
                               onClick={() => handleToggleRitual(ritual.id)}
-                              className={`p-3 rounded-xl border flex items-center justify-between transition-all active:scale-95 ${isDone ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-600/20' : (isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600')}`}
+                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[8px] font-black uppercase tracking-tight transition-all active:scale-95 ${isDone ? 'bg-emerald-500 border-emerald-400 text-white shadow-sm shadow-emerald-500/30' : (isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-500')}`}
                             >
-                              <span className="text-[9px] font-black uppercase tracking-tight text-left pr-2">{ritual.label}</span>
-                              {isDone ? <Check size={14} /> : <div className={`w-3.5 h-3.5 rounded-full border shrink-0 ${isDark ? 'border-[var(--border-subtle)]' : 'bg-slate-200'}`} />}
+                              {isDone ? <Check size={10} /> : <div className={`w-2.5 h-2.5 rounded-full border shrink-0 ${isDark ? 'border-slate-600' : 'border-slate-300'}`} />}
+                              {ritual.label}
                             </button>
                           );
                         })}
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Complete button */}
-                  <button
-                    onClick={() => { onSavePrep?.({ ...prepForm, completed: true }); setIsPrepExpanded(false); }}
-                    className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-blue-500/20 active:scale-95 transition-all hover:bg-blue-500"
-                  >
-                    DOKONČIT PŘÍPRAVU
-                  </button>
+                    {/* Complete button — compact */}
+                    <button
+                      onClick={() => { onSavePrep?.({ ...prepForm, completed: true }); setIsPrepExpanded(false); }}
+                      className="w-full py-2.5 bg-blue-600 text-white rounded-xl font-black uppercase text-[9px] tracking-widest shadow-lg shadow-blue-500/20 active:scale-95 transition-all hover:bg-blue-500"
+                    >
+                      DOKONČIT PŘÍPRAVU
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
