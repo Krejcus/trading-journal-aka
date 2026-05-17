@@ -34,6 +34,7 @@ import {
 import ConfirmationModal from './ConfirmationModal';
 import ImageZoomModal from './ImageZoomModal';
 import { storageService } from '../services/storageService';
+import VoiceMemoButton from './VoiceMemoButton';
 
 interface WeekFocusGoal {
   text: string;
@@ -271,23 +272,36 @@ const BreakdownCard: React.FC<{
       )}
 
       {isEditing ? (
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            e.target.style.height = 'auto';
-            e.target.style.height = e.target.scrollHeight + 'px';
-          }}
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder="Jak probíhala session? Co jsi mohl udělat lépe?"
-          className={`w-full text-sm leading-relaxed bg-transparent border-none outline-none resize-none placeholder:italic ${
-            isDark ? 'text-slate-300 placeholder:text-slate-600' : 'text-slate-700 placeholder:text-slate-400'
-          }`}
-          rows={3}
-        />
+        <div className="relative">
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = e.target.scrollHeight + 'px';
+            }}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder="Jak probíhala session? Co jsi mohl udělat lépe?"
+            className={`w-full text-sm leading-relaxed bg-transparent border-none outline-none resize-none placeholder:italic pr-12 ${
+              isDark ? 'text-slate-300 placeholder:text-slate-600' : 'text-slate-700 placeholder:text-slate-400'
+            }`}
+            rows={3}
+          />
+          <div className="absolute bottom-1 right-1" onMouseDown={(e) => e.preventDefault()}>
+            <VoiceMemoButton
+              size="sm"
+              onTranscribed={(t) => {
+                const sep = text.trim().length > 0 ? '\n\n' : '';
+                const newText = text + sep + t;
+                setText(newText);
+                onUpdate(newText, screenshot);
+              }}
+            />
+          </div>
+        </div>
       ) : (
         <div
           onClick={() => { setIsEditing(true); isEditingRef.current = true; }}
@@ -308,6 +322,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
   const [isDeletingPrep, setIsDeletingPrep] = useState(false);
   const [isDeletingReview, setIsDeletingReview] = useState(false);
   const [isBreakdownExpanded, setIsBreakdownExpanded] = useState(false);
+  const [expandedBreakdownSessions, setExpandedBreakdownSessions] = useState<Set<string>>(new Set());
   const [isPrepExpanded, setIsPrepExpanded] = useState(false);
   const [isReviewExpanded, setIsReviewExpanded] = useState(false);
 
@@ -589,11 +604,10 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                 </div>
               </div>
 
-              {/* Collapsed — preview */}
+              {/* Collapsed — horizontal session strip */}
               {!isPrepExpanded && !isMini && prep && (
-                <div className="mt-3 space-y-3">
+                <div className="mt-3 flex gap-2 items-stretch">
                   {prep.scenarios.sessions?.map((session, i) => {
-                    // Match session config to get time range & active state
                     const sessConfig = sessions?.find(s => s.id === session.id);
                     const now = new Date();
                     let isActive = false;
@@ -605,52 +619,63 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                       const startMin = sh * 60 + sm;
                       const endMin = eh * 60 + em;
                       const nowMin = now.getHours() * 60 + now.getMinutes();
-                      // Active only if today's date matches
                       isActive = date === now.toLocaleDateString('en-CA') && nowMin >= startMin && nowMin <= endMin;
                     }
+                    const color = session.color || sessConfig?.color || '#6366f1';
+                    const biasEmoji = session.bias === 'Bullish' ? '🐂' : session.bias === 'Bearish' ? '🐻' : session.bias === 'Neutral' ? '⚖️' : null;
                     return (
                       <div
                         key={session.id || i}
-                        className={`group/session overflow-hidden rounded-2xl border transition-all ${isActive
-                          ? 'border-blue-500/50 shadow-[0_0_24px_rgba(59,130,246,0.2)] bg-blue-500/[0.04]'
-                          : isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white/40 border-slate-200/50'
+                        className={`relative flex-1 min-w-0 overflow-hidden rounded-2xl border transition-all flex flex-col ${
+                          isActive
+                            ? 'border-blue-500/40 shadow-[0_0_20px_rgba(59,130,246,0.15)]'
+                            : isDark ? 'border-white/5' : 'border-slate-200/70'
                         }`}
-                        style={{ borderLeftWidth: 3, borderLeftColor: session.color || sessConfig?.color || '#6366f1' }}
+                        style={{ borderTopWidth: 3, borderTopColor: color }}
                       >
-                        <div className="flex gap-3 p-3">
-                          {/* Image left (compact) */}
-                          {session.image && (
-                            <div
-                              className="relative w-24 sm:w-32 h-20 sm:h-24 rounded-lg overflow-hidden shrink-0 cursor-pointer"
-                              onClick={(e) => { e.stopPropagation(); setZoomImg(session.image!); }}
-                            >
+                        {/* Screenshot or placeholder */}
+                        <div
+                          className={`relative w-full h-32 overflow-hidden flex items-center justify-center cursor-pointer ${
+                            session.image ? '' : isDark ? 'bg-white/[0.02]' : 'bg-slate-50'
+                          }`}
+                          onClick={(e) => { if (session.image) { e.stopPropagation(); setZoomImg(session.image); } }}
+                        >
+                          {session.image ? (
+                            <>
                               <img src={session.image} className="w-full h-full object-cover" />
+                              <div className="absolute inset-0 bg-black/0 hover:bg-black/20 transition-all flex items-center justify-center">
+                                <Maximize2 size={14} className="text-white opacity-0 hover:opacity-100 transition-all" />
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-center">
+                              <ImageIcon size={16} className={`mx-auto mb-1 ${isDark ? 'text-slate-700' : 'text-slate-300'}`} />
+                              <p className="text-[7px] font-black uppercase text-slate-400 tracking-widest">Bez screenu</p>
                             </div>
                           )}
-                          {/* Text right (full width) */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap mb-1.5">
-                              <span className={`text-[9px] font-black uppercase tracking-widest ${isActive ? 'text-blue-400' : isDark ? 'text-slate-300' : 'text-slate-700'}`}>{session.label}</span>
-                              {timeLabel && (
-                                <span className="text-[8px] font-black text-slate-500">{timeLabel}</span>
-                              )}
-                              {isActive && (
-                                <span className="px-1.5 py-0.5 bg-blue-500 text-white rounded text-[7px] font-black uppercase tracking-widest animate-pulse">
-                                  NOW
-                                </span>
-                              )}
-                              {session.bias && (
-                                <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${session.bias === 'Bullish' ? 'bg-emerald-500/10 text-emerald-500' : session.bias === 'Bearish' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-500'}`}>
-                                  {session.bias}
-                                </span>
-                              )}
-                            </div>
-                            {session.plan ? (
-                              <p className={`text-[11px] leading-relaxed italic ${isDark ? 'text-slate-300' : 'text-slate-600'} line-clamp-3`}>"{session.plan}"</p>
-                            ) : (
-                              <p className="text-[10px] text-slate-500 italic">Bez plánu pro tuto session</p>
+                          {isActive && (
+                            <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 bg-blue-500 text-white rounded text-[7px] font-black uppercase tracking-widest animate-pulse">NOW</span>
+                          )}
+                        </div>
+
+                        {/* Info below image */}
+                        <div className="px-2.5 py-2 flex flex-col gap-1">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[9px] font-black uppercase tracking-widest truncate" style={{ color }}>{session.label}</span>
+                            {biasEmoji && (
+                              <span className="text-[10px] shrink-0">{biasEmoji}</span>
                             )}
                           </div>
+                          {timeLabel && (
+                            <span className="text-[8px] font-black text-slate-400 font-mono">{timeLabel}</span>
+                          )}
+                          {session.plan ? (
+                            <p className={`text-[9px] leading-snug italic line-clamp-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                              {session.plan}
+                            </p>
+                          ) : (
+                            <p className="text-[8px] text-slate-400 italic">Bez plánu</p>
+                          )}
                         </div>
                       </div>
                     );
@@ -729,15 +754,32 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                         </div>
 
                         {/* Textarea */}
-                        <textarea
-                          value={session.plan}
-                          onChange={(e) => editPrepForm!(prev => ({
-                            ...prev,
-                            scenarios: { ...prev.scenarios, sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, plan: e.target.value } : s) }
-                          }))}
-                          placeholder="Tactical game plan pro tuto seanci..."
-                          className={`w-full flex-1 min-h-[130px] rounded-xl p-3 border text-[12px] leading-relaxed transition-all placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-blue-500/20 resize-none ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
-                        />
+                        <div className="relative flex-1 flex flex-col">
+                          <textarea
+                            value={session.plan}
+                            onChange={(e) => editPrepForm!(prev => ({
+                              ...prev,
+                              scenarios: { ...prev.scenarios, sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, plan: e.target.value } : s) }
+                            }))}
+                            placeholder="Tactical game plan pro tuto seanci..."
+                            className={`w-full flex-1 min-h-[130px] rounded-xl p-3 pr-12 border text-[12px] leading-relaxed transition-all placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-blue-500/20 resize-none ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
+                          />
+                          <div className="absolute bottom-2 right-2">
+                            <VoiceMemoButton
+                              size="sm"
+                              onTranscribed={(t) => {
+                                editPrepForm!(prev => ({
+                                  ...prev,
+                                  scenarios: { ...prev.scenarios, sessions: prev.scenarios.sessions?.map(s => {
+                                    if (s.id !== session.id) return s;
+                                    const sep = (s.plan || '').trim().length > 0 ? '\n\n' : '';
+                                    return { ...s, plan: (s.plan || '') + sep + t };
+                                  }) }
+                                }));
+                              }}
+                            />
+                          </div>
+                        </div>
                       </div>
 
                       {/* RIGHT: screenshot */}
@@ -869,6 +911,123 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                     <ChevronDown size={16} className={`text-slate-500 transition-transform duration-300 ${isBreakdownExpanded ? 'rotate-180' : ''}`} />
                   </div>
                 </div>
+
+                {/* Collapsed preview — analysis → trades → breakdown visual strip */}
+                {!isBreakdownExpanded && breakdownCount > 0 && sessionGroups && (
+                  <div className="mt-3 space-y-2">
+                    {sessionGroups.map((group, i) => {
+                      const bd = group.breakdown;
+                      const hasContent = bd?.notes?.trim() || bd?.screenshot || group.prepSession?.image || group.trades.length > 0;
+                      if (!hasContent) return null;
+                      const sessionColor = group.session.color || '#6366f1';
+                      const isExpanded = expandedBreakdownSessions.has(group.session.id);
+                      const toggleExpanded = (e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        setExpandedBreakdownSessions(prev => {
+                          const next = new Set(prev);
+                          isExpanded ? next.delete(group.session.id) : next.add(group.session.id);
+                          return next;
+                        });
+                      };
+                      return (
+                        <div
+                          key={group.session.id || i}
+                          className={`overflow-hidden rounded-2xl border transition-all ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white/40 border-slate-200/50'}`}
+                          style={{ borderLeftWidth: 3, borderLeftColor: sessionColor }}
+                        >
+                          {/* Header row */}
+                          <div
+                            className="flex items-center justify-between px-3 pt-2.5 pb-1 cursor-pointer"
+                            onClick={toggleExpanded}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: sessionColor }}>{group.session.name}</span>
+                              {group.trades.length > 0 && (
+                                <span className={`text-[8px] font-black font-mono ${group.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                  {group.pnl >= 0 ? '+' : ''}${group.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                </span>
+                              )}
+                              <span className="text-[8px] text-slate-400">{group.trades.length} trade{group.trades.length !== 1 ? 's' : ''}</span>
+                            </div>
+                            <ChevronDown size={12} className={`text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                          </div>
+
+                          {/* Visual strip: [analysis screen] [trades] [breakdown screen] */}
+                          <div className="flex gap-2 px-3 pb-3 items-stretch">
+                            {/* Analysis screenshot */}
+                            {group.prepSession?.image && (
+                              <div className="relative shrink-0 flex flex-col gap-1">
+                                <p className="text-[7px] font-black uppercase text-slate-400 tracking-widest text-center">Analýza</p>
+                                <div
+                                  className="w-28 h-20 rounded-lg overflow-hidden cursor-pointer border border-white/10"
+                                  onClick={(e) => { e.stopPropagation(); setZoomImg(group.prepSession!.image!); }}
+                                >
+                                  <img src={group.prepSession.image} className="w-full h-full object-cover" />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Arrow + trades in the middle */}
+                            {(group.prepSession?.image || bd?.screenshot) && group.trades.length > 0 && (
+                              <div className="flex flex-col justify-center items-center gap-1 px-1 shrink-0">
+                                <ChevronRight size={12} className="text-slate-300" />
+                              </div>
+                            )}
+                            {group.trades.length > 0 && (
+                              <div className="flex flex-col justify-center gap-1 min-w-0 flex-1">
+                                <p className="text-[7px] font-black uppercase text-slate-400 tracking-widest">Trades</p>
+                                <div className="flex flex-col gap-1">
+                                  {group.trades.map((t, tIdx) => {
+                                    const time = new Date(t.timestamp || 0).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+                                    return (
+                                      <div key={t.id || tIdx} className={`flex items-center justify-between gap-2 px-2 py-1 rounded-lg ${isDark ? 'bg-white/[0.04]' : 'bg-slate-100'}`}>
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                          <span className="text-[8px] font-mono text-slate-500 shrink-0">{time}</span>
+                                          <span className={`text-[7px] font-black uppercase shrink-0 ${t.direction === 'Long' ? 'text-emerald-500' : 'text-rose-500'}`}>{t.direction}</span>
+                                        </div>
+                                        <span className={`text-[9px] font-black font-mono shrink-0 ${t.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                          {t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Arrow before breakdown */}
+                            {bd?.screenshot && (group.prepSession?.image || group.trades.length > 0) && (
+                              <div className="flex flex-col justify-center items-center gap-1 px-1 shrink-0">
+                                <ChevronRight size={12} className="text-slate-300" />
+                              </div>
+                            )}
+
+                            {/* Breakdown screenshot */}
+                            {bd?.screenshot && (
+                              <div className="relative shrink-0 flex flex-col gap-1">
+                                <p className="text-[7px] font-black uppercase text-slate-400 tracking-widest text-center">Breakdown</p>
+                                <div
+                                  className="w-28 h-20 rounded-lg overflow-hidden cursor-pointer border border-white/10"
+                                  onClick={(e) => { e.stopPropagation(); setZoomImg(bd.screenshot!); }}
+                                >
+                                  <img src={bd.screenshot} className="w-full h-full object-cover" />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Expanded notes */}
+                          {isExpanded && bd?.notes?.trim() && (
+                            <div className={`px-3 pb-3 pt-1 border-t ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
+                              <p className={`text-[11px] leading-relaxed italic ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>"{bd.notes}"</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {/* Expanded — sessions side by side with prep info + trades + breakdown */}
                 {isBreakdownExpanded && (
@@ -1139,7 +1298,17 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                   {/* Stressors & Gratitude */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[9px] font-black uppercase tracking-widest mb-2 text-rose-500">Stresory & Spouštěče</label>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block text-[9px] font-black uppercase tracking-widest text-rose-500">Stresory & Spouštěče</label>
+                        <VoiceMemoButton
+                          size="sm"
+                          onTranscribed={(t) => {
+                            const cur = reviewForm.psycho?.stressors || '';
+                            const sep = cur.trim().length > 0 ? '\n\n' : '';
+                            editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: cur + sep + t } });
+                          }}
+                        />
+                      </div>
                       <textarea
                         value={reviewForm.psycho?.stressors || ''}
                         onChange={(e) => editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: e.target.value } })}
@@ -1148,7 +1317,17 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                       />
                     </div>
                     <div>
-                      <label className="block text-[9px] font-black uppercase tracking-widest mb-2 text-emerald-500">Vděčnost & Radost</label>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block text-[9px] font-black uppercase tracking-widest text-emerald-500">Vděčnost & Radost</label>
+                        <VoiceMemoButton
+                          size="sm"
+                          onTranscribed={(t) => {
+                            const cur = reviewForm.psycho?.gratitude || '';
+                            const sep = cur.trim().length > 0 ? '\n\n' : '';
+                            editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: cur + sep + t } });
+                          }}
+                        />
+                      </div>
                       <textarea
                         value={reviewForm.psycho?.gratitude || ''}
                         onChange={(e) => editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: e.target.value } })}
@@ -1160,7 +1339,17 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
                   {/* Personal journal */}
                   <div>
-                    <label className="block text-[9px] font-black uppercase tracking-widest mb-2 text-slate-500">Osobní Deník</label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-500">Osobní Deník</label>
+                      <VoiceMemoButton
+                        size="sm"
+                        onTranscribed={(t) => {
+                          const cur = reviewForm.psycho?.notes || '';
+                          const sep = cur.trim().length > 0 ? '\n\n' : '';
+                          editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, notes: cur + sep + t } });
+                        }}
+                      />
+                    </div>
                     <div className="flex gap-2 mb-2">
                       <input
                         type="text"

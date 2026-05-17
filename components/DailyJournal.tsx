@@ -1156,7 +1156,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           </div>
 
           {/* Sidebar: Stats — slim s hover expand */}
-          <div className="lg:sticky lg:top-24 order-1 lg:order-2 group/disc relative">
+          <div className="lg:sticky lg:top-24 order-1 lg:order-2 group/disc relative z-40 hover:z-50">
             {/* Slim collapsed view — streak + mini heatmap */}
             <div className="lg:flex hidden flex-col items-center gap-2 p-2 rounded-2xl border bg-[var(--bg-card)]/60 border-[var(--border-subtle)] backdrop-blur-md cursor-pointer transition-all group-hover/disc:opacity-0 group-hover/disc:pointer-events-none">
               {(() => {
@@ -1215,7 +1215,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             </div>
 
             {/* Expanded full dashboard — viditelné na hover */}
-            <div className="hidden lg:block absolute right-0 top-0 w-[320px] opacity-0 group-hover/disc:opacity-100 pointer-events-none group-hover/disc:pointer-events-auto transition-opacity duration-200 z-50 shadow-2xl rounded-2xl">
+            <div className="hidden lg:block absolute right-0 top-0 w-[320px] opacity-0 group-hover/disc:opacity-100 pointer-events-none group-hover/disc:pointer-events-auto transition-opacity duration-200 z-[60] shadow-2xl rounded-2xl">
               <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={groupedTrades} ironRules={ironRules} />
             </div>
 
@@ -1429,7 +1429,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     </div>
 
                     <button
-                      onClick={() => { setSelectedDate(review.date); onTabChange('daily'); setView('edit-review'); window.scrollTo(0, 0); }}
+                      onClick={() => { setSelectedDate(review.date); setView('timeline'); onTabChange('daily'); window.scrollTo(0, 0); }}
                       className="mt-6 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-600/10"
                     >
                       Otevřít Detail

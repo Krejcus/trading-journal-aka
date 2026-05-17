@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, Send, Loader2, Sparkles, X } from 'lucide-react';
+import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation } from '../types';
 import { streamAIResponse, buildTraderContext, parseAllRefs, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
@@ -111,6 +111,7 @@ const AICoachPage: React.FC<Props> = ({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -439,7 +440,7 @@ const AICoachPage: React.FC<Props> = ({
   // ─── Sidebar ───────────────────────────────────────────────────────────────
 
   const Sidebar = (
-    <div className="flex flex-col h-full bg-theme-page">
+    <div className="flex flex-col h-full w-full min-w-0 bg-theme-page">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-4 border-b border-[var(--border-subtle)] flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -466,7 +467,7 @@ const AICoachPage: React.FC<Props> = ({
       )}
 
       {/* Conversation list */}
-      <div className="flex-1 overflow-y-auto py-2 scrollbar-thin">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden py-2 scrollbar-thin min-w-0 w-full">
         {conversations.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 px-4 text-center">
             <Bot size={28} className="text-[var(--text-secondary)]" />
@@ -487,14 +488,23 @@ const AICoachPage: React.FC<Props> = ({
               {group.items.map(conv => (
                 <div
                   key={conv.id}
-                  className={`group relative flex items-start gap-2 px-3 py-2.5 mx-2 rounded-xl cursor-pointer transition-all ${
+                  className={`group relative flex items-center gap-2 px-3 py-2 mx-2 rounded-lg cursor-pointer transition-all ${
                     activeConvId === conv.id
                       ? 'bg-[var(--bg-card)] text-[var(--text-primary)]'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)]'
                   }`}
                   onClick={() => handleSelectConversation(conv.id)}
                 >
-                  <MessageSquare size={13} className="flex-shrink-0 mt-0.5 opacity-60" />
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                      CATEGORY_COLORS[conv.category]?.includes('blue') ? 'bg-blue-400' :
+                      CATEGORY_COLORS[conv.category]?.includes('amber') ? 'bg-amber-400' :
+                      CATEGORY_COLORS[conv.category]?.includes('emerald') ? 'bg-emerald-400' :
+                      CATEGORY_COLORS[conv.category]?.includes('violet') ? 'bg-violet-400' :
+                      'bg-slate-400'
+                    }`}
+                    title={CATEGORY_LABELS[conv.category]}
+                  />
                   <div className="flex-1 min-w-0">
                     {renamingId === conv.id ? (
                       <input
@@ -511,19 +521,13 @@ const AICoachPage: React.FC<Props> = ({
                       />
                     ) : (
                       <div
-                        className="text-xs font-medium truncate leading-tight"
+                        className="text-[11px] font-medium truncate leading-tight"
                         onDoubleClick={() => handleStartRename(conv)}
-                        title="Dvojklik pro přejmenování"
+                        title={`${conv.title} · ${CATEGORY_LABELS[conv.category]} · ${formatRelativeDate(conv.updated_at)}`}
                       >
                         {conv.title}
                       </div>
                     )}
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className={`text-[8px] font-bold px-1.5 py-px rounded border ${CATEGORY_COLORS[conv.category]}`}>
-                        {CATEGORY_LABELS[conv.category]}
-                      </span>
-                      <span className="text-[9px] text-[var(--text-secondary)]">{formatRelativeDate(conv.updated_at)}</span>
-                    </div>
                   </div>
                   {/* Delete button — shown on hover */}
                   {deleteConfirmId === conv.id ? (
@@ -544,9 +548,10 @@ const AICoachPage: React.FC<Props> = ({
                   ) : (
                     <button
                       onClick={e => { e.stopPropagation(); setDeleteConfirmId(conv.id); }}
-                      className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-rose-500/10 text-[var(--text-secondary)] hover:text-rose-400 transition-all"
+                      className="flex-shrink-0 p-1 rounded text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition-all"
+                      title="Smazat konverzaci"
                     >
-                      <Trash2 size={11} />
+                      <Trash2 size={13} />
                     </button>
                   )}
                 </div>
@@ -570,6 +575,14 @@ const AICoachPage: React.FC<Props> = ({
           className="lg:hidden p-1.5 rounded-lg hover:bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-all"
         >
           <ChevronLeft size={18} />
+        </button>
+        {/* Sidebar toggle — only on desktop */}
+        <button
+          onClick={() => setSidebarCollapsed(prev => !prev)}
+          className="hidden lg:flex p-1.5 rounded-lg hover:bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-all items-center justify-center"
+          title={sidebarCollapsed ? 'Zobrazit seznam konverzací' : 'Skrýt seznam konverzací'}
+        >
+          {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
         </button>
         <div className="flex-1 min-w-0">
           {activeConvId ? (
@@ -693,19 +706,23 @@ const AICoachPage: React.FC<Props> = ({
         Důvod: pokud by byly dvě kopie ChatArea (hidden + visible), messagesContainerRef
         by ukazoval na špatný (skrytý) element a auto-scroll by nefungoval.
       */}
-      <div className="flex h-full">
-        {/* Sidebar — na desktopu vždy viditelný (280px), na mobilu jen v list view */}
+      <div className="flex h-full w-full">
+        {/* Sidebar — na desktopu fixed 240px (skrytelný přes toggle), na mobilu fullwidth */}
         <div className={`
-          flex-shrink-0 h-full
-          ${mobileView === 'chat' ? 'hidden lg:flex lg:w-[280px] lg:border-r lg:border-[var(--border-subtle)]' : 'flex w-full lg:w-[280px] lg:border-r lg:border-[var(--border-subtle)]'}
+          flex-shrink-0 h-full overflow-hidden transition-all duration-200
+          ${mobileView === 'chat' ? 'hidden lg:flex' : 'flex'}
+          ${sidebarCollapsed
+            ? 'w-0 lg:w-0 border-r-0'
+            : 'w-full lg:w-60 lg:border-r lg:border-[var(--border-subtle)]'
+          }
         `}>
           {Sidebar}
         </div>
 
         {/* Chat area — na desktopu vždy viditelný, na mobilu jen v chat view */}
         <div className={`
-          flex-1 h-full overflow-hidden
-          ${mobileView === 'list' ? 'hidden lg:flex' : 'flex'}
+          flex-1 h-full overflow-hidden min-w-0
+          ${mobileView === 'list' && !sidebarCollapsed ? 'hidden lg:flex' : 'flex'}
         `}>
           {ChatArea}
         </div>

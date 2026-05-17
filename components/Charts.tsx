@@ -10,6 +10,7 @@ import { Info, Calendar, Clock, ShieldCheck, Activity } from 'lucide-react';
 
 // Module-level mouse tracker shared with Dashboard — position at render time, no re-renders
 let _mx = 0, _my = 0;
+let _suppressTooltipUntil = 0;
 if (typeof window !== 'undefined') {
   window.addEventListener('mousemove', (e) => { _mx = e.clientX; _my = e.clientY; }, { passive: true });
 }
@@ -59,6 +60,8 @@ interface CustomTooltipProps {
 const CustomEquityTooltip = (props: any) => {
   const { active, payload, label, theme } = props;
   if (!active || !payload || !payload.length) return null;
+  // Suppress tooltip briefly after a click — prevents stale tooltip overlaying the trade detail modal
+  if (Date.now() < _suppressTooltipUntil) return null;
 
   const data = payload[0].payload;
   const val = payload[0].value ?? 0;
@@ -194,6 +197,7 @@ const CustomActiveDot = (props: CustomActiveDotProps) => {
         cursor="pointer"
         onClick={(e) => {
           e.stopPropagation();
+          _suppressTooltipUntil = Date.now() + 2000;
           onTradeClick(payload.trade.id);
         }}
       />
@@ -291,6 +295,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   if (data && data.activePayload && data.activePayload[0]) {
                     const trade = data.activePayload[0].payload.trade;
                     if (trade && onTradeClick) {
+                      _suppressTooltipUntil = Date.now() + 2000;
                       onTradeClick(trade.id);
                     }
                   }

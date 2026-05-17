@@ -97,10 +97,10 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
       }
 
       const ruleDef = Array.isArray(ironRules) ? ironRules.find(r => r.id === ruleId) : null;
-      const label = ruleDef ? ruleDef.label : (ruleId.startsWith('rule_') ? 'Nové pravidlo' : ruleId);
-      const type = ruleDef ? ruleDef.type : (ruleId.startsWith('ritual') || ruleId.startsWith('r_') ? 'ritual' : 'trading');
+      // Skip orphaned rule IDs that no longer have a definition
+      if (!ruleDef) return;
 
-      ruleStreaks[ruleId] = { streak: rStreak, label, type };
+      ruleStreaks[ruleId] = { streak: rStreak, label: ruleDef.label, type: ruleDef.type };
     });
 
     const heatmapData = weekdaysOnly.map(date => {
