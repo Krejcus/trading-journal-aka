@@ -156,7 +156,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const handleAddAccount = () => {
     if (!newAccount.name) return;
     const account: Account = {
-      id: `acc_${Date.now()}`,
+      id: crypto.randomUUID(),
       name: newAccount.name!,
       initialBalance: Number(newAccount.initialBalance),
       challengeCost: Number(newAccount.challengeCost) || 0,
