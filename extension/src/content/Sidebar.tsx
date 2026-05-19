@@ -87,7 +87,7 @@ export function Sidebar() {
                 )}
             >
                 <div className={`pt-6 px-6 pb-4 border-b flex justify-between items-center ${theme === 'dark' ? 'border-white/5 bg-white/[0.02]' : 'border-black/5 bg-black/[0.02]'}`}>
-                    <h1 className={`m-0 text-lg font-extrabold tracking-widest flex items-center gap-3 ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600'}`}>
+                    <h1 className={`m-0 text-lg font-extrabold tracking-widest flex items-center gap-3 ${theme === 'dark' ? 'text-blue-400' : 'text-blue-600'}`}>
                         <div className="w-10 h-10 flex items-center justify-center transition-all duration-300 hover:scale-105">
                             <img
                                 src={chrome.runtime.getURL('icons/at_logo_light_clean.png')}
@@ -109,14 +109,14 @@ export function Sidebar() {
                         )}
                         <button
                             onClick={() => setIsWide(!isWide)}
-                            className={`bg-transparent border-none cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-slate-400 hover:text-cyan-400' : 'text-slate-500 hover:text-cyan-600'}`}
+                            className={`bg-transparent border-none cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-slate-400 hover:text-blue-400' : 'text-slate-500 hover:text-blue-600'}`}
                             title={isWide ? 'Zúžit okno' : 'Rozšířit okno'}
                         >
                             {isWide ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
                         </button>
                         <button
                             onClick={toggleTheme}
-                            className={`bg-transparent border-none cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-slate-400 hover:text-cyan-400' : 'text-slate-500 hover:text-cyan-600'}`}
+                            className={`bg-transparent border-none cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-slate-400 hover:text-blue-400' : 'text-slate-500 hover:text-blue-600'}`}
                             title={theme === 'dark' ? 'Přepnout na světlý motiv' : 'Přepnout na tmavý motiv'}
                         >
                             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
@@ -137,7 +137,7 @@ export function Sidebar() {
                         ) : !session ? (
                             <div className="w-full flex flex-col justify-center h-full pt-10">
                                 <div className="text-center mb-8">
-                                    <h2 className={`text-lg font-extrabold mb-2 uppercase tracking-wide ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600'}`}>Vítejte u Alpha Bridge</h2>
+                                    <h2 className={`text-lg font-extrabold mb-2 uppercase tracking-wide ${theme === 'dark' ? 'text-blue-400' : 'text-blue-600'}`}>Vítejte u Alpha Bridge</h2>
                                     <p className={`text-xs font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Přihlašte se údaji z AlphaTrade</p>
                                 </div>
                                 <form onSubmit={handleLogin} onKeyDown={(e) => {
