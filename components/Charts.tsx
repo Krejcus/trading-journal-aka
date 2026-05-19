@@ -7,6 +7,7 @@ import {
 } from 'recharts';
 import { TradeStats } from '../types';
 import { Info, Calendar, Clock, ShieldCheck, Activity } from 'lucide-react';
+import { thumbSmall } from '../services/imageUrlService';
 
 // Module-level mouse tracker shared with Dashboard — position at render time, no re-renders
 let _mx = 0, _my = 0;
@@ -77,32 +78,34 @@ const CustomEquityTooltip = (props: any) => {
           'bg-white/95 border-slate-200 text-slate-900'
       }`}>
       <p className="text-[10px] font-black uppercase tracking-widest mb-2 opacity-50">{label}</p>
-      <div className="space-y-3">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
-            <span className="text-[10px] font-black uppercase tracking-tight text-slate-400">Portfolio Size</span>
-          </div>
-          <p className={`font-black text-xl leading-none ${isPositive ? COLORS.textProfit : COLORS.textLoss}`}>
-            ${Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-          </p>
-        </div>
-        {trade && (
-          <div className="pt-2 border-t border-white/5">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <span className="text-[10px] font-black uppercase tracking-tight text-slate-400 block mb-0.5">Instrument</span>
-                <p className="font-black text-xs uppercase tracking-tighter text-white">
-                  {trade.instrument} <span className={trade.direction === 'Long' ? COLORS.textLong : COLORS.textShort}>{trade.direction}</span>
-                </p>
-              </div>
-              <div className="text-right">
-                <span className="text-[10px] font-black uppercase tracking-tight text-slate-400 block mb-0.5">Trade PnL</span>
-                <p className={`font-black text-xs ${trade.pnl >= 0 ? COLORS.textProfit : COLORS.textLoss}`}>
-                  {trade.pnl >= 0 ? '+' : '-'}${Number(Math.abs(trade.pnl || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </p>
-              </div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
+              <span className="text-[9px] font-black uppercase tracking-tight text-slate-400">Portfolio</span>
             </div>
+            <p className={`font-black text-base leading-none ${isPositive ? COLORS.textProfit : COLORS.textLoss}`}>
+              ${Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </p>
+          </div>
+          {trade && (
+            <div className="text-right">
+              <span className="text-[9px] font-black uppercase tracking-tight text-slate-400 block mb-0.5">{trade.instrument} <span className={trade.direction === 'Long' ? COLORS.textLong : COLORS.textShort}>{trade.direction}</span></span>
+              <p className={`font-black text-base leading-none ${trade.pnl >= 0 ? COLORS.textProfit : COLORS.textLoss}`}>
+                {trade.pnl >= 0 ? '+' : '-'}${Number(Math.abs(trade.pnl || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </p>
+            </div>
+          )}
+        </div>
+        {trade?.screenshot && (
+          <div className="border-t border-white/5 pt-2">
+            <img
+              src={thumbSmall(trade.screenshot)}
+              alt="screenshot"
+              className="w-full rounded-lg object-cover"
+              style={{ height: 90 }}
+            />
           </div>
         )}
         {validVal != null && (
@@ -117,9 +120,6 @@ const CustomEquityTooltip = (props: any) => {
           </div>
         )}
       </div>
-      {trade && (
-        <p className="mt-3 text-[8px] font-black text-blue-500 uppercase tracking-widest animate-pulse">Click for details</p>
-      )}
     </div>,
     document.body
   );

@@ -156,12 +156,12 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
 
   const equityCurve: EquityPoint[] = [{ date: 'Start', equity: initialBalance, validEquity: initialBalance, drawdown: 0 }];
   const calendarMap = new Map<string, { pnl: number; count: number }>();
-  const signalMap = new Map<string, { pnl: number; wins: number; count: number }>();
+  const signalMap = new Map<string, { pnl: number; wins: number; count: number; be: number }>();
   const days = ['Ne', 'Po', 'Út', 'St', 'Čt', 'Pá', 'So'];
   const dayMap = new Map<string, any>();
-  days.forEach(k => dayMap.set(k, { pnl: 0, profit: 0, loss: 0, wins: 0, count: 0 }));
+  days.forEach(k => dayMap.set(k, { pnl: 0, profit: 0, loss: 0, wins: 0, count: 0, be: 0 }));
   const hourMap = new Map<string, any>();
-  for (let i = 0; i < 24; i++) hourMap.set(i.toString(), { pnl: 0, profit: 0, loss: 0, wins: 0, count: 0 });
+  for (let i = 0; i < 24; i++) hourMap.set(i.toString(), { pnl: 0, profit: 0, loss: 0, wins: 0, count: 0, be: 0 });
 
   const monthlyMap = new Map<number, Map<number, number>>();
 
@@ -202,7 +202,8 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
         id: trade.id,
         instrument: trade.instrument || 'Unknown',
         direction: trade.direction,
-        pnl: trade.pnl
+        pnl: trade.pnl,
+        screenshot: trade.screenshot
       }
     });
 
@@ -220,12 +221,16 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
       const dayName = days[d.getDay()];
       const dm = dayMap.get(dayName);
       dm.pnl += trade.pnl; dm.count++;
-      if (trade.pnl > 0) { dm.profit += trade.pnl; dm.wins++; } else { dm.loss += trade.pnl; }
+      if (trade.pnl > 0.01) { dm.profit += trade.pnl; dm.wins++; }
+      else if (trade.pnl < -0.01) { dm.loss += trade.pnl; }
+      else { dm.be = (dm.be || 0) + 1; }
 
       const hr = d.getHours().toString();
       const hm = hourMap.get(hr);
       hm.pnl += trade.pnl; hm.count++;
-      if (trade.pnl > 0) { hm.profit += trade.pnl; hm.wins++; } else { hm.loss += trade.pnl; }
+      if (trade.pnl > 0.01) { hm.profit += trade.pnl; hm.wins++; }
+      else if (trade.pnl < -0.01) { hm.loss += trade.pnl; }
+      else { hm.be = (hm.be || 0) + 1; }
 
       if (trade.pnl > 0.01) {
         grossProfit += trade.pnl; winningTrades++; totalWinDuration += trade.durationMinutes;
@@ -242,8 +247,13 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
       } else { breakEvenTrades++; }
 
       const sig = trade.signal;
-      const sm = signalMap.get(sig) || { pnl: 0, wins: 0, count: 0 };
-      signalMap.set(sig, { pnl: sm.pnl + trade.pnl, wins: sm.wins + (trade.pnl > 0 ? 1 : 0), count: sm.count + 1 });
+      const sm = signalMap.get(sig) || { pnl: 0, wins: 0, count: 0, be: 0 };
+      signalMap.set(sig, {
+        pnl: sm.pnl + trade.pnl,
+        wins: sm.wins + (trade.pnl > 0.01 ? 1 : 0),
+        count: sm.count + 1,
+        be: (sm.be || 0) + (Math.abs(trade.pnl) <= 0.01 ? 1 : 0),
+      });
     } else {
       missedTrades++;
     }
@@ -308,7 +318,7 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
 
   return {
     initialBalance, totalPnL,
-    winRate: (winningTrades + losingTrades + breakEvenTrades) > 0 ? (winningTrades / (winningTrades + losingTrades + breakEvenTrades)) * 100 : 0,
+    winRate: (winningTrades + losingTrades) > 0 ? (winningTrades / (winningTrades + losingTrades)) * 100 : 0,
     executionRate: validSignalsCount > 0 ? (takenValidTrades / validSignalsCount) * 100 : 100,
     profitFactor: grossLoss > 0 ? grossProfit / grossLoss : 0,
     grossProfit, grossLoss,
@@ -327,7 +337,12 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
     winningDays: Array.from(calendarMap.values()).filter(v => v.pnl > 0.01).length,
     losingDays: Array.from(calendarMap.values()).filter(v => v.pnl < -0.01).length,
     breakEvenDays: Array.from(calendarMap.values()).filter(v => Math.abs(v.pnl) <= 0.01).length,
-    dayWinRate: calendarMap.size ? (Array.from(calendarMap.values()).filter(v => v.pnl > 0.01).length / calendarMap.size) * 100 : 0,
+    dayWinRate: (() => {
+      const days = Array.from(calendarMap.values());
+      const winDays = days.filter(v => v.pnl > 0.01).length;
+      const lossDays = days.filter(v => v.pnl < -0.01).length;
+      return (winDays + lossDays) > 0 ? (winDays / (winDays + lossDays)) * 100 : 0;
+    })(),
     // Fix: Correct variable names for consecutive stats
     maxConsecutiveWins: maxConsecWins, maxConsecutiveLosses: maxConsecLosses,
     avgConsecutiveWins: avgConsecWins, avgConsecutiveLosses: avgConsecLosses,
@@ -335,10 +350,13 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
     avgDurationLoss: losingTrades ? totalLossDuration / losingTrades : 0,
     currentDayStreak, maxWinningDayStreak, maxLosingDayStreak, currentTradeStreak,
     zScore: 0, sharpeRatio: 0, sortinoRatio: 0, sqn: 0, kellyCriterion: 0, profitPerHour: 0,
-    signals: Array.from(signalMap.entries()).map(([name, d]) => ({ signalName: name, count: d.count, winRate: (d.wins / d.count) * 100, totalPnL: d.pnl, avgPnL: d.pnl / d.count })),
+    signals: Array.from(signalMap.entries()).map(([name, d]) => {
+      const nonBe = d.count - (d.be || 0);
+      return { signalName: name, count: d.count, winRate: nonBe > 0 ? (d.wins / nonBe) * 100 : 0, totalPnL: d.pnl, avgPnL: d.pnl / d.count };
+    }),
     equityCurve,
-    dayStats: days.map(d => { const dm = dayMap.get(d); return { label: d, pnl: dm.pnl, profit: dm.profit, loss: dm.loss, winRate: dm.count ? (dm.wins / dm.count) * 100 : 0, trades: dm.count }; }),
-    hourStats: Array.from(hourMap.entries()).map(([h, dm]) => ({ label: `${h}:00`, pnl: dm.pnl, profit: dm.profit, loss: dm.loss, winRate: dm.count ? (dm.wins / dm.count) * 100 : 0, trades: dm.count })).filter(h => h.trades > 0),
+    dayStats: days.map(d => { const dm = dayMap.get(d); const nonBe = dm.count - (dm.be || 0); return { label: d, pnl: dm.pnl, profit: dm.profit, loss: dm.loss, winRate: nonBe > 0 ? (dm.wins / nonBe) * 100 : 0, trades: dm.count }; }),
+    hourStats: Array.from(hourMap.entries()).map(([h, dm]) => { const nonBe = dm.count - (dm.be || 0); return { label: `${h}:00`, pnl: dm.pnl, profit: dm.profit, loss: dm.loss, winRate: nonBe > 0 ? (dm.wins / nonBe) * 100 : 0, trades: dm.count }; }).filter(h => h.trades > 0),
     longStats: { count: 0, pnl: 0, wins: 0, winRate: 0 }, shortStats: { count: 0, pnl: 0, wins: 0, winRate: 0 },
     calendarData: Array.from(calendarMap.entries()).map(([date, d]) => ({ date, pnl: d.pnl, trades: d.count })).sort((a, b) => a.date.localeCompare(b.date)),
     monthlyBreakdown,

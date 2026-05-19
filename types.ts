@@ -248,6 +248,7 @@ export interface EquityPoint {
     instrument: string;
     direction: string;
     pnl: number;
+    screenshot?: string;
   };
 }
 

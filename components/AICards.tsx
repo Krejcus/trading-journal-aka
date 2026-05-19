@@ -541,7 +541,13 @@ export const MessageBubble: React.FC<{
   onOpenJournal?: (date: string) => void;
 }> = ({ msg, trades, dailyPreps, dailyReviews, isStreaming = false, onOpenTrade, onOpenJournal }) => {
   const isUser = msg.role === 'user';
-  const rawContent = msg.role === 'assistant' ? stripAllRefs(msg.content) : msg.content;
+  // Strip [CONTEXT]...[/CONTEXT] block from user messages — it's the hidden analytical context
+  // sent from "Analyze with AI" buttons. AI receives it, user shouldn't see the noise.
+  const stripContextBlock = (text: string): string =>
+    text.replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]\s*/g, '').trim();
+  const rawContent = msg.role === 'assistant'
+    ? stripAllRefs(msg.content)
+    : stripContextBlock(msg.content);
   const { done, animRef } = useTypewriter(rawContent, isStreaming);
 
   return (

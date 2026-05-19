@@ -51,8 +51,10 @@ import {
    AlertTriangle,
    Flame,
    Snowflake,
-   Timer
+   Timer,
+   Sparkles
 } from 'lucide-react';
+import { buildDayAnalysisPrompt, buildWeekAnalysisPrompt } from '../services/aiAnalysisPrompts';
 import {
    BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, PieChart, Pie, AreaChart, Area, CartesianGrid
 } from 'recharts';
@@ -69,6 +71,7 @@ interface DashboardCalendarProps {
    pnlFormat?: PnLDisplayMode;
    user: User;
    exchangeRates: ExchangeRates | null;
+   onAnalyzeWithAI?: (prompt: string) => void;
 }
 
 interface DayData {
@@ -136,7 +139,8 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
    onDayClick,
    pnlFormat,
    user,
-   exchangeRates
+   exchangeRates,
+   onAnalyzeWithAI,
 }) => {
    const isDark = theme !== 'light';
    const targetCurrency = user.currency || 'USD';
@@ -205,11 +209,11 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
             />
          </div>
          {selectedDay && createPortal(
-            <DayDeepDiveModal day={selectedDay} theme={theme} onClose={() => setSelectedDay(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} />,
+            <DayDeepDiveModal day={selectedDay} theme={theme} onClose={() => setSelectedDay(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} />,
             document.body
          )}
          {selectedWeek && createPortal(
-            <WeekDetailModal week={selectedWeek} monthName={new Date(currentData.year, currentData.month - 1, 1).toLocaleString('cs-CZ', { month: 'long' })} theme={theme} onClose={() => setSelectedWeek(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} />,
+            <WeekDetailModal week={selectedWeek} monthName={new Date(currentData.year, currentData.month - 1, 1).toLocaleString('cs-CZ', { month: 'long' })} theme={theme} onClose={() => setSelectedWeek(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} />,
             document.body
          )}
       </div>
@@ -364,9 +368,15 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
    );
 };
 
-const formatPnLCompact = (val: number, mode: PnLDisplayMode): string => {
-   if (mode === 'rr') return `${val >= 0 ? '+' : ''}${val.toFixed(1)}R`;
-   if (mode === 'percent') return `${val >= 0 ? '+' : ''}${val.toFixed(1)}%`;
+const formatPnLCompact = (val: number, mode: PnLDisplayMode, trades?: Trade[], initialBalance?: number): string => {
+   if (mode === 'rr') {
+      const rr = trades ? calculateTotalRR(trades) : 0;
+      return `${rr >= 0 ? '+' : ''}${rr.toFixed(1)}R`;
+   }
+   if (mode === 'percent') {
+      const pct = initialBalance && initialBalance > 0 ? (val / initialBalance) * 100 : 0;
+      return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+   }
    const abs = Math.abs(val);
    const sign = val >= 0 ? '+' : '-';
    if (abs >= 10000) return `${sign}$${(abs / 1000).toFixed(0)}k`;
@@ -390,7 +400,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
             <div className={`absolute top-0 w-full h-1 ${pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
             <span className="text-[8px] font-black uppercase tracking-widest opacity-60 mb-0.5">T{weekIndex}</span>
             <span className={`font-black font-mono text-[11px] md:text-sm leading-tight ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-               {formatPnLCompact(pnl, pnlFormat)}
+               {formatPnLCompact(pnl, pnlFormat, week.days.flatMap(d => d.trades), initialBalance)}
             </span>
             <div className="absolute inset-0 bg-blue-500/0 group-hover:bg-blue-500/5 transition-colors duration-200" />
          </div>
@@ -405,7 +415,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
       bgStyle = { backgroundColor: `rgba(${color}, ${intensity})` };
       borderClass = day.pnl >= 0 ? 'border-emerald-500/30' : 'border-rose-500/30';
    }
-   const pnlCompact = day.hasTrades ? formatPnLCompact(day.pnl, pnlFormat) : null;
+   const pnlCompact = day.hasTrades ? formatPnLCompact(day.pnl, pnlFormat, day.trades, initialBalance) : null;
    const textColor = intensity > 0.6 ? 'text-white' : (day.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400');
    return (
       <div onClick={() => onDayClick(day)} className={`rounded-xl md:rounded-2xl p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black shadow-none' : theme === 'dark' ? 'bg-white/5' : 'bg-white shadow-sm'}`} style={bgStyle}>
@@ -433,7 +443,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    );
 };
 
-const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any }> = ({ week, monthName, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates }) => {
+const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any, onAnalyzeWithAI?: (prompt: string) => void }> = ({ week, monthName, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates, onAnalyzeWithAI }) => {
    const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
@@ -504,7 +514,27 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{monthName} Report</p>
                      </div>
                   </div>
-                  <div className="flex items-center gap-6">
+                  <div className="flex items-center gap-4">
+                     {onAnalyzeWithAI && allWeekTrades.length > 0 && (
+                        <button
+                           onClick={() => {
+                              const daysWithTradesData = week.days.filter(d => d.hasTrades).map(d => ({
+                                 date: d.dateObj,
+                                 pnl: d.pnl,
+                                 tradeCount: d.trades.filter(t => t.executionStatus !== 'Missed').length,
+                                 wins: d.wins,
+                              }));
+                              const prompt = buildWeekAnalysisPrompt(week.weekIndex, monthName, allWeekTrades, daysWithTradesData);
+                              onAnalyzeWithAI(prompt);
+                              onClose();
+                           }}
+                           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 text-[11px] font-black uppercase tracking-wider transition-all hover:scale-105 border border-blue-500/30"
+                           title="Otevře AI Coach s analýzou tohoto týdne"
+                        >
+                           <Sparkles size={14} />
+                           Analyzovat s AI
+                        </button>
+                     )}
                      <div className="text-right">
                         <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Net Result</p>
                         <p className={`text-3xl font-black font-mono leading-none ${week.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
@@ -520,8 +550,8 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                   </div>
                </div>
 
-               <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-                  <div className={`w-full lg:w-[40%] overflow-y-auto custom-scrollbar border-r p-6 flex flex-col gap-6 ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+               <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
+                  <div className={`w-full lg:w-[40%] lg:overflow-y-auto custom-scrollbar border-r p-6 flex flex-col gap-6 ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
                      <div className="grid grid-cols-2 gap-4">
                         <div className="col-span-2 p-5 rounded-[24px] border border-blue-500/20 bg-blue-500/5 relative overflow-hidden">
                            <div className="flex justify-between items-center mb-4 relative z-10">
@@ -550,12 +580,12 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                      </div>
                   </div>
 
-                  <div className={`flex-1 flex flex-col overflow-hidden ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
+                  <div className={`lg:flex-1 flex flex-col lg:overflow-hidden ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
                      <div className={`flex p-1 mx-6 mt-6 mb-2 rounded-xl border ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
                         <button onClick={() => setActiveTab('overview')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${activeTab === 'overview' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}><LayoutGrid size={12} /> Daily Overview</button>
                         <button onClick={() => setActiveTab('trades')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${activeTab === 'trades' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}><List size={12} /> Trade Feed ({allWeekTrades.length})</button>
                      </div>
-                     <div className="flex-1 overflow-y-auto custom-scrollbar p-6 pt-2">
+                     <div className="lg:flex-1 lg:overflow-y-auto custom-scrollbar p-6 pt-2">
                         {activeTab === 'overview' ? (
                            <div className="space-y-2">
                               {week.days.map((day) => (
@@ -604,7 +634,7 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
    );
 };
 
-const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any }> = ({ day, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates }) => {
+const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any, onAnalyzeWithAI?: (prompt: string) => void }> = ({ day, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates, onAnalyzeWithAI }) => {
    const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
@@ -639,7 +669,21 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                         <div className="flex items-center gap-2">{review?.rating && <div className="flex gap-0.5">{[1, 2, 3, 4, 5].map(s => <div key={s} className={`w-1 h-1 rounded-full ${s <= review.rating ? 'bg-yellow-500' : 'bg-slate-700'}`} />)}</div>}<span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Daily Log</span></div>
                      </div>
                   </div>
-                  <div className="flex items-center gap-6">
+                  <div className="flex items-center gap-4">
+                     {onAnalyzeWithAI && hasTrades && (
+                        <button
+                           onClick={() => {
+                              const prompt = buildDayAnalysisPrompt(dateObj, trades, prep, review);
+                              onAnalyzeWithAI(prompt);
+                              onClose();
+                           }}
+                           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 text-[11px] font-black uppercase tracking-wider transition-all hover:scale-105 border border-blue-500/30"
+                           title="Otevře AI Coach s analýzou tohoto dne"
+                        >
+                           <Sparkles size={14} />
+                           Analyzovat s AI
+                        </button>
+                     )}
                      <div className="text-right">
                         <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Daily PnL</p>
                         <p className={`text-3xl font-black font-mono leading-none ${hasTrades ? (pnl >= 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-slate-500'}`}>
@@ -650,20 +694,69 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                   </div>
                </div>
 
-               <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+               <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
                   <div className={`w-full lg:w-[35%] flex flex-col border-r ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                     <div className={`grid grid-cols-3 border-b ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
-                        <div className="p-4 border-r border-white/5 text-center"><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Trades</p><p className="text-xl font-black">{realDayTrades.length}</p></div>
-                        <div className="p-4 border-r border-white/5 text-center"><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Win Rate</p><p className="text-xl font-black text-blue-500">{realDayTrades.length > 0 ? ((realDayTrades.filter(t => t.pnl > 0).length / realDayTrades.length) * 100).toFixed(0) : 0}%</p></div>
-                        <div className="p-4 text-center"><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Mood</p><p className="text-xl font-black text-purple-500 capitalize">{dominantEmotion || '-'}</p></div>
+                     <div className={`grid grid-cols-2 border-b ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
+                        <div className={`p-4 border-r text-center ${isDark ? 'border-white/5' : 'border-slate-200'}`}><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Trades</p><p className="text-xl font-black">{realDayTrades.length}</p></div>
+                        <div className="p-4 text-center"><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Win Rate</p><p className="text-xl font-black text-blue-500">{realDayTrades.length > 0 ? ((realDayTrades.filter(t => t.pnl > 0).length / realDayTrades.length) * 100).toFixed(0) : 0}%</p></div>
                      </div>
                      <div className={`flex p-1 border-b ${isDark ? 'border-white/5 bg-slate-900/50' : 'border-slate-200 bg-slate-100'}`}>
                         <button onClick={() => setActiveTab('narrative')} className={`flex-1 py-2 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${activeTab === 'narrative' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Context Feed</button>
                         <button onClick={() => setActiveTab('trades')} className={`flex-1 py-2 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${activeTab === 'trades' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Trade List ({trades.length})</button>
                      </div>
-                     <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
+                     <div className="lg:flex-1 lg:overflow-y-auto custom-scrollbar p-6 space-y-6">
                         {activeTab === 'narrative' ? (
-                           <>{prep && (<div className="space-y-3"><p className="text-[9px] font-black uppercase text-blue-500 flex items-center gap-2"><Sun size={12} /> Morning Prep</p><div className={`p-4 rounded-xl text-xs leading-relaxed italic border ${isDark ? 'bg-blue-500/5 border-blue-500/10 text-slate-300' : 'bg-white border-blue-100 text-slate-600'}`}>{prep.scenarios.bullish || prep.scenarios.bearish || "No notes."}</div></div>)}{review && (<div className="space-y-3"><p className="text-[9px] font-black uppercase text-indigo-500 flex items-center gap-2"><Moon size={12} /> Evening Audit</p><div className={`p-4 rounded-xl text-xs leading-relaxed italic border ${isDark ? 'bg-indigo-500/5 border-indigo-500/10 text-slate-300' : 'bg-white border-indigo-100 text-slate-600'}`}>{review.mainTakeaway || "No review."}</div>{review.mistakes.length > 0 && review.mistakes[0] && (<div className="flex flex-wrap gap-2 pt-2">{review.mistakes.map(m => <span key={m} className="px-2 py-1 rounded bg-rose-500/10 text-rose-500 text-[9px] font-black uppercase border border-rose-500/20">{m}</span>)}</div>)}</div>)}{!prep && !review && <div className="text-center opacity-30 mt-10"><FileText size={32} className="mx-auto mb-2" /><p className="text-[10px] uppercase font-black">No Data</p></div>}</>
+                           <>{prep && (() => {
+                              const sessions = prep.scenarios?.sessions || [];
+                              const hasContent = prep.bias || prep.scenarios?.bullish || prep.scenarios?.bearish || prep.mindsetState || (prep.goals && prep.goals.length > 0) || sessions.some(s => s.plan?.trim());
+                              // Hide overall "Neutral" bias when sessions specify their own — it's redundant noise.
+                              const hasSessionBias = sessions.some(s => s.bias && s.bias !== 'Neutral');
+                              const showOverallBias = prep.bias && !(prep.bias === 'Neutral' && hasSessionBias);
+                              return (
+                                 <div className="space-y-3">
+                                    <p className="text-[9px] font-black uppercase text-blue-500 flex items-center gap-2"><Sun size={12} /> Morning Prep</p>
+                                    <div className={`p-4 rounded-xl text-xs leading-relaxed border space-y-2 ${isDark ? 'bg-blue-500/5 border-blue-500/10 text-slate-300' : 'bg-white border-blue-100 text-slate-600'}`}>
+                                       {showOverallBias && <div><span className="font-black text-blue-500">Bias:</span> {prep.bias}</div>}
+                                       {typeof prep.confidence === 'number' && prep.confidence > 0 && <div><span className="font-black text-blue-500">Sebevědomí:</span> {prep.confidence}/100</div>}
+                                       {prep.goals && prep.goals.length > 0 && <div><span className="font-black text-blue-500">Cíle:</span> {prep.goals.join(' · ')}</div>}
+                                       {prep.mindsetState && <div className="italic">{prep.mindsetState}</div>}
+                                       {prep.scenarios?.bullish && <div><span className="font-black text-emerald-500">Bullish:</span> <span className="italic">{prep.scenarios.bullish}</span></div>}
+                                       {prep.scenarios?.bearish && <div><span className="font-black text-rose-500">Bearish:</span> <span className="italic">{prep.scenarios.bearish}</span></div>}
+                                       {sessions.filter(s => s.plan?.trim()).map(s => (
+                                          <div key={s.id} className="border-t border-blue-500/10 pt-2 mt-2 first-of-type:border-t-0 first-of-type:pt-0 first-of-type:mt-0">
+                                             <div className="font-black text-blue-500 mb-1 flex items-center gap-2">{s.label}{s.bias && <span className="text-[9px] opacity-70">({s.bias})</span>}</div>
+                                             <div className="italic">{s.plan}</div>
+                                          </div>
+                                       ))}
+                                       {!hasContent && <span className="opacity-60">No notes.</span>}
+                                    </div>
+                                 </div>
+                              );
+                           })()}{review && (() => {
+                              const breakdowns = review.sessionBreakdowns || [];
+                              const hasContent = review.mainTakeaway || review.lessons || review.rating || (review.mistakes && review.mistakes.length > 0 && review.mistakes[0]) || breakdowns.some(b => b.notes?.trim());
+                              return (
+                                 <div className="space-y-3">
+                                    <p className="text-[9px] font-black uppercase text-indigo-500 flex items-center gap-2"><Moon size={12} /> Evening Audit</p>
+                                    <div className={`p-4 rounded-xl text-xs leading-relaxed border space-y-2 ${isDark ? 'bg-indigo-500/5 border-indigo-500/10 text-slate-300' : 'bg-white border-indigo-100 text-slate-600'}`}>
+                                       {review.rating > 0 && <div><span className="font-black text-indigo-500">Hodnocení:</span> {review.rating}/5</div>}
+                                       {review.scenarioResult && <div><span className="font-black text-indigo-500">Výsledek scénáře:</span> {review.scenarioResult}</div>}
+                                       {review.mainTakeaway && <div className="italic">{review.mainTakeaway}</div>}
+                                       {review.lessons && <div><span className="font-black text-indigo-500">Lekce:</span> <span className="italic">{review.lessons}</span></div>}
+                                       {breakdowns.filter(b => b.notes?.trim()).map(b => (
+                                          <div key={b.sessionId} className="border-t border-indigo-500/10 pt-2 mt-2">
+                                             <div className="font-black text-indigo-500 mb-1">{b.sessionLabel}</div>
+                                             <div className="italic">{b.notes}</div>
+                                          </div>
+                                       ))}
+                                       {!hasContent && <span className="opacity-60">No review.</span>}
+                                    </div>
+                                    {review.mistakes.length > 0 && review.mistakes[0] && (
+                                       <div className="flex flex-wrap gap-2 pt-2">{review.mistakes.map(m => <span key={m} className="px-2 py-1 rounded bg-rose-500/10 text-rose-500 text-[9px] font-black uppercase border border-rose-500/20">{m}</span>)}</div>
+                                    )}
+                                 </div>
+                              );
+                           })()}{!prep && !review && <div className="text-center opacity-30 mt-10"><FileText size={32} className="mx-auto mb-2" /><p className="text-[10px] uppercase font-black">No Data</p></div>}</>
                         ) : (
                            <div className="space-y-2">
                               {trades.map((t, i) => (
@@ -679,7 +772,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                         )}
                      </div>
                   </div>
-                  <div className={`flex-1 relative flex flex-col ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
+                  <div className={`lg:flex-1 relative flex flex-col h-[60vh] lg:h-auto ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
                      <div className="flex-1 relative overflow-hidden flex items-center justify-center p-4 group/mainimg">{screenshots.length > 0 ? (<><img src={zoomImg || screenshots[0]} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl cursor-pointer" onClick={() => setFullscreenImg(zoomImg || screenshots[0])} /><div className="absolute top-6 right-6 opacity-0 group-hover/mainimg:opacity-100 transition-opacity"><button onClick={() => setFullscreenImg(zoomImg || screenshots[0])} className="p-3 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-colors shadow-xl"><Maximize2 size={18} /></button></div></>) : (<div className="text-center opacity-20"><ImageIcon size={64} className="mx-auto mb-4" /><p className="text-xs font-black uppercase tracking-[0.2em]">Visual Data Missing</p></div>)}</div>
                      {screenshots.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'}`}>{screenshots.map((src, i) => (<div key={i} onClick={() => setZoomImg(src)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${src === (zoomImg || screenshots[0]) ? 'ring-2 ring-blue-500' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
                   </div>

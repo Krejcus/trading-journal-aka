@@ -89,6 +89,10 @@ interface Props {
   onOpenTrade?: (trade: Trade) => void;
   onOpenJournal?: (date: string) => void;
   initialConversationId?: string;
+  /** When set on mount (and no initialConversationId), creates a new conversation and sends this prompt as the first message. */
+  initialPrompt?: string;
+  /** Called after `initialPrompt` is consumed so the parent can clear it. */
+  onInitialPromptConsumed?: () => void;
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -97,7 +101,7 @@ const AICoachPage: React.FC<Props> = ({
   trades, accounts, ironRules, playbookItems,
   dailyPreps, dailyReviews, theme,
   onOpenTrade, onOpenJournal,
-  initialConversationId,
+  initialConversationId, initialPrompt, onInitialPromptConsumed,
 }) => {
   const [conversations, setConversations] = useState<AIConversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(initialConversationId ?? null);
@@ -127,6 +131,9 @@ const AICoachPage: React.FC<Props> = ({
   // Whether the first user message has been sent (for auto-titling)
   const firstMessageSentRef = useRef(false);
 
+  // Conversation IDs we just created locally — skip the DB load effect for these to avoid race with streaming
+  const justCreatedConvIdsRef = useRef<Set<string>>(new Set());
+
   // Chunk batching — accumulate streaming chunks and flush to state every ~50ms
   // Reduces React re-renders during streaming (less frame-drop interference with RAF)
   const chunkBufferRef = useRef('');
@@ -147,6 +154,11 @@ const AICoachPage: React.FC<Props> = ({
     if (!activeConvId) {
       setMessages([]);
       firstMessageSentRef.current = false;
+      return;
+    }
+    // Skip DB load for conversations we just created locally — startWithPrompt is already populating messages
+    if (justCreatedConvIdsRef.current.has(activeConvId)) {
+      justCreatedConvIdsRef.current.delete(activeConvId);
       return;
     }
     setLoadingConv(true);
@@ -265,9 +277,10 @@ const AICoachPage: React.FC<Props> = ({
 
   // ─── Send message ──────────────────────────────────────────────────────────
 
-  const sendMessage = useCallback(async (text: string) => {
+  const sendMessage = useCallback(async (text: string, overrideConvId?: string) => {
     if (!text.trim() || isStreaming) return;
-    if (!activeConvId) return;
+    const convId = overrideConvId ?? activeConvId;
+    if (!convId) return;
 
     const isFirstMessage = !firstMessageSentRef.current;
     firstMessageSentRef.current = true;
@@ -280,16 +293,19 @@ const AICoachPage: React.FC<Props> = ({
     setIsStreaming(true);
 
     // Save user message to DB
-    await storageService.appendMessage(activeConvId, 'user', text.trim());
+    await storageService.appendMessage(convId, 'user', text.trim());
 
     // If this is the first message, auto-update conversation title
     if (isFirstMessage) {
-      const autoTitle = text.trim().slice(0, 50).replace(/\n/g, ' ');
+      // Strip hidden [CONTEXT]...[/CONTEXT] block so the title reflects the visible question, not the context.
+      const visible = text.trim().replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]\s*/g, '').trim();
+      const titleSource = visible || text.trim();
+      const autoTitle = titleSource.slice(0, 50).replace(/\n/g, ' ');
       const titleCapitalized = autoTitle.charAt(0).toUpperCase() + autoTitle.slice(1);
       const category = detectCategory(text.trim());
-      await storageService.updateConversation(activeConvId, { title: titleCapitalized, category });
+      await storageService.updateConversation(convId, { title: titleCapitalized, category });
       setConversations(prev => prev.map(c =>
-        c.id === activeConvId
+        c.id === convId
           ? { ...c, title: titleCapitalized, category, updated_at: new Date().toISOString() }
           : c,
       ));
@@ -375,12 +391,12 @@ const AICoachPage: React.FC<Props> = ({
         setIsStreaming(false);
         // Save assistant message to DB
         if (finalContent) {
-          await storageService.appendMessage(activeConvId, 'assistant', finalContent);
+          await storageService.appendMessage(convId, 'assistant', finalContent);
         }
         // Update conversation's updated_at in local state
         setConversations(prev => {
           const updated = prev.map(c =>
-            c.id === activeConvId
+            c.id === convId
               ? { ...c, updated_at: new Date().toISOString() }
               : c,
           );
@@ -406,16 +422,29 @@ const AICoachPage: React.FC<Props> = ({
     try {
       const conv = await storageService.createConversation();
       if (!conv) return;
+      // Mark BEFORE setActiveConvId so the [activeConvId] effect skips the DB load
+      justCreatedConvIdsRef.current.add(conv.id);
       setConversations(prev => [conv, ...prev]);
       setActiveConvId(conv.id);
       setMessages([]);
       firstMessageSentRef.current = false;
       setMobileView('chat');
-      setTimeout(() => sendMessage(prompt), 100);
+      // Pass conv.id explicitly — sendMessage's `activeConvId` closure is still null at this point
+      sendMessage(prompt, conv.id);
     } catch (e: any) {
       setCreateError(e?.message ?? 'Nepodařilo se vytvořit konverzaci');
     }
   }, [sendMessage]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Auto-start with externally provided prompt (e.g. from "Analyze with AI" button) ──
+  const initialPromptHandledRef = useRef(false);
+  useEffect(() => {
+    if (initialPrompt && !initialConversationId && !initialPromptHandledRef.current) {
+      initialPromptHandledRef.current = true;
+      startWithPrompt(initialPrompt);
+      onInitialPromptConsumed?.();
+    }
+  }, [initialPrompt, initialConversationId, startWithPrompt, onInitialPromptConsumed]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

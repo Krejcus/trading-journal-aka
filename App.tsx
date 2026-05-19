@@ -298,6 +298,7 @@ const App: React.FC = () => {
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
   const [aiChatTrade, setAiChatTrade] = useState<Trade | null>(null);
   const [aiActiveConvId, setAiActiveConvId] = useState<string | undefined>(undefined);
+  const [aiInitialPrompt, setAiInitialPrompt] = useState<string | undefined>(undefined);
   const [journalTargetDate, setJournalTargetDate] = useState<string | undefined>(undefined);
   const isPreferencesDirty = useRef(false);
   const [networkNotifications, setNetworkNotifications] = useState<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }> | null>(null);
@@ -1602,7 +1603,7 @@ const App: React.FC = () => {
   const [isNetworkSpectating, setIsNetworkSpectating] = useState(false);
 
   const displayTrades = useMemo(() => {
-    if (viewMode === 'individual') return trades;
+    if (viewMode === 'individual') return trades.filter(t => t.accountId === activeAccountId);
 
     const grouped = new Map<string, Trade[]>();
     const independent: Trade[] = [];
@@ -2432,6 +2433,8 @@ const App: React.FC = () => {
                 dailyReviews={dailyReviews}
                 theme={theme}
                 initialConversationId={aiActiveConvId}
+                initialPrompt={aiInitialPrompt}
+                onInitialPromptConsumed={() => setAiInitialPrompt(undefined)}
                 onOpenTrade={(trade) => setAiChatTrade(trade)}
                 onOpenJournal={(date) => {
                   setJournalTargetDate(date);
@@ -2494,6 +2497,11 @@ const App: React.FC = () => {
                       payouts={businessPayouts}
                       isMobileEditing={isMobileEditing}
                       setIsMobileEditing={setIsMobileEditing}
+                      onAnalyzeWithAI={(prompt) => {
+                        setAiActiveConvId(undefined);
+                        setAiInitialPrompt(prompt);
+                        setActivePage('ai');
+                      }}
                     />
                   )}
 

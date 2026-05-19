@@ -73,6 +73,8 @@ interface DashboardProps {
   payouts?: BusinessPayout[];
   isMobileEditing?: boolean;
   setIsMobileEditing?: (v: boolean) => void;
+  /** Open AI Coach with a pre-filled analysis prompt (e.g. for a specific day/week). */
+  onAnalyzeWithAI?: (prompt: string) => void;
 }
 
 // ... existing imports ...
@@ -1136,7 +1138,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
   allTrades = [], payouts = [],
-  isMobileEditing: isMobileEditingProp = false, setIsMobileEditing: setIsMobileEditingProp
+  isMobileEditing: isMobileEditingProp = false, setIsMobileEditing: setIsMobileEditingProp,
+  onAnalyzeWithAI,
 }) => {
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
   const isMobileEditing = isMobileEditingProp;
@@ -1412,7 +1415,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           onTradeClick={(id) => setSelectedTradeId(id)}
         />
       );
-      case 'calendar': return <div className="h-full flex flex-col"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} /></div>;
+      case 'calendar': return <div className="h-full flex flex-col"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} /></div>;
       default: return null;
     }
   };

@@ -202,7 +202,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     lessons: '',
     rating: 0,
     goalResults: [],
-    scenarioResult: 'Range',
+    scenarioResult: undefined,
     ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending', label: r.label })),
     weeklyGoalAdherence: [],
     psycho: { metrics: (psychoMetrics || []).reduce((acc, m) => ({ ...acc, [m.id]: 5 }), {}), stressors: '', gratitude: '', notes: '' }
@@ -352,6 +352,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         const isEmpty = !prepForm.scenarios.bullish && !prepForm.scenarios.bearish && !prepForm.mindsetState && !prepForm.scenarios.scenarioImages?.length && !prepForm.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !prepForm.ritualCompletions?.some(r => r.status === 'Pass');
         if (isEmpty) return;
       }
+      // Skip autosave when tab is hidden — prevents concurrent writes when multiple clients are open
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
 
       setHasUnsavedChanges(true);
       setSaveStatus('saving');
@@ -370,11 +372,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         } finally {
           setIsSaving(false);
         }
-      }, 500);
+      }, 2000);
 
       return () => clearTimeout(timer);
     }
-  }, [prepForm, onSavePrep, preps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prepForm, onSavePrep]);
 
   // Auto-save Logic for Review
   useEffect(() => {
@@ -395,6 +398,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes && !reviewForm.psycho?.stressors?.trim() && !reviewForm.psycho?.gratitude?.trim() && !reviewForm.ruleAdherence?.some(a => a.status !== 'Pending') && !reviewForm.sessionBreakdowns?.some(b => b.notes?.trim());
         if (isEmpty) return;
       }
+      // Skip autosave when tab is hidden — prevents concurrent writes when multiple clients are open
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
 
       setHasUnsavedChanges(true);
       setSaveStatus('saving');
@@ -413,11 +418,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         } finally {
           setIsSaving(false);
         }
-      }, 500);
+      }, 2000);
 
       return () => clearTimeout(timer);
     }
-  }, [reviewForm, onSaveReview, reviews]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewForm, onSaveReview]);
 
   const addQuickNote = () => {
     if (!quickNote.trim()) return;
@@ -961,7 +967,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         lessons: '',
         rating: 0,
         goalResults: initialResults,
-        scenarioResult: 'Range',
+        scenarioResult: undefined,
         ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending', label: r.label })),
         psycho: { metrics: (psychoMetrics || []).reduce((acc, m) => ({ ...acc, [m.id]: 5 }), {}), stressors: '', gratitude: '', notes: '' }
       });
