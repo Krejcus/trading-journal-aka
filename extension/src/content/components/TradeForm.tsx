@@ -400,10 +400,14 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
 
             await new Promise(resolve => setTimeout(resolve, 800));
 
-            // 2. Screenshot
+            // 2. Screenshot (with 15s timeout to prevent hang if background worker is unresponsive)
             setSubmitStatus({ text: "📸 Čekám na screenshot...", type: 'info' });
             const response: any = await new Promise((resolve, reject) => {
+                const timeoutId = setTimeout(() => {
+                    reject(new Error("Screenshot timeout — Chrome možná rate-limituje (počkej 5-10s a zkus znovu)."));
+                }, 15000);
                 chrome.runtime.sendMessage({ action: "captureVisibleTab" }, (res: any) => {
+                    clearTimeout(timeoutId);
                     if (chrome.runtime.lastError) {
                         reject(new Error("Screenshot: " + chrome.runtime.lastError.message));
                     } else {

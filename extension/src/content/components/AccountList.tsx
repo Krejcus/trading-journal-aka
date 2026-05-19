@@ -20,7 +20,13 @@ export function AccountList({ onSelectionChange }: { onSelectionChange: (selecte
     useEffect(() => {
         async function loadAccounts() {
             try {
-                const { data: { session } } = await supabase.auth.getSession();
+                // Race getSession against a 5s timeout — prevents indefinite "Načítám účty..." spinner
+                // when chrome.storage.local has a corrupted token or supabase client is stuck.
+                const sessionPromise = supabase.auth.getSession();
+                const timeoutPromise = new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('session-timeout')), 5000)
+                );
+                const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]) as any;
                 if (!session) {
                     setIsLoading(false);
                     return;
