@@ -1540,7 +1540,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               autoSize
             >
               {currentLayout.map(widget => (
-                <div key={widget.id} className="h-full">
+                <div key={widget.id} className={`h-full ${isEditing ? 'group relative' : ''}`}>
                   {isEditing && (
                     <WidgetEditOverlay
                       id={widget.id}

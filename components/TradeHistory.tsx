@@ -3,6 +3,7 @@ import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
 import { storageService } from '../services/storageService';
+import { thumbMedium, thumbLarge, fullSize } from '../services/imageUrlService';
 import {
   Trash2, TrendingUp, TrendingDown, X, Edit3, Calendar,
   Tag, DollarSign, FileText, Image as ImageIcon,
@@ -567,9 +568,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       )}
 
                       <img
-                        src={tradeScreenshot}
+                        src={thumbLarge(tradeScreenshot)}
                         onLoad={() => handleImageLoad(String(trade.id))}
                         onError={() => handleImageError(String(trade.id))}
+                        loading="lazy"
                         className={`w-full h-full object-cover transition-all duration-1000 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}
                       />
 
@@ -681,9 +683,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                                 <ImageIcon size={14} className="text-slate-600" />
                               ) : (
                                 <img
-                                  src={tableScreenshot}
+                                  src={thumbMedium(tableScreenshot)}
                                   onLoad={() => handleImageLoad(String(trade.id))}
                                   onError={() => handleImageError(String(trade.id))}
+                                  loading="lazy"
                                   className={`w-full h-full object-cover group-hover:opacity-100 transition-all duration-700 animate-in fade-in ${loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'}`}
                                 />
                               )}

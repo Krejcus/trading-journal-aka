@@ -8,6 +8,7 @@ import {
   Target, Sparkles, AlertTriangle, Lightbulb, Sun, Moon,
   Check, X, Edit3, Clock, Coffee, BarChart3
 } from 'lucide-react';
+import { thumbSmall, thumbMedium, fullSize } from '../services/imageUrlService';
 
 interface WeeklyOverviewProps {
   weekDays: string[];
@@ -608,7 +609,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                   <p className="text-[9px] font-black uppercase tracking-widest mb-2 text-cyan-500">DALŠÍ SCÉNÁŘE</p>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                     {prep.scenarios.scenarioImages.map((img, i) => (
-                      <img key={i} src={img} alt={`Scenario ${i + 1}`} className="w-full rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition-opacity" loading="lazy" onClick={() => window.open(img, '_blank')} />
+                      <img key={i} src={thumbMedium(img)} alt={`Scenario ${i + 1}`} className="w-full rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition-opacity" loading="lazy" onClick={() => window.open(fullSize(img), '_blank')} />
                     ))}
                   </div>
                 </div>
@@ -722,7 +723,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                                   <p className={`text-[11px] leading-relaxed whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{plan.plan}</p>
                                 )}
                                 {plan.image && (
-                                  <img src={plan.image} alt="Plán" className="w-full rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition-opacity" loading="lazy" onClick={() => window.open(plan.image, '_blank')} />
+                                  <img src={thumbMedium(plan.image)} alt="Plán" className="w-full rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition-opacity" loading="lazy" onClick={() => window.open(fullSize(plan.image), '_blank')} />
                                 )}
                               </div>
                             ) : (
@@ -742,7 +743,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                                   <p className={`text-[11px] leading-relaxed whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{breakdown.notes}</p>
                                 )}
                                 {breakdown.screenshot && (
-                                  <img src={breakdown.screenshot} alt="Breakdown" className="w-full rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition-opacity" loading="lazy" onClick={() => window.open(breakdown.screenshot, '_blank')} />
+                                  <img src={thumbMedium(breakdown.screenshot)} alt="Breakdown" className="w-full rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition-opacity" loading="lazy" onClick={() => window.open(fullSize(breakdown.screenshot), '_blank')} />
                                 )}
                               </div>
                             ) : (
@@ -803,9 +804,9 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                         {primaryScreen && (
                           <div
                             className="relative w-12 h-12 rounded overflow-hidden border border-white/10 shrink-0"
-                            onClick={(e) => { e.stopPropagation(); window.open(primaryScreen, '_blank'); }}
+                            onClick={(e) => { e.stopPropagation(); window.open(fullSize(primaryScreen), '_blank'); }}
                           >
-                            <img src={primaryScreen} alt="" className="w-full h-full object-cover" loading="lazy" />
+                            <img src={thumbSmall(primaryScreen)} alt="" className="w-full h-full object-cover" loading="lazy" />
                             {allScreens.length > 1 && (
                               <span className="absolute bottom-0 right-0 bg-black/80 text-white text-[8px] font-black px-1 rounded-tl">+{allScreens.length - 1}</span>
                             )}
@@ -1017,11 +1018,11 @@ const Block: React.FC<{
     )}
     {image && (
       <img
-        src={image}
+        src={thumbMedium(image)}
         alt={label}
         className="w-full max-w-md rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition-opacity"
         loading="lazy"
-        onClick={() => window.open(image, '_blank')}
+        onClick={() => window.open(fullSize(image), '_blank')}
       />
     )}
   </div>

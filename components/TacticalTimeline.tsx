@@ -35,6 +35,7 @@ import ConfirmationModal from './ConfirmationModal';
 import ImageZoomModal from './ImageZoomModal';
 import { storageService } from '../services/storageService';
 import VoiceMemoButton from './VoiceMemoButton';
+import { thumbSmall, thumbMedium, fullSize } from '../services/imageUrlService';
 
 interface WeekFocusGoal {
   text: string;
@@ -247,7 +248,7 @@ const BreakdownCard: React.FC<{
             className="aspect-video rounded-xl overflow-hidden border border-white/5 cursor-pointer"
             onClick={() => onZoomImg?.(screenshot)}
           >
-            <img src={screenshot} className="w-full h-full object-cover" />
+            <img src={thumbMedium(screenshot)} className="w-full h-full object-cover" loading="lazy" />
           </div>
           <button
             onClick={handleRemoveScreenshot}
@@ -502,51 +503,77 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
         </div>
 
         <div className={`relative z-[1] w-full ${isMini ? 'pl-7' : 'pl-16'}`}>
-          <div className={`group ${padding} ${rounded} border transition-all hover:shadow-xl hover:scale-[1.01] ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-            <div className={`flex items-center justify-between ${isMini ? 'mb-1.5' : 'mb-4'}`}>
-              <div className="flex items-center gap-1">
-                <span className={`${isMini ? 'px-1 py-0.5' : 'px-2 py-0.5'} rounded-lg text-[6px] md:text-[7px] font-black uppercase ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
-                  {trade.direction}
-                </span>
-                {!isMini && <span className="text-[10px] font-black uppercase tracking-tight text-slate-500">{trade.instrument}</span>}
-                {trade.accountCount >= 1 && (
-                  <span className="px-1.5 py-0.5 rounded-lg text-[6px] md:text-[7px] font-black uppercase bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                    Kopírováno na {trade.accountCount} {trade.accountCount === 1 ? 'účet' : (trade.accountCount >= 2 && trade.accountCount <= 4) ? 'účty' : 'účtů'}
+          <div className={`group ${isMini ? padding : 'p-3'} ${rounded} border transition-all hover:shadow-lg ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
+            {isMini ? (
+              <>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1">
+                    <span className={`px-1 py-0.5 rounded-lg text-[6px] md:text-[7px] font-black uppercase ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
+                      {trade.direction}
+                    </span>
+                  </div>
+                  <span className={`text-[10px] md:text-xs font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                    ${trade.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
-                )}
-              </div>
-              <div className="flex flex-col items-end">
-                <span className={`${isMini ? 'text-[10px] md:text-xs' : 'text-lg'} font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                  ${trade.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </span>
-                {trade.accountCount >= 1 && !isMini && (
-                  <span className="text-[8px] font-bold text-slate-500 uppercase tracking-tighter">Suma P&L</span>
-                )}
-              </div>
-            </div>
-
-            {trade.screenshot && (
-              <div
-                className={`${isMini ? 'mb-1' : 'mb-4'} aspect-video rounded-lg overflow-hidden border border-white/5 relative group/tradeimg cursor-pointer`}
-                onClick={() => setZoomImg(trade.screenshot!)}
-              >
-                <img src={trade.screenshot} className="w-full h-full object-cover transition-transform duration-700 group-hover/tradeimg:scale-110" />
-                {!isMini && (
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/tradeimg:opacity-100 flex items-center justify-center transition-all">
-                    <Maximize2 size={16} className="text-white" />
+                </div>
+                {trade.screenshot && (
+                  <div
+                    className="mb-1 aspect-video rounded-lg overflow-hidden border border-white/5 relative cursor-pointer"
+                    onClick={() => setZoomImg(fullSize(trade.screenshot)!)}
+                  >
+                    <img src={thumbSmall(trade.screenshot)} className="w-full h-full object-cover" loading="lazy" />
                   </div>
                 )}
-              </div>
-            )}
+                <p className="text-[6px] text-slate-600 font-mono mt-1 text-right">{!isPlaceholderTime ? time : ''}</p>
+              </>
+            ) : (
+              <div className="flex items-center gap-3">
+                {/* Image left — small thumbnail */}
+                {trade.screenshot && (
+                  <div
+                    className="shrink-0 h-16 sm:h-20 w-28 sm:w-36 rounded-lg overflow-hidden border border-white/5 relative group/tradeimg cursor-pointer bg-slate-50 flex items-center justify-center"
+                    onClick={() => setZoomImg(fullSize(trade.screenshot)!)}
+                  >
+                    <img src={thumbSmall(trade.screenshot)} className="h-full w-auto object-contain transition-transform duration-700 group-hover/tradeimg:scale-105" loading="lazy" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/tradeimg:opacity-100 flex items-center justify-center transition-all">
+                      <Maximize2 size={12} className="text-white" />
+                    </div>
+                  </div>
+                )}
 
-            {!isMini && (
-              <div className={`flex gap-1 flex-wrap ${altSide ? 'lg:justify-end' : ''}`}>
-                {trade.mistakes?.map((mistake: any) => (
-                  <span key={mistake} className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-500 text-[8px] font-black uppercase border border-rose-500/20">{mistake}</span>
-                ))}
+                {/* Right: badges + mistakes */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className={`px-2 py-0.5 rounded-lg text-[8px] font-black uppercase ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
+                      {trade.direction}
+                    </span>
+                    <span className="text-[11px] font-black uppercase tracking-tight text-slate-700">{trade.instrument}</span>
+                    {trade.accountCount >= 1 && (
+                      <span className="px-1.5 py-0.5 rounded-lg text-[7px] font-black uppercase bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                        ×{trade.accountCount}
+                      </span>
+                    )}
+                  </div>
+                  {trade.mistakes && trade.mistakes.length > 0 && (
+                    <div className="flex gap-1 flex-wrap mt-1.5">
+                      {trade.mistakes.map((mistake: any) => (
+                        <span key={mistake} className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 text-[7px] font-black uppercase border border-rose-500/20">{mistake}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* PnL right */}
+                <div className="shrink-0 text-right">
+                  <span className={`text-base font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                    ${trade.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </span>
+                  {trade.accountCount >= 1 && (
+                    <p className="text-[7px] font-bold text-slate-500 uppercase tracking-tighter">Suma P&L</p>
+                  )}
+                </div>
               </div>
             )}
-            {isMini && <p className="text-[6px] text-slate-600 font-mono mt-1 text-right">{!isPlaceholderTime ? time : ''}</p>}
           </div>
         </div>
       </div>
@@ -638,11 +665,11 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                           className={`relative w-full h-32 overflow-hidden flex items-center justify-center cursor-pointer ${
                             session.image ? '' : isDark ? 'bg-white/[0.02]' : 'bg-slate-50'
                           }`}
-                          onClick={(e) => { if (session.image) { e.stopPropagation(); setZoomImg(session.image); } }}
+                          onClick={(e) => { if (session.image) { e.stopPropagation(); setZoomImg(fullSize(session.image)); } }}
                         >
                           {session.image ? (
                             <>
-                              <img src={session.image} className="w-full h-full object-cover" />
+                              <img src={thumbMedium(session.image)} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 hover:bg-black/20 transition-all flex items-center justify-center">
                                 <Maximize2 size={14} className="text-white opacity-0 hover:opacity-100 transition-all" />
                               </div>
@@ -796,9 +823,9 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                         <div className={`flex-1 rounded-xl border-2 border-dashed overflow-hidden flex items-center justify-center min-h-[148px] ${session.image ? 'border-transparent' : isDark ? 'border-slate-700 bg-white/[0.02]' : 'border-slate-200 bg-slate-50'}`}>
                           {session.image ? (
                             <div className="relative w-full h-full group/pimg">
-                              <img src={session.image} className="w-full h-full object-cover" />
+                              <img src={thumbMedium(session.image)} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover/pimg:bg-black/40 transition-all flex items-center justify-center">
-                                <button onClick={() => setZoomImg(session.image!)} className="p-1.5 rounded-lg bg-black/60 text-white opacity-0 group-hover/pimg:opacity-100 transition-all"><Maximize2 size={12} /></button>
+                                <button onClick={() => setZoomImg(fullSize(session.image)!)} className="p-1.5 rounded-lg bg-black/60 text-white opacity-0 group-hover/pimg:opacity-100 transition-all"><Maximize2 size={12} /></button>
                               </div>
                             </div>
                           ) : (
@@ -867,8 +894,77 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
           </div>
         </div>
 
-        {/* ====== TRADES (flat list) ====== */}
-        {[...trades].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)).map((trade, idx) => (
+        {/* ====== TRADES — grouped in 2-col grid ====== */}
+        {!isMini && trades.length > 0 && (() => {
+          const sortedTrades = [...trades].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+          const firstTime = sortedTrades[0]?.timestamp ? new Date(sortedTrades[0].timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' }) : '';
+          const totalPnl = sortedTrades.reduce((s, t) => s + t.pnl, 0);
+          const dotColor = totalPnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500';
+          return (
+            <div className="relative flex items-center">
+              {/* Timeline dot — single one for all trades */}
+              <div className={`absolute left-10 -translate-x-1/2 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all duration-500 ${dotColor} border-black/50`}>
+                {firstTime && <div className="absolute -top-6 text-[9px] font-black uppercase text-slate-500 tracking-widest whitespace-nowrap">{firstTime}</div>}
+              </div>
+
+              <div className="relative z-[1] w-full pl-16">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                  {sortedTrades.map((trade, idx) => {
+                    const d = new Date(trade.timestamp || 0);
+                    const tTime = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+                    const isPlaceholder = tTime === '01:00' || tTime === '00:00';
+                    return (
+                      <div
+                        key={trade.id || idx}
+                        className={`group p-3 ${rounded} border transition-all hover:shadow-lg ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {trade.screenshot && (
+                            <div
+                              className="shrink-0 h-16 sm:h-20 w-24 sm:w-32 rounded-lg overflow-hidden border border-white/5 relative group/tradeimg cursor-pointer bg-slate-50 flex items-center justify-center"
+                              onClick={() => setZoomImg(fullSize(trade.screenshot)!)}
+                            >
+                              <img src={thumbSmall(trade.screenshot)} className="h-full w-auto object-contain transition-transform duration-700 group-hover/tradeimg:scale-105" loading="lazy" />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/tradeimg:opacity-100 flex items-center justify-center transition-all">
+                                <Maximize2 size={12} className="text-white" />
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {!isPlaceholder && (
+                                <span className="text-[8px] font-black font-mono text-slate-500">{tTime}</span>
+                              )}
+                              <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
+                                {trade.direction}
+                              </span>
+                              <span className="text-[10px] font-black uppercase tracking-tight text-slate-700">{trade.instrument}</span>
+                            </div>
+                            {trade.mistakes && trade.mistakes.length > 0 && (
+                              <div className="flex gap-1 flex-wrap mt-1.5">
+                                {trade.mistakes.map((mistake: any) => (
+                                  <span key={mistake} className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-500 text-[7px] font-black uppercase border border-rose-500/20">{mistake}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <span className={`text-sm font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              ${trade.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Mini mode: keep original flat list */}
+        {isMini && [...trades].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)).map((trade, idx) => (
           <React.Fragment key={trade.id || idx}>
             {renderTradeCard(trade, idx % 2 === 0)}
           </React.Fragment>
@@ -960,9 +1056,9 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                                 <p className="text-[7px] font-black uppercase text-slate-400 tracking-widest text-center">Analýza</p>
                                 <div
                                   className="w-28 h-20 rounded-lg overflow-hidden cursor-pointer border border-white/10"
-                                  onClick={(e) => { e.stopPropagation(); setZoomImg(group.prepSession!.image!); }}
+                                  onClick={(e) => { e.stopPropagation(); setZoomImg(fullSize(group.prepSession!.image!)); }}
                                 >
-                                  <img src={group.prepSession.image} className="w-full h-full object-cover" />
+                                  <img src={thumbSmall(group.prepSession.image)} className="w-full h-full object-cover" loading="lazy" />
                                 </div>
                               </div>
                             )}
@@ -1009,9 +1105,9 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                                 <p className="text-[7px] font-black uppercase text-slate-400 tracking-widest text-center">Breakdown</p>
                                 <div
                                   className="w-28 h-20 rounded-lg overflow-hidden cursor-pointer border border-white/10"
-                                  onClick={(e) => { e.stopPropagation(); setZoomImg(bd.screenshot!); }}
+                                  onClick={(e) => { e.stopPropagation(); setZoomImg(fullSize(bd.screenshot!)); }}
                                 >
-                                  <img src={bd.screenshot} className="w-full h-full object-cover" />
+                                  <img src={thumbSmall(bd.screenshot)} className="w-full h-full object-cover" loading="lazy" />
                                 </div>
                               </div>
                             )}
@@ -1061,9 +1157,9 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                           {group.prepSession?.image && (
                             <div
                               className="aspect-video rounded-xl overflow-hidden border border-white/5 mb-3 cursor-pointer relative group/prepimg"
-                              onClick={() => setZoomImg(group.prepSession.image)}
+                              onClick={() => setZoomImg(fullSize(group.prepSession.image))}
                             >
-                              <img src={group.prepSession.image} className="w-full h-full object-cover" />
+                              <img src={thumbMedium(group.prepSession.image)} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/prepimg:opacity-100 flex items-center justify-center transition-all">
                                 <Maximize2 size={14} className="text-white" />
                               </div>
