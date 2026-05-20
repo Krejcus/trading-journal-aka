@@ -1,6 +1,14 @@
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { storageService } from '../services/storageService';
+import {
+  getProfile as getCoachProfile,
+  listMemories as listCoachMemories,
+  forgetMemory as forgetCoachMemory,
+  clearAllMemory as clearAllCoachMemory,
+  type MemoryEntry as CoachMemoryEntry,
+  type CoachProfile,
+} from '../services/coachMemoryService';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Trash2, Plus, Brain, X, Target,
@@ -162,6 +170,47 @@ const Settings: React.FC<SettingsProps> = ({
   const [migrationProgress, setMigrationProgress] = useState<{ done: number; total: number } | null>(null);
   const [migrationResult, setMigrationResult] = useState<{ migrated: number; skipped: number; failed: number } | null>(null);
 
+  const [embedding, setEmbedding] = useState(false);
+  const [embedProgress, setEmbedProgress] = useState<{ done: number; total: number; label: string } | null>(null);
+  const [embedResult, setEmbedResult] = useState<{ embedded: number; skipped: number; failed: number } | null>(null);
+
+  const [coachProfile, setCoachProfile] = useState<CoachProfile>({ facts: {}, preferences: {} });
+  const [coachMemories, setCoachMemories] = useState<CoachMemoryEntry[]>([]);
+  const [memoryFilter, setMemoryFilter] = useState<'all' | 'observation' | 'episode' | 'conversation_summary'>('all');
+  const [confirmClearMemory, setConfirmClearMemory] = useState(false);
+
+  const refreshCoachMemory = useCallback(async () => {
+    const [profile, memories] = await Promise.all([getCoachProfile(), listCoachMemories(300)]);
+    setCoachProfile(profile);
+    setCoachMemories(memories);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'system') refreshCoachMemory();
+  }, [activeTab, refreshCoachMemory]);
+
+  const handleForgetMemory = useCallback(async (id: string) => {
+    const ok = await forgetCoachMemory(id);
+    if (ok) {
+      setCoachMemories(prev => prev.filter(m => m.id !== id));
+      showToast('Smazáno z paměti');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleClearAllMemory = useCallback(async () => {
+    await clearAllCoachMemory();
+    setCoachMemories([]);
+    setConfirmClearMemory(false);
+    showToast('Veškerá paměť Coache smazána');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const filteredMemories = useMemo(() => {
+    if (memoryFilter === 'all') return coachMemories;
+    return coachMemories.filter(m => m.type === memoryFilter);
+  }, [coachMemories, memoryFilter]);
+
   // Push notification diagnostics
   const [pushDiag, setPushDiag] = useState<{ isStandalone: boolean; isApple: boolean; permission: string; hasActiveSW: boolean; hasActiveSubscription: boolean; ready: boolean } | null>(null);
   useEffect(() => {
@@ -191,6 +240,23 @@ const Settings: React.FC<SettingsProps> = ({
       showToast('Migrace selhala: ' + (e?.message || 'Neznámá chyba'));
     } finally {
       setMigrating(false);
+    }
+  }, [showToast]);
+
+  const handleBackfillEmbeddings = useCallback(async () => {
+    setEmbedding(true);
+    setEmbedResult(null);
+    setEmbedProgress({ done: 0, total: 0, label: 'Inicializace...' });
+    try {
+      const result = await storageService.backfillEmbeddings((done, total, label) => {
+        setEmbedProgress({ done, total, label });
+      });
+      setEmbedResult(result);
+      showToast(`Hotovo — ${result.embedded} záznamů vyembedováno`);
+    } catch (e: any) {
+      showToast('Embedding selhal: ' + (e?.message || 'Neznámá chyba'));
+    } finally {
+      setEmbedding(false);
     }
   }, [showToast]);
 
@@ -773,6 +839,169 @@ const Settings: React.FC<SettingsProps> = ({
                     </div>
                   )}
                 </div>
+              </Card>
+
+              {/* RAG Embeddings Backfill */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Zap} title="AI Coach — Indexace dat (RAG)" subtitle="Sémantické vyhledávání v historii" color="bg-gradient-to-br from-purple-600 to-pink-600" isDark={isDark} />
+                <p className={`text-xs mb-4 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Vyembeduje všechny tvoje obchody, přípravy a audity do vektorové DB, aby AI Coach uměl vyhledávat sémanticky (podle významu, ne jen klíčových slov). Nové záznamy se embedují automaticky při uložení. Toto je jednorázová operace pro historická data.
+                </p>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={handleBackfillEmbeddings}
+                    disabled={embedding}
+                    className={`flex items-center gap-3 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all self-start ${embedding
+                      ? 'opacity-50 cursor-not-allowed bg-purple-600/20 text-purple-400 border border-purple-500/20'
+                      : 'bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/20'
+                    }`}
+                  >
+                    {embedding && (
+                      <div className="w-3 h-3 rounded-full border border-purple-300 border-t-transparent animate-spin" />
+                    )}
+                    {embedding ? 'Indexuji...' : 'Indexovat historická data'}
+                  </button>
+                  {embedding && embedProgress && embedProgress.total > 0 && (
+                    <div className="space-y-1">
+                      <div className={`text-[10px] font-bold ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                        {embedProgress.label}
+                      </div>
+                      <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-white/5' : 'bg-slate-200'}`}>
+                        <div
+                          className="h-full bg-purple-500 rounded-full transition-all duration-300"
+                          style={{ width: `${Math.round((embedProgress.done / embedProgress.total) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {embedResult && (
+                    <div className={`flex gap-4 p-3 rounded-2xl text-[10px] font-bold ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+                      <span className="text-emerald-400">✓ {embedResult.embedded} vyembedováno</span>
+                      <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>↷ {embedResult.skipped} už indexováno</span>
+                      {embedResult.failed > 0 && <span className="text-rose-400">✗ {embedResult.failed} selhalo</span>}
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              {/* Coach Memory Management */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Brain} title="Paměť AI Coache" subtitle="Hluboká dlouhodobá paměť — fakta, pozorování, epizody" color="bg-gradient-to-br from-indigo-600 to-purple-600" isDark={isDark} />
+
+                {/* Profile (facts + preferences) */}
+                <div className="space-y-4 mb-6">
+                  <div className={`p-4 rounded-2xl border ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                    <h4 className={`text-[10px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>Fakta o tobě (Layer 1)</h4>
+                    {Object.keys(coachProfile.facts).length > 0 ? (
+                      <div className="space-y-1 text-xs">
+                        {Object.entries(coachProfile.facts).map(([k, v]) => (
+                          <div key={k} className="flex gap-2">
+                            <span className={`font-bold min-w-[140px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{k}:</span>
+                            <span className={isDark ? 'text-slate-300' : 'text-slate-800'}>{Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className={`text-xs italic ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>Coach si zatím nezapamatoval žádná fakta. Bude přidávat během konverzací.</p>
+                    )}
+                  </div>
+
+                  <div className={`p-4 rounded-2xl border ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                    <h4 className={`text-[10px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>Preference komunikace (Layer 2)</h4>
+                    {Object.keys(coachProfile.preferences).length > 0 ? (
+                      <div className="space-y-1 text-xs">
+                        {Object.entries(coachProfile.preferences).map(([k, v]) => (
+                          <div key={k} className="flex gap-2">
+                            <span className={`font-bold min-w-[140px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{k}:</span>
+                            <span className={isDark ? 'text-slate-300' : 'text-slate-800'}>{Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className={`text-xs italic ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>Žádné preference. Můžeš Coachovi v chatu říct: "Vždy ukazuj v R", "Buď stručnější", atd.</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Long-term memory list */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <h4 className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>
+                      Dlouhodobá paměť ({coachMemories.length} záznamů)
+                    </h4>
+                    <div className="flex gap-1 text-[9px]">
+                      {(['all', 'observation', 'episode', 'conversation_summary'] as const).map(t => (
+                        <button
+                          key={t}
+                          onClick={() => setMemoryFilter(t)}
+                          className={`px-2.5 py-1 rounded-lg font-black uppercase tracking-wider transition-all ${memoryFilter === t
+                            ? 'bg-indigo-600 text-white'
+                            : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {t === 'all' ? 'Vše' : t === 'observation' ? 'Pozorování' : t === 'episode' ? 'Epizody' : 'Shrnutí'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {filteredMemories.length === 0 ? (
+                    <p className={`text-xs italic p-4 rounded-2xl ${isDark ? 'bg-white/5 text-slate-500' : 'bg-slate-50 text-slate-500'}`}>
+                      Žádné záznamy v této kategorii. Coach si je sám vytvoří při konverzacích a po důležitých obchodech.
+                    </p>
+                  ) : (
+                    <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                      {filteredMemories.map(m => {
+                        const typeColor = m.type === 'episode' ? 'amber' : m.type === 'conversation_summary' ? 'blue' : 'emerald';
+                        const typeLabel = m.type === 'observation' ? 'Pozorování' : m.type === 'episode' ? 'Epizoda' : 'Shrnutí';
+                        return (
+                          <div key={m.id} className={`p-3 rounded-xl border flex items-start gap-3 group ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <span className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-${typeColor}-500/10 text-${typeColor}-500 border border-${typeColor}-500/20`}>
+                                  {typeLabel}
+                                </span>
+                                {m.memory_date && (
+                                  <span className={`text-[9px] font-mono ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>{m.memory_date}</span>
+                                )}
+                                {m.importance >= 8 && (
+                                  <span className="text-[9px] font-black text-amber-500">⚡ důležité</span>
+                                )}
+                              </div>
+                              <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{m.content}</p>
+                            </div>
+                            <button
+                              onClick={() => handleForgetMemory(m.id)}
+                              className={`opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all ${isDark ? 'hover:bg-rose-500/20 text-slate-500 hover:text-rose-400' : 'hover:bg-rose-50 text-slate-400 hover:text-rose-600'}`}
+                              title="Smazat tuto vzpomínku"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {coachMemories.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-slate-700/30 flex flex-col gap-2">
+                    {!confirmClearMemory ? (
+                      <button
+                        onClick={() => setConfirmClearMemory(true)}
+                        className={`self-start text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl transition-all ${isDark ? 'text-rose-400 hover:bg-rose-500/10 border border-rose-500/20' : 'text-rose-600 hover:bg-rose-50 border border-rose-200'}`}
+                      >
+                        Vymazat veškerou paměť
+                      </button>
+                    ) : (
+                      <div className={`flex items-center gap-2 p-3 rounded-xl border ${isDark ? 'bg-rose-500/10 border-rose-500/20' : 'bg-rose-50 border-rose-200'}`}>
+                        <span className={`text-xs ${isDark ? 'text-rose-300' : 'text-rose-700'}`}>Smazat všech {coachMemories.length} záznamů? Tato akce je nevratná.</span>
+                        <button onClick={handleClearAllMemory} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-[10px] font-black uppercase">Smazat</button>
+                        <button onClick={() => setConfirmClearMemory(false)} className="px-3 py-1.5 rounded-lg bg-slate-600 text-white text-[10px] font-black uppercase">Zrušit</button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </Card>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

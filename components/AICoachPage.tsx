@@ -3,6 +3,7 @@ import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, Send, Loader2, Sparkles,
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation } from '../types';
 import { streamAIResponse, buildTraderContext, parseAllRefs, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
+import { summarizeConversation } from '../services/coachMemoryService';
 import { MessageBubble, type ExtendedMessage } from './AICards';
 import TradeDetailModal from './TradeDetailModal';
 
@@ -108,6 +109,7 @@ const AICoachPage: React.FC<Props> = ({
   const [messages, setMessages] = useState<ExtendedMessage[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>(initialConversationId ? 'chat' : 'list');
   const [loadingConv, setLoadingConv] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -133,6 +135,11 @@ const AICoachPage: React.FC<Props> = ({
 
   // Conversation IDs we just created locally — skip the DB load effect for these to avoid race with streaming
   const justCreatedConvIdsRef = useRef<Set<string>>(new Set());
+
+  // Tracking for auto-summarization on conversation switch / unmount
+  const prevConvIdRef = useRef<string | null>(null);
+  const prevMessagesRef = useRef<ExtendedMessage[]>([]);
+  const summarizedConvsRef = useRef<Set<string>>(new Set());
 
   // Chunk batching — accumulate streaming chunks and flush to state every ~50ms
   // Reduces React re-renders during streaming (less frame-drop interference with RAF)
@@ -219,6 +226,44 @@ const AICoachPage: React.FC<Props> = ({
   useEffect(() => {
     if (cardCount > 0) scrollToBottom('smooth');
   }, [cardCount, scrollToBottom]);
+
+  // ─── Auto-summarize on conversation switch / unmount ──────────────────────
+  // Keep refs of the latest active conversation + its messages so when the user
+  // navigates away, we can distill the chat into a memory entry. Idempotent —
+  // each conversation gets summarized at most once per visit.
+  useEffect(() => {
+    prevMessagesRef.current = messages;
+  }, [messages]);
+
+  const flushSummaryFor = useCallback((convId: string, msgs: ExtendedMessage[]) => {
+    if (!convId) return;
+    if (msgs.length < 4) return; // too short to be worth summarizing
+    if (summarizedConvsRef.current.has(convId)) return; // already done this session
+    summarizedConvsRef.current.add(convId);
+    // Fire-and-forget — silent on failure
+    summarizeConversation({
+      conversation_id: convId,
+      messages: msgs.map(m => ({ role: m.role, content: m.content })),
+    }).catch(() => {});
+  }, []);
+
+  // When activeConvId changes from a non-null value, summarize the previous one.
+  useEffect(() => {
+    const prev = prevConvIdRef.current;
+    if (prev && prev !== activeConvId) {
+      flushSummaryFor(prev, prevMessagesRef.current);
+    }
+    prevConvIdRef.current = activeConvId;
+  }, [activeConvId, flushSummaryFor]);
+
+  // On unmount, summarize whatever's currently active.
+  useEffect(() => {
+    return () => {
+      if (prevConvIdRef.current) {
+        flushSummaryFor(prevConvIdRef.current, prevMessagesRef.current);
+      }
+    };
+  }, [flushSummaryFor]);
 
   // ─── Create new conversation ───────────────────────────────────────────────
 
@@ -389,6 +434,7 @@ const AICoachPage: React.FC<Props> = ({
           });
         }
         setIsStreaming(false);
+        setToolStatus(null);
         // Save assistant message to DB
         if (finalContent) {
           await storageService.appendMessage(convId, 'assistant', finalContent);
@@ -410,7 +456,18 @@ const AICoachPage: React.FC<Props> = ({
       (err) => {
         console.error('[AICoachPage] stream error:', err);
         setIsStreaming(false);
+        setToolStatus(null);
         setMessages(prev => prev.slice(0, -1));
+      },
+      // options — tool-use mode
+      {
+        preps: dailyPreps,
+        reviews: dailyReviews,
+        // Sum of active account starting balances — Coach uses for $ → % conversion when user prefers %.
+        initialBalance: accounts
+          .filter(a => a.status !== 'Archived')
+          .reduce((sum, a) => sum + (a.initialBalance || 0), 0) || undefined,
+        onToolUse: (label) => setToolStatus(label),
       },
     );
   }, [messages, traderContext, trades, dailyPreps, dailyReviews, isStreaming, activeConvId]);
@@ -677,18 +734,22 @@ const AICoachPage: React.FC<Props> = ({
               </div>
             )}
 
-            {messages.map((msg, i) => (
-              <MessageBubble
-                key={i}
-                msg={msg}
-                trades={trades}
-                dailyPreps={dailyPreps}
-                dailyReviews={dailyReviews}
-                isStreaming={isStreaming && i === messages.length - 1 && msg.role === 'assistant'}
-                onOpenTrade={onOpenTrade ?? (trade => setOpenTrade(trade))}
-                onOpenJournal={onOpenJournal}
-              />
-            ))}
+            {messages.map((msg, i) => {
+              const isLastStreaming = isStreaming && i === messages.length - 1 && msg.role === 'assistant';
+              return (
+                <MessageBubble
+                  key={i}
+                  msg={msg}
+                  trades={trades}
+                  dailyPreps={dailyPreps}
+                  dailyReviews={dailyReviews}
+                  isStreaming={isLastStreaming}
+                  toolStatus={isLastStreaming ? toolStatus : null}
+                  onOpenTrade={onOpenTrade ?? (trade => setOpenTrade(trade))}
+                  onOpenJournal={onOpenJournal}
+                />
+              );
+            })}
           </>
         )}
         <div ref={messagesEndRef} />

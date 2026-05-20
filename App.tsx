@@ -1579,8 +1579,16 @@ const App: React.FC = () => {
 
   const activeAccount = useMemo(() => accounts.find(a => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNT, [accounts, activeAccountId]);
 
+  // Effective active account for the current dashboard context:
+  // if the globally-selected activeAccount is NOT in contextAccounts (e.g. you switched to Challenge mode
+  // but activeAccountId still points to a Live account), fall back to the first contextAccount.
+  const effectiveActiveAccount = useMemo(() => {
+    if (contextAccounts.some(a => a.id === activeAccountId)) return activeAccount;
+    return contextAccounts[0] || activeAccount;
+  }, [contextAccounts, activeAccount, activeAccountId]);
+
   const displayBalance = useMemo(() => {
-    if (viewMode === 'individual') return activeAccount.initialBalance || 0;
+    if (viewMode === 'individual') return effectiveActiveAccount.initialBalance || 0;
 
     // Filter out archived accounts - only use active accounts for balance calculation
     const activeContextAccounts = contextAccounts.filter(a => a.status === 'Active');
@@ -1591,7 +1599,7 @@ const App: React.FC = () => {
     // Sum initial balances of all active accounts that are in the current context
     return activeContextAccounts
       .reduce((sum, a) => sum + (a.initialBalance || 0), 0);
-  }, [contextAccounts, activeAccount, viewMode]);
+  }, [contextAccounts, effectiveActiveAccount, viewMode]);
 
   const [quickNote, setQuickNote] = useState('');
 
@@ -1603,7 +1611,7 @@ const App: React.FC = () => {
   const [isNetworkSpectating, setIsNetworkSpectating] = useState(false);
 
   const displayTrades = useMemo(() => {
-    if (viewMode === 'individual') return trades.filter(t => t.accountId === activeAccountId);
+    if (viewMode === 'individual') return trades.filter(t => t.accountId === effectiveActiveAccount.id);
 
     const grouped = new Map<string, Trade[]>();
     const independent: Trade[] = [];

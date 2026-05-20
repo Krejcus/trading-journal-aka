@@ -307,10 +307,12 @@ const BreakdownCard: React.FC<{
         <div
           onClick={() => { setIsEditing(true); isEditingRef.current = true; }}
           className={`text-sm leading-relaxed cursor-pointer hover:opacity-80 transition-opacity whitespace-pre-wrap ${
-            isDark ? 'text-slate-400' : 'text-slate-600'
+            text.trim()
+              ? (isDark ? 'text-slate-400' : 'text-slate-600')
+              : (isDark ? 'text-slate-600 italic' : 'text-slate-400 italic')
           }`}
         >
-          {text}
+          {text.trim() || 'Klikni pro přidání poznámky...'}
         </div>
       )}
     </div>

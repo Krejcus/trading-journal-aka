@@ -537,9 +537,10 @@ export const MessageBubble: React.FC<{
   dailyPreps?: DailyPrep[];
   dailyReviews?: DailyReview[];
   isStreaming?: boolean; // true jen pro poslední assistant zprávu během streamování
+  toolStatus?: string | null; // např. "🔍 Hledám 'revenge'…" během tool use
   onOpenTrade?: (trade: Trade) => void;
   onOpenJournal?: (date: string) => void;
-}> = ({ msg, trades, dailyPreps, dailyReviews, isStreaming = false, onOpenTrade, onOpenJournal }) => {
+}> = ({ msg, trades, dailyPreps, dailyReviews, isStreaming = false, toolStatus = null, onOpenTrade, onOpenJournal }) => {
   const isUser = msg.role === 'user';
   // Strip [CONTEXT]...[/CONTEXT] block from user messages — it's the hidden analytical context
   // sent from "Analyze with AI" buttons. AI receives it, user shouldn't see the noise.
@@ -564,10 +565,10 @@ export const MessageBubble: React.FC<{
             : 'bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] rounded-tl-sm'
         }`}>
           {!rawContent && isStreaming ? (
-            /* Čekáme na první chunk — spinner */
+            /* Čekáme na první chunk — spinner s tool statusem pokud agent volá nástroje */
             <span className="flex items-center gap-2 text-[var(--text-secondary)]">
               <Loader2 size={13} className="animate-spin" />
-              <span className="text-xs">Přemýšlím...</span>
+              <span className="text-xs">{toolStatus || 'Přemýšlím...'}</span>
             </span>
           ) : isUser ? (
             <span className="whitespace-pre-wrap">{rawContent}</span>
@@ -588,6 +589,14 @@ export const MessageBubble: React.FC<{
             </span>
           )}
         </div>
+
+        {/* Tool status badge — shows while agent is mid-stream invoking tools */}
+        {!isUser && isStreaming && toolStatus && rawContent && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-500 text-[10px] font-bold">
+            <Loader2 size={10} className="animate-spin" />
+            <span>{toolStatus}</span>
+          </div>
+        )}
 
         {msg.tradeCards && msg.tradeCards.length > 0 && (
           <div className="w-full space-y-2">

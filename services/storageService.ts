@@ -2,6 +2,8 @@
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate, AIConversation } from '../types';
 import { supabase } from './supabase';
 import { get, set } from 'idb-keyval';
+import { embedTrade, embedPrep, embedReview } from './embeddingService';
+import { maybeDetectEpisodes } from './coachMemoryService';
 
 // Helper to validate UUID
 const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -628,6 +630,22 @@ export const storageService = {
       drawings: d.drawings
     }));
 
+    // Fire-and-forget: queue saved trades for RAG embedding (debounced + batched)
+    results.forEach(t => embedTrade(t as Trade));
+
+    // Fire-and-forget: detect notable episodes (drawdowns / breakthroughs / outliers)
+    // from the just-saved trades — populates Coach's episodic memory.
+    maybeDetectEpisodes({
+      trades: results.map((t: any) => ({
+        id: t.id,
+        date: t.date,
+        pnl: t.pnl,
+        riskAmount: t.riskAmount,
+        instrument: t.instrument,
+        session: t.session,
+      })),
+    }).catch(() => {});
+
     // Cache merge AFTER successful DB upsert — prevents phantom data on DB failure
     try {
       const cacheKey = `alphatrade_trades_${userId}`;
@@ -1114,6 +1132,8 @@ export const storageService = {
     // Update IDB cache
     const cached = await get<DailyPrep[]>(`alphatrade_daily_preps_${userId}`) || [];
     await set(`alphatrade_daily_preps_${userId}`, [...cached.filter(p => p.date !== prep.date), prep]);
+    // Fire-and-forget embedding update for RAG (debounced inside embeddingService)
+    embedPrep(prep);
   },
 
   async saveSingleReview(review: DailyReview): Promise<void> {
@@ -1124,6 +1144,7 @@ export const storageService = {
     // Update IDB cache
     const cached = await get<DailyReview[]>(`alphatrade_daily_reviews_${userId}`) || [];
     await set(`alphatrade_daily_reviews_${userId}`, [...cached.filter(r => r.date !== review.date), review]);
+    embedReview(review);
   },
 
   async saveDailyPreps(preps: DailyPrep[]): Promise<void> {
@@ -2381,5 +2402,100 @@ export const storageService = {
     skipped = (data?.length || 0) - toMigrate.length;
     onProgress?.(toMigrate.length, toMigrate.length, 'done');
     return { migrated, skipped, failed };
+  },
+
+  /**
+   * Backfill RAG embeddings for all existing trades, preps, and reviews that don't
+   * yet have an ai_embeddings row. Calls the `embed` Edge Function in batches of 50.
+   */
+  async backfillEmbeddings(
+    onProgress?: (done: number, total: number, label: string) => void
+  ): Promise<{ embedded: number; skipped: number; failed: number }> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
+    const { buildTradeContent, buildPrepContent, buildReviewContent } = await import('./embeddingService');
+
+    // Find existing embedding keys to skip already-done items.
+    const { data: existingEmbeds } = await supabase
+      .from('ai_embeddings')
+      .select('source_type, source_id')
+      .eq('user_id', userId);
+    const existingKeys = new Set((existingEmbeds || []).map((e: any) => `${e.source_type}:${e.source_id}`));
+
+    // Fetch full content for all three sources.
+    const [tradesRes, prepsRes, reviewsRes] = await Promise.all([
+      supabase.from('trades').select('id, date, data, account_id, instrument, signal, pnl, direction, timestamp').eq('user_id', userId),
+      supabase.from('daily_preps').select('id, date, data').eq('user_id', userId),
+      supabase.from('daily_reviews').select('id, date, data').eq('user_id', userId),
+    ]);
+
+    type Item = { source_type: 'trade' | 'prep' | 'review'; source_id: string; source_date: string | null; content: string; metadata: Record<string, unknown> };
+    const items: Item[] = [];
+
+    for (const t of (tradesRes.data || []) as any[]) {
+      const key = `trade:${t.id}`;
+      if (existingKeys.has(key)) continue;
+      const trade: Trade = { ...(t.data || {}), id: t.id, accountId: t.account_id, instrument: t.instrument, signal: t.signal, pnl: t.pnl, direction: t.direction, date: t.date, timestamp: t.timestamp };
+      const { content, metadata } = buildTradeContent(trade);
+      if (!content || content.length < 20) continue;
+      items.push({ source_type: 'trade', source_id: String(t.id), source_date: t.date ? String(t.date).slice(0, 10) : null, content, metadata });
+    }
+    for (const p of (prepsRes.data || []) as any[]) {
+      const prep: DailyPrep = { ...(p.data || {}), id: p.id, date: p.date };
+      const key = `prep:${prep.id}`;
+      if (existingKeys.has(key)) continue;
+      const { content, metadata } = buildPrepContent(prep);
+      if (!content || content.length < 30) continue;
+      items.push({ source_type: 'prep', source_id: prep.id, source_date: prep.date, content, metadata });
+    }
+    for (const r of (reviewsRes.data || []) as any[]) {
+      const review: DailyReview = { ...(r.data || {}), id: r.id, date: r.date };
+      const key = `review:${review.id}`;
+      if (existingKeys.has(key)) continue;
+      const { content, metadata } = buildReviewContent(review);
+      if (!content || content.length < 30) continue;
+      items.push({ source_type: 'review', source_id: review.id, source_date: review.date, content, metadata });
+    }
+
+    const total = items.length;
+    if (total === 0) {
+      onProgress?.(0, 0, 'Nic k zaindexování');
+      return { embedded: 0, skipped: existingKeys.size, failed: 0 };
+    }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error('No active session');
+
+    const BASE = (supabase as any).supabaseUrl || (import.meta as any).env?.VITE_SUPABASE_URL;
+    const url = `${BASE}/functions/v1/embed`;
+
+    let embedded = 0;
+    let failed = 0;
+    const BATCH = 50;
+
+    for (let i = 0; i < items.length; i += BATCH) {
+      const slice = items.slice(i, i + BATCH);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: slice }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          embedded += data.embedded || 0;
+        } else {
+          failed += slice.length;
+          console.warn('[backfillEmbeddings] batch failed:', data);
+        }
+      } catch (e) {
+        failed += slice.length;
+        console.warn('[backfillEmbeddings] network error:', e);
+      }
+      onProgress?.(Math.min(i + BATCH, total), total, `${Math.min(i + BATCH, total)} / ${total}`);
+    }
+
+    return { embedded, skipped: existingKeys.size, failed };
   },
 };

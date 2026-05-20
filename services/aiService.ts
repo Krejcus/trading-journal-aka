@@ -1,4 +1,6 @@
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview } from '../types';
+import { COACH_TOOLS, executeTool, describeToolCall } from './coachTools';
+import { getProfile, recallMemory, renderProfileForPrompt } from './coachMemoryService';
 
 export interface AIMessage {
   role: 'user' | 'assistant';
@@ -294,6 +296,17 @@ export function stripAllRefs(text: string): string {
 
 // ─── Streaming chat ──────────────────────────────────────────────────────────
 
+export interface StreamOptions {
+  preps?: DailyPrep[];
+  reviews?: DailyReview[];
+  /** Sum of initialBalance across active accounts — used by Coach for $→% conversion. */
+  initialBalance?: number;
+  /** Called when the agent invokes a tool — UI can show "🔍 Searching..." status. */
+  onToolUse?: (label: string) => void;
+  /** Disable tool-use mode (fallback to old static-context behaviour). */
+  disableTools?: boolean;
+}
+
 export async function streamAIResponse(
   messages: AIMessage[],
   traderContext: string,
@@ -302,6 +315,7 @@ export async function streamAIResponse(
   onRefs: (refs: ParsedRefs) => void,
   onDone: () => void,
   onError: (err: string) => void,
+  options: StreamOptions = {},
 ): Promise<void> {
   const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
   if (!apiKey || apiKey === 'your_api_key_here') {
@@ -309,7 +323,10 @@ export async function streamAIResponse(
     return;
   }
 
-  const tradesText = formatTradesForAI(allTrades, 100);
+  // In tool-use mode the full trade dump is no longer needed in the system prompt —
+  // Coach will fetch what it needs via tools. Keep a tiny recent snapshot for context.
+  const useTools = !options.disableTools;
+  const tradesText = useTools ? formatTradesForAI(allTrades, 25) : formatTradesForAI(allTrades, 100);
 
   // ── Dnešní datum + týdenní kontext ────────────────────────────────────────
   const now = new Date();
@@ -328,6 +345,40 @@ export async function streamAIResponse(
   const lastFriday = new Date(friday); lastFriday.setDate(friday.getDate() - 7);
   const lastMondayISO = lastMonday.toLocaleDateString('en-CA');
   const lastFridayISO = lastFriday.toLocaleDateString('en-CA');
+
+  // ─── Deep memory injection ──────────────────────────────────────────────────
+  // Load static profile (facts + preferences) + auto-recall relevant long-term memory
+  // based on the latest user message. Both happen in parallel and silently degrade
+  // if Supabase is unreachable.
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+  // Strip CONTEXT blocks so we don't embed the giant prompt body sent by Day/Week analyze buttons.
+  const recallQuery = lastUserMsg.replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]\s*/g, '').trim().slice(0, 500);
+
+  let memoryBlock = '';
+  try {
+    const [profile, recalled] = await Promise.all([
+      getProfile(),
+      recallQuery ? recallMemory({ query: recallQuery, limit: 6, similarity_threshold: 0.25 }) : Promise.resolve([]),
+    ]);
+
+    const profileBlock = renderProfileForPrompt(profile, { initialBalance: options.initialBalance });
+    const recallBlock = (() => {
+      if (!recalled || recalled.length === 0) return '';
+      const lines = ['=== RELEVANTNÍ DLOUHODOBÁ PAMĚŤ (vyhledáno k aktuálnímu dotazu) ==='];
+      for (const r of recalled) {
+        const date = r.memory_date ? `[${r.memory_date}] ` : '';
+        const sim = r.similarity ? ` (sim ${r.similarity.toFixed(2)})` : '';
+        const importance = r.importance >= 8 ? ' ⚡' : '';
+        lines.push(`- ${date}[${r.type}]${importance}${sim} ${r.content}`);
+      }
+      lines.push('Využij tyto vzpomínky pokud souvisí s dotazem. Pokud zmíníš událost z paměti, buď konkrétní (cituj datum).');
+      return lines.join('\n');
+    })();
+
+    memoryBlock = [profileBlock, recallBlock].filter(Boolean).join('\n\n');
+  } catch (e) {
+    console.warn('[aiService] memory injection failed (continuing without):', e);
+  }
 
   const systemPrompt = `Jsi AI trading coach specializovaný na analýzu výkonu traderů. Komunikuješ v češtině, stručně a konkrétně.
 Máš KOMPLETNÍ přístup ke všem datům tradera — odpovídej vždy na základě jeho skutečných dat.
@@ -388,79 +439,187 @@ Příklady správného použití:
 
 Max 5 karet celkem v jedné odpovědi. Nikdy nepřepisuj obsah příprav/auditů jako prostý text — použij kartu a jen krátce okomentuj.
 
-${traderContext}
+=== PRAVIDLO CITACE (KRITICKÉ) ===
+Každé tvrzení o konkrétní události, čísle nebo datu MUSÍ být doložené citací (markerem [TRADE:id], [PREP:YYYY-MM-DD], [REVIEW:YYYY-MM-DD]).
+- "v březnu měl 8 ztrát" → musíš mít konkrétní [TRADE:id] markery
+- "tvůj nejlepší obchod byl X" → MUSÍ být [TRADE:id]
+- "lekce jsi napsal a porušil" → MUSÍ být [REVIEW:date] + [TRADE:id]
 
-=== KOMPLETNÍ SEZNAM OBCHODŮ ===
+Když citace chybí (data nemáš nebo si nejsi jistý), MUSÍŠ to říct upřímně: "Z dostupných záznamů to nevidím" nebo "to v paměti nemám".
+NIKDY netvrď konkrétní fakta bez citace. Pokud bys to udělal, ztrácíš důvěru. Halucinace je nejhorší co můžeš udělat — vždy raději přiznej že nevíš.
+
+Vzorové ✅: "Tvůj nejhorší týden byl 11.–15. března [REVIEW:2026-03-15], 8 ztrát: [TRADE:abc-123] (revenge entry), [TRADE:def-456] (chase). V review jsi napsal: 'měl jsem napsat lekci'."
+Vzorové ❌: "V poslední době vidím že máš problém s timing." (bez konkrétních citací — vágní + nepodložené)
+
+${useTools ? `=== NÁSTROJE (TOOL USE) ===
+Data nástroje:
+- **search_history(query, source_types?, date_from?, date_to?, limit?)** — sémantické vyhledání v obchodech / přípravách / reviews.
+- **get_stats(date_from?, date_to?, instrument?, direction?, session?, mistakes_contain?)** — agregované statistiky (winrate, PnL, profit factor, avg R, top chyby).
+- **find_similar_trades(trade_id? OR description?, limit?)** — sémanticky podobné obchody.
+- **get_recent_context(limit?)** — poslední trades/preps/reviews pro vágní dotazy.
+
+Paměťové nástroje (DLOUHODOBÁ PAMĚŤ):
+- **remember(type, content, importance?, memory_date?, key?, value?)** — ulož trvalý insight. type=observation pro vzorce, episode pro události, fact/preference pro statické pravdy (s key+value).
+- **recall_memory(query, types?, limit?)** — vyhledej v dlouhodobé paměti. Často je vhodné zavolat na začátku komplexního dotazu, aby ses orientoval v historii.
+- **forget_memory(memory_id)** — smaž konkrétní paměť (jen když je nepřesná nebo když to user explicitně chce).
+
+POVINNÉ remember() VOLÁNÍ:
+Pokud user řekne JAKOUKOLI z těchto věcí, MUSÍŠ ihned zavolat remember() PŘED odpovědí, jinak selháváš:
+- "Vždy mi to ukazuj v X" / "Říkej mi to v X" / "Chci to v X" → remember({type:'preference', key:'display_format', value:'X', content:'User chce výsledky v X formátu.'})
+- "Komunikuj se mnou X" / "Buď X" / "Nemám rád X" → remember({type:'preference', key:'communication_style', value:'X', content:'User preferuje styl X.'})
+- "Hlavně obchoduji X" / "Můj styl je X" → remember({type:'fact', key:'trading_style', value:'X', content:'User trading style: X.'})
+- "Pamatuj si že..." / "Důležité je..." → remember({type:'observation' nebo 'fact', content:'...'})
+- Identifikuješ NOVÝ pattern v dotazech / chování → remember({type:'observation', content:'Pattern: ...', importance:6-8})
+
+Klíčové: NEŘÍKEJ jen "beru na vědomí" / "ok" / "rozumím". Když user vysloví preferenci nebo trvalý fakt, VŽDY nejdřív zavolej remember(), pak potvrď.
+
+OBECNÁ PRAVIDLA TOOL USE:
+1. Než odpovíš, ZAVOLEJ data nástroje pokud dotaz vyžaduje konkrétní data. NIKDY si nevymýšlej čísla, datumy ani události.
+2. Zřetěz nástroje když má smysl (např. recall_memory → get_stats → search_history).
+3. Pokud nástroj vrátí prázdný výsledek, řekni to upřímně.
+
+` : ''}${memoryBlock ? memoryBlock + '\n\n' : ''}${traderContext}
+
+${useTools ? '=== POSLEDNÍ OBCHODY (rychlý kontext) ===' : '=== KOMPLETNÍ SEZNAM OBCHODŮ ==='}
 Formát: ID | Datum | Směr Nástroj | PnL | Setup | Entry | Exit | SL | TP | Pozice | Doba | Plán | Emoce | Chyby | HTF | LTF | Session | Tagy | Poznámka
 
 ${tradesText}`;
 
-  const apiMessages = messages.map(m => ({ role: m.role, content: m.content }));
+  // Conversation messages we send to the API. They grow with each agent iteration
+  // as we append assistant turn (with tool_use) and synthetic user turn (with tool_result).
+  type ApiMessage = {
+    role: 'user' | 'assistant';
+    content: string | Array<
+      | { type: 'text'; text: string }
+      | { type: 'tool_use'; id: string; name: string; input: any }
+      | { type: 'tool_result'; tool_use_id: string; content: string }
+    >;
+  };
+  const apiMessages: ApiMessage[] = messages.map(m => ({ role: m.role, content: m.content }));
+
+  let fullText = ''; // accumulated final-answer text across iterations (for ref parsing)
+  const MAX_ITER = 6;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
+    for (let iter = 0; iter < MAX_ITER; iter++) {
+      const body: any = {
         model: 'claude-sonnet-4-5',
         max_tokens: 1024,
         system: systemPrompt,
         messages: apiMessages,
         stream: true,
-      }),
-    });
+      };
+      if (useTools) body.tools = COACH_TOOLS;
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      onError(`API chyba: ${(err as any).error?.message || response.statusText}`);
-      return;
-    }
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify(body),
+      });
 
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let fullText = '';
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        onError(`API chyba: ${(err as any).error?.message || response.statusText}`);
+        return;
+      }
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      // Per-iteration tracking
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let stopReason: string | null = null;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      // Content blocks for the assistant message we're streaming.
+      // Each block is either text or tool_use; tool_use accumulates partial_json.
+      type Block =
+        | { type: 'text'; text: string }
+        | { type: 'tool_use'; id: string; name: string; jsonStr: string };
+      const blocks: Block[] = [];
 
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        if (!data || data === '[DONE]') continue;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
-        try {
-          const event = JSON.parse(data);
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (!data || data === '[DONE]') continue;
+          let event: any;
+          try { event = JSON.parse(data); } catch { continue; }
 
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-            const chunk = event.delta.text;
-            fullText += chunk;
-            onChunk(chunk);
-          }
-
-          if (event.type === 'message_stop') {
-            const refs = parseAllRefs(fullText);
-            if (refs.tradeIds.length || refs.prepDates.length || refs.reviewDates.length || refs.charts.length) {
-              onRefs(refs);
+          if (event.type === 'content_block_start') {
+            const cb = event.content_block;
+            if (cb?.type === 'text') {
+              blocks[event.index] = { type: 'text', text: '' };
+            } else if (cb?.type === 'tool_use') {
+              blocks[event.index] = { type: 'tool_use', id: cb.id, name: cb.name, jsonStr: '' };
             }
-            onDone();
+          } else if (event.type === 'content_block_delta') {
+            const blk = blocks[event.index];
+            if (!blk) continue;
+            if (event.delta?.type === 'text_delta' && blk.type === 'text') {
+              const chunk = event.delta.text || '';
+              blk.text += chunk;
+              fullText += chunk;
+              onChunk(chunk);
+            } else if (event.delta?.type === 'input_json_delta' && blk.type === 'tool_use') {
+              blk.jsonStr += event.delta.partial_json || '';
+            }
+          } else if (event.type === 'message_delta') {
+            if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
           }
-        } catch {
-          // skip malformed SSE
         }
       }
+
+      // Done streaming this iteration. Inspect stop reason.
+      if (stopReason !== 'tool_use') {
+        // Normal end_turn (or max_tokens) — parse refs from the cumulative text and finish.
+        const refs = parseAllRefs(fullText);
+        if (refs.tradeIds.length || refs.prepDates.length || refs.reviewDates.length || refs.charts.length) {
+          onRefs(refs);
+        }
+        onDone();
+        return;
+      }
+
+      // Tool use: append assistant message with the blocks, execute tools, append tool_result message.
+      const assistantContent: any[] = blocks.map(b => {
+        if (b.type === 'text') return { type: 'text', text: b.text };
+        let input: any = {};
+        try { input = b.jsonStr ? JSON.parse(b.jsonStr) : {}; } catch { input = {}; }
+        return { type: 'tool_use', id: b.id, name: b.name, input };
+      });
+      apiMessages.push({ role: 'assistant', content: assistantContent });
+
+      // Execute every tool_use block in parallel for speed.
+      const toolUseBlocks = assistantContent.filter((b: any) => b.type === 'tool_use');
+      const toolResults = await Promise.all(toolUseBlocks.map(async (b: any) => {
+        if (options.onToolUse) {
+          try { options.onToolUse(describeToolCall(b.name, b.input)); } catch {}
+        }
+        const result = await executeTool(b.name, b.input, {
+          trades: allTrades,
+          preps: options.preps || [],
+          reviews: options.reviews || [],
+        });
+        return { type: 'tool_result' as const, tool_use_id: b.id, content: JSON.stringify(result).slice(0, 12000) };
+      }));
+
+      apiMessages.push({ role: 'user', content: toolResults });
+      // Loop again — Claude will now respond with text or more tool calls.
     }
-    onDone();
+
+    // Max iterations reached without end_turn. Force end.
+    onError('Agent dosáhl maxima iterací (možná zacyklení).');
+    return;
   } catch (err: any) {
     onError(err.message || 'Neznámá chyba při volání AI');
   }
