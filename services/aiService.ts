@@ -1,6 +1,15 @@
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview } from '../types';
 import { COACH_TOOLS, executeTool, describeToolCall } from './coachTools';
 import { getProfile, recallMemory, renderProfileForPrompt } from './coachMemoryService';
+import { supabase } from './supabase';
+
+// Anthropic API access goes through the `chat` Supabase Edge Function so the
+// API key lives only in Supabase secrets — never in the client bundle.
+const EDGE_BASE = (() => {
+  const url = (supabase as any).supabaseUrl || (import.meta as any).env?.VITE_SUPABASE_URL;
+  return url || '';
+})();
+const CHAT_ENDPOINT = `${EDGE_BASE}/functions/v1/chat`;
 
 export interface AIMessage {
   role: 'user' | 'assistant';
@@ -317,11 +326,13 @@ export async function streamAIResponse(
   onError: (err: string) => void,
   options: StreamOptions = {},
 ): Promise<void> {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey === 'your_api_key_here') {
-    onError('Chybí VITE_ANTHROPIC_API_KEY v .env.local');
+  // Edge Function requires user JWT; if user isn't logged in we can't call Anthropic.
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    onError('Nejsi přihlášen — přihlas se znovu.');
     return;
   }
+  const accessToken = session.access_token;
 
   // In tool-use mode the full trade dump is no longer needed in the system prompt —
   // Coach will fetch what it needs via tools. Keep a tiny recent snapshot for context.
@@ -511,13 +522,13 @@ ${tradesText}`;
       };
       if (useTools) body.tools = COACH_TOOLS;
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      // Go through the Supabase Edge Function proxy so the Anthropic API key
+      // never leaves the server. JWT-authenticated requests only.
+      const response = await fetch(CHAT_ENDPOINT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
+          'Authorization': `Bearer ${accessToken}`,
         },
         body: JSON.stringify(body),
       });
