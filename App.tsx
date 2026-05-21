@@ -103,6 +103,7 @@ const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: num
   hourly_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   daily_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   calendar: { minW: 6, minH: 5, maxW: 12, maxH: 10 },
+  daily_insight: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
 };
 
 const SIZE_TO_W: Record<string, number> = { small: 2, medium: 4, large: 6, full: 12 };

@@ -178,6 +178,18 @@ body {
   }
 }
 
+@keyframes glow-pulse-amber {
+
+  0%,
+  100% {
+    box-shadow: 0 0 5px rgba(245, 158, 11, 0.2), 0 0 10px rgba(245, 158, 11, 0.1);
+  }
+
+  50% {
+    box-shadow: 0 0 15px rgba(245, 158, 11, 0.4), 0 0 25px rgba(245, 158, 11, 0.2);
+  }
+}
+
 .neon-glow-green {
   animation: glow-pulse-green 3s infinite;
 }
@@ -186,12 +198,20 @@ body {
   animation: glow-pulse-red 3s infinite;
 }
 
+.neon-glow-amber {
+  animation: glow-pulse-amber 3s infinite;
+}
+
 .neon-border-green {
   border-color: rgba(16, 185, 129, 0.5);
 }
 
 .neon-border-red {
   border-color: rgba(244, 63, 94, 0.5);
+}
+
+.neon-border-amber {
+  border-color: rgba(245, 158, 11, 0.5);
 }
 
 /* ===== QUANTUM PULSE LOADER ===== */

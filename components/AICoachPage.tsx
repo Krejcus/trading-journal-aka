@@ -6,6 +6,7 @@ import { storageService } from '../services/storageService';
 import { summarizeConversation } from '../services/coachMemoryService';
 import { MessageBubble, type ExtendedMessage } from './AICards';
 import TradeDetailModal from './TradeDetailModal';
+import VoiceMemoButton from './VoiceMemoButton';
 
 // ─── Quick prompts ────────────────────────────────────────────────────────────
 
@@ -769,6 +770,16 @@ const AICoachPage: React.FC<Props> = ({
               disabled={isStreaming}
               className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder-slate-500 resize-none outline-none max-h-32 scrollbar-thin disabled:opacity-50"
               style={{ lineHeight: '1.5' }}
+            />
+            <VoiceMemoButton
+              size="sm"
+              disabled={isStreaming}
+              title="Nadiktovat dotaz (Whisper, česky)"
+              onTranscribed={(text) => {
+                // Append to input so user can edit / append more before sending
+                setInput(prev => (prev.trim() ? prev.trim() + ' ' : '') + text);
+                setTimeout(() => inputRef.current?.focus(), 50);
+              }}
             />
             <button
               onClick={() => sendMessage(input)}

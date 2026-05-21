@@ -1624,7 +1624,17 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
                   <div className="mt-8 relative z-10">
                     <button
-                      onClick={() => { onSavePrep({ ...prepForm, completed: true }); prepFormDirty.current = false; setHasUnsavedChanges(false); setView('timeline'); window.scrollTo(0, 0); }}
+                      onClick={() => {
+                        // Same fix as Review: update local state FIRST so debounced autosave can't overwrite completed:true.
+                        const completed = { ...prepForm, completed: true };
+                        skipAutoSavePrep.current = true;
+                        setPrepForm(completed);
+                        onSavePrep(completed);
+                        prepFormDirty.current = false;
+                        setHasUnsavedChanges(false);
+                        setView('timeline');
+                        window.scrollTo(0, 0);
+                      }}
                       className={`w-full py-5 rounded-[24px] font-black text-[12px] uppercase tracking-[0.3em] text-white shadow-2xl active:scale-95 transition-all duration-500 bg-blue-600 hover:bg-blue-500 shadow-blue-500/30`}
                     >
                       DOKONČIT PŘÍPRAVU
@@ -1838,7 +1848,18 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
                   <div className="mt-6">
                     <button
-                      onClick={() => { onSaveReview({ ...reviewForm, completed: true }); reviewFormDirty.current = false; setHasUnsavedChanges(false); setView('timeline'); window.scrollTo(0, 0); }}
+                      onClick={() => {
+                        // Update local state FIRST so subsequent autosaves carry completed:true.
+                        // Otherwise the 2s debounced autosave fires with the stale form and overwrites DB back to undefined.
+                        const completed = { ...reviewForm, completed: true };
+                        skipAutoSaveReview.current = true; // suppress imminent autosave for this state transition
+                        setReviewForm(completed);
+                        onSaveReview(completed);
+                        reviewFormDirty.current = false;
+                        setHasUnsavedChanges(false);
+                        setView('timeline');
+                        window.scrollTo(0, 0);
+                      }}
                       className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-indigo-500/20 active:scale-95 transition-all"
                     >
                       DOKONČIT REVIEW

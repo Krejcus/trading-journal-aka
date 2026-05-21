@@ -387,12 +387,21 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           {visibleTrades.map((trade) => {
             const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
             const isMissed = status === 'Missed';
-            const isWin = trade.pnl >= 0;
+            const isBE = Math.abs(trade.pnl) <= 0.01;
+            const isWin = trade.pnl > 0.01;
 
-            let glowClass = isWin ? 'neon-border-green neon-glow-green' : 'neon-border-red neon-glow-red';
+            let glowClass = isWin
+              ? 'neon-border-green neon-glow-green'
+              : isBE
+                ? 'neon-border-amber neon-glow-amber'
+                : 'neon-border-red neon-glow-red';
             if (isMissed) glowClass = 'border-l-4 border-blue-500 opacity-60 grayscale-[0.3]';
 
-            const pnlColor = isMissed ? 'text-blue-400' : (isWin ? 'text-emerald-500' : 'text-rose-500');
+            const pnlColor = isMissed
+              ? 'text-blue-400'
+              : isBE
+                ? 'text-amber-500'
+                : (isWin ? 'text-emerald-500' : 'text-rose-500');
             const tradeHex = !isNaN(Number(trade.id))
               ? `0x${Math.abs(Number(trade.id)).toString(16).padStart(6, '0')}`
               : `0xCOMB`;
@@ -625,8 +634,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                 {visibleTrades.map((trade) => {
                   const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
                   const isMissed = status === 'Missed';
-                  const isWin = trade.pnl >= 0;
-                  const pnlColor = isMissed ? 'text-blue-400' : (isWin ? 'text-emerald-500' : 'text-rose-500');
+                  const isBE = Math.abs(trade.pnl) <= 0.01;
+                  const isWin = trade.pnl > 0.01;
+                  const pnlColor = isMissed
+                    ? 'text-blue-400'
+                    : isBE
+                      ? 'text-amber-500'
+                      : (isWin ? 'text-emerald-500' : 'text-rose-500');
                   const tableScreenshot = getScreenshot(trade);
                   const tblAllTrades = allTrades.length > 0 ? allTrades : trades;
                   let tblGroup: Trade[] = [];

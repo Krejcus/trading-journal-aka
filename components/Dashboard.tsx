@@ -45,8 +45,10 @@ import {
   ShieldCheck,
   Terminal,
   Flag,
-  Flame
+  Flame,
+  Sparkles
 } from 'lucide-react';
+import DailyInsightWidget from './DailyInsightWidget';
 
 interface DashboardProps {
   stats: TradeStats;
@@ -453,6 +455,7 @@ const MASTER_WIDGET_LIST = [
   { id: 'hourly_edge', label: 'Hodinový Výkon', category: 'Analýza', icon: <Clock size={18} />, description: 'Výkonnost podle hodin.', preview: <div className="text-blue-500 font-black text-xs">NY Open</div>, defaultRowSpan: 2 },
   { id: 'daily_edge', label: 'Denní Výkon', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Výkonnost podle dnů v týdnu.', preview: <div className="text-blue-500 font-black text-xs">Tue/Thu Focus</div>, defaultRowSpan: 2 },
   { id: 'calendar', label: 'Obchodní Kalendář', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Denní zisky v kalendáři.', preview: <div className={`${COLORS.textProfit} font-black text-xs`}>Green Month</div>, defaultRowSpan: 3 },
+  { id: 'daily_insight', label: 'Insight Dne (AI)', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Coach každý den vygeneruje jeden personalizovaný insight z tvé historie.', preview: <div className="text-purple-500 font-black text-xs">Sparkles ✨</div>, defaultRowSpan: 1 },
 ];
 
 // Module-level mouse tracker — no re-renders, just reads position at tooltip render time
@@ -1416,6 +1419,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         />
       );
       case 'calendar': return <div className="h-full flex flex-col"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} /></div>;
+      case 'daily_insight': return <DailyInsightWidget theme={theme} trades={allTrades.length > 0 ? allTrades : stats.trades} onOpenTrade={(t) => setSelectedTradeId(String(t.id))} />;
       default: return null;
     }
   };
