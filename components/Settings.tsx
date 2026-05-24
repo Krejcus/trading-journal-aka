@@ -14,7 +14,7 @@ import {
   Trash2, Plus, Brain, X, Target,
   Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck,
   ShieldAlert, Activity, Check, ChevronLeft,
-  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle
+  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus, SystemSettings } from '../types';
@@ -166,13 +166,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [toast, setToast] = useState<{ message: string, id: number } | null>(null);
 
   // Screenshot migration state
-  const [migrating, setMigrating] = useState(false);
-  const [migrationProgress, setMigrationProgress] = useState<{ done: number; total: number } | null>(null);
-  const [migrationResult, setMigrationResult] = useState<{ migrated: number; skipped: number; failed: number } | null>(null);
 
-  const [embedding, setEmbedding] = useState(false);
-  const [embedProgress, setEmbedProgress] = useState<{ done: number; total: number; label: string } | null>(null);
-  const [embedResult, setEmbedResult] = useState<{ embedded: number; skipped: number; failed: number } | null>(null);
 
   const [coachProfile, setCoachProfile] = useState<CoachProfile>({ facts: {}, preferences: {} });
   const [coachMemories, setCoachMemories] = useState<CoachMemoryEntry[]>([]);
@@ -225,40 +219,6 @@ const Settings: React.FC<SettingsProps> = ({
       setToast(prev => prev?.message === message ? null : prev);
     }, 2000);
   };
-
-  const handleMigrateScreenshots = useCallback(async () => {
-    setMigrating(true);
-    setMigrationResult(null);
-    setMigrationProgress({ done: 0, total: 0 });
-    try {
-      const result = await storageService.migrateScreenshotsToStorage((done, total) => {
-        setMigrationProgress({ done, total });
-      });
-      setMigrationResult(result);
-      showToast(`Hotovo — ${result.migrated} screenshotů přesunuto`);
-    } catch (e: any) {
-      showToast('Migrace selhala: ' + (e?.message || 'Neznámá chyba'));
-    } finally {
-      setMigrating(false);
-    }
-  }, [showToast]);
-
-  const handleBackfillEmbeddings = useCallback(async () => {
-    setEmbedding(true);
-    setEmbedResult(null);
-    setEmbedProgress({ done: 0, total: 0, label: 'Inicializace...' });
-    try {
-      const result = await storageService.backfillEmbeddings((done, total, label) => {
-        setEmbedProgress({ done, total, label });
-      });
-      setEmbedResult(result);
-      showToast(`Hotovo — ${result.embedded} záznamů vyembedováno`);
-    } catch (e: any) {
-      showToast('Embedding selhal: ' + (e?.message || 'Neznámá chyba'));
-    } finally {
-      setEmbedding(false);
-    }
-  }, [showToast]);
 
   // Weekly Focus Logic with standardized helper
   const [selectedWeek, setSelectedWeek] = useState(() => getWeekISOString(new Date()));
@@ -408,26 +368,86 @@ const Settings: React.FC<SettingsProps> = ({
               <Card isDark={isDark}>
                 <SectionHeader icon={ShieldCheck} title="Železná Pravidla" subtitle="Tvůj denní kodex disciplíny" color="bg-blue-600" isDark={isDark} />
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                  {ironRules.map(rule => (
+                  {ironRules.map(rule => {
+                    // Parse label — detekce typu (checklist 📋 / experiment ⏱ / standard rule)
+                    const label = rule.label || '';
+                    const isChecklist = label.startsWith('📋 ');
+                    const expMatch = label.match(/^⏱\s*\[([^\]]+)\]\s*(.+)$/);
+                    const isExperiment = !!expMatch;
+
+                    let title = label;
+                    let items: string[] = [];
+                    let duration = '';
+                    if (isChecklist) {
+                      const lines = label.split('\n');
+                      title = lines[0].replace(/^📋\s+/, '').trim();
+                      items = lines.slice(1)
+                        .map(l => l.replace(/^\s*▢\s*/, '').trim())
+                        .filter(Boolean);
+                    } else if (isExperiment && expMatch) {
+                      duration = expMatch[1];
+                      title = expMatch[2].trim();
+                    }
+
+                    // Visual styling per typ — checklist = purple, experiment = amber, ritual = indigo, default = blue
+                    const accentBg = isChecklist
+                      ? 'bg-purple-600 shadow-purple-600/20'
+                      : isExperiment
+                        ? 'bg-amber-500 shadow-amber-500/20'
+                        : rule.type === 'ritual'
+                          ? 'bg-indigo-600 shadow-indigo-600/20'
+                          : 'bg-blue-600 shadow-blue-600/20';
+                    const accentChip = isChecklist
+                      ? 'bg-purple-500/20 text-purple-500'
+                      : isExperiment
+                        ? 'bg-amber-500/20 text-amber-600'
+                        : rule.type === 'ritual'
+                          ? 'bg-indigo-500/20 text-indigo-400'
+                          : 'bg-blue-500/20 text-blue-400';
+                    const typeLabel = isChecklist
+                      ? 'Checklist'
+                      : isExperiment
+                        ? 'Experiment'
+                        : (rule.type === 'ritual' ? 'Ritual' : 'Hard Rule');
+                    const Icon = isChecklist ? FileText : isExperiment ? Zap : (rule.type === 'ritual' ? Zap : ShieldAlert);
+
+                    return (
                     <div key={rule.id} className={`relative p-5 rounded-[24px] border group transition-all ${isDark ? 'bg-white/5 border-white/5 hover:border-blue-500/30' : 'bg-slate-50 border-slate-100 hover:shadow-lg'}`}>
-                      <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg ${rule.type === 'ritual' ? 'bg-indigo-600 text-white shadow-indigo-600/20' : 'bg-blue-600 text-white shadow-blue-600/20'}`}>
-                          {rule.type === 'ritual' ? <Zap size={20} /> : <ShieldAlert size={20} />}
+                      <div className="flex items-start gap-4">
+                        <div className={`w-12 h-12 shrink-0 rounded-2xl flex items-center justify-center shadow-lg text-white ${accentBg}`}>
+                          <Icon size={20} />
                         </div>
-                        <div>
-                          <p className="text-xs font-black tracking-tight mb-1">{rule.label}</p>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${rule.type === 'ritual' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-blue-500/20 text-blue-400'}`}>
-                              {rule.type === 'ritual' ? 'Ritual' : 'Hard Rule'}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-black tracking-tight mb-1.5">{title}</p>
+                          {isChecklist && items.length > 0 && (
+                            <ul className="space-y-1 mb-2 pl-1">
+                              {items.map((item, i) => (
+                                <li key={i} className="text-[11px] flex items-start gap-1.5 leading-snug">
+                                  <span className="text-purple-500/60 shrink-0 font-mono mt-0.5">▢</span>
+                                  <span className={isDark ? 'text-slate-300' : 'text-slate-700'}>{item}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${accentChip}`}>
+                              {typeLabel}
                             </span>
+                            {isExperiment && (
+                              <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 flex items-center gap-1">
+                                ⏱ {duration}
+                              </span>
+                            )}
                             <div className="w-1 h-1 rounded-full bg-slate-600" />
-                            <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">Unbreakable</span>
+                            <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">
+                              {isExperiment ? 'Time-boxed' : isChecklist ? 'Pre-trade' : 'Unbreakable'}
+                            </span>
                           </div>
                         </div>
                       </div>
                       <button onClick={() => setItemToDelete({ id: rule.id, type: 'rule' })} className="absolute top-4 right-4 p-2 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button>
-                    </div>
-                  ))}
+                    </div>);
+                  })}
                 </div>
                 <div className="flex flex-col sm:flex-row gap-3 p-2 rounded-[28px] bg-blue-500/5 border border-blue-500/10">
                   <InputField value={newRuleLabel} onChange={(e: any) => setNewRuleLabel(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addIronRule()} placeholder="Nadefinuj nové pravidlo..." isDark={isDark} />
@@ -704,31 +724,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               </Card>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Seance & Alerty */}
-                <Card isDark={isDark}>
-                  <SectionHeader icon={Bell} title="Seance & Alerty" subtitle="Push notifikace do telefonu" color="bg-blue-600" isDark={isDark} />
-                  <div className="space-y-2">
-                    <Toggle
-                      active={systemSettings.sessionAlertsEnabled}
-                      onClick={() => updateSystem('sessionAlertsEnabled', !systemSettings.sessionAlertsEnabled)}
-                      label="Aktivovat Notifikace Seancí"
-                      desc="Ponechte vypnuté, pokud nechcete být rušeni."
-                      isDark={isDark}
-                    />
-                    <AnimatePresence>
-                      {systemSettings.sessionAlertsEnabled && (
-                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="space-y-2 pl-4 border-l border-blue-500/20 ml-2 py-2">
-                          <Toggle active={systemSettings.sessionStartAlert15m} onClick={() => updateSystem('sessionStartAlert15m', !systemSettings.sessionStartAlert15m)} label="15 minut před startem" isDark={isDark} />
-                          <Toggle active={systemSettings.sessionStartAlertExact} onClick={() => updateSystem('sessionStartAlertExact', !systemSettings.sessionStartAlertExact)} label="Při startu seance" isDark={isDark} />
-                          <Toggle active={systemSettings.sessionEndAlertExact} onClick={() => updateSystem('sessionEndAlertExact', !systemSettings.sessionEndAlertExact)} label="Při konci seance" isDark={isDark} />
-                          <Toggle active={systemSettings.sessionEndAlert10m} onClick={() => updateSystem('sessionEndAlert10m', !systemSettings.sessionEndAlert10m)} label="10 minut po (čas na audit)" isDark={isDark} />
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                </Card>
-
+              <div className="grid grid-cols-1 gap-6">
                 {/* Alpha Guardian */}
                 <Card isDark={isDark}>
                   <SectionHeader icon={Shield} title="Alpha Guardian" subtitle="Hlídač disciplíny a procesu" color="bg-emerald-600" isDark={isDark} />
@@ -797,92 +793,6 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                 </Card>
               </div>
-
-              {/* Screenshot Migration Card */}
-              <Card isDark={isDark}>
-                <SectionHeader icon={Shield} title="Migrace Screenshotů" subtitle="Přesun obrázků do cloudu" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
-                <p className={`text-xs mb-4 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Screenshoty obchodů uložené přímo v databázi způsobují vysoké Disk IO zatížení. Kliknutím přesunete všechny obrázky do Supabase Storage — URL jsou uloženy místo raw dat, výkon se výrazně zlepší.
-                </p>
-                <div className="flex flex-col gap-3">
-                  <button
-                    onClick={handleMigrateScreenshots}
-                    disabled={migrating}
-                    className={`flex items-center gap-3 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all self-start ${migrating
-                      ? 'opacity-50 cursor-not-allowed bg-blue-600/20 text-blue-400 border border-blue-500/20'
-                      : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20'
-                    }`}
-                  >
-                    {migrating && (
-                      <div className="w-3 h-3 rounded-full border border-blue-300 border-t-transparent animate-spin" />
-                    )}
-                    {migrating ? 'Migruji...' : 'Migrovat screenshoty do cloudu'}
-                  </button>
-                  {migrating && migrationProgress && migrationProgress.total > 0 && (
-                    <div className="space-y-1">
-                      <div className={`text-[10px] font-bold ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                        {migrationProgress.done} / {migrationProgress.total} screenshotů
-                      </div>
-                      <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-white/5' : 'bg-slate-200'}`}>
-                        <div
-                          className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                          style={{ width: `${Math.round((migrationProgress.done / migrationProgress.total) * 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {migrationResult && (
-                    <div className={`flex gap-4 p-3 rounded-2xl text-[10px] font-bold ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
-                      <span className="text-emerald-400">✓ {migrationResult.migrated} přesunuto</span>
-                      <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>↷ {migrationResult.skipped} přeskočeno</span>
-                      {migrationResult.failed > 0 && <span className="text-rose-400">✗ {migrationResult.failed} selhalo</span>}
-                    </div>
-                  )}
-                </div>
-              </Card>
-
-              {/* RAG Embeddings Backfill */}
-              <Card isDark={isDark}>
-                <SectionHeader icon={Zap} title="AI Coach — Indexace dat (RAG)" subtitle="Sémantické vyhledávání v historii" color="bg-gradient-to-br from-purple-600 to-pink-600" isDark={isDark} />
-                <p className={`text-xs mb-4 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Vyembeduje všechny tvoje obchody, přípravy a audity do vektorové DB, aby AI Coach uměl vyhledávat sémanticky (podle významu, ne jen klíčových slov). Nové záznamy se embedují automaticky při uložení. Toto je jednorázová operace pro historická data.
-                </p>
-                <div className="flex flex-col gap-3">
-                  <button
-                    onClick={handleBackfillEmbeddings}
-                    disabled={embedding}
-                    className={`flex items-center gap-3 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all self-start ${embedding
-                      ? 'opacity-50 cursor-not-allowed bg-purple-600/20 text-purple-400 border border-purple-500/20'
-                      : 'bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-600/20'
-                    }`}
-                  >
-                    {embedding && (
-                      <div className="w-3 h-3 rounded-full border border-purple-300 border-t-transparent animate-spin" />
-                    )}
-                    {embedding ? 'Indexuji...' : 'Indexovat historická data'}
-                  </button>
-                  {embedding && embedProgress && embedProgress.total > 0 && (
-                    <div className="space-y-1">
-                      <div className={`text-[10px] font-bold ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                        {embedProgress.label}
-                      </div>
-                      <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-white/5' : 'bg-slate-200'}`}>
-                        <div
-                          className="h-full bg-purple-500 rounded-full transition-all duration-300"
-                          style={{ width: `${Math.round((embedProgress.done / embedProgress.total) * 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {embedResult && (
-                    <div className={`flex gap-4 p-3 rounded-2xl text-[10px] font-bold ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
-                      <span className="text-emerald-400">✓ {embedResult.embedded} vyembedováno</span>
-                      <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>↷ {embedResult.skipped} už indexováno</span>
-                      {embedResult.failed > 0 && <span className="text-rose-400">✗ {embedResult.failed} selhalo</span>}
-                    </div>
-                  )}
-                </div>
-              </Card>
 
               {/* Coach Memory Management */}
               <Card isDark={isDark}>
@@ -1004,53 +914,6 @@ const Settings: React.FC<SettingsProps> = ({
                 )}
               </Card>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Debug / Test Mode */}
-                <Card isDark={isDark}>
-                  <SectionHeader icon={Zap} title="Debug Režim" subtitle="Testování notifikací a Guardiana" color="bg-zinc-600" isDark={isDark} />
-                  <div className="space-y-4">
-                    <Toggle
-                      active={systemSettings.testModeEnabled}
-                      onClick={() => updateSystem('testModeEnabled', !systemSettings.testModeEnabled)}
-                      label="Testovací Režim"
-                      desc="Zapne simulaci kritického stavu a pošle notifikaci každou minutu."
-                      isDark={isDark}
-                    />
-                  </div>
-                </Card>
-              </div>
-
-              {/* Push Notifications — Coming in native app */}
-              <div className={`p-8 rounded-[40px] border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'} flex flex-col items-center text-center gap-4`}>
-                <div className={`p-4 rounded-3xl ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                  <Bell size={32} className={isDark ? 'text-slate-500' : 'text-slate-400'} />
-                </div>
-                <div>
-                  <h3 className={`text-xl font-black italic tracking-tighter mb-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>PUSH NOTIFIKACE</h3>
-                  <p className={`text-[11px] font-bold uppercase tracking-widest mb-3 ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>Přichází v nativní aplikaci</p>
-                  <p className={`text-xs max-w-xs mx-auto leading-relaxed ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>
-                    Spolehlivé push notifikace budou součástí nativní iOS appky. Systém Guardian alertů je připraven — stačí propojit.
-                  </p>
-                </div>
-              </div>
-
-              {/* Diagnostic / Support */}
-              <div className={`mt-12 p-8 rounded-[40px] border ${isDark ? 'bg-zinc-900/50 border-white/5' : 'bg-slate-50 border-slate-200'} flex flex-col gap-6`}>
-                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-                  <div>
-                    <h4 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>Systémová diagnostika</h4>
-                    <p className="text-[10px] text-zinc-500 font-medium whitespace-nowrap overflow-hidden text-ellipsis">Verze: {appVersion || 'Unknown'}</p>
-                  </div>
-                  {onHardRefresh && (
-                    <button
-                      onClick={onHardRefresh}
-                      className="px-6 py-3 bg-zinc-800 hover:bg-rose-900/20 hover:text-rose-500 text-zinc-400 rounded-2xl text-[10px] font-bold uppercase tracking-widest transition-all border border-white/5"
-                    >
-                      Hard Refresh
-                    </button>
-                  )}
-                </div>
-              </div>
             </div>
           )}
         </div>

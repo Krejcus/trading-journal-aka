@@ -4,10 +4,11 @@ import remarkGfm from 'remark-gfm';
 import {
   X, ZoomIn, ChevronLeft, ChevronRight, TrendingUp, TrendingDown,
   Calendar, ExternalLink, Moon, Sun, CheckCircle2, XCircle, Target,
-  Brain, Star, Loader2, Sparkles,
+  Brain, Star, Loader2, Sparkles, Shield, FlaskConical, ListChecks, Flag, Check,
+  ChevronDown, ChevronUp, BarChart3, BookOpen, FileText,
 } from 'lucide-react';
 import type { Trade, DailyPrep, DailyReview } from '../types';
-import { stripAllRefs, type AIMessage, type ChartSpec } from '../services/aiService';
+import { stripAllRefs, type AIMessage, type ChartSpec, type SuggestedAction } from '../services/aiService';
 import { DynamicChart } from './AICharts';
 
 // ─── Extended message type ────────────────────────────────────────────────────
@@ -17,6 +18,11 @@ export type ExtendedMessage = AIMessage & {
   prepCards?: DailyPrep[];
   reviewCards?: DailyReview[];
   chartSpecs?: ChartSpec[];
+  followups?: string[];
+  /** Akční návrhy z Coache — Iron Rules, experimenty, cíle */
+  actions?: SuggestedAction[];
+  /** ID akcí které user už aplikoval — slouží jako vizuální indikátor */
+  appliedActionIds?: number[];
 };
 
 // ─── Lightbox ─────────────────────────────────────────────────────────────────
@@ -436,8 +442,7 @@ const CHARS_PER_SEC = 75; // znaků za sekundu — klidné, čitelné tempo
 function useTypewriter(fullContent: string, active: boolean) {
   const isPreloaded = !active && fullContent !== '';
   const [done, setDone] = useState(isPreloaded);
-
-  const animRef = useRef<HTMLSpanElement>(null);
+  const [displayText, setDisplayText] = useState(isPreloaded ? fullContent : '');
 
   const r = useRef({
     queue: '',
@@ -455,7 +460,7 @@ function useTypewriter(fullContent: string, active: boolean) {
     if (fullContent === '') {
       r.current = { ...r.current, queue: '', text: '', done: false, startTime: 0, charsShown: 0 };
       setDone(false);
-      if (animRef.current) animRef.current.textContent = '';
+      setDisplayText('');
       return;
     }
     if (r.current.done) return;
@@ -501,7 +506,8 @@ function useTypewriter(fullContent: string, active: boolean) {
           const n = Math.min(toReveal, r.current.queue.length);
           r.current.text += r.current.queue.slice(0, n);
           r.current.queue = r.current.queue.slice(n);
-          if (animRef.current) animRef.current.textContent = r.current.text;
+          // Aktualizujeme React state → ReactMarkdown renderuje průběžně
+          setDisplayText(r.current.text);
         }
       }
 
@@ -512,7 +518,7 @@ function useTypewriter(fullContent: string, active: boolean) {
     return () => cancelAnimationFrame(r.current.raf);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { done, animRef };
+  return { done, displayText };
 }
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
@@ -531,6 +537,188 @@ const mdComponents = {
 
 // ─── Message bubble ───────────────────────────────────────────────────────────
 
+// ─── Action panel ─────────────────────────────────────────────────────────────
+// Renderuje SuggestedAction[] jako klikatelné karty pod zprávou.
+// Klik → onApplyAction(action, index) → App pohltí (přidá Iron Rule / cíl / atd.)
+// Po aplikaci se karta vizuálně označí jako "applied".
+
+const ActionIcon: React.FC<{ type: SuggestedAction['type']; size?: number }> = ({ type, size = 14 }) => {
+  switch (type) {
+    case 'rule': return <Shield size={size} strokeWidth={2.5} />;
+    case 'experiment': return <FlaskConical size={size} strokeWidth={2.5} />;
+    case 'goal': return <Flag size={size} strokeWidth={2.5} />;
+    case 'checklist': return <ListChecks size={size} strokeWidth={2.5} />;
+  }
+};
+
+const ActionTypeLabel: Record<SuggestedAction['type'], string> = {
+  rule: 'Iron Rule',
+  experiment: 'Experiment',
+  goal: 'Cíl',
+  checklist: 'Checklist',
+};
+
+/** Vysvětlí kde se akce uloží — zobrazí se jako tooltip / inline hint pod tlačítkem. */
+const ActionDestinationHint: Record<SuggestedAction['type'], string> = {
+  rule: 'Uloží se do Settings → Iron Rules',
+  experiment: 'Time-boxed pravidlo v Settings → Iron Rules',
+  goal: 'Uloží se do Goals',
+  checklist: 'Uloží se jako Iron Rule s odrážkami v Settings → Pravidla',
+};
+
+export const ActionPanel: React.FC<{
+  actions: SuggestedAction[];
+  appliedIds: number[];
+  /** Sada labelů již existujících Iron Rules a Goals — pokud action.label matchuje,
+   *  považujeme akci za "applied" i napříč reloady/přepnutími konverzace. */
+  existingLabels?: Set<string>;
+  onApply: (action: SuggestedAction, index: number) => void;
+}> = ({ actions, appliedIds, existingLabels, onApply }) => {
+  if (!actions || actions.length === 0) return null;
+
+  /** Vrátí pravdivý label co by se uložil do Iron Rules / Goals, podle typu akce.
+   *  Musí být v sync s logikou v App.tsx onApplyAction handler. */
+  const persistedLabel = (action: SuggestedAction): string => {
+    if (action.type === 'experiment' && action.duration) return `⏱ [${action.duration}] ${action.label}`;
+    if (action.type === 'checklist') return `📋 ${action.label}`;
+    return action.label;
+  };
+
+  return (
+    <div className="w-full mt-2 space-y-1.5">
+      <div className="flex items-center gap-1.5 px-1 mb-1">
+        <Target size={11} className="text-blue-500" />
+        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)]">
+          Doporučené akce
+        </span>
+      </div>
+      {actions.map((action, i) => {
+        // Applied pokud (a) right-now v session kliknutý, NEBO (b) label už existuje v Iron Rules/Goals.
+        // (b) přežije reload — pravidlo zůstává v Supabase, načte se zpět.
+        // U checklistu porovnáváme jen prefix (text může mít multi-line items).
+        const label = persistedLabel(action);
+        const persistedMatch = existingLabels
+          ? (action.type === 'checklist'
+              ? Array.from(existingLabels).some(l => l.startsWith(label))
+              : existingLabels.has(label))
+          : false;
+        const applied = appliedIds.includes(i) || persistedMatch;
+        const sev = action.severity || 'standard';
+        const severityClasses = sev === 'critical'
+          ? 'border-rose-500/30 bg-rose-500/[0.05]'
+          : sev === 'optional'
+            ? 'border-slate-500/20 bg-slate-500/[0.03]'
+            : 'border-blue-500/25 bg-blue-500/[0.04]';
+        const btnClasses = applied
+          ? 'bg-emerald-500 text-white shadow-emerald-500/30 cursor-default'
+          : sev === 'critical'
+            ? 'bg-rose-500 hover:bg-rose-600 text-white shadow-rose-500/30'
+            : sev === 'optional'
+              ? 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+              : 'bg-blue-500 hover:bg-blue-600 text-white shadow-blue-500/30';
+        return (
+          <div
+            key={i}
+            className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${severityClasses}`}
+          >
+            <div className={`p-2 rounded-lg shrink-0 ${
+              sev === 'critical' ? 'bg-rose-500/15 text-rose-500'
+              : sev === 'optional' ? 'bg-slate-500/15 text-slate-500'
+              : 'bg-blue-500/15 text-blue-500'
+            }`}>
+              <ActionIcon type={action.type} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                  {ActionTypeLabel[action.type]}
+                </span>
+                {action.duration && (
+                  <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 border border-amber-500/20">
+                    {action.duration}
+                  </span>
+                )}
+              </div>
+              <p className="text-[12px] font-bold text-[var(--text-primary)] leading-snug">
+                {action.label}
+              </p>
+              {action.items && action.items.length > 0 && (
+                <ul className="mt-2 space-y-0.5">
+                  {action.items.map((item, k) => (
+                    <li key={k} className="text-[10px] text-[var(--text-secondary)] flex items-start gap-1.5">
+                      <span className="text-blue-500 shrink-0">▢</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button
+              onClick={() => !applied && onApply(action, i)}
+              disabled={applied}
+              title={applied ? 'Akce již aplikována' : ActionDestinationHint[action.type]}
+              className={`shrink-0 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all shadow-md flex items-center gap-1.5 ${btnClasses}`}
+            >
+              {applied ? (
+                <>
+                  <Check size={10} strokeWidth={3} />
+                  Přidáno
+                </>
+              ) : (
+                <>+ Přidat</>
+              )}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+// ─── Collapsible card section ─────────────────────────────────────────────────
+// Když je víc než PRAH karet, sbalí je do collapsable bloku s ikonou a počtem.
+// Méně než PRAH → renderuje karty inline (žádný zbytečný UI overhead).
+
+const COLLAPSE_THRESHOLD = 3;
+
+const CollapsibleCardSection: React.FC<{
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+  children: React.ReactNode;
+}> = ({ icon, label, count, children }) => {
+  // Default sbalené pokud je víc karet než práh
+  const [expanded, setExpanded] = useState(count <= COLLAPSE_THRESHOLD);
+
+  if (count <= COLLAPSE_THRESHOLD) {
+    // Pod práh — renderuj inline bez collapsable wrapperu
+    return <div className="w-full space-y-2">{children}</div>;
+  }
+
+  return (
+    <div className="w-full">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border transition-all ${
+          expanded
+            ? 'bg-blue-500/[0.05] border-blue-500/20 text-[var(--text-primary)] mb-2'
+            : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-blue-500/[0.05] hover:border-blue-500/15'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          {icon}
+          <span className="text-[11px] font-black uppercase tracking-widest">{label}</span>
+          <span className="text-[9px] font-mono font-black px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-500">
+            {count}
+          </span>
+        </div>
+        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {expanded && <div className="space-y-2">{children}</div>}
+    </div>
+  );
+};
+
 export const MessageBubble: React.FC<{
   msg: ExtendedMessage;
   trades?: Trade[];
@@ -540,7 +728,15 @@ export const MessageBubble: React.FC<{
   toolStatus?: string | null; // např. "🔍 Hledám 'revenge'…" během tool use
   onOpenTrade?: (trade: Trade) => void;
   onOpenJournal?: (date: string) => void;
-}> = ({ msg, trades, dailyPreps, dailyReviews, isStreaming = false, toolStatus = null, onOpenTrade, onOpenJournal }) => {
+  onFollowup?: (text: string) => void;
+  /** Klik na action card — app aplikuje akci (přidá rule/cíl) */
+  onApplyAction?: (action: SuggestedAction, messageIndex: number, actionIndex: number) => void;
+  /** Index této zprávy v rodičovském messages[] — kvůli appliedActionIds keying */
+  messageIndex?: number;
+  /** Labely již existujících Iron Rules + Goals (kvůli derivovanému "applied" stavu).
+   *  Předává AICoachPage z props. */
+  existingActionLabels?: Set<string>;
+}> = ({ msg, trades, dailyPreps, dailyReviews, isStreaming = false, toolStatus = null, onOpenTrade, onOpenJournal, onFollowup, onApplyAction, messageIndex, existingActionLabels }) => {
   const isUser = msg.role === 'user';
   // Strip [CONTEXT]...[/CONTEXT] block from user messages — it's the hidden analytical context
   // sent from "Analyze with AI" buttons. AI receives it, user shouldn't see the noise.
@@ -549,7 +745,7 @@ export const MessageBubble: React.FC<{
   const rawContent = msg.role === 'assistant'
     ? stripAllRefs(msg.content)
     : stripContextBlock(msg.content);
-  const { done, animRef } = useTypewriter(rawContent, isStreaming);
+  const { done, displayText } = useTypewriter(rawContent, isStreaming);
 
   return (
     <div className={`flex gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -572,21 +768,11 @@ export const MessageBubble: React.FC<{
             </span>
           ) : isUser ? (
             <span className="whitespace-pre-wrap">{rawContent}</span>
-          ) : done ? (
-            /* Animace skončila — jednou spustíme ReactMarkdown */
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-              {rawContent}
-            </ReactMarkdown>
           ) : (
-            /* Animace běží — přímé DOM zápisy, žádný re-render */
-            <span className="whitespace-pre-wrap leading-relaxed">
-              <span ref={animRef} />
-              {/* Blikající kurzor */}
-              <span
-                className="inline-block w-[2px] h-[0.85em] bg-blue-400 ml-[2px] align-text-bottom opacity-100"
-                style={{ animation: 'blink 1s step-end infinite' }}
-              />
-            </span>
+            /* Markdown rendering — jak při streamování, tak po dokončení */
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+              {done ? rawContent : displayText + '▌'}
+            </ReactMarkdown>
           )}
         </div>
 
@@ -599,33 +785,74 @@ export const MessageBubble: React.FC<{
         )}
 
         {msg.tradeCards && msg.tradeCards.length > 0 && (
-          <div className="w-full space-y-2">
+          <CollapsibleCardSection
+            icon={<BarChart3 size={13} className="text-blue-500" />}
+            label="Použité obchody"
+            count={msg.tradeCards.length}
+          >
             {msg.tradeCards.map(trade => (
               <TradeMiniCard key={trade.id} trade={trade} onClick={() => onOpenTrade?.(trade)} />
             ))}
-          </div>
+          </CollapsibleCardSection>
         )}
 
         {msg.prepCards && msg.prepCards.length > 0 && (
-          <div className="w-full space-y-2">
+          <CollapsibleCardSection
+            icon={<BookOpen size={13} className="text-blue-500" />}
+            label="Použité přípravy"
+            count={msg.prepCards.length}
+          >
             {msg.prepCards.map(prep => (
               <PrepMiniCard key={prep.id} prep={prep} onOpen={() => onOpenJournal?.(prep.date)} />
             ))}
-          </div>
+          </CollapsibleCardSection>
         )}
 
         {msg.reviewCards && msg.reviewCards.length > 0 && (
-          <div className="w-full space-y-2">
+          <CollapsibleCardSection
+            icon={<FileText size={13} className="text-blue-500" />}
+            label="Použité audity"
+            count={msg.reviewCards.length}
+          >
             {msg.reviewCards.map(review => (
               <ReviewMiniCard key={review.id} review={review} onOpen={() => onOpenJournal?.(review.date)} />
             ))}
-          </div>
+          </CollapsibleCardSection>
         )}
 
         {msg.chartSpecs && msg.chartSpecs.length > 0 && trades && (
           <div className="w-full space-y-3">
             {msg.chartSpecs.map((spec, i) => (
               <DynamicChart key={i} spec={spec} trades={trades} dailyPreps={dailyPreps} dailyReviews={dailyReviews} />
+            ))}
+          </div>
+        )}
+
+        {/* Action panel — Coach generates [ACTION:{...}] markers.
+            Renderujeme pouze po dokončení streamu, aby user neklikal half-parsed akce. */}
+        {!isUser && !isStreaming && msg.actions && msg.actions.length > 0 && onApplyAction && messageIndex !== undefined && (
+          <ActionPanel
+            actions={msg.actions}
+            appliedIds={msg.appliedActionIds || []}
+            existingLabels={existingActionLabels}
+            onApply={(action, idx) => onApplyAction(action, messageIndex, idx)}
+          />
+        )}
+
+        {/* Follow-up suggestion pills — Coach generates these as [FOLLOWUP:text] at message end.
+            Only render after the message stops streaming so user doesn't click a half-typed suggestion. */}
+        {!isUser && !isStreaming && msg.followups && msg.followups.length > 0 && onFollowup && (
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {msg.followups.map((text, i) => (
+              <button
+                key={i}
+                onClick={() => onFollowup(text)}
+                className="group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 text-xs font-bold border border-blue-500/20 hover:border-blue-500/40 transition-all active:scale-95"
+                title="Pošle tento dotaz Coachovi"
+              >
+                <span>{text}</span>
+                <span className="text-[10px] opacity-50 group-hover:opacity-100 transition-opacity">→</span>
+              </button>
             ))}
           </div>
         )}

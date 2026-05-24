@@ -4,7 +4,7 @@ import {
     Play, X, Edit3, Trash2, Clock, Image as ImageIcon,
     Maximize2, ArrowRight, Timer, Terminal, ArrowUpRight, ArrowDownRight,
     Share2, Check, ChevronLeft, ChevronRight, Zap, Brain, FileText, Monitor, Target,
-    ShieldCheck, Layers, Wallet, Save, CornerDownLeft
+    ShieldCheck, Layers, Wallet, Save, CornerDownLeft, AlertOctagon
 } from 'lucide-react';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL } from '../utils/formatPnL';
@@ -13,6 +13,8 @@ import { storageService } from '../services/storageService';
 import { ErrorBoundary } from './ErrorBoundary';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
+import TradeAISection from './TradeAISection';
+import ManualTradeForm from './ManualTradeForm';
 
 interface PropertyProps {
     label: string;
@@ -24,13 +26,13 @@ interface PropertyProps {
 }
 
 const Property = React.memo(({ label, value, subValue, color, icon: Icon, isDark = true }: PropertyProps) => (
-    <div className={`py-4 px-1 group/prop border-b ${isDark ? 'border-white/[0.03]' : 'border-slate-100'} last:border-0`}>
-        <div className="flex items-center gap-2 mb-1.5 opacity-40 group-hover/prop:opacity-60 transition-opacity">
-            {Icon && <Icon size={10} className="text-slate-400" />}
+    <div className={`py-2.5 px-1 group/prop border-b ${isDark ? 'border-white/[0.03]' : 'border-slate-100'} last:border-0`}>
+        <div className="flex items-center gap-1.5 mb-1 opacity-40 group-hover/prop:opacity-60 transition-opacity">
+            {Icon && <Icon size={9} className="text-slate-400" />}
             <span className="text-[8px] font-black uppercase tracking-[0.2em]">{label}</span>
         </div>
         <div>
-            <span className={`text-[13px] font-black font-mono tracking-tighter ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
+            <span className={`text-[12px] font-black font-mono tracking-tighter ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
             {subValue && <p className="text-[8px] font-bold text-slate-500 mt-0.5 uppercase tracking-wide opacity-60">{subValue}</p>}
         </div>
     </div>
@@ -93,6 +95,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         };
     }, []);
 
+
     const activeTrade = fullTrade || trade;
 
     useEffect(() => {
@@ -106,7 +109,18 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             try {
                 if (trade.id) {
                     const detailed = await storageService.getTradeById(String(trade.id));
-                    if (detailed && !cancelled) setFullTrade(detailed);
+                    // Merge only screenshot/screenshots from DB — keep parent prop's
+                    // up-to-date fields (executionStatus, isValid, notes, etc.) so we
+                    // don't overwrite an optimistic update with stale DB data.
+                    if (detailed && !cancelled) {
+                        setFullTrade(prev => ({
+                            ...prev,
+                            screenshot: detailed.screenshot ?? prev.screenshot,
+                            screenshots: detailed.screenshots ?? prev.screenshots,
+                            drawings: detailed.drawings ?? prev.drawings,
+                            aiSuggestions: (detailed as any).aiSuggestions ?? (prev as any).aiSuggestions,
+                        }));
+                    }
                 }
             } catch (e) {
                 console.error("Failed to load full trade details", e);
@@ -116,9 +130,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         };
         loadFull();
         return () => { cancelled = true; };
-    // Include screenshot/screenshots: if parent refreshes with new screenshot data, update fullTrade
+    // Sync na CELÝ trade objekt — když edit upraví jakékoliv pole, sync fullTrade.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [trade.id, trade.screenshot, trade.screenshots]);
+    }, [trade]);
 
     const groupTrades = useMemo(() => {
         if (!allTrades.length) return [activeTrade];
@@ -178,6 +192,29 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [shareCopied, setShareCopied] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
+    // Full Edit Mode — ManualTradeForm overlay
+    const [isFullEditOpen, setIsFullEditOpen] = useState(false);
+    const [editPrefs, setEditPrefs] = useState<{ htf: string[]; ltf: string[]; mistakes: string[] }>({ htf: [], ltf: [], mistakes: [] });
+    useEffect(() => {
+        storageService.getCachedPreferences().then((p: any) => {
+            if (!p) return;
+            setEditPrefs({ htf: p.htfOptions || [], ltf: p.ltfOptions || [], mistakes: p.standardMistakes || [] });
+        }).catch(() => {});
+    }, []);
+
+    // Keyboard navigation — šipky listují trady, Escape zavírá
+    useEffect(() => {
+        const handleKey = (e: KeyboardEvent) => {
+            if (isFullEditOpen) return;
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+            if (e.key === 'ArrowLeft' && hasPrev) onPrev?.();
+            if (e.key === 'ArrowRight' && hasNext) onNext?.();
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', handleKey);
+        return () => window.removeEventListener('keydown', handleKey);
+    }, [hasPrev, hasNext, onPrev, onNext, onClose, isFullEditOpen]);
+
     // Inline Editing State
     const [isEditingNotes, setIsEditingNotes] = useState(false);
     const [editedNotes, setEditedNotes] = useState(activeTrade.notes || '');
@@ -216,7 +253,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     const timeRange = `${formatTime(tradeEntryTime)} - ${formatTime(exitTime)}`;
     const holdTime = activeTrade.duration || (Math.round(safeValue(activeTrade.durationMinutes ?? (activeTrade as any).duration_minutes)) + 'm');
-    const status = activeTrade.executionStatus || (activeTrade.isValid === false ? 'Invalid' : 'Valid');
+    // Status MUSÍ číst z nejnovějšího trade propu (ne z fullTrade, který může být přepsán stale DB fetchem)
+    const status = trade.executionStatus || activeTrade.executionStatus || ((trade.isValid === false || activeTrade.isValid === false) ? 'Invalid' : 'Valid');
     const isMissed = status === 'Missed';
     const isWin = pnl >= 0;
 
@@ -284,6 +322,12 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     {isMissed ? <Clock size={11} /> : (trade.direction === 'Long' ? <ArrowUpRight size={12} strokeWidth={3} /> : <ArrowDownRight size={12} strokeWidth={3} />)}
                                     <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{isMissed ? 'MISSED' : trade.direction}</span>
                                 </div>
+                                {!isMissed && (
+                                    <div className={`px-2 lg:px-3 py-1 rounded-full border flex items-center gap-1.5 shrink-0 ${status === 'Invalid' ? 'text-rose-500 bg-rose-500/10 border-rose-500/20' : 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'}`}>
+                                        {status === 'Invalid' ? <AlertOctagon size={11} strokeWidth={3} /> : <Check size={11} strokeWidth={3} />}
+                                        <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{status === 'Invalid' ? 'NEVALIDNÍ' : 'VALIDNÍ'}</span>
+                                    </div>
+                                )}
                             </div>
                             <div className="h-6 w-px bg-white/10 hidden lg:block" />
                             <div className="hidden lg:flex flex-col">
@@ -295,137 +339,108 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         </div>
 
                         <div className="flex items-center gap-1.5 lg:gap-3">
-                            {/* Prev/Next — visible on all screen sizes */}
-                            <div className="flex items-center gap-0.5 bg-white/5 p-0.5 rounded-xl border border-white/5">
-                                <button onClick={onPrev} disabled={!hasPrev} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasPrev ? 'opacity-10 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronLeft size={16} /></button>
-                                <button onClick={onNext} disabled={!hasNext} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasNext ? 'opacity-10 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={16} /></button>
+                            {/* Prev/Next */}
+                            <div className={`flex items-center gap-0.5 p-0.5 rounded-xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-white border-slate-200'}`}>
+                                <button onClick={onPrev} disabled={!hasPrev} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasPrev ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronLeft size={16} /></button>
+                                <button onClick={onNext} disabled={!hasNext} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasNext ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronRight size={16} /></button>
                             </div>
-                            <button onClick={handleShare} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${shareCopied ? 'bg-emerald-500/20 text-emerald-500' : 'bg-white/5 text-white hover:bg-white/10'}`}>{shareCopied ? <Check size={16} /> : <Share2 size={16} />}</button>
-                            <button onClick={(e) => { e.stopPropagation(); setIsDeleteModalOpen(true); }} className="p-2 lg:p-3 rounded-xl lg:rounded-2xl bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all"><Trash2 size={16} /></button>
-                            <button onClick={onClose} className={`p-2 lg:p-3 rounded-full transition-all ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-slate-100 text-slate-600'}`}><X size={20} /></button>
+                            <button onClick={handleShare} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${shareCopied ? 'bg-emerald-500/20 text-emerald-500' : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white' : 'bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-slate-200'}`}>{shareCopied ? <Check size={16} /> : <Share2 size={16} />}</button>
+                            {onUpdateTrade && !String(activeTrade.id).startsWith('combined_') && (
+                                <button onClick={(e) => { e.stopPropagation(); setIsFullEditOpen(true); }} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-blue-500/10 text-blue-500 hover:bg-blue-500 hover:text-white' : 'bg-white text-blue-400 hover:bg-blue-500 hover:text-white border border-blue-200'}`} title="Upravit obchod"><Edit3 size={16} /></button>
+                            )}
+                            <button onClick={(e) => { e.stopPropagation(); setIsDeleteModalOpen(true); }} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white' : 'bg-white text-rose-400 hover:bg-rose-500 hover:text-white border border-rose-200'}`}><Trash2 size={16} /></button>
+                            <button onClick={onClose} className={`p-2 lg:p-3 rounded-full transition-all ${isDark ? 'hover:bg-white/10 text-slate-400' : 'bg-white hover:bg-slate-50 text-slate-400 border border-slate-200'}`}><X size={20} /></button>
                         </div>
                     </div>
 
                     <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
-                        {/* LEFT SIDEPANEL: Property Sheet — second on mobile (order-2), first on desktop */}
-                        <div className={`order-2 lg:order-1 w-full lg:w-[400px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/40'} backdrop-blur-xl overflow-y-auto no-scrollbar`}>
-                            {/* Dominant PnL Card */}
-                            <div className="p-4 lg:p-8 border-b border-white/5">
-                                <p className="text-[9px] lg:text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2 lg:mb-3">Profit / Loss</p>
-                                <div className="flex items-end justify-between gap-4">
-                                    <h3 className={`text-4xl lg:text-5xl font-black font-mono tracking-tighter leading-none ${pnlColor}`}>{formattedPnL}</h3>
+
+                        {/* LEFT: Pure trade data only */}
+                        <div className={`order-2 lg:order-1 w-full lg:w-[320px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/40'} backdrop-blur-xl overflow-y-auto no-scrollbar`}>
+                            {/* PnL */}
+                            <div className={`p-4 lg:p-5 border-b relative overflow-hidden ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
+                                <div className={`absolute inset-0 pointer-events-none ${isMissed ? 'bg-blue-500/5' : isWin ? 'bg-emerald-500/5' : 'bg-rose-500/5'}`} />
+                                <div className={`absolute bottom-0 left-0 right-0 h-px ${isMissed ? 'bg-blue-500/20' : isWin ? 'bg-emerald-500/20' : 'bg-rose-500/20'}`} />
+                                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-1.5 relative">Profit / Loss</p>
+                                <div className="flex items-end justify-between gap-4 relative">
+                                    <h3 className={`text-3xl lg:text-4xl font-black font-mono tracking-tighter leading-none ${pnlColor}`}>{formattedPnL}</h3>
                                     <div className="flex flex-col items-end">
                                         <span className={`text-sm font-black font-mono ${realRRR >= 1 ? 'text-emerald-500' : 'text-slate-500'}`}>{isFinite(realRRR) ? realRRR.toFixed(2) : '0.00'} R</span>
                                         <span className="text-[8px] font-bold text-slate-600 uppercase tracking-widest leading-none mt-1">Reward/Risk</span>
                                     </div>
                                 </div>
                             </div>
-
-                            {/* Bento Properties */}
-                            <div className="p-4 lg:p-8 space-y-2">
-                                <div className="grid grid-cols-2 gap-x-8">
+                            {/* Metrics */}
+                            <div className="p-4 lg:p-5">
+                                <div className="grid grid-cols-2 gap-x-6">
                                     <Property label="ENTRY" value={entryPrice || '—'} icon={Target} isDark={isDark} />
-                                    <Property label="EXIT" value={exitPrice || '—'} icon={ArrowRight} isDark={isDark} />
+                                    <Property label="EXIT" value={exitPrice || '—'} color={isWin ? 'text-emerald-400' : 'text-rose-400'} icon={ArrowRight} isDark={isDark} />
                                     <Property label="STOP LOSS" value={stopLoss || '—'} color="text-rose-500/80" icon={ShieldCheck} isDark={isDark} />
                                     <Property label="TAKE PROFIT" value={takeProfit || '—'} color="text-emerald-500/80" icon={Zap} isDark={isDark} />
                                     <Property label="POSITION" value={activeTrade.positionSize || 1} icon={Layers} isDark={isDark} />
                                     <Property label="HOLD TIME" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} isDark={isDark} />
                                 </div>
-
-                                <div className="pt-6 space-y-6">
-                                    {/* Accounts */}
-                                    <div>
-                                        <div className="flex items-center justify-between mb-4">
-                                            <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2"><Wallet size={12} /> Execution Flow</p>
-                                        </div>
-                                        <div className="space-y-2">
-                                            {groupTrades.map(gt => {
-                                                const acc = accounts.find(a => a.id === gt.accountId);
-                                                if (!acc && gt.accountId !== activeTrade.accountId) return null;
-                                                const pnlVal = safeValue(gt.pnl);
-                                                const isMasterTrade = masterTradeIdInGroup ? gt.id === masterTradeIdInGroup : (gt.isMaster || (!gt.masterTradeId && groupTrades.length > 1 && gt.id === groupTrades[0]?.id));
-
-                                                return (
-                                                    <div key={gt.id} className={`p-4 rounded-2xl border flex items-center justify-between transition-all ${isDark ? 'bg-white/[0.03] border-white/5 hover:bg-white/[0.06]' : 'bg-white border-slate-200'}`}>
-                                                        <div className="flex items-center gap-3">
-                                                            <div className={`w-2 h-2 rounded-full ${acc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_12px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
-                                                            <div className="flex flex-col">
-                                                                <span className="text-xs font-black uppercase tracking-tight truncate max-w-[140px]">{acc?.name || accountName}</span>
-                                                                <div className="flex gap-2">
-                                                                    {isMasterTrade && <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest">Master Node</span>}
-                                                                    {!isMasterTrade && groupTrades.length > 1 && <span className="text-[8px] font-black text-purple-500 uppercase tracking-widest">Copy Node</span>}
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <span className={`text-xs font-black font-mono ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(pnlVal)}</span>
+                                <div className="pt-4">
+                                    <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2 mb-2"><Wallet size={12} /> Účty</p>
+                                    <div className="space-y-1.5">
+                                        {groupTrades.map(gt => {
+                                            const acc = accounts.find(a => a.id === gt.accountId);
+                                            if (!acc && gt.accountId !== activeTrade.accountId) return null;
+                                            const pnlVal = safeValue(gt.pnl);
+                                            const isMasterTrade = masterTradeIdInGroup ? gt.id === masterTradeIdInGroup : (gt.isMaster || (!gt.masterTradeId && groupTrades.length > 1 && gt.id === groupTrades[0]?.id));
+                                            return (
+                                                <div key={gt.id} className={`px-3 py-2 rounded-xl border flex items-center justify-between transition-all ${isDark ? 'bg-white/[0.03] border-white/5 hover:bg-white/[0.06]' : 'bg-white border-slate-200'}`}>
+                                                    <div className="flex items-center gap-2.5 min-w-0">
+                                                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${acc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
+                                                        <span className="text-[11px] font-black uppercase tracking-tight truncate max-w-[120px]">{acc?.name || accountName}</span>
+                                                        {isMasterTrade && groupTrades.length > 1 && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
+                                                        {!isMasterTrade && groupTrades.length > 1 && <span className="text-[7px] font-black text-purple-500 uppercase tracking-widest shrink-0">COPY</span>}
                                                     </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-
-                                    {/* Psychology & Tags */}
-                                    <div className="space-y-4">
-                                        <div>
-                                            <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><Brain size={12} /> Mindset Details</p>
-                                            <div className="flex flex-wrap gap-2">
-                                                {activeTrade.emotions?.map(e => <span key={e} className="px-3 py-1.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[10px] font-black uppercase tracking-wide">{getEmotionDetails(e).label}</span>)}
-                                                {activeTrade.mistakes?.map(m => <span key={m} className="px-3 py-1.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[10px] font-black uppercase tracking-wide">{m}</span>)}
-                                                {!activeTrade.emotions?.length && !activeTrade.mistakes?.length && <span className="text-[10px] text-slate-600 italic">No emotional data</span>}
-                                            </div>
-                                        </div>
-
-                                        {/* Tactical Context */}
-                                        {(activeTrade.htfConfluence?.length || activeTrade.ltfConfluence?.length) && (
-                                            <div className="pt-2">
-                                                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><Monitor size={12} /> Tactical Context</p>
-                                                <div className="flex flex-wrap gap-2">
-                                                    {activeTrade.htfConfluence?.map(c => <span key={c} className="px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-wide">{c}</span>)}
-                                                    {activeTrade.ltfConfluence?.map(c => <span key={c} className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-black uppercase tracking-wide">{c}</span>)}
+                                                    <span className={`text-[11px] font-black font-mono shrink-0 ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(pnlVal)}</span>
                                                 </div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {/* Notes: Pro Inline Editing */}
-                                    <div className="flex flex-col min-h-0 pt-4">
-                                        <div className="flex items-center justify-between mb-3">
-                                            <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2"><FileText size={12} /> Execution Log</p>
-                                            {!isEditingNotes && (
-                                                <button onClick={() => setIsEditingNotes(true)} className="text-[9px] font-black text-blue-500 uppercase tracking-widest hover:underline px-2 py-1">Edit Log</button>
-                                            )}
-                                        </div>
-                                        {isEditingNotes ? (
-                                            <div className="space-y-3">
-                                                <textarea
-                                                    autoFocus
-                                                    className={`w-full p-4 rounded-2xl border text-xs font-medium leading-relaxed min-h-[150px] outline-none transition-all ${isDark ? 'bg-black/40 border-blue-500/30 text-white focus:border-blue-500' : 'bg-white border-blue-200 text-slate-900 focus:border-blue-500'}`}
-                                                    value={editedNotes}
-                                                    onChange={(e) => setEditedNotes(e.target.value)}
-                                                    placeholder="Log details..."
-                                                />
-                                                <div className="flex justify-end gap-2">
-                                                    <button onClick={() => { setIsEditingNotes(false); setEditedNotes(activeTrade.notes || ''); }} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-slate-500 hover:text-white' : 'text-slate-400 hover:text-slate-900'}`}>Cancel</button>
-                                                    <button onClick={handleSaveNotes} className="px-4 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-blue-500 transition-colors">
-                                                        <Save size={12} /> Save Updates
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <div
-                                                onClick={() => setIsEditingNotes(true)}
-                                                className={`p-5 rounded-2xl border text-xs font-medium leading-[1.8] cursor-text transition-all ${isDark ? 'bg-black/30 border-white/5 text-slate-400 hover:border-white/10' : 'bg-white border-slate-100 text-slate-600 hover:border-slate-200'}`}
-                                            >
-                                                {activeTrade.notes || "Add execution log entry..."}
-                                            </div>
-                                        )}
+                                            );
+                                        })}
                                     </div>
                                 </div>
+
+                                {/* Mindset */}
+                                {!!(activeTrade.emotions?.length || activeTrade.mistakes?.length) && (
+                                    <div className={`pt-4 border-t ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
+                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-2.5 flex items-center gap-2"><Brain size={11} /> Mindset</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {activeTrade.emotions?.map(e => <span key={e} className="px-2 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[9px] font-black uppercase tracking-wide">{getEmotionDetails(e).label}</span>)}
+                                            {activeTrade.mistakes?.map(m => <span key={m} className="px-2 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[9px] font-black uppercase tracking-wide">{m}</span>)}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* HTF Confluence */}
+                                {!!activeTrade.htfConfluence?.length && (
+                                    <div className={`pt-4 border-t ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
+                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-2.5 flex items-center gap-2"><Monitor size={11} /> HTF Confluence</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {activeTrade.htfConfluence.map(c => <span key={c} className="px-2 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[9px] font-black uppercase tracking-wide">{c}</span>)}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* LTF Confluence */}
+                                {!!activeTrade.ltfConfluence?.length && (
+                                    <div className={`pt-4 border-t ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
+                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-2.5 flex items-center gap-2"><Zap size={11} /> LTF Confluence</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {activeTrade.ltfConfluence.map(c => <span key={c} className="px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[9px] font-black uppercase tracking-wide">{c}</span>)}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
-                        {/* RIGHT: THE CANVAS (Screenshot) — first on mobile (order-1), second on desktop */}
-                        <div className={`order-1 lg:order-2 shrink-0 lg:flex-1 relative group overflow-hidden ${isDark ? 'bg-black/40' : 'bg-slate-100/50'}`}>
+                        {/* RIGHT: screenshot top + info bottom */}
+                        <div className="order-1 lg:order-2 flex-1 flex flex-col overflow-hidden">
+
+                            {/* TOP: Screenshot — no border-radius, no background, edge-to-edge */}
+                            <div className={`relative group flex-[3_3_0] min-h-0 overflow-hidden`}>
                             {/* Loading spinner while fetching full trade details */}
                             {isLoadingDetails && (
                                 <div className="w-full py-16 lg:absolute lg:inset-0 flex items-center justify-center z-10">
@@ -436,24 +451,22 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 {!isLoadingDetails && (images.length > 0 && !imageLoadError) ? (
                                     <motion.div
                                         key={images[activeImageIndex]}
-                                        initial={{ opacity: 0, scale: 0.98 }}
-                                        animate={{ opacity: 1, scale: 1 }}
-                                        exit={{ opacity: 0, scale: 1.02 }}
-                                        transition={{ duration: 0.4, ease: "easeOut" }}
-                                        className="w-full lg:h-full lg:flex lg:items-center lg:justify-center lg:p-10"
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        exit={{ opacity: 0 }}
+                                        transition={{ duration: 0.3 }}
+                                        className="absolute inset-0"
                                     >
-                                        <div className="relative w-full lg:max-w-full lg:max-h-full">
-                                            <img
-                                                src={images[activeImageIndex]}
-                                                className="w-full h-auto lg:h-full lg:object-contain lg:rounded-2xl lg:shadow-[0_50px_100px_-20px_rgba(0,0,0,0.6)] cursor-zoom-in"
-                                                onClick={() => setIsZoomed(true)}
-                                                onError={() => setImageLoadError(true)}
-                                            />
-                                            {/* Floating Zoom Button */}
-                                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                                                <div className="p-6 bg-white/10 backdrop-blur-md rounded-full text-white border border-white/20 shadow-2xl pointer-events-auto cursor-pointer hover:scale-110 transition-transform" onClick={() => setIsZoomed(true)}>
-                                                    <Maximize2 size={32} />
-                                                </div>
+                                        <img
+                                            src={images[activeImageIndex]}
+                                            className="absolute inset-0 w-full h-full object-contain cursor-zoom-in"
+                                            onClick={() => setIsZoomed(true)}
+                                            onError={() => setImageLoadError(true)}
+                                        />
+                                        {/* Zoom on hover */}
+                                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                            <div className="p-5 bg-black/40 backdrop-blur-md rounded-full text-white border border-white/20 shadow-2xl pointer-events-auto cursor-pointer hover:scale-110 transition-transform" onClick={() => setIsZoomed(true)}>
+                                                <Maximize2 size={28} />
                                             </div>
                                         </div>
                                     </motion.div>
@@ -522,6 +535,23 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 </>
                             )}
                         </div>
+
+                            {/* BOTTOM: Mindset + AI + Notes */}
+                            <div className={`flex-[2_2_0] min-h-0 overflow-y-auto no-scrollbar border-t ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/30'}`}>
+                                <div className="px-5 lg:px-6 pt-3 pb-5 lg:pb-6 space-y-4">
+                                    {/* AI */}
+                                    <TradeAISection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
+                                    {/* Notes */}
+                                    <div>
+                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><FileText size={12} /> Poznámky</p>
+                                        <div className={`p-5 rounded-2xl border text-xs font-medium leading-[1.8] ${isDark ? 'bg-black/30 border-white/5 text-slate-400' : 'bg-white border-slate-100 text-slate-600'}`}>
+                                            {activeTrade.notes || <span className="italic opacity-40">No log entry.</span>}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>{/* /RIGHT */}
                     </div>
                 </motion.div>
 
@@ -537,6 +567,22 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
             {isZoomed && images.length > 0 && (
                 <ImageZoomModal images={images} initialIndex={activeImageIndex} onClose={() => setIsZoomed(false)} />
+            )}
+
+            {/* FULL EDIT MODE — ManualTradeForm overlay */}
+            {isFullEditOpen && onUpdateTrade && (
+                <ManualTradeForm
+                    editTrade={activeTrade}
+                    onUpdate={(updates) => onUpdateTrade(updates)}
+                    onClose={() => setIsFullEditOpen(false)}
+                    theme={theme}
+                    accounts={accounts}
+                    activeAccountId={String(activeTrade.accountId || '')}
+                    availableEmotions={emotions}
+                    availableMistakes={editPrefs.mistakes}
+                    availableHtfOptions={editPrefs.htf}
+                    availableLtfOptions={editPrefs.ltf}
+                />
             )}
         </ErrorBoundary>
     );

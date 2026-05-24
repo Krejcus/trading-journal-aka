@@ -16,6 +16,7 @@ import {
     Globe,
     Briefcase,
     Bot,
+    Activity,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User } from '../types';
@@ -61,6 +62,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     const mainItems = [
         { id: 'dashboard', label: t('dashboard', lang), icon: LayoutDashboard },
         { id: 'history', label: t('history', lang) || 'Historie', icon: History },
+        { id: 'insights', label: 'Insights', icon: Activity },
         { id: 'journal', label: t('journal', lang), icon: BookOpen },
         { id: 'business', label: t('business', lang), icon: Briefcase },
         { id: 'ai', label: 'AI Coach', icon: Bot },

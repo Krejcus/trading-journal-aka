@@ -884,7 +884,12 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
                     {/* Complete button — compact */}
                     <button
-                      onClick={() => { onSavePrep?.({ ...prepForm, completed: true }); setIsPrepExpanded(false); }}
+                      onClick={() => {
+                        const completedPrep = { ...prepForm, completed: true };
+                        editPrepForm?.(() => completedPrep); // sync DailyJournal form state → debounced autosave nenese starý completed: undefined
+                        onSavePrep?.(completedPrep);
+                        setIsPrepExpanded(false);
+                      }}
                       className="w-full py-2.5 bg-blue-600 text-white rounded-xl font-black uppercase text-[9px] tracking-widest shadow-lg shadow-blue-500/20 active:scale-95 transition-all hover:bg-blue-500"
                     >
                       DOKONČIT PŘÍPRAVU
@@ -1469,7 +1474,12 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
                   {/* Complete button */}
                   <button
-                    onClick={() => { onSaveReview?.({ ...reviewForm, completed: true }); setIsReviewExpanded(false); }}
+                    onClick={() => {
+                      const completedReview = { ...reviewForm, completed: true };
+                      editReviewForm?.(completedReview); // sync DailyJournal form state → debounced autosave nenese starý completed: undefined
+                      onSaveReview?.(completedReview);
+                      setIsReviewExpanded(false);
+                    }}
                     className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-indigo-500/20 active:scale-95 transition-all hover:bg-indigo-500"
                   >
                     DOKONČIT REVIEW

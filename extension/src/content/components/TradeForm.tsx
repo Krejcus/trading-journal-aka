@@ -6,6 +6,7 @@ import { supabase, SUPABASE_URL, SUPABASE_KEY } from '../../lib/supabase';
 import { cropImage } from '../../lib/screenshot';
 import { RefreshCw, CheckCircle2, XCircle, Eye, Send, RotateCcw, Clock } from 'lucide-react';
 import { useTheme } from './ThemeContext';
+import VoiceMemoButton from './VoiceMemoButton';
 
 // Chrome API global (extension context)
 declare const chrome: any;
@@ -109,6 +110,7 @@ function makeInitialTrade() {
         ltfConfluence:  [] as string[],
         emotions:       [] as string[],
         mistakes:       [] as string[],
+        executionStatus: 'Valid' as 'Valid' | 'Invalid' | 'Missed',
     };
 }
 
@@ -166,6 +168,15 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
     const updateField = (field: string) => (val: string) => {
         setTrade(prev => ({ ...prev, [field]: val }));
         if (field === 'pnl') setPnlManual(!!val);
+    };
+
+    // Append transkribovaný hlas do notes (s mezerou když už něco je)
+    const appendToNotes = (text: string) => {
+        if (!text) return;
+        setTrade(prev => ({
+            ...prev,
+            notes: prev.notes ? `${prev.notes.trim()} ${text}` : text,
+        }));
     };
 
     const toggleMultiSelect = (field: 'htfConfluence' | 'ltfConfluence' | 'emotions' | 'mistakes') => (val: string) => {
@@ -449,20 +460,35 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
 
             const baseDateStr = trade.entryDate || new Date().toISOString().split('T')[0];
             const baseTimeStr = trade.entryTime || new Date().toTimeString().split(' ')[0].slice(0, 5);
+            // Konvence appky: `date` / `timestamp` = EXIT time (close trade), entry je oddělené.
+            // Detail modal pak vypočítá `tradeEntryTime = exitTime - durationMinutes*60000`
+            // (nebo použije explicitní `entryTime` field).
             let finalDateIso  = new Date().toISOString();
             let finalTimestamp = Date.now();
+            let entryTimestamp: number | null = null;
+            let entryDateIso: string | null = null;
             let durationString = "0 m";
+            let durationMinutesNum = 0;
 
             try {
                 const parsedEntry = new Date(`${baseDateStr}T${baseTimeStr}:00`);
                 const parsedExit  = new Date(`${trade.exitDate || baseDateStr}T${trade.exitTime || baseTimeStr}:00`);
+
                 if (!isNaN(parsedEntry.getTime())) {
-                    finalDateIso   = parsedEntry.toISOString();
-                    finalTimestamp = parsedEntry.getTime();
+                    entryTimestamp = parsedEntry.getTime();
+                    entryDateIso = parsedEntry.toISOString();
                 }
+
+                if (!isNaN(parsedExit.getTime())) {
+                    // Trade.date / timestamp = EXIT time, ne entry
+                    finalDateIso = parsedExit.toISOString();
+                    finalTimestamp = parsedExit.getTime();
+                }
+
                 if (!isNaN(parsedEntry.getTime()) && !isNaN(parsedExit.getTime())) {
                     const diffMs = parsedExit.getTime() - parsedEntry.getTime();
                     if (diffMs > 0) {
+                        durationMinutesNum = diffMs / 60000;
                         const h = Math.floor(diffMs / 3600000);
                         const m = Math.floor((diffMs % 3600000) / 60000);
                         durationString = h > 0 ? `${h}h ${m}m` : `${m} m`;
@@ -524,7 +550,10 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                     screenshot: publicUrl,
                     screenshots: publicUrl ? [publicUrl] : [],
                     duration: durationString,
-                    exitDate: null,
+                    durationMinutes: durationMinutesNum,
+                    entryTime: entryTimestamp,
+                    entryDate: entryDateIso,
+                    exitDate: finalDateIso,
                     status: 'CLOSED',
                     outcome: trade.outcome,
                     groupId: commonGroupId,
@@ -532,7 +561,8 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                     masterTradeId: isMaster ? null : masterTradeId,
                     session: trade.session,
                     phase,
-                    executionStatus: "Valid",
+                    executionStatus: trade.executionStatus,
+                    isValid: trade.executionStatus === 'Valid',
                     signal: finalSignal,
                     htfConfluence: trade.htfConfluence,
                     ltfConfluence: trade.ltfConfluence,
@@ -592,6 +622,23 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                 type: 'success',
             });
             setShowReset(true);
+
+            // 8. Fire-and-forget AI enrichment — jen pokud má trade notes nebo screenshot
+            // (filtr "skutečný obchod" vs. testovací záznam)
+            const hasNotes = (trade.notes || '').trim().length > 0;
+            const hasScreenshot = !!publicUrl;
+            if (hasNotes || hasScreenshot) {
+                for (const savedTrade of savedTrades) {
+                    fetch(`${SUPABASE_URL}/functions/v1/enrich-trade`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${session.access_token}`,
+                        },
+                        body: JSON.stringify({ tradeId: savedTrade.id }),
+                    }).catch(e => console.warn('[AlphaBridge] enrich-trade failed:', e));
+                }
+            }
 
         } catch (err: any) {
             console.error('[AlphaBridge]', err);
@@ -713,47 +760,55 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                                     inputClassName="px-2"
                                 />
                             </div>
-                            {/* Entry time + Teď */}
+                            {/* Entry time */}
                             <div className="flex-1 min-w-0 flex flex-col">
                                 <label className={`block text-xs font-bold uppercase tracking-wider mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Entry</label>
-                                <div className="flex gap-1">
-                                    <input
-                                        type="time"
-                                        value={trade.entryTime}
-                                        onChange={(e) => updateField('entryTime')(e.target.value)}
-                                        onKeyDown={(e) => e.stopPropagation()}
-                                        className={`flex-1 min-w-0 border rounded-xl px-2 py-2 text-sm outline-none transition-all duration-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 ${theme === 'dark' ? 'bg-slate-800/80 border-slate-700/50 text-slate-100' : 'bg-white/80 border-slate-300/50 text-slate-800'}`}
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={() => updateField('entryTime')(new Date().toTimeString().slice(0, 5))}
-                                        title="Nastavit aktuální čas"
-                                        className={`px-2 rounded-xl border text-[10px] font-bold transition-all flex items-center gap-0.5 shrink-0 ${theme === 'dark' ? 'bg-slate-800/80 border-slate-700/50 text-slate-400 hover:text-blue-400 hover:border-blue-500/50' : 'bg-white/80 border-slate-300/50 text-slate-500 hover:text-blue-600 hover:border-blue-300'}`}
-                                    >
-                                        <Clock size={10} />
-                                    </button>
-                                </div>
+                                <input
+                                    type="time"
+                                    value={trade.entryTime}
+                                    onChange={(e) => updateField('entryTime')(e.target.value)}
+                                    onKeyDown={(e) => e.stopPropagation()}
+                                    className={`w-full border rounded-xl px-2 py-2 text-sm outline-none transition-all duration-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 ${theme === 'dark' ? 'bg-slate-800/80 border-slate-700/50 text-slate-100' : 'bg-white/80 border-slate-300/50 text-slate-800'}`}
+                                />
                             </div>
-                            {/* Exit time + Teď */}
+                            {/* Exit time */}
                             <div className="flex-1 min-w-0 flex flex-col">
                                 <label className={`block text-xs font-bold uppercase tracking-wider mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Exit</label>
-                                <div className="flex gap-1">
-                                    <input
-                                        type="time"
-                                        value={trade.exitTime}
-                                        onChange={(e) => updateField('exitTime')(e.target.value)}
-                                        onKeyDown={(e) => e.stopPropagation()}
-                                        className={`flex-1 min-w-0 border rounded-xl px-2 py-2 text-sm outline-none transition-all duration-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 ${theme === 'dark' ? 'bg-slate-800/80 border-slate-700/50 text-slate-100' : 'bg-white/80 border-slate-300/50 text-slate-800'}`}
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={() => updateField('exitTime')(new Date().toTimeString().slice(0, 5))}
-                                        title="Nastavit aktuální čas"
-                                        className={`px-2 rounded-xl border text-[10px] font-bold transition-all flex items-center gap-0.5 shrink-0 ${theme === 'dark' ? 'bg-slate-800/80 border-slate-700/50 text-slate-400 hover:text-blue-400 hover:border-blue-500/50' : 'bg-white/80 border-slate-300/50 text-slate-500 hover:text-blue-600 hover:border-blue-300'}`}
-                                    >
-                                        <Clock size={10} />
-                                    </button>
-                                </div>
+                                <input
+                                    type="time"
+                                    value={trade.exitTime}
+                                    onChange={(e) => updateField('exitTime')(e.target.value)}
+                                    onKeyDown={(e) => e.stopPropagation()}
+                                    className={`w-full border rounded-xl px-2 py-2 text-sm outline-none transition-all duration-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 ${theme === 'dark' ? 'bg-slate-800/80 border-slate-700/50 text-slate-100' : 'bg-white/80 border-slate-300/50 text-slate-800'}`}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Execution Status (Valid / Invalid / Missed) */}
+                        <div className="mb-3">
+                            <label className={`block text-xs font-bold uppercase tracking-wider mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Stav obchodu</label>
+                            <div className={`p-1 rounded-xl border flex gap-1 ${trade.executionStatus === 'Valid' ? (theme === 'dark' ? 'bg-emerald-900/20 border-emerald-700/40' : 'bg-emerald-50 border-emerald-200') : trade.executionStatus === 'Invalid' ? (theme === 'dark' ? 'bg-rose-900/20 border-rose-700/40' : 'bg-rose-50 border-rose-200') : (theme === 'dark' ? 'bg-blue-900/20 border-blue-700/40' : 'bg-blue-50 border-blue-200')}`}>
+                                <button
+                                    type="button"
+                                    onClick={() => updateField('executionStatus')('Valid')}
+                                    className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all ${trade.executionStatus === 'Valid' ? 'bg-emerald-600 text-white shadow-md' : theme === 'dark' ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+                                >
+                                    Validní
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => updateField('executionStatus')('Invalid')}
+                                    className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all ${trade.executionStatus === 'Invalid' ? 'bg-rose-600 text-white shadow-md' : theme === 'dark' ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+                                >
+                                    Nevalidní
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => updateField('executionStatus')('Missed')}
+                                    className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all ${trade.executionStatus === 'Missed' ? 'bg-blue-600 text-white shadow-md' : theme === 'dark' ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+                                >
+                                    Missed
+                                </button>
                             </div>
                         </div>
 
@@ -808,7 +863,14 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
             </div>
 
             {isWide && (
-                <TextArea label="Poznámky" value={trade.notes} onChange={updateField('notes')} placeholder="Důvod vstupu, pocity..." rows={2} />
+                <TextArea
+                    label="Poznámky"
+                    value={trade.notes}
+                    onChange={updateField('notes')}
+                    placeholder="Důvod vstupu, pocity..."
+                    rows={2}
+                    actionSlot={<VoiceMemoButton onTranscribed={appendToNotes} size="sm" title="Diktovat poznámky (CZ)" />}
+                />
             )}
 
             {!isWide && (
@@ -841,7 +903,14 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                         onToggle={toggleMultiSelect('mistakes')}
                         colorScheme="mistakes"
                     />
-                    <TextArea label="Poznámky" value={trade.notes} onChange={updateField('notes')} placeholder="Důvod vstupu, pocity..." rows={2} />
+                    <TextArea
+                        label="Poznámky"
+                        value={trade.notes}
+                        onChange={updateField('notes')}
+                        placeholder="Důvod vstupu, pocity..."
+                        rows={2}
+                        actionSlot={<VoiceMemoButton onTranscribed={appendToNotes} size="sm" title="Diktovat poznámky (CZ)" />}
+                    />
                 </>
             )}
 

@@ -26,8 +26,8 @@ export function formatPnL(
             if (rr === undefined || rr === null) {
                 return formatCurrency(value, currency, rates, showSign);
             }
-            const rrValue = value >= 0 ? Math.abs(rr) : -Math.abs(rr);
-            return `${showSign ? (rrValue > 0 ? '+' : rrValue < 0 ? '-' : '') : ''}${Math.abs(rrValue).toFixed(2)}R`;
+            // Použij skutečné znaménko RR — USD a RR se mohou rozcházet (např. malé risky na ztrátách vs. velké na výhrách)
+            return `${showSign ? (rr > 0 ? '+' : rr < 0 ? '-' : '') : ''}${Math.abs(rr).toFixed(2)}R`;
 
         case 'usd':
         default:

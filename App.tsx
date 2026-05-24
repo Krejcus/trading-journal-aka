@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion";
 import { normalizeTrades, calculateStats } from './services/analysis';
 import { storageService, getUserId } from './services/storageService';
+import { safeSetItem } from './utils/safeStorage';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
@@ -15,6 +16,7 @@ const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
+const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
 
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
@@ -225,6 +227,9 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
   const [isInitialLoadDone, setIsInitialLoadDone] = useState(false);
+  // Ochrana proti přepsání DB defaultními hodnotami z useState — autosave preferences
+  // se spustí jen po prvním úspěšném applyPreferences (z cache NEBO DB).
+  const prefsAppliedRef = useRef(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [initStatus, setInitStatus] = useState<string>("Inicializace...");
   const [showRetry, setShowRetry] = useState(false);
@@ -358,7 +363,7 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    localStorage.setItem('alphatrade_dash_mode', dashboardMode);
+    safeSetItem('alphatrade_dash_mode', dashboardMode);
   }, [dashboardMode]);
   const [sessions, setSessions] = useState<SessionConfig[]>(DEFAULT_SESSIONS);
   const [ironRules, setIronRules] = useState<IronRule[]>([
@@ -590,7 +595,7 @@ const App: React.FC = () => {
   const handleAccentColorChange = (color: string) => {
     setAccentColor(color);
     document.documentElement.dataset.accent = color;
-    localStorage.setItem('alphatrade_accent_color', color);
+    safeSetItem('alphatrade_accent_color', color);
   };
 
   // Fix theme switching - properly manage CSS classes
@@ -612,7 +617,7 @@ const App: React.FC = () => {
   );
 
   useEffect(() => {
-    localStorage.setItem('alphatrade_view_mode', viewMode);
+    safeSetItem('alphatrade_view_mode', viewMode);
   }, [viewMode]);
 
   const [pnlDisplayMode, setPnlDisplayMode] = useState<PnLDisplayMode>(
@@ -620,7 +625,7 @@ const App: React.FC = () => {
   );
 
   useEffect(() => {
-    localStorage.setItem('alphatrade_pnl_display_mode', pnlDisplayMode);
+    safeSetItem('alphatrade_pnl_display_mode', pnlDisplayMode);
   }, [pnlDisplayMode]);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile sidebar toggle
@@ -759,6 +764,10 @@ const App: React.FC = () => {
 
   const applyPreferences = useCallback((prefs: UserPreferences) => {
     if (isPreferencesDirty.current) {
+      // I když přeskočíme apply (uživatel má rozdělanou změnu), aspoň označíme že
+      // preference už dorazily z DB/cache — autosave se může pustit a nepřepíše DB
+      // defaulty z useState (které by jinak vznikly při saves PŘED prvním applyPreferences).
+      prefsAppliedRef.current = true;
       return;
     }
 
@@ -810,6 +819,9 @@ const App: React.FC = () => {
     if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
     if ((prefs as any).networkNotifications) setNetworkNotifications((prefs as any).networkNotifications);
+    // Mark prefs as applied — autosave se teď může spustit, nehrozí přepsání DB
+    // defaulty z useState (HTF/LTF, sessions, emotions, …).
+    prefsAppliedRef.current = true;
   }, []);
 
   const [filters, setFilters] = useState<TradeFilters>({
@@ -871,7 +883,7 @@ const App: React.FC = () => {
         });
 
       }
-      localStorage.setItem('alphatrade_last_session_user', session.user.id);
+      safeSetItem('alphatrade_last_session_user', session.user.id);
 
       // --- CACHE-FIRST LOADING: Instant from IndexedDB, then background refresh ---
       const cached = await storageService.getCachedDashboardData(session.user.id);
@@ -911,7 +923,7 @@ const App: React.FC = () => {
             );
           }
           if (fresh.user) setCurrentUser(fresh.user);
-          if (fresh.preferences) applyPreferences(fresh.preferences);
+          if (fresh.preferences && !isPreferencesDirty.current) applyPreferences(fresh.preferences);
           setDailyPreps(prev =>
             fingerprintSimple(fresh.preps) !== fingerprintSimple(prev) ? (fresh.preps || []) : prev
           );
@@ -1088,9 +1100,29 @@ const App: React.FC = () => {
                 console.error('[Realtime] Failed to update cache:', err);
               }
             } else if (payload.eventType === 'UPDATE') {
-              // Payload contains full updated row — no extra DB round-trip needed
-              const fullTrade = parseRealtimeTrade(payload.new);
-              setTrades(prev => prev.map(t => t.id === fullTrade.id ? fullTrade : t));
+              // Payload může být ČÁSTEČNÝ podle REPLICA IDENTITY (DEFAULT vs FULL).
+              // Pokud chybí klíčová pole (account_id nebo data blob), MERGE-uj přes existující
+              // optimistic verzi místo přepisu — jinak rozbijeme trade a filtry ho vyhodí.
+              const raw: any = payload.new;
+              const hasFullPayload = raw && raw.account_id && raw.data && typeof raw.data === 'object';
+              if (hasFullPayload) {
+                const fullTrade = parseRealtimeTrade(raw);
+                setTrades(prev => prev.map(t => t.id === fullTrade.id ? fullTrade : t));
+              } else {
+                // Částečný payload — mergni jen pole co dorazila do existujícího trade
+                setTrades(prev => prev.map(t => {
+                  if (t.id !== raw?.id) return t;
+                  const partial: any = {};
+                  if (raw.account_id) partial.accountId = raw.account_id;
+                  if (raw.instrument != null) partial.instrument = raw.instrument;
+                  if (raw.pnl != null) partial.pnl = raw.pnl;
+                  if (raw.direction != null) partial.direction = raw.direction;
+                  if (raw.date != null) partial.date = raw.date;
+                  if (raw.timestamp != null) partial.timestamp = raw.timestamp;
+                  if (raw.data && typeof raw.data === 'object') Object.assign(partial, raw.data);
+                  return { ...t, ...partial };
+                }));
+              }
             } else if (payload.eventType === 'DELETE') {
               setTrades(prev => prev.filter(t => t.id !== payload.old.id));
             }
@@ -1221,10 +1253,10 @@ const App: React.FC = () => {
 
         // Cache for next visit
         try {
-          localStorage.setItem(`alphatrade_biz_expenses_${userId}`, JSON.stringify(expenses || []));
-          localStorage.setItem(`alphatrade_biz_payouts_${userId}`, JSON.stringify(payouts || []));
-          localStorage.setItem(`alphatrade_biz_goals_${userId}`, JSON.stringify(goals || []));
-          localStorage.setItem(`alphatrade_biz_resources_${userId}`, JSON.stringify(resources || []));
+          safeSetItem(`alphatrade_biz_expenses_${userId}`, JSON.stringify(expenses || []));
+          safeSetItem(`alphatrade_biz_payouts_${userId}`, JSON.stringify(payouts || []));
+          safeSetItem(`alphatrade_biz_goals_${userId}`, JSON.stringify(goals || []));
+          safeSetItem(`alphatrade_biz_resources_${userId}`, JSON.stringify(resources || []));
         } catch {}
 
         // Prefetch payout images in background
@@ -1407,14 +1439,14 @@ const App: React.FC = () => {
   // Handle theme persistence independently of session
   useEffect(() => {
     try {
-      localStorage.setItem('alphatrade_theme', theme);
+      safeSetItem('alphatrade_theme', theme);
       const stored = localStorage.getItem('alphatrade_preferences');
       const currentUserId = session?.user?.id;
       const prefKey = currentUserId ? `alphatrade_preferences_${currentUserId}` : 'alphatrade_preferences';
 
       const currentPrefs = stored ? JSON.parse(stored) : {};
       if (currentPrefs.theme !== theme) {
-        localStorage.setItem(prefKey, JSON.stringify({ ...currentPrefs, theme }));
+        safeSetItem(prefKey, JSON.stringify({ ...currentPrefs, theme }));
       }
     } catch (e) {
       console.error("Failed to save theme to localStorage", e);
@@ -1422,7 +1454,9 @@ const App: React.FC = () => {
   }, [theme, session]);
 
   useEffect(() => {
-    if (canSave && isPreferencesDirty.current) {
+    // KRITICKÉ: nesaveuj preferences, pokud applyPreferences ještě neproběhlo —
+    // state by mohl mít defaulty z useState (HTF/LTF, sessions, emotions) a přepsali bychom DB.
+    if (canSave && isPreferencesDirty.current && prefsAppliedRef.current) {
       const timer = setTimeout(() => {
         // CRITICAL FIX: Clear dirty flag BEFORE saving, not after
         // This prevents background sync from skipping fresh data while save is in progress
@@ -1447,8 +1481,8 @@ const App: React.FC = () => {
     if (!canSave) return;
 
     const interval = setInterval(() => {
-      // Only save if there are pending changes
-      if (isPreferencesDirty.current) {
+      // Only save if there are pending changes AND prefs už byly aplikovány z cache/DB
+      if (isPreferencesDirty.current && prefsAppliedRef.current) {
         isPreferencesDirty.current = false;
 
         // Business Hub data excluded - saved to dedicated tables, not preferences
@@ -1505,7 +1539,7 @@ const App: React.FC = () => {
         Promise.all(weeklyFocusList.map(wf => storageService.saveWeeklyFocus(wf)))
           .catch(() => { isWeeklyFocusDirty.current = true; });
       }
-      if (isPreferencesDirty.current) {
+      if (isPreferencesDirty.current && prefsAppliedRef.current) {
         isPreferencesDirty.current = false;
         storageService.savePreferences(currentUserPreferences() as any).catch(() => { isPreferencesDirty.current = true; });
       }
@@ -1563,7 +1597,7 @@ const App: React.FC = () => {
       }
 
       // Persist immediately to local storage to survive refresh
-      localStorage.setItem('alphatrade_dash_mode', dashboardMode);
+      safeSetItem('alphatrade_dash_mode', dashboardMode);
 
     }
   }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone]);
@@ -1612,7 +1646,33 @@ const App: React.FC = () => {
   const [isNetworkSpectating, setIsNetworkSpectating] = useState(false);
 
   const displayTrades = useMemo(() => {
-    if (viewMode === 'individual') return trades.filter(t => t.accountId === effectiveActiveAccount.id);
+    if (viewMode === 'individual') {
+      // Strategie:
+      //   1. Primárně zkus zobrazit trades z aktivního účtu + jeho kopií (jeho "rodiny")
+      //   2. Pokud má aktivní účet 0 trades (typický case: prázdný master account jako "Hlavní účet"),
+      //      fallback na všechny účty v contextAccounts (= v aktuálním dashboardMode).
+      //      Tím uživatel uvidí všechny své challenge/funded trades i když má aktivní prázdný účet.
+      const activeId = effectiveActiveAccount.id;
+      const childIds = accounts.filter(a => a.parentAccountId === activeId).map(a => a.id);
+      const familyIds = new Set([activeId, ...childIds]);
+      // Pokud je aktivní účet kopie, přidej i master a sourozence
+      const masterId = effectiveActiveAccount.parentAccountId;
+      if (masterId) {
+        familyIds.add(masterId as string);
+        accounts.filter(a => a.parentAccountId === masterId).forEach(a => familyIds.add(a.id));
+      }
+      const familyResult = trades.filter(t => familyIds.has(t.accountId as string));
+
+      if (familyResult.length > 0) return familyResult;
+
+      // Fallback: žádné trades v rodině → ukaž všechny účty z contextAccounts
+      // (= účty co prošly dashboardMode filtrem, např. všechny challenge účty)
+      if (contextAccounts.length > 0) {
+        const contextIds = new Set(contextAccounts.map(a => a.id));
+        return trades.filter(t => contextIds.has(t.accountId as string));
+      }
+      return [];
+    }
 
     const grouped = new Map<string, Trade[]>();
     const independent: Trade[] = [];
@@ -1640,7 +1700,7 @@ const App: React.FC = () => {
     });
 
     return [...independent, ...aggregated].sort((a, b) => b.timestamp - a.timestamp);
-  }, [trades, viewMode]);
+  }, [trades, viewMode, effectiveActiveAccount, accounts, contextAccounts]);
 
   const stats = useMemo(() => {
     try {
@@ -1690,7 +1750,7 @@ const App: React.FC = () => {
       setBusinessGoals(dbGoals || []);
       setBusinessResources(dbResources || []);
 
-      if (dbPrefs) applyPreferences(dbPrefs);
+      if (dbPrefs && !isPreferencesDirty.current) applyPreferences(dbPrefs);
 
     } catch (error) {
       console.error('[Refresh] Error:', error);
@@ -2252,6 +2312,7 @@ const App: React.FC = () => {
             <h2 className="text-xl font-black uppercase tracking-tighter">
               {activePage === 'dashboard' && 'Dashboard'}
               {activePage === 'history' && 'Historie obchodu'}
+              {activePage === 'insights' && 'Insights'}
               {activePage === 'journal' && 'Deník'}
               {activePage === 'accounts' && 'Portfolio'}
               {activePage === 'settings' && 'Nastavení'}
@@ -2437,6 +2498,7 @@ const App: React.FC = () => {
                 trades={trades}
                 accounts={accounts}
                 ironRules={ironRules}
+                standardGoals={standardGoals}
                 playbookItems={playbookItems}
                 dailyPreps={dailyPreps}
                 dailyReviews={dailyReviews}
@@ -2448,6 +2510,55 @@ const App: React.FC = () => {
                 onOpenJournal={(date) => {
                   setJournalTargetDate(date);
                   setActivePage('journal');
+                }}
+                onApplyAction={(action) => {
+                  // Aplikuje doporučenou akci z AI Coache do uživatelova systému.
+                  // Každý typ akce má jiný target — Iron Rule, Goal (standardGoals), atd.
+                  // KRITICKÉ: setIronRules / setStandardGoals MUSÍ být doprovozeny
+                  // `isPreferencesDirty.current = true`, jinak background sync přepíše tvoje změny.
+                  switch (action.type) {
+                    case 'rule':
+                    case 'experiment': {
+                      // Experiment je rule s expirací — pro MVP ho přidáme jako Iron Rule
+                      // s prefixem ⏱ a duration suffixem. Auto-expire můžeme doplnit později.
+                      const prefix = action.type === 'experiment' && action.duration
+                        ? `⏱ [${action.duration}] ` : '';
+                      const label = `${prefix}${action.label}`;
+                      const newRule: IronRule = {
+                        id: `rule_${Date.now()}`,
+                        label,
+                        isActive: true,
+                      };
+                      setIronRules(prev => [...prev, newRule]);
+                      isPreferencesDirty.current = true;
+                      break;
+                    }
+                    case 'goal': {
+                      // Goals jsou string[] (standardGoals). Přidej jen pokud ještě není.
+                      setStandardGoals(prev =>
+                        prev.includes(action.label) ? prev : [...prev, action.label]
+                      );
+                      isPreferencesDirty.current = true;
+                      break;
+                    }
+                    case 'checklist': {
+                      // Checklist uložíme jako JEDEN Iron Rule s multi-line textem
+                      // (hlavička + odrážky). User pak vidí celý checklist pohromadě
+                      // v Settings → Pravidla. AI Coach k tomu má přístup.
+                      const items = action.items || [];
+                      const itemsText = items.length > 0
+                        ? '\n' + items.map(item => `  ▢ ${item}`).join('\n')
+                        : '';
+                      const newRule: IronRule = {
+                        id: `rule_${Date.now()}`,
+                        label: `📋 ${action.label}${itemsText}`,
+                        isActive: true,
+                      };
+                      setIronRules(prev => [...prev, newRule]);
+                      isPreferencesDirty.current = true;
+                      break;
+                    }
+                  }
                 }}
               />
             </React.Suspense>
@@ -2511,6 +2622,7 @@ const App: React.FC = () => {
                         setAiInitialPrompt(prompt);
                         setActivePage('ai');
                       }}
+                      onNavigateToSettings={() => setActivePage('settings')}
                     />
                   )}
 
@@ -2546,6 +2658,37 @@ const App: React.FC = () => {
                         viewMode={historyLayoutMode}
                       />
                     )
+                  )}
+
+                  {activePage === 'insights' && (
+                    <div className="p-4 md:p-8 max-w-7xl mx-auto w-full">
+                      <div className="mb-6">
+                        <h2 className={`text-3xl font-black tracking-tighter uppercase mb-1 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+                          Insights
+                        </h2>
+                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
+                          Pattern analýza nad tvojí historií · detekce leaks & strengths
+                        </p>
+                      </div>
+                      <InsightsPanel
+                        trades={trades}
+                        theme={theme}
+                        onAddRule={(rule) => {
+                          // Přidá insight jako nové Iron Rule
+                          const newRule = { id: `rule_${Date.now()}`, label: rule, isActive: true };
+                          setIronRules(prev => [...prev, newRule as any]);
+                        }}
+                        onAskAI={(prompt) => {
+                          // Otevře AI Coach s pre-fill promptem
+                          setAiInitialPrompt(prompt);
+                          setActivePage('ai');
+                        }}
+                        onOpenTrade={(trade) => {
+                          // Otevře trade detail modal (existující flow pro AI chat trade)
+                          setAiChatTrade(trade);
+                        }}
+                      />
+                    </div>
                   )}
 
                   {activePage === 'journal' && (

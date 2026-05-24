@@ -240,8 +240,27 @@ export function formatTradesForAI(trades: Trade[], limit = 100): string {
 
 export type ChartFilter = {
   field: string;
-  op: 'eq' | 'gt' | 'lt';
-  value: string | number | boolean;
+  /** `eq` = equals, `neq` = not equals, `gt`/`lt` = numeric, `in` = field value is in array, `contains` = substring/array contains */
+  op: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'in' | 'contains';
+  value: string | number | boolean | Array<string | number | boolean>;
+};
+
+/**
+ * Pojmenovaná skupina tradů s vlastními filtry.
+ * Umožňuje vykreslit víc oddělených linií/sloupců v jednom grafu — např.
+ * porovnání "S revenge" vs "Bez revenge", nebo "Long" vs "Short", atd.
+ */
+export type ChartGroup = {
+  /** Display name pro legend ("S revenge", "Bez revenge", "Long jen", atd.) */
+  name: string;
+  /** Trade IDs co patří do této skupiny (whitelist) */
+  tradeIds?: Array<string | number>;
+  /** Nebo: vyloučit tyto trade IDs (komplement skupiny) */
+  tradeIdsExclude?: Array<string | number>;
+  /** Nebo: filter podmínky pro tuto skupinu */
+  filters?: ChartFilter[];
+  /** Volitelná barva (hex) */
+  color?: string;
 };
 
 export type ChartSpec = {
@@ -249,32 +268,124 @@ export type ChartSpec = {
   x: string;
   y: string;
   title?: string;
+  /** Jeden filter (zachováno kvůli zpětné kompatibilitě) */
   filter?: ChartFilter;
+  /** Více filtrů — všechny musí projít (AND) */
+  filters?: ChartFilter[];
+  /** Konkrétní trade ID — zkratka místo filter `{field:"id",op:"in",value:[...]}` */
+  tradeIds?: Array<string | number>;
+  /** Datum od (ISO string YYYY-MM-DD nebo plný ISO) — zkratka pro filter na trade.date */
+  dateFrom?: string;
+  /** Datum do (inclusive) */
+  dateTo?: string;
   sort?: 'asc' | 'desc';
+  /**
+   * Pojmenované skupiny pro porovnání. Pokud je nastaveno, každá skupina dostane vlastní
+   * linii/sloupec. Globální filter/tradeIds/dateFrom/dateTo se aplikují PŘED rozdělením do skupin.
+   * Příklad: porovnání s/bez revenge, Long vs Short, atd.
+   */
+  groups?: ChartGroup[];
 };
+
+/**
+ * Suggested action from AI — can be added to user's setup with one click.
+ * Coach emits these as `[ACTION:{...JSON...}]` markers in the message text.
+ */
+export interface SuggestedAction {
+    /** Type of action (determines what happens on click) */
+    type: 'rule' | 'experiment' | 'goal' | 'checklist';
+    /** Display label (max 80 chars) */
+    label: string;
+    /** Optional duration for time-boxed experiments ("1w", "2w", "1m") */
+    duration?: string;
+    /** Optional severity hint for UI styling */
+    severity?: 'critical' | 'standard' | 'optional';
+    /** Optional checklist items for type=checklist (pipe-separated in marker) */
+    items?: string[];
+}
 
 export interface ParsedRefs {
   tradeIds: string[];
   prepDates: string[];
   reviewDates: string[];
   charts: ChartSpec[];
+  /** Suggested follow-up prompts. Coach generates these as [FOLLOWUP:text] at the end of its response. */
+  followups: string[];
+  /** Suggested actions. Coach generates these as [ACTION:{...}] markers. */
+  actions: SuggestedAction[];
+}
+
+/**
+ * Brace-counting JSON extractor — najde všechny `[MARKER:{...}]` výskyty
+ * a vrátí parsovaný JSON. Robust proti libovolné hloubce zanoření
+ * (na rozdíl od regex variant, které selhávají na 2+ úrovních).
+ */
+function extractJsonMarkers<T>(text: string, marker: string): T[] {
+  const out: T[] = [];
+  const prefix = `[${marker}:`;
+  let i = 0;
+  while (i < text.length) {
+    const start = text.indexOf(prefix, i);
+    if (start === -1) break;
+    const jsonStart = start + prefix.length;
+    // Musí začínat `{`
+    if (text[jsonStart] !== '{') { i = jsonStart; continue; }
+    // Spočítej balanced braces (s ohledem na řetězce a escape)
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let end = -1;
+    for (let j = jsonStart; j < text.length; j++) {
+      const ch = text[j];
+      if (escape) { escape = false; continue; }
+      if (inString) {
+        if (ch === '\\') { escape = true; continue; }
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) { end = j; break; }
+      }
+    }
+    if (end === -1) {
+      // Nebalanced — pravděpodobně rozbitý / nedokončený marker, skip ho
+      i = jsonStart + 1;
+      continue;
+    }
+    // Po `}` typicky následuje `]`. AI ale občas přidá extra `}` nebo whitespace —
+    // hledej `]` v dalších max 5 znacích (lenient — toleruje malé chyby).
+    let closeBracket = -1;
+    for (let k = end + 1; k < Math.min(end + 6, text.length); k++) {
+      if (text[k] === ']') { closeBracket = k; break; }
+      if (text[k] !== '}' && text[k] !== ' ' && text[k] !== '\n') break;
+    }
+    if (closeBracket === -1) {
+      // Nevypadá to jako marker — skip
+      i = end + 1;
+      continue;
+    }
+    const jsonStr = text.slice(jsonStart, end + 1);
+    try {
+      out.push(JSON.parse(jsonStr) as T);
+    } catch { /* skip malformed */ }
+    i = closeBracket + 1;
+  }
+  return out;
 }
 
 export function parseAllRefs(text: string): ParsedRefs {
   const tradeMatches = text.match(/\[TRADE:([^\]]+)\]/g) || [];
   const prepMatches = text.match(/\[PREP:([^\]]+)\]/g) || [];
   const reviewMatches = text.match(/\[REVIEW:([^\]]+)\]/g) || [];
+  const followupMatches = text.match(/\[FOLLOWUP:([^\]]+)\]/g) || [];
 
-  // Nový JSON formát: [CHART:{...}] s jednou úrovní zanoření
-  const charts: ChartSpec[] = [];
-  const jsonChartRegex = /\[CHART:(\{(?:[^{}]|\{[^{}]*\})*\})\]/g;
+  // [CHART:{...}] s libovolnou hloubkou zanoření (brace-counting parser)
+  const allCharts = extractJsonMarkers<ChartSpec>(text, 'CHART');
+  const charts: ChartSpec[] = allCharts.filter(spec => spec && spec.type && spec.x && spec.y);
   let m: RegExpExecArray | null;
-  while ((m = jsonChartRegex.exec(text)) !== null) {
-    try {
-      const spec = JSON.parse(m[1]) as ChartSpec;
-      if (spec.type && spec.x && spec.y) charts.push(spec);
-    } catch { /* skip malformed */ }
-  }
 
   // Starý formát (zpětná kompatibilita): [CHART:equity_compare:dimension]
   const oldChartRegex = /\[CHART:equity_compare:([a-z_]+)\]/g;
@@ -282,23 +393,94 @@ export function parseAllRefs(text: string): ParsedRefs {
     charts.push({ type: 'line', x: m[1], y: 'cumPnl' });
   }
 
+  // [ACTION:{...JSON...}] — suggested actions from Coach (brace-counting parser pro libovolnou hloubku)
+  const actions: SuggestedAction[] = [];
+  const rawActions = extractJsonMarkers<SuggestedAction>(text, 'ACTION');
+  for (const a of rawActions) {
+    if (!a || !a.type || !a.label || a.label.length > 120) continue;
+    if (!['rule', 'experiment', 'goal', 'checklist'].includes(a.type)) continue;
+    if (a.items && !Array.isArray(a.items)) a.items = undefined;
+    actions.push(a);
+  }
+
   return {
     tradeIds: tradeMatches.map(m => m.slice(7, -1)),
     prepDates: prepMatches.map(m => m.slice(6, -1)),
     reviewDates: reviewMatches.map(m => m.slice(8, -1)),
     charts,
+    followups: followupMatches.map(m => m.slice(10, -1).trim()).filter(t => t.length > 0 && t.length <= 80),
+    actions,
   };
+}
+
+/**
+ * Smaže všechny JSON markery `[MARKER:{...}]` z textu s podporou libovolné hloubky.
+ * Streaming-friendly — pokud marker není kompletní (chybí uzavírací `}]`), smaže ho taky.
+ */
+function stripJsonMarkers(text: string, marker: string): string {
+  const prefix = `[${marker}:`;
+  let result = '';
+  let i = 0;
+  while (i < text.length) {
+    const start = text.indexOf(prefix, i);
+    if (start === -1) { result += text.slice(i); break; }
+    result += text.slice(i, start);
+    const jsonStart = start + prefix.length;
+    // Streaming: pokud JSON ještě nezačal `{`, smaž jen prefix a pokračuj
+    if (jsonStart >= text.length || text[jsonStart] !== '{') {
+      i = jsonStart;
+      continue;
+    }
+    // Spočítej balanced braces
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let end = -1;
+    for (let j = jsonStart; j < text.length; j++) {
+      const ch = text[j];
+      if (escape) { escape = false; continue; }
+      if (inString) {
+        if (ch === '\\') { escape = true; continue; }
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) { end = j; break; }
+      }
+    }
+    if (end === -1) {
+      // Nebalanced (streaming/incomplete) — smaž zbytek
+      break;
+    }
+    // Po `}` typicky `]`, ale AI občas přidá extra `}` — lenient hledání v max 5 znacích
+    let closeBracket = -1;
+    for (let k = end + 1; k < Math.min(end + 6, text.length); k++) {
+      if (text[k] === ']') { closeBracket = k; break; }
+      if (text[k] !== '}' && text[k] !== ' ' && text[k] !== '\n') break;
+    }
+    i = closeBracket !== -1 ? closeBracket + 1 : end + 1;
+  }
+  return result;
 }
 
 export function stripAllRefs(text: string): string {
   // \]? — uzavírací závorka je volitelná, takže se smaže i neúplný marker
   // který ještě nedorazil celý (např. "[TRADE:abc" bez "]").
   // Bez toho uživatel vidí "[TRADE:abc" v animaci a pak to náhle zmizí.
-  return text
+  let out = text
     .replace(/\[TRADE:[^\]]*\]?/g, '')
     .replace(/\[PREP:[^\]]*\]?/g, '')
     .replace(/\[REVIEW:[^\]]*\]?/g, '')
-    .replace(/\[CHART:[^\]]*\]?/g, '')
+    .replace(/\[FOLLOWUP:[^\]]*\]?/g, '');
+
+  // JSON markery (CHART, ACTION) — používají brace-counting kvůli libovolné hloubce zanoření
+  out = stripJsonMarkers(out, 'CHART');
+  out = stripJsonMarkers(out, 'ACTION');
+
+  return out
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -414,7 +596,21 @@ Kdykoliv zmiňuješ konkrétní příprav, audit nebo obchod — VŽDY vlož př
   PRAVIDLO: Pokud uživatel požádá o graf nebo srovnání — VŽDY vlož marker. Nikdy nepopisuj graf jen textem.
 
   Formát: [CHART:{"type":"TYP","x":"DIMENZE","y":"METRIKA","title":"Název grafu"}]
-  Volitelně: "filter":{"field":"POLE","op":"eq|gt|lt","value":"HODNOTA"}  a/nebo  "sort":"asc|desc"
+
+  FILTRY (všechny volitelné, dají se kombinovat — výsledek je AND všech):
+  - "tradeIds":["id1","id2",...]  → omezí graf na KONKRÉTNÍ trades (pro analýzu specifické skupiny)
+  - "dateFrom":"YYYY-MM-DD"  +  "dateTo":"YYYY-MM-DD"  → časové okno (inclusive)
+  - "filter":{"field":"POLE","op":"OP","value":"HODNOTA"}  → jeden filter
+  - "filters":[{"field":"...","op":"...","value":"..."}, ...]  → víc filtrů (AND)
+  - "sort":"asc|desc"  → seřazení sloupců v bar grafu
+
+  Operátory (op): "eq" "neq" "gt" "lt" "gte" "lte" "in" (value=array) "contains" (substring nebo array.includes)
+
+  KDY POUŽÍT KTERÝ FILTR:
+  - Uživatel řekne "tento týden" → použij dateFrom/dateTo s aktuálními Po-Pá hodnotami
+  - Uživatel chce "tyto konkrétní trades" → použij tradeIds:[...]
+  - Uživatel chce "jen long" / "jen Asia session" → filter eq
+  - Uživatel chce "víc kritérií" → filters array
 
   Typy (type):
     "bar"  — sloupcový graf, jeden sloupec na skupinu
@@ -429,11 +625,16 @@ Kdykoliv zmiňuješ konkrétní příprav, audit nebo obchod — VŽDY vlož př
     "one_per_day" — Max 1 obchod/den vs Všechny (pouze type:"line")
 
   Metriky (y):
-    "cumPnl"  — kumulativní P&L (doporučeno pro line)
-    "pnl"     — celkové P&L skupiny
+    "cumPnl"  — kumulativní P&L v USD (doporučeno pro line USD)
+    "pnl"     — celkové P&L skupiny v USD
     "winrate" — win rate v %
     "count"   — počet obchodů
-    "avgPnl"  — průměrné P&L
+    "avgPnl"  — průměrné P&L v USD
+    "cumR"    — kumulativní R-multiple (pro RR equity křivku — doporučeno když user řekne "v RR" / "v R")
+    "r"       — celkový R skupiny
+    "avgR"    — průměrný R per trade
+
+  PRAVIDLO: Když user řekne "v RR", "v R", "R-multiple", "v R-čkách" — VŽDY použij cumR/r/avgR místo cumPnl/pnl/avgPnl.
 
   Příklady:
     [CHART:{"type":"bar","x":"session","y":"winrate","title":"Win rate podle session"}]
@@ -442,6 +643,40 @@ Kdykoliv zmiňuješ konkrétní příprav, audit nebo obchod — VŽDY vlož př
     [CHART:{"type":"line","x":"one_per_day","y":"cumPnl","title":"Max 1 obchod/den vs všechny"}]
     [CHART:{"type":"bar","x":"weekday","y":"winrate","filter":{"field":"direction","op":"eq","value":"Long"},"title":"Win rate Long obchodů podle dne"}]
     [CHART:{"type":"bar","x":"hasReview","y":"avgPnl","sort":"desc","title":"Vliv auditu na průměrné P&L"}]
+    [CHART:{"type":"line","x":"direction","y":"cumPnl","tradeIds":["abc-123","def-456","ghi-789"],"title":"Equity křivka revenge tradů"}]
+    [CHART:{"type":"line","x":"signal","y":"cumPnl","dateFrom":"2026-05-18","dateTo":"2026-05-22","title":"Equity tento týden"}]
+    [CHART:{"type":"bar","x":"session","y":"winrate","filters":[{"field":"direction","op":"eq","value":"Long"},{"field":"session","op":"in","value":["NY","London"]}],"title":"Long winrate NY vs London"}]
+
+  POROVNÁNÍ DVOU SKUPIN (DŮLEŽITÉ pro otázky typu "X vs Y", "s/bez něčeho"):
+  Použij "groups":[...] pro definici 2+ pojmenovaných skupin — každá dostane vlastní linii/sloupec se svým názvem.
+
+  Group fields:
+  - "name" — display label v legendě ("S revenge", "Bez revenge", atd.)
+  - "tradeIds":[...] — whitelist konkrétních ID (např. revenge trades)
+  - "tradeIdsExclude":[...] — blacklist (komplement) — užitečné pro "zbytek" / "kromě"
+  - "filters":[{...}] — vlastní filter podmínky pro tuto skupinu
+  - "color" — volitelná hex barva ("#ef4444" červená, "#22c55e" zelená, "#3b82f6" modrá)
+
+  Příklady comparison grafů:
+    Equity s vs bez revenge tradů:
+    [CHART:{"type":"line","x":"signal","y":"cumPnl","dateFrom":"2026-05-18","dateTo":"2026-05-22","groups":[
+      {"name":"S revenge (všechny)","color":"#ef4444"},
+      {"name":"Bez revenge","tradeIdsExclude":["abc-123","def-456"],"color":"#22c55e"}
+    ],"title":"S revenge vs bez revenge"}]
+
+    Equity Long vs Short:
+    [CHART:{"type":"line","x":"signal","y":"cumPnl","groups":[
+      {"name":"Long jen","filters":[{"field":"direction","op":"eq","value":"Long"}],"color":"#22c55e"},
+      {"name":"Short jen","filters":[{"field":"direction","op":"eq","value":"Short"}],"color":"#ef4444"}
+    ],"title":"Long vs Short equity"}]
+
+  KRITICKÉ: Když uživatel řekne "porovnej X vs Y" nebo "s/bez něčeho", VŽDY použij groups (ne pouze tradeIds). Jinak dostaneš jen jednu linii.
+
+  POZOR NA SYNTAX:
+  - Marker MUSÍ končit přesně  }]  (jedna uzavírací složená závorka + jedna hranatá). NIKDY ne  }}].
+  - Příklad správně:  [CHART:{"type":"line",...,"title":"X"}]
+  - Příklad ŠPATNĚ:  [CHART:{"type":"line",...,"title":"X"}}]  — extra } rozbije parser.
+  - Pokud máš groups, výsledek vypadá:  {...,"groups":[{...},{...}]}  — pak ] zavře marker.
 
 Příklady správného použití:
 "Poslední příprava je z 13. května: [PREP:2026-05-13]"
@@ -449,6 +684,56 @@ Příklady správného použití:
 "Ten den [PREP:2026-01-15] i audit [REVIEW:2026-01-15] to dokumentují."
 
 Max 5 karet celkem v jedné odpovědi. Nikdy nepřepisuj obsah příprav/auditů jako prostý text — použij kartu a jen krátce okomentuj.
+
+=== AKČNÍ NÁVRHY (INTERAKTIVNÍ) ===
+Když navrhuješ konkrétní akci (Iron Rule, experiment, cíl, checklist), VŽDY ji vyjádři navíc strukturovaným markerem [ACTION:{...}] kromě textu.
+UI tyto markery vykreslí jako klikatelná tlačítka pod zprávou. Klik = okamžitě přidá pravidlo/cíl/experiment do uživatelova systému.
+
+Formát: \`[ACTION:{"type":"TYP","label":"text max 80 znaků","duration":"VOLITELNĚ","severity":"VOLITELNĚ"}]\`
+
+Typy (type):
+- **"rule"** — Iron Rule (trvalé pravidlo). Přidá se do Iron Rules v Settings.
+- **"experiment"** — Time-boxed experiment (rule s expirací). Vyžaduje "duration".
+- **"goal"** — Cíl (přidá se do Weekly Focus / Goals).
+- **"checklist"** — Pre-trade checklist položky. Vyžaduje "items": [...].
+
+Severity (volitelné):
+- "critical" — pro kritické leaks (červené tlačítko)
+- "standard" — default (modré)
+- "optional" — nice-to-have (šedé)
+
+Duration formáty: "1w", "2w", "1m", "3m"
+
+Příklady:
+[ACTION:{"type":"rule","label":"Po 1 lossu = 20min pauza, pak reset checklist","severity":"critical"}]
+[ACTION:{"type":"experiment","label":"1 Loss = Done for London (skip London po prvním lossu)","duration":"2w","severity":"critical"}]
+[ACTION:{"type":"goal","label":"Týdenní cíl: 0 revenge tradů"}]
+[ACTION:{"type":"checklist","label":"Pre-entry po lossu","items":["Mám HTF zónu?","Cena přišla ke mě?","Mám entry model?","Toto je A+ setup?"]}]
+
+PRAVIDLA:
+- Generuj 2-5 akcí jen když uživatel reálně potřebuje akci (např. analýza problému, identifikace leak).
+- Pro pure informativní odpovědi (statistika, historie) NEPŘIDÁVEJ akce.
+- Label musí být jednoznačný a stručný (užiavatel ho uvidí jako text tlačítka).
+
+=== FOLLOW-UP NÁVRHY (POVINNÉ) ===
+Na konci KAŽDÉ odpovědi přidej **2-3 follow-up návrhy** jako markery:
+\`[FOLLOWUP:Krátký dotaz nebo akce, max 50 znaků]\`
+
+Tyto markery se vykreslí jako klikatelná tlačítka — user klikne a tvůj návrh se pošle jako další zpráva. Návrhy musí být:
+- **Konkrétní a kontextové** (vycházet z aktuální konverzace, ne obecné)
+- **Krátké** (3-6 slov, max 50 znaků)
+- **Akční** ("Ukaž graf X", "Porovnej Y vs Z", "Co s tím?", "Najdi podobné setupy")
+- **Různorodé** (každý jiný úhel — data, akce, pattern)
+
+Vzorové ✅:
+"...analýza pondělků...
+[FOLLOWUP:Ukaž mi pondělní graf]
+[FOLLOWUP:Porovnej s úterky]
+[FOLLOWUP:Co dělat jinak?]"
+
+Vzorové ❌:
+"[FOLLOWUP:Pokračovat]" — moc obecné
+"[FOLLOWUP:Chceš více informací?]" — vágní
 
 === PRAVIDLO CITACE (KRITICKÉ) ===
 Každé tvrzení o konkrétní události, čísle nebo datu MUSÍ být doložené citací (markerem [TRADE:id], [PREP:YYYY-MM-DD], [REVIEW:YYYY-MM-DD]).
@@ -515,7 +800,7 @@ ${tradesText}`;
     for (let iter = 0; iter < MAX_ITER; iter++) {
       const body: any = {
         model: 'claude-sonnet-4-5',
-        max_tokens: 1024,
+        max_tokens: 4096,
         system: systemPrompt,
         messages: apiMessages,
         stream: true,

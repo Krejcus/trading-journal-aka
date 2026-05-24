@@ -80,13 +80,15 @@ const DailyInsightWidget: React.FC<Props> = ({ theme, trades, onOpenTrade }) => 
   const fetchLatest = useCallback(async (): Promise<InsightRecord | null> => {
     try {
       const result = await withTimeout(
-        supabase
-          .from('daily_insights')
-          .select('*')
-          .eq('is_dismissed', false)
-          .order('generated_at', { ascending: false })
-          .limit(1)
-          .maybeSingle(),
+        Promise.resolve(
+          supabase
+            .from('daily_insights')
+            .select('*')
+            .eq('is_dismissed', false)
+            .order('generated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        ),
         5000,
       );
       if (!result) return null;
@@ -195,7 +197,7 @@ const DailyInsightWidget: React.FC<Props> = ({ theme, trades, onOpenTrade }) => 
   const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <div
       ref={containerRef}
-      className={`${size === 'lg' ? 'p-6' : size === 'md' ? 'p-5' : 'p-4'} rounded-[24px] lg:rounded-[32px] h-full flex flex-col overflow-hidden glass-panel`}
+      className={`${size === 'lg' ? 'p-6' : size === 'md' ? 'p-5' : 'p-4'} rounded-[24px] lg:rounded-[32px] h-full min-h-0 w-full flex flex-col overflow-hidden glass-panel`}
     >
       {children}
     </div>

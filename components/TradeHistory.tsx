@@ -11,7 +11,7 @@ import {
   ShieldCheck, ShieldAlert, BarChart3, Activity, Zap, Monitor,
   Maximize2, ArrowRight, Gauge, Hash, Ruler, Percent,
   Compass, Hourglass, Cpu, Terminal, Layers, ArrowUpRight, ArrowDownRight,
-  Share2, Check, Copy, LayoutGrid, List
+  Share2, Check, Copy, LayoutGrid, List, AlertOctagon, Clock, Timer, CheckCircle2
 } from 'lucide-react';
 
 import TradeDetailModal from './TradeDetailModal';
@@ -124,15 +124,19 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     });
   };
 
-  // Sync selectedTrade when trades prop changes (e.g., after drawing update)
+  // Sync selectedTrade when trades change.
+  // DŮLEŽITÉ: hledáme v `allTrades` (kompletní list), ne ve `trades` (po filtru).
+  // Jinak po editaci na Invalid/Missed by trade vypadl z filtru "Valid only" a selectedTrade
+  // by se neaktualizoval — modal by zůstal viset na staré verzi.
   useEffect(() => {
     if (selectedTrade) {
-      const updated = trades.find(t => t.id === selectedTrade.id);
+      const source = allTrades.length > 0 ? allTrades : trades;
+      const updated = source.find(t => t.id === selectedTrade.id);
       if (updated && JSON.stringify(updated) !== JSON.stringify(selectedTrade)) {
         setSelectedTrade(updated);
       }
     }
-  }, [trades, selectedTrade]);
+  }, [trades, allTrades, selectedTrade]);
 
   // Ensure trades are always sorted by date (newest first) for consistent display and navigation
   const sortedTrades = useMemo(() =>
@@ -146,6 +150,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     [sortedTrades, visibleCount]
   );
   const hasMore = visibleCount < sortedTrades.length;
+
 
   // --- MULTI-SELECT HANDLERS ---
   const toggleTradeSelection = (tradeId: string | number) => {
@@ -455,25 +460,54 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   </div>
                 )}
 
-                <div className="absolute top-2 right-4 opacity-5 pointer-events-none">
-                  <span className="text-[8px] font-mono font-bold tracking-widest uppercase">System.Alpha.v4.0</span>
-                </div>
-                <div className="absolute bottom-2 left-4 opacity-5 pointer-events-none">
-                  <span className="text-[8px] font-mono font-bold tracking-widest uppercase">LOG_ID_{tradeHex}</span>
-                </div>
 
                 <div className="flex-1 flex flex-col justify-between p-6 min-w-0 relative z-10">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3 mb-1">
-                      <span className={`px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter ${isMissed ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                        isWin ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border-rose-500/20'
-                        }`}>
-                        {isMissed ? 'MISSED' : trade.direction}
+                  <div className="space-y-2.5">
+                    {/* Row 1: Datum (zvýrazněno) */}
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <Calendar size={11} className="text-slate-400" />
+                      <span className={`text-xs font-black font-mono tracking-tight ${theme !== 'light' ? 'text-slate-200' : 'text-slate-800'}`}>
+                        {formatTradeDate(trade.date).date}
                       </span>
-                      <div className="flex items-center gap-1.5 bg-slate-500/5 px-2 py-0.5 rounded border border-white/5">
-                        <Calendar size={8} className="text-slate-500" />
-                        <span className="text-[9px] font-mono font-bold text-slate-500">{formatTradeDate(trade.date).date}</span>
-                      </div>
+                    </div>
+
+                    {/* Row 2: Instrument (hero) — hned pod datem pro maximální důraz */}
+                    <h3 className={`text-2xl font-black uppercase tracking-tighter truncate leading-none ${theme !== 'light' ? 'text-white group-hover:text-trade-accent' : 'text-slate-900'} transition-colors duration-300`}>
+                      {trade.instrument}
+                    </h3>
+
+                    {/* Row 3: Direction + Status + Phase */}
+                    <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                      {(() => {
+                        const isLong = String(trade.direction || '').toLowerCase() === 'long';
+                        return (
+                          <span className={`px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter flex items-center gap-1 ${
+                            isLong ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+                          }`}>
+                            {isLong ? <ArrowUpRight size={9} strokeWidth={3} /> : <ArrowDownRight size={9} strokeWidth={3} />}
+                            {trade.direction}
+                          </span>
+                        );
+                      })()}
+                      {/* Execution Status badge — always show */}
+                      {(() => {
+                        const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
+                        if (status === 'Missed') return (
+                          <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter flex items-center gap-1 bg-blue-500/10 text-blue-400 border-blue-500/20">
+                            <Clock size={9} strokeWidth={3} /> MISSED
+                          </span>
+                        );
+                        if (status === 'Invalid') return (
+                          <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter flex items-center gap-1 bg-rose-500/10 text-rose-500 border-rose-500/20">
+                            <AlertOctagon size={9} strokeWidth={3} /> NEVALIDNÍ
+                          </span>
+                        );
+                        return (
+                          <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter flex items-center gap-1 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+                            <CheckCircle2 size={9} strokeWidth={3} /> VALIDNÍ
+                          </span>
+                        );
+                      })()}
                       {getTradePhase(trade) && (
                         <span className={`px-1.5 py-0.5 rounded text-[7px] font-black tracking-widest border ${
                             getTradePhase(trade) === 'Funded'
@@ -487,62 +521,62 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       )}
                     </div>
 
-                    <h3 className={`text-2xl font-black uppercase tracking-tighter truncate leading-none ${theme !== 'light' ? 'text-white group-hover:text-trade-accent' : 'text-slate-900'} transition-colors duration-300`}>
-                      {trade.instrument}
-                    </h3>
-
-                    <div className={`flex items-center gap-1.5 mt-1.5 px-2.5 py-1.5 rounded-lg border flex-wrap ${isGroupTrade
+                    {/* Row 4: Account pill — kompaktní, stejný styl jako ostatní badge */}
+                    <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border w-fit ${isGroupTrade
                         ? 'bg-blue-500/5 border-blue-500/15'
                         : theme !== 'light' ? 'bg-white/[0.03] border-white/5' : 'bg-slate-50 border-slate-200'
                       }`}>
-                      <Terminal size={12} className={isGroupTrade ? 'text-blue-400' : 'text-slate-500'} />
+                      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                        tradeAccount?.type === 'Funded' ? 'bg-purple-500' :
+                        isGroupTrade ? 'bg-blue-500' :
+                        'bg-emerald-500'
+                      }`} />
                       {isCombinedCard && masterAcc ? (
                         <>
-                          <span className={`text-[11px] font-black uppercase tracking-wide truncate max-w-[140px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-700'}`}>
+                          <span className={`text-[8px] font-black uppercase tracking-tighter truncate max-w-[120px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-600'}`}>
                             {masterAcc.name}
                           </span>
-                          <ArrowRight size={10} className="text-blue-400/60" />
-                          <span className="text-[9px] font-black text-blue-400 uppercase tracking-wider">
+                          <ArrowRight size={8} className="text-blue-400/60" />
+                          <span className="text-[7px] font-black text-blue-400 uppercase tracking-widest">
                             {copyCount} {copyCount === 1 ? 'copy' : 'copies'}
                           </span>
                         </>
                       ) : (
                         <>
-                          <span className={`text-[11px] font-black uppercase tracking-wide truncate max-w-[140px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-700'}`}>
+                          <span className={`text-[8px] font-black uppercase tracking-tighter truncate max-w-[120px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-600'}`}>
                             {getAccountName(trade.accountId)}
                           </span>
                           {isMasterCard && (
-                            <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 rounded text-[7px] font-black tracking-widest border border-blue-500/30">MASTER</span>
+                            <span className="px-1 py-0 bg-blue-600/20 text-blue-400 rounded text-[6px] font-black tracking-widest border border-blue-500/30">MASTER</span>
                           )}
                           {isCopyCard && (
-                            <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 rounded text-[7px] font-black tracking-widest border border-purple-500/30">COPY</span>
+                            <span className="px-1 py-0 bg-purple-600/20 text-purple-400 rounded text-[6px] font-black tracking-widest border border-purple-500/30">COPY</span>
                           )}
                         </>
                       )}
                     </div>
 
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {(trade.emotions || []).slice(0, 3).map(eId => {
-                        const e = getEmotionDetails(eId);
-                        return <span key={eId} className="text-[8px] font-black uppercase text-blue-500/60 bg-blue-500/5 px-2 py-0.5 rounded border border-blue-500/10">{e.label}</span>;
-                      })}
-                    </div>
+                    {/* Row 4: Emoce */}
+                    {(trade.emotions || []).length > 0 && (
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        {(trade.emotions || []).slice(0, 3).map(eId => {
+                          const e = getEmotionDetails(eId);
+                          return <span key={eId} className="text-[9px] font-black uppercase text-purple-500/70 bg-purple-500/5 px-2 py-0.5 rounded border border-purple-500/15">{e.label}</span>;
+                        })}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex items-end justify-between mt-6 md:mt-0">
-                    <div className="flex flex-col">
-                      <span className={`text-3xl md:text-4xl font-black tracking-tighter leading-none font-mono ${pnlColor}`}>
-                        {formatValue(
-                          trade.pnl,
-                          pnlDisplayMode,
-                          accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
-                          trade.riskAmount ? trade.pnl / trade.riskAmount : undefined
-                        )}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[9px] font-black uppercase text-slate-500 group-hover:text-blue-500 transition-all duration-300 group-hover:translate-x-1">
-                      Audit <ChevronRight size={14} className="text-blue-500/50" />
-                    </div>
+                  {/* Bottom: PnL */}
+                  <div className="flex items-end mt-6 md:mt-0">
+                    <span className={`text-3xl md:text-4xl font-black tracking-tighter leading-none font-mono ${pnlColor}`}>
+                      {formatValue(
+                        trade.pnl,
+                        pnlDisplayMode,
+                        accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
+                        trade.riskAmount ? trade.pnl / trade.riskAmount : undefined
+                      )}
+                    </span>
                   </div>
                 </div>
 

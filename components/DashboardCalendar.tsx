@@ -292,6 +292,13 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
       return trades.filter(t => t.executionStatus !== 'Missed').reduce((acc, t) => acc + t.pnl, 0);
    }, [trades]);
 
+   // Metrika pro výběr barvy měsíčního souhrnu — v RR módu RR, jinak USD
+   const totalMonthColorMetric = useMemo(() => {
+      if (pnlFormat === 'rr') return calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed'));
+      return totalMonthPnl;
+   }, [trades, pnlFormat, totalMonthPnl]);
+   const monthIsPositive = totalMonthColorMetric >= 0;
+
    const maxDayPnL = useMemo(() => {
       const absolutePnLs = gridRows.flatMap(row => row.map(cell => cell.type === 'day' ? Math.abs(cell.data!.pnl) : 0));
       return Math.max(...absolutePnLs, 1);
@@ -314,7 +321,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
                </div>
                <div className="flex flex-col items-end">
                   <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Měsíční PnL</span>
-                  <span className={`text-lg font-mono font-black tracking-tighter leading-tight ${totalMonthPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  <span className={`text-lg font-mono font-black tracking-tighter leading-tight ${monthIsPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
                      {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                   </span>
                </div>
@@ -336,7 +343,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
             </div>
             <div className={`flex flex-col items-end gap-1 px-5 py-3 rounded-2xl border ${theme === 'oled' ? 'bg-black border-white/10' : theme === 'dark' ? 'bg-slate-900/50 border-white/5' : 'bg-white border-slate-200'}`}>
                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-500">Měsíční PnL</span>
-               <span className={`text-2xl font-mono font-black tracking-tighter ${totalMonthPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+               <span className={`text-2xl font-mono font-black tracking-tighter ${monthIsPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
                   {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                </span>
             </div>
@@ -392,31 +399,38 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    if (cell.type === 'summary') {
       const week = cell.summaryData!;
       const { pnl, weekIndex } = week;
+      // V RR módu rozhoduj barvu podle RR (ne USD) — RR a USD se mohou rozcházet znaménkem
+      const weekTrades = week.days.flatMap(d => d.trades);
+      const colorMetric = pnlFormat === 'rr' ? calculateTotalRR(weekTrades) : pnl;
+      const isPositive = colorMetric >= 0;
       return (
          <div onClick={() => onWeekClick(week)} className={`rounded-2xl flex flex-col items-center justify-center p-2 border transition-all cursor-pointer relative overflow-hidden group hover:ring-2 hover:ring-blue-500/50 ${theme === 'oled' ? 'bg-black border-white/10 text-slate-400 hover:bg-white/5' :
             theme === 'dark' ? 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10' :
                'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
             }`}>
-            <div className={`absolute top-0 w-full h-1 ${pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+            <div className={`absolute top-0 w-full h-1 ${isPositive ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
             <span className="text-[8px] font-black uppercase tracking-widest opacity-60 mb-0.5">T{weekIndex}</span>
-            <span className={`font-black font-mono text-[11px] md:text-sm leading-tight ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-               {formatPnLCompact(pnl, pnlFormat, week.days.flatMap(d => d.trades), initialBalance)}
+            <span className={`font-black font-mono text-[11px] md:text-sm leading-tight ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+               {formatPnLCompact(pnl, pnlFormat, weekTrades, initialBalance)}
             </span>
             <div className="absolute inset-0 bg-blue-500/0 group-hover:bg-blue-500/5 transition-colors duration-200" />
          </div>
       );
    }
    const day = cell.data!;
+   // V RR módu rozhoduj barvu podle součtu RR (ne USD) — mohou se rozcházet znaménkem
+   const dayColorMetric = pnlFormat === 'rr' ? calculateTotalRR(day.trades.filter(t => t.executionStatus !== 'Missed')) : day.pnl;
+   const dayIsPositive = dayColorMetric >= 0;
    const intensity = day.hasTrades ? Math.max(0.15, Math.min(1, Math.abs(day.pnl) / maxPnL)) : 0;
    let bgStyle = {};
    let borderClass = theme !== 'light' ? 'border-white/5' : 'border-slate-100';
    if (day.hasTrades) {
-      const color = day.pnl >= 0 ? '16, 185, 129' : '244, 63, 94';
+      const color = dayIsPositive ? '16, 185, 129' : '244, 63, 94';
       bgStyle = { backgroundColor: `rgba(${color}, ${intensity})` };
-      borderClass = day.pnl >= 0 ? 'border-emerald-500/30' : 'border-rose-500/30';
+      borderClass = dayIsPositive ? 'border-emerald-500/30' : 'border-rose-500/30';
    }
    const pnlCompact = day.hasTrades ? formatPnLCompact(day.pnl, pnlFormat, day.trades, initialBalance) : null;
-   const textColor = intensity > 0.6 ? 'text-white' : (day.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400');
+   const textColor = intensity > 0.6 ? 'text-white' : (dayIsPositive ? 'text-emerald-400' : 'text-rose-400');
    return (
       <div onClick={() => onDayClick(day)} className={`rounded-xl md:rounded-2xl p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black shadow-none' : theme === 'dark' ? 'bg-white/5' : 'bg-white shadow-sm'}`} style={bgStyle}>
          {/* Day number */}

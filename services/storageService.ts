@@ -123,6 +123,8 @@ export const storageService = {
         miniViewRange: d.miniViewRange, miniViewLayout: d.miniViewLayout,
         miniViewSecondaryRange: d.miniViewSecondaryRange,
         miniViewSecondaryTimeframe: d.miniViewSecondaryTimeframe,
+        // AI návrhy z enrich-trade Edge Function (HTF/LTF/mistakes/emotions + reasoning)
+        aiSuggestions: d.aiSuggestions || undefined,
         data: {}
       };
     }) as Trade[];
@@ -350,7 +352,8 @@ export const storageService = {
         masterTradeId:data->>masterTradeId,
         entryTime:data->>entryTime,
         screenshot:data->>screenshot,
-        screenshots:data->screenshots
+        screenshots:data->screenshots,
+        aiSuggestions:data->aiSuggestions
       `)
       .eq('user_id', userId)
       .order('timestamp', { ascending: false });
@@ -405,6 +408,7 @@ export const storageService = {
       // Include screenshot URLs (small strings, not base64 blobs — safe to include always)
       screenshot: t.screenshot && !String(t.screenshot).startsWith('data:') ? t.screenshot : undefined,
       screenshots: t.screenshots?.filter((s: string) => s && !String(s).startsWith('data:')) || undefined,
+      aiSuggestions: t.aiSuggestions || undefined,
       miniViewRange: t.miniViewRange,
       miniViewLayout: t.miniViewLayout,
       miniViewSecondaryRange: t.miniViewSecondaryRange,
@@ -427,16 +431,31 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
-    // We update both the JSONB column AND the data jsonb column to allow migration/fallback
-    // Ideally we just update the root column `drawings`
+    // Synchronizujeme drawings na DVOU místech:
+    //   1. root sloupec `drawings` — primární source of truth
+    //   2. `data.drawings` v JSONB — saveTrades() bulk save jinak může drawings přepsat stale verzí
+    // Bez kroku 2 dochází k tomu, že bulk save z data blobu (kde má stale drawings) přemaže
+    // čerstvé drawings v root sloupci.
+
+    // Načti aktuální data blob ať můžeme drawings do něj merge-nout
+    const { data: current, error: getErr } = await supabase
+      .from('trades')
+      .select('data')
+      .eq('id', tradeId)
+      .eq('user_id', userId)
+      .single();
+    if (getErr) {
+      console.error("Failed to fetch trade before drawings update:", getErr);
+      throw getErr;
+    }
+
+    const mergedData = { ...(current?.data || {}), drawings };
 
     const { error } = await supabase
       .from('trades')
       .update({
         drawings: drawings,
-        // We also update the 'data' blob to keep it in sync if architecture relies on it
-        // detailed update might be complex without fetching first. 
-        // For now, let's just update the root column which is the source of truth for drawings.
+        data: mergedData,
       })
       .eq('id', tradeId)
       .eq('user_id', userId);

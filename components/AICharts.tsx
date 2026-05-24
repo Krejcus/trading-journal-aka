@@ -22,6 +22,10 @@ const METRIC_FORMATTER: Record<string, (v: number) => string> = {
   winrate:  v => `${v}%`,
   count:    v => `${v}`,
   avgPnl:   v => `$${v}`,
+  // R-multiple metriky — používají risk amount per trade
+  cumR:     v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}R`,
+  r:        v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}R`,
+  avgR:     v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}R`,
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -33,10 +37,15 @@ function getDimensionKey(
   reviewDates: Set<string>,
 ): string | null {
   switch (dim) {
-    case 'session':    return trade.session || null;
-    case 'signal':     return trade.signal || null;
-    case 'direction':  return trade.direction || null;
-    case 'instrument': return trade.instrument || null;
+    case 'session':    return trade.session ? String(trade.session).trim() : null;
+    case 'signal':     return trade.signal ? String(trade.signal).trim() : null;
+    // Normalize direction case ("LONG" / "Long" / "long" → "Long"), aby se nevytvářely duplicitní skupiny
+    case 'direction': {
+      if (!trade.direction) return null;
+      const s = String(trade.direction).trim().toLowerCase();
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    case 'instrument': return trade.instrument ? String(trade.instrument).trim() : null;
     case 'weekday': {
       if (!trade.date) return null;
       return WEEKDAY_NAMES[new Date(trade.date).getDay()] ?? null;
@@ -51,17 +60,76 @@ function getDimensionKey(
   }
 }
 
-function applyFilter(trades: Trade[], filter?: ChartSpec['filter']): Trade[] {
-  if (!filter) return trades;
-  return trades.filter(t => {
-    const val = (t as any)[filter.field];
-    switch (filter.op) {
-      case 'eq': return String(val) === String(filter.value);
-      case 'gt': return Number(val) > Number(filter.value);
-      case 'lt': return Number(val) < Number(filter.value);
-      default:   return true;
+function matchesSingleFilter(t: Trade, filter: NonNullable<ChartSpec['filter']>): boolean {
+  const val = (t as any)[filter.field];
+  switch (filter.op) {
+    case 'eq': return String(val) === String(filter.value);
+    case 'neq': return String(val) !== String(filter.value);
+    case 'gt': return Number(val) > Number(filter.value);
+    case 'lt': return Number(val) < Number(filter.value);
+    case 'gte': return Number(val) >= Number(filter.value);
+    case 'lte': return Number(val) <= Number(filter.value);
+    case 'in': {
+      const arr = Array.isArray(filter.value) ? filter.value : [filter.value];
+      const valStr = String(val);
+      return arr.some(v => String(v) === valStr);
     }
-  });
+    case 'contains': {
+      // String substring nebo array.includes
+      if (Array.isArray(val)) return val.some(v => String(v) === String(filter.value));
+      return String(val ?? '').toLowerCase().includes(String(filter.value).toLowerCase());
+    }
+    default: return true;
+  }
+}
+
+/**
+ * Aplikuje VŠECHNY filter mechanismy na trades:
+ * - `filter` (single, zpětná kompatibilita)
+ * - `filters` (array, AND)
+ * - `tradeIds` (whitelist konkrétních ID)
+ * - `dateFrom` / `dateTo` (date range na trade.date)
+ */
+function applyFilter(trades: Trade[], spec: ChartSpec): Trade[] {
+  let result = trades;
+
+  // tradeIds — nejvyšší priorita, často nejvíc selektivní
+  if (spec.tradeIds && spec.tradeIds.length > 0) {
+    const idSet = new Set(spec.tradeIds.map(String));
+    result = result.filter(t => idSet.has(String(t.id)));
+  }
+
+  // Date range — porovnává trade.date (ISO) proti dateFrom/dateTo
+  if (spec.dateFrom || spec.dateTo) {
+    const from = spec.dateFrom ? new Date(spec.dateFrom).getTime() : -Infinity;
+    // dateTo je inclusive → použijeme konec dne pokud je to jen YYYY-MM-DD
+    const toRaw = spec.dateTo;
+    const to = toRaw
+      ? (toRaw.length === 10 ? new Date(toRaw + 'T23:59:59.999Z').getTime() : new Date(toRaw).getTime())
+      : Infinity;
+    result = result.filter(t => {
+      const ts = t.timestamp || (t.date ? new Date(t.date).getTime() : 0);
+      return ts >= from && ts <= to;
+    });
+  }
+
+  // Single filter (backward compat)
+  if (spec.filter) {
+    result = result.filter(t => matchesSingleFilter(t, spec.filter!));
+  }
+
+  // Multi filter (AND)
+  if (spec.filters && spec.filters.length > 0) {
+    result = result.filter(t => spec.filters!.every(f => matchesSingleFilter(t, f)));
+  }
+
+  return result;
+}
+
+/** Spočítá R pro jeden trade (pnl / riskAmount). Vrací null pokud riskAmount není > 0. */
+function tradeR(t: Trade): number | null {
+  if (!t.riskAmount || t.riskAmount <= 0) return null;
+  return t.pnl / t.riskAmount;
 }
 
 function computeMetric(grpTrades: Trade[], metric: string): number {
@@ -76,8 +144,40 @@ function computeMetric(grpTrades: Trade[], metric: string): number {
       return grpTrades.length;
     case 'avgPnl':
       return parseFloat((grpTrades.reduce((s, t) => s + t.pnl, 0) / grpTrades.length).toFixed(2));
+    // R-multiple metriky — počítají s pnl/riskAmount per trade
+    case 'r':
+    case 'cumR': {
+      const total = grpTrades.reduce((s, t) => s + (tradeR(t) ?? 0), 0);
+      return parseFloat(total.toFixed(2));
+    }
+    case 'avgR': {
+      const valid = grpTrades.map(tradeR).filter((x): x is number => x !== null);
+      if (valid.length === 0) return 0;
+      const avg = valid.reduce((s, v) => s + v, 0) / valid.length;
+      return parseFloat(avg.toFixed(2));
+    }
     default: return 0;
   }
+}
+
+/**
+ * Aplikuje skupinové filtry — vrátí trades, které spadají do dané ChartGroup.
+ * Priorita: tradeIds (whitelist) → tradeIdsExclude (blacklist) → filters (AND)
+ */
+function tradesInGroup(trades: Trade[], group: { tradeIds?: Array<string | number>; tradeIdsExclude?: Array<string | number>; filters?: ChartSpec['filters'] }): Trade[] {
+  let result = trades;
+  if (group.tradeIds && group.tradeIds.length > 0) {
+    const inSet = new Set(group.tradeIds.map(String));
+    result = result.filter(t => inSet.has(String(t.id)));
+  }
+  if (group.tradeIdsExclude && group.tradeIdsExclude.length > 0) {
+    const outSet = new Set(group.tradeIdsExclude.map(String));
+    result = result.filter(t => !outSet.has(String(t.id)));
+  }
+  if (group.filters && group.filters.length > 0) {
+    result = result.filter(t => group.filters!.every(f => matchesSingleFilter(t, f)));
+  }
+  return result;
 }
 
 function buildGroupMap(
@@ -130,8 +230,20 @@ export const DynamicChart: React.FC<Props> = ({
   const prepDates   = React.useMemo(() => new Set(dailyPreps.map(p => p.date?.slice(0, 10) ?? '')),   [dailyPreps]);
   const reviewDates = React.useMemo(() => new Set(dailyReviews.map(r => r.date?.slice(0, 10) ?? '')), [dailyReviews]);
 
-  const filtered  = React.useMemo(() => applyFilter(trades, spec.filter), [trades, spec.filter]);
-  const groupMap  = React.useMemo(() => buildGroupMap(filtered, spec.x, prepDates, reviewDates), [filtered, spec.x, prepDates, reviewDates]);
+  const filtered  = React.useMemo(() => applyFilter(trades, spec), [trades, spec]);
+
+  // Pokud má spec definované `groups`, každá skupina = jedna line/sloupec.
+  // Jinak grupujeme podle dimenze `spec.x` (původní chování).
+  const groupMap = React.useMemo(() => {
+    if (spec.groups && spec.groups.length > 0) {
+      const m = new Map<string, Trade[]>();
+      for (const g of spec.groups) {
+        m.set(g.name, tradesInGroup(filtered, g));
+      }
+      return m;
+    }
+    return buildGroupMap(filtered, spec.x, prepDates, reviewDates);
+  }, [filtered, spec.x, spec.groups, prepDates, reviewDates]);
   const groupNames = Array.from(groupMap.keys());
 
   const title = spec.title ?? `${spec.y} / ${spec.x}`;
@@ -147,11 +259,16 @@ export const DynamicChart: React.FC<Props> = ({
 
   // ── BAR CHART ──────────────────────────────────────────────────────────────
   if (spec.type === 'bar') {
+    // Najdi color override z spec.groups (pokud existuje)
+    const colorByName = new Map<string, string>();
+    if (spec.groups) {
+      for (const g of spec.groups) if (g.color) colorByName.set(g.name, g.color);
+    }
     let barData = groupNames.map((name, idx) => ({
       name,
       value: computeMetric(groupMap.get(name)!, spec.y),
       count: groupMap.get(name)!.length,
-      color: COLORS[idx % COLORS.length],
+      color: colorByName.get(name) || COLORS[idx % COLORS.length],
     }));
     if (spec.sort === 'desc') barData = [...barData].sort((a, b) => b.value - a.value);
     if (spec.sort === 'asc')  barData = [...barData].sort((a, b) => a.value - b.value);
@@ -225,7 +342,10 @@ export const DynamicChart: React.FC<Props> = ({
     ),
   )).sort();
 
-  // Pro každou skupinu: datum → kumulativní PnL po všech obchodech toho dne
+  // Pro každou skupinu: datum → kumulativní hodnota po všech obchodech toho dne.
+  // Volba metriky podle spec.y: 'cumPnl' = USD, 'cumR' = R-multiple, atd.
+  // Pro line chart dává smysl jen kumulativní metriky.
+  const useR = spec.y === 'cumR' || spec.y === 'r' || spec.y === 'avgR';
   const groupDatePnl = new Map<string, Map<string, number>>();
   for (const [name, groupTrades] of groupMap.entries()) {
     const sorted = [...groupTrades].sort((a, b) =>
@@ -234,7 +354,8 @@ export const DynamicChart: React.FC<Props> = ({
     let running = 0;
     const datePnl = new Map<string, number>();
     for (const t of sorted) {
-      running += t.pnl;
+      const delta = useR ? (tradeR(t) ?? 0) : t.pnl;
+      running += delta;
       datePnl.set(t.date?.slice(0, 10) ?? '', parseFloat(running.toFixed(2)));
     }
     groupDatePnl.set(name, datePnl);
@@ -305,30 +426,34 @@ export const DynamicChart: React.FC<Props> = ({
             />
             <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '8px' }} />
             <ReferenceLine y={0} stroke="rgba(255,255,255,0.1)" />
-            {groupNames.map((name, idx) => (
-              <Line
-                key={name}
-                type="monotone"
-                dataKey={name}
-                stroke={COLORS[idx % COLORS.length]}
-                strokeWidth={2}
-                dot={false}
-                connectNulls={false}
-                isAnimationActive={false}
-              />
-            ))}
+            {groupNames.map((name, idx) => {
+              const overrideColor = spec.groups?.find(g => g.name === name)?.color;
+              return (
+                <Line
+                  key={name}
+                  type="monotone"
+                  dataKey={name}
+                  stroke={overrideColor || COLORS[idx % COLORS.length]}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+              );
+            })}
           </LineChart>
         </ResponsiveContainer>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {lineStats.map((s, idx) => {
           const isPos = s.finalPnl >= 0;
+          const overrideColor = spec.groups?.find(g => g.name === s.name)?.color;
           return (
             <div key={s.name} className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[10px]">
-              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
+              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: overrideColor || COLORS[idx % COLORS.length] }} />
               <span className="font-bold text-[var(--text-primary)]">{s.name}</span>
               <span className={`font-mono font-black ${isPos ? 'text-emerald-500' : 'text-rose-500'}`}>
-                {isPos ? '+' : ''}${s.finalPnl.toFixed(0)}
+                {useR ? `${isPos ? '+' : ''}${s.finalPnl.toFixed(2)}R` : `${isPos ? '+' : ''}$${s.finalPnl.toFixed(0)}`}
               </span>
               <span className="text-[var(--text-secondary)]">{s.count} obchodů</span>
               <span className="text-[var(--text-secondary)]">{s.winRate}% WR</span>

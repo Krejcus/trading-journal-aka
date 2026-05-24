@@ -49,6 +49,8 @@ import {
   Sparkles
 } from 'lucide-react';
 import DailyInsightWidget from './DailyInsightWidget';
+import PendingReviewWidget from './PendingReviewWidget';
+import DailyFocusWidget from './DailyFocusWidget';
 
 interface DashboardProps {
   stats: TradeStats;
@@ -77,6 +79,8 @@ interface DashboardProps {
   setIsMobileEditing?: (v: boolean) => void;
   /** Open AI Coach with a pre-filled analysis prompt (e.g. for a specific day/week). */
   onAnalyzeWithAI?: (prompt: string) => void;
+  /** Naviguje do Settings tabu — pro "Spravovat" tlačítka ve widgetech. */
+  onNavigateToSettings?: () => void;
 }
 
 // ... existing imports ...
@@ -456,6 +460,8 @@ const MASTER_WIDGET_LIST = [
   { id: 'daily_edge', label: 'Denní Výkon', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Výkonnost podle dnů v týdnu.', preview: <div className="text-blue-500 font-black text-xs">Tue/Thu Focus</div>, defaultRowSpan: 2 },
   { id: 'calendar', label: 'Obchodní Kalendář', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Denní zisky v kalendáři.', preview: <div className={`${COLORS.textProfit} font-black text-xs`}>Green Month</div>, defaultRowSpan: 3 },
   { id: 'daily_insight', label: 'Insight Dne (AI)', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Coach každý den vygeneruje jeden personalizovaný insight z tvé historie.', preview: <div className="text-purple-500 font-black text-xs">Sparkles ✨</div>, defaultRowSpan: 1 },
+  { id: 'pending_ai_review', label: 'AI Návrhy k Review', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Obchody čekající na schválení/úpravu AI návrhů tagů.', preview: <div className="text-amber-500 font-black text-xs">3 čekají</div>, defaultRowSpan: 1 },
+  { id: 'daily_focus', label: 'Dnes Hlídat', category: 'Chování', icon: <Target size={18} />, description: 'Aktivní Iron Rules a checklisty z AI Coache — připomínka co dnes hlídat.', preview: <div className="text-blue-500 font-black text-xs">📋 3 pravidla</div>, defaultRowSpan: 2 },
 ];
 
 // Module-level mouse tracker — no re-renders, just reads position at tooltip render time
@@ -1143,6 +1149,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   allTrades = [], payouts = [],
   isMobileEditing: isMobileEditingProp = false, setIsMobileEditing: setIsMobileEditingProp,
   onAnalyzeWithAI,
+  onNavigateToSettings,
 }) => {
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
   const isMobileEditing = isMobileEditingProp;
@@ -1420,6 +1427,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       );
       case 'calendar': return <div className="h-full flex flex-col"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} /></div>;
       case 'daily_insight': return <DailyInsightWidget theme={theme} trades={allTrades.length > 0 ? allTrades : stats.trades} onOpenTrade={(t) => setSelectedTradeId(String(t.id))} />;
+      case 'pending_ai_review': return <PendingReviewWidget theme={theme} trades={allTrades.length > 0 ? allTrades : stats.trades} onOpenTrade={(t) => setSelectedTradeId(String(t.id))} />;
+      case 'daily_focus': return <DailyFocusWidget ironRules={ironRules} theme={theme} onManage={onNavigateToSettings} />;
       default: return null;
     }
   };
@@ -1518,8 +1527,12 @@ const Dashboard: React.FC<DashboardProps> = ({
               } else {
                 // Unpaired KPI (odd count) or full-width widget
                 const fixedHeight = chartHeights[item.widget.id];
+                // daily_insight a pending_ai_review widgety se samy určí podle obsahu — nepotřebují min výšku
+                const isSelfSizing = item.widget.id === 'daily_insight' || item.widget.id === 'pending_ai_review';
                 const style = item.isKpi
                   ? { minHeight: 160 }
+                  : isSelfSizing
+                  ? {}
                   : fixedHeight ? { height: fixedHeight } : { minHeight: 260 };
                 rows.push(
                   <motion.div key={item.widget.id} style={style} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>

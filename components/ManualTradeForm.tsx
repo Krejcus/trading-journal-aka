@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { storageService } from '../services/storageService';
+import { safeSetItem } from '../utils/safeStorage';
 import {
   X, Save, Tag, Wallet, Target,
   Brain, Zap, Layers, CheckCircle2,
@@ -13,7 +14,12 @@ import ConfirmationModal from './ConfirmationModal';
 import { Trade, Account, CustomEmotion } from '../types';
 
 interface ManualTradeFormProps {
-  onAdd: (trades: Trade | Trade[]) => void;
+  // Create mode (default)
+  onAdd?: (trades: Trade | Trade[]) => void;
+  // Edit mode — pokud je nastaveno, form předvyplní z trade a Save volá onUpdate místo onAdd
+  editTrade?: Trade;
+  onUpdate?: (updates: Partial<Trade>) => Promise<void> | void;
+
   onClose: () => void;
   theme: 'dark' | 'light' | 'oled';
   accounts: Account[];
@@ -37,10 +43,13 @@ const INSTRUMENTS = [
 ];
 
 const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
-  onAdd, onClose, theme, accounts, activeAccountId,
+  onAdd, editTrade, onUpdate, onClose, theme, accounts, activeAccountId,
   availableEmotions, availableMistakes, availableHtfOptions, availableLtfOptions,
   instrumentFees, viewMode = 'individual'
 }) => {
+  // Edit mode: pokud je editTrade nastaveno, nezobrazujeme multi-account, draft,
+  // a Save volá onUpdate s diff místo onAdd s novými trades.
+  const isEditMode = !!editTrade;
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isInstrumentOpen, setIsInstrumentOpen] = useState(false);
   const [expandedSection, setExpandedSection] = useState<'emotions' | 'htf' | 'ltf' | 'mistakes' | null>('emotions');
@@ -55,26 +64,56 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     return d.toISOString().slice(0, 16);
   };
 
-  const [formData, setFormData] = useState({
-    accountIds: [activeAccountId],
-    instrument: 'MNQ',
-    customMultiplier: '1',
-    entryDate: getLocalISOString(),
-    exitDate: getLocalISOString(new Date(Date.now() + 15 * 60000)),
-    entryPrice: '',
-    exitPrice: '',
-    stopLoss: '',
-    takeProfit: '',
-    positionSize: '1',
-    pnl: '',
-    notes: '',
-    htfConfluence: [] as string[],
-    ltfConfluence: [] as string[],
-    mistakes: [] as string[],
-    screenshots: [] as string[],
-    emotions: [] as string[],
-    planAdherence: 'Yes' as 'Yes' | 'No' | 'Partial',
-    executionStatus: 'Valid' as 'Valid' | 'Invalid' | 'Missed'
+  // Lazy initializer — pokud edit mode, pre-fill z editTrade
+  const [formData, setFormData] = useState(() => {
+    if (editTrade) {
+      const entryDateMs = editTrade.entryTime || (editTrade as any).entryDate
+        ? new Date(editTrade.entryTime || (editTrade as any).entryDate).getTime()
+        : new Date(editTrade.date || Date.now()).getTime();
+      const exitDateMs = editTrade.timestamp || new Date(editTrade.date || Date.now()).getTime();
+      return {
+        accountIds: [editTrade.accountId as string],
+        instrument: editTrade.instrument || 'MNQ',
+        customMultiplier: '1',
+        entryDate: getLocalISOString(new Date(entryDateMs)),
+        exitDate: getLocalISOString(new Date(exitDateMs)),
+        entryPrice: editTrade.entryPrice != null ? String(editTrade.entryPrice) : '',
+        exitPrice: editTrade.exitPrice != null ? String(editTrade.exitPrice) : '',
+        stopLoss: editTrade.stopLoss != null ? String(editTrade.stopLoss) : '',
+        takeProfit: editTrade.takeProfit != null ? String(editTrade.takeProfit) : '',
+        positionSize: editTrade.positionSize != null ? String(editTrade.positionSize) : '1',
+        pnl: editTrade.pnl != null ? String(editTrade.pnl) : '',
+        notes: editTrade.notes || '',
+        htfConfluence: editTrade.htfConfluence || [],
+        ltfConfluence: editTrade.ltfConfluence || [],
+        mistakes: editTrade.mistakes || [],
+        screenshots: editTrade.screenshots || (editTrade.screenshot ? [editTrade.screenshot] : []),
+        emotions: editTrade.emotions || [],
+        planAdherence: (editTrade.planAdherence as any) || 'Yes',
+        executionStatus: (editTrade.executionStatus as any) || (editTrade.isValid === false ? 'Invalid' : 'Valid'),
+      };
+    }
+    return {
+      accountIds: [activeAccountId],
+      instrument: 'MNQ',
+      customMultiplier: '1',
+      entryDate: getLocalISOString(),
+      exitDate: getLocalISOString(new Date(Date.now() + 15 * 60000)),
+      entryPrice: '',
+      exitPrice: '',
+      stopLoss: '',
+      takeProfit: '',
+      positionSize: '1',
+      pnl: '',
+      notes: '',
+      htfConfluence: [] as string[],
+      ltfConfluence: [] as string[],
+      mistakes: [] as string[],
+      screenshots: [] as string[],
+      emotions: [] as string[],
+      planAdherence: 'Yes' as 'Yes' | 'No' | 'Partial',
+      executionStatus: 'Valid' as 'Valid' | 'Invalid' | 'Missed'
+    };
   });
 
   const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
@@ -115,10 +154,11 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     return () => window.removeEventListener('paste', handlePaste);
   }, [handlePaste]);
 
-  // Save draft whenever formData changes
+  // Save draft whenever formData changes — POUZE v create modu (v edit modu nemá smysl)
   useEffect(() => {
-    localStorage.setItem('alphatrade_trade_draft', JSON.stringify(formData));
-  }, [formData]);
+    if (isEditMode) return;
+    safeSetItem('alphatrade_trade_draft', JSON.stringify(formData));
+  }, [formData, isEditMode]);
 
   const calculations = useMemo(() => {
     const entry = parseFloat(formData.entryPrice);
@@ -244,9 +284,74 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
     const masterTradeId = masterAccount ? generateUUID() : undefined;
 
-    localStorage.removeItem('alphatrade_trade_draft');
+    // Draft mažeme jen v create modu (v edit modu by smazal uživatelův draft pro novÝ obchod)
+    if (!isEditMode) localStorage.removeItem('alphatrade_trade_draft');
 
     // Create new trade(s):
+    // EDIT MODE: nestavíme nové trades, pošleme jen diff přes onUpdate
+    if (isEditMode && editTrade && onUpdate) {
+      // Helper: convert form date string → ISO. Fallback na original pokud parse selže.
+      const safeIsoFromForm = (formStr: string, fallback?: string | number): string => {
+        const d = new Date(formStr);
+        if (!isNaN(d.getTime())) return d.toISOString();
+        return fallback ? new Date(fallback).toISOString() : new Date().toISOString();
+      };
+      const safeTimestampFromForm = (formStr: string, fallback?: string | number): number => {
+        const d = new Date(formStr);
+        if (!isNaN(d.getTime())) return d.getTime();
+        return fallback ? new Date(fallback).getTime() : Date.now();
+      };
+
+      // Defensivně: pokud NaN, použij original hodnotu z editTrade (raději neměň než rozbít)
+      const safeNum = (v: number, fallback: number | undefined) => isFinite(v) ? v : (fallback ?? 0);
+
+      const newExitDateIso = safeIsoFromForm(formData.exitDate, editTrade.date);
+      const newExitTimestamp = safeTimestampFromForm(formData.exitDate, editTrade.timestamp);
+      const newEntryTimestamp = safeTimestampFromForm(formData.entryDate, editTrade.entryTime || editTrade.timestamp);
+      const newDurationMinutes = safeNum(calculations.durationMinutes, editTrade.durationMinutes);
+      const finalPnl = safeNum(pnlNum, editTrade.pnl);
+
+      const updates: Partial<Trade> = {
+        instrument: formData.instrument,
+        date: newExitDateIso,
+        timestamp: newExitTimestamp,
+        direction: calculations.direction,
+        pnl: finalPnl,
+        riskAmount: safeNum(calculations.risk, editTrade.riskAmount),
+        targetAmount: Math.abs(finalPnl),
+        durationMinutes: newDurationMinutes,
+        duration: `${Math.floor(newDurationMinutes)}m`,
+        entryTime: newEntryTimestamp,
+        notes: formData.notes,
+        htfConfluence: formData.htfConfluence,
+        ltfConfluence: formData.ltfConfluence,
+        mistakes: formData.mistakes,
+        emotions: formData.emotions,
+        planAdherence: formData.executionStatus === 'Valid' ? 'Yes' : 'No',
+        isValid: formData.executionStatus === 'Valid',
+        executionStatus: formData.executionStatus,
+        session: calculations.session,
+        entryPrice: safeNum(parseFloat(formData.entryPrice), editTrade.entryPrice),
+        exitPrice: safeNum(parseFloat(formData.exitPrice), editTrade.exitPrice),
+        stopLoss: safeNum(parseFloat(formData.stopLoss), editTrade.stopLoss),
+        takeProfit: safeNum(parseFloat(formData.takeProfit), editTrade.takeProfit),
+        positionSize: safeNum(parseFloat(formData.positionSize), editTrade.positionSize || 1),
+      };
+      // Screenshots: nevkládat pokud jsou prázdné (zachovat původní v takovém případě)
+      if (formData.screenshots.length > 0) {
+        updates.screenshot = formData.screenshots[0];
+        updates.screenshots = formData.screenshots;
+      }
+
+      Promise.resolve(onUpdate(updates)).then(() => {
+        onClose();
+      }).catch((err) => {
+        console.error('[ManualTradeForm] Update failed:', err);
+        setValidationError('Nepodařilo se uložit změny. Zkus to znovu.');
+      });
+      return;
+    }
+
     const tradesToCreate: Trade[] = formData.accountIds.map(accId => {
       const acc = accounts.find(a => a.id === accId);
       const isThisMaster = accId === masterAccount?.id;
@@ -293,7 +398,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       };
     });
 
-    onAdd(tradesToCreate);
+    if (onAdd) onAdd(tradesToCreate);
   };
 
   const inputContainerClass = `relative h-[42px] rounded-xl border transition-all flex items-center overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-blue-500/50' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-[var(--border-active)]'}`;
@@ -309,15 +414,15 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 md:p-4 bg-[var(--bg-page)]/60 backdrop-blur-2xl animate-in fade-in duration-500">
+      <div className="fixed inset-0 z-[120] flex items-center justify-center p-2 md:p-4 bg-[var(--bg-page)]/60 backdrop-blur-2xl animate-in fade-in duration-500">
         <div className={`w-full max-w-[1400px] max-h-[96vh] rounded-[32px] md:rounded-[40px] shadow-[0_32px_128px_rgba(0,0,0,0.8)] border flex flex-col overflow-hidden animate-in zoom-in-95 duration-500 relative z-10 ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-2xl'}`}>
           <div className={`px-5 py-4 md:px-8 md:py-5 border-b flex justify-between items-center bg-[var(--bg-page)]/50 border-[var(--border-subtle)] backdrop-blur-md shrink-0`}>
             <div className="flex items-center gap-3 md:gap-4">
               <div className={`p-2.5 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/20`}><Plus size={18} className="text-white" /></div>
               <div>
-                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase text-[var(--text-primary)]`}>NOVÝ OBCHOD</h2>
+                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase text-[var(--text-primary)]`}>{isEditMode ? 'UPRAVIT OBCHOD' : 'NOVÝ OBCHOD'}</h2>
               </div>
-              {localStorage.getItem('alphatrade_trade_draft') && (
+              {!isEditMode && localStorage.getItem('alphatrade_trade_draft') && (
                 <button
                   type="button"
                   onClick={() => setIsDeleteDraftModalOpen(true)}
@@ -365,10 +470,12 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                       <div className={inlineLabelClass}><Wallet size={10} className="mr-1" /> Terminal</div>
                       <button
                         type="button"
-                        onClick={() => setIsAccountOpen(!isAccountOpen)}
-                        className={`w-full h-full flex items-center justify-between px-3 text-xs font-black hover:bg-white/5 ${isDark ? 'text-white' : 'text-slate-900'}`}
+                        onClick={() => { if (!isEditMode) setIsAccountOpen(!isAccountOpen); }}
+                        disabled={isEditMode}
+                        title={isEditMode ? 'Účet nelze v edit modu změnit' : undefined}
+                        className={`w-full h-full flex items-center justify-between px-3 text-xs font-black ${isEditMode ? 'cursor-not-allowed opacity-60' : 'hover:bg-white/5'} ${isDark ? 'text-white' : 'text-slate-900'}`}
                       >
-                        {selectedAccCount === 0 ? 'Vyberte účet' : selectedAccCount === 1 ? firstSelectedAcc?.name : `Hromadné (${selectedAccCount})`} <ChevronDown size={12} className="text-slate-600" />
+                        {selectedAccCount === 0 ? 'Vyberte účet' : selectedAccCount === 1 ? firstSelectedAcc?.name : `Hromadné (${selectedAccCount})`} {!isEditMode && <ChevronDown size={12} className="text-slate-600" />}
                       </button>
                     </div>
                     {isAccountOpen && (
@@ -524,7 +631,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
           <div className={`p-5 md:p-8 shrink-0 border-t flex flex-col sm:flex-row gap-3 md:gap-6 bg-[var(--bg-page)]/50 border-[var(--border-subtle)] backdrop-blur-xl`}>
             <button type="button" onClick={onClose} className="w-full sm:w-[180px] h-[52px] bg-white/5 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest border border-white/5 hover:bg-white/10 transition-all">Zrušit</button>
-            <button onClick={handleSubmit} type="button" className={`flex-1 h-[52px] rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl transition-all flex items-center justify-center gap-3 ${formData.executionStatus === 'Valid' ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20' : formData.executionStatus === 'Invalid' ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}`}><Save size={18} /> ULOŽIT OBCHOD</button>
+            <button onClick={handleSubmit} type="button" className={`flex-1 h-[52px] rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl transition-all flex items-center justify-center gap-3 ${formData.executionStatus === 'Valid' ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20' : formData.executionStatus === 'Invalid' ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}`}><Save size={18} /> {isEditMode ? 'ULOŽIT ZMĚNY' : 'ULOŽIT OBCHOD'}</button>
           </div>
         </div >
       </div >

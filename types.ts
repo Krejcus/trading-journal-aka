@@ -126,7 +126,7 @@ export interface Account {
   phase?: 'Challenge' | 'Funded';
   accumulatedChallengePnL?: number;
   type: 'Live' | 'Paper' | 'Backtest' | 'Funded';
-  status: 'Active' | 'Inactive';
+  status: 'Active' | 'Inactive' | 'Archived';
   currency: string;
   createdAt: number;
   profitTarget?: number;
@@ -206,6 +206,16 @@ export interface Trade {
   miniViewLayout?: 'single' | 'split';
   miniViewSecondaryRange?: { from: number; to: number };
   miniViewSecondaryTimeframe?: '1m' | '5m' | '15m' | '1h' | '4h' | 'D' | 'W';
+  /** AI návrhy tagů vygenerované Edge Function `enrich-trade` po save obchodu. */
+  aiSuggestions?: {
+    htf?: Array<{ value: string; reasoning: string }>;
+    ltf?: Array<{ value: string; reasoning: string }>;
+    mistakes?: Array<{ value: string; reasoning: string }>;
+    emotions?: Array<{ value: string; reasoning: string }>;
+    summary?: string;
+    generatedAt?: string;
+    unreviewed?: boolean;
+  };
 }
 
 export interface SignalStat {

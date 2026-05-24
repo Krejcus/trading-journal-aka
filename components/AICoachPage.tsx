@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, ChevronDown, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation } from '../types';
 import { streamAIResponse, buildTraderContext, parseAllRefs, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
@@ -84,6 +84,8 @@ interface Props {
   trades: Trade[];
   accounts: Account[];
   ironRules: IronRule[];
+  /** Aktuální seznam standardGoals — pro derivovaný "applied" stav v ActionPanelu */
+  standardGoals?: string[];
   playbookItems: PlaybookItem[];
   dailyPreps: DailyPrep[];
   dailyReviews: DailyReview[];
@@ -95,14 +97,16 @@ interface Props {
   initialPrompt?: string;
   /** Called after `initialPrompt` is consumed so the parent can clear it. */
   onInitialPromptConsumed?: () => void;
+  /** Klik na "Přidat" v action card v Coach response. Parent rozhodne co se stane (přidá rule / cíl / atd.) */
+  onApplyAction?: (action: import('../services/aiService').SuggestedAction) => void;
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
 const AICoachPage: React.FC<Props> = ({
-  trades, accounts, ironRules, playbookItems,
+  trades, accounts, ironRules, standardGoals, playbookItems,
   dailyPreps, dailyReviews, theme,
-  onOpenTrade, onOpenJournal,
+  onOpenTrade, onOpenJournal, onApplyAction,
   initialConversationId, initialPrompt, onInitialPromptConsumed,
 }) => {
   const [conversations, setConversations] = useState<AIConversation[]>([]);
@@ -120,15 +124,47 @@ const AICoachPage: React.FC<Props> = ({
   const [createError, setCreateError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // Proactive greeting state: Coach generates a personalized greeting + 3 suggested topics
+  // when user opens AI Coach without an active conversation.
+  const [proactive, setProactive] = useState<{ greeting: string; suggestions: string[] } | null>(null);
+  const [loadingProactive, setLoadingProactive] = useState(false);
+  const proactiveFetchedRef = useRef(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Direct scroll — more reliable than scrollIntoView (works on both mobile & desktop)
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+  // ─── Stick-to-bottom scroll chování (jako Claude.ai / ChatGPT) ───────────
+  // Když je user "u dna" (< 80px od konce), auto-scroll je aktivní.
+  // Když odscroluje nahoru, auto-scroll se vypne — user může číst v klidu.
+  // Když znovu doscroluje na konec, auto-scroll se obnoví.
+  const STICK_THRESHOLD_PX = 80;
+  const isAtBottomRef = useRef(true); // tracking flag — synchronní s aktuálním scroll pozicí
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false); // UI state pro floating tlačítko
+
+  const isNearBottom = useCallback((el: HTMLElement | null): boolean => {
+    if (!el) return true;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    return distanceFromBottom <= STICK_THRESHOLD_PX;
+  }, []);
+
+  // User scroll handler — aktualizuje isAtBottomRef pri každém scroll eventu.
+  // React si pri setState s nezměněnou hodnotou interně skipne re-render, takže
+  // tlačítko se rerenderuje jen když user opravdu překročí threshold.
+  const handleScroll = useCallback(() => {
+    const atBottom = isNearBottom(messagesContainerRef.current);
+    isAtBottomRef.current = atBottom;
+    setShowScrollToBottom(!atBottom);
+  }, [isNearBottom]);
+
+  // Direct scroll — respektuje stick-to-bottom flag (force=true vynutí scroll i když user není u dna)
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth', force: boolean = false) => {
     const el = messagesContainerRef.current;
     if (!el) return;
+    // Pokud user odscroloval a nepřinutíme force, scroll skip
+    if (!force && !isAtBottomRef.current) return;
     el.scrollTo({ top: el.scrollHeight, behavior });
+    isAtBottomRef.current = true;
   }, []);
 
   // Whether the first user message has been sent (for auto-titling)
@@ -151,6 +187,16 @@ const AICoachPage: React.FC<Props> = ({
     () => buildTraderContext({ trades, accounts, ironRules, playbookItems, dailyPreps, dailyReviews }),
     [trades, accounts, ironRules, playbookItems, dailyPreps, dailyReviews],
   );
+
+  /** Sada labelů již existujících pravidel + cílů — pro ActionPanel "applied" detekci.
+   *  Když se label akce shoduje s existujícím pravidlem, tlačítko ukáže ✓ Přidáno
+   *  (i po reloadu / přepnutí konverzace). */
+  const existingActionLabels = React.useMemo(() => {
+    const set = new Set<string>();
+    (ironRules || []).forEach(r => { if (r.label) set.add(r.label); });
+    (standardGoals || []).forEach(g => set.add(g));
+    return set;
+  }, [ironRules, standardGoals]);
 
   // Load conversations on mount
   useEffect(() => {
@@ -197,6 +243,12 @@ const AICoachPage: React.FC<Props> = ({
           if (refs.charts.length) {
             base.chartSpecs = refs.charts;
           }
+          if (refs.followups.length) {
+            base.followups = refs.followups;
+          }
+          if (refs.actions.length) {
+            base.actions = refs.actions;
+          }
         }
         return base;
       });
@@ -206,18 +258,23 @@ const AICoachPage: React.FC<Props> = ({
     });
   }, [activeConvId, trades, dailyPreps, dailyReviews]);
 
-  // Scroll to bottom when a new message is added
+  // Scroll to bottom when a new message is added.
+  // FORCE pokud poslední zpráva je od usera (právě poslal) — chceme ho posunout k odpovědi.
+  // Jinak respektujeme stick flag — pokud user skroluje historií, neruším ho.
+  const lastMsgRole = messages[messages.length - 1]?.role;
   useEffect(() => {
-    scrollToBottom('smooth');
-  }, [messages.length, scrollToBottom]);
+    const isUserMessage = lastMsgRole === 'user';
+    scrollToBottom('smooth', isUserMessage);
+  }, [messages.length, lastMsgRole, scrollToBottom]);
 
-  // Scroll to bottom during streaming (content grows but length stays same)
+  // Scroll to bottom during streaming — respektuje stick flag (NEFORCE).
+  // Když user odscroluje nahoru číst, scroll-down se vypne. Když znovu doscroluje
+  // na konec, isAtBottomRef se obnoví v handleScroll a auto-scroll se zapne zpátky.
   useEffect(() => {
     if (isStreaming) scrollToBottom('instant');
   }, [messages[messages.length - 1]?.content, isStreaming, scrollToBottom]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Scroll to bottom when cards are added below the last message
-  // (trade/prep/review cards arrive via onRefs after streaming ends)
+  // Scroll to bottom when cards are added below the last message (respektuje stick)
   const lastMsg = messages[messages.length - 1];
   const cardCount =
     (lastMsg?.tradeCards?.length ?? 0) +
@@ -265,6 +322,40 @@ const AICoachPage: React.FC<Props> = ({
       }
     };
   }, [flushSummaryFor]);
+
+  // ─── Proactive greeting ───────────────────────────────────────────────────
+  // When user opens AI Coach without an active conversation, fetch a personalized
+  // greeting + 3 suggested topics. Cached for the session.
+  useEffect(() => {
+    if (activeConvId) return;
+    if (proactiveFetchedRef.current) return;
+    proactiveFetchedRef.current = true;
+    setLoadingProactive(true);
+    (async () => {
+      try {
+        const { supabase } = await import('../services/supabase');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        const baseUrl = (supabase as any).supabaseUrl || (import.meta as any).env?.VITE_SUPABASE_URL || '';
+        const res = await fetch(`${baseUrl}/functions/v1/proactive-greeting`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (res.ok && data.greeting && Array.isArray(data.suggestions)) {
+          setProactive({ greeting: data.greeting, suggestions: data.suggestions });
+        }
+      } catch (e) {
+        console.warn('[AICoachPage] proactive greeting failed:', e);
+      } finally {
+        setLoadingProactive(false);
+      }
+    })();
+  }, [activeConvId]);
 
   // ─── Create new conversation ───────────────────────────────────────────────
 
@@ -386,19 +477,22 @@ const AICoachPage: React.FC<Props> = ({
               }
               return updated;
             });
-            // Scroll to bottom with each batch
-            const el = messagesContainerRef.current;
-            if (el) el.scrollTop = el.scrollHeight;
+            // Scroll to bottom s každým batch chunk — ale respektuje stick flag
+            // (pokud user skroluje historií, scroll se nepřeruší)
+            if (isAtBottomRef.current) {
+              const el = messagesContainerRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+            }
           }, 50);
         }
       },
       // onRefs
-      ({ tradeIds, prepDates, reviewDates, charts }) => {
+      ({ tradeIds, prepDates, reviewDates, charts, followups, actions }) => {
         const foundTrades = tradeIds.map(id => trades.find(t => String(t.id) === id)).filter(Boolean) as Trade[];
         const foundPreps = prepDates.map(d => dailyPreps.find(p => p.date === d)).filter(Boolean) as DailyPrep[];
         const foundReviews = reviewDates.map(d => dailyReviews.find(r => r.date === d)).filter(Boolean) as DailyReview[];
 
-        if (foundTrades.length || foundPreps.length || foundReviews.length || (charts && charts.length > 0)) {
+        if (foundTrades.length || foundPreps.length || foundReviews.length || (charts && charts.length > 0) || (followups && followups.length > 0) || (actions && actions.length > 0)) {
           setMessages(prev => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
@@ -409,6 +503,8 @@ const AICoachPage: React.FC<Props> = ({
                 prepCards: foundPreps.length ? [...(last.prepCards || []), ...foundPreps] : last.prepCards,
                 reviewCards: foundReviews.length ? [...(last.reviewCards || []), ...foundReviews] : last.reviewCards,
                 chartSpecs: charts && charts.length > 0 ? [...(last.chartSpecs || []), ...charts] : last.chartSpecs,
+                followups: followups && followups.length > 0 ? followups : last.followups,
+                actions: actions && actions.length > 0 ? actions : last.actions,
               };
             }
             return updated;
@@ -653,7 +749,7 @@ const AICoachPage: React.FC<Props> = ({
   // ─── Chat area ─────────────────────────────────────────────────────────────
 
   const ChatArea = (
-    <div className="flex flex-col h-full w-full bg-theme-page">
+    <div className="relative flex flex-col h-full w-full bg-theme-page">
       {/* Chat header — visible on both mobile and desktop */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--border-subtle)] flex-shrink-0">
         {/* Back button — only on mobile (desktop has permanent sidebar) */}
@@ -683,7 +779,7 @@ const AICoachPage: React.FC<Props> = ({
       </div>
 
       {/* Messages */}
-      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-6 space-y-4 scrollbar-thin">
+      <div ref={messagesContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-6 space-y-4 scrollbar-thin">
         {!activeConvId ? (
           // No conversation selected — show empty state with quick prompts
           <div className="flex flex-col items-center justify-center h-full gap-6 max-w-sm mx-auto">
@@ -713,20 +809,33 @@ const AICoachPage: React.FC<Props> = ({
         ) : (
           <>
             {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full gap-5 max-w-sm mx-auto">
-                <div className="text-center">
+              <div className="flex flex-col items-center justify-center h-full gap-5 max-w-md mx-auto px-2">
+                <div className="text-center w-full">
                   <div className="w-12 h-12 rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-3">
-                    <Bot size={20} className="text-blue-400" />
+                    <Sparkles size={20} className="text-blue-400" />
                   </div>
-                  <p className="text-sm font-black text-[var(--text-primary)]">Nová konverzace</p>
-                  <p className="text-xs text-[var(--text-secondary)] mt-1">Napiš cokoliv nebo použij rychlý prompt.</p>
+                  {loadingProactive ? (
+                    <p className="text-xs text-[var(--text-secondary)] italic flex items-center gap-2 justify-center">
+                      <Loader2 size={12} className="animate-spin" />
+                      Coach se na tebe chystá…
+                    </p>
+                  ) : proactive ? (
+                    <p className="text-sm text-[var(--text-primary)] leading-relaxed text-left bg-blue-500/5 border border-blue-500/20 rounded-2xl p-4">
+                      {proactive.greeting}
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-sm font-black text-[var(--text-primary)]">Nová konverzace</p>
+                      <p className="text-xs text-[var(--text-secondary)] mt-1">Napiš cokoliv nebo použij rychlý prompt.</p>
+                    </>
+                  )}
                 </div>
                 <div className="w-full space-y-2">
-                  {QUICK_PROMPTS.map(q => (
+                  {(proactive?.suggestions && proactive.suggestions.length > 0 ? proactive.suggestions : QUICK_PROMPTS).map(q => (
                     <button
                       key={q}
                       onClick={() => sendMessage(q)}
-                      className="w-full text-left px-4 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:bg-[var(--bg-card)] text-xs text-[var(--text-primary)] hover:text-[var(--text-primary)] transition-all"
+                      className="w-full text-left px-4 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:border-blue-500/40 hover:bg-blue-500/5 text-xs text-[var(--text-primary)] transition-all active:scale-[0.98]"
                     >
                       {q}
                     </button>
@@ -748,6 +857,24 @@ const AICoachPage: React.FC<Props> = ({
                   toolStatus={isLastStreaming ? toolStatus : null}
                   onOpenTrade={onOpenTrade ?? (trade => setOpenTrade(trade))}
                   onOpenJournal={onOpenJournal}
+                  onFollowup={(text) => { setInput(''); sendMessage(text); }}
+                  messageIndex={i}
+                  existingActionLabels={existingActionLabels}
+                  onApplyAction={onApplyAction ? (action, msgIdx, actionIdx) => {
+                    onApplyAction(action);
+                    // Označ akci jako aplikovanou (vizuální feedback)
+                    setMessages(prev => {
+                      const updated = [...prev];
+                      const m = updated[msgIdx];
+                      if (m) {
+                        updated[msgIdx] = {
+                          ...m,
+                          appliedActionIds: [...(m.appliedActionIds || []), actionIdx]
+                        };
+                      }
+                      return updated;
+                    });
+                  } : undefined}
                 />
               );
             })}
@@ -755,6 +882,19 @@ const AICoachPage: React.FC<Props> = ({
         )}
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Floating "Skoč dolů" — zobrazí se když user odscroluje nahoru.
+          Klik = force scroll k poslednímu chunku + obnoví auto-scroll behavior. */}
+      {showScrollToBottom && (
+        <button
+          onClick={() => scrollToBottom('smooth', true)}
+          className="absolute right-6 bottom-24 z-20 flex items-center gap-1.5 px-3 py-2 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/30 transition-all text-[10px] font-black uppercase tracking-widest"
+          title="Skočit na poslední zprávu"
+        >
+          <ChevronDown size={14} strokeWidth={3} />
+          Dolů
+        </button>
+      )}
 
       {/* Input area */}
       {activeConvId && (

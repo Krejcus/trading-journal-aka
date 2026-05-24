@@ -60,11 +60,14 @@ export function Button({ children, onClick, className = "", disabled = false }: 
     );
 }
 
-export function TextArea({ label, value, onChange, placeholder, className = "", inputClassName = "", rows = 3 }: { label: string, value: string, onChange: (val: string) => void, placeholder?: string, className?: string, inputClassName?: string, rows?: number }) {
+export function TextArea({ label, value, onChange, placeholder, className = "", inputClassName = "", rows = 3, actionSlot }: { label: string, value: string, onChange: (val: string) => void, placeholder?: string, className?: string, inputClassName?: string, rows?: number, actionSlot?: React.ReactNode }) {
     const { theme } = useTheme();
     return (
         <div className={`flex flex-col mb-4 ${className}`}>
-            <label className={`block text-xs font-bold uppercase tracking-wider mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>{label}</label>
+            <div className="flex items-center justify-between mb-1.5">
+                <label className={`block text-xs font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>{label}</label>
+                {actionSlot && <div className="flex items-center">{actionSlot}</div>}
+            </div>
             <textarea
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
