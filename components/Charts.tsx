@@ -38,6 +38,8 @@ interface ChartsProps {
   showDisciplinedCurve?: boolean;
   onToggleDisciplined?: () => void;
   onTradeClick?: (tradeId: string | number) => void;
+  /** PnL display mode — když je 'rr', equity křivka se přepne na kumulativní R. */
+  pnlDisplayMode?: 'usd' | 'percent' | 'rr';
 }
 
 const COLORS = {
@@ -59,7 +61,7 @@ interface CustomTooltipProps {
 }
 
 const CustomEquityTooltip = (props: any) => {
-  const { active, payload, label, theme } = props;
+  const { active, payload, label, theme, isRR } = props;
   if (!active || !payload || !payload.length) return null;
   // Suppress tooltip briefly after a click — prevents stale tooltip overlaying the trade detail modal
   if (Date.now() < _suppressTooltipUntil) return null;
@@ -70,6 +72,18 @@ const CustomEquityTooltip = (props: any) => {
   const isPositive = val >= initial;
   const trade = data?.trade;
   const validVal = payload.find((p: any) => p.dataKey === 'validEquity')?.value;
+
+  // Format value based on display mode
+  const fmtPortfolio = (v: number) => isRR
+    ? `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}R`
+    : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const fmtTrade = (pnl: number, riskAmount: number | undefined) => {
+    if (isRR && riskAmount && riskAmount > 0) {
+      const r = pnl / riskAmount;
+      return `${r >= 0 ? '+' : ''}${r.toFixed(2)}R`;
+    }
+    return `${pnl >= 0 ? '+' : '-'}$${Number(Math.abs(pnl || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  };
 
   return createPortal(
     <div style={chartTooltipStyle(230)} className={`border p-4 rounded-2xl shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150
@@ -86,14 +100,14 @@ const CustomEquityTooltip = (props: any) => {
               <span className="text-[9px] font-black uppercase tracking-tight text-slate-400">Portfolio</span>
             </div>
             <p className={`font-black text-base leading-none ${isPositive ? COLORS.textProfit : COLORS.textLoss}`}>
-              ${Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              {fmtPortfolio(Number(val))}
             </p>
           </div>
           {trade && (
             <div className="text-right">
               <span className="text-[9px] font-black uppercase tracking-tight text-slate-400 block mb-0.5">{trade.instrument} <span className={trade.direction === 'Long' ? COLORS.textLong : COLORS.textShort}>{trade.direction}</span></span>
               <p className={`font-black text-base leading-none ${trade.pnl >= 0 ? COLORS.textProfit : COLORS.textLoss}`}>
-                {trade.pnl >= 0 ? '+' : '-'}${Number(Math.abs(trade.pnl || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                {fmtTrade(trade.pnl, trade.riskAmount)}
               </p>
             </div>
           )}
@@ -227,26 +241,53 @@ const CustomActiveDot = (props: CustomActiveDotProps) => {
   );
 };
 
-const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribution, isEditing, showDisciplinedCurve, onToggleDisciplined, onTradeClick }) => {
+const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribution, isEditing, showDisciplinedCurve, onToggleDisciplined, onTradeClick, pnlDisplayMode = 'usd' }) => {
   const axisColor = theme !== 'light' ? '#64748b' : '#94a3b8';
   const gridColor = theme !== 'light' ? '#334155' : '#e2e8f0';
 
   const hourData = stats.hourStats;
   const dayData = stats.dayStats.filter(d => d.label !== 'So' && d.label !== 'Ne');
 
+  const isRRMode = pnlDisplayMode === 'rr';
   const initialCap = stats.initialBalance;
-  const equityData = stats.equityCurve.map((pt, i) => ({
-    ...pt,
-    name: pt.date === 'Start' ? 'Start' : (i),
-    initial: initialCap
-  }));
 
+  // V RR mode přepočti equity z USD na kumulativní R-multiple.
+  // Start = 0R (ne initialBalance), každý trade přispěje pnl/riskAmount.
+  const equityData = React.useMemo(() => {
+    if (!isRRMode) {
+      return stats.equityCurve.map((pt, i) => ({
+        ...pt,
+        name: pt.date === 'Start' ? 'Start' : (i),
+        initial: initialCap,
+      }));
+    }
+    // Build R-based equity from trades sorted by timestamp ASC
+    const sorted = [...stats.trades].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    let cumR = 0;
+    const out: any[] = [{ name: 'Start', date: 'Start', equity: 0, initial: 0 }];
+    sorted.forEach((t, i) => {
+      const r = t.riskAmount && t.riskAmount > 0 ? (t.pnl || 0) / t.riskAmount : 0;
+      cumR += r;
+      out.push({
+        name: i + 1,
+        date: t.date,
+        equity: parseFloat(cumR.toFixed(2)),
+        initial: 0,
+        trade: t,
+      });
+    });
+    return out;
+  }, [stats.equityCurve, stats.trades, initialCap, isRRMode]);
+
+  // Baseline pro gradient — v USD mode je to initialCap (start kapitálu),
+  // v RR mode je to 0 (start na 0R).
+  const baseline = isRRMode ? 0 : initialCap;
   const getGradientOffset = () => {
     const dataMax = Math.max(...equityData.map((i) => i.equity));
     const dataMin = Math.min(...equityData.map((i) => i.equity));
-    if (dataMax <= initialCap) return 0;
-    if (dataMin >= initialCap) return 1;
-    return (dataMax - initialCap) / (dataMax - dataMin);
+    if (dataMax <= baseline) return 0;
+    if (dataMin >= baseline) return 1;
+    return (dataMax - baseline) / (dataMax - dataMin);
   };
 
   const off = getGradientOffset();
@@ -281,7 +322,9 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
               <div className="h-8 w-px bg-slate-800 mx-1 hidden md:block"></div>
               <div className="flex flex-col items-end">
                 <span className="text-[8px] uppercase font-black text-slate-500">Začátek</span>
-                <span className="text-sm font-mono font-black text-blue-500">${initialCap.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                <span className="text-sm font-mono font-black text-blue-500">
+                  {isRRMode ? '0R' : `$${initialCap.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                </span>
               </div>
             </div>
           </div>
@@ -325,12 +368,16 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                 <YAxis
                   stroke={axisColor}
                   axisLine={false} tickLine={false}
-                  tickFormatter={(val) => `$${val >= 1000 ? (val / 1000).toFixed(0) + 'k' : val}`}
+                  tickFormatter={(val) =>
+                    isRRMode
+                      ? `${val >= 0 ? '+' : ''}${val.toFixed(val % 1 === 0 ? 0 : 1)}R`
+                      : `$${Math.abs(val) >= 1000 ? (val / 1000).toFixed(0) + 'k' : val}`
+                  }
                   width={45}
                   domain={['auto', 'auto']}
                   tick={{ fontSize: 10, fontStyle: 'italic', fontWeight: 'bold' }}
                 />
-                <Tooltip content={<CustomEquityTooltip theme={theme} />} cursor={{ stroke: axisColor, strokeDasharray: '5 5' }} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
+                <Tooltip content={<CustomEquityTooltip theme={theme} isRR={isRRMode} />} cursor={{ stroke: axisColor, strokeDasharray: '5 5' }} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
 
                 <ReferenceLine
                   y={initialCap}

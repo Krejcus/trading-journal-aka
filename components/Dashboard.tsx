@@ -625,19 +625,26 @@ const ProKpiCard: React.FC<{
   const onPieEnter = (_: any, index: number) => setActiveIndex(index);
   const onPieLeave = () => setActiveIndex(-1);
 
-  // Helper to remove unnecessary .00 decimals
+  // Helper to remove unnecessary .00 decimals.
+  // Zachová sufixy (R, %, Kč, €) a prefixy (+/-) — bug-fix: dřív zahodil 'R'
+  // protože poslední větev parseFloat→toString stripla non-number suffix.
   const displayValue = useMemo(() => {
     if (!value.includes('.')) return value;
-    // Handle percentage
+    // Percentage
     if (value.endsWith('%')) {
       const num = parseFloat(value.replace('%', ''));
       return `${num}%`;
     }
-    // Handle other numbers (if they don't have currency symbols mixed in complex ways)
-    if (value.startsWith('$')) {
-      const num = parseFloat(value.replace('$', '').replace(/,/g, ''));
+    // R-multiple (např. "+4.38R") — vrať as-is, zachovej R a znaménko
+    if (value.endsWith('R')) return value;
+    // CZK / EUR — zachovej as-is
+    if (value.endsWith('Kč') || value.endsWith('€')) return value;
+    // USD
+    if (value.includes('$')) {
+      const num = parseFloat(value.replace(/[+\-$,]/g, ''));
       if (isNaN(num)) return value;
-      return `$${num.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+      const sign = value.trim().startsWith('+') ? '+' : value.trim().startsWith('-') ? '-' : '';
+      return `${sign}$${num.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
     }
     const num = parseFloat(value);
     return isNaN(num) ? value : num.toString();
@@ -1423,6 +1430,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           showDisciplinedCurve={config?.showDisciplinedCurve}
           onToggleDisciplined={() => toggleDisciplinedCurve('equity')}
           onTradeClick={(id) => setSelectedTradeId(id)}
+          pnlDisplayMode={pnlDisplayMode}
         />
       );
       case 'calendar': return <div className="h-full flex flex-col"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} /></div>;
