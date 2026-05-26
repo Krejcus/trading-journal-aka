@@ -2258,13 +2258,26 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Show loader during initial auth check OR when logged in but data not yet loaded
-  if ((loading || (session && !isInitialLoadDone)) && !sharedTrade) {
+  // GATE pro shared trade — pokud je v URL ?shareId nebo ?share, NEZOBRAZUJEME
+  // ani login ani app UI dokud se shared trade nenačte. Předchází to flashe
+  // tvého účtu / login screenu před shared view (race condition).
+  const hasShareInUrl = (() => {
+    const p = new URLSearchParams(window.location.search);
+    return !!p.get('shareId') || !!p.get('share');
+  })();
+
+  if (hasShareInUrl && !sharedTrade) {
+    // Stále načítáme — držet loader bez ohledu na session/loading stav
     return <QuantumLoader theme={theme} />;
   }
 
   if (sharedTrade) {
     return <SharedTradeView trade={sharedTrade} theme={theme} ownerName={sharedOwnerName} ownerAvatar={sharedOwnerAvatar} />;
+  }
+
+  // Show loader during initial auth check OR when logged in but data not yet loaded
+  if (loading || (session && !isInitialLoadDone)) {
+    return <QuantumLoader theme={theme} />;
   }
 
   if (!session) {
