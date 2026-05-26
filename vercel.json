@@ -4,5 +4,11 @@
             "path": "/api/cron/send-alerts",
             "schedule": "* * * * *"
         }
+    ],
+    "rewrites": [
+        {
+            "source": "/share/:id",
+            "destination": "/api/share/:id"
+        }
     ]
 }

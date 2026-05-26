@@ -15,6 +15,7 @@ import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 import TradeAISection from './TradeAISection';
 import ManualTradeForm from './ManualTradeForm';
+import TradeShareModal from './TradeShareModal';
 
 interface PropertyProps {
     label: string;
@@ -190,6 +191,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [isZoomed, setIsZoomed] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [shareCopied, setShareCopied] = useState(false);
+    const [isShareCardOpen, setIsShareCardOpen] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
     // Full Edit Mode — ManualTradeForm overlay
@@ -344,7 +346,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 <button onClick={onPrev} disabled={!hasPrev} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasPrev ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronLeft size={16} /></button>
                                 <button onClick={onNext} disabled={!hasNext} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasNext ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronRight size={16} /></button>
                             </div>
-                            <button onClick={handleShare} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${shareCopied ? 'bg-emerald-500/20 text-emerald-500' : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white' : 'bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-slate-200'}`}>{shareCopied ? <Check size={16} /> : <Share2 size={16} />}</button>
+                            <button onClick={() => setIsShareCardOpen(true)} title="Sdílet jako kartu" className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white' : 'bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-slate-200'}`}><Share2 size={16} /></button>
                             {onUpdateTrade && !String(activeTrade.id).startsWith('combined_') && (
                                 <button onClick={(e) => { e.stopPropagation(); setIsFullEditOpen(true); }} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-blue-500/10 text-blue-500 hover:bg-blue-500 hover:text-white' : 'bg-white text-blue-400 hover:bg-blue-500 hover:text-white border border-blue-200'}`} title="Upravit obchod"><Edit3 size={16} /></button>
                             )}
@@ -582,6 +584,20 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     availableMistakes={editPrefs.mistakes}
                     availableHtfOptions={editPrefs.htf}
                     availableLtfOptions={editPrefs.ltf}
+                />
+            )}
+
+            {/* SHARE CARD MODAL — generuje shareable PNG s AlphaTrade brandingem */}
+            {isShareCardOpen && (
+                <TradeShareModal
+                    trade={activeTrade}
+                    username={(() => {
+                        // Priority: name → email prefix → fallback
+                        if (user?.name) return `@${user.name.toLowerCase().replace(/\s+/g, '')}`;
+                        if (user?.email) return `@${user.email.split('@')[0]}`;
+                        return '@trader';
+                    })()}
+                    onClose={() => setIsShareCardOpen(false)}
                 />
             )}
         </ErrorBoundary>
