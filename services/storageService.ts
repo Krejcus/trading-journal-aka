@@ -1140,14 +1140,28 @@ export const storageService = {
       safeSetItem(localKey, prefs);
       return;
     }
-    // Write to Supabase FIRST — if it fails, don't update the local cache so state stays consistent
-    const { error } = await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
+    // Write to Supabase FIRST — if it fails, don't update the local cache so state stays consistent.
+    // Use SELECT after UPDATE to VERIFY persistence — protects against silent failures
+    // (RLS edge cases, network glitch). If verify fails, throw to trigger retry.
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ preferences: prefs })
+      .eq('id', userId)
+      .select('preferences')
+      .single();
     if (error) {
-      console.error("[savePreferences] DB error:", error);
+      console.error('[savePreferences] DB error:', error);
       throw error;
+    }
+    if (!data || !data.preferences) {
+      const msg = '[savePreferences] Verification failed — DB returned no preferences after update';
+      console.error(msg);
+      throw new Error(msg);
     }
     // Persist to localStorage only after confirmed DB write
     safeSetItem(localKey, prefs);
+    // Store save timestamp for staleness detection
+    safeSetItem(`${localKey}_savedAt`, Date.now());
     await updateCacheTimestamp();
   },
 

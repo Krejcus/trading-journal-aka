@@ -895,6 +895,13 @@ const App: React.FC = () => {
       // --- CACHE-FIRST LOADING: Instant from IndexedDB, then background refresh ---
       const cached = await storageService.getCachedDashboardData(session.user.id);
 
+      // Cache staleness check — cache starší než 24h nepoužij, načti čerstvě z DB.
+      // Zabraňuje "po noci se to vrátilo do defaultu" — staré cache by overwrite čerstvé prefs.
+      const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+      const savedAtRaw = localStorage.getItem(`alphatrade_preferences_${session.user.id}_savedAt`);
+      const cacheAge = savedAtRaw ? Date.now() - parseInt(savedAtRaw, 10) : Infinity;
+      const cacheIsFresh = cacheAge < CACHE_MAX_AGE_MS;
+
       if (cached) {
         setTrades(cached.trades || []);
         if (cached.accounts && cached.accounts.length > 0) {
@@ -906,7 +913,13 @@ const App: React.FC = () => {
           setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
         if (cached.user) setCurrentUser(cached.user);
-        if (cached.preferences) applyPreferences(cached.preferences);
+        // Apply cached preferences POUZE pokud cache je fresh — jinak počkáme na background refresh.
+        // To zabrání aplikování zastaralých prefs (sessions, htf, atd.) co byly přepsány z DB.
+        if (cached.preferences && cacheIsFresh) {
+          applyPreferences(cached.preferences);
+        } else if (cached.preferences && !cacheIsFresh) {
+          console.log('[Cache] Skipping stale cached preferences (age:', Math.round(cacheAge / 1000 / 60), 'min), waiting for fresh DB load');
+        }
         setDailyPreps(cached.preps || []);
         setDailyReviews(cached.reviews || []);
         setWeeklyFocusList(cached.weeklyFocus || []);
@@ -1547,8 +1560,18 @@ const App: React.FC = () => {
           .catch(() => { isWeeklyFocusDirty.current = true; });
       }
       if (isPreferencesDirty.current && prefsAppliedRef.current) {
-        isPreferencesDirty.current = false;
-        storageService.savePreferences(currentUserPreferences() as any).catch(() => { isPreferencesDirty.current = true; });
+        // KRITICKÉ: NEČISTI dirty flag dokud save nepotvrdí. Pri beforeunload je tab close
+        // race — pokud bys clearnul dirty před save completion, save může selhat tiše
+        // (tab dies mid-request) a uživatel ztratí změny. Necháváme dirty=true; flush
+        // probíhá best-effort, pokud projde, server-side update se vystaví a další load
+        // si vezme čerstvá data z DB.
+        const prefs = currentUserPreferences() as any;
+        storageService.savePreferences(prefs)
+          .then(() => { isPreferencesDirty.current = false; })
+          .catch((err: any) => {
+            console.warn('[Flush] savePreferences failed during page unload:', err?.message || err);
+            // Dirty stays true — next load triggers retry via auto-save interval
+          });
       }
     };
 
