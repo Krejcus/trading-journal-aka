@@ -11,12 +11,16 @@ import TradeShareCard from './TradeShareCard';
 interface SharedTradeViewProps {
     trade: Trade;
     theme: 'dark' | 'light' | 'oled';
+    /** Jméno autora trade — z profiles tabulky. */
+    ownerName?: string;
+    /** Avatar URL autora. */
+    ownerAvatar?: string;
 }
 
 const CARD_W = 1600;
 const CARD_H = 900;
 
-const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade }) => {
+const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade, ownerName, ownerAvatar }) => {
     const [scale, setScale] = useState(0.6);
 
     // Compute scale to fit viewport — fill jak jen jde
@@ -51,7 +55,8 @@ const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade }) => {
                 }}>
                     <TradeShareCard
                         trade={trade}
-                        username="@trader"
+                        username={ownerName ? `@${ownerName.toLowerCase().replace(/\s+/g, '')}` : '@trader'}
+                        avatarUrl={ownerAvatar}
                         shareUrl={window.location.href}
                         showQR={false}
                     />

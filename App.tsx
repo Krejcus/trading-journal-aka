@@ -302,6 +302,8 @@ const App: React.FC = () => {
   }, []);
 
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
+  const [sharedOwnerName, setSharedOwnerName] = useState<string | undefined>();
+  const [sharedOwnerAvatar, setSharedOwnerAvatar] = useState<string | undefined>();
   const [aiChatTrade, setAiChatTrade] = useState<Trade | null>(null);
   const [aiActiveConvId, setAiActiveConvId] = useState<string | undefined>(undefined);
   const [aiInitialPrompt, setAiInitialPrompt] = useState<string | undefined>(undefined);
@@ -329,8 +331,13 @@ const App: React.FC = () => {
         console.error("Failed to parse shared trade", e);
       }
     } else if (shareId) {
-      storageService.getTradeById(shareId).then(trade => {
-        if (trade) setSharedTrade(trade);
+      // Public share — funguje i pro nepřihlášené uživatele (RLS is_public=true)
+      storageService.getPublicTradeById(shareId).then(result => {
+        if (result) {
+          setSharedTrade(result.trade);
+          setSharedOwnerName(result.ownerName);
+          setSharedOwnerAvatar(result.ownerAvatar);
+        }
       }).catch(err => console.warn('[Share] Failed to load shared trade:', err));
     }
   }, []);
@@ -2257,7 +2264,7 @@ const App: React.FC = () => {
   }
 
   if (sharedTrade) {
-    return <SharedTradeView trade={sharedTrade} theme={theme} />;
+    return <SharedTradeView trade={sharedTrade} theme={theme} ownerName={sharedOwnerName} ownerAvatar={sharedOwnerAvatar} />;
   }
 
   if (!session) {

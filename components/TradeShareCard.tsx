@@ -18,6 +18,8 @@ import type { Trade } from '../types';
 interface Props {
     trade: Trade;
     username?: string;
+    /** URL na uživatelův avatar — pokud chybí, vyrenderuje se gradient kruh s iniciálkou. */
+    avatarUrl?: string;
     shareUrl?: string;
     /** Pokud true, ukáže "Scan for full detail" + QR. Default true. */
     showQR?: boolean;
@@ -51,7 +53,7 @@ function calcR(trade: Trade): number | null {
     return trade.pnl / trade.riskAmount;
 }
 
-const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', shareUrl, showQR = true }) => {
+const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUrl, shareUrl, showQR = true }) => {
     const pnl = Number(trade.pnl || 0);
     const isWin = pnl > 0;
     const isLong = String(trade.direction || '').toLowerCase() === 'long';
@@ -295,13 +297,27 @@ const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', shareUrl
             {/* Footer */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, position: 'relative', zIndex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <div style={{
-                        width: 48, height: 48,
-                        borderRadius: 999,
-                        background: 'linear-gradient(135deg, #8b5cf6, #ec4899)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 22, fontWeight: 700,
-                    }}>{username.charAt(1)?.toUpperCase() || 'T'}</div>
+                    {avatarUrl ? (
+                        <img
+                            src={avatarUrl}
+                            crossOrigin="anonymous"
+                            alt={username}
+                            style={{
+                                width: 48, height: 48,
+                                borderRadius: 999,
+                                objectFit: 'cover',
+                                border: '2px solid rgba(34,211,238,0.3)',
+                            }}
+                        />
+                    ) : (
+                        <div style={{
+                            width: 48, height: 48,
+                            borderRadius: 999,
+                            background: 'linear-gradient(135deg, #8b5cf6, #ec4899)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 22, fontWeight: 700,
+                        }}>{username.charAt(1)?.toUpperCase() || 'T'}</div>
+                    )}
                     <div>
                         <div style={{ fontSize: 20, fontWeight: 700 }}>{username}</div>
                         <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Shared via AlphaTrade</div>

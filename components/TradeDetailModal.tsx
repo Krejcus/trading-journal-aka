@@ -597,6 +597,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         if (user?.email) return `@${user.email.split('@')[0]}`;
                         return '@trader';
                     })()}
+                    avatarUrl={user?.avatar}
                     onClose={() => setIsShareCardOpen(false)}
                 />
             )}

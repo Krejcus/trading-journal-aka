@@ -21,13 +21,14 @@ import TradeShareCard from './TradeShareCard';
 interface Props {
     trade: Trade;
     username?: string;
+    avatarUrl?: string;
     onClose: () => void;
 }
 
 const CARD_W = 1600;
 const CARD_H = 900;
 
-const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', onClose }) => {
+const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', avatarUrl, onClose }) => {
     const cardRef = useRef<HTMLDivElement>(null);
     const [generating, setGenerating] = useState(false);
     const [feedback, setFeedback] = useState<string | null>(null);
@@ -217,7 +218,7 @@ const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', onClose
                     className="shadow-2xl shadow-black/50"
                 >
                     <div ref={cardRef} style={{ width: CARD_W, height: CARD_H, borderRadius: 24, overflow: 'hidden' }}>
-                        <TradeShareCard trade={trade} username={username} shareUrl={shareUrl} showQR={true} />
+                        <TradeShareCard trade={trade} username={username} avatarUrl={avatarUrl} shareUrl={shareUrl} showQR={true} />
                     </div>
                 </motion.div>
             </div>

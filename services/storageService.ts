@@ -758,6 +758,53 @@ export const storageService = {
     };
   },
 
+  /**
+   * Načte shared (public) trade + jeho ownera profile.
+   * Funguje i pro nepřihlášené uživatele (RLS `is_public = true` policy).
+   * Vrací trade + ownerName + ownerAvatar pro SharedTradeView.
+   */
+  async getPublicTradeById(id: string): Promise<{ trade: Trade; ownerName?: string; ownerAvatar?: string } | null> {
+    // Trade fetch — bez user_id filtru, ale RLS dovolí jen is_public=true
+    const { data: tradeRow, error: tradeErr } = await supabase
+      .from('trades')
+      .select('*')
+      .eq('id', id)
+      .eq('is_public', true)
+      .maybeSingle();
+    if (tradeErr || !tradeRow) return null;
+
+    // Owner profile fetch — paralelně by bylo lepší ale jednorázové
+    let ownerName: string | undefined;
+    let ownerAvatar: string | undefined;
+    if (tradeRow.user_id) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('full_name, avatar_url, email')
+        .eq('id', tradeRow.user_id)
+        .maybeSingle();
+      if (profile) {
+        ownerName = profile.full_name || (profile.email ? profile.email.split('@')[0] : undefined);
+        ownerAvatar = profile.avatar_url || undefined;
+      }
+    }
+
+    const trade: Trade = {
+      ...tradeRow.data,
+      id: tradeRow.id,
+      accountId: tradeRow.account_id,
+      instrument: tradeRow.instrument,
+      pnl: tradeRow.pnl,
+      direction: tradeRow.direction,
+      date: tradeRow.date,
+      timestamp: tradeRow.timestamp,
+      drawings: tradeRow.drawings || tradeRow.data?.drawings || [],
+      isPublic: tradeRow.is_public,
+      createdAt: tradeRow.created_at,
+    };
+
+    return { trade, ownerName, ownerAvatar };
+  },
+
   // Batch fetch screenshots for multiple trades.
   // Uses targeted column selectors instead of fetching the whole data blob,
   // which avoids loading megabytes of unrelated JSON per trade.
