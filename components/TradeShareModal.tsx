@@ -116,16 +116,18 @@ const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', onClose
     }, [generatePng, trade]);
 
     const handleCopyLink = useCallback(async () => {
+        // Debug log — pomůže zjistit pokud trade.id chybí nebo není UUID
+        console.log('[Share] Copying URL:', shareUrl, 'trade.id:', trade.id, 'type:', typeof trade.id);
         try {
             await navigator.clipboard.writeText(shareUrl);
-            setFeedback('Link zkopírován ✓ Vlož ⌘+V — Discord/X vytvoří preview');
-            setTimeout(() => setFeedback(null), 3500);
+            setFeedback(`Zkopírováno: ${shareUrl.length > 50 ? shareUrl.slice(0, 47) + '...' : shareUrl}`);
+            setTimeout(() => setFeedback(null), 4000);
         } catch (e) {
             console.error('[Share] Link copy failed:', e);
             setFeedback('Nepodařilo se zkopírovat link');
             setTimeout(() => setFeedback(null), 2500);
         }
-    }, [shareUrl]);
+    }, [shareUrl, trade.id]);
 
     const handleCopy = useCallback(async () => {
         if (!cardRef.current) return;
