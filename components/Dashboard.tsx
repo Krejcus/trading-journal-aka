@@ -1369,10 +1369,14 @@ const Dashboard: React.FC<DashboardProps> = ({
         );
       }
       case 'kpi_day_winrate': {
-        // Group trades by date and calculate profitable days
+        // Group trades by date (YYYY-MM-DD only — NE full ISO timestamp!) and calculate profitable days.
+        // BUG FIX: dříve t.date je plný ISO ("2026-05-22T15:51:00.000Z"), každý trade dostal vlastní
+        // klíč v `dayPnL` → 1 den s 5 trady se počítal jako 5 různých dnů.
         const dayPnL: Record<string, number> = {};
         stats.trades.filter(t => t.executionStatus !== 'Missed').forEach(t => {
-          dayPnL[t.date] = (dayPnL[t.date] || 0) + t.pnl;
+          const dayKey = (t.date || '').slice(0, 10); // YYYY-MM-DD
+          if (!dayKey) return;
+          dayPnL[dayKey] = (dayPnL[dayKey] || 0) + t.pnl;
         });
         const tradingDays = Object.keys(dayPnL).length;
         const profitableDays = Object.values(dayPnL).filter(pnl => pnl > 0).length;

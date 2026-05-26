@@ -770,7 +770,17 @@ const App: React.FC = () => {
   }, [saveWithRetry]);
 
   const applyPreferences = useCallback((prefs: UserPreferences) => {
+    // DIAGNOSTIC: track what fields are present in incoming prefs
+    console.log('[applyPreferences] called with dirty=', isPreferencesDirty.current, 'fields:', {
+      sessions: prefs.sessions?.length,
+      htfOptions: prefs.htfOptions?.length,
+      ltfOptions: prefs.ltfOptions?.length,
+      ironRules: prefs.ironRules?.length,
+      dashboardLayout: prefs.dashboardLayout?.length,
+      systemSettings: !!prefs.systemSettings,
+    });
     if (isPreferencesDirty.current) {
+      console.log('[applyPreferences] SKIPPED — dirty=true');
       // I když přeskočíme apply (uživatel má rozdělanou změnu), aspoň označíme že
       // preference už dorazily z DB/cache — autosave se může pustit a nepřepíše DB
       // defaulty z useState (které by jinak vznikly při saves PŘED prvním applyPreferences).
@@ -943,7 +953,14 @@ const App: React.FC = () => {
             );
           }
           if (fresh.user) setCurrentUser(fresh.user);
-          if (fresh.preferences && !isPreferencesDirty.current) applyPreferences(fresh.preferences);
+          if (fresh.preferences) {
+            console.log('[BG-Refresh] received fresh prefs, dirty=', isPreferencesDirty.current, 'fields:', {
+              sessions: fresh.preferences.sessions?.length,
+              htfOptions: fresh.preferences.htfOptions?.length,
+              dashboardLayout: fresh.preferences.dashboardLayout?.length,
+            });
+            if (!isPreferencesDirty.current) applyPreferences(fresh.preferences);
+          }
           setDailyPreps(prev =>
             fingerprintSimple(fresh.preps) !== fingerprintSimple(prev) ? (fresh.preps || []) : prev
           );
@@ -1323,7 +1340,16 @@ const App: React.FC = () => {
 
         if (!isPreferencesDirty.current) {
           const freshPrefs = await storageService.getPreferences();
-          if (freshPrefs) applyPreferences(freshPrefs);
+          if (freshPrefs) {
+            console.log('[FocusSync] applying fresh prefs from DB:', {
+              sessions: freshPrefs.sessions?.length,
+              htfOptions: freshPrefs.htfOptions?.length,
+              dashboardLayout: freshPrefs.dashboardLayout?.length,
+            });
+            applyPreferences(freshPrefs);
+          }
+        } else {
+          console.log('[FocusSync] SKIPPED prefs fetch — dirty=true (uživatel má rozdělanou změnu)');
         }
 
         const freshAccounts = await storageService.getAccounts();
@@ -1477,16 +1503,27 @@ const App: React.FC = () => {
     // KRITICKÉ: nesaveuj preferences, pokud applyPreferences ještě neproběhlo —
     // state by mohl mít defaulty z useState (HTF/LTF, sessions, emotions) a přepsali bychom DB.
     if (canSave && isPreferencesDirty.current && prefsAppliedRef.current) {
+      console.log('[Save:debounce] scheduling save in 2s, dirty=', isPreferencesDirty.current, 'applied=', prefsAppliedRef.current);
       const timer = setTimeout(() => {
+        const prefs = currentUserPreferences();
+        console.log('[Save:debounce] FIRING save with', {
+          sessions: (prefs.sessions || []).length,
+          htfOptions: (prefs.htfOptions || []).length,
+          ltfOptions: (prefs.ltfOptions || []).length,
+          ironRules: (prefs.ironRules || []).length,
+          dashboardLayout: (prefs.dashboardLayout || []).length,
+        });
         // CRITICAL FIX: Clear dirty flag BEFORE saving, not after
         // This prevents background sync from skipping fresh data while save is in progress
         isPreferencesDirty.current = false;
 
         // Business Hub data (expenses, payouts, goals, resources) now saved to dedicated tables
         // NOT in preferences - prevents data duplication and inconsistency
-        storageService.savePreferences(currentUserPreferences() as any).catch(err => {
+        storageService.savePreferences(prefs as any).then(() => {
+          console.log('[Save:debounce] ✓ SUCCESS');
+        }).catch(err => {
           // If save fails, mark as dirty again so we retry
-          console.error("[Preferences] Save failed:", err);
+          console.error("[Save:debounce] ✗ FAILED:", err);
           isPreferencesDirty.current = true;
         });
       }, 2000);
@@ -1780,7 +1817,10 @@ const App: React.FC = () => {
       setBusinessGoals(dbGoals || []);
       setBusinessResources(dbResources || []);
 
-      if (dbPrefs && !isPreferencesDirty.current) applyPreferences(dbPrefs);
+      if (dbPrefs) {
+        console.log('[PullRefresh] received dbPrefs, dirty=', isPreferencesDirty.current);
+        if (!isPreferencesDirty.current) applyPreferences(dbPrefs);
+      }
 
     } catch (error) {
       console.error('[Refresh] Error:', error);
@@ -2643,7 +2683,24 @@ const App: React.FC = () => {
                       layout={dashboardLayout}
                       sessions={sessions}
                       ironRules={ironRules}
-                      onUpdateLayout={(v) => { setDashboardLayout(v); isPreferencesDirty.current = true; }}
+                      onUpdateLayout={(v) => {
+                          // GATE: před DB loadem (prefsAppliedRef=false) je layout v state pouze
+                          // DEFAULT_WIDGETS. react-grid-layout fires onLayoutChange automaticky při
+                          // mount s normalizovanými coords (různé od defaultů ale stále NE user input).
+                          // Bez tohoto gate by dirty=true → BG-Refresh SKIPNE fresh prefs → auto-save
+                          // přepíše DB defaultem. User akce není možná před loadem (loading screen).
+                          if (!prefsAppliedRef.current) {
+                              console.log('[Setter] setDashboardLayout BLOCKED (prefs not yet applied)');
+                              return;
+                          }
+                          // Identity check pro post-load auto-fires (resize, theme change atd.)
+                          try {
+                              if (JSON.stringify(v) === JSON.stringify(dashboardLayout)) return;
+                          } catch { /* fallthrough */ }
+                          setDashboardLayout(v);
+                          isPreferencesDirty.current = true;
+                          console.log('[Setter] setDashboardLayout (widgets:', v.length, ') → dirty=true');
+                      }}
                       isEditing={isDashboardEditing}
                       onCloseEdit={() => setIsDashboardEditing(false)}
                       dashboardMode={dashboardMode}
@@ -2796,7 +2853,7 @@ const App: React.FC = () => {
                       userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); isPreferencesDirty.current = true; }}
                       htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); isPreferencesDirty.current = true; }}
                       ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); isPreferencesDirty.current = true; }}
-                      sessions={sessions} setSessions={(v) => { setSessions(v); isPreferencesDirty.current = true; }}
+                      sessions={sessions} setSessions={(v) => { setSessions(v); isPreferencesDirty.current = true; console.log('[Setter] setSessions → dirty=true'); }}
                       ironRules={ironRules}
                       setIronRules={(v) => { setIronRules(v); isPreferencesDirty.current = true; }}
                       psychoMetrics={psychoMetrics}
