@@ -17,10 +17,12 @@ import {
     Briefcase,
     Bot,
     Activity,
+    Lock,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User } from '../types';
 import { t } from '../services/translations';
+import { isLocked } from '../utils/featureGating';
 
 interface SidebarProps {
     activePage: string;
@@ -35,6 +37,7 @@ interface SidebarProps {
     onLogout: () => void;
     onOpenProfile: () => void;
     onNavigate?: (page: string) => void;
+    onLockedFeature?: (featureId: string) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -49,7 +52,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     user,
     onLogout,
     onOpenProfile,
-    onNavigate
+    onNavigate,
+    onLockedFeature
 }) => {
     const lang = user.language || 'cs';
     const [isHovered, setIsHovered] = useState(false);
@@ -96,6 +100,11 @@ const Sidebar: React.FC<SidebarProps> = ({
   `;
 
     const handleNavClick = (pageId: string) => {
+        // Locked feature pro non-owner role → otevřít info modal místo navigace
+        if (isLocked(pageId, user.role)) {
+            if (onLockedFeature) onLockedFeature(pageId);
+            return;
+        }
         // Force collapse on click for "pro" feel
         setIsClicked(true);
 
@@ -217,63 +226,44 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                 {/* Navigation - Scrollable Area */}
                 <nav className="flex-1 px-2 space-y-1 overflow-y-auto custom-scrollbar no-scrollbar py-2">
-                    {mainItems.map((item) => {
+                    {[...mainItems, ...secondaryItems].map((item, idx) => {
                         const Icon = item.icon;
                         const isActive = activePage === item.id;
+                        const locked = isLocked(item.id, user.role);
+                        // Visual separator between main and secondary groups
+                        const isFirstSecondary = idx === mainItems.length;
                         return (
-                            <button
-                                key={item.id}
-                                onClick={() => handleNavClick(item.id)}
-                                className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto' : 'px-6 mx-2'}`}
-                                title={!isExpanded ? item.label : ""}
-                            >
-                                <Icon size={16} className={`shrink-0 ${isActive ? (isDark ? 'text-white' : 'text-[var(--text-primary)]') : 'text-current'}`} />
-                                <AnimatePresence>
-                                    {isExpanded && (
-                                        <motion.span
-                                            initial={{ opacity: 0, x: -10 }}
-                                            animate={{ opacity: 1, x: 0 }}
-                                            exit={{ opacity: 0, x: -10 }}
-                                            className="whitespace-nowrap"
-                                        >
-                                            {item.label}
-                                        </motion.span>
+                            <React.Fragment key={item.id}>
+                                {isFirstSecondary && <div className="h-2" />}
+                                <button
+                                    onClick={() => handleNavClick(item.id)}
+                                    className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto' : 'px-6 mx-2'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
+                                    title={!isExpanded ? item.label + (locked ? ' (uzamčeno)' : '') : ''}
+                                >
+                                    <Icon size={16} className={`shrink-0 ${isActive ? (isDark ? 'text-white' : 'text-[var(--text-primary)]') : 'text-current'}`} />
+                                    <AnimatePresence>
+                                        {isExpanded && (
+                                            <motion.span
+                                                initial={{ opacity: 0, x: -10 }}
+                                                animate={{ opacity: 1, x: 0 }}
+                                                exit={{ opacity: 0, x: -10 }}
+                                                className="whitespace-nowrap"
+                                            >
+                                                {item.label}
+                                            </motion.span>
+                                        )}
+                                    </AnimatePresence>
+                                    {locked && isExpanded && (
+                                        <Lock size={11} className="absolute right-4 text-amber-400/70" />
                                     )}
-                                </AnimatePresence>
-                                {isActive && isExpanded && (
-                                    <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-[var(--text-primary)] shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
-                                )}
-                            </button>
-                        );
-                    })}
-
-                    {secondaryItems.map((item) => {
-                        const Icon = item.icon;
-                        const isActive = activePage === item.id;
-                        return (
-                            <button
-                                key={item.id}
-                                onClick={() => handleNavClick(item.id)}
-                                className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto' : 'px-6 mx-2'}`}
-                                title={!isExpanded ? item.label : ""}
-                            >
-                                <Icon size={16} className={`shrink-0 ${isActive ? (isDark ? 'text-white' : 'text-[var(--text-primary)]') : 'text-current'}`} />
-                                <AnimatePresence>
-                                    {isExpanded && (
-                                        <motion.span
-                                            initial={{ opacity: 0, x: -10 }}
-                                            animate={{ opacity: 1, x: 0 }}
-                                            exit={{ opacity: 0, x: -10 }}
-                                            className="whitespace-nowrap"
-                                        >
-                                            {item.label}
-                                        </motion.span>
+                                    {locked && !isExpanded && (
+                                        <Lock size={9} className="absolute -top-0.5 -right-0.5 text-amber-400/70 bg-[var(--bg-page)] rounded-full p-0.5" />
                                     )}
-                                </AnimatePresence>
-                                {isActive && isExpanded && (
-                                    <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-[var(--text-primary)] shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
-                                )}
-                            </button>
+                                    {isActive && isExpanded && !locked && (
+                                        <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-[var(--text-primary)] shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
+                                    )}
+                                </button>
+                            </React.Fragment>
                         );
                     })}
                 </nav>

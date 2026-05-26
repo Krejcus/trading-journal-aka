@@ -844,8 +844,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const navigateDate = (direction: 'prev' | 'next') => {
     const doNavigate = () => {
       const d = new Date(selectedDate);
-      if (direction === 'prev') d.setDate(d.getDate() - 1);
-      else d.setDate(d.getDate() + 1);
+      const step = direction === 'prev' ? -1 : 1;
+      // Posuň o 1 den, pak přeskoč víkendy (so/ne) — trh je zavřený
+      d.setDate(d.getDate() + step);
+      while (d.getDay() === 0 || d.getDay() === 6) {
+        d.setDate(d.getDate() + step);
+      }
       const newDateStr = d.toLocaleDateString('en-CA');
       if (newDateStr <= today) { setSelectedDate(newDateStr); setView('timeline'); }
     };
@@ -1115,18 +1119,22 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   <h2 className="hidden lg:inline-flex text-3xl md:text-5xl font-black tracking-tighter italic items-center gap-4">
                     DENNÍ PŘEHLED
                   </h2>
-                  <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner self-start">
-                    <button onClick={() => navigateDate('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90"><ChevronLeft size={20} /></button>
-                    <div className="px-3 py-1 text-center min-w-[100px]">
-                      <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">Taktický Datum</p>
-                      <p className="text-xs font-black font-mono">{selectedDate}</p>
-                    </div>
-                    <button onClick={() => navigateDate('next')} disabled={selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 ${selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
-                  </div>
+                  {(() => {
+                    const dt = new Date(selectedDate + 'T00:00:00');
+                    const weekday = new Intl.DateTimeFormat('cs-CZ', { weekday: 'long' }).format(dt);
+                    const fullDate = new Intl.DateTimeFormat('cs-CZ', { day: 'numeric', month: 'long', year: 'numeric' }).format(dt);
+                    return (
+                      <div className="flex items-center gap-3 theme-card px-2 py-2 rounded-2xl border theme-border shadow-inner self-start min-w-[260px]">
+                        <button onClick={() => navigateDate('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90 shrink-0"><ChevronLeft size={20} /></button>
+                        <div className="flex-1 text-center">
+                          <p className="text-xl md:text-2xl font-black italic tracking-tight uppercase leading-tight">{weekday}</p>
+                          <p className="text-[10px] md:text-xs font-semibold text-slate-500 tracking-wide lowercase">{fullDate}</p>
+                        </div>
+                        <button onClick={() => navigateDate('next')} disabled={selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 shrink-0 ${selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
+                      </div>
+                    );
+                  })()}
                 </div>
-                <p className="text-slate-500 font-black uppercase text-[9px] tracking-[0.3em]">
-                  Chronological Feed • Trace Engine
-                </p>
               </div>
             </div>
 
@@ -1259,9 +1267,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   </div>
                 )}
               </div>
-              <p className="text-slate-500 font-black uppercase text-[9px] tracking-[0.3em]">
-                {activeTab === 'daily' ? `Chronological Feed • Trace Engine` : (activeTab === 'weekly' ? `Weekly Debrief • Týden ${currentWeekInfo.weekNumber} ` : `Psycho Archives • Emoční Historie`)}
-              </p>
+              {activeTab !== 'daily' && (
+                <p className="text-slate-500 font-black uppercase text-[9px] tracking-[0.3em]">
+                  {activeTab === 'weekly' ? `Weekly Debrief • Týden ${currentWeekInfo.weekNumber} ` : `Psycho Archives • Emoční Historie`}
+                </p>
+              )}
             </div>
             <div className="flex gap-2 w-full sm:w-auto items-center">
               {view !== 'timeline' && (

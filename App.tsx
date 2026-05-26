@@ -20,6 +20,8 @@ const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
 
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
+import LockedFeatureModal from './components/LockedFeatureModal';
+import { canAccess } from './utils/featureGating';
 import FilterDropdown from './components/FilterDropdown';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
@@ -71,7 +73,9 @@ const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
 const DEFAULT_USER: User = {
   id: 'default_user',
   email: 'trader@alphatrade.cz',
-  name: 'Alpha Trader'
+  name: 'Alpha Trader',
+  role: 'friend', // SAFE default — před DB load je vše locked, owner se unlockne po loadu.
+  // Lepší než 'owner' (kde by neowner viděl plný přístup než dorazí DB).
 };
 
 const DEFAULT_ACCOUNT: Account = {
@@ -240,6 +244,29 @@ const App: React.FC = () => {
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
       if (activeSession) {
         setSession(activeSession);
+        // INSTANT user z cached snapshot předchozí session — žádný flash avatara/jména/role.
+        // Cache obsahuje plný User objekt z posledního DB loadu.
+        let instantUser: User | null = null;
+        try {
+          const raw = localStorage.getItem(`alphatrade_user_cache_${activeSession.user.id}`);
+          if (raw) instantUser = JSON.parse(raw) as User;
+        } catch { /* parse error → fallback níž */ }
+
+        if (instantUser && instantUser.id === activeSession.user.id) {
+          // Cached user existuje → instant render
+          setCurrentUser(instantUser);
+          setIsUserFromDb(true); // splash zmizí instantně
+        } else {
+          // První přihlášení nebo cache prázdná → fallback z JWT (email, id z tokenu)
+          setCurrentUser({
+            id: activeSession.user.id,
+            email: activeSession.user.email || '',
+            name: (activeSession.user.user_metadata as any)?.full_name || activeSession.user.email?.split('@')[0] || '',
+            avatar: (activeSession.user.user_metadata as any)?.avatar_url || '',
+            role: 'friend',
+          });
+          // Splash bude držet dokud DB nedoběhne (~300-500ms)
+        }
         setInitStatus("Načítám data...");
       } else {
         setLoading(false);
@@ -276,6 +303,7 @@ const App: React.FC = () => {
         setAccounts([]);
         setActiveAccountId('');
         setCurrentUser(DEFAULT_USER);
+        setIsUserFromDb(false);
         setDailyPreps([]);
         setDailyReviews([]);
         setWeeklyFocusList([]);
@@ -346,6 +374,33 @@ const App: React.FC = () => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [activeAccountId, setActiveAccountId] = useState<string>('');
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USER);
+  // Locked feature modal pro non-owner roli (kamarád apod.)
+  const [lockedFeatureModal, setLockedFeatureModal] = useState<string | null>(null);
+  // True pokud currentUser obsahuje data z DB (ne jen DEFAULT_USER nebo JWT instant fallback).
+  // Drží loader dokud role nedorazí z DB → eliminuje flash locked tabů pro ownery.
+  const [isUserFromDb, setIsUserFromDb] = useState(false);
+
+  // Safety timeout: pokud DB user load selže nebo trvá moc dlouho (>5s),
+  // uvolnit loader s JWT user data. Lepší fallback než nekonečný spinner.
+  useEffect(() => {
+    if (!isUserFromDb && currentUser.id !== 'default_user') {
+      const t = setTimeout(() => {
+        console.warn('[Auth] DB user load timeout — proceeding with JWT instant fallback');
+        setIsUserFromDb(true);
+      }, 5000);
+      return () => clearTimeout(t);
+    }
+  }, [isUserFromDb, currentUser.id]);
+
+  // Persist celý user objekt do localStorage při každé změně z DB — další reload pak má
+  // instant rendering (žádný flash avatara/jména/role). Cache klíč per-user.
+  useEffect(() => {
+    if (isUserFromDb && currentUser.id !== 'default_user') {
+      try {
+        localStorage.setItem(`alphatrade_user_cache_${currentUser.id}`, JSON.stringify(currentUser));
+      } catch { /* localStorage full nebo blocked */ }
+    }
+  }, [isUserFromDb, currentUser]);
 
   const [dailyPreps, setDailyPreps] = useState<DailyPrep[]>([]);
   const [dailyReviews, setDailyReviews] = useState<DailyReview[]>([]);
@@ -557,6 +612,14 @@ const App: React.FC = () => {
   });
 
   const [activePage, setActivePage] = useState('dashboard');
+
+  // Defense-in-depth: kdyby se non-owner role pokusila dostat na uzamčenou page
+  // přes přímou state mutaci nebo router redirect → přesměrovat na dashboard.
+  useEffect(() => {
+    if (!canAccess(activePage, currentUser.role)) {
+      setActivePage('dashboard');
+    }
+  }, [activePage, currentUser.role]);
   const [isClearTradesModalOpen, setIsClearTradesModalOpen] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light' | 'oled'>(() => {
     try {
@@ -922,7 +985,9 @@ const App: React.FC = () => {
           setAccounts([DEFAULT_ACCOUNT]);
           setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
-        if (cached.user) setCurrentUser(cached.user);
+        // User profile NEČTEME z cache — vždy z DB. Cache může mít zastaralou role
+        // (např. před přiřazením 'owner'). DB call je rychlý (1 řádek, 3 fieldy).
+        // Před DB loadem zůstává DEFAULT_USER s role='friend' (safe — flash locked → unlocked).
         // Apply cached preferences POUZE pokud cache je fresh — jinak počkáme na background refresh.
         // To zabrání aplikování zastaralých prefs (sessions, htf, atd.) co byly přepsány z DB.
         if (cached.preferences && cacheIsFresh) {
@@ -952,7 +1017,7 @@ const App: React.FC = () => {
               fingerprintSimple(fresh.accounts) !== fingerprintSimple(prev) ? fresh.accounts : prev
             );
           }
-          if (fresh.user) setCurrentUser(fresh.user);
+          if (fresh.user) { setCurrentUser(fresh.user); setIsUserFromDb(true); }
           if (fresh.preferences) {
             console.log('[BG-Refresh] received fresh prefs, dirty=', isPreferencesDirty.current, 'fields:', {
               sessions: fresh.preferences.sessions?.length,
@@ -1033,7 +1098,7 @@ const App: React.FC = () => {
           setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
 
-        if (dbUser) setCurrentUser(dbUser);
+        if (dbUser) { setCurrentUser(dbUser); setIsUserFromDb(true); }
         if (dbPrefs) applyPreferences(dbPrefs);
         setDailyPreps(dbPreps || []);
         setDailyReviews(dbReviews || []);
@@ -1798,7 +1863,7 @@ const App: React.FC = () => {
         storageService.getBusinessResources()
       ]);
 
-      if (dbUser) setCurrentUser(dbUser);
+      if (dbUser) { setCurrentUser(dbUser); setIsUserFromDb(true); }
 
       // No longer filter weekends at data level - this should be a UI filter
       setTrades(dbTrades || []);
@@ -2338,8 +2403,10 @@ const App: React.FC = () => {
     return <SharedTradeView trade={sharedTrade} theme={theme} ownerName={sharedOwnerName} ownerAvatar={sharedOwnerAvatar} />;
   }
 
-  // Show loader during initial auth check OR when logged in but data not yet loaded
-  if (loading || (session && !isInitialLoadDone)) {
+  // Show loader during initial auth check OR when logged in but data not yet loaded.
+  // Také DRŽÍME loader dokud nedoběhne DB user s rolí — eliminuje flash locked tabů
+  // pro ownery (instant user z JWT má dočasnou role='friend' než DB přepíše).
+  if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb)) {
     return <QuantumLoader theme={theme} />;
   }
 
@@ -2377,6 +2444,7 @@ const App: React.FC = () => {
             setActivePage(page);
             setIsSidebarOpen(false);
           }}
+          onLockedFeature={(featureId) => setLockedFeatureModal(featureId)}
         />
       </div>
 
@@ -2386,6 +2454,14 @@ const App: React.FC = () => {
         onNavigate={(page) => setActivePage(page)}
         onAddTrade={handleTryAddTrade}
         theme={theme}
+        userRole={currentUser.role}
+        onLockedFeature={(featureId) => setLockedFeatureModal(featureId)}
+      />
+
+      {/* Locked feature info modal — friend role klikne na uzamčenou položku */}
+      <LockedFeatureModal
+        featureId={lockedFeatureModal}
+        onClose={() => setLockedFeatureModal(null)}
       />
 
       <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>

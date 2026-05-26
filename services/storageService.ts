@@ -142,7 +142,8 @@ export const storageService = {
 
     const user = raw.user ? {
       id: raw.user.id, email: raw.user.email || '',
-      name: raw.user.full_name || '', avatar: raw.user.avatar_url
+      name: raw.user.full_name || '', avatar: raw.user.avatar_url,
+      role: (raw.user.role as any) || 'friend',
     } as User : null;
 
     const preferences = raw.preferences || null;
@@ -228,11 +229,12 @@ export const storageService = {
     }
     if (!data) return null;
 
-    const user = {
+    const user: User = {
       id: data.id,
       email: data.email || '',
       name: data.full_name || '',
-      avatar: data.avatar_url
+      avatar: data.avatar_url,
+      role: (data.role as any) || 'friend',
     };
 
     // Keep cache in sync
@@ -249,7 +251,8 @@ export const storageService = {
       id: data.id,
       email: data.email || '',
       name: data.full_name || '',
-      avatar: data.avatar_url
+      avatar: data.avatar_url,
+      role: (data.role as any) || 'friend', // 'owner' | 'friend' | 'user'
     };
   },
 

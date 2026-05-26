@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
    X, User as UserIcon, Camera, Mail, Hash,
@@ -26,6 +26,20 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
       currency: user.currency || 'USD',
       timezone: user.timezone || 'Europe/Prague'
    });
+
+   // Sync formData když přijdou čerstvé user data z DB (BG-Refresh dorazí pozdě po mountu)
+   // Bez tohoto by formData zůstal s DEFAULT_USER hodnotami pokud se modal otevřel před načtením.
+   useEffect(() => {
+      setFormData(prev => ({
+         ...prev,
+         name: user.name || prev.name,
+         email: user.email || prev.email,
+         avatar: user.avatar || prev.avatar,
+         language: user.language || prev.language,
+         currency: user.currency || prev.currency,
+         timezone: user.timezone || prev.timezone,
+      }));
+   }, [user.id, user.name, user.email, user.avatar, user.language, user.currency, user.timezone]);
 
    const [passwords, setPasswords] = useState({
       currentPassword: '',

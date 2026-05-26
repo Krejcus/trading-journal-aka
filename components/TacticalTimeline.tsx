@@ -751,7 +751,7 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
                   {/* Active session editor — compact 2-col */}
                   {prepForm.scenarios.sessions?.filter(s => s.id === activeSessionTab).map(session => (
-                    <div key={session.id} className="grid grid-cols-[1fr_260px] gap-3">
+                    <div key={session.id} className="grid grid-cols-1 md:grid-cols-[1fr_260px] gap-3">
 
                       {/* LEFT: bias row + textarea */}
                       <div className="flex flex-col gap-2">
@@ -841,27 +841,8 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                     </div>
                   ))}
 
-                  {/* Bottom bar: confidence + rituals + button */}
+                  {/* Bottom bar: rituals + button */}
                   <div className={`flex flex-col gap-2 pt-2 border-t ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
-                    {/* Confidence inline */}
-                    <div className="flex items-center gap-3">
-                      <Brain size={11} className="text-violet-500 shrink-0" />
-                      <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 shrink-0 w-20">Sebevědomí</span>
-                      <input
-                        type="range" min="0" max="100" step="5"
-                        value={prepForm.confidence ?? 50}
-                        onChange={(e) => editPrepForm!(prev => ({ ...prev, confidence: Number(e.target.value) }))}
-                        className="flex-1 h-1.5 rounded-lg appearance-none cursor-pointer"
-                        style={{
-                          accentColor: (prepForm.confidence ?? 50) >= 70 ? '#10b981' : (prepForm.confidence ?? 50) >= 40 ? '#f59e0b' : '#f43f5e',
-                          background: `linear-gradient(to right, ${(prepForm.confidence ?? 50) >= 70 ? '#10b981' : (prepForm.confidence ?? 50) >= 40 ? '#f59e0b' : '#f43f5e'} ${prepForm.confidence ?? 50}%, ${isDark ? '#334155' : '#e2e8f0'} ${prepForm.confidence ?? 50}%)`
-                        }}
-                      />
-                      <span className={`text-[11px] font-black tabular-nums w-8 text-right shrink-0 ${(prepForm.confidence ?? 50) >= 70 ? 'text-emerald-400' : (prepForm.confidence ?? 50) >= 40 ? 'text-amber-400' : 'text-rose-400'}`}>
-                        {prepForm.confidence ?? 50}%
-                      </span>
-                    </div>
-
                     {/* Rituals — compact chips */}
                     {rituals && rituals.length > 0 && (
                       <div className="flex flex-wrap gap-1.5">

@@ -1,15 +1,19 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase } from 'lucide-react';
+import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock } from 'lucide-react';
+import type { UserRole } from '../types';
+import { isLocked } from '../utils/featureGating';
 
 interface BottomNavProps {
   activePage: string;
   onNavigate: (page: string) => void;
   onAddTrade: () => void;
   theme: 'dark' | 'light' | 'oled';
+  userRole?: UserRole;
+  onLockedFeature?: (featureId: string) => void;
 }
 
-const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrade, theme }) => {
+const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrade, theme, userRole, onLockedFeature }) => {
   const [moreOpen, setMoreOpen] = useState(false);
   const isDark = theme !== 'light';
 
@@ -28,6 +32,12 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
   ];
 
   const handleNavigate = (page: string) => {
+    // Locked feature pro non-owner → otevřít info modal
+    if (isLocked(page, userRole)) {
+      if (onLockedFeature) onLockedFeature(page);
+      setMoreOpen(false);
+      return;
+    }
     onNavigate(page);
     setMoreOpen(false);
   };
@@ -55,18 +65,20 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
               {moreItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = activePage === item.id;
+                const locked = isLocked(item.id, userRole);
                 return (
                   <button
                     key={item.id}
                     onClick={() => handleNavigate(item.id)}
-                    className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-bold uppercase tracking-wider transition-colors ${
-                      isActive
+                    className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-bold uppercase tracking-wider transition-colors ${locked ? 'opacity-50' : ''} ${
+                      isActive && !locked
                         ? isDark ? 'text-white bg-white/10' : 'text-slate-900 bg-slate-100'
                         : isDark ? 'text-slate-400 hover:text-white hover:bg-white/5' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                     }`}
                   >
                     <Icon size={18} />
-                    {item.label}
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {locked && <Lock size={12} className="text-amber-400/80" />}
                   </button>
                 );
               })}
@@ -81,14 +93,16 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
           {mainItems.slice(0, 2).map((item) => {
             const Icon = item.icon;
             const isActive = activePage === item.id;
+            const locked = isLocked(item.id, userRole);
             return (
               <button
                 key={item.id}
                 onClick={() => handleNavigate(item.id)}
-                className={`flex flex-col items-center gap-1 py-3 px-4 min-w-[56px] transition-all active:scale-90 ${isActive ? (isDark ? 'text-white' : 'text-slate-900') : (isDark ? 'text-slate-500' : 'text-slate-400')}`}
+                className={`flex flex-col items-center gap-1 py-3 px-4 min-w-[56px] transition-all active:scale-90 ${locked ? 'opacity-40' : ''} ${isActive && !locked ? (isDark ? 'text-white' : 'text-slate-900') : (isDark ? 'text-slate-500' : 'text-slate-400')}`}
               >
                 <div className="relative p-1.5 rounded-xl transition-colors">
                   <Icon size={20} strokeWidth={isActive ? 2 : 1.8} />
+                  {locked && <Lock size={9} className="absolute -top-0.5 -right-0.5 text-amber-400/80 bg-[var(--bg-page)] rounded-full p-0.5" />}
                 </div>
                 <span className={`text-[9px] font-bold uppercase tracking-wider ${isActive ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
               </button>
@@ -109,14 +123,16 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
           {mainItems.slice(2, 4).map((item) => {
             const Icon = item.icon;
             const isActive = activePage === item.id;
+            const locked = isLocked(item.id, userRole);
             return (
               <button
                 key={item.id}
                 onClick={() => handleNavigate(item.id)}
-                className={`flex flex-col items-center gap-1 py-3 px-4 min-w-[56px] transition-all active:scale-90 ${isActive ? (isDark ? 'text-white' : 'text-slate-900') : (isDark ? 'text-slate-500' : 'text-slate-400')}`}
+                className={`flex flex-col items-center gap-1 py-3 px-4 min-w-[56px] transition-all active:scale-90 ${locked ? 'opacity-40' : ''} ${isActive && !locked ? (isDark ? 'text-white' : 'text-slate-900') : (isDark ? 'text-slate-500' : 'text-slate-400')}`}
               >
                 <div className="relative p-1.5 rounded-xl transition-colors">
                   <Icon size={20} strokeWidth={isActive ? 2 : 1.8} />
+                  {locked && <Lock size={9} className="absolute -top-0.5 -right-0.5 text-amber-400/80 bg-[var(--bg-page)] rounded-full p-0.5" />}
                 </div>
                 <span className={`text-[9px] font-bold uppercase tracking-wider ${isActive ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
               </button>

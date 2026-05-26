@@ -58,6 +58,8 @@ export interface DrawingTemplate {
   };
 }
 
+export type UserRole = 'owner' | 'friend';
+
 export interface User {
   id: string;
   email: string;
@@ -67,6 +69,7 @@ export interface User {
   currency?: 'USD' | 'CZK' | 'EUR';
   timezone?: string;
   preferences?: Record<string, any>; // extended preferences (networkNotifications etc.)
+  role?: UserRole; // 'owner' = full access, 'friend' = limited, 'user' = default
 }
 
 export interface SocialConnection {
