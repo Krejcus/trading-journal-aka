@@ -851,11 +851,16 @@ const App: React.FC = () => {
       return;
     }
 
-    if (prefs.emotions) setUserEmotions(prefs.emotions);
-    if (prefs.standardMistakes) setUserMistakes(prefs.standardMistakes);
-    if (prefs.standardGoals) setStandardGoals(prefs.standardGoals);
-    if (prefs.dashboardLayout) {
-      const dl = prefs.dashboardLayout;
+    // PRO NOVÉ USERY: DB má default preferences s prázdnými poli [].
+    // Ignorujeme je — necháme useState defaulty (DEFAULT_WIDGETS, DEFAULT_SESSIONS, atd.).
+    // Auto-save pak při první user akci uloží skutečné defaulty místo prázdných.
+    const hasItems = (arr: any) => Array.isArray(arr) && arr.length > 0;
+
+    if (hasItems(prefs.emotions)) setUserEmotions(prefs.emotions);
+    if (hasItems(prefs.standardMistakes)) setUserMistakes(prefs.standardMistakes);
+    if (hasItems(prefs.standardGoals)) setStandardGoals(prefs.standardGoals);
+    if (hasItems(prefs.dashboardLayout)) {
+      const dl = prefs.dashboardLayout!;
       // Remove any widget IDs that no longer exist in the app (orphaned widgets show as empty boxes)
       const validDl = dl.filter(w => w.id in WIDGET_CONSTRAINTS);
       const isOld = validDl.length > 0 && (validDl[0] as any).x === undefined && (validDl[0] as any).size !== undefined;
@@ -874,7 +879,7 @@ const App: React.FC = () => {
         }
       }
     }
-    if (prefs.sessions) {
+    if (hasItems(prefs.sessions)) {
       const migratedSessions = (prefs.sessions as any[]).map(s => ({
         ...s,
         startTime: s.startTime || `${String(s.startHour ?? 9).padStart(2, '0')}:00`,
@@ -883,16 +888,16 @@ const App: React.FC = () => {
       }));
       setSessions(migratedSessions);
     }
-    if (prefs.htfOptions) setHtfOptions(prefs.htfOptions);
-    if (prefs.ltfOptions) setLtfOptions(prefs.ltfOptions);
-    if (prefs.ironRules) setIronRules(prefs.ironRules);
+    if (hasItems(prefs.htfOptions)) setHtfOptions(prefs.htfOptions);
+    if (hasItems(prefs.ltfOptions)) setLtfOptions(prefs.ltfOptions);
+    if (hasItems(prefs.ironRules)) setIronRules(prefs.ironRules);
     // Business Hub data (expenses, payouts, goals, resources) now use dedicated Supabase tables
     // DO NOT apply from preferences - prevents stale data overwriting fresh table data
-    if (prefs.playbookItems) setPlaybookItems(prefs.playbookItems);
-    if (prefs.constitutionRules) setConstitutionRules(prefs.constitutionRules);
-    if (prefs.careerRoadmap) setCareerRoadmap(prefs.careerRoadmap);
+    if (hasItems(prefs.playbookItems)) setPlaybookItems(prefs.playbookItems);
+    if (hasItems(prefs.constitutionRules)) setConstitutionRules(prefs.constitutionRules);
+    if (hasItems(prefs.careerRoadmap)) setCareerRoadmap(prefs.careerRoadmap);
     if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
-    if (prefs.psychoMetricsConfig) setPsychoMetrics(prefs.psychoMetricsConfig);
+    if (hasItems(prefs.psychoMetricsConfig)) setPsychoMetrics(prefs.psychoMetricsConfig);
     // Theme is NOT applied here — it has its own persistence via localStorage
     // to prevent cross-tab sync or focus sync from reverting user's theme choice.
     // Theme is applied only on initial load (useState initializer).
