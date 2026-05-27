@@ -417,7 +417,9 @@ const App: React.FC = () => {
   const [htfOptions, setHtfOptions] = useState<string[]>(['4H Demand', '4H Supply', 'Daily Level', 'Weekly High/Low']);
   const [ltfOptions, setLtfOptions] = useState<string[]>(['M5 BoS', 'M1 Choch', 'Liquidity Sweep', 'FVG Entry']);
   const [standardGoals, setStandardGoals] = useState<string[]>(['Dodržet max risk 1%', 'Žádný obchod po 11:00', 'Počkat na setup A+']);
-  const [dashboardLayout, setDashboardLayout] = useState<DashboardWidgetConfig[]>(DEFAULT_WIDGETS);
+  // Init `[]` ne DEFAULT_WIDGETS — zabraní flashe defaultních widgetů před DB loadem.
+  // applyPreferences pak nastaví buď DB layout nebo DEFAULT_WIDGETS (pro nového usera).
+  const [dashboardLayout, setDashboardLayout] = useState<DashboardWidgetConfig[]>([]);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => {
     // Try to load from local storage first for immediate persistence
     const saved = localStorage.getItem('alphatrade_dash_mode');
@@ -878,6 +880,9 @@ const App: React.FC = () => {
           setDashboardLayout(validDl);
         }
       }
+    } else {
+      // DB nemá uložený dashboard layout → nový user nebo prázdný blob → set defaulty
+      setDashboardLayout(DEFAULT_WIDGETS);
     }
     if (hasItems(prefs.sessions)) {
       const migratedSessions = (prefs.sessions as any[]).map(s => ({
