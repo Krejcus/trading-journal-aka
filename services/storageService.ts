@@ -2402,16 +2402,35 @@ export const storageService = {
     await this.savePreferences({ ...prefs, drawingTemplates: filtered } as any);
   },
 
+  // Globální cache AI conversations — persisted v localStorage, sdílený mezi
+  // AICoachPage mount/unmount cykly. Eliminuje flash prázdného seznamu po reloadu.
+  _conversationsCache: (() => {
+    try {
+      const raw = localStorage.getItem('alphatrade_conversations_cache');
+      return raw ? JSON.parse(raw) as AIConversation[] : [];
+    } catch { return [] as AIConversation[]; }
+  })(),
+
+  getCachedConversations(): AIConversation[] {
+    return this._conversationsCache;
+  },
+
   async getConversations(): Promise<AIConversation[]> {
     const userId = await getUserId();
-    if (!userId) return [];
+    if (!userId) return this._conversationsCache;
     const { data, error } = await supabase
       .from('ai_conversations')
       .select('*')
       .eq('user_id', userId)
       .order('updated_at', { ascending: false });
-    if (error) { console.error('[AI] getConversations:', error); return []; }
-    return data ?? [];
+    if (error) { console.error('[AI] getConversations:', error); return this._conversationsCache; }
+    const list = data ?? [];
+    // Update cache + persist
+    this._conversationsCache = list;
+    try {
+      localStorage.setItem('alphatrade_conversations_cache', JSON.stringify(list));
+    } catch { /* localStorage full */ }
+    return list;
   },
 
   async createConversation(title = 'Nová konverzace'): Promise<AIConversation | null> {

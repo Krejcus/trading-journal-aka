@@ -109,7 +109,11 @@ const AICoachPage: React.FC<Props> = ({
   onOpenTrade, onOpenJournal, onApplyAction,
   initialConversationId, initialPrompt, onInitialPromptConsumed,
 }) => {
-  const [conversations, setConversations] = useState<AIConversation[]>([]);
+  // Init z globálního cache (persisted v localStorage) — žádný flash prázdného seznamu po reloadu.
+  // useEffect níž pak refresh z DB na pozadí.
+  const [conversations, setConversations] = useState<AIConversation[]>(
+    () => storageService.getCachedConversations()
+  );
   const [activeConvId, setActiveConvId] = useState<string | null>(initialConversationId ?? null);
   const [messages, setMessages] = useState<ExtendedMessage[]>([]);
   const [input, setInput] = useState('');
