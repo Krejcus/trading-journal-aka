@@ -27,14 +27,14 @@ interface PropertyProps {
 }
 
 const Property = React.memo(({ label, value, subValue, color, icon: Icon, isDark = true }: PropertyProps) => (
-    <div className={`py-2.5 px-1 group/prop border-b ${isDark ? 'border-white/[0.03]' : 'border-slate-100'} last:border-0`}>
-        <div className="flex items-center gap-1.5 mb-1 opacity-40 group-hover/prop:opacity-60 transition-opacity">
+    <div className={`py-1.5 px-1 lg:py-2.5 group/prop lg:border-b ${isDark ? 'lg:border-white/[0.03]' : 'lg:border-slate-100'} lg:last:border-0`}>
+        <div className="flex items-center gap-1 lg:gap-1.5 mb-0.5 lg:mb-1 opacity-40 group-hover/prop:opacity-60 transition-opacity">
             {Icon && <Icon size={9} className="text-slate-400" />}
-            <span className="text-[8px] font-black uppercase tracking-[0.2em]">{label}</span>
+            <span className="text-[8px] font-black uppercase tracking-[0.15em] lg:tracking-[0.2em]">{label}</span>
         </div>
         <div>
-            <span className={`text-[12px] font-black font-mono tracking-tighter ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
-            {subValue && <p className="text-[8px] font-bold text-slate-500 mt-0.5 uppercase tracking-wide opacity-60">{subValue}</p>}
+            <span className={`text-[11px] lg:text-[12px] font-black font-mono tracking-tighter ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
+            {subValue && <p className="text-[7px] lg:text-[8px] font-bold text-slate-500 mt-0.5 uppercase tracking-wide opacity-60">{subValue}</p>}
         </div>
     </div>
 ));
@@ -372,15 +372,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     </div>
                                 </div>
                             </div>
-                            {/* Metrics */}
-                            <div className="p-4 lg:p-5">
-                                <div className="grid grid-cols-2 gap-x-6">
+                            {/* Metrics — 3-col na mobile (kompaktnější), 2-col na desktop */}
+                            <div className="p-3 lg:p-5">
+                                <div className="grid grid-cols-3 gap-x-2 gap-y-3 lg:grid-cols-2 lg:gap-x-6 lg:gap-y-4">
                                     <Property label="ENTRY" value={entryPrice || '—'} icon={Target} isDark={isDark} />
                                     <Property label="EXIT" value={exitPrice || '—'} color={isWin ? 'text-emerald-400' : 'text-rose-400'} icon={ArrowRight} isDark={isDark} />
-                                    <Property label="STOP LOSS" value={stopLoss || '—'} color="text-rose-500/80" icon={ShieldCheck} isDark={isDark} />
-                                    <Property label="TAKE PROFIT" value={takeProfit || '—'} color="text-emerald-500/80" icon={Zap} isDark={isDark} />
+                                    <Property label="STOP" value={stopLoss || '—'} color="text-rose-500/80" icon={ShieldCheck} isDark={isDark} />
+                                    <Property label="TARGET" value={takeProfit || '—'} color="text-emerald-500/80" icon={Zap} isDark={isDark} />
                                     <Property label="POSITION" value={activeTrade.positionSize || 1} icon={Layers} isDark={isDark} />
-                                    <Property label="HOLD TIME" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} isDark={isDark} />
+                                    <Property label="HOLD" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} isDark={isDark} />
                                 </div>
                                 <div className="pt-4">
                                     <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2 mb-2"><Wallet size={12} /> Účty</p>
@@ -435,6 +435,18 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                         </div>
                                     </div>
                                 )}
+
+                                {/* AI + Notes (MOBILE ONLY) — na desktop jsou v right pane bottom.
+                                    User chce mít AI a poznámky úplně dole pod metrikami a confluence. */}
+                                <div className="lg:hidden pt-4 mt-4 border-t border-slate-100 dark:border-white/[0.03] space-y-4">
+                                    <TradeAISection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
+                                    <div>
+                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><FileText size={12} /> Poznámky</p>
+                                        <div className={`p-4 rounded-2xl border text-xs font-medium leading-[1.8] ${isDark ? 'bg-black/30 border-white/5 text-slate-400' : 'bg-white border-slate-100 text-slate-600'}`}>
+                                            {activeTrade.notes || <span className="italic opacity-40">No log entry.</span>}
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -538,8 +550,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             )}
                         </div>
 
-                            {/* BOTTOM: Mindset + AI + Notes */}
-                            <div className={`flex-[2_2_0] min-h-0 overflow-y-auto no-scrollbar border-t ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/30'}`}>
+                            {/* BOTTOM: AI + Notes (DESKTOP ONLY) — na mobile přesunuto do sidebar dole */}
+                            <div className={`hidden lg:block flex-[2_2_0] min-h-0 overflow-y-auto no-scrollbar border-t ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/30'}`}>
                                 <div className="px-5 lg:px-6 pt-3 pb-5 lg:pb-6 space-y-4">
                                     {/* AI */}
                                     <TradeAISection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
