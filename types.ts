@@ -139,6 +139,14 @@ export interface Account {
   archivedAt?: number;
   result?: 'Passed' | 'Failed';
   instrumentFees?: Record<string, number>;
+  // Account Funeral metadata (vyplněné v AccountFuneralModal při markování jako Failed)
+  failureReason?: string;
+  failureDate?: string;
+  failureWhatHappened?: string;
+  failureAmountLost?: number;
+  failureProgressPct?: number;
+  failureDaysOfConsistency?: number;
+  failureKeyLesson?: string;
 }
 
 export type PnLDisplayMode = 'usd' | 'percent' | 'rr';

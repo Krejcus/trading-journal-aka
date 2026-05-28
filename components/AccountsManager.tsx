@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import PayoutModal from './PayoutModal';
+import AccountFuneralModal, { type FailureData } from './AccountFuneralModal';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -246,7 +247,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     setPassConfirmTarget(null);
   }, [passConfirmTarget, accounts, trades, onUpdate, setActiveAccountId]);
 
-  const executeFail = useCallback(() => {
+  const executeFail = useCallback((failureData: FailureData) => {
     if (!failConfirmTarget) return;
     const updated = accounts.map(a =>
       a.id === failConfirmTarget.id ? {
@@ -254,7 +255,15 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         status: 'Inactive',
         isArchived: true,
         archivedAt: Date.now(),
-        result: 'Failed'
+        result: 'Failed',
+        // Funeral metadata — později render-uje "Lessons from failed accounts" widget
+        failureReason: failureData.reason,
+        failureDate: failureData.failureDate,
+        failureWhatHappened: failureData.whatHappened,
+        failureAmountLost: failureData.amountLost,
+        failureProgressPct: failureData.progressPct,
+        failureDaysOfConsistency: failureData.daysOfConsistency,
+        failureKeyLesson: failureData.keyLesson,
       } as Account : a
     );
     onUpdate(updated);
@@ -559,14 +568,14 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       )}
 
       {failConfirmTarget && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setFailConfirmTarget(null)}>
-          <div className="max-w-md w-full p-8 rounded-[32px] bg-slate-900 border border-white/10 text-center space-y-6" onClick={e => e.stopPropagation()}>
-            <div className="p-4 bg-rose-500/10 text-rose-500 rounded-full inline-block"><Skull size={32} /></div>
-            <h3 className="text-xl font-black italic uppercase text-rose-500">Účet Spálen</h3>
-            <p className="text-slate-500 text-sm">Opravdu chcete archivovat účet <span className="text-rose-500 font-bold">{failConfirmTarget.name}</span> jako neúspěšný?</p>
-            <div className="flex gap-4"><button onClick={() => setFailConfirmTarget(null)} className="flex-1 py-3 text-[10px] font-black uppercase text-slate-500 bg-white/5 rounded-xl">Zrušit</button><button onClick={executeFail} className="flex-1 py-3 text-[10px] font-black uppercase bg-rose-600 text-white rounded-xl">Potvrdit</button></div>
-          </div>
-        </div>
+        <AccountFuneralModal
+          account={failConfirmTarget}
+          trades={trades}
+          userId={user.id}
+          onConfirm={executeFail}
+          onClose={() => setFailConfirmTarget(null)}
+          theme={theme}
+        />
       )}
 
       <ConfirmationModal isOpen={!!accountToDelete} onClose={() => setAccountToDelete(null)} onConfirm={executeDelete} title="Smazat Účet" message={`Opravdu chcete smazat účet "${accountToDelete?.name}"?`} theme={theme} />
