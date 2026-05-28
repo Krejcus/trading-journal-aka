@@ -436,16 +436,16 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* AI + Notes (MOBILE ONLY) — na desktop jsou v right pane bottom.
-                                    User chce mít AI a poznámky úplně dole pod metrikami a confluence. */}
+                                {/* Notes + AI (MOBILE ONLY) — na desktop jsou v right pane bottom.
+                                    Pořadí: nejdřív Poznámky (user content), pak AI návrhy. */}
                                 <div className="lg:hidden pt-4 mt-4 border-t border-slate-100 dark:border-white/[0.03] space-y-4">
-                                    <TradeAISection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
                                     <div>
                                         <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><FileText size={12} /> Poznámky</p>
                                         <div className={`p-4 rounded-2xl border text-xs font-medium leading-[1.8] ${isDark ? 'bg-black/30 border-white/5 text-slate-400' : 'bg-white border-slate-100 text-slate-600'}`}>
                                             {activeTrade.notes || <span className="italic opacity-40">No log entry.</span>}
                                         </div>
                                     </div>
+                                    <TradeAISection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
                                 </div>
                             </div>
                         </div>
