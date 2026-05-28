@@ -300,6 +300,33 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     return () => clearTimeout(retryTimer);
   }, [visibleTrades, loadScreenshots]);
 
+  // PREFETCH ALL screenshoty jedním query při mountu — eliminate flash při scroll/lazy load.
+  // Po dokončení má každý visible trade screenshot okamžitě z cache, žádný per-batch query.
+  useEffect(() => {
+    let cancelled = false;
+    const prefetch = async () => {
+      try {
+        const all = await storageService.prefetchAllScreenshots();
+        if (cancelled || all.size === 0) return;
+        updateScreenshotCache(prev => {
+          const next = new Map(prev);
+          all.forEach((v, k) => {
+            if (!next.has(k) && (v.screenshot || (v.screenshots && v.screenshots.length > 0))) {
+              next.set(k, v);
+            }
+          });
+          return next;
+        });
+        // Mark all prefetched IDs as fetched — zabrání retry logic v loadScreenshots
+        all.forEach((_, id) => fetchedIdsRef.current.add(id));
+      } catch (err) {
+        console.warn('[Screenshots] Prefetch failed (will fall back to lazy):', err);
+      }
+    };
+    prefetch();
+    return () => { cancelled = true; };
+  }, [updateScreenshotCache]);
+
   // Helper: get screenshot for a trade (prefer cache over inline field)
   // Uses screenshotCache STATE (not ref) so React re-renders when cache updates
   const getScreenshot = (trade: Trade): string | undefined => {
