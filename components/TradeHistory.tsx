@@ -68,7 +68,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   // --- LAZY SCREENSHOT CACHE ---
-  const [screenshotCache, setScreenshotCache] = useState<Map<string, { screenshot?: string; screenshots?: string[] }>>(new Map());
+  // Init z globálního cache (naplněno v App.tsx po loadu) — žádný flash při mountu
+  const [screenshotCache, setScreenshotCache] = useState<Map<string, { screenshot?: string; screenshots?: string[] }>>(
+    () => new Map(storageService.getCachedScreenshots())
+  );
   // Ref mirror of screenshotCache — avoids stale closure in stable callbacks
   const screenshotCacheRef = useRef<Map<string, { screenshot?: string; screenshots?: string[] }>>(new Map());
   const loadingScreenshotsRef = useRef<Set<string>>(new Set());

@@ -1014,6 +1014,10 @@ const App: React.FC = () => {
         isFetchingRef.current = false;
         clearTimeout(safetyTimer);
 
+        // PREFETCH SCREENSHOTŮ na pozadí — když user klikne na History,
+        // cache je už hotová, žádný flash prázdných obrázků.
+        storageService.prefetchAllScreenshots().catch(() => { /* silent */ });
+
         // Background refresh — silently sync with server, only update if data actually changed
         // Fingerprint checks both count AND content (catches edits without add/delete)
         const fingerprintTrades = (t: Trade[]) => t.map(x => `${x.id}:${x.pnl}:${x.timestamp}`).join('|');

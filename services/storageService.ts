@@ -852,8 +852,20 @@ export const storageService = {
     return result;
   },
 
+  // Globální in-memory cache screenshotů — sdílená napříč komponentami.
+  // Naplněná v App.tsx po prvním DB load, čtená v TradeHistory při mountu.
+  _screenshotCache: new Map<string, { screenshot?: string; screenshots?: string[] }>(),
+
+  getCachedScreenshots(): Map<string, { screenshot?: string; screenshots?: string[] }> {
+    return this._screenshotCache;
+  },
+
   // Prefetch all trade screenshots in background (returns map of id -> screenshot)
   async prefetchAllScreenshots(): Promise<Map<string, { screenshot?: string; screenshots?: string[] }>> {
+    // Pokud už máme cached, vrať instantně (žádný duplicitní DB query)
+    if (this._screenshotCache.size > 0) {
+      return this._screenshotCache;
+    }
     const result = new Map<string, { screenshot?: string; screenshots?: string[] }>();
     const userId = await getUserId();
     if (!userId) return result;
@@ -876,6 +888,8 @@ export const storageService = {
           result.set(row.id, { screenshot, screenshots });
         }
       });
+      // Update sdílený cache pro TradeHistory mount
+      result.forEach((v, k) => this._screenshotCache.set(k, v));
     } catch (err) {
       console.warn('[prefetchAllScreenshots] Failed:', err);
     }
