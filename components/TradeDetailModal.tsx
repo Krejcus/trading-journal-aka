@@ -450,8 +450,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
                         </div>
 
-                        {/* RIGHT: screenshot top + info bottom */}
-                        <div className="order-1 lg:order-2 flex-1 flex flex-col overflow-hidden">
+                        {/* RIGHT: screenshot top + info bottom.
+                            Na mobile: flex-none (natural height image) — pak sidebar dole.
+                            Na desktop: flex-1 (zabere prostor v row layoutu). */}
+                        <div className="order-1 lg:order-2 flex-none lg:flex-1 flex flex-col overflow-hidden">
 
                             {/* TOP: Screenshot — na mobile přizpůsobí výšku obrázku (žádné pruhy),
                                 na desktop fixní 3/5 flex prostor (lg:flex-[3_3_0] + absolute fill). */}
