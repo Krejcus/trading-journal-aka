@@ -125,7 +125,25 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
     .reduce((sum, p) => sum + (p.grossAmount || p.amount), 0);
 
   const current = initial + stats.totalPnL - totalWithdrawals;
-  const target = initial * 1.10; // 10% Profit Target
+
+  // Profit target z účtu/účtů ve scope (ne natvrdo 10 %).
+  // V individual módu = profitTarget aktivního účtu; v combined = vážený průměr dle initial balance.
+  const scopedIds = new Set(stats.trades.map(t => t.accountId));
+  const scopedAccounts = accounts.filter(a => scopedIds.has(a.id));
+  let targetPct = 10;
+  if (scopedAccounts.length > 0) {
+    const totalInit = scopedAccounts.reduce((s, a) => s + (a.initialBalance || 0), 0);
+    if (totalInit > 0) {
+      const weighted = scopedAccounts.reduce((s, a) => s + (a.initialBalance || 0) * (((a.profitTarget && a.profitTarget > 0) ? a.profitTarget : 10) / 100), 0);
+      targetPct = (weighted / totalInit) * 100;
+    }
+  } else if (accounts.length === 1) {
+    // Nový účet bez obchodů (individual): vezmi jeho cíl
+    targetPct = (accounts[0].profitTarget && accounts[0].profitTarget > 0) ? accounts[0].profitTarget : 10;
+  }
+  const targetPctLabel = Number.isInteger(targetPct) ? targetPct.toString() : targetPct.toFixed(1);
+
+  const target = initial * (1 + targetPct / 100);
   const progress = target === initial ? 0 : Math.min(100, Math.max(0, ((current - initial) / (target - initial)) * 100));
   const remaining = target - current;
   const isPassed = current >= target;
@@ -144,7 +162,7 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
         <div className="flex justify-between items-end mb-2">
           <span className="text-3xl font-black tracking-tighter text-white">{format(current)}</span>
           <div className="text-right">
-            <span className="text-[10px] font-bold text-slate-500 uppercase block">Cíl (10%)</span>
+            <span className="text-[10px] font-bold text-slate-500 uppercase block">Cíl ({targetPctLabel}%)</span>
             <span className="text-sm font-black text-slate-300">{format(target)}</span>
           </div>
         </div>

@@ -1315,6 +1315,9 @@ const App: React.FC = () => {
   // --- LAZY LOADING: Archived Accounts ---
   const [archivedAccounts, setArchivedAccounts] = useState<Account[]>([]);
   const [isArchivedLoaded, setIsArchivedLoaded] = useState(false);
+  // Pokud uživatel otevře konkrétní archivovaný účet z karty ("Otevřít v dashboardu"),
+  // nascopujeme archiv režim jen na tento účet (jinak by se ukázaly všechny inactive).
+  const [dashFocusAccount, setDashFocusAccount] = useState<string | null>(null);
 
   useEffect(() => {
     if (dashboardMode === 'archive' && session && !isArchivedLoaded) {
@@ -1717,7 +1720,7 @@ const App: React.FC = () => {
       } else if (dashboardMode === 'funded') {
         // Select Live accounts and Prop accounts that are in Funded phase
         const fundedIds = accounts
-          .filter(a => (a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live')
+          .filter(a => a.status === 'Active' && ((a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live'))
           .map(a => a.id);
         setFilters(prev => ({ ...prev, accounts: fundedIds }));
 
@@ -1729,33 +1732,46 @@ const App: React.FC = () => {
         // "Challenge" usually implies active challenges. 
         // Let's stick to phase 'Challenge'.
         const challengeIds = accounts
-          .filter(a => a.type === 'Funded' && a.phase === 'Challenge')
+          .filter(a => a.status === 'Active' && a.type === 'Funded' && a.phase === 'Challenge')
           .map(a => a.id);
         setFilters(prev => ({ ...prev, accounts: challengeIds }));
       } else if (dashboardMode === 'backtesting') {
         const backtestIds = accounts
-          .filter(a => a.type === 'Backtest')
+          .filter(a => a.status === 'Active' && a.type === 'Backtest')
           .map(a => a.id);
         setFilters(prev => ({ ...prev, accounts: backtestIds }));
       } else if (dashboardMode === 'archive') {
-        // Show only archived accounts (lazy-loaded separately)
-        const archivedIds = archivedAccounts.map(a => a.id);
-        setFilters(prev => ({ ...prev, accounts: archivedIds }));
+        // Archiv: deaktivované účty z hlavního pole + lazy isArchived slupky.
+        // Pokud je nastaven fokus na konkrétní účet (otevřeno z karty), scopujeme jen na něj.
+        if (dashFocusAccount) {
+          setFilters(prev => ({ ...prev, accounts: [dashFocusAccount] }));
+        } else {
+          const inactive = accounts.filter(a => a.status === 'Inactive').map(a => a.id);
+          const seen = new Set(inactive);
+          const archivedIds = archivedAccounts.filter(a => !seen.has(a.id)).map(a => a.id);
+          setFilters(prev => ({ ...prev, accounts: [...inactive, ...archivedIds] }));
+        }
       }
 
       // Persist immediately to local storage to survive refresh
       safeSetItem('alphatrade_dash_mode', dashboardMode);
 
     }
-  }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone]);
+  }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone, dashFocusAccount]);
 
   const contextAccounts = useMemo(() => {
     if (activePage !== 'dashboard') return accounts;
     if (dashboardMode === 'combined') return accounts;
-    if (dashboardMode === 'funded') return accounts.filter(a => (a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live');
-    if (dashboardMode === 'challenge') return accounts.filter(a => a.type === 'Funded' && a.phase === 'Challenge');
-    if (dashboardMode === 'backtesting') return accounts.filter(a => a.type === 'Backtest');
-    if (dashboardMode === 'archive') return archivedAccounts;
+    if (dashboardMode === 'funded') return accounts.filter(a => a.status === 'Active' && ((a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live'));
+    if (dashboardMode === 'challenge') return accounts.filter(a => a.status === 'Active' && a.type === 'Funded' && a.phase === 'Challenge');
+    if (dashboardMode === 'backtesting') return accounts.filter(a => a.status === 'Active' && a.type === 'Backtest');
+    // Archiv: deaktivované účty z hlavního pole (mají obchody). 'isArchived' slupky (Passed/Failed,
+    // prázdné) řešíme jinde — Hřbitov. archivedAccounts (lazy) ponecháno jako doplněk pro jistotu.
+    if (dashboardMode === 'archive') {
+      const inactive = accounts.filter(a => a.status === 'Inactive');
+      const seen = new Set(inactive.map(a => a.id));
+      return [...inactive, ...archivedAccounts.filter(a => !seen.has(a.id))];
+    }
     return accounts;
   }, [accounts, archivedAccounts, activePage, dashboardMode]);
 
@@ -1765,9 +1781,29 @@ const App: React.FC = () => {
   // if the globally-selected activeAccount is NOT in contextAccounts (e.g. you switched to Challenge mode
   // but activeAccountId still points to a Live account), fall back to the first contextAccount.
   const effectiveActiveAccount = useMemo(() => {
-    if (contextAccounts.some(a => a.id === activeAccountId)) return activeAccount;
-    return contextAccounts[0] || activeAccount;
-  }, [contextAccounts, activeAccount, activeAccountId]);
+    // Scope = účty odpovídající aktuálnímu account-filtru (dashboardMode).
+    // Na Historii je contextAccounts = všechny účty, takže scope odvodíme z filters.accounts,
+    // jinak by individual mód mohl vybrat účet mimo aktuální mód (challenge/funded/...).
+    const scopeIds = filters.accounts.length > 0 ? new Set(filters.accounts) : null;
+    const inScope = (a: Account) => !scopeIds || scopeIds.has(a.id);
+
+    // 1. Globálně zvolený aktivní účet, pokud je platný a ve scope
+    if (activeAccountId) {
+      const a = accounts.find(x => x.id === activeAccountId);
+      if (a && inScope(a)) return a;
+    }
+
+    // 2. První účet ve scope, který má obchody (vlastní nebo na svých kopiích)
+    const scopeAccounts = accounts.filter(inScope);
+    const hasTrades = (a: Account) =>
+      trades.some(t => t.accountId === a.id) ||
+      accounts.some(c => c.parentAccountId === a.id && trades.some(t => t.accountId === c.id));
+    const withTrades = scopeAccounts.find(hasTrades);
+    if (withTrades) return withTrades;
+
+    // 3. Fallbacky
+    return scopeAccounts[0] || contextAccounts[0] || activeAccount;
+  }, [contextAccounts, accounts, trades, filters.accounts, activeAccount, activeAccountId]);
 
   const displayBalance = useMemo(() => {
     if (viewMode === 'individual') return effectiveActiveAccount.initialBalance || 0;
@@ -1945,10 +1981,14 @@ const App: React.FC = () => {
       const matchHour = filters.hours.includes(h);
 
       let matchAcc = false;
+      // Prázdný account-filtr: "ukaž vše" platí JEN v módu 'combined' (Vše).
+      // U konkrétního módu (funded/challenge/backtesting) prázdný filtr znamená,
+      // že v něm není žádný aktivní účet → nic nezobrazuj (obchody se ale nemažou).
+      const emptyMeansAll = dashboardMode === 'combined';
       if (viewMode === 'combined') {
         // In combined mode, if filtering by accounts, include trades from both master and its children
         if (filters.accounts.length === 0) {
-          matchAcc = true;
+          matchAcc = emptyMeansAll;
         } else {
           matchAcc = filters.accounts.some(filterId => {
             const isTarget = t.accountId === filterId;
@@ -1959,9 +1999,9 @@ const App: React.FC = () => {
           });
         }
       } else {
-        // In normal mode, empty filter means "show all accounts"
+        // In normal mode, empty filter means "show all accounts" (jen v combined módu)
         if (filters.accounts.length === 0) {
-          matchAcc = true;
+          matchAcc = emptyMeansAll;
         } else {
           matchAcc = filters.accounts.includes(t.accountId);
         }
@@ -2640,7 +2680,7 @@ const App: React.FC = () => {
                 isMobileEditing={activePage === 'dashboard' ? isMobileEditing : undefined}
                 setIsMobileEditing={activePage === 'dashboard' ? setIsMobileEditing : undefined}
                 dashboardMode={dashboardMode}
-                setDashboardMode={(v) => { setDashboardMode(v); isPreferencesDirty.current = true; }}
+                setDashboardMode={(v) => { setDashFocusAccount(null); setDashboardMode(v); isPreferencesDirty.current = true; }}
                 viewMode={viewMode}
                 setViewMode={setViewMode}
                 pnlDisplayMode={pnlDisplayMode}
@@ -2918,6 +2958,14 @@ const App: React.FC = () => {
                       onUpdatePayouts={handleUpdatePayouts}
                       payouts={businessPayouts}
                       user={currentUser}
+                      onOpenInDashboard={(id) => {
+                        setDashFocusAccount(id);
+                        setActiveAccountId(id);
+                        setViewMode('individual');
+                        setDashboardMode('archive');
+                        isPreferencesDirty.current = true;
+                        setActivePage('dashboard');
+                      }}
                     />
                   )}
 

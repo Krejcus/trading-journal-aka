@@ -18,11 +18,13 @@ import {
   TrendingUp,
   LayoutGrid,
   Calendar,
-  FlaskConical
+  FlaskConical,
+  LayoutDashboard
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import PayoutModal from './PayoutModal';
 import AccountFuneralModal, { type FailureData } from './AccountFuneralModal';
+import Graveyard, { MemorialModal, computeStats } from './Graveyard';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -34,6 +36,7 @@ interface AccountsManagerProps {
   trades: Trade[];
   onUpdateTrades: (trades: Trade[]) => void;
   onAddExpense?: (expense: any) => void;
+  onOpenInDashboard?: (id: string) => void;
   onUpdatePayouts: (payouts: BusinessPayout[]) => void;
   payouts: BusinessPayout[];
   user: User;
@@ -95,7 +98,8 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   onUpdatePayouts,
   payouts,
   user,
-  onAddExpense
+  onAddExpense,
+  onOpenInDashboard
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -104,12 +108,14 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const [passConfirmTarget, setPassConfirmTarget] = useState<Account | null>(null);
   const [failConfirmTarget, setFailConfirmTarget] = useState<Account | null>(null);
   const [showInactive, setShowInactive] = useState(false);
+  const [archivedDetail, setArchivedDetail] = useState<Account | null>(null);
 
   const [newAccount, setNewAccount] = useState<Partial<Account>>({
     name: '',
     initialBalance: 10000,
     challengeCost: 0,
     profitSplit: 90,
+    profitTarget: 10,
     type: 'Funded',
     phase: 'Challenge',
     status: 'Active',
@@ -142,8 +148,16 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     };
   }, [accounts, trades, payouts]);
 
+  // Spálené účty (result Failed) — zobrazí se v Hřbitově, ne v běžném gridu
+  const failedAccounts = useMemo(
+    () => accounts.filter(a => a.status === 'Inactive' && a.result === 'Failed'),
+    [accounts]
+  );
+
   const groupedAccounts = useMemo(() => {
-    const list = showInactive ? accounts.filter(a => a.status === 'Inactive') : accounts.filter(a => a.status === 'Active');
+    const list = showInactive
+      ? accounts.filter(a => a.status === 'Inactive' && a.result !== 'Failed')
+      : accounts.filter(a => a.status === 'Active');
     // Masters are accounts without parentAccountId, OR accounts whose parent is NOT in the current visible list
     const masters = list.filter(a => !a.parentAccountId || !list.some(potentialParent => potentialParent.id === a.parentAccountId));
 
@@ -164,6 +178,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       totalWithdrawals: 0,
       totalGrossWithdrawals: 0,
       profitSplit: Number(newAccount.profitSplit) || 90,
+      profitTarget: Number(newAccount.profitTarget) || 10,
       phase: newAccount.type === 'Backtest' ? undefined : (newAccount.phase as any || 'Challenge'),
       accumulatedChallengePnL: 0,
       type: newAccount.type as any,
@@ -191,6 +206,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       initialBalance: 10000,
       challengeCost: 0,
       profitSplit: 90,
+      profitTarget: 10,
       type: 'Funded',
       phase: 'Challenge',
       status: 'Active',
@@ -327,7 +343,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     return (
       <div
         key={acc.id}
-        onClick={() => acc.status === 'Active' && setActiveAccountId(acc.id)}
+        onClick={() => acc.status === 'Active' ? setActiveAccountId(acc.id) : setArchivedDetail(acc)}
         className={`group relative ${cardPadding} ${cardHeight} rounded-[24px] border transition-all duration-500 cursor-pointer overflow-hidden backdrop-blur-sm flex flex-col justify-between
           ${activeAccountId === acc.id
             ? 'border-blue-500/50 bg-blue-500/10 shadow-[0_0_30px_rgba(59,130,246,0.15)] ring-1 ring-blue-500/20'
@@ -426,6 +442,11 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             <button onClick={(e) => toggleAccountStatus(e, acc.id)} className={`text-[8px] font-black uppercase tracking-wider flex items-center gap-1 transition-all ${acc.status === 'Active' ? 'text-slate-500 hover:text-amber-500' : 'text-emerald-500 hover:text-emerald-400'}`}>
               {acc.status === 'Active' ? <><Archive size={10} /> Archivovat</> : <><Check size={10} /> Obnovit</>}
             </button>
+            {acc.status === 'Inactive' && onOpenInDashboard && (
+              <button onClick={(e) => { e.stopPropagation(); onOpenInDashboard(acc.id); }} className="text-[8px] font-black uppercase tracking-wider flex items-center gap-1 text-blue-500 hover:text-blue-400 transition-all" title="Otevřít v dashboardu">
+                <LayoutDashboard size={10} /> Dashboard
+              </button>
+            )}
           </div>
           <button onClick={(e) => { e.stopPropagation(); setAccountToDelete(acc); }} className="text-[8px] font-black uppercase text-slate-600 hover:text-rose-500 transition-all flex items-center gap-1"><Trash2 size={10} /> Smazat</button>
         </div>
@@ -515,11 +536,16 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Fáze</label><select value={newAccount.phase} onChange={e => setNewAccount({ ...newAccount, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select></div>
                 <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-rose-500 tracking-widest">Cena Pořízení ($)</label><input type="number" value={newAccount.challengeCost} onChange={e => setNewAccount({ ...newAccount, challengeCost: Number(e.target.value) })} className={`${inputClass} border-rose-500/20`} /></div>
                 <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-emerald-500 tracking-widest">Profit Split (%)</label><input type="number" value={newAccount.profitSplit} onChange={e => setNewAccount({ ...newAccount, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
+                <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-blue-500 tracking-widest">Profit Cíl (%)</label><input type="number" value={newAccount.profitTarget} onChange={e => setNewAccount({ ...newAccount, profitTarget: Number(e.target.value) })} className={inputClass} placeholder="napr. 6" /></div>
               </>
             )}
           </div>
           <div className="flex justify-end gap-3"><button onClick={() => setIsAdding(false)} className="px-6 py-2.5 rounded-xl font-black uppercase text-[10px] text-slate-500 tracking-widest hover:text-slate-300">Zrušit</button><button onClick={handleAddAccount} className="px-8 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest shadow-lg active:scale-95 transition-all">Aktivovat</button></div>
         </div>
+      )}
+
+      {showInactive && failedAccounts.length > 0 && (
+        <Graveyard accounts={failedAccounts} trades={trades} theme={theme} />
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6 items-start">
@@ -542,6 +568,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
               <div className="space-y-2"><label className="text-[10px] font-black uppercase text-slate-500">Počáteční Balance</label><input type="number" value={editFormData.initialBalance || ''} onChange={e => setEditFormData({ ...editFormData, initialBalance: Number(e.target.value) })} className={inputClass} /></div>
               <div className="space-y-2"><label className="text-[10px] font-black uppercase text-slate-500">Cena Pořízení</label><input type="number" value={editFormData.challengeCost || 0} onChange={e => setEditFormData({ ...editFormData, challengeCost: Number(e.target.value) })} className={inputClass} /></div>
               <div className="space-y-2"><label className="text-[10px] font-black uppercase text-slate-500">Profit Split (%)</label><input type="number" value={editFormData.profitSplit || 90} onChange={e => setEditFormData({ ...editFormData, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
+              <div className="space-y-2"><label className="text-[10px] font-black uppercase text-blue-500">Profit Cíl (%)</label><input type="number" value={editFormData.profitTarget ?? 10} onChange={e => setEditFormData({ ...editFormData, profitTarget: Number(e.target.value) })} className={inputClass} /></div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase text-slate-500">Fáze Účtu</label>
                 <select value={editFormData.phase || 'Challenge'} onChange={e => setEditFormData({ ...editFormData, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select>
@@ -579,6 +606,17 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       )}
 
       <ConfirmationModal isOpen={!!accountToDelete} onClose={() => setAccountToDelete(null)} onConfirm={executeDelete} title="Smazat Účet" message={`Opravdu chcete smazat účet "${accountToDelete?.name}"?`} theme={theme} />
+
+      {archivedDetail && (
+        <MemorialModal
+          account={archivedDetail}
+          stats={computeStats(archivedDetail, trades)}
+          trades={trades.filter(t => t.accountId === archivedDetail.id)}
+          isDark={theme !== 'light'}
+          onClose={() => setArchivedDetail(null)}
+          onOpenInDashboard={onOpenInDashboard ? (id) => { setArchivedDetail(null); onOpenInDashboard(id); } : undefined}
+        />
+      )}
     </div>
   );
 };

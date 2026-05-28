@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Filter, RotateCcw, Calendar, Clock, Wallet, TrendingUp, Target, ShieldCheck, Monitor, Zap, AlertOctagon, LayoutGrid, Check, X, Layers } from 'lucide-react';
+import { Filter, RotateCcw, Calendar, Clock, Wallet, TrendingUp, Target, ShieldCheck, Monitor, Zap, AlertOctagon, LayoutGrid, Check, X, Layers, ChevronDown } from 'lucide-react';
 import { TradeFilters, Account, Trade, DashboardMode, PnLDisplayMode } from '../types';
 
 interface FilterDropdownProps {
@@ -48,6 +48,12 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   setHistoryLayoutMode
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+  const toggleSection = (id: string) => setOpenSections(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
   const dropdownRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -142,8 +148,48 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
 
   const sectionLabelClass = `flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-500' : 'text-slate-400'}`;
 
+  const renderCollapsible = (
+    id: string,
+    Icon: React.ComponentType<{ size?: number; className?: string }>,
+    label: string,
+    badge: string | number | null,
+    content: React.ReactNode
+  ) => {
+    const open = openSections.has(id);
+    return (
+      <motion.div variants={itemVariants}>
+        <button
+          onClick={() => toggleSection(id)}
+          className={`w-full flex items-center gap-1.5 px-2.5 py-2 rounded-lg border transition-all ${open
+            ? (isDark ? 'bg-white/10 border-white/20' : 'bg-white border-slate-300 shadow-sm')
+            : (isDark ? 'bg-white/5 border-white/5 hover:border-white/10' : 'bg-slate-100 border-slate-200 hover:border-slate-300')}`}
+        >
+          <Icon size={10} className={badge ? (isDark ? 'text-indigo-400' : 'text-indigo-500') : 'text-slate-500'} />
+          <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">{label}</span>
+          {badge ? (
+            <span className="min-w-[15px] h-[15px] px-1 rounded-full text-[7px] font-black text-white flex items-center justify-center bg-indigo-500">{badge}</span>
+          ) : null}
+          <ChevronDown size={10} className={`ml-auto text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+        <AnimatePresence initial={false}>
+          {open && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              <div className="pt-2">{content}</div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    );
+  };
+
   const getGlassBtnClass = (isActive: boolean, type: 'neutral' | 'win' | 'loss' | 'status-valid' | 'status-invalid' | 'status-missed' = 'neutral') => {
-    const base = "transition-all duration-300 border backdrop-blur-md relative overflow-hidden text-[9px] font-black uppercase tracking-wider h-8 flex items-center justify-center rounded-xl px-2";
+    const base = "transition-all duration-300 border backdrop-blur-md relative overflow-hidden text-[8px] font-black uppercase tracking-wider h-7 flex items-center justify-center rounded-lg px-1.5";
     if (!isActive) {
       return isDark
         ? `${base} bg-white/[0.02] border-white/5 text-slate-500 hover:bg-white/[0.05] hover:text-slate-300`
@@ -262,27 +308,28 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   <div className={sectionLabelClass}><Monitor size={10} /> Režim</div>
                   <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
                     <motion.div
-                      animate={{ x: (dashboardMode === 'funded' ? 0 : dashboardMode === 'combined' ? 100 : dashboardMode === 'challenge' ? 200 : 300) + '%' }}
+                      animate={{ x: (dashboardMode === 'funded' ? 0 : dashboardMode === 'combined' ? 100 : dashboardMode === 'challenge' ? 200 : dashboardMode === 'backtesting' ? 300 : 400) + '%' }}
                       transition={{ type: 'spring', stiffness: 400, damping: 35 }}
-                      className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/4)] rounded-lg border ${
+                      className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/5)] rounded-lg border ${
                         dashboardMode === 'funded' ? (isDark ? 'bg-emerald-500/20 border-emerald-500/40' : 'bg-emerald-500 shadow-sm') :
                         dashboardMode === 'combined' ? (isDark ? 'bg-orange-500/20 border-orange-500/40' : 'bg-orange-500 shadow-sm') :
                         dashboardMode === 'backtesting' ? (isDark ? 'bg-violet-500/20 border-violet-500/40' : 'bg-violet-500 shadow-sm') :
+                        dashboardMode === 'archive' ? (isDark ? 'bg-slate-500/20 border-slate-500/40' : 'bg-slate-500 shadow-sm') :
                         (isDark ? 'bg-blue-500/20 border-blue-500/40' : 'bg-blue-500 shadow-sm')
                       } ${!isDark ? 'text-white' : ''}`}
                     />
-                    {['funded', 'combined', 'challenge', 'backtesting'].map((m) => (
+                    {['funded', 'combined', 'challenge', 'backtesting', 'archive'].map((m) => (
                       <button
                         key={m}
                         onClick={() => setDashboardMode(m as DashboardMode)}
                         className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${
                           dashboardMode === m
                             ? (isDark
-                              ? m === 'funded' ? 'text-emerald-400' : m === 'combined' ? 'text-orange-400' : m === 'backtesting' ? 'text-violet-400' : 'text-blue-400'
+                              ? m === 'funded' ? 'text-emerald-400' : m === 'combined' ? 'text-orange-400' : m === 'backtesting' ? 'text-violet-400' : m === 'archive' ? 'text-slate-300' : 'text-blue-400'
                               : 'text-white')
                             : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
                       >
-                        {m === 'combined' ? 'Vše' : m === 'backtesting' ? 'BT' : m}
+                        {m === 'combined' ? 'Vše' : m === 'backtesting' ? 'BT' : m === 'archive' ? 'Archiv' : m}
                       </button>
                     ))}
                   </div>
@@ -317,13 +364,13 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                       <motion.div
                         animate={{ x: (pnlDisplayMode === 'usd' ? 0 : pnlDisplayMode === 'percent' ? 100 : 200) + '%' }}
                         transition={{ type: 'spring', stiffness: 400, damping: 35 }}
-                        className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/3)] rounded-lg border ${isDark ? 'bg-indigo-500/20 border-indigo-500/30' : 'bg-slate-800 text-white'}`}
+                        className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/3)] rounded-lg border ${isDark ? 'bg-white/10 border-white/10' : 'bg-white shadow-sm font-black'}`}
                       />
                       {[{ id: 'usd', label: '$' }, { id: 'percent', label: '%' }, { id: 'rr', label: 'R' }].map(p => (
                         <button
                           key={p.id}
                           onClick={() => setPnlDisplayMode(p.id as any)}
-                          className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black tracking-widest transition-colors ${pnlDisplayMode === p.id ? (isDark ? 'text-indigo-400' : 'text-white') : (isDark ? 'text-slate-500 hover:text-slate-400' : 'text-slate-500 hover:text-slate-900')}`}
+                          className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black tracking-widest transition-colors ${pnlDisplayMode === p.id ? (isDark ? 'text-white' : 'text-slate-900') : (isDark ? 'text-slate-500 hover:text-slate-400' : 'text-slate-500 hover:text-slate-900')}`}
                         >
                           {p.label}
                         </button>
@@ -356,19 +403,6 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
               </div>
 
               <motion.div variants={itemVariants}>
-                <div className={sectionLabelClass}><ShieldCheck size={10} /> Exekuce</div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {[
-                    { id: 'Valid', label: 'Validní', type: 'status-valid' },
-                    { id: 'Invalid', label: 'Nevalidní', type: 'status-invalid' },
-                    { id: 'Missed', label: 'Zmešk.', type: 'status-missed' }
-                  ].map(s => (
-                    <button key={s.id} onClick={() => setFilters(f => ({ ...f, executionStatuses: toggleItem(f.executionStatuses, s.id as any) }))} className={getGlassBtnClass(filters.executionStatuses.includes(s.id as any), s.type as any)}>{s.label}</button>
-                  ))}
-                </div>
-              </motion.div>
-
-              <motion.div variants={itemVariants}>
                 <div className={sectionLabelClass}><Calendar size={10} /> Období</div>
                 <div className="grid grid-cols-5 gap-1.5">
                   {[
@@ -383,137 +417,132 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 </div>
               </motion.div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <motion.div variants={itemVariants}>
-                  <div className={sectionLabelClass}><TrendingUp size={10} /> Směr</div>
-                  <div className="flex gap-1.5">
-                    <button onClick={() => setFilters(f => ({ ...f, directions: toggleItem(f.directions, 'Long') }))} className={`flex-1 ${getGlassBtnClass(filters.directions.includes('Long'), 'win')}`}>Long</button>
-                    <button onClick={() => setFilters(f => ({ ...f, directions: toggleItem(f.directions, 'Short') }))} className={`flex-1 ${getGlassBtnClass(filters.directions.includes('Short'), 'loss')}`}>Short</button>
-                  </div>
-                </motion.div>
-                <motion.div variants={itemVariants}>
-                  <div className={sectionLabelClass}><Target size={10} /> Výsledek</div>
-                  <div className="flex gap-1.5">
-                    {[{ id: 'Win', label: 'Win', type: 'win' }, { id: 'Loss', label: 'Loss', type: 'loss' }, { id: 'BE', label: 'BE', type: 'neutral' }].map(o => (
-                      <button key={o.id} onClick={() => setFilters(f => ({ ...f, outcomes: toggleItem(f.outcomes, o.id as any) }))} className={`flex-1 ${getGlassBtnClass(filters.outcomes.includes(o.id as any), o.type as any)}`}>{o.label}</button>
+              <div className="grid grid-cols-3 gap-2 items-start">
+                {renderCollapsible('exekuce', ShieldCheck, 'Exekuce', filters.executionStatuses.length || null, (
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {[
+                      { id: 'Valid', label: 'Validní', type: 'status-valid' },
+                      { id: 'Invalid', label: 'Nevalidní', type: 'status-invalid' },
+                      { id: 'Missed', label: 'Zmešk.', type: 'status-missed' }
+                    ].map(s => (
+                      <button key={s.id} onClick={() => setFilters(f => ({ ...f, executionStatuses: toggleItem(f.executionStatuses, s.id as any) }))} className={getGlassBtnClass(filters.executionStatuses.includes(s.id as any), s.type as any)}>{s.label}</button>
                     ))}
                   </div>
-                </motion.div>
+                ))}
+                {renderCollapsible('smer', TrendingUp, 'Směr', filters.directions.length || null, (
+                  <div className="grid grid-cols-1 gap-1.5">
+                    <button onClick={() => setFilters(f => ({ ...f, directions: toggleItem(f.directions, 'Long') }))} className={getGlassBtnClass(filters.directions.includes('Long'), 'win')}>Long</button>
+                    <button onClick={() => setFilters(f => ({ ...f, directions: toggleItem(f.directions, 'Short') }))} className={getGlassBtnClass(filters.directions.includes('Short'), 'loss')}>Short</button>
+                  </div>
+                ))}
+                {renderCollapsible('vysledek', Target, 'Výsledek', filters.outcomes.length || null, (
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {[{ id: 'Win', label: 'Win', type: 'win' }, { id: 'Loss', label: 'Loss', type: 'loss' }, { id: 'BE', label: 'BE', type: 'neutral' }].map(o => (
+                      <button key={o.id} onClick={() => setFilters(f => ({ ...f, outcomes: toggleItem(f.outcomes, o.id as any) }))} className={getGlassBtnClass(filters.outcomes.includes(o.id as any), o.type as any)}>{o.label}</button>
+                    ))}
+                  </div>
+                ))}
               </div>
 
-              {availableTags.htf.length > 0 && (
-                <motion.div variants={itemVariants}>
-                  <div className={sectionLabelClass}><Monitor size={10} /> HTF</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {availableTags.htf.map(tag => (
-                      <button
-                        key={tag}
-                        onClick={() => setFilters(f => ({ ...f, htfConfluences: toggleItem(f.htfConfluences, tag) }))}
-                        className={`px-2.5 py-1.5 rounded-lg border text-[8px] font-black uppercase transition-all ${filters.htfConfluences.includes(tag)
-                          ? 'bg-indigo-600 border-indigo-500 text-white'
-                          : (isDark ? 'bg-white/5 border-white/5 text-slate-500 hover:text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-500')}`}
-                      >
-                        {tag}
-                      </button>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-              {availableTags.ltf.length > 0 && (
-                <motion.div variants={itemVariants}>
-                  <div className={sectionLabelClass}><Zap size={10} /> LTF Triggery</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {availableTags.ltf.map(tag => (
-                      <button
-                        key={tag}
-                        onClick={() => setFilters(f => ({ ...f, ltfConfluences: toggleItem(f.ltfConfluences, tag) }))}
-                        className={`px-2.5 py-1.5 rounded-lg border text-[8px] font-black uppercase transition-all ${filters.ltfConfluences.includes(tag)
-                          ? 'bg-amber-600 border-amber-500 text-white'
-                          : (isDark ? 'bg-white/5 border-white/5 text-slate-500 hover:text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-500')}`}
-                      >
-                        {tag}
-                      </button>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-              {availableTags.mistakes.length > 0 && (
-                <motion.div variants={itemVariants}>
-                  <div className={sectionLabelClass}><AlertOctagon size={10} /> Chyby</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {availableTags.mistakes.map(tag => (
-                      <button
-                        key={tag}
-                        onClick={() => setFilters(f => ({ ...f, mistakes: toggleItem(f.mistakes, tag) }))}
-                        className={`px-2.5 py-1.5 rounded-lg border text-[8px] font-black uppercase transition-all ${filters.mistakes.includes(tag)
-                          ? 'bg-rose-600 border-rose-500 text-white'
-                          : (isDark ? 'bg-white/5 border-white/5 text-slate-500 hover:text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-500')}`}
-                      >
-                        {tag}
-                      </button>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4">
-                <motion.div variants={itemVariants}>
-                  <div className={sectionLabelClass}><Calendar size={10} /> Dny</div>
-                  <div className="grid grid-cols-5 gap-1">
-                    {TRADING_DAYS.map(day => (
-                      <button key={day} onClick={() => setFilters(f => ({ ...f, days: toggleItem(f.days, day) }))} className={`aspect-square rounded-lg text-[8px] font-black flex items-center justify-center ${getGlassBtnClass(filters.days.includes(day))}`}>{day}</button>
-                    ))}
-                  </div>
-                </motion.div>
-                <motion.div variants={itemVariants}>
-                  <div className={sectionLabelClass}><Clock size={10} /> Hodiny</div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-[8px] font-black text-slate-500">
-                      <span className={isDark ? 'text-indigo-400' : 'text-indigo-600'}>{hourRange[0]}:00</span>
-                      <span className={isDark ? 'text-indigo-400' : 'text-indigo-600'}>{hourRange[1]}:00</span>
+              <div className="grid grid-cols-2 gap-2 items-start">
+                {(() => {
+                  const tagGroups = [
+                    { id: 'htf', label: 'HTF', icon: Monitor, tags: availableTags.htf, selected: filters.htfConfluences, key: 'htfConfluences', iconColor: 'text-indigo-400', activeClass: 'bg-indigo-600 border-indigo-500 text-white' },
+                    { id: 'ltf', label: 'LTF', icon: Zap, tags: availableTags.ltf, selected: filters.ltfConfluences, key: 'ltfConfluences', iconColor: 'text-amber-400', activeClass: 'bg-amber-600 border-amber-500 text-white' },
+                    { id: 'mistakes', label: 'Chyby', icon: AlertOctagon, tags: availableTags.mistakes, selected: filters.mistakes, key: 'mistakes', iconColor: 'text-rose-400', activeClass: 'bg-rose-600 border-rose-500 text-white' },
+                  ].filter(g => g.tags.length > 0);
+                  if (tagGroups.length === 0) return null;
+                  const totalSelected = tagGroups.reduce((sum, g) => sum + g.selected.length, 0);
+                  return renderCollapsible('konfluence', Layers, 'Konfluence', totalSelected || null, (
+                    <div className="space-y-2.5">
+                      {tagGroups.map(g => (
+                        <div key={g.id}>
+                          <div className="flex items-center gap-1.5 mb-1.5 text-[8px] font-black uppercase tracking-widest text-slate-500">
+                            <g.icon size={9} className={g.selected.length > 0 ? g.iconColor : 'text-slate-500'} /> {g.label}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {g.tags.map(tag => (
+                              <button
+                                key={tag}
+                                onClick={() => setFilters(f => ({ ...f, [g.key]: toggleItem((f as any)[g.key], tag) }))}
+                                className={`px-2.5 py-1.5 rounded-lg border text-[8px] font-black uppercase transition-all ${g.selected.includes(tag)
+                                  ? g.activeClass
+                                  : (isDark ? 'bg-white/5 border-white/5 text-slate-500 hover:text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-500')}`}
+                              >
+                                {tag}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <div className="relative h-4 flex items-center px-1">
-                      <div className={`absolute inset-x-1 h-0.5 rounded-full ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
-                      <div
-                        className="absolute h-0.5 rounded-full bg-indigo-500"
-                        style={{
-                          left: `calc(${(hourRange[0] / 23) * 100}% + 2px)`,
-                          right: `calc(${100 - (hourRange[1] / 23) * 100}% + 2px)`
-                        }}
-                      />
-                      <input
-                        type="range" min={0} max={23} value={hourRange[0]}
-                        onChange={(e) => {
-                          const val = Math.min(Number(e.target.value), hourRange[1] - 1);
-                          setHourRange([val, hourRange[1]]);
-                          const newHours = Array.from({ length: hourRange[1] - val + 1 }, (_, i) => val + i);
-                          setFilters(f => ({ ...f, hours: newHours }));
-                        }}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                      />
-                      <input
-                        type="range" min={0} max={23} value={hourRange[1]}
-                        onChange={(e) => {
-                          const val = Math.max(Number(e.target.value), hourRange[0] + 1);
-                          setHourRange([hourRange[0], val]);
-                          const newHours = Array.from({ length: val - hourRange[0] + 1 }, (_, i) => hourRange[0] + i);
-                          setFilters(f => ({ ...f, hours: newHours }));
-                        }}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
-                      />
-                      <div className="absolute w-3 h-3 rounded-full bg-white border border-indigo-500 shadow-sm pointer-events-none" style={{ left: `calc(${(hourRange[0] / 23) * 100}% - 6px + 2px)` }} />
-                      <div className="absolute w-3 h-3 rounded-full bg-white border border-indigo-500 shadow-sm pointer-events-none" style={{ left: `calc(${(hourRange[1] / 23) * 100}% - 6px + 2px)` }} />
+                  ));
+                })()}
+
+                {(() => {
+                  const daysActive = filters.days.length > 0 && filters.days.length < 5;
+                  const hoursActive = hourRange[0] !== 0 || hourRange[1] !== 23;
+                  const badge = (daysActive ? 1 : 0) + (hoursActive ? 1 : 0);
+                  return renderCollapsible('cas', Clock, 'Dny & Hodiny', badge || null, (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="mb-1.5 flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest text-slate-500"><Calendar size={9} /> Dny</div>
+                        <div className="grid grid-cols-5 gap-1">
+                          {TRADING_DAYS.map(day => (
+                            <button key={day} onClick={() => setFilters(f => ({ ...f, days: toggleItem(f.days, day) }))} className={`aspect-square rounded-lg text-[8px] font-black flex items-center justify-center ${getGlassBtnClass(filters.days.includes(day))}`}>{day}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-1.5 flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest text-slate-500"><Clock size={9} /> Hodiny</div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-[8px] font-black text-slate-500">
+                            <span className={isDark ? 'text-indigo-400' : 'text-indigo-600'}>{hourRange[0]}:00</span>
+                            <span className={isDark ? 'text-indigo-400' : 'text-indigo-600'}>{hourRange[1]}:00</span>
+                          </div>
+                          <div className="relative h-4 flex items-center px-1">
+                            <div className={`absolute inset-x-1 h-0.5 rounded-full ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
+                            <div
+                              className="absolute h-0.5 rounded-full bg-indigo-500"
+                              style={{
+                                left: `calc(${(hourRange[0] / 23) * 100}% + 2px)`,
+                                right: `calc(${100 - (hourRange[1] / 23) * 100}% + 2px)`
+                              }}
+                            />
+                            <input
+                              type="range" min={0} max={23} value={hourRange[0]}
+                              onChange={(e) => {
+                                const val = Math.min(Number(e.target.value), hourRange[1] - 1);
+                                setHourRange([val, hourRange[1]]);
+                                const newHours = Array.from({ length: hourRange[1] - val + 1 }, (_, i) => val + i);
+                                setFilters(f => ({ ...f, hours: newHours }));
+                              }}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                            />
+                            <input
+                              type="range" min={0} max={23} value={hourRange[1]}
+                              onChange={(e) => {
+                                const val = Math.max(Number(e.target.value), hourRange[0] + 1);
+                                setHourRange([hourRange[0], val]);
+                                const newHours = Array.from({ length: val - hourRange[0] + 1 }, (_, i) => hourRange[0] + i);
+                                setFilters(f => ({ ...f, hours: newHours }));
+                              }}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+                            />
+                            <div className="absolute w-3 h-3 rounded-full bg-white border border-indigo-500 shadow-sm pointer-events-none" style={{ left: `calc(${(hourRange[0] / 23) * 100}% - 6px + 2px)` }} />
+                            <div className="absolute w-3 h-3 rounded-full bg-white border border-indigo-500 shadow-sm pointer-events-none" style={{ left: `calc(${(hourRange[1] / 23) * 100}% - 6px + 2px)` }} />
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </motion.div>
+                  ));
+                })()}
               </div>
 
               <motion.div variants={itemVariants}>
                 <div className={sectionLabelClass}><Wallet size={10} /> Portfolia & Účty</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {accounts.filter(a => a.status === 'Active').map(acc => (
+                  {accounts.filter(a => dashboardMode === 'archive' ? a.status === 'Inactive' : a.status === 'Active').map(acc => (
                     <button key={acc.id} onClick={() => setFilters(f => ({ ...f, accounts: toggleItem(f.accounts, acc.id) }))} className={`w-full py-2.5 px-3 flex items-center justify-between rounded-xl ${getGlassBtnClass(filters.accounts.includes(acc.id))}`}>
                       <span className="truncate">{acc.name}</span>
                       {filters.accounts.includes(acc.id) && <Check size={12} />}

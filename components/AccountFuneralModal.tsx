@@ -64,7 +64,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
     // Auto-compute stats
     const stats = useMemo(() => {
         if (accountTrades.length === 0) {
-            return { peakEquity: 0, currentEquity: 0, drawdownFromPeak: 0, daysActive: 0, progressPct: 0, totalTrades: 0 };
+            return { peakEquity: 0, currentEquity: 0, maxDrawdown: 0, daysActive: 0, daysConsistency: 0, progressPct: 0, totalTrades: 0, peakProfit: 0, challengeTarget: 0 };
         }
         let runningEquity = account.initialBalance;
         let peak = account.initialBalance;
@@ -73,18 +73,38 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
             if (runningEquity > peak) peak = runningEquity;
         });
         const peakProfit = peak - account.initialBalance;
-        const drawdownFromPeak = peak - runningEquity;
+        // Max drawdown: largest peak-to-trough decline across the equity curve
+        let runDD = account.initialBalance;
+        let peakDD = account.initialBalance;
+        let maxDrawdown = 0;
+        accountTrades.forEach(t => {
+            runDD += (t.pnl || 0);
+            if (runDD > peakDD) peakDD = runDD;
+            const dd = peakDD - runDD;
+            if (dd > maxDrawdown) maxDrawdown = dd;
+        });
         // Days from first trade to last trade
         const first = accountTrades[0].timestamp || Date.now();
         const last = accountTrades[accountTrades.length - 1].timestamp || Date.now();
         const daysActive = Math.max(1, Math.ceil((last - first) / (1000 * 60 * 60 * 24)));
         // Progress to target (Challenge: typicky 8-10% of initial balance)
-        const challengeTarget = (account as any).propThreshold ? (account.initialBalance * ((account as any).propThreshold / 1000)) : (account.initialBalance * 0.08);
+        // Challenge target = initialBalance * profitTarget% (same source as AccountsManager progress bar)
+        const targetPct = (account.profitTarget && account.profitTarget > 0) ? account.profitTarget : 10;
+        const challengeTarget = account.initialBalance * (targetPct / 100);
         const progressPct = Math.round((peakProfit / challengeTarget) * 100);
+
+        // Days of consistency = number of distinct calendar days with at least one trade
+        const tradingDaySet = new Set<string>();
+        accountTrades.forEach(t => {
+            const ts = t.timestamp || Date.now();
+            tradingDaySet.add(new Date(ts).toISOString().slice(0, 10));
+        });
+        const daysConsistency = tradingDaySet.size;
         return {
             peakEquity: peak,
             currentEquity: runningEquity,
-            drawdownFromPeak: Math.round(drawdownFromPeak),
+            maxDrawdown: Math.round(maxDrawdown),
+            daysConsistency,
             daysActive,
             progressPct: Math.max(0, Math.min(100, progressPct)),
             totalTrades: accountTrades.length,
@@ -96,8 +116,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
     const today = new Date().toISOString().slice(0, 10);
     const [reason, setReason] = useState<string>(REASON_OPTIONS[0]);
     const [whatHappened, setWhatHappened] = useState<string>('');
-    const [amountLost, setAmountLost] = useState<number>(stats.drawdownFromPeak || 0);
-    const [daysConsistency, setDaysConsistency] = useState<number>(stats.daysActive);
+    const [amountLost, setAmountLost] = useState<number>(stats.maxDrawdown || 0);
     const [keyLesson, setKeyLesson] = useState<string>('');
     const [failureDate, setFailureDate] = useState<string>(today);
     const [saving, setSaving] = useState(false);
@@ -117,7 +136,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
             reason,
             whatHappened: whatHappened.trim(),
             amountLost,
-            daysOfConsistency: daysConsistency,
+            daysOfConsistency: stats.daysConsistency,
             progressPct: stats.progressPct,
             keyLesson: keyLesson.trim(),
             failureDate,
@@ -133,7 +152,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                 `• Initial balance: $${account.initialBalance.toLocaleString()}`,
                 `• Peak equity: $${stats.peakEquity.toLocaleString()} (+$${stats.peakProfit})`,
                 `• Pokrok v challenge: ${stats.progressPct} % k targetu ($${stats.peakProfit}/$${stats.challengeTarget})`,
-                `• Dní konzistentní práce: ${daysConsistency}`,
+                `• Dní konzistentní práce: ${stats.daysConsistency}`,
                 `• Celkem trades: ${stats.totalTrades}`,
                 ``,
                 `DŮVOD SPÁLENÍ: ${reason}`,
@@ -148,7 +167,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                 ``,
                 `AI COACH: Při jakékoliv otázce o disciplíně, position sizing, revenge tradingu`,
                 `nebo po loss day, VŽDY připomeň tuto epizodu. Zdůrazni že účet byl`,
-                `na ${stats.progressPct}% k targetu po ${daysConsistency} dnech konzistence,`,
+                `na ${stats.progressPct}% k targetu po ${stats.daysConsistency} dnech konzistence,`,
                 `a všechno se ztratilo kvůli: ${reason}.`,
             ].join('\n');
 
@@ -167,7 +186,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                     progress_at_blowup_pct: stats.progressPct,
                     progress_pnl_usd: stats.peakProfit,
                     target_pnl_usd: stats.challengeTarget,
-                    days_of_consistency: daysConsistency,
+                    days_of_consistency: stats.daysConsistency,
                     reason,
                     key_lesson: keyLesson.trim(),
                     total_trades: stats.totalTrades,
@@ -211,7 +230,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                     {/* Auto-computed stats grid */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <StatCard label="Peak Equity" value={`$${stats.peakEquity.toLocaleString()}`} icon={Target} color="emerald" isDark={isDark} />
-                        <StatCard label="Drawdown" value={`-$${stats.drawdownFromPeak.toLocaleString()}`} icon={TrendingDown} color="rose" isDark={isDark} />
+                        <StatCard label="Max Drawdown" value={`-$${stats.maxDrawdown.toLocaleString()}`} icon={TrendingDown} color="rose" isDark={isDark} />
                         <StatCard label="Pokrok" value={`${stats.progressPct} %`} icon={Target} color="amber" isDark={isDark} />
                         <StatCard label="Dní aktivní" value={stats.daysActive.toString()} icon={Calendar} color="blue" isDark={isDark} />
                     </div>
@@ -266,12 +285,13 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                                     <Calendar size={11} className="inline mr-1" />
                                     Dní konzistence
                                 </label>
-                                <input
-                                    type="number"
-                                    value={daysConsistency}
-                                    onChange={e => setDaysConsistency(Number(e.target.value) || 0)}
-                                    className={`w-full px-4 py-3 rounded-xl border text-sm font-mono ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}
-                                />
+                                <div
+                                    title="Automaticky spočítáno z obchodních dní — nelze upravit"
+                                    className={`w-full px-4 py-3 rounded-xl border text-sm font-mono flex items-center gap-2 ${isDark ? 'bg-slate-800/50 border-white/5 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
+                                >
+                                    <span>{stats.daysConsistency}</span>
+                                    <span className="text-[9px] uppercase tracking-widest opacity-50 ml-auto">auto</span>
+                                </div>
                             </div>
                         </div>
 
