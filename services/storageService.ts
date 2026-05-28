@@ -860,6 +860,20 @@ export const storageService = {
     return this._screenshotCache;
   },
 
+  // Globální set ID obchodů jejichž screenshot už byl jednou loadnut v <img onLoad>.
+  // Per-session persistent → při návratu na History tab se fade-in animace přeskočí
+  // (image je v browser cache, takže onLoad triggerne ihned, ale state by se jinak
+  // resetoval na empty Set při unmount/mount → 1s opacity transition flash).
+  _loadedImageIds: new Set<string>(),
+
+  getLoadedImageIds(): Set<string> {
+    return this._loadedImageIds;
+  },
+
+  markImageLoaded(id: string): void {
+    this._loadedImageIds.add(id);
+  },
+
   // Prefetch all trade screenshots in background (returns map of id -> screenshot)
   async prefetchAllScreenshots(): Promise<Map<string, { screenshot?: string; screenshots?: string[] }>> {
     // Pokud už máme cached, vrať instantně (žádný duplicitní DB query)

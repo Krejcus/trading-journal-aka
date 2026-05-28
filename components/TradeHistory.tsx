@@ -78,7 +78,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // Tracks IDs we've already attempted to fetch (even if no screenshot was found)
   // This prevents re-fetching "no screenshot" trades every time the cache updates
   const fetchedIdsRef = useRef<Set<string>>(new Set());
-  const [loadedImages, setLoadedImages] = useState<Set<string>>(new Set());
+  // Init z globálního setu — při návratu na tab nejsou cached images "znova loading"
+  const [loadedImages, setLoadedImages] = useState<Set<string>>(
+    () => new Set(storageService.getLoadedImageIds())
+  );
   const [errorImages, setErrorImages] = useState<Set<string>>(new Set());
 
   // Keep ref in sync with state (synchronously inside setState so ref is always current)
@@ -91,6 +94,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   }, []);
 
   const handleImageLoad = (id: string) => {
+    storageService.markImageLoaded(id); // persistent přes mount/unmount
     setLoadedImages(prev => {
       const next = new Set(prev);
       next.add(id);
@@ -645,7 +649,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         onLoad={() => handleImageLoad(String(trade.id))}
                         onError={() => handleImageError(String(trade.id))}
                         loading="lazy"
-                        className={`w-full h-full object-cover transition-all duration-1000 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}
+                        className={`w-full h-full object-cover transition-opacity duration-300 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100' : 'opacity-0'}`}
                       />
 
                       <div className={`absolute inset-0 bg-gradient-to-r ${theme !== 'light' ? 'from-[var(--bg-card)] via-transparent' : 'from-white via-transparent'} to-transparent md:block hidden z-20`}></div>
