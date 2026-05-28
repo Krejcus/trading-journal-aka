@@ -453,8 +453,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         {/* RIGHT: screenshot top + info bottom */}
                         <div className="order-1 lg:order-2 flex-1 flex flex-col overflow-hidden">
 
-                            {/* TOP: Screenshot — no border-radius, no background, edge-to-edge */}
-                            <div className={`relative group flex-[3_3_0] min-h-0 overflow-hidden`}>
+                            {/* TOP: Screenshot — na mobile přizpůsobí výšku obrázku (žádné pruhy),
+                                na desktop fixní 3/5 flex prostor (lg:flex-[3_3_0] + absolute fill). */}
+                            <div className={`relative group lg:flex-[3_3_0] lg:min-h-0 lg:overflow-hidden`}>
                             {/* Loading spinner while fetching full trade details */}
                             {isLoadingDetails && (
                                 <div className="w-full py-16 lg:absolute lg:inset-0 flex items-center justify-center z-10">
@@ -469,11 +470,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                         animate={{ opacity: 1 }}
                                         exit={{ opacity: 0 }}
                                         transition={{ duration: 0.3 }}
-                                        className="absolute inset-0"
+                                        className="relative lg:absolute lg:inset-0"
                                     >
                                         <img
                                             src={images[activeImageIndex]}
-                                            className="absolute inset-0 w-full h-full object-contain cursor-zoom-in"
+                                            className="block w-full h-auto lg:absolute lg:inset-0 lg:w-full lg:h-full lg:object-contain cursor-zoom-in"
                                             onClick={() => setIsZoomed(true)}
                                             onError={() => setImageLoadError(true)}
                                         />
