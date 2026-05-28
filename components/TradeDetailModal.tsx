@@ -359,15 +359,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
                         {/* LEFT: Pure trade data only */}
                         <div className={`order-2 lg:order-1 w-full lg:w-[320px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/40'} backdrop-blur-xl overflow-y-auto no-scrollbar`}>
-                            {/* PnL */}
-                            <div className={`p-4 lg:p-5 border-b relative overflow-hidden ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
-                                <div className={`absolute inset-0 pointer-events-none ${isMissed ? 'bg-blue-500/5' : isWin ? 'bg-emerald-500/5' : 'bg-rose-500/5'}`} />
-                                <div className={`absolute bottom-0 left-0 right-0 h-px ${isMissed ? 'bg-blue-500/20' : isWin ? 'bg-emerald-500/20' : 'bg-rose-500/20'}`} />
-                                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-1.5 relative">Profit / Loss</p>
-                                <div className="flex items-end justify-between gap-4 relative">
-                                    <h3 className={`text-3xl lg:text-4xl font-black font-mono tracking-tighter leading-none ${pnlColor}`}>{formattedPnL}</h3>
+                            {/* PnL hero card */}
+                            <div className={`p-5 border-b relative ${isDark ? 'border-white/5' : 'border-slate-100'} ${isMissed ? 'bg-blue-500/[0.04]' : isWin ? 'bg-emerald-500/[0.04]' : 'bg-rose-500/[0.04]'}`}>
+                                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">Profit / Loss</p>
+                                <div className="flex items-baseline justify-between gap-4 flex-wrap">
+                                    <h3 className={`text-4xl lg:text-4xl font-black font-mono tracking-tighter leading-none ${pnlColor}`} style={{ color: isMissed ? '#60a5fa' : isWin ? '#10b981' : '#f43f5e' }}>
+                                        {formattedPnL || '—'}
+                                    </h3>
                                     <div className="flex flex-col items-end">
-                                        <span className={`text-sm font-black font-mono ${realRRR >= 1 ? 'text-emerald-500' : 'text-slate-500'}`}>{isFinite(realRRR) ? realRRR.toFixed(2) : '0.00'} R</span>
+                                        <span className={`text-base font-black font-mono ${realRRR >= 1 ? 'text-emerald-500' : 'text-slate-500'}`}>{isFinite(realRRR) ? realRRR.toFixed(2) : '0.00'} R</span>
                                         <span className="text-[8px] font-bold text-slate-600 uppercase tracking-widest leading-none mt-1">Reward/Risk</span>
                                     </div>
                                 </div>
