@@ -861,10 +861,17 @@ export const storageService = {
   },
 
   // Globální set ID obchodů jejichž screenshot už byl jednou loadnut v <img onLoad>.
-  // Per-session persistent → při návratu na History tab se fade-in animace přeskočí
-  // (image je v browser cache, takže onLoad triggerne ihned, ale state by se jinak
-  // resetoval na empty Set při unmount/mount → 1s opacity transition flash).
-  _loadedImageIds: new Set<string>(),
+  // Persisted v localStorage — přežije page reload (F5), aby flash nebyl po každém refreshi.
+  // Při tab navigaci (dashboard↔history) by samotný Set v paměti stačil, ale po reload
+  // se in-memory state resetuje a image musí znova trigger onLoad → 300ms fade-in flash.
+  _loadedImageIds: (() => {
+    try {
+      const raw = localStorage.getItem('alphatrade_loaded_image_ids');
+      return raw ? new Set<string>(JSON.parse(raw)) : new Set<string>();
+    } catch { return new Set<string>(); }
+  })(),
+
+  _loadedImageIdsSaveTimer: null as any,
 
   getLoadedImageIds(): Set<string> {
     return this._loadedImageIds;
@@ -872,6 +879,13 @@ export const storageService = {
 
   markImageLoaded(id: string): void {
     this._loadedImageIds.add(id);
+    // Debounced persist — zabrání hammer localStorage při scroll načítání 50 obrázků
+    if (this._loadedImageIdsSaveTimer) clearTimeout(this._loadedImageIdsSaveTimer);
+    this._loadedImageIdsSaveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem('alphatrade_loaded_image_ids', JSON.stringify([...this._loadedImageIds]));
+      } catch { /* localStorage full / blocked */ }
+    }, 500);
   },
 
   // Prefetch all trade screenshots in background (returns map of id -> screenshot)
@@ -904,6 +918,24 @@ export const storageService = {
       });
       // Update sdílený cache pro TradeHistory mount
       result.forEach((v, k) => this._screenshotCache.set(k, v));
+
+      // HTTP preload — stáhne všechny screenshoty do browser cache na pozadí.
+      // Když pak <img src=url> render-uje, browser ho má z RAM (instant, žádný flash).
+      // Throttle 5 paralelně ať nezabijeme network při 100+ obrázcích.
+      const urls: string[] = [];
+      result.forEach(v => {
+        if (v.screenshot) urls.push(v.screenshot);
+      });
+      const preloadBatch = async (start: number) => {
+        const batch = urls.slice(start, start + 5);
+        await Promise.all(batch.map(url => new Promise<void>(resolve => {
+          const img = new Image();
+          img.onload = img.onerror = () => resolve();
+          img.src = url;
+        })));
+        if (start + 5 < urls.length) preloadBatch(start + 5);
+      };
+      if (urls.length > 0) preloadBatch(0);
     } catch (err) {
       console.warn('[prefetchAllScreenshots] Failed:', err);
     }
