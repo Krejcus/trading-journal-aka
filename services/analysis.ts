@@ -1,5 +1,6 @@
 
 import { Trade, TradeStats, SignalStat, TimeStat, CalendarDay, MonthlyData, EquityPoint } from '../types';
+import { isTradovateFills, parseTradovateFills } from './tradovateImport';
 
 export const parseCurrency = (val: string | number): number => {
   if (typeof val === 'number') return val;
@@ -34,6 +35,11 @@ const findTradeId = (row: any): string | null => {
 };
 
 export const normalizeTrades = (raw: any[], accountId: string): Trade[] => {
+  // Tradovate (Apex/Tradeify/Lucid) exportuje fills/ordery — spáruj je do obchodů.
+  if (isTradovateFills(raw)) {
+    return parseTradovateFills(raw, accountId).trades;
+  }
+
   const tradeMap = new Map<string, any>();
 
   raw.forEach((r) => {

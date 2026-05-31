@@ -19,7 +19,8 @@ import {
   LayoutGrid,
   Calendar,
   FlaskConical,
-  LayoutDashboard
+  LayoutDashboard,
+  UploadCloud
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import PayoutModal from './PayoutModal';
@@ -37,6 +38,7 @@ interface AccountsManagerProps {
   onUpdateTrades: (trades: Trade[]) => void;
   onAddExpense?: (expense: any) => void;
   onOpenInDashboard?: (id: string) => void;
+  onImportTradovate?: (id: string) => void;
   onUpdatePayouts: (payouts: BusinessPayout[]) => void;
   payouts: BusinessPayout[];
   user: User;
@@ -99,7 +101,8 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   payouts,
   user,
   onAddExpense,
-  onOpenInDashboard
+  onOpenInDashboard,
+  onImportTradovate
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -445,6 +448,11 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             {acc.status === 'Inactive' && onOpenInDashboard && (
               <button onClick={(e) => { e.stopPropagation(); onOpenInDashboard(acc.id); }} className="text-[8px] font-black uppercase tracking-wider flex items-center gap-1 text-blue-500 hover:text-blue-400 transition-all" title="Otevřít v dashboardu">
                 <LayoutDashboard size={10} /> Dashboard
+              </button>
+            )}
+            {acc.status === 'Active' && onImportTradovate && (
+              <button onClick={(e) => { e.stopPropagation(); onImportTradovate(acc.id); }} className="text-[8px] font-black uppercase tracking-wider flex items-center gap-1 text-blue-500 hover:text-blue-400 transition-all" title="Importovat obchody z Tradovate">
+                <UploadCloud size={10} /> Import
               </button>
             )}
           </div>

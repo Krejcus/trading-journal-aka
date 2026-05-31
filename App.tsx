@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { normalizeTrades, calculateStats } from './services/analysis';
+import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { safeSetItem } from './utils/safeStorage';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings } from './types';
@@ -17,6 +18,7 @@ const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
 const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
+const TradovateImportModal = React.lazy(() => import('./components/TradovateImportModal'));
 
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
@@ -373,6 +375,11 @@ const App: React.FC = () => {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [activeAccountId, setActiveAccountId] = useState<string>('');
+  // Tradovate import modal
+  const [tradovateImportOpen, setTradovateImportOpen] = useState(false);
+  const [tradovateImportAccount, setTradovateImportAccount] = useState<string | undefined>(undefined);
+  // Průvodce doplněním importovaných obchodů — inkrement spustí wizard v TradeHistory.
+  const [enrichSignal, setEnrichSignal] = useState(0);
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USER);
   // Locked feature modal pro non-owner roli (kamarád apod.)
   const [lockedFeatureModal, setLockedFeatureModal] = useState<string | null>(null);
@@ -2091,6 +2098,45 @@ const App: React.FC = () => {
     });
   };
 
+  // Tradovate import: modal už spáruje fills→obchody a vyřeší dedup,
+  // takže sem chodí jen NOVÉ obchody (s accountId zapečeným) k uložení.
+  const handleTradovateImport = (newTrades: Trade[]) => {
+    if (!newTrades || newTrades.length === 0) return;
+    const importedIds = new Set(newTrades.map(t => String(t.id)));
+    // Optimisticky přidej, ať uživatel hned vidí výsledek.
+    setTrades(prev => [...prev, ...newTrades]);
+    // Vrátí optimistické přidání zpět (aby v UI nezůstaly obchody s dočasnými id, které v DB nejsou).
+    const rollback = () => setTrades(prev => prev.filter(t => !importedIds.has(String(t.id))));
+    storageService.saveTrades(newTrades).then(saved => {
+      if (saved && saved.length > 0) {
+        // Nahraď optimistické verze uloženými (s reálnými DB id).
+        setTrades(prev => {
+          const savedIds = new Set(saved.map(s => String(s.id)));
+          const withoutImported = prev.filter(t => !importedIds.has(String(t.id)) && !savedIds.has(String(t.id)));
+          return [...withoutImported, ...saved];
+        });
+      } else {
+        // Uložení neproběhlo (prázdná odpověď bez výjimky) → ber jako selhání, ne tiše nechat orphany.
+        console.error('[TradovateImport] saveTrades vrátilo prázdný výsledek — rollback optimistického přidání.');
+        rollback();
+        setSyncError('Nepodařilo se uložit importované obchody do cloudu.');
+      }
+    }).catch(err => {
+      console.error('[TradovateImport] Failed to save imported trades:', err);
+      rollback();
+      setSyncError('Nepodařilo se uložit importované obchody do cloudu.');
+    });
+  };
+
+  // Počet importovaných obchodů bez doplněného screenshotu/konfluence.
+  const enrichCount = useMemo(() => trades.filter(tradeNeedsEnrichment).length, [trades]);
+
+  // Spustí průvodce doplněním — přepne na historii a inkrementuje signál pro TradeHistory.
+  const startEnrichWizard = useCallback(() => {
+    setActivePage('history');
+    setEnrichSignal(s => s + 1);
+  }, []);
+
   const handleManualTrade = (tradeOrTrades: Trade | Trade[]) => {
     const newTradesArray = Array.isArray(tradeOrTrades) ? tradeOrTrades : [tradeOrTrades];
 
@@ -2887,6 +2933,11 @@ const App: React.FC = () => {
                         exchangeRates={exchangeRates}
                         allTrades={trades}
                         viewMode={historyLayoutMode}
+                        enrichSignal={enrichSignal}
+                        onImportTradovate={() => {
+                          setTradovateImportAccount(viewMode === 'individual' ? activeAccountId : undefined);
+                          setTradovateImportOpen(true);
+                        }}
                       />
                     )
                   )}
@@ -2965,6 +3016,10 @@ const App: React.FC = () => {
                         setDashboardMode('archive');
                         isPreferencesDirty.current = true;
                         setActivePage('dashboard');
+                      }}
+                      onImportTradovate={(id) => {
+                        setTradovateImportAccount(id);
+                        setTradovateImportOpen(true);
                       }}
                     />
                   )}
@@ -3103,6 +3158,42 @@ const App: React.FC = () => {
           />
         )
       }
+
+      {/* Floating tlačítko — skok na nedoplněné importované obchody */}
+      <AnimatePresence>
+        {enrichCount > 0 && (
+          <motion.button
+            key="enrich-fab"
+            initial={{ opacity: 0, scale: 0.8, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.8, y: 20 }}
+            onClick={startEnrichWizard}
+            className="fixed bottom-24 right-5 md:bottom-6 md:right-6 z-[90] flex items-center gap-2 pl-4 pr-5 py-3 rounded-full bg-amber-500 hover:bg-amber-400 text-white font-black text-sm uppercase tracking-wider shadow-2xl shadow-amber-500/40 transition-colors active:scale-95"
+            title="Doplnit screenshoty a konfluence k importovaným obchodům"
+          >
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white" />
+            </span>
+            Doplnit ({enrichCount})
+          </motion.button>
+        )}
+      </AnimatePresence>
+
+      {tradovateImportOpen && (
+        <React.Suspense fallback={null}>
+          <TradovateImportModal
+            isOpen={tradovateImportOpen}
+            onClose={() => setTradovateImportOpen(false)}
+            accounts={accounts.filter(a => a.status === 'Active')}
+            defaultAccountId={tradovateImportAccount || activeAccountId}
+            existingTrades={trades}
+            isDark={theme !== 'light'}
+            onConfirm={handleTradovateImport}
+            onStartEnrich={startEnrichWizard}
+          />
+        </React.Suspense>
+      )}
 
       <UserProfileModal
         isOpen={isProfileOpen}

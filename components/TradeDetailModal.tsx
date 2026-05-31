@@ -57,12 +57,16 @@ interface TradeDetailModalProps {
     user?: User;
     exchangeRates?: ExchangeRates | null;
     allTrades?: Trade[];
+    /** Otevřít rovnou v editačním formuláři (průvodce doplněním importovaných obchodů). */
+    startInEditMode?: boolean;
+    /** Zavolá se po ULOŽENÍ v režimu průvodce — přejdi na další obchod. */
+    onSaved?: () => void;
 }
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, hasPrev, hasNext,
     onUpdateTrade, pnlDisplayMode = 'usd', accounts = [], initialBalance, user, exchangeRates,
-    allTrades = []
+    allTrades = [], startInEditMode = false, onSaved
 }) => {
     const isDark = theme !== 'light';
     const targetCurrency = user?.currency || 'USD';
@@ -195,7 +199,21 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
     // Full Edit Mode — ManualTradeForm overlay
-    const [isFullEditOpen, setIsFullEditOpen] = useState(false);
+    const [isFullEditOpen, setIsFullEditOpen] = useState(!!startInEditMode);
+    // Průvodce: rozliš uložení (→ další obchod) od zrušení (→ konec průvodce).
+    const wizardSavedRef = useRef(false);
+    // Při přechodu na další obchod v průvodci znovu otevři editační formulář.
+    useEffect(() => {
+        if (startInEditMode) {
+            wizardSavedRef.current = false;
+            setIsFullEditOpen(true);
+        }
+    }, [trade.id, startInEditMode]);
+    // Bezpečnostní pojistka: v režimu průvodce bez onUpdateTrade by se editační formulář
+    // nevyrenderoval (viz render guard níž) a průvodce by visel na detailu bez akce — radši ukonči.
+    useEffect(() => {
+        if (startInEditMode && !onUpdateTrade) onClose();
+    }, [startInEditMode, onUpdateTrade, onClose]);
     const [editPrefs, setEditPrefs] = useState<{ htf: string[]; ltf: string[]; mistakes: string[] }>({ htf: [], ltf: [], mistakes: [] });
     useEffect(() => {
         storageService.getCachedPreferences().then((p: any) => {
@@ -589,9 +607,22 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             {/* FULL EDIT MODE — ManualTradeForm overlay */}
             {isFullEditOpen && onUpdateTrade && (
                 <ManualTradeForm
+                    key={String(activeTrade.id)}
                     editTrade={activeTrade}
-                    onUpdate={(updates) => onUpdateTrade(updates)}
-                    onClose={() => setIsFullEditOpen(false)}
+                    onUpdate={(updates) => {
+                        // Označ „uloženo" až PO úspěšném dořešení (ManualTradeForm volá onClose
+                        // teprve po resolve této promise) — jinak by průvodce postoupil i po selhání.
+                        return Promise.resolve(onUpdateTrade(updates)).then(res => { wizardSavedRef.current = true; return res; });
+                    }}
+                    onClose={() => {
+                        if (startInEditMode) {
+                            // Průvodce: uložení → další obchod; zrušení → konec průvodce.
+                            if (wizardSavedRef.current) { wizardSavedRef.current = false; onSaved?.(); }
+                            else { onClose(); }
+                        } else {
+                            setIsFullEditOpen(false);
+                        }
+                    }}
                     theme={theme}
                     accounts={accounts}
                     activeAccountId={String(activeTrade.accountId || '')}

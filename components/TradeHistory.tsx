@@ -11,12 +11,33 @@ import {
   ShieldCheck, ShieldAlert, BarChart3, Activity, Zap, Monitor,
   Maximize2, ArrowRight, Gauge, Hash, Ruler, Percent,
   Compass, Hourglass, Cpu, Terminal, Layers, ArrowUpRight, ArrowDownRight,
-  Share2, Check, Copy, LayoutGrid, List, AlertOctagon, Clock, Timer, CheckCircle2
+  Share2, Check, Copy, LayoutGrid, List, AlertOctagon, Clock, Timer, CheckCircle2, UploadCloud, Sparkles
 } from 'lucide-react';
+import { tradeNeedsEnrichment } from '../services/tradovateImport';
 
 import TradeDetailModal from './TradeDetailModal';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
+
+// Jednotný badge „k doplnění" pro importované obchody bez screenshotu/konfluence.
+// `card` = plovoucí pilulka v rohu karty, `inline` = malý štítek vedle instrumentu v tabulce.
+const EnrichBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
+  variant === 'card' ? (
+    <div
+      className="absolute top-3 right-3 z-20 flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500 text-white text-[9px] font-black uppercase tracking-wider shadow-lg shadow-amber-500/30"
+      title="Importováno — doplň screenshot a konfluence"
+    >
+      <Sparkles size={10} /> Doplnit
+    </div>
+  ) : (
+    <span
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-500 text-[8px] font-black uppercase tracking-wider"
+      title="Importováno — doplň screenshot a konfluence"
+    >
+      <Sparkles size={8} /> Doplnit
+    </span>
+  )
+);
 
 interface TradeHistoryProps {
   trades: Trade[];
@@ -32,12 +53,15 @@ interface TradeHistoryProps {
   initialBalance?: number;
   user: User;
   exchangeRates: ExchangeRates;
+  onImportTradovate?: () => void;
+  /** Inkrementuje se zvenčí (floating tlačítko / „Doplnit teď") pro spuštění průvodce doplněním. */
+  enrichSignal?: number;
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
   trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
-  viewMode
+  viewMode, onImportTradovate, enrichSignal
 }) => {
   const isDark = theme !== 'light';
   const targetCurrency = user.currency || 'USD';
@@ -55,6 +79,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [zoomImage, setZoomImage] = useState<{ images: string[]; index: number } | null>(null);
+
+  // --- ENRICHMENT (doplnění importovaných obchodů) ---
+  const [enrichFilter, setEnrichFilter] = useState(false); // filtr „K doplnění"
+  const [wizardMode, setWizardMode] = useState(false);      // průvodce: po zavření detailu otevři další
 
   // --- MULTI-SELECT STATE ---
   const [selectedTradeIds, setSelectedTradeIds] = useState<Set<string | number>>(new Set());
@@ -145,11 +173,72 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     }
   }, [trades, allTrades, selectedTrade]);
 
-  // Ensure trades are always sorted by date (newest first) for consistent display and navigation
-  const sortedTrades = useMemo(() =>
-    [...trades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+  // Obchody z importu, které ještě nemají doplněný screenshot/konfluence.
+  const enrichTrades = useMemo(
+    () => trades.filter(tradeNeedsEnrichment),
     [trades]
   );
+  const enrichCount = enrichTrades.length;
+  const enrichIds = useMemo(() => new Set(enrichTrades.map(t => String(t.id))), [enrichTrades]);
+
+  // Jeden zdroj pravdy pro frontu průvodce: nedoplněné obchody chronologicky (nejstarší první),
+  // volitelně bez konkrétního id (aktuálně řešený obchod).
+  const buildEnrichQueue = useCallback((excludeId?: string | number) =>
+    trades
+      .filter(tradeNeedsEnrichment)
+      .filter(t => excludeId == null || String(t.id) !== String(excludeId))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+    [trades]
+  );
+
+  // Ensure trades are always sorted by date (newest first) for consistent display and navigation
+  const sortedTrades = useMemo(() => {
+    const base = enrichFilter ? trades.filter(tradeNeedsEnrichment) : trades;
+    return [...base].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [trades, enrichFilter]);
+
+  // Pokud filtr „K doplnění" vyprázdní seznam (vše doplněno), vypni ho.
+  useEffect(() => {
+    if (enrichFilter && enrichCount === 0) setEnrichFilter(false);
+  }, [enrichFilter, enrichCount]);
+
+  // --- PRŮVODCE DOPLNĚNÍM ---
+  // Otevři frontu od prvního nedoplněného obchodu.
+  const startWizard = useCallback(() => {
+    const queue = buildEnrichQueue();
+    if (queue.length > 0) {
+      setWizardMode(true);
+      setSelectedTrade(queue[0]);
+    }
+  }, [buildEnrichQueue]);
+
+  // enrichSignal se zvenčí inkrementuje (≥1) → spusť průvodce.
+  // Ref init na undefined (ne na hodnotu propu) — jinak by se při mountu z jiné stránky,
+  // kde už je signál inkrementovaný, hodnota rovnala a průvodce by se NESPUSTIL.
+  // `!enrichSignal` ošetří jak undefined, tak výchozí 0 (= žádný požadavek).
+  const enrichSignalRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!enrichSignal || enrichSignal === enrichSignalRef.current) return;
+    enrichSignalRef.current = enrichSignal;
+    startWizard();
+  }, [enrichSignal, startWizard]);
+
+  // Zavření detailu — ukončí i případný průvodce.
+  const handleCloseDetail = useCallback(() => {
+    setWizardMode(false);
+    setSelectedTrade(null);
+  }, []);
+
+  // Po uložení v průvodci — skoč na další nedoplněný obchod (nebo skonči).
+  const handleWizardAdvance = useCallback(() => {
+    const remaining = buildEnrichQueue(selectedTrade?.id);
+    if (remaining.length > 0) {
+      setSelectedTrade(remaining[0]);
+    } else {
+      setWizardMode(false);
+      setSelectedTrade(null);
+    }
+  }, [buildEnrichQueue, selectedTrade]);
 
   // Visible slice for rendering
   const visibleTrades = useMemo(() =>
@@ -399,6 +488,40 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           {isMultiSelectMode ? 'Zrušit výběr' : 'Vybrat více'}
         </button>
 
+        {!isMultiSelectMode && enrichCount > 0 && (
+          <button
+            onClick={() => setEnrichFilter(v => !v)}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm transition-all active:scale-95 ${
+              enrichFilter
+                ? 'bg-amber-500 text-white'
+                : 'bg-amber-500/15 text-amber-500 border border-amber-500/30 hover:bg-amber-500/25'
+            }`}
+            title="Zobrazit jen importované obchody bez screenshotu/konfluence"
+          >
+            <Sparkles size={14} /> K doplnění ({enrichCount})
+          </button>
+        )}
+
+        {!isMultiSelectMode && enrichFilter && enrichCount > 0 && (
+          <button
+            onClick={startWizard}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm transition-all bg-emerald-600 hover:bg-emerald-500 text-white active:scale-95"
+            title="Projít nedoplněné obchody jeden po druhém"
+          >
+            <ChevronRight size={14} /> Doplnit postupně
+          </button>
+        )}
+
+        {!isMultiSelectMode && onImportTradovate && (
+          <button
+            onClick={onImportTradovate}
+            className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm transition-all bg-blue-600/90 hover:bg-blue-500 text-white active:scale-95"
+            title="Importovat obchody z Tradovate exportu"
+          >
+            <UploadCloud size={14} /> Import Tradovate
+          </button>
+        )}
+
         {isMultiSelectMode && (
           <>
             <button
@@ -448,6 +571,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             const tradeScreenshot = getScreenshot(trade);
             const tradeScreenshots = getScreenshots(trade);
             const isImageLoaded = loadedImages.has(String(trade.id));
+            const needsEnrich = enrichIds.has(String(trade.id));
 
             const tradeAccount = accounts.find(a => a.id === trade.accountId);
             // Find group trades using same logic as TradeDetailModal (groupId + fuzzy)
@@ -476,6 +600,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   selectedTradeIds.has(trade.id) ? 'ring-2 ring-cyan-400' : ''
                 }`}
               >
+                {/* Badge „k doplnění" pro importované obchody bez kontextu */}
+                {needsEnrich && !isMultiSelectMode && <EnrichBadge variant="card" />}
+
                 {/* Multi-Select Checkbox */}
                 {isMultiSelectMode && (
                   <div
@@ -780,7 +907,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       </td>
                       <td className="px-6 py-3">
                         <div className="flex flex-col">
-                          <span className={`text-sm font-black uppercase tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</span>
+                          <span className={`flex items-center gap-1.5 text-sm font-black uppercase tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+                            {trade.instrument}
+                            {enrichIds.has(String(trade.id)) && <EnrichBadge variant="inline" />}
+                          </span>
                           <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{getTradePhase(trade) || 'Standard'}</span>
                         </div>
                       </td>
@@ -884,7 +1014,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           trade={selectedTrade}
           accountName={getAccountName(selectedTrade.accountId)}
           theme={theme}
-          onClose={() => setSelectedTrade(null)}
+          onClose={handleCloseDetail}
+          startInEditMode={wizardMode}
+          onSaved={handleWizardAdvance}
           onDelete={() => { onDelete(selectedTrade.id); setSelectedTrade(null); }}
           emotions={emotions}
           onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
