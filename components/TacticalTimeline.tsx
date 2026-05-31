@@ -9,6 +9,7 @@ import {
   TrendingDown,
   Clock,
   Target,
+  Sparkles,
   Brain,
   ChevronRight,
   AlertCircle,
@@ -328,6 +329,29 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
   const [expandedBreakdownSessions, setExpandedBreakdownSessions] = useState<Set<string>>(new Set());
   const [isPrepExpanded, setIsPrepExpanded] = useState(false);
   const [isReviewExpanded, setIsReviewExpanded] = useState(false);
+  // Ranní afirmace (AI) — on-demand generování v inline editoru přípravy.
+  const [affirmation, setAffirmation] = useState<{ affirmation: string; focus: string } | null>(null);
+  const [affirmationLoading, setAffirmationLoading] = useState(false);
+  const [affirmationError, setAffirmationError] = useState<string | null>(null);
+  const generateAffirmation = React.useCallback(async () => {
+    setAffirmationLoading(true);
+    setAffirmationError(null);
+    try {
+      const { supabase } = await import('../services/supabase');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setAffirmationError('Nejsi přihlášený.'); return; }
+      const baseUrl = (supabase as any).supabaseUrl || (import.meta as any).env?.VITE_SUPABASE_URL || '';
+      const res = await fetch(`${baseUrl}/functions/v1/morning-affirmation`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (res.ok && data.affirmation) setAffirmation({ affirmation: data.affirmation, focus: data.focus || '' });
+      else setAffirmationError('Afirmaci se nepodařilo vygenerovat.');
+    } catch { setAffirmationError('Chyba spojení.'); }
+    finally { setAffirmationLoading(false); }
+  }, []);
 
   // Reaguj na autoExpand signál — otevři prep nebo review když rodič požádá
   useEffect(() => {
@@ -840,6 +864,36 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                       </div>
                     </div>
                   ))}
+
+                  {/* Ranní afirmace (AI) — mentální nastavení na míru */}
+                  <div className={`mb-3 p-3 rounded-2xl border ${isDark ? 'bg-violet-500/5 border-violet-500/20' : 'bg-violet-50 border-violet-200'}`}>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={13} className="text-violet-500" />
+                        <span className="text-[9px] font-black uppercase tracking-widest text-violet-500">Ranní afirmace</span>
+                      </div>
+                      <button
+                        onClick={generateAffirmation}
+                        disabled={affirmationLoading}
+                        className={`px-3 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all active:scale-95 flex items-center gap-1.5 bg-violet-600 text-white hover:bg-violet-500 ${affirmationLoading ? 'opacity-50 cursor-wait' : ''}`}
+                      >
+                        <Sparkles size={10} /> {affirmationLoading ? 'Generuji…' : affirmation ? 'Nová' : 'Vygenerovat'}
+                      </button>
+                    </div>
+                    {affirmationError && <p className="text-[10px] font-bold text-rose-500">{affirmationError}</p>}
+                    {affirmation ? (
+                      <div className="space-y-2">
+                        <p className={`text-xs leading-relaxed font-medium ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{affirmation.affirmation}</p>
+                        {affirmation.focus && (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-violet-500/15 text-violet-500 text-[9px] font-black uppercase tracking-wider">
+                            <Target size={10} /> {affirmation.focus}
+                          </div>
+                        )}
+                      </div>
+                    ) : !affirmationLoading && !affirmationError && (
+                      <p className="text-[10px] font-bold text-slate-500">Coach ti připraví afirmaci na míru tomu, s čím teď bojuješ.</p>
+                    )}
+                  </div>
 
                   {/* Bottom bar: rituals + button */}
                   <div className={`flex flex-col gap-2 pt-2 border-t ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
