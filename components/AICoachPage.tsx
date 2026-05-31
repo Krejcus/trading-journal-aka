@@ -564,6 +564,8 @@ const AICoachPage: React.FC<Props> = ({
       {
         preps: dailyPreps,
         reviews: dailyReviews,
+        // Všechny účty (i spálené) — tools umí filtrovat a reportovat per účet.
+        accounts,
         // Sum of active account starting balances — Coach uses for $ → % conversion when user prefers %.
         initialBalance: accounts
           .filter(a => a.status !== 'Archived')

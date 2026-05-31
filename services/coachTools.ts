@@ -9,7 +9,7 @@
 // + get_stats × 2).
 
 import { supabase } from './supabase';
-import type { Trade, DailyPrep, DailyReview } from '../types';
+import type { Trade, DailyPrep, DailyReview, Account } from '../types';
 import {
   addMemory,
   recallMemory,
@@ -81,6 +81,51 @@ export const COACH_TOOLS = [
           type: 'string',
           description:
             'Filter trades whose mistakes include this tag (e.g. "revenge", "FOMO").',
+        },
+        account: {
+          type: 'string',
+          description: 'Filtr podle účtu — název (např. "Tradeify 50k") nebo ID. Pro "jak se mi daří na účtu X".',
+        },
+        tag: {
+          type: 'string',
+          description: 'Filtr: obchod musí mít tento tag (case-insensitive).',
+        },
+        weekday: {
+          type: 'string',
+          enum: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+          description: 'Filtr na den v týdnu (z data obchodu).',
+        },
+        min_r: {
+          type: 'number',
+          description: 'Jen obchody s R-multiplem >= této hodnotě (vyžaduje riskAmount).',
+        },
+        max_r: {
+          type: 'number',
+          description: 'Jen obchody s R-multiplem <= této hodnotě.',
+        },
+        include_missed: {
+          type: 'boolean',
+          description: 'Zahrnout i zmeškané obchody (executionStatus=Missed). Default false.',
+        },
+        group_by: {
+          type: 'string',
+          enum: ['account', 'instrument', 'direction', 'session', 'weekday', 'tag', 'mistake', 'outcome'],
+          description: 'Rozpad statistik po skupinách → pole {group, stats} seřazené dle PnL. Pro "který den/účet/setup je nejlepší".',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_accounts',
+    description:
+      'Vrátí VŠECHNY obchodní účty (i neaktivní/spálené) se stavem, fází, P&L a počtem obchodů. Pro "kolik mám účtů", "který účet jsem spálil", nebo jako kontext před filtrováním podle účtu.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['Active', 'Inactive', 'Archived', 'all'],
+          description: 'Filtr stavu. Default "all".',
         },
       },
     },
@@ -259,20 +304,54 @@ interface GetStatsArgs {
   direction?: 'Long' | 'Short';
   session?: string;
   mistakes_contain?: string;
+  // Phase A — plná query síla
+  account?: string;
+  tag?: string;
+  weekday?: 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
+  min_r?: number;
+  max_r?: number;
+  include_missed?: boolean;
+  group_by?: 'account' | 'instrument' | 'direction' | 'session' | 'weekday' | 'tag' | 'mistake' | 'outcome';
 }
 
-function computeStats(allTrades: Trade[], args: GetStatsArgs) {
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function tradeWeekday(t: Trade): string { return WEEKDAYS[new Date(t.date).getDay()] || '?'; }
+
+/** Resolve an account filter (name substring or id) to a matching accountId, or null. */
+function resolveAccountId(input: string | undefined, accounts: Account[]): string | null {
+  if (!input) return null;
+  const q = input.toLowerCase().trim();
+  const byId = accounts.find((a) => String(a.id).toLowerCase() === q);
+  if (byId) return String(byId.id);
+  const byName = accounts.find((a) => String(a.name || '').toLowerCase().includes(q));
+  return byName ? String(byName.id) : null;
+}
+
+function computeStats(allTrades: Trade[], args: GetStatsArgs, accounts: Account[] = []) {
+  const accId = args.account ? resolveAccountId(args.account, accounts) : null;
   const filtered = allTrades.filter((t) => {
-    if (t.executionStatus === 'Missed') return false;
+    if (!args.include_missed && t.executionStatus === 'Missed') return false;
     if (args.date_from && t.date && t.date.slice(0, 10) < args.date_from) return false;
     if (args.date_to && t.date && t.date.slice(0, 10) > args.date_to) return false;
     if (args.instrument && t.instrument !== args.instrument) return false;
     if (args.direction && t.direction !== args.direction) return false;
     if (args.session && t.session !== args.session) return false;
+    if (args.account && String(t.accountId) !== accId) return false;
+    if (args.weekday && tradeWeekday(t) !== args.weekday) return false;
+    if (args.tag) {
+      const tg = args.tag.toLowerCase();
+      if (!(t.tags || []).some((x) => String(x).toLowerCase().includes(tg))) return false;
+    }
     if (args.mistakes_contain) {
       const needle = args.mistakes_contain.toLowerCase();
       const hit = (t.mistakes || []).some((m) => m.toLowerCase().includes(needle));
       if (!hit) return false;
+    }
+    if (args.min_r != null) {
+      if (!t.riskAmount || t.riskAmount === 0 || (t.pnl || 0) / t.riskAmount < args.min_r) return false;
+    }
+    if (args.max_r != null) {
+      if (!t.riskAmount || t.riskAmount === 0 || (t.pnl || 0) / t.riskAmount > args.max_r) return false;
     }
     return true;
   });
@@ -337,6 +416,98 @@ function computeStats(allTrades: Trade[], args: GetStatsArgs) {
       to: filtered.reduce((max, t) => (t.date && t.date > max ? t.date.slice(0, 10) : max), '0000-01-01'),
     },
   };
+}
+
+/** Keys a trade falls into for a given group_by dimension (tags/mistakes can be multi). */
+function groupKeysFor(
+  t: Trade,
+  dim: NonNullable<GetStatsArgs['group_by']>,
+  accNameById: Map<string, string>,
+): string[] {
+  switch (dim) {
+    case 'account': return [accNameById.get(String(t.accountId)) || String(t.accountId) || '—'];
+    case 'instrument': return [t.instrument || '—'];
+    case 'direction': return [t.direction || '—'];
+    case 'session': return [t.session || '—'];
+    case 'weekday': return [tradeWeekday(t)];
+    case 'tag': return (t.tags && t.tags.length) ? t.tags.map(String) : ['(bez tagu)'];
+    case 'mistake': return (t.mistakes && t.mistakes.length) ? t.mistakes.map(String) : ['(bez chyby)'];
+    case 'outcome': return [(t.pnl || 0) > 0.01 ? 'win' : (t.pnl || 0) < -0.01 ? 'loss' : 'breakeven'];
+    default: return ['—'];
+  }
+}
+
+/** get_stats handler — applies filters, optional group_by breakdown. */
+function getStats(args: GetStatsArgs, ctx: ToolContext) {
+  const accounts = ctx.accounts || [];
+  if (!args.group_by) return computeStats(ctx.trades, args, accounts);
+
+  // Group: bucket the (filtered) trades, then run computeStats per bucket.
+  const accNameById = new Map(accounts.map((a) => [String(a.id), String(a.name || a.id)]));
+  // Pre-filter once (without group dimension) by reusing computeStats's filter via a no-op:
+  const base = computeStatsFilter(ctx.trades, args, accounts);
+  const buckets = new Map<string, Trade[]>();
+  for (const t of base) {
+    for (const key of groupKeysFor(t, args.group_by, accNameById)) {
+      const arr = buckets.get(key) || [];
+      arr.push(t);
+      buckets.set(key, arr);
+    }
+  }
+  const groups = Array.from(buckets.entries())
+    .map(([group, ts]) => ({ group, stats: computeStats(ts, { ...args, group_by: undefined }, accounts) }))
+    .sort((a, b) => (Number((b.stats as any).totalPnL) || 0) - (Number((a.stats as any).totalPnL) || 0));
+  return { group_by: args.group_by, groupCount: groups.length, groups };
+}
+
+/** Shared filter pass (mirrors computeStats's filter) so group_by buckets pre-filtered trades. */
+function computeStatsFilter(allTrades: Trade[], args: GetStatsArgs, accounts: Account[]): Trade[] {
+  const accId = args.account ? resolveAccountId(args.account, accounts) : null;
+  return allTrades.filter((t) => {
+    if (!args.include_missed && t.executionStatus === 'Missed') return false;
+    if (args.date_from && t.date && t.date.slice(0, 10) < args.date_from) return false;
+    if (args.date_to && t.date && t.date.slice(0, 10) > args.date_to) return false;
+    if (args.instrument && t.instrument !== args.instrument) return false;
+    if (args.direction && t.direction !== args.direction) return false;
+    if (args.session && t.session !== args.session) return false;
+    if (args.account && String(t.accountId) !== accId) return false;
+    if (args.weekday && tradeWeekday(t) !== args.weekday) return false;
+    if (args.tag) {
+      const tg = args.tag.toLowerCase();
+      if (!(t.tags || []).some((x) => String(x).toLowerCase().includes(tg))) return false;
+    }
+    if (args.mistakes_contain) {
+      const needle = args.mistakes_contain.toLowerCase();
+      if (!(t.mistakes || []).some((m) => m.toLowerCase().includes(needle))) return false;
+    }
+    if (args.min_r != null && (!t.riskAmount || t.riskAmount === 0 || (t.pnl || 0) / t.riskAmount < args.min_r)) return false;
+    if (args.max_r != null && (!t.riskAmount || t.riskAmount === 0 || (t.pnl || 0) / t.riskAmount > args.max_r)) return false;
+    return true;
+  });
+}
+
+/** list_accounts handler — all accounts (incl. blown) with status + P&L + trade count. */
+function listAccounts(args: { status?: string }, ctx: ToolContext) {
+  const accounts = ctx.accounts || [];
+  const want = args.status && args.status !== 'all' ? args.status : null;
+  const out = accounts
+    .filter((a) => !want || a.status === want)
+    .map((a) => {
+      const accTrades = ctx.trades.filter((t) => String(t.accountId) === String(a.id) && t.executionStatus !== 'Missed');
+      const pnl = accTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+      return {
+        id: a.id,
+        name: a.name,
+        status: a.status,
+        type: a.type,
+        phase: a.phase,
+        result: a.result,
+        initialBalance: a.initialBalance,
+        tradeCount: accTrades.length,
+        netPnl: Number(pnl.toFixed(2)),
+      };
+    });
+  return { count: out.length, accounts: out };
 }
 
 interface FindSimilarArgs {
@@ -424,6 +595,7 @@ export interface ToolContext {
   trades: Trade[];
   preps: DailyPrep[];
   reviews: DailyReview[];
+  accounts?: Account[];
 }
 
 interface RememberArgs {
@@ -501,7 +673,9 @@ export async function executeTool(
       case 'search_history':
         return await searchHistory(args);
       case 'get_stats':
-        return computeStats(ctx.trades, args);
+        return getStats(args, ctx);
+      case 'list_accounts':
+        return listAccounts(args, ctx);
       case 'find_similar_trades':
         return await findSimilarTrades(ctx.trades, args);
       case 'get_recent_context':
@@ -532,12 +706,18 @@ export function describeToolCall(name: string, args: any): string {
     }
     case 'get_stats': {
       const parts = [];
+      if (args?.account) parts.push(`účet ${args.account}`);
       if (args?.instrument) parts.push(args.instrument);
       if (args?.direction) parts.push(args.direction);
       if (args?.session) parts.push(args.session);
+      if (args?.weekday) parts.push(args.weekday);
+      if (args?.tag) parts.push(`#${args.tag}`);
       if (args?.date_from || args?.date_to) parts.push(`${args.date_from || '?'} → ${args.date_to || '?'}`);
+      if (args?.group_by) return `📊 Rozpad statistik dle ${args.group_by}${parts.length ? ` (${parts.join(', ')})` : ''}`;
       return `📊 Počítám statistiky${parts.length ? ` (${parts.join(', ')})` : ''}`;
     }
+    case 'list_accounts':
+      return `🗂️ Načítám účty${args?.status && args.status !== 'all' ? ` (${args.status})` : ''}`;
     case 'find_similar_trades':
       return `🔗 Hledám podobné obchody${args?.trade_id ? ` k ${args.trade_id}` : ''}`;
     case 'get_recent_context':
