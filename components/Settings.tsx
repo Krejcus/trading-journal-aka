@@ -132,6 +132,46 @@ const Toggle = ({ active, onClick, label, desc, isDark }: any) => (
   </div>
 );
 
+// Sjednocený akcentový systém — jeden zdroj pravdy pro barvy chipů, add-lišt a tlačítek.
+// Tailwind potřebuje literální třídy, proto explicitní mapa (žádné dynamické stringy).
+const ACCENT: Record<string, { dot: string; chipDark: string; chipLight: string; wrap: string; btn: string }> = {
+  indigo:  { dot: '#6366f1', chipDark: 'bg-indigo-500/10 border-indigo-500/20 text-indigo-300 hover:bg-indigo-500 hover:text-white hover:border-transparent', chipLight: 'bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white', wrap: 'bg-indigo-500/5 border-indigo-500/10', btn: 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30' },
+  rose:    { dot: '#f43f5e', chipDark: 'bg-rose-500/10 border-rose-500/20 text-rose-300 hover:bg-rose-500 hover:text-white hover:border-transparent', chipLight: 'bg-rose-50 border-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white', wrap: 'bg-rose-500/5 border-rose-500/10', btn: 'bg-rose-600 hover:bg-rose-500 shadow-rose-600/30' },
+  purple:  { dot: '#a855f7', chipDark: 'bg-purple-500/10 border-purple-500/20 text-purple-300 hover:bg-purple-500 hover:text-white hover:border-transparent', chipLight: 'bg-purple-50 border-purple-100 text-purple-600 hover:bg-purple-600 hover:text-white', wrap: 'bg-purple-500/5 border-purple-500/10', btn: 'bg-purple-600 hover:bg-purple-500 shadow-purple-600/30' },
+  blue:    { dot: '#3b82f6', chipDark: 'bg-blue-500/10 border-blue-500/20 text-blue-300 hover:bg-blue-500 hover:text-white hover:border-transparent', chipLight: 'bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-600 hover:text-white', wrap: 'bg-blue-500/5 border-blue-500/10', btn: 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30' },
+  emerald: { dot: '#10b981', chipDark: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300 hover:bg-emerald-500 hover:text-white hover:border-transparent', chipLight: 'bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-600 hover:text-white', wrap: 'bg-emerald-500/5 border-emerald-500/10', btn: 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30' },
+  orange:  { dot: '#f97316', chipDark: 'bg-orange-500/10 border-orange-500/20 text-orange-300 hover:bg-orange-500 hover:text-white hover:border-transparent', chipLight: 'bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-600 hover:text-white', wrap: 'bg-orange-500/5 border-orange-500/10', btn: 'bg-orange-600 hover:bg-orange-500 shadow-orange-600/30' },
+  teal:    { dot: '#14b8a6', chipDark: 'bg-teal-500/10 border-teal-500/20 text-teal-300 hover:bg-teal-500 hover:text-white hover:border-transparent', chipLight: 'bg-teal-50 border-teal-100 text-teal-600 hover:bg-teal-600 hover:text-white', wrap: 'bg-teal-500/5 border-teal-500/10', btn: 'bg-teal-600 hover:bg-teal-500 shadow-teal-600/30' },
+};
+
+// Sjednocený chip pro krátké štítky (chyby, cíle, HTF, LTF…)
+const Chip = ({ label, accent = 'blue', isDark, onRemove }: { label: string; accent?: string; isDark: boolean; onRemove: () => void }) => {
+  const a = ACCENT[accent] || ACCENT.blue;
+  return (
+    <div className={`group flex items-center gap-2 pl-3.5 pr-2.5 py-1.5 rounded-full border text-[10px] font-black tracking-wide transition-all ${isDark ? a.chipDark : a.chipLight}`}>
+      <span>{label}</span>
+      <button onClick={onRemove} className="opacity-40 group-hover:opacity-100 transition-all"><X size={11} /></button>
+    </div>
+  );
+};
+
+// Sjednocená "add" lišta — stejný radius, padding i tlačítko napříč všemi sekcemi.
+const AddBar = ({ value, onChange, onAdd, placeholder, accent = 'blue', isDark }: { value: string; onChange: (e: any) => void; onAdd: () => void; placeholder: string; accent?: string; isDark: boolean }) => {
+  const a = ACCENT[accent] || ACCENT.blue;
+  return (
+    <div className={`flex gap-2 p-1.5 rounded-2xl border ${a.wrap}`}>
+      <input
+        value={value}
+        onChange={onChange}
+        onKeyDown={e => e.key === 'Enter' && onAdd()}
+        placeholder={placeholder}
+        className={`flex-1 bg-transparent px-4 py-2.5 text-[11px] font-bold outline-none ${isDark ? 'text-white placeholder:text-slate-500' : 'text-[var(--text-primary)] placeholder:text-slate-400'}`}
+      />
+      <button onClick={onAdd} className={`w-11 h-11 shrink-0 rounded-xl text-white flex items-center justify-center shadow-lg active:scale-90 transition-all ${a.btn}`}><Plus size={20} /></button>
+    </div>
+  );
+};
+
 const Settings: React.FC<SettingsProps> = ({
   theme, userEmotions, setUserEmotions,
   userMistakes, setUserMistakes,
@@ -157,8 +197,6 @@ const Settings: React.FC<SettingsProps> = ({
   const [newEmoLabel, setNewEmoLabel] = useState('');
   const [newRuleLabel, setNewRuleLabel] = useState('');
   const [newRuleType, setNewRuleType] = useState<'ritual' | 'trading'>('ritual');
-  const [newMetricLabel, setNewMetricLabel] = useState('');
-  const [newMetricColor, setNewMetricColor] = useState('#3b82f6');
   const [newStandardGoal, setNewStandardGoal] = useState('');
   const [emojiPickerTarget, setEmojiPickerTarget] = useState<{ goalIdx: number } | null>(null);
 
@@ -255,7 +293,6 @@ const Settings: React.FC<SettingsProps> = ({
   // Handlers
   const addMistake = () => { if (newMistake && !userMistakes.includes(newMistake)) { setUserMistakes([...userMistakes, newMistake]); setNewMistake(''); showToast('Chyba přidána'); } };
   const addEmo = () => { if (newEmoLabel) { setUserEmotions([...userEmotions, { id: Date.now().toString(), label: newEmoLabel, icon: '' }]); setNewEmoLabel(''); showToast('Emoce přidána'); } };
-  const addMetric = () => { if (newMetricLabel.trim()) { setPsychoMetrics([...psychoMetrics, { id: `metric_${Date.now()}`, label: newMetricLabel, color: newMetricColor }]); setNewMetricLabel(''); showToast('Metrika přidána'); } };
   const addIronRule = () => { if (newRuleLabel) { setIronRules([...ironRules, { id: `rule_${Date.now()}`, label: newRuleLabel, type: newRuleType }]); setNewRuleLabel(''); showToast('Pravidlo přidáno'); } };
   const addHtf = () => { if (newHtf && !htfOptions.includes(newHtf)) { setHtfOptions([...htfOptions, newHtf]); setNewHtf(''); showToast('HTF přidána'); } };
   const addLtf = () => { if (newLtf && !ltfOptions.includes(newLtf)) { setLtfOptions([...ltfOptions, newLtf]); setNewLtf(''); showToast('LTF přidána'); } };
@@ -269,8 +306,8 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const tabs = [
-    { id: 'psychology', label: 'Psychologie', icon: Brain, desc: 'Emoce & Metriky' },
-    { id: 'strategy', label: 'Strategie', icon: Target, desc: 'Pravidla & Focus' },
+    { id: 'psychology', label: 'Psychologie', icon: Brain, desc: 'Pravidla, Cíle & Focus' },
+    { id: 'strategy', label: 'Strategie', icon: Target, desc: 'Confluence, Chyby & Emoce' },
     { id: 'market', label: 'Trh', icon: Clock, desc: 'Seance & Čas' },
     { id: 'system', label: 'Systém', icon: Shield, desc: 'Alpha Guardian' },
   ] as const;
@@ -306,68 +343,9 @@ const Settings: React.FC<SettingsProps> = ({
         <div className="space-y-6">
           {activeTab === 'psychology' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <Card isDark={isDark}>
-                  <SectionHeader icon={Activity} title="Metriky Psychiky" subtitle="Posuvníky pro denní audit" color="bg-indigo-600" isDark={isDark} />
-                  <div className="space-y-3 mb-6">
-                    {psychoMetrics.map(m => (
-                      <div key={m.id} className={`flex items-center justify-between p-3.5 rounded-2xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'} group`}>
-                        <div className="flex items-center gap-3">
-                          <div className="w-2.5 h-2.5 rounded-full shadow-[0_0_8px_currentColor]" style={{ color: m.color, backgroundColor: m.color }} />
-                          <span className="text-[10px] font-black tracking-widest">{m.label}</span>
-                        </div>
-                        <button onClick={() => setItemToDelete({ id: m.id, type: 'metric' })} className="p-2 text-slate-500 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex gap-2 p-1.5 rounded-[22px] bg-indigo-500/5 border border-indigo-500/10">
-                    <input value={newMetricLabel} onChange={e => setNewMetricLabel(e.target.value)} onKeyDown={e => e.key === 'Enter' && addMetric()} placeholder="Název metriky..." className="flex-1 bg-transparent px-4 py-2 text-[10px] font-bold outline-none" />
-                    <input type="color" value={newMetricColor} onChange={e => setNewMetricColor(e.target.value)} className="w-10 h-10 rounded-xl bg-transparent border-0 cursor-pointer p-0" />
-                    <button onClick={addMetric} className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-500 shadow-lg active:scale-90 transition-all"><Plus size={20} /></button>
-                  </div>
-                </Card>
-
-                <Card isDark={isDark}>
-                  <SectionHeader icon={AlertOctagon} title="Katalog Chyb" subtitle="Identifikace slabých stránek" color="bg-rose-600" isDark={isDark} />
-                  <div className="flex flex-wrap gap-2 mb-6 max-h-[160px] overflow-y-auto custom-scrollbar pr-2">
-                    {userMistakes.map(m => (
-                      <div key={m} className={`group flex items-center gap-2 px-4 py-1.5 rounded-full border text-[9px] font-black transition-all ${isDark ? 'bg-rose-500/5 border-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white' : 'bg-rose-50 border-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white'}`}>
-                        <span>{m}</span>
-                        <button onClick={() => { setUserMistakes(prev => prev.filter(x => x !== m)); showToast('Odstraněno'); }} className="opacity-40 group-hover:opacity-100"><X size={12} /></button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex gap-2 p-1.5 rounded-[22px] bg-rose-500/5 border border-rose-500/10">
-                    <InputField value={newMistake} onChange={(e: any) => setNewMistake(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addMistake()} placeholder="Přidat chybu (např. Overtrading)" isDark={isDark} />
-                    <button onClick={addMistake} className="w-12 rounded-xl bg-rose-600 text-white flex items-center justify-center hover:bg-rose-500 shadow-lg active:scale-95 transition-all"><Plus size={20} /></button>
-                  </div>
-                </Card>
-              </div>
-
-              <Card isDark={isDark}>
-                <SectionHeader icon={Brain} title="Emoční Mapa" subtitle="Vliv emocí na rozhodování" color="bg-purple-600" isDark={isDark} />
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-                  {userEmotions.map(emo => (
-                    <div key={emo.id} className={`p-4 rounded-2xl border flex flex-col items-center justify-center gap-2 text-center group transition-all duration-300 hover:translate-y-[-2px] relative ${isDark ? 'bg-white/5 border-white/5 hover:border-purple-500/40 hover:bg-purple-500/5' : 'bg-slate-50 border-slate-100 hover:shadow-md'}`}>
-                      <div className="w-1.5 h-1.5 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
-                      <span className="text-[10px] font-black tracking-tight text-slate-400 group-hover:text-purple-400">{emo.label}</span>
-                      <button onClick={() => { setUserEmotions(prev => prev.filter(e => e.id !== emo.id)); showToast('Odstraněno'); }} className="absolute top-2 right-2 p-1 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><X size={10} /></button>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex gap-2 max-w-md mx-auto p-1.5 rounded-[22px] bg-purple-500/5 border border-purple-500/10">
-                  <InputField value={newEmoLabel} onChange={(e: any) => setNewEmoLabel(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addEmo()} placeholder="Nová emoce..." isDark={isDark} />
-                  <button onClick={addEmo} className="px-6 rounded-xl bg-purple-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-purple-500 shadow-lg active:scale-95 transition-all">Přidat</button>
-                </div>
-              </Card>
-            </div>
-          )}
-
-          {activeTab === 'strategy' && (
-            <div className="space-y-6">
               <Card isDark={isDark}>
                 <SectionHeader icon={ShieldCheck} title="Železná Pravidla" subtitle="Tvůj denní kodex disciplíny" color="bg-blue-600" isDark={isDark} />
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 mb-6">
                   {ironRules.map(rule => {
                     // Parse label — detekce typu (checklist 📋 / experiment ⏱ / standard rule)
                     const label = rule.label || '';
@@ -412,24 +390,14 @@ const Settings: React.FC<SettingsProps> = ({
                     const Icon = isChecklist ? FileText : isExperiment ? Zap : (rule.type === 'ritual' ? Zap : ShieldAlert);
 
                     return (
-                    <div key={rule.id} className={`relative p-5 rounded-[24px] border group transition-all ${isDark ? 'bg-white/5 border-white/5 hover:border-blue-500/30' : 'bg-slate-50 border-slate-100 hover:shadow-lg'}`}>
-                      <div className="flex items-start gap-4">
-                        <div className={`w-12 h-12 shrink-0 rounded-2xl flex items-center justify-center shadow-lg text-white ${accentBg}`}>
-                          <Icon size={20} />
+                    <div key={rule.id} className={`relative p-3.5 rounded-2xl border group transition-all ${isDark ? 'bg-white/5 border-white/5 hover:border-blue-500/30' : 'bg-slate-50 border-slate-100 hover:shadow-lg'}`}>
+                      <div className="flex items-start gap-3">
+                        <div className={`w-9 h-9 shrink-0 rounded-xl flex items-center justify-center shadow-md text-white ${accentBg}`}>
+                          <Icon size={16} />
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-black tracking-tight mb-1.5">{title}</p>
-                          {isChecklist && items.length > 0 && (
-                            <ul className="space-y-1 mb-2 pl-1">
-                              {items.map((item, i) => (
-                                <li key={i} className="text-[11px] flex items-start gap-1.5 leading-snug">
-                                  <span className="text-purple-500/60 shrink-0 font-mono mt-0.5">▢</span>
-                                  <span className={isDark ? 'text-slate-300' : 'text-slate-700'}>{item}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                          <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex-1 min-w-0 pr-6">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="text-[11px] font-black tracking-tight leading-tight">{title}</p>
                             <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${accentChip}`}>
                               {typeLabel}
                             </span>
@@ -438,25 +406,41 @@ const Settings: React.FC<SettingsProps> = ({
                                 ⏱ {duration}
                               </span>
                             )}
-                            <div className="w-1 h-1 rounded-full bg-slate-600" />
-                            <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">
-                              {isExperiment ? 'Time-boxed' : isChecklist ? 'Pre-trade' : 'Unbreakable'}
-                            </span>
                           </div>
+                          {isChecklist && items.length > 0 && (
+                            <ul className="space-y-0.5 mt-1.5 pl-0.5">
+                              {items.map((item, i) => (
+                                <li key={i} className="text-[10px] flex items-start gap-1.5 leading-snug">
+                                  <span className="text-purple-500/60 shrink-0 font-mono mt-px">▢</span>
+                                  <span className={isDark ? 'text-slate-300' : 'text-slate-700'}>{item}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                         </div>
                       </div>
-                      <button onClick={() => setItemToDelete({ id: rule.id, type: 'rule' })} className="absolute top-4 right-4 p-2 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={14} /></button>
+                      <button onClick={() => setItemToDelete({ id: rule.id, type: 'rule' })} className="absolute top-2.5 right-2.5 p-1.5 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={13} /></button>
                     </div>);
                   })}
                 </div>
-                <div className="flex flex-col sm:flex-row gap-3 p-2 rounded-[28px] bg-blue-500/5 border border-blue-500/10">
+                <div className="flex flex-col sm:flex-row gap-2 p-1.5 rounded-2xl bg-blue-500/5 border border-blue-500/10">
                   <InputField value={newRuleLabel} onChange={(e: any) => setNewRuleLabel(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addIronRule()} placeholder="Nadefinuj nové pravidlo..." isDark={isDark} />
-                  <select value={newRuleType} onChange={e => setNewRuleType(e.target.value as any)} className={`px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+                  <select value={newRuleType} onChange={e => setNewRuleType(e.target.value as any)} className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
                     <option value="ritual">Rituál</option>
                     <option value="trading">Pravidlo</option>
                   </select>
-                  <button onClick={addIronRule} className="px-8 py-3 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-blue-600/40 hover:bg-blue-500 transition-all">Přidat Pravidlo</button>
+                  <button onClick={addIronRule} className="px-8 py-3 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-600/30 hover:bg-blue-500 active:scale-95 transition-all">Přidat Pravidlo</button>
                 </div>
+              </Card>
+
+              <Card isDark={isDark}>
+                <SectionHeader icon={Target} title="Výchozí Cíle Dne" subtitle="Automaticky předvyplněno v deníku" color="bg-orange-600" isDark={isDark} />
+                <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
+                  {standardGoals.map(goal => (
+                    <Chip key={goal} label={goal} accent="orange" isDark={isDark} onRemove={() => { setStandardGoals(standardGoals.filter(x => x !== goal)); showToast('Odstraněno'); }} />
+                  ))}
+                </div>
+                <AddBar value={newStandardGoal} onChange={(e: any) => setNewStandardGoal(e.target.value)} onAdd={addStandardGoal} placeholder="Nový výchozí cíl..." accent="orange" isDark={isDark} />
               </Card>
 
               <Card isDark={isDark}>
@@ -552,53 +536,50 @@ const Settings: React.FC<SettingsProps> = ({
                   )}
                 </div>
               </Card>
+            </div>
+          )}
 
-              <Card isDark={isDark}>
-                <SectionHeader icon={Target} title="Výchozí Cíle Dne" subtitle="Automaticky předvyplněno v deníku" color="bg-orange-600" isDark={isDark} />
-                <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
-                  {standardGoals.map(goal => (
-                    <span key={goal} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black ${isDark ? 'bg-white/5 border-white/10 text-orange-400 group hover:border-orange-500/50' : 'bg-orange-50 border-orange-100 text-orange-600'}`}>
-                      {goal}
-                      <button onClick={() => { setStandardGoals(standardGoals.filter(x => x !== goal)); showToast('Odstraněno'); }} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
-                    </span>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <InputField value={newStandardGoal} onChange={(e: any) => setNewStandardGoal(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addStandardGoal()} placeholder="Nový výchozí cíl..." isDark={isDark} />
-                  <button onClick={addStandardGoal} className="px-6 rounded-xl bg-orange-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-orange-500 shadow-lg active:scale-95 transition-all">Přidat</button>
-                </div>
-              </Card>
-
+          {activeTab === 'strategy' && (
+            <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <Card isDark={isDark}>
-                  <SectionHeader icon={Activity} title="HTF Confluence" subtitle="Vyšší časové rámce" color="bg-emerald-600" isDark={isDark} />
+                  <SectionHeader icon={Activity} title="HTF Confluence" subtitle="Vyšší časové rámce" color="bg-teal-600" isDark={isDark} />
                   <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
                     {htfOptions.map(opt => (
-                      <span key={opt} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black ${isDark ? 'bg-white/5 border-white/10 text-emerald-400 group hover:border-emerald-500/50' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`}>
-                        {opt}
-                        <button onClick={() => { setHtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
-                      </span>
+                      <Chip key={opt} label={opt} accent="teal" isDark={isDark} onRemove={() => { setHtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }} />
                     ))}
                   </div>
-                  <div className="flex gap-2">
-                    <InputField value={newHtf} onChange={(e: any) => setNewHtf(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addHtf()} placeholder="Nová HTF..." isDark={isDark} />
-                    <button onClick={addHtf} className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center hover:bg-emerald-500 shadow-lg active:scale-95 transition-all"><Plus size={24} /></button>
-                  </div>
+                  <AddBar value={newHtf} onChange={(e: any) => setNewHtf(e.target.value)} onAdd={addHtf} placeholder="Nová HTF..." accent="teal" isDark={isDark} />
                 </Card>
                 <Card isDark={isDark}>
                   <SectionHeader icon={Monitor} title="LTF Confluence" subtitle="Potvrzení vstupu" color="bg-blue-600" isDark={isDark} />
                   <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
                     {ltfOptions.map(opt => (
-                      <span key={opt} className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border text-[9px] font-black ${isDark ? 'bg-white/5 border-white/10 text-blue-400 hover:border-blue-500/50' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
-                        {opt}
-                        <button onClick={() => { setLtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }} className="text-rose-500/50 hover:text-rose-500"><X size={12} /></button>
-                      </span>
+                      <Chip key={opt} label={opt} accent="blue" isDark={isDark} onRemove={() => { setLtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }} />
                     ))}
                   </div>
-                  <div className="flex gap-2">
-                    <InputField value={newLtf} onChange={(e: any) => setNewLtf(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addLtf()} placeholder="Nová LTF..." isDark={isDark} />
-                    <button onClick={addLtf} className="w-12 h-12 rounded-xl bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 shadow-lg active:scale-95 transition-all"><Plus size={24} /></button>
+                  <AddBar value={newLtf} onChange={(e: any) => setNewLtf(e.target.value)} onAdd={addLtf} placeholder="Nová LTF..." accent="blue" isDark={isDark} />
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Card isDark={isDark}>
+                  <SectionHeader icon={AlertOctagon} title="Katalog Chyb" subtitle="Identifikace slabých stránek" color="bg-rose-600" isDark={isDark} />
+                  <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
+                    {userMistakes.map(m => (
+                      <Chip key={m} label={m} accent="rose" isDark={isDark} onRemove={() => { setUserMistakes(prev => prev.filter(x => x !== m)); showToast('Odstraněno'); }} />
+                    ))}
                   </div>
+                  <AddBar value={newMistake} onChange={(e: any) => setNewMistake(e.target.value)} onAdd={addMistake} placeholder="Přidat chybu (např. Overtrading)" accent="rose" isDark={isDark} />
+                </Card>
+                <Card isDark={isDark}>
+                  <SectionHeader icon={Brain} title="Emoční Mapa" subtitle="Vliv emocí na rozhodování" color="bg-purple-600" isDark={isDark} />
+                  <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
+                    {userEmotions.map(emo => (
+                      <Chip key={emo.id} label={emo.label} accent="purple" isDark={isDark} onRemove={() => { setUserEmotions(prev => prev.filter(e => e.id !== emo.id)); showToast('Odstraněno'); }} />
+                    ))}
+                  </div>
+                  <AddBar value={newEmoLabel} onChange={(e: any) => setNewEmoLabel(e.target.value)} onAdd={addEmo} placeholder="Nová emoce..." accent="purple" isDark={isDark} />
                 </Card>
               </div>
             </div>
@@ -617,8 +598,8 @@ const Settings: React.FC<SettingsProps> = ({
                     {[0, 3, 6, 9, 12, 15, 18, 21].map(h => <span key={h}>{h}h</span>)}
                     <span>24h</span>
                   </div>
-                  <div className="h-4 w-full bg-slate-900 rounded-full relative shadow-inner flex items-center">
-                    <div className="absolute inset-x-0 h-[1px] bg-white/5 top-1/2" />
+                  <div className={`h-4 w-full rounded-full relative shadow-inner flex items-center ${isDark ? 'bg-black/50' : 'bg-slate-200'}`}>
+                    <div className={`absolute inset-x-0 h-[1px] top-1/2 ${isDark ? 'bg-white/5' : 'bg-white/60'}`} />
                     {sessions.map(s => {
                       const [sh, sm] = (s.startTime || '09:00').split(':').map(Number);
                       const [eh, em] = (s.endTime || '17:00').split(':').map(Number);
@@ -632,23 +613,23 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {sessions.map(s => (
-                    <div key={s.id} className={`p-6 rounded-[32px] border relative group transition-all duration-300 hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:border-indigo-500/40' : 'bg-white border-slate-100 hover:shadow-xl'}`}>
-                      <div className="space-y-5">
-                        <div className="flex items-center gap-3">
+                    <div key={s.id} className={`p-4 rounded-3xl border relative group transition-all duration-300 hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:border-indigo-500/40' : 'bg-white border-slate-100 hover:shadow-xl'}`}>
+                      <div className="space-y-3.5">
+                        <div className="flex items-center gap-2.5">
                           <div className="relative group shrink-0">
                             <input type="color" value={s.color || '#3b82f6'} onChange={e => updateSession(s.id, { color: e.target.value })} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
-                            <div className="w-8 h-8 rounded-xl border-2 border-white/10 shadow-lg" style={{ backgroundColor: s.color || '#3b82f6' }} />
+                            <div className="w-7 h-7 rounded-lg border-2 border-white/10 shadow-lg" style={{ backgroundColor: s.color || '#3b82f6' }} />
                           </div>
-                          <input value={s.name} onChange={e => updateSession(s.id, { name: e.target.value })} className={`flex-1 bg-transparent text-sm font-black tracking-tighter outline-none border-b border-transparent focus:border-indigo-500 py-1 transition-all ${isDark ? 'text-white' : 'text-slate-900'}`} />
+                          <input value={s.name} onChange={e => updateSession(s.id, { name: e.target.value })} className={`flex-1 bg-transparent text-sm font-black tracking-tight outline-none border-b border-transparent focus:border-indigo-500 py-0.5 transition-all ${isDark ? 'text-white' : 'text-slate-900'}`} />
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-1.5">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
                             <label className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Start Time</label>
                             <input type="time" value={s.startTime} onChange={e => updateSession(s.id, { startTime: e.target.value })} className={`w-full px-3 py-2 rounded-xl text-xs font-bold ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`} />
                           </div>
-                          <div className="space-y-1.5">
+                          <div className="space-y-1">
                             <label className="text-[8px] font-black uppercase text-slate-500 tracking-widest">End Time</label>
                             <input type="time" value={s.endTime} onChange={e => updateSession(s.id, { endTime: e.target.value })} className={`w-full px-3 py-2 rounded-xl text-xs font-bold ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`} />
                           </div>
