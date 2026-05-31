@@ -69,6 +69,7 @@ import {
 
 import { supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
+import MorningBriefBanner from './components/MorningBriefBanner';
 
 const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
 
@@ -2851,6 +2852,16 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <React.Suspense fallback={<div className="flex-1" />}>
+                  {activePage === 'dashboard' && loadedUserId && (
+                    <MorningBriefBanner
+                      userId={loadedUserId}
+                      theme={theme}
+                      onOpenCoach={(prompt) => {
+                        setAiInitialPrompt(prompt);
+                        setActivePage('ai');
+                      }}
+                    />
+                  )}
                   {activePage === 'dashboard' && (
                     <Dashboard
                       stats={filteredStats}

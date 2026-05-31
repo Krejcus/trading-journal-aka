@@ -147,6 +147,10 @@ export const COACH_TOOLS = [
             'Alternative: free-text description of the setup to match (e.g. "NQ Long FVG retest after BOS at 21000").',
         },
         limit: { type: 'integer', description: 'Max results (1–20). Default 5.' },
+        account: {
+          type: 'string',
+          description: 'Volitelný filtr — jen obchody na daném účtu (název nebo ID).',
+        },
       },
     },
   },
@@ -160,6 +164,10 @@ export const COACH_TOOLS = [
         limit: {
           type: 'integer',
           description: 'How many of each type. Default 10.',
+        },
+        account: {
+          type: 'string',
+          description: 'Volitelný filtr — jen obchody na daném účtu (název nebo ID). Preps/reviews nejsou per-account, takže ty se nefiltrují.',
         },
       },
     },
@@ -514,11 +522,13 @@ interface FindSimilarArgs {
   trade_id?: string;
   description?: string;
   limit?: number;
+  account?: string;
 }
 
 async function findSimilarTrades(
   allTrades: Trade[],
   args: FindSimilarArgs,
+  accounts: Account[] = [],
 ): Promise<{ results: any[]; count: number }> {
   let queryText = args.description;
   if (!queryText && args.trade_id) {
@@ -532,18 +542,32 @@ async function findSimilarTrades(
   const embedding = await embedQueryViaEdge(queryText);
   if (!embedding) return { results: [], count: 0 };
 
+  // Pokud uživatel filtruje účet, načteme víc kandidátů — pak je zúžíme.
+  const accId = args.account ? resolveAccountId(args.account, accounts) : null;
+  const overscan = accId ? 4 : 1;
+  const matchCount = Math.min((args.limit ?? 5) * overscan, 40);
+
   const { data, error } = await supabase.rpc('match_embeddings', {
     query_embedding: embedding,
-    match_count: Math.min(args.limit ?? 5, 20),
+    match_count: matchCount,
     similarity_threshold: 0.3,
     filter_source_types: ['trade'],
   });
   if (error) return { results: [], count: 0 };
 
   // Filter out the reference trade itself if trade_id was provided
-  const filtered = (data || []).filter((r: any) =>
+  let filtered = (data || []).filter((r: any) =>
     !args.trade_id || r.source_id !== String(args.trade_id),
   );
+  // Account post-filter — match returned source_id back to local trades to read accountId.
+  if (accId) {
+    const tradeById = new Map(allTrades.map(t => [String(t.id), t]));
+    filtered = filtered.filter((r: any) => {
+      const t = tradeById.get(String(r.source_id));
+      return t && String(t.accountId) === accId;
+    });
+  }
+  filtered = filtered.slice(0, args.limit ?? 5);
   return { results: filtered, count: filtered.length };
 }
 
@@ -552,8 +576,12 @@ function getRecentContext(
   allPreps: DailyPrep[],
   allReviews: DailyReview[],
   limit = 10,
+  accounts: Account[] = [],
+  accountFilter?: string,
 ) {
-  const sortedTrades = [...allTrades]
+  const accId = accountFilter ? resolveAccountId(accountFilter, accounts) : null;
+  const tradesPool = accId ? allTrades.filter(t => String(t.accountId) === accId) : allTrades;
+  const sortedTrades = [...tradesPool]
     .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
     .slice(0, limit);
   const sortedPreps = [...allPreps].sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
@@ -562,6 +590,7 @@ function getRecentContext(
     .slice(0, limit);
 
   return {
+    accountFilter: accountFilter && !accId ? `nematched: "${accountFilter}"` : (accountFilter || undefined),
     recentTrades: sortedTrades.map((t) => ({
       id: t.id,
       date: t.date,
@@ -677,9 +706,9 @@ export async function executeTool(
       case 'list_accounts':
         return listAccounts(args, ctx);
       case 'find_similar_trades':
-        return await findSimilarTrades(ctx.trades, args);
+        return await findSimilarTrades(ctx.trades, args, ctx.accounts || []);
       case 'get_recent_context':
-        return getRecentContext(ctx.trades, ctx.preps, ctx.reviews, args?.limit);
+        return getRecentContext(ctx.trades, ctx.preps, ctx.reviews, args?.limit, ctx.accounts || [], args?.account);
       case 'remember':
         return await rememberHandler(args);
       case 'recall_memory':
@@ -719,9 +748,9 @@ export function describeToolCall(name: string, args: any): string {
     case 'list_accounts':
       return `🗂️ Načítám účty${args?.status && args.status !== 'all' ? ` (${args.status})` : ''}`;
     case 'find_similar_trades':
-      return `🔗 Hledám podobné obchody${args?.trade_id ? ` k ${args.trade_id}` : ''}`;
+      return `🔗 Hledám podobné obchody${args?.trade_id ? ` k ${args.trade_id}` : ''}${args?.account ? ` (účet ${args.account})` : ''}`;
     case 'get_recent_context':
-      return `📋 Načítám poslední obchody`;
+      return `📋 Načítám poslední obchody${args?.account ? ` (účet ${args.account})` : ''}`;
     case 'remember':
       return `🧠 Ukládám si do paměti${args?.type ? ` (${args.type})` : ''}`;
     case 'recall_memory':

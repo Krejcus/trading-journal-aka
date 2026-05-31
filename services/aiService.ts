@@ -754,8 +754,8 @@ Data nástroje:
 - **search_history(query, source_types?, date_from?, date_to?, limit?)** — sémantické vyhledání v obchodech / přípravách / reviews.
 - **get_stats(date_from?, date_to?, instrument?, direction?, session?, mistakes_contain?, account?, tag?, weekday?, min_r?, max_r?, include_missed?, group_by?)** — agregované statistiky (winrate, PnL, profit factor, avg R, top chyby). Filtruj podle ÚČTU (account = název/ID), tagu, chyby, dne v týdnu (weekday), R-rozsahu. **group_by** (account|instrument|direction|session|weekday|tag|mistake|outcome) vrátí rozpad po skupinách seřazený dle PnL — použij pro "který den/účet/setup je nejlepší/nejhorší".
 - **list_accounts(status?)** — VŠECHNY účty (i spálené/neaktivní) se stavem, fází, výsledkem (Passed/Failed), P&L a počtem obchodů. Pro "kolik mám účtů", "který jsem spálil", nebo než budeš filtrovat podle účtu.
-- **find_similar_trades(trade_id? OR description?, limit?)** — sémanticky podobné obchody.
-- **get_recent_context(limit?)** — poslední trades/preps/reviews pro vágní dotazy.
+- **find_similar_trades(trade_id? OR description?, limit?, account?)** — sémanticky podobné obchody, lze zúžit na konkrétní účet.
+- **get_recent_context(limit?, account?)** — poslední trades/preps/reviews pro vágní dotazy; s "account" filtruje obchody na daný účet (preps/reviews jsou globální).
 
 Paměťové nástroje (DLOUHODOBÁ PAMĚŤ):
 - **remember(type, content, importance?, memory_date?, key?, value?)** — ulož trvalý insight. type=observation pro vzorce, episode pro události, fact/preference pro statické pravdy (s key+value).
@@ -803,12 +803,19 @@ ${tradesText}`;
     for (let iter = 0; iter < MAX_ITER; iter++) {
       const body: any = {
         model: 'claude-sonnet-4-5',
-        max_tokens: 4096,
+        max_tokens: 12000, // bump → thinking budget (8k) + final answer + tool args
         system: systemPrompt,
         messages: apiMessages,
         stream: true,
       };
-      if (useTools) body.tools = COACH_TOOLS;
+      if (useTools) {
+        body.tools = COACH_TOOLS;
+        // Interleaved thinking — Claude může přemýšlet MEZI tool calls v rámci
+        // jednoho assistant turn. Stojí to víc tokenů (myšlenkové tokeny se
+        // účtují), ale dramaticky zlepší kvalitu komplexních analýz.
+        // Edge funkce posílá `anthropic-beta: interleaved-thinking-2025-05-14`.
+        body.thinking = { type: 'enabled', budget_tokens: 8000 };
+      }
 
       // Go through the Supabase Edge Function proxy so the Anthropic API key
       // never leaves the server. JWT-authenticated requests only.
@@ -834,10 +841,13 @@ ${tradesText}`;
       let stopReason: string | null = null;
 
       // Content blocks for the assistant message we're streaming.
-      // Each block is either text or tool_use; tool_use accumulates partial_json.
+      // text → user-visible answer, tool_use → tool invocation, thinking →
+      // interleaved reasoning (must be passed back verbatim on tool_use rounds
+      // or Anthropic returns 400 — context-integrity check).
       type Block =
         | { type: 'text'; text: string }
-        | { type: 'tool_use'; id: string; name: string; jsonStr: string };
+        | { type: 'tool_use'; id: string; name: string; jsonStr: string }
+        | { type: 'thinking'; thinking: string; signature: string };
       const blocks: Block[] = [];
 
       while (true) {
@@ -860,6 +870,13 @@ ${tradesText}`;
               blocks[event.index] = { type: 'text', text: '' };
             } else if (cb?.type === 'tool_use') {
               blocks[event.index] = { type: 'tool_use', id: cb.id, name: cb.name, jsonStr: '' };
+            } else if (cb?.type === 'thinking') {
+              blocks[event.index] = { type: 'thinking', thinking: '', signature: '' };
+              // UI hint — můžeme říct uživateli, že agent přemýšlí. Levné u onToolUse,
+              // protože sem už chodí krátké statusy ("📊 Počítám statistiky").
+              if (options.onToolUse) {
+                try { options.onToolUse('💭 Myslím…'); } catch { /* no-op */ }
+              }
             }
           } else if (event.type === 'content_block_delta') {
             const blk = blocks[event.index];
@@ -871,6 +888,12 @@ ${tradesText}`;
               onChunk(chunk);
             } else if (event.delta?.type === 'input_json_delta' && blk.type === 'tool_use') {
               blk.jsonStr += event.delta.partial_json || '';
+            } else if (event.delta?.type === 'thinking_delta' && blk.type === 'thinking') {
+              blk.thinking += event.delta.thinking || '';
+            } else if (event.delta?.type === 'signature_delta' && blk.type === 'thinking') {
+              // Signature je kryptografický důkaz, že thinking nebylo upravené.
+              // Musí se vrátit beze změny v dalším requestu, jinak Anthropic vrátí 400.
+              blk.signature += event.delta.signature || '';
             }
           } else if (event.type === 'message_delta') {
             if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
@@ -889,9 +912,12 @@ ${tradesText}`;
         return;
       }
 
-      // Tool use: append assistant message with the blocks, execute tools, append tool_result message.
+      // Tool use: append assistant message with the blocks (including thinking,
+      // verbatim with signature — Anthropic vyžaduje integritu kontextu),
+      // execute tools, append tool_result message.
       const assistantContent: any[] = blocks.map(b => {
         if (b.type === 'text') return { type: 'text', text: b.text };
+        if (b.type === 'thinking') return { type: 'thinking', thinking: b.thinking, signature: b.signature };
         let input: any = {};
         try { input = b.jsonStr ? JSON.parse(b.jsonStr) : {}; } catch { input = {}; }
         return { type: 'tool_use', id: b.id, name: b.name, input };

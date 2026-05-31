@@ -2,7 +2,8 @@
   "exclude": [
     "backups",
     "node_modules",
-    "dist"
+    "dist",
+    "supabase/functions"
   ],
   "compilerOptions": {
     "target": "ES2022",
