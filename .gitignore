@@ -34,3 +34,9 @@ backups/
 previews/
 *.zip
 migrate-screenshots.mjs
+
+# Local MCP config (contains secrets)
+.mcp.json
+
+# Local Claude Code config (per-user, may contain secrets)
+.claude/settings.local.json
