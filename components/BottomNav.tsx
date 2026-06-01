@@ -11,9 +11,11 @@ interface BottomNavProps {
   theme: 'dark' | 'light' | 'oled';
   userRole?: UserRole;
   onLockedFeature?: (featureId: string) => void;
+  /** Počet importovaných obchodů k doplnění — malý glass badge u Historie. */
+  enrichCount?: number;
 }
 
-const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrade, theme, userRole, onLockedFeature }) => {
+const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrade, theme, userRole, onLockedFeature, enrichCount = 0 }) => {
   const [moreOpen, setMoreOpen] = useState(false);
   const isDark = theme !== 'light';
 
@@ -103,6 +105,9 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
                 <div className="relative p-1.5 rounded-xl transition-colors">
                   <Icon size={20} strokeWidth={isActive ? 2 : 1.8} />
                   {locked && <Lock size={9} className="absolute -top-0.5 -right-0.5 text-amber-400/80 bg-[var(--bg-page)] rounded-full p-0.5" />}
+                  {item.id === 'history' && enrichCount > 0 && (
+                    <span className="absolute -top-1.5 -left-1.5 min-w-[15px] h-[15px] px-1 rounded-full border border-amber-500/60 text-amber-500 text-[8px] font-black flex items-center justify-center">{enrichCount}</span>
+                  )}
                 </div>
                 <span className={`text-[9px] font-bold uppercase tracking-wider ${isActive ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
               </button>

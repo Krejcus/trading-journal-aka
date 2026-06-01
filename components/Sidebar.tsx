@@ -38,6 +38,8 @@ interface SidebarProps {
     onOpenProfile: () => void;
     onNavigate?: (page: string) => void;
     onLockedFeature?: (featureId: string) => void;
+    /** Počet importovaných obchodů k doplnění — malý glass badge u Historie. */
+    enrichCount?: number;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -53,7 +55,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     onLogout,
     onOpenProfile,
     onNavigate,
-    onLockedFeature
+    onLockedFeature,
+    enrichCount = 0
 }) => {
     const lang = user.language || 'cs';
     const [isHovered, setIsHovered] = useState(false);
@@ -240,7 +243,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                                     className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto' : 'px-6 mx-2'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
                                     title={!isExpanded ? item.label + (locked ? ' (uzamčeno)' : '') : ''}
                                 >
-                                    <Icon size={16} className={`shrink-0 ${isActive ? (isDark ? 'text-white' : 'text-[var(--text-primary)]') : 'text-current'}`} />
+                                    <span className="relative shrink-0 flex">
+                                        <Icon size={16} className={`shrink-0 ${isActive ? (isDark ? 'text-white' : 'text-[var(--text-primary)]') : 'text-current'}`} />
+                                        {item.id === 'history' && enrichCount > 0 && (
+                                            <span className="absolute -top-2 -right-2 min-w-[14px] h-[14px] px-0.5 rounded-full border border-amber-500/60 text-amber-500 text-[8px] font-black flex items-center justify-center bg-[var(--bg-page)]">{enrichCount}</span>
+                                        )}
+                                    </span>
                                     <AnimatePresence>
                                         {isExpanded && (
                                             <motion.span
