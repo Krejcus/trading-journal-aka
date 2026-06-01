@@ -196,7 +196,10 @@ const Settings: React.FC<SettingsProps> = ({
   const [newMistake, setNewMistake] = useState('');
   const [newEmoLabel, setNewEmoLabel] = useState('');
   const [newRuleLabel, setNewRuleLabel] = useState('');
-  const [newRuleType, setNewRuleType] = useState<'ritual' | 'trading'>('ritual');
+  // 'experiment' je UI volba — ukládá se jako trading rule s prefixem ⏱ [duration]
+  // (konzistentní s tím, jak experiment přidává AI Coach).
+  const [newRuleType, setNewRuleType] = useState<'ritual' | 'trading' | 'experiment'>('ritual');
+  const [newRuleDuration, setNewRuleDuration] = useState<'1w' | '2w' | '1m'>('2w');
   const [newStandardGoal, setNewStandardGoal] = useState('');
   const [emojiPickerTarget, setEmojiPickerTarget] = useState<{ goalIdx: number } | null>(null);
 
@@ -293,7 +296,16 @@ const Settings: React.FC<SettingsProps> = ({
   // Handlers
   const addMistake = () => { if (newMistake && !userMistakes.includes(newMistake)) { setUserMistakes([...userMistakes, newMistake]); setNewMistake(''); showToast('Chyba přidána'); } };
   const addEmo = () => { if (newEmoLabel) { setUserEmotions([...userEmotions, { id: Date.now().toString(), label: newEmoLabel, icon: '' }]); setNewEmoLabel(''); showToast('Emoce přidána'); } };
-  const addIronRule = () => { if (newRuleLabel) { setIronRules([...ironRules, { id: `rule_${Date.now()}`, label: newRuleLabel, type: newRuleType }]); setNewRuleLabel(''); showToast('Pravidlo přidáno'); } };
+  const addIronRule = () => {
+    if (!newRuleLabel) return;
+    // Experiment = trading rule s prefixem ⏱ [duration] (parsuje se zpět v render logice).
+    const isExp = newRuleType === 'experiment';
+    const label = isExp ? `⏱ [${newRuleDuration}] ${newRuleLabel}` : newRuleLabel;
+    const type: 'ritual' | 'trading' = newRuleType === 'ritual' ? 'ritual' : 'trading';
+    setIronRules([...ironRules, { id: `rule_${Date.now()}`, label, type }]);
+    setNewRuleLabel('');
+    showToast(isExp ? 'Experiment přidán' : 'Pravidlo přidáno');
+  };
   const addHtf = () => { if (newHtf && !htfOptions.includes(newHtf)) { setHtfOptions([...htfOptions, newHtf]); setNewHtf(''); showToast('HTF přidána'); } };
   const addLtf = () => { if (newLtf && !ltfOptions.includes(newLtf)) { setLtfOptions([...ltfOptions, newLtf]); setNewLtf(''); showToast('LTF přidána'); } };
   const addStandardGoal = () => { if (newStandardGoal && !standardGoals.includes(newStandardGoal)) { setStandardGoals([...standardGoals, newStandardGoal]); setNewStandardGoal(''); showToast('Cíl přidán'); } };
@@ -428,8 +440,16 @@ const Settings: React.FC<SettingsProps> = ({
                   <select value={newRuleType} onChange={e => setNewRuleType(e.target.value as any)} className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
                     <option value="ritual">Rituál</option>
                     <option value="trading">Pravidlo</option>
+                    <option value="experiment">Experiment</option>
                   </select>
-                  <button onClick={addIronRule} className="px-8 py-3 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-600/30 hover:bg-blue-500 active:scale-95 transition-all">Přidat Pravidlo</button>
+                  {newRuleType === 'experiment' && (
+                    <select value={newRuleDuration} onChange={e => setNewRuleDuration(e.target.value as any)} className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest outline-none border transition-all ${isDark ? 'bg-amber-500/10 border-amber-500/20 text-amber-300' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                      <option value="1w">1 týden</option>
+                      <option value="2w">2 týdny</option>
+                      <option value="1m">1 měsíc</option>
+                    </select>
+                  )}
+                  <button onClick={addIronRule} className="px-8 py-3 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-600/30 hover:bg-blue-500 active:scale-95 transition-all">{newRuleType === 'experiment' ? 'Přidat Experiment' : newRuleType === 'ritual' ? 'Přidat Rituál' : 'Přidat Pravidlo'}</button>
                 </div>
               </Card>
 
