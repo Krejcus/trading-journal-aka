@@ -5,7 +5,7 @@ import {
   X, ZoomIn, ChevronLeft, ChevronRight, TrendingUp, TrendingDown,
   Calendar, ExternalLink, Moon, Sun, CheckCircle2, XCircle, Target,
   Brain, Star, Loader2, Sparkles, Shield, FlaskConical, ListChecks, Flag, Check,
-  ChevronDown, ChevronUp, BarChart3, BookOpen, FileText,
+  ChevronDown, ChevronUp, BarChart3, BookOpen, FileText, Pencil, Trash2,
 } from 'lucide-react';
 import type { Trade, DailyPrep, DailyReview } from '../types';
 import { stripAllRefs, type AIMessage, type ChartSpec, type SuggestedAction } from '../services/aiService';
@@ -548,6 +548,8 @@ const ActionIcon: React.FC<{ type: SuggestedAction['type']; size?: number }> = (
     case 'experiment': return <FlaskConical size={size} strokeWidth={2.5} />;
     case 'goal': return <Flag size={size} strokeWidth={2.5} />;
     case 'checklist': return <ListChecks size={size} strokeWidth={2.5} />;
+    case 'modify_rule': return <Pencil size={size} strokeWidth={2.5} />;
+    case 'remove_rule': return <Trash2 size={size} strokeWidth={2.5} />;
   }
 };
 
@@ -556,6 +558,8 @@ const ActionTypeLabel: Record<SuggestedAction['type'], string> = {
   experiment: 'Experiment',
   goal: 'Cíl',
   checklist: 'Checklist',
+  modify_rule: 'Úprava pravidla',
+  remove_rule: 'Zrušit pravidlo',
 };
 
 /** Vysvětlí kde se akce uloží — zobrazí se jako tooltip / inline hint pod tlačítkem. */
@@ -564,6 +568,8 @@ const ActionDestinationHint: Record<SuggestedAction['type'], string> = {
   experiment: 'Time-boxed pravidlo v Settings → Iron Rules',
   goal: 'Uloží se do Goals',
   checklist: 'Uloží se jako Iron Rule s odrážkami v Settings → Pravidla',
+  modify_rule: 'Změní existující pravidlo v Settings → Iron Rules',
+  remove_rule: 'Odebere pravidlo ze Settings → Iron Rules',
 };
 
 export const ActionPanel: React.FC<{
@@ -597,13 +603,17 @@ export const ActionPanel: React.FC<{
         // (b) přežije reload — pravidlo zůstává v Supabase, načte se zpět.
         // U checklistu porovnáváme jen prefix (text může mít multi-line items).
         const label = persistedLabel(action);
-        const persistedMatch = existingLabels
+        // modify_rule/remove_rule cílí existující pravidlo — "applied" řešíme jen přes
+        // session click (persistedMatch by mátl: u modify je label nový text, u remove naopak).
+        const isRuleEdit = action.type === 'modify_rule' || action.type === 'remove_rule';
+        const persistedMatch = !isRuleEdit && existingLabels
           ? (action.type === 'checklist'
               ? Array.from(existingLabels).some(l => l.startsWith(label))
               : existingLabels.has(label))
           : false;
         const applied = appliedIds.includes(i) || persistedMatch;
-        const sev = action.severity || 'standard';
+        // remove_rule je vždy destruktivní → červené, bez ohledu na severity.
+        const sev = action.type === 'remove_rule' ? 'critical' : (action.severity || 'standard');
         const severityClasses = sev === 'critical'
           ? 'border-rose-500/30 bg-rose-500/[0.05]'
           : sev === 'optional'
@@ -639,9 +649,24 @@ export const ActionPanel: React.FC<{
                   </span>
                 )}
               </div>
-              <p className="text-[12px] font-bold text-[var(--text-primary)] leading-snug">
-                {action.label}
-              </p>
+              {action.type === 'modify_rule' && action.oldLabel ? (
+                <div className="space-y-0.5">
+                  <p className="text-[11px] font-medium text-[var(--text-muted)] leading-snug line-through opacity-70">
+                    {action.oldLabel}
+                  </p>
+                  <p className="text-[12px] font-bold text-[var(--text-primary)] leading-snug">
+                    → {action.label}
+                  </p>
+                </div>
+              ) : action.type === 'remove_rule' ? (
+                <p className="text-[12px] font-bold text-[var(--text-primary)] leading-snug line-through opacity-80">
+                  {action.oldLabel || action.label}
+                </p>
+              ) : (
+                <p className="text-[12px] font-bold text-[var(--text-primary)] leading-snug">
+                  {action.label}
+                </p>
+              )}
               {action.items && action.items.length > 0 && (
                 <ul className="mt-2 space-y-0.5">
                   {action.items.map((item, k) => (
@@ -662,8 +687,12 @@ export const ActionPanel: React.FC<{
               {applied ? (
                 <>
                   <Check size={10} strokeWidth={3} />
-                  Přidáno
+                  {action.type === 'modify_rule' ? 'Změněno' : action.type === 'remove_rule' ? 'Zrušeno' : 'Přidáno'}
                 </>
+              ) : action.type === 'modify_rule' ? (
+                <>Změnit</>
+              ) : action.type === 'remove_rule' ? (
+                <>Zrušit</>
               ) : (
                 <>+ Přidat</>
               )}

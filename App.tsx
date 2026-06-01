@@ -64,7 +64,8 @@ import {
   MessageSquare,
   Activity,
   Brain,
-  Shield
+  Shield,
+  Sparkles
 } from 'lucide-react';
 
 import { supabase } from './services/supabase';
@@ -2547,6 +2548,7 @@ const App: React.FC = () => {
             setIsSidebarOpen(false);
           }}
           onLockedFeature={(featureId) => setLockedFeatureModal(featureId)}
+          enrichCount={enrichCount}
         />
       </div>
 
@@ -2557,6 +2559,7 @@ const App: React.FC = () => {
         onAddTrade={handleTryAddTrade}
         theme={theme}
         userRole={currentUser.role}
+        enrichCount={enrichCount}
         onLockedFeature={(featureId) => setLockedFeatureModal(featureId)}
       />
 
@@ -2785,10 +2788,12 @@ const App: React.FC = () => {
                       const prefix = action.type === 'experiment' && action.duration
                         ? `⏱ [${action.duration}] ` : '';
                       const label = `${prefix}${action.label}`;
+                      // type:'trading' je KRITICKÉ — Settings i příprava filtrují pravidla
+                      // podle type. Bez něj pravidlo propadne filtry a je neviditelné.
                       const newRule: IronRule = {
                         id: `rule_${Date.now()}`,
                         label,
-                        isActive: true,
+                        type: 'trading',
                       };
                       setIronRules(prev => [...prev, newRule]);
                       isPreferencesDirty.current = true;
@@ -2813,9 +2818,32 @@ const App: React.FC = () => {
                       const newRule: IronRule = {
                         id: `rule_${Date.now()}`,
                         label: `📋 ${action.label}${itemsText}`,
-                        isActive: true,
+                        type: 'trading',
                       };
                       setIronRules(prev => [...prev, newRule]);
+                      isPreferencesDirty.current = true;
+                      break;
+                    }
+                    case 'modify_rule': {
+                      // Najdi cílené pravidlo: 1) podle targetId (case-insensitive, coach píše
+                      // občas T_SL vs t_sl), 2) fallback podle oldLabel (když ID chybí/nesedí).
+                      const tid = action.targetId?.toLowerCase();
+                      const oldL = action.oldLabel?.trim().toLowerCase();
+                      const matches = (r: IronRule) =>
+                        (tid && r.id.toLowerCase() === tid) ||
+                        (oldL && r.label.trim().toLowerCase().startsWith(oldL));
+                      setIronRules(prev => prev.map(r => matches(r) ? { ...r, label: action.label } : r));
+                      isPreferencesDirty.current = true;
+                      break;
+                    }
+                    case 'remove_rule': {
+                      // Stejná logika cílení jako modify_rule (targetId → fallback oldLabel).
+                      const tid = action.targetId?.toLowerCase();
+                      const oldL = action.oldLabel?.trim().toLowerCase();
+                      const matches = (r: IronRule) =>
+                        (tid && r.id.toLowerCase() === tid) ||
+                        (oldL && r.label.trim().toLowerCase().startsWith(oldL));
+                      setIronRules(prev => prev.filter(r => !matches(r)));
                       isPreferencesDirty.current = true;
                       break;
                     }
@@ -2967,9 +2995,10 @@ const App: React.FC = () => {
                         trades={trades}
                         theme={theme}
                         onAddRule={(rule) => {
-                          // Přidá insight jako nové Iron Rule
-                          const newRule = { id: `rule_${Date.now()}`, label: rule, isActive: true };
-                          setIronRules(prev => [...prev, newRule as any]);
+                          // Přidá insight jako nové Iron Rule (type:'trading' — jinak propadne filtry).
+                          const newRule: IronRule = { id: `rule_${Date.now()}`, label: rule, type: 'trading' };
+                          setIronRules(prev => [...prev, newRule]);
+                          isPreferencesDirty.current = true;
                         }}
                         onAskAI={(prompt) => {
                           // Otevře AI Coach s pre-fill promptem
@@ -3170,26 +3199,6 @@ const App: React.FC = () => {
         )
       }
 
-      {/* Floating tlačítko — skok na nedoplněné importované obchody */}
-      <AnimatePresence>
-        {enrichCount > 0 && (
-          <motion.button
-            key="enrich-fab"
-            initial={{ opacity: 0, scale: 0.8, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.8, y: 20 }}
-            onClick={startEnrichWizard}
-            className="fixed bottom-24 right-5 md:bottom-6 md:right-6 z-[90] flex items-center gap-2 pl-4 pr-5 py-3 rounded-full bg-amber-500 hover:bg-amber-400 text-white font-black text-sm uppercase tracking-wider shadow-2xl shadow-amber-500/40 transition-colors active:scale-95"
-            title="Doplnit screenshoty a konfluence k importovaným obchodům"
-          >
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-60" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white" />
-            </span>
-            Doplnit ({enrichCount})
-          </motion.button>
-        )}
-      </AnimatePresence>
 
       {tradovateImportOpen && (
         <React.Suspense fallback={null}>

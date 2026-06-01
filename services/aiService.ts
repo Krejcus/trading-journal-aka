@@ -69,8 +69,9 @@ export function buildTraderContext(ctx: TraderContext): string {
   ).join('\n');
 
   // ── Iron Rules ──────────────────────────────────────────────────────────
+  // ID uvádíme, aby coach mohl cílit konkrétní pravidlo přes modify_rule/remove_rule.
   const rulesText = ironRules.length > 0
-    ? ironRules.map(r => `[${r.type}] ${r.label}${r.description ? ': ' + r.description : ''}`).join('\n')
+    ? ironRules.map(r => `[id:${r.id}] [${r.type}] ${r.label}${r.description ? ': ' + r.description : ''}`).join('\n')
     : 'Žádná pravidla';
 
   // ── Playbook ────────────────────────────────────────────────────────────
@@ -293,8 +294,8 @@ export type ChartSpec = {
  */
 export interface SuggestedAction {
     /** Type of action (determines what happens on click) */
-    type: 'rule' | 'experiment' | 'goal' | 'checklist';
-    /** Display label (max 80 chars) */
+    type: 'rule' | 'experiment' | 'goal' | 'checklist' | 'modify_rule' | 'remove_rule';
+    /** Display label (max 80 chars). Pro modify_rule = NOVÝ text pravidla. */
     label: string;
     /** Optional duration for time-boxed experiments ("1w", "2w", "1m") */
     duration?: string;
@@ -302,6 +303,10 @@ export interface SuggestedAction {
     severity?: 'critical' | 'standard' | 'optional';
     /** Optional checklist items for type=checklist (pipe-separated in marker) */
     items?: string[];
+    /** Pro modify_rule / remove_rule: ID cíleného Iron Rule (z kontextu coache). */
+    targetId?: string;
+    /** Pro modify_rule / remove_rule: současný text pravidla (pro zobrazení změny). */
+    oldLabel?: string;
 }
 
 export interface ParsedRefs {
@@ -398,7 +403,10 @@ export function parseAllRefs(text: string): ParsedRefs {
   const rawActions = extractJsonMarkers<SuggestedAction>(text, 'ACTION');
   for (const a of rawActions) {
     if (!a || !a.type || !a.label || a.label.length > 120) continue;
-    if (!['rule', 'experiment', 'goal', 'checklist'].includes(a.type)) continue;
+    if (!['rule', 'experiment', 'goal', 'checklist', 'modify_rule', 'remove_rule'].includes(a.type)) continue;
+    // modify_rule/remove_rule musí cílit pravidlo přes targetId NEBO oldLabel
+    // (App handler zkusí targetId a fallback na text). Bez obojího je marker neúplný.
+    if ((a.type === 'modify_rule' || a.type === 'remove_rule') && !a.targetId && !a.oldLabel) continue;
     if (a.items && !Array.isArray(a.items)) a.items = undefined;
     actions.push(a);
   }
@@ -577,6 +585,7 @@ export async function streamAIResponse(
 
   const systemPrompt = `Jsi AI trading coach specializovaný na analýzu výkonu traderů. Komunikuješ v češtině, stručně a konkrétně.
 Máš KOMPLETNÍ přístup ke všem datům tradera — odpovídej vždy na základě jeho skutečných dat.
+Trader se jmenuje Filip. Pokud ho oslovuješ jménem, používej VÝHRADNĚ "Filipe" — NIKDY si nevymýšlej jiné jméno.
 
 === ČASOVÝ KONTEXT (KRITICKÉ) ===
 DNES: ${todayISO} (${weekday})
@@ -698,6 +707,8 @@ Typy (type):
 - **"experiment"** — Time-boxed experiment (rule s expirací). Vyžaduje "duration".
 - **"goal"** — Cíl (přidá se do Weekly Focus / Goals).
 - **"checklist"** — Pre-trade checklist položky. Vyžaduje "items": [...].
+- **"modify_rule"** — ÚPRAVA existujícího pravidla. Vyžaduje "targetId" (id pravidla z kontextu výše) + "label" (NOVÝ text) + "oldLabel" (současný text). Použij když pravidlo chce zpřísnit/přeformulovat (např. limit -$250 → -$200).
+  (Pozn.: mazání pravidel se přes tlačítko nedělá — viz pravidla níže. Smazání jen doporuč textem.)
 
 Severity (volitelné):
 - "critical" — pro kritické leaks (červené tlačítko)
@@ -711,11 +722,16 @@ Příklady:
 [ACTION:{"type":"experiment","label":"1 Loss = Done for London (skip London po prvním lossu)","duration":"2w","severity":"critical"}]
 [ACTION:{"type":"goal","label":"Týdenní cíl: 0 revenge tradů"}]
 [ACTION:{"type":"checklist","label":"Pre-entry po lossu","items":["Mám HTF zónu?","Cena přišla ke mě?","Mám entry model?","Toto je A+ setup?"]}]
+[ACTION:{"type":"modify_rule","targetId":"rule_123","oldLabel":"Daily loss -$250 = konec","label":"Daily loss -$200 = konec","severity":"critical"}]
 
 PRAVIDLA:
 - Generuj 2-5 akcí jen když uživatel reálně potřebuje akci (např. analýza problému, identifikace leak).
 - Pro pure informativní odpovědi (statistika, historie) NEPŘIDÁVEJ akce.
 - Label musí být jednoznačný a stručný (užiavatel ho uvidí jako text tlačítka).
+- Když navrhuješ ÚPRAVU konkrétního pravidla (zpřísnit/přeformulovat), přidej modify_rule marker s "targetId" (z řádku [id:...] v kontextu, malými písmeny) + "oldLabel" (přesný současný text) + "label" (nový text). To dá uživateli tlačítko "Změnit".
+- Když navrhuješ NOVÉ pravidlo, použij rule/experiment/checklist marker.
+- MAZÁNÍ pravidel: NEgeneruj remove_rule markery. Místo toho v textu jasně řekni, KTERÁ pravidla doporučuješ smazat a proč — a dodej, že je uživatel smaže ručně v Nastavení → Pravidla (tam má plnou kontrolu). Mazání přes tlačítko v chatu záměrně neděláme (ochrana proti omylu).
+- Nikdy si targetId nevymýšlej — když pravidlo v kontextu není, nepoužívej modify_rule.
 
 === FOLLOW-UP NÁVRHY (POVINNÉ) ===
 Na konci KAŽDÉ odpovědi přidej **2-3 follow-up návrhy** jako markery:
@@ -868,6 +884,13 @@ ${tradesText}`;
             const cb = event.content_block;
             if (cb?.type === 'text') {
               blocks[event.index] = { type: 'text', text: '' };
+              // Odděl nový text blok od předchozího (po tool callu) prázdným řádkem,
+              // jinak se markdown slije: "…detaily.## Nadpis" → rozbitý render.
+              if (fullText && !fullText.endsWith('\n\n')) {
+                const sep = fullText.endsWith('\n') ? '\n' : '\n\n';
+                fullText += sep;
+                onChunk(sep);
+              }
             } else if (cb?.type === 'tool_use') {
               blocks[event.index] = { type: 'tool_use', id: cb.id, name: cb.name, jsonStr: '' };
             } else if (cb?.type === 'thinking') {
