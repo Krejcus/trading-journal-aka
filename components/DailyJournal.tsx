@@ -551,7 +551,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           rowData.push(`"${notes.replace(/"/g, '""')}"`);
         }
         if (exportFields.pnl) {
-          const dayPnL = groupedTrades.filter(t => t.date.startsWith(r.date)).reduce((s, t) => s + t.pnl, 0);
+          const dayPnL = groupedTrades.filter(t => t.date.startsWith(r.date) && t.executionStatus !== 'Missed').reduce((s, t) => s + t.pnl, 0);
           rowData.push(dayPnL);
         }
         return rowData;
@@ -572,7 +572,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           mdContent += `### Stats\n`;
           if (exportFields.rating) mdContent += `- Rating: ${r.rating || 0}/5\n`;
           if (exportFields.pnl) {
-            const dayPnL = groupedTrades.filter(t => t.date.startsWith(r.date)).reduce((s, t) => s + t.pnl, 0);
+            const dayPnL = groupedTrades.filter(t => t.date.startsWith(r.date) && t.executionStatus !== 'Missed').reduce((s, t) => s + t.pnl, 0);
             mdContent += `- Day PnL: $${dayPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}\n`;
           }
           mdContent += `\n`;
@@ -661,7 +661,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         `;
 
         filteredReviews.forEach((r, idx) => {
-          const dayTrades = groupedTrades.filter(t => t.date.startsWith(r.date));
+          const dayTrades = groupedTrades.filter(t => t.date.startsWith(r.date) && t.executionStatus !== 'Missed');
           const dayPnL = dayTrades.reduce((s, t) => s + t.pnl, 0);
 
           // Add weekly break logic
@@ -771,7 +771,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   };
 
   const weeklyStats = useMemo(() => {
-    const weekTrades = groupedTrades.filter(t => currentWeekInfo.days.includes(t.date.split('T')[0]));
+    const weekTradesAll = groupedTrades.filter(t => currentWeekInfo.days.includes(t.date.split('T')[0]));
+    // Pro počítání P&L vynech missed obchody (nebyly provedeny)
+    const weekTrades = weekTradesAll.filter(t => t.executionStatus !== 'Missed');
     const weekPreps = preps.filter(p => currentWeekInfo.days.includes(p.date));
     const weekReviews = reviews.filter(r => currentWeekInfo.days.includes(r.date));
 
@@ -1389,7 +1391,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             {reviews
               .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
               .map(review => {
-                const dayTrades = groupedTrades.filter(t => t.date.startsWith(review.date));
+                const dayTrades = groupedTrades.filter(t => t.date.startsWith(review.date) && t.executionStatus !== 'Missed');
                 const dayPnl = dayTrades.reduce((s, t) => s + t.pnl, 0);
 
                 return (
@@ -1764,8 +1766,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             </div>
           )}
           {view === 'edit-review' && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start animate-in slide-in-from-right-4 duration-500">
-              {/* --- COLUMN 1: CHECKLISTS & ACTION --- */}
+            <div className="max-w-3xl mx-auto animate-in slide-in-from-right-4 duration-500">
+              {/* Psycho-Cybernetics (Mindset & Emoční Audit) odstraněno — nepoužíváme. */}
               <div className="space-y-6">
                 {/* EXECUTION AUDIT - Compact Grid */}
                 <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}>
@@ -1878,96 +1880,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 </section>
               </div>
 
-              {/* --- COLUMN 2: PSYCHO & REFLECTIONS --- */}
-              <div className="space-y-6">
-                <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border relative overflow-hidden ${theme !== 'light' ? 'bg-indigo-950/10 border-indigo-500/20' : 'bg-indigo-50 border-indigo-200 shadow-sm'}`}>
-                  <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" />
-                  <div className="flex items-center gap-4 mb-6 relative z-10">
-                    <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-500"><Brain size={18} /></div>
-                    <div>
-                      <h3 className="text-lg font-black italic uppercase">PSYCHO-CYBERNETICS</h3>
-                      <p className="text-[8px] font-black uppercase text-indigo-500 tracking-widest">Mindset & Emoční Audit</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-6 relative z-10">
-                    {/* Dynamic Metrics Sliders - Compact 2-col */}
-                    <div className="grid grid-cols-2 gap-3">
-                      {psychoMetrics?.map(metric => {
-                        const value = reviewForm.psycho?.metrics?.[metric.id] || 5;
-                        return (
-                          <div key={metric.id} className={`p-4 rounded-2xl border ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                            <div className="flex justify-between items-center mb-3">
-                              <label className="text-[9px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2">
-                                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: metric.color }} />
-                                {metric.label}
-                              </label>
-                              <span className="text-[10px] font-black text-blue-500">{value}/10</span>
-                            </div>
-                            <input
-                              type="range" min="1" max="10" step="1"
-                              value={value}
-                              onChange={(e) => {
-                                const newMetrics = { ...reviewForm.psycho?.metrics, [metric.id]: Number(e.target.value) };
-                                editReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, metrics: newMetrics } });
-                              }}
-                              className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer ${theme !== 'light' ? 'bg-[var(--bg-card)]' : 'bg-slate-200'}`}
-                              style={{ accentColor: metric.color }}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className={`${labelClass} text-rose-500 text-[9px]`}>Stresory & Spouštěče</label>
-                        <textarea
-                          value={reviewForm.psycho?.stressors || ''}
-                          onChange={(e) => editReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: e.target.value } })}
-                          className={`${inputClass} !h-20 !p-3 resize-none text-[11px]`}
-                          placeholder="Co mě rozhodilo?"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className={`${labelClass} text-emerald-500 text-[9px]`}>Vděčnost & Radost</label>
-                        <textarea
-                          value={reviewForm.psycho?.gratitude || ''}
-                          onChange={(e) => editReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: e.target.value } })}
-                          className={`${inputClass} !h-20 !p-3 resize-none text-[11px]`}
-                          placeholder="Co se povedlo?"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className={`${labelClass} text-[9px]`}>Osobní Deník</label>
-                      <div className="flex gap-2 mb-2">
-                        <input
-                          type="text"
-                          value={quickNote}
-                          onChange={(e) => setQuickNote(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && addQuickNote()}
-                          placeholder="Rychlý zápis..."
-                          className={`${inputClass} flex-1 !h-8 !px-3 text-[11px]`}
-                        />
-                        <button
-                          onClick={addQuickNote}
-                          className="px-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-all font-black uppercase text-[8px]"
-                        >
-                          Zapsat
-                        </button>
-                      </div>
-                      <textarea
-                        value={reviewForm.psycho?.notes || ''}
-                        onChange={(e) => editReviewForm({ ...reviewForm, psycho: { ...reviewForm.psycho!, notes: e.target.value } })}
-                        className={`${inputClass} !h-24 !p-3 resize-none font-mono text-[10px] leading-relaxed`}
-                        placeholder="Proud myšlenek..."
-                      />
-                    </div>
-                  </div>
-                </section>
-              </div>
             </div>
           )}
         </div>

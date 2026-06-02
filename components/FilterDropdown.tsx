@@ -379,27 +379,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   </motion.div>
                 )}
 
-                {historyLayoutMode && setHistoryLayoutMode && (
-                  <motion.div variants={itemVariants}>
-                    <div className={sectionLabelClass}><LayoutGrid size={10} /> Zobrazení</div>
-                    <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
-                      <motion.div
-                        animate={{ x: (historyLayoutMode === 'grid' ? 0 : 100) + '%' }}
-                        transition={{ type: 'spring', stiffness: 400, damping: 35 }}
-                        className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/2)] rounded-lg border ${isDark ? 'bg-white/10 border-white/10' : 'bg-white shadow-sm font-black'}`}
-                      />
-                      {[{ id: 'grid', label: 'Mřížka' }, { id: 'table', label: 'Tabulka' }].map(v => (
-                        <button
-                          key={v.id}
-                          onClick={() => setHistoryLayoutMode(v.id as any)}
-                          className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${historyLayoutMode === v.id ? (isDark ? 'text-white' : 'text-slate-900') : (isDark ? 'text-slate-500 hover:text-slate-400' : 'text-slate-500 hover:text-slate-900')}`}
-                        >
-                          {v.label}
-                        </button>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
+                {/* Zobrazení (Mřížka/Tabulka) přesunuto do kebab menu v TradeHistory toolbaru. */}
               </div>
 
               <motion.div variants={itemVariants}>

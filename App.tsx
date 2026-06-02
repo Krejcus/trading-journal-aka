@@ -1404,7 +1404,9 @@ const App: React.FC = () => {
   useEffect(() => {
     // Načti archivované účty, když uživatel: (a) přepne na archive dashboard,
     // (b) otevře stránku Účty (kvůli zobrazení Hřbitova spálených účtů).
-    const needsArchived = (dashboardMode === 'archive' || activePage === 'accounts');
+    // History/Deník/AI také potřebují, aby se v UI místo "Neznámý účet" objevil
+    // název archivovaného (spáleného) účtu pro jeho staré obchody.
+    const needsArchived = (dashboardMode === 'archive' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai');
     if (needsArchived && session && !isArchivedLoaded) {
       storageService.getArchivedAccounts().then(archived => {
         setArchivedAccounts(archived || []);
@@ -1845,7 +1847,12 @@ const App: React.FC = () => {
   }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone, dashFocusAccount]);
 
   const contextAccounts = useMemo(() => {
-    if (activePage !== 'dashboard') return accounts;
+    // Mimo dashboard (History / Deník / AI) zahrň i archivované (spálené) účty,
+    // aby filter chips a tooltipy ukazovaly jejich název místo "Neznámý účet".
+    if (activePage !== 'dashboard') {
+      const seen = new Set(accounts.map(a => a.id));
+      return [...accounts, ...archivedAccounts.filter(a => !seen.has(a.id))];
+    }
     if (dashboardMode === 'combined') return accounts;
     if (dashboardMode === 'funded') return accounts.filter(a => a.status === 'Active' && ((a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live'));
     if (dashboardMode === 'challenge') return accounts.filter(a => a.status === 'Active' && a.type === 'Funded' && a.phase === 'Challenge');
@@ -3037,7 +3044,7 @@ const App: React.FC = () => {
                     ) : (
                       <TradeHistory
                         trades={filteredDisplayTrades}
-                        accounts={accounts}
+                        accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]}
                         onDelete={handleDeleteTrade}
                         onUpdateTrade={handleUpdateTrade}
                         onClear={handleClearTrades}
@@ -3049,6 +3056,7 @@ const App: React.FC = () => {
                         exchangeRates={exchangeRates}
                         allTrades={trades}
                         viewMode={historyLayoutMode}
+                        setViewMode={setHistoryLayoutMode}
                         enrichSignal={enrichSignal}
                         userMistakes={userMistakes}
                         onImportTradovate={() => {

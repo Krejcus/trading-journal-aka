@@ -468,10 +468,13 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
   const dayStats = useMemo(() => {
     if (trades.length === 0) return null;
-    const pnl = trades.reduce((acc, t) => acc + t.pnl, 0);
-    const wins = trades.filter(t => t.pnl > 0).length;
-    const wr = (wins / trades.length) * 100;
-    return { pnl, wr, count: trades.length };
+    // Missed obchody se nezapočítávají do statistik dne (P&L, WR ani count)
+    const realTrades = trades.filter(t => t.executionStatus !== 'Missed');
+    if (realTrades.length === 0) return null;
+    const pnl = realTrades.reduce((acc, t) => acc + t.pnl, 0);
+    const wins = realTrades.filter(t => t.pnl > 0).length;
+    const wr = (wins / realTrades.length) * 100;
+    return { pnl, wr, count: realTrades.length };
   }, [trades]);
 
   // Group trades into sessions
@@ -499,7 +502,10 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
       const breakdown = sessionBreakdowns?.find(b => b.sessionId === session.id);
       const prepSession = prep?.scenarios?.sessions?.find((s: any) => s.id === session.id);
-      const sessionPnl = sessionTrades.reduce((sum, t) => sum + t.pnl, 0);
+      // Missed obchody se nezapočítávají do session P&L
+      const sessionPnl = sessionTrades
+        .filter(t => t.executionStatus !== 'Missed')
+        .reduce((sum, t) => sum + t.pnl, 0);
 
       return { session, trades: sessionTrades, breakdown, pnl: sessionPnl, prepSession };
     });
@@ -520,25 +526,33 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
     const d = new Date(trade.timestamp || 0);
     const time = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
     const isPlaceholderTime = time === '01:00' || time === '00:00';
+    // Missed obchody: jsou viditelné, ale modré (neutrální) místo green/red,
+    // aby bylo jasné že se nezapočítávají do P&L
+    const isMissed = trade.executionStatus === 'Missed';
+    const dotBg   = isMissed ? 'bg-blue-500'                 : (trade.pnl >= 0 ? 'bg-emerald-500'                                  : 'bg-rose-500');
+    const badgeCl = isMissed ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20'
+                              : (trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                                                : 'bg-rose-500/10 text-rose-500 border border-rose-500/20');
+    const pnlCl   = isMissed ? 'text-blue-400'               : (trade.pnl >= 0 ? 'text-emerald-500'                                : 'text-rose-500');
 
     return (
-      <div className="relative flex items-center">
+      <div className={`relative flex items-center ${isMissed ? 'opacity-80' : ''}`}>
         {/* Timeline Dot */}
-        <div className={`absolute ${isMini ? 'left-4' : 'left-10'} -translate-x-1/2 ${isMini ? 'w-1.5 h-1.5' : 'w-4 h-4'} rounded-full border-2 flex items-center justify-center transition-all duration-500 ${trade.pnl >= 0 ? 'bg-emerald-500 border-black/50' : 'bg-rose-500 border-black/50'}`}>
+        <div className={`absolute ${isMini ? 'left-4' : 'left-10'} -translate-x-1/2 ${isMini ? 'w-1.5 h-1.5' : 'w-4 h-4'} rounded-full border-2 flex items-center justify-center transition-all duration-500 ${dotBg} border-black/50`}>
           {!isMini && !isPlaceholderTime && <div className="absolute -top-6 text-[9px] font-black uppercase text-slate-500 tracking-widest whitespace-nowrap">{time}</div>}
         </div>
 
         <div className={`relative z-[1] w-full ${isMini ? 'pl-7' : 'pl-16'}`}>
-          <div className={`group ${isMini ? padding : 'p-3'} ${rounded} border transition-all hover:shadow-lg ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
+          <div className={`group ${isMini ? padding : 'p-3'} ${rounded} border transition-all hover:shadow-lg ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'} ${isMissed ? 'grayscale-[0.35]' : ''}`}>
             {isMini ? (
               <>
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-1">
-                    <span className={`px-1 py-0.5 rounded-lg text-[6px] md:text-[7px] font-black uppercase ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
-                      {trade.direction}
+                    <span className={`px-1 py-0.5 rounded-lg text-[6px] md:text-[7px] font-black uppercase ${badgeCl}`}>
+                      {isMissed ? 'MISSED' : trade.direction}
                     </span>
                   </div>
-                  <span className={`text-[10px] md:text-xs font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                  <span className={`text-[10px] md:text-xs font-black font-mono ${pnlCl}`}>
                     ${trade.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
                 </div>
@@ -570,8 +584,8 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                 {/* Right: badges + mistakes */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className={`px-2 py-0.5 rounded-lg text-[8px] font-black uppercase ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
-                      {trade.direction}
+                    <span className={`px-2 py-0.5 rounded-lg text-[8px] font-black uppercase ${badgeCl}`}>
+                      {isMissed ? 'MISSED' : trade.direction}
                     </span>
                     <span className="text-[11px] font-black uppercase tracking-tight text-slate-700">{trade.instrument}</span>
                     {trade.accountCount >= 1 && (
@@ -591,10 +605,13 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
 
                 {/* PnL right */}
                 <div className="shrink-0 text-right">
-                  <span className={`text-base font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                  <span className={`text-base font-black font-mono ${pnlCl}`}>
                     ${trade.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </span>
-                  {trade.accountCount >= 1 && (
+                  {isMissed && (
+                    <p className="text-[7px] font-bold text-blue-500 uppercase tracking-tighter">Missed (target)</p>
+                  )}
+                  {!isMissed && trade.accountCount >= 1 && (
                     <p className="text-[7px] font-bold text-slate-500 uppercase tracking-tighter">Suma P&L</p>
                   )}
                 </div>
@@ -940,7 +957,8 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
         {!isMini && trades.length > 0 && (() => {
           const sortedTrades = [...trades].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
           const firstTime = sortedTrades[0]?.timestamp ? new Date(sortedTrades[0].timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' }) : '';
-          const totalPnl = sortedTrades.reduce((s, t) => s + t.pnl, 0);
+          // Missed se nezapočítávají
+          const totalPnl = sortedTrades.filter(t => t.executionStatus !== 'Missed').reduce((s, t) => s + t.pnl, 0);
           const dotColor = totalPnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500';
           return (
             <div className="relative flex items-center">
@@ -955,10 +973,15 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                     const d = new Date(trade.timestamp || 0);
                     const tTime = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
                     const isPlaceholder = tTime === '01:00' || tTime === '00:00';
+                    const isMissed = trade.executionStatus === 'Missed';
+                    const badgeCl = isMissed ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20'
+                                              : (trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                                                                : 'bg-rose-500/10 text-rose-500 border border-rose-500/20');
+                    const pnlCl   = isMissed ? 'text-blue-400' : (trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500');
                     return (
                       <div
                         key={trade.id || idx}
-                        className={`group p-3 ${rounded} border transition-all hover:shadow-lg ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}
+                        className={`group p-3 ${rounded} border transition-all hover:shadow-lg ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'} ${isMissed ? 'grayscale-[0.35] opacity-80' : ''}`}
                       >
                         <div className="flex items-center gap-3">
                           {trade.screenshot && (
@@ -977,8 +1000,8 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                               {!isPlaceholder && (
                                 <span className="text-[8px] font-black font-mono text-slate-500">{tTime}</span>
                               )}
-                              <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
-                                {trade.direction}
+                              <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${badgeCl}`}>
+                                {isMissed ? 'MISSED' : trade.direction}
                               </span>
                               <span className="text-[10px] font-black uppercase tracking-tight text-slate-700">{trade.instrument}</span>
                             </div>
@@ -991,9 +1014,10 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                             )}
                           </div>
                           <div className="shrink-0 text-right">
-                            <span className={`text-sm font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                            <span className={`text-sm font-black font-mono ${pnlCl}`}>
                               ${trade.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </span>
+                            {isMissed && <p className="text-[7px] font-bold text-blue-500 uppercase">Missed</p>}
                           </div>
                         </div>
                       </div>
@@ -1080,12 +1104,20 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                           >
                             <div className="flex items-center gap-2">
                               <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: sessionColor }}>{group.session.name}</span>
-                              {group.trades.length > 0 && (
-                                <span className={`text-[8px] font-black font-mono ${group.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                  {group.pnl >= 0 ? '+' : ''}${group.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                </span>
-                              )}
-                              <span className="text-[8px] text-slate-400">{group.trades.length} trade{group.trades.length !== 1 ? 's' : ''}</span>
+                              {(() => {
+                                const realCount  = group.trades.filter(t => t.executionStatus !== 'Missed').length;
+                                const missedCount = group.trades.length - realCount;
+                                return (
+                                  <>
+                                    {realCount > 0 && (
+                                      <span className={`text-[8px] font-black font-mono ${group.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                        {group.pnl >= 0 ? '+' : ''}${group.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                      </span>
+                                    )}
+                                    <span className="text-[8px] text-slate-400">{realCount} trade{realCount !== 1 ? 's' : ''}{missedCount > 0 ? ` + ${missedCount} missed` : ''}</span>
+                                  </>
+                                );
+                              })()}
                             </div>
                             <ChevronDown size={12} className={`text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
                           </div>
@@ -1223,21 +1255,25 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                               {group.trades.map((trade, tIdx) => {
                                 const d = new Date(trade.timestamp || 0);
                                 const time = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+                                const isMissed = trade.executionStatus === 'Missed';
+                                const dotBg = isMissed ? 'bg-blue-500' : (trade.pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500');
+                                const dirCl = isMissed ? 'bg-blue-500/10 text-blue-500' : (trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500');
+                                const pnlCl = isMissed ? 'text-blue-400' : (trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500');
                                 return (
                                   <div
                                     key={trade.id || tIdx}
                                     className={`flex items-center justify-between px-2 py-1.5 rounded-lg ${
                                       isDark ? 'bg-white/[0.03]' : 'bg-white'
-                                    }`}
+                                    } ${isMissed ? 'opacity-80' : ''}`}
                                   >
                                     <div className="flex items-center gap-1.5">
-                                      <span className={`w-1.5 h-1.5 rounded-full ${trade.pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                      <span className={`w-1.5 h-1.5 rounded-full ${dotBg}`} />
                                       <span className="text-[8px] font-mono text-slate-500">{time}</span>
-                                      <span className={`px-1 py-0.5 rounded text-[6px] font-black uppercase ${
-                                        trade.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
-                                      }`}>{trade.direction}</span>
+                                      <span className={`px-1 py-0.5 rounded text-[6px] font-black uppercase ${dirCl}`}>
+                                        {isMissed ? 'MISSED' : trade.direction}
+                                      </span>
                                     </div>
-                                    <span className={`text-[10px] font-black font-mono ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                    <span className={`text-[10px] font-black font-mono ${pnlCl}`}>
                                       ${trade.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                                     </span>
                                   </div>
@@ -1313,17 +1349,23 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
               </div>
 
               {/* Collapsed — preview */}
-              {!isReviewExpanded && review && (
-                <div className={`mt-3 ${isMini ? 'space-y-1' : 'space-y-3'}`}>
-                  <div className={`${isMini ? 'p-1.5' : 'p-3'} rounded-xl border ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                    <p className="text-[7px] font-black uppercase text-slate-500">PnL</p>
-                    <p className={`${isMini ? 'text-[10px]' : 'text-sm'} font-black font-mono ${dayStats && dayStats.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                      ${dayStats?.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 }) || '0'}
-                    </p>
+              {!isReviewExpanded && review && (() => {
+                const pnl = dayStats?.pnl ?? 0;
+                const hasRealTrades = (dayStats?.count ?? 0) > 0;
+                // Žádný real trade (jen missed nebo nic) → neutrální slate, jinak green/red
+                const pnlColor = !hasRealTrades ? 'text-slate-400' : (pnl >= 0 ? 'text-emerald-500' : 'text-rose-500');
+                return (
+                  <div className={`mt-3 ${isMini ? 'space-y-1' : 'space-y-3'}`}>
+                    <div className={`${isMini ? 'p-1.5' : 'p-3'} rounded-xl border ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
+                      <p className="text-[7px] font-black uppercase text-slate-500">PnL</p>
+                      <p className={`${isMini ? 'text-[10px]' : 'text-sm'} font-black font-mono ${pnlColor}`}>
+                        ${pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </p>
+                    </div>
+                    {isMini && <p className="text-[6px] text-slate-600 font-mono text-right">18:00</p>}
                   </div>
-                  {isMini && <p className="text-[6px] text-slate-600 font-mono text-right">18:00</p>}
-                </div>
-              )}
+                );
+              })()}
               {!isReviewExpanded && !review && (
                 <p className={`mt-2 ${isMini ? 'text-[7px]' : 'text-sm'} text-slate-500 italic`}>Udělej reflexi...</p>
               )}
@@ -1397,83 +1439,10 @@ const TacticalTimeline: React.FC<TacticalTimelineProps> = ({ date, prep, review,
                     </div>
                   )}
 
-                  {/* Psycho-cybernetics */}
-                  {psychoMetrics && psychoMetrics.length > 0 && (
-                    <div>
-                      <div className="flex items-center gap-2 mb-3">
-                        <Brain size={14} className="text-indigo-500" />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Psycho-Cybernetics</span>
-                      </div>
-                      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-                        {psychoMetrics.map(metric => {
-                          const value = reviewForm.psycho?.metrics?.[metric.id] || 5;
-                          return (
-                            <div key={metric.id} className={`p-3 rounded-xl border ${isDark ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                              <div className="flex justify-between items-center mb-2">
-                                <label className="text-[8px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-1.5">
-                                  <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: metric.color }} />
-                                  {metric.label}
-                                </label>
-                                <span className="text-[9px] font-black text-blue-500">{value}/10</span>
-                              </div>
-                              <input
-                                type="range" min="1" max="10" step="1"
-                                value={value}
-                                onChange={(e) => {
-                                  const newMetrics = { ...reviewForm.psycho?.metrics, [metric.id]: Number(e.target.value) };
-                                  editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, metrics: newMetrics } });
-                                }}
-                                className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer ${isDark ? 'bg-[var(--bg-card)]' : 'bg-slate-200'}`}
-                                style={{ accentColor: metric.color }}
-                              />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                  {/* Psycho-Cybernetics odstraněno — nepoužíváme. */}
 
-                  {/* Stressors & Gratitude */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="block text-[9px] font-black uppercase tracking-widest text-rose-500">Stresory & Spouštěče</label>
-                        <VoiceMemoButton
-                          size="sm"
-                          onTranscribed={(t) => {
-                            const cur = reviewForm.psycho?.stressors || '';
-                            const sep = cur.trim().length > 0 ? '\n\n' : '';
-                            editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: cur + sep + t } });
-                          }}
-                        />
-                      </div>
-                      <textarea
-                        value={reviewForm.psycho?.stressors || ''}
-                        onChange={(e) => editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, stressors: e.target.value } })}
-                        className={`w-full h-20 p-3 rounded-xl border text-[11px] resize-none outline-none focus:ring-2 focus:ring-blue-500/20 transition-all ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-slate-300 placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
-                        placeholder="Co mě rozhodilo?"
-                      />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="block text-[9px] font-black uppercase tracking-widest text-emerald-500">Vděčnost & Radost</label>
-                        <VoiceMemoButton
-                          size="sm"
-                          onTranscribed={(t) => {
-                            const cur = reviewForm.psycho?.gratitude || '';
-                            const sep = cur.trim().length > 0 ? '\n\n' : '';
-                            editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: cur + sep + t } });
-                          }}
-                        />
-                      </div>
-                      <textarea
-                        value={reviewForm.psycho?.gratitude || ''}
-                        onChange={(e) => editReviewForm!({ ...reviewForm, psycho: { ...reviewForm.psycho!, gratitude: e.target.value } })}
-                        className={`w-full h-20 p-3 rounded-xl border text-[11px] resize-none outline-none focus:ring-2 focus:ring-blue-500/20 transition-all ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-slate-300 placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
-                        placeholder="Co se povedlo?"
-                      />
-                    </div>
-                  </div>
+                  {/* Stresory & Vděčnost odstraněno — vše se píše rovnou do Osobního Deníku níže.
+                      Stará data zmigrována do `psycho.notes` jako "Stresory: ..." / "Vděčnost: ..." prefixy. */}
 
                   {/* Personal journal */}
                   <div>

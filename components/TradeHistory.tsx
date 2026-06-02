@@ -12,7 +12,8 @@ import {
   ShieldCheck, ShieldAlert, BarChart3, Activity, Zap, Monitor,
   Maximize2, ArrowRight, Gauge, Hash, Ruler, Percent,
   Compass, Hourglass, Cpu, Terminal, Layers, ArrowUpRight, ArrowDownRight,
-  Share2, Check, Copy, LayoutGrid, List, AlertOctagon, Clock, Timer, CheckCircle2, UploadCloud, Sparkles
+  Share2, Check, Copy, LayoutGrid, List, AlertOctagon, Clock, Timer, CheckCircle2, UploadCloud, Sparkles,
+  MoreHorizontal, CheckSquare
 } from 'lucide-react';
 import { tradeNeedsEnrichment } from '../services/tradovateImport';
 
@@ -50,6 +51,7 @@ interface TradeHistoryProps {
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
   allTrades?: Trade[];
   viewMode: 'grid' | 'table';
+  setViewMode?: (mode: 'grid' | 'table') => void;
   pnlDisplayMode?: PnLDisplayMode;
   initialBalance?: number;
   user: User;
@@ -64,7 +66,7 @@ interface TradeHistoryProps {
 const TradeHistory: React.FC<TradeHistoryProps> = ({
   trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
-  viewMode, onImportTradovate, enrichSignal, userMistakes = [],
+  viewMode, setViewMode, onImportTradovate, enrichSignal, userMistakes = [],
 }) => {
   const isDark = theme !== 'light';
   const targetCurrency = user.currency || 'USD';
@@ -98,6 +100,20 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const [bulkTagText, setBulkTagText] = useState('');
   const [bulkTagNotes, setBulkTagNotes] = useState('');
   const [bulkTagMarkDone, setBulkTagMarkDone] = useState(true); // C: defaultně archivovat z fronty
+
+  // Kebab menu (sloučí "Vybrat více" + "Import Tradovate" + budoucí akce)
+  const [kebabOpen, setKebabOpen] = useState(false);
+  const kebabRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!kebabOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (kebabRef.current && !kebabRef.current.contains(e.target as Node)) setKebabOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setKebabOpen(false); };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => { document.removeEventListener('mousedown', onDocClick); document.removeEventListener('keydown', onEsc); };
+  }, [kebabOpen]);
 
   // --- INFINITE SCROLL STATE ---
   const PAGE_SIZE = 20;
@@ -513,25 +529,6 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
       {/* Multi-Select Toolbar */}
       <div className="flex items-center gap-3 mb-4 px-2">
-        <button
-          onClick={() => {
-            if (isMultiSelectMode) {
-              clearSelection();
-            } else {
-              setIsMultiSelectMode(true);
-            }
-          }}
-          className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${
-            isMultiSelectMode
-              ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-              : theme === 'light'
-                ? 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200'
-                : 'bg-slate-700/50 text-slate-300 border border-slate-600/30 hover:bg-slate-600/50'
-          }`}
-        >
-          {isMultiSelectMode ? 'Zrušit výběr' : 'Vybrat více'}
-        </button>
-
         {!isMultiSelectMode && enrichCount > 0 && (
           <button
             onClick={() => setEnrichFilter(v => !v)}
@@ -556,13 +553,95 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           </button>
         )}
 
-        {!isMultiSelectMode && onImportTradovate && (
+        {!isMultiSelectMode && (
+          <div className="ml-auto relative" ref={kebabRef}>
+            <button
+              onClick={() => setKebabOpen(v => !v)}
+              className={`flex items-center justify-center w-9 h-9 rounded-lg transition-all active:scale-95 ${
+                kebabOpen
+                  ? theme === 'light'
+                    ? 'bg-slate-200 text-slate-700'
+                    : 'bg-slate-700 text-slate-100'
+                  : theme === 'light'
+                    ? 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    : 'bg-slate-700/50 text-slate-300 hover:bg-slate-600/50'
+              }`}
+              title="Další akce"
+              aria-label="Další akce"
+            >
+              <MoreHorizontal size={18} />
+            </button>
+
+            <AnimatePresence>
+              {kebabOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4, scale: 0.96 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -4, scale: 0.96 }}
+                  transition={{ duration: 0.12 }}
+                  className={`absolute right-0 mt-2 w-56 rounded-xl shadow-lg border overflow-hidden z-30 ${
+                    theme === 'light'
+                      ? 'bg-white border-slate-200'
+                      : 'bg-slate-800 border-slate-700'
+                  }`}
+                >
+                  {setViewMode && (
+                    <div className={`px-3 pt-3 pb-2 ${theme === 'light' ? 'border-b border-slate-200' : 'border-b border-slate-700'}`}>
+                      <div className={`text-[9px] font-black uppercase tracking-widest mb-1.5 px-1 ${theme === 'light' ? 'text-slate-400' : 'text-slate-500'} flex items-center gap-1.5`}>
+                        <LayoutGrid size={10} /> Zobrazení
+                      </div>
+                      <div className={`flex p-0.5 rounded-lg relative ${theme === 'light' ? 'bg-slate-100' : 'bg-slate-900/60'}`}>
+                        <motion.div
+                          animate={{ x: (viewMode === 'grid' ? 0 : 100) + '%' }}
+                          transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+                          className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/2)] rounded-md ${theme === 'light' ? 'bg-white shadow-sm' : 'bg-slate-700'}`}
+                        />
+                        {([{ id: 'grid', label: 'Mřížka', Icon: LayoutGrid }, { id: 'table', label: 'Tabulka', Icon: List }] as const).map(v => (
+                          <button
+                            key={v.id}
+                            onClick={() => setViewMode(v.id)}
+                            className={`flex-1 relative z-10 py-1.5 rounded-md text-[10px] font-black uppercase tracking-wider transition-colors flex items-center justify-center gap-1.5 ${
+                              viewMode === v.id
+                                ? (theme === 'light' ? 'text-slate-900' : 'text-white')
+                                : (theme === 'light' ? 'text-slate-500' : 'text-slate-400')
+                            }`}
+                          >
+                            <v.Icon size={11} /> {v.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => { setKebabOpen(false); setIsMultiSelectMode(true); }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-semibold text-left transition-colors ${
+                      theme === 'light' ? 'hover:bg-slate-100 text-slate-700' : 'hover:bg-slate-700/60 text-slate-200'
+                    }`}
+                  >
+                    <CheckSquare size={16} className="opacity-70" /> Vybrat více
+                  </button>
+                  {onImportTradovate && (
+                    <button
+                      onClick={() => { setKebabOpen(false); onImportTradovate(); }}
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-semibold text-left transition-colors ${
+                        theme === 'light' ? 'hover:bg-slate-100 text-slate-700' : 'hover:bg-slate-700/60 text-slate-200'
+                      }`}
+                    >
+                      <UploadCloud size={16} className="opacity-70" /> Import Tradovate
+                    </button>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+
+        {isMultiSelectMode && (
           <button
-            onClick={onImportTradovate}
-            className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm transition-all bg-blue-600/90 hover:bg-blue-500 text-white active:scale-95"
-            title="Importovat obchody z Tradovate exportu"
+            onClick={clearSelection}
+            className={`px-4 py-2 rounded-lg font-bold text-sm transition-all bg-cyan-500/20 text-cyan-400 border border-cyan-500/30`}
           >
-            <UploadCloud size={14} /> Import Tradovate
+            Zrušit výběr
           </button>
         )}
 
@@ -612,7 +691,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               : isBE
                 ? 'neon-border-amber neon-glow-amber'
                 : 'neon-border-red neon-glow-red';
-            if (isMissed) glowClass = 'border-l-4 border-blue-500 opacity-60 grayscale-[0.3]';
+            // Missed: stejný pulzující rámeček jako ostatní, ale modrý + lehce zšedlý
+            // (zachová tvar/vzhled karty, jen jasně signalizuje že obchod nebyl proveden)
+            if (isMissed) glowClass = 'neon-border-blue neon-glow-blue grayscale-[0.45] opacity-80';
 
             const pnlColor = isMissed
               ? 'text-blue-400'

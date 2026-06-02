@@ -1137,6 +1137,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
           const endMin = endH * 60 + (endM || 0);
 
           const sessionTrades = trades.filter(t => {
+            if (t.executionStatus === 'Missed') return false; // missed nepočítej do session P&L
             const d = new Date(t.timestamp);
             const tm = d.getHours() * 60 + d.getMinutes();
             return startMin <= endMin ? (tm >= startMin && tm < endMin) : (tm >= startMin || tm < endMin);
