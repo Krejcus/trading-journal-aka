@@ -5,6 +5,7 @@ import { streamAIResponse, buildTraderContext, parseAllRefs, type AIMessage } fr
 import { storageService } from '../services/storageService';
 import { summarizeConversation } from '../services/coachMemoryService';
 import { MessageBubble, type ExtendedMessage } from './AICards';
+import ConfirmationModal from './ConfirmationModal';
 import TradeDetailModal from './TradeDetailModal';
 import VoiceMemoButton from './VoiceMemoButton';
 
@@ -122,6 +123,9 @@ const AICoachPage: React.FC<Props> = ({
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
+  // Warning modal — pokud user mění konverzaci (nebo zakládá novou) během streamu.
+  // Stejný princip jako navigace v App.tsx: stream se odpojí → odpověď zmizí.
+  const [pendingConvAction, setPendingConvAction] = useState<(() => void) | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'chat'>(initialConversationId ? 'chat' : 'list');
   const [loadingConv, setLoadingConv] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -382,6 +386,11 @@ const AICoachPage: React.FC<Props> = ({
   // ─── Create new conversation ───────────────────────────────────────────────
 
   const handleNewConversation = useCallback(async () => {
+    // Stream-guard — stejně jako u přepnutí konverzace.
+    if (isStreaming) {
+      setPendingConvAction(() => () => { handleNewConversation(); });
+      return;
+    }
     setCreateError(null);
     try {
       const conv = await storageService.createConversation();
@@ -395,14 +404,24 @@ const AICoachPage: React.FC<Props> = ({
     } catch (e: any) {
       setCreateError(e?.message ?? 'Nepodařilo se vytvořit konverzaci');
     }
-  }, []);
+  }, [isStreaming]);
 
   // ─── Select conversation ───────────────────────────────────────────────────
 
   const handleSelectConversation = useCallback((id: string) => {
-    setActiveConvId(id);
-    setMobileView('chat');
-  }, []);
+    if (id === activeConvId) return;
+    const doIt = () => {
+      setActiveConvId(id);
+      setMobileView('chat');
+    };
+    // Pokud coach pořád streamuje, vyvolej warning modal — přepnutí by stream
+    // odpojilo a odpověď by se ztratila.
+    if (isStreaming) {
+      setPendingConvAction(() => doIt);
+      return;
+    }
+    doIt();
+  }, [activeConvId, isStreaming]);
 
   // ─── Delete conversation ───────────────────────────────────────────────────
 
@@ -1026,6 +1045,22 @@ const AICoachPage: React.FC<Props> = ({
           emotions={[]}
         />
       )}
+
+      {/* Warning modal — pokud user mění konverzaci (nebo zakládá novou) během streamu. */}
+      <ConfirmationModal
+        isOpen={!!pendingConvAction}
+        onClose={() => setPendingConvAction(null)}
+        onConfirm={() => {
+          const fn = pendingConvAction;
+          setPendingConvAction(null);
+          if (fn) fn();
+        }}
+        title="Coach pořád pracuje"
+        message="Mentor analyzuje data a píše odpověď. Pokud teď přepneš konverzaci, ztratíš ji a budeš muset poslat dotaz znovu. Chceš počkat nebo přepnout přesto?"
+        confirmText="Přepnout přesto"
+        cancelText="Počkat"
+        theme={theme as 'dark' | 'light' | 'oled'}
+      />
     </>
   );
 };
