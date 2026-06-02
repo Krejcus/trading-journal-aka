@@ -51,6 +51,10 @@ export const COACH_TOOLS = [
           type: 'integer',
           description: 'Max results to return (1–20). Default 10.',
         },
+        account: {
+          type: 'string',
+          description: 'Volitelný filtr — jen záznamy obchodů na daném účtu (název nebo ID). Týká se jen trade výsledků (preps/reviews jsou globální).',
+        },
       },
       required: ['query'],
     },
@@ -274,9 +278,10 @@ interface SearchHistoryArgs {
   date_from?: string;
   date_to?: string;
   limit?: number;
+  account?: string;
 }
 
-async function searchHistory(args: SearchHistoryArgs): Promise<{
+async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], trades: Trade[] = []): Promise<{
   results: Array<{
     source_type: string;
     source_id: string;
@@ -290,9 +295,14 @@ async function searchHistory(args: SearchHistoryArgs): Promise<{
   const embedding = await embedQueryViaEdge(args.query);
   if (!embedding) return { results: [], count: 0 };
 
+  const limit = Math.min(args.limit ?? 10, 20);
+  // Při account filtru načteme víc kandidátů (overscan), pak ořežeme.
+  const accId = args.account ? resolveAccountId(args.account, accounts) : null;
+  const matchCount = accId ? Math.min(limit * 4, 40) : limit;
+
   const { data, error } = await supabase.rpc('match_embeddings', {
     query_embedding: embedding,
-    match_count: Math.min(args.limit ?? 10, 20),
+    match_count: matchCount,
     similarity_threshold: 0.2,
     filter_source_types: args.source_types || null,
     filter_date_from: args.date_from || null,
@@ -302,7 +312,16 @@ async function searchHistory(args: SearchHistoryArgs): Promise<{
     console.warn('[coachTools] search_history rpc error:', error);
     return { results: [], count: 0 };
   }
-  return { results: data || [], count: (data || []).length };
+  let results = data || [];
+  // Account post-filter: jen trade záznamy se zkontrolují proti accountId; prep/review
+  // nejsou per-account, takže je necháme projít beze změny.
+  if (accId) {
+    const tradeAcct = new Map(trades.map(t => [String(t.id), String(t.accountId)]));
+    results = results.filter((r: any) =>
+      r.source_type !== 'trade' || tradeAcct.get(String(r.source_id)) === accId
+    ).slice(0, limit);
+  }
+  return { results, count: results.length };
 }
 
 interface GetStatsArgs {
@@ -700,7 +719,7 @@ export async function executeTool(
   try {
     switch (name) {
       case 'search_history':
-        return await searchHistory(args);
+        return await searchHistory(args, ctx.accounts || [], ctx.trades);
       case 'get_stats':
         return getStats(args, ctx);
       case 'list_accounts':
@@ -731,7 +750,8 @@ export function describeToolCall(name: string, args: any): string {
   switch (name) {
     case 'search_history': {
       const where = args?.source_types?.length ? ` v ${args.source_types.join('+')}` : '';
-      return `🔍 Hledám "${args?.query?.slice(0, 40) || ''}${(args?.query?.length || 0) > 40 ? '…' : ''}"${where}`;
+      const acc = args?.account ? ` (účet ${args.account})` : '';
+      return `🔍 Hledám "${args?.query?.slice(0, 40) || ''}${(args?.query?.length || 0) > 40 ? '…' : ''}"${where}${acc}`;
     }
     case 'get_stats': {
       const parts = [];

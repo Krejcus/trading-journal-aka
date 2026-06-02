@@ -12,6 +12,8 @@ const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
 const Settings = React.lazy(() => import('./components/Settings'));
 const AccountsManager = React.lazy(() => import('./components/AccountsManager'));
 const Graveyard = React.lazy(() => import('./components/Graveyard'));
+const DailyStartModal = React.lazy(() => import('./components/DailyStartModal'));
+const LossDayDebriefModal = React.lazy(() => import('./components/LossDayDebriefModal'));
 const DailyJournal = React.lazy(() => import('./components/DailyJournal'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
@@ -343,6 +345,11 @@ const App: React.FC = () => {
   // AI streaming state — když je true a user chce odejít z AI stránky, zobrazí
   // se warning modal (přepnutí by ztratilo streamovanou odpověď).
   const [isAIStreaming, setIsAIStreaming] = useState(false);
+  // Daily Start Ritual — modal pro ranní brief (auto-trigger 6-12 PRG pokud nemá prep, nebo manuálně).
+  const [dailyStartOpen, setDailyStartOpen] = useState(false);
+  // Loss Day Debrief — modal po překročení daily limitu (auto-trigger po setTrades).
+  const [lossDayDebriefOpen, setLossDayDebriefOpen] = useState(false);
+  const [lossDayTargetDate, setLossDayTargetDate] = useState<string | undefined>(undefined);
   // Pending navigace která čeká na potvrzení v modalu.
   const [pendingNav, setPendingNav] = useState<(() => void) | null>(null);
   const [journalTargetDate, setJournalTargetDate] = useState<string | undefined>(undefined);
@@ -1320,6 +1327,54 @@ const App: React.FC = () => {
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
   }, [session, applyPreferences]);
+
+  // --- AUTO-TRIGGER: Daily Start Ritual ---
+  // Pokud user nemá prep pro dnešek + je obchodní den + jsme v okně 6-12 PRG, otevři modal.
+  // Jen jednou per session — pak už respektuj user volbu.
+  const dailyStartCheckedRef = useRef(false);
+  useEffect(() => {
+    if (!isInitialLoadDone || dailyStartCheckedRef.current) return;
+    const now = new Date();
+    const hourPrg = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Prague', hour: 'numeric', hour12: false }).format(now));
+    const wkdayShort = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Prague', weekday: 'short' }).format(now);
+    const isWeekend = wkdayShort === 'Sat' || wkdayShort === 'Sun';
+    const todayIso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(now);
+    const hasPrepToday = dailyPreps.some(p => p.date === todayIso && (p.scenarios?.bullish || p.scenarios?.bearish || p.mindsetState || p.ritualCompletions?.some(rc => rc.status === 'Pass')));
+    if (!isWeekend && hourPrg >= 6 && hourPrg < 12 && !hasPrepToday) {
+      // Slight delay aby loading flicker neblokoval první view
+      const t = setTimeout(() => setDailyStartOpen(true), 1500);
+      dailyStartCheckedRef.current = true;
+      return () => clearTimeout(t);
+    }
+    // Stále označ že jsme check udělali, ať se to neopakuje napříč rerendery
+    dailyStartCheckedRef.current = true;
+  }, [isInitialLoadDone, dailyPreps]);
+
+  // --- AUTO-TRIGGER: Loss Day Debrief ---
+  // Po každém setTrades (import / save) zkontroluj dnešní P&L. Pokud < -dailyLimit
+  // a ještě dnes nebyl debrief (review s autoDebrief flagem), otevři modal.
+  const lossDayDebriefShownRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isInitialLoadDone) return;
+    const todayIso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(new Date());
+    if (lossDayDebriefShownRef.current === todayIso) return;
+    // Spočítej dnešní P&L
+    const todayPnl = trades
+      .filter(t => String(t.date || '').slice(0, 10) === todayIso && t.executionStatus !== 'Missed')
+      .reduce((s, t) => s + (Number(t.pnl) || 0), 0);
+    // Default daily limit (250) — TODO: tahat z user prefs
+    const dailyLimit = 250;
+    if (todayPnl < -dailyLimit) {
+      // Zkontroluj jestli už dnes byl auto-debrief uložen
+      const todayReview = dailyReviews.find(r => r.date === todayIso);
+      const alreadyDebriefed = (todayReview as any)?.autoDebrief === true;
+      if (!alreadyDebriefed) {
+        lossDayDebriefShownRef.current = todayIso;
+        setLossDayTargetDate(todayIso);
+        setLossDayDebriefOpen(true);
+      }
+    }
+  }, [isInitialLoadDone, trades, dailyReviews]);
 
   // --- SMART PREFETCHING ---
   // Preload critical secondary modules immediately after dashboard loads
@@ -3272,6 +3327,95 @@ const App: React.FC = () => {
         cancelText="Počkat"
         theme={theme}
       />
+
+      {/* Daily Start Ritual — ranní brief před tradingem. */}
+      <React.Suspense fallback={null}>
+        <DailyStartModal
+          isOpen={dailyStartOpen}
+          onClose={() => setDailyStartOpen(false)}
+          onConfirm={(data) => {
+            // Ulož commit do daily_preps pro dnešek (merge, ne overwrite).
+            const today = new Date().toISOString().slice(0, 10);
+            setDailyPreps(prev => {
+              const idx = prev.findIndex(p => p.date === today);
+              if (idx === -1) {
+                const newPrep: any = {
+                  id: crypto.randomUUID(), date: today,
+                  scenarios: { bullish: '', bearish: '' }, goals: [],
+                  checklist: { sleptWell: false, planReady: false, disciplineCommitted: true, newsChecked: false },
+                  mindsetState: data.affirmation, confidence: 70,
+                  ritualCompletions: [],
+                  startedAt: Date.now(),
+                  committedRuleIds: data.committedRuleIds,
+                  dailyFocus: data.focus,
+                };
+                isPrepsDirty.current = true;
+                return [newPrep, ...prev];
+              }
+              const merged = { ...prev[idx], startedAt: Date.now(), committedRuleIds: data.committedRuleIds, dailyFocus: data.focus };
+              if (!prev[idx].mindsetState) (merged as any).mindsetState = data.affirmation;
+              isPrepsDirty.current = true;
+              return prev.map((p, i) => i === idx ? merged : p);
+            });
+            setDailyStartOpen(false);
+          }}
+          theme={theme}
+          ironRules={ironRules}
+        />
+      </React.Suspense>
+
+      {/* Loss Day Debrief — automatický po překročení daily limitu. */}
+      <React.Suspense fallback={null}>
+        <LossDayDebriefModal
+          isOpen={lossDayDebriefOpen}
+          onClose={() => setLossDayDebriefOpen(false)}
+          targetDate={lossDayTargetDate}
+          theme={theme}
+          onSave={({ whatHappened, trigger, prevention, date }) => {
+            // Ulož reflexi do daily_reviews (autoDebrief flag).
+            setDailyReviews(prev => {
+              const idx = prev.findIndex(r => r.date === date);
+              const reviewBody: any = {
+                id: idx === -1 ? crypto.randomUUID() : prev[idx].id,
+                date,
+                rating: 1,
+                mainTakeaway: whatHappened,
+                lessons: `Trigger: ${trigger}\n\nPrevence: ${prevention}`,
+                mistakes: [],
+                autoDebrief: true,
+              };
+              isReviewsDirty.current = true;
+              if (idx === -1) return [reviewBody, ...prev];
+              return prev.map((r, i) => i === idx ? { ...r, ...reviewBody } : r);
+            });
+            setLossDayDebriefOpen(false);
+          }}
+          onApplyAction={(action) => {
+            // Reuse existing onApplyAction logic z chat akcí.
+            switch (action.type) {
+              case 'rule':
+              case 'experiment': {
+                const prefix = action.type === 'experiment' && action.duration ? `⏱ [${action.duration}] ` : '';
+                const label = `${prefix}${action.label}`;
+                const newRule: IronRule = { id: `rule_${Date.now()}`, label, type: 'trading' };
+                setIronRules(prev => [...prev, newRule]);
+                isPreferencesDirty.current = true;
+                break;
+              }
+              case 'modify_rule': {
+                if (!action.targetId) break;
+                const tid = action.targetId.toLowerCase();
+                const oldL = action.oldLabel?.trim().toLowerCase();
+                const matches = (r: IronRule) =>
+                  r.id.toLowerCase() === tid || (oldL && r.label.trim().toLowerCase().startsWith(oldL));
+                setIronRules(prev => prev.map(r => matches(r) ? { ...r, label: action.label } : r));
+                isPreferencesDirty.current = true;
+                break;
+              }
+            }
+          }}
+        />
+      </React.Suspense>
 
       <UserProfileModal
         isOpen={isProfileOpen}
