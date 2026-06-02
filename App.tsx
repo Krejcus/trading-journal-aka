@@ -2991,6 +2991,7 @@ const App: React.FC = () => {
                         allTrades={trades}
                         viewMode={historyLayoutMode}
                         enrichSignal={enrichSignal}
+                        userMistakes={userMistakes}
                         onImportTradovate={() => {
                           setTradovateImportAccount(viewMode === 'individual' ? activeAccountId : undefined);
                           setTradovateImportOpen(true);

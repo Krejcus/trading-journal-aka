@@ -33,6 +33,8 @@ export function isImportedTrade(t: Trade): boolean {
  */
 export function tradeNeedsEnrichment(t: Trade): boolean {
   if (!isImportedTrade(t)) return false;
+  // Manuálně archivovaný z fronty — user řekl "víc už k tomu nemám" (bulk-tag flow).
+  if (t.enrichmentSkipped) return false;
   const hasScreens = !!(t.screenshot || (t.screenshots && t.screenshots.length > 0));
   const hasConfluence = !!(
     (t.htfConfluence && t.htfConfluence.length > 0) ||

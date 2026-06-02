@@ -217,6 +217,10 @@ export interface Trade {
   miniViewLayout?: 'single' | 'split';
   miniViewSecondaryRange?: { from: number; to: number };
   miniViewSecondaryTimeframe?: '1m' | '5m' | '15m' | '1h' | '4h' | 'D' | 'W';
+  /** User manuálně označil import-trade jako "doplněno" (bulk-tag flow, nemá smysl
+   *  k němu cokoli dál přidávat — typicky revenge/overtrading session). Odebere
+   *  obchod z "K doplnění" fronty i bez screenshotu/konfluence. */
+  enrichmentSkipped?: boolean;
   /** AI návrhy tagů vygenerované Edge Function `enrich-trade` po save obchodu. */
   aiSuggestions?: {
     htf?: Array<{ value: string; reasoning: string }>;

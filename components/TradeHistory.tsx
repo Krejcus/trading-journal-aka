@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
@@ -56,12 +57,14 @@ interface TradeHistoryProps {
   onImportTradovate?: () => void;
   /** Inkrementuje se zvenčí (floating tlačítko / „Doplnit teď") pro spuštění průvodce doplněním. */
   enrichSignal?: number;
+  /** Uživatelské kategorie chyb (Settings → Strategie → Katalog Chyb) — pro bulk-tag importovaných obchodů. */
+  userMistakes?: string[];
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
   trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
-  viewMode, onImportTradovate, enrichSignal
+  viewMode, onImportTradovate, enrichSignal, userMistakes = [],
 }) => {
   const isDark = theme !== 'light';
   const targetCurrency = user.currency || 'USD';
@@ -88,6 +91,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const [selectedTradeIds, setSelectedTradeIds] = useState<Set<string | number>>(new Set());
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+
+  // --- BULK TAG MODAL (pro hromadné tagování importovaných obchodů) ---
+  const [bulkTagOpen, setBulkTagOpen] = useState(false);
+  const [bulkTagMistakes, setBulkTagMistakes] = useState<Set<string>>(new Set());
+  const [bulkTagText, setBulkTagText] = useState('');
+  const [bulkTagNotes, setBulkTagNotes] = useState('');
+  const [bulkTagMarkDone, setBulkTagMarkDone] = useState(true); // C: defaultně archivovat z fronty
 
   // --- INFINITE SCROLL STATE ---
   const PAGE_SIZE = 20;
@@ -279,6 +289,40 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     setSelectedTradeIds(new Set());
     setIsMultiSelectMode(false);
     setBulkDeleteConfirmOpen(false);
+  };
+
+  /** Aplikuje hromadný tag na vybrané obchody — append (ne overwrite) mistakes/tags,
+   *  prepend notes (existující kontext zachová), volitelně označí jako "doplněno". */
+  const applyBulkTag = () => {
+    if (selectedTradeIds.size === 0 || !onUpdateTrade) return;
+    const newMistakes = Array.from(bulkTagMistakes);
+    const newTag = bulkTagText.trim();
+    const newNote = bulkTagNotes.trim();
+    selectedTradeIds.forEach(id => {
+      const t = trades.find(x => String(x.id) === String(id));
+      if (!t) return;
+      const mergedMistakes = Array.from(new Set([...(t.mistakes || []), ...newMistakes]));
+      const mergedTags = newTag
+        ? Array.from(new Set([...(t.tags || []), newTag]))
+        : t.tags;
+      const mergedNotes = newNote
+        ? (t.notes ? `${newNote}\n\n${t.notes}` : newNote)
+        : t.notes;
+      const updates: Partial<Trade> = {
+        mistakes: mergedMistakes,
+        tags: mergedTags,
+        notes: mergedNotes,
+      };
+      if (bulkTagMarkDone) updates.enrichmentSkipped = true;
+      onUpdateTrade(id, updates);
+    });
+    // Reset state + zavřít modal
+    setBulkTagOpen(false);
+    setBulkTagMistakes(new Set());
+    setBulkTagText('');
+    setBulkTagNotes('');
+    setSelectedTradeIds(new Set());
+    setIsMultiSelectMode(false);
   };
 
   const clearSelection = () => {
@@ -530,6 +574,17 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             >
               {selectedTradeIds.size === visibleTrades.length ? 'Zrušit vše' : 'Vybrat vše'}
             </button>
+
+            {selectedTradeIds.size > 0 && enrichFilter && onUpdateTrade && (
+              <button
+                onClick={() => setBulkTagOpen(true)}
+                className="px-4 py-2 rounded-lg font-bold text-sm bg-amber-500/20 text-amber-500 border border-amber-500/40 hover:bg-amber-500/30 transition-all flex items-center gap-2"
+                title="Přidat chyby/tagy najednou k vybraným importovaným obchodům"
+              >
+                <Sparkles size={16} />
+                Hromadně otagovat ({selectedTradeIds.size})
+              </button>
+            )}
 
             {selectedTradeIds.size > 0 && (
               <button
@@ -1008,6 +1063,135 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       {zoomImage && (
         <ImageZoomModal images={zoomImage.images} initialIndex={zoomImage.index} onClose={() => setZoomImage(null)} />
       )}
+
+      {/* Bulk Tag Modal — hromadné označení vybraných importovaných obchodů. */}
+      <AnimatePresence>
+        {bulkTagOpen && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setBulkTagOpen(false)}>
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className={`max-w-lg w-full rounded-[32px] border shadow-2xl overflow-hidden ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-6 border-b border-amber-500/20 bg-gradient-to-b from-amber-500/5 to-transparent">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-amber-500/15 border border-amber-500/30">
+                    <Sparkles size={20} className="text-amber-500" />
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black uppercase tracking-[0.3em] text-amber-500 mb-0.5">Hromadné otagování</p>
+                    <h2 className={`text-lg font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                      {selectedTradeIds.size} importovaných obchodů
+                    </h2>
+                  </div>
+                </div>
+                <p className={`text-xs mt-3 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Pro session kterou „nemá smysl rozebírat detailně" (revenge cyklus, overtrading apod.) přidáš všem vybraným obchodům stejné chyby/tag/poznámku najednou.
+                </p>
+              </div>
+
+              <div className="p-6 space-y-5">
+                {/* Chyby — checklist */}
+                <div>
+                  <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                    Chyby (vyber co se opakovalo)
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {userMistakes.length === 0 && (
+                      <p className={`text-[11px] italic ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                        Žádné chyby zatím nemáš v Nastavení → Strategie → Katalog Chyb.
+                      </p>
+                    )}
+                    {userMistakes.map(m => {
+                      const active = bulkTagMistakes.has(m);
+                      return (
+                        <button
+                          key={m}
+                          onClick={() => {
+                            const next = new Set(bulkTagMistakes);
+                            if (active) next.delete(m); else next.add(m);
+                            setBulkTagMistakes(next);
+                          }}
+                          className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wide transition-all border ${active
+                            ? 'bg-rose-500 text-white border-rose-500 shadow-md'
+                            : (isDark ? 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100')
+                          }`}
+                        >
+                          {m}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Tag */}
+                <div>
+                  <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                    Tag (volitelný — např. „MFF spálení 1.6.")
+                  </label>
+                  <input
+                    value={bulkTagText}
+                    onChange={e => setBulkTagText(e.target.value)}
+                    placeholder="MFF spálení 1.6."
+                    className={`w-full px-4 py-2.5 rounded-xl border text-sm font-bold outline-none ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-600' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-400'}`}
+                  />
+                </div>
+
+                {/* Note */}
+                <div>
+                  <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                    Poznámka (volitelná — co se stalo, jedním řádkem)
+                  </label>
+                  <textarea
+                    value={bulkTagNotes}
+                    onChange={e => setBulkTagNotes(e.target.value)}
+                    placeholder="Po prvním lossu jsem začal honit a do konce dne nedokázal přestat."
+                    rows={2}
+                    className={`w-full px-4 py-2.5 rounded-xl border text-xs resize-none outline-none ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-600' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-400'}`}
+                  />
+                </div>
+
+                {/* Toggle — označit jako Hotovo (odebere z K doplnění fronty) */}
+                <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${bulkTagMarkDone ? 'bg-emerald-500/10 border-emerald-500/30' : (isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200')}`}>
+                  <input
+                    type="checkbox"
+                    checked={bulkTagMarkDone}
+                    onChange={e => setBulkTagMarkDone(e.target.checked)}
+                    className="w-4 h-4 accent-emerald-500"
+                  />
+                  <div className="flex-1">
+                    <p className={`text-[11px] font-black uppercase tracking-wide ${bulkTagMarkDone ? 'text-emerald-500' : (isDark ? 'text-slate-300' : 'text-slate-700')}`}>
+                      Označit jako doplněno (odebrat z fronty „K doplnění")
+                    </p>
+                    <p className={`text-[10px] mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
+                      Vědomá volba: „víc už k tomu nemám" — badge zmizí.
+                    </p>
+                  </div>
+                </label>
+
+                {/* Akce */}
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => setBulkTagOpen(false)}
+                    className={`flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${isDark ? 'bg-white/5 hover:bg-white/10 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}
+                  >
+                    Zrušit
+                  </button>
+                  <button
+                    onClick={applyBulkTag}
+                    disabled={bulkTagMistakes.size === 0 && !bulkTagText.trim() && !bulkTagNotes.trim()}
+                    className="flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-lg shadow-amber-500/30 hover:shadow-amber-500/50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Aplikovat na {selectedTradeIds.size}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {selectedTrade && (
         <TradeDetailModal
