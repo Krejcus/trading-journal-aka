@@ -11,6 +11,7 @@ const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'))
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
 const Settings = React.lazy(() => import('./components/Settings'));
 const AccountsManager = React.lazy(() => import('./components/AccountsManager'));
+const Graveyard = React.lazy(() => import('./components/Graveyard'));
 const DailyJournal = React.lazy(() => import('./components/DailyJournal'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
@@ -1346,13 +1347,16 @@ const App: React.FC = () => {
   const [dashFocusAccount, setDashFocusAccount] = useState<string | null>(null);
 
   useEffect(() => {
-    if (dashboardMode === 'archive' && session && !isArchivedLoaded) {
+    // Načti archivované účty, když uživatel: (a) přepne na archive dashboard,
+    // (b) otevře stránku Účty (kvůli zobrazení Hřbitova spálených účtů).
+    const needsArchived = (dashboardMode === 'archive' || activePage === 'accounts');
+    if (needsArchived && session && !isArchivedLoaded) {
       storageService.getArchivedAccounts().then(archived => {
         setArchivedAccounts(archived || []);
         setIsArchivedLoaded(true);
       }).catch(err => console.error("[LazyLoad] Failed to load archived accounts:", err));
     }
-  }, [dashboardMode, session, isArchivedLoaded]);
+  }, [dashboardMode, activePage, session, isArchivedLoaded]);
 
   // --- LAZY LOADING: Business Hub Data ---
   // Load expenses, goals, resources only when user enters BusinessHub section
@@ -3055,32 +3059,51 @@ const App: React.FC = () => {
                   )}
 
                   {activePage === 'accounts' && (
-                    <AccountsManager
-                      accounts={accounts}
-                      activeAccountId={activeAccountId}
-                      setActiveAccountId={setActiveAccountId}
-                      onUpdate={setAccounts}
-                      onDelete={handleDeleteAccount}
-                      theme={theme}
-                      trades={trades}
-                      onUpdateTrades={handleUpdateTrades}
-                      onAddExpense={handleAddSingleExpense}
-                      onUpdatePayouts={handleUpdatePayouts}
-                      payouts={businessPayouts}
-                      user={currentUser}
-                      onOpenInDashboard={(id) => {
-                        setDashFocusAccount(id);
-                        setActiveAccountId(id);
-                        setViewMode('individual');
-                        setDashboardMode('archive');
-                        isPreferencesDirty.current = true;
-                        setActivePage('dashboard');
-                      }}
-                      onImportTradovate={(id) => {
-                        setTradovateImportAccount(id);
-                        setTradovateImportOpen(true);
-                      }}
-                    />
+                    <>
+                      <AccountsManager
+                        accounts={accounts}
+                        activeAccountId={activeAccountId}
+                        setActiveAccountId={setActiveAccountId}
+                        onUpdate={setAccounts}
+                        onDelete={handleDeleteAccount}
+                        theme={theme}
+                        trades={trades}
+                        onUpdateTrades={handleUpdateTrades}
+                        onAddExpense={handleAddSingleExpense}
+                        onUpdatePayouts={handleUpdatePayouts}
+                        payouts={businessPayouts}
+                        user={currentUser}
+                        onOpenInDashboard={(id) => {
+                          setDashFocusAccount(id);
+                          setActiveAccountId(id);
+                          setViewMode('individual');
+                          setDashboardMode('archive');
+                          isPreferencesDirty.current = true;
+                          setActivePage('dashboard');
+                        }}
+                        onImportTradovate={(id) => {
+                          setTradovateImportAccount(id);
+                          setTradovateImportOpen(true);
+                        }}
+                      />
+                      {/* Hřbitov spálených účtů — všechny Failed účty z aktivního i archivovaného pole. */}
+                      {(() => {
+                        const failedAccounts = [...accounts, ...archivedAccounts]
+                          .filter((a, i, arr) => a.result === 'Failed' && arr.findIndex(x => x.id === a.id) === i);
+                        if (failedAccounts.length === 0) return null;
+                        return (
+                          <div className="mt-8">
+                            <React.Suspense fallback={<div className="h-32" />}>
+                              <Graveyard
+                                accounts={failedAccounts}
+                                trades={trades}
+                                theme={theme}
+                              />
+                            </React.Suspense>
+                          </div>
+                        );
+                      })()}
+                    </>
                   )}
 
                   {activePage === 'network' && (
