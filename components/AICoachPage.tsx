@@ -296,6 +296,51 @@ const AICoachPage: React.FC<Props> = ({
     });
   }, [activeConvId, trades, dailyPreps, dailyReviews]);
 
+  // Realtime subscription na ai_messages pro aktivní konverzaci. Když stream
+  // pokračuje v jiné instanci AICoachPage (user přepnul tab/konverzaci a vrátil
+  // se), dostáváme live updaty přímo z DB — místo prázdné bubliny vidí user
+  // aktuální obsah průběžně tak, jak coach píše.
+  useEffect(() => {
+    if (!activeConvId) return;
+    let channelRef: { unsubscribe?: () => void } | null = null;
+    let cancelled = false;
+    (async () => {
+      const { supabase } = await import('../services/supabase');
+      if (cancelled) return;
+      const channel = supabase
+        .channel(`ai-messages-${activeConvId}`)
+        .on('postgres_changes', {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'ai_messages',
+          filter: `conversation_id=eq.${activeConvId}`,
+        }, (payload) => {
+          const updated = payload.new as { id: string; content: string; role: string };
+          if (updated.role !== 'assistant') return;
+          setMessages(prev => {
+            const next = [...prev];
+            // Najdi poslední assistant zprávu (typicky streamovaný pahýl) a updatuj.
+            for (let i = next.length - 1; i >= 0; i--) {
+              if (next[i].role === 'assistant') {
+                if (next[i].content !== updated.content) {
+                  next[i] = { ...next[i], content: updated.content };
+                }
+                break;
+              }
+            }
+            return next;
+          });
+        })
+        .subscribe();
+      channelRef = { unsubscribe: () => supabase.removeChannel(channel) };
+      if (cancelled) channelRef.unsubscribe?.();
+    })();
+    return () => {
+      cancelled = true;
+      channelRef?.unsubscribe?.();
+    };
+  }, [activeConvId]);
+
   // Scroll to bottom when a new message is added.
   // FORCE pokud poslední zpráva je od usera (právě poslal) — chceme ho posunout k odpovědi.
   // Jinak respektujeme stick flag — pokud user skroluje historií, neruším ho.
