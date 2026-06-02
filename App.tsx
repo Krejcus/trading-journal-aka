@@ -339,6 +339,11 @@ const App: React.FC = () => {
   const [aiChatTrade, setAiChatTrade] = useState<Trade | null>(null);
   const [aiActiveConvId, setAiActiveConvId] = useState<string | undefined>(undefined);
   const [aiInitialPrompt, setAiInitialPrompt] = useState<string | undefined>(undefined);
+  // AI streaming state — když je true a user chce odejít z AI stránky, zobrazí
+  // se warning modal (přepnutí by ztratilo streamovanou odpověď).
+  const [isAIStreaming, setIsAIStreaming] = useState(false);
+  // Pending navigace která čeká na potvrzení v modalu.
+  const [pendingNav, setPendingNav] = useState<(() => void) | null>(null);
   const [journalTargetDate, setJournalTargetDate] = useState<string | undefined>(undefined);
   const isPreferencesDirty = useRef(false);
   const [networkNotifications, setNetworkNotifications] = useState<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }> | null>(null);
@@ -623,6 +628,18 @@ const App: React.FC = () => {
   });
 
   const [activePage, setActivePage] = useState('dashboard');
+
+  /**
+   * Wrapper kolem setActivePage — když je AI Coach v aktivním streamu a user
+   * chce odejít, zachytí to a zobrazí warning modal. User pak rozhodne.
+   */
+  const navigateTo = useCallback((page: string) => {
+    if (isAIStreaming && activePage === 'ai' && page !== 'ai') {
+      setPendingNav(() => () => setActivePage(page));
+      return;
+    }
+    setActivePage(page);
+  }, [isAIStreaming, activePage]);
 
   // Defense-in-depth: kdyby se non-owner role pokusila dostat na uzamčenou page
   // přes přímou state mutaci nebo router redirect → přesměrovat na dashboard.
@@ -2544,7 +2561,7 @@ const App: React.FC = () => {
           }}
           onOpenProfile={() => setIsProfileOpen(true)}
           onNavigate={(page) => {
-            setActivePage(page);
+            navigateTo(page);
             setIsSidebarOpen(false);
           }}
           onLockedFeature={(featureId) => setLockedFeatureModal(featureId)}
@@ -2555,7 +2572,7 @@ const App: React.FC = () => {
       {/* Bottom navigation — pouze mobil */}
       <BottomNav
         activePage={activePage}
-        onNavigate={(page) => setActivePage(page)}
+        onNavigate={navigateTo}
         onAddTrade={handleTryAddTrade}
         theme={theme}
         userRole={currentUser.role}
@@ -2770,6 +2787,7 @@ const App: React.FC = () => {
                 initialConversationId={aiActiveConvId}
                 initialPrompt={aiInitialPrompt}
                 onInitialPromptConsumed={() => setAiInitialPrompt(undefined)}
+                onStreamingChange={setIsAIStreaming}
                 onOpenTrade={(trade) => setAiChatTrade(trade)}
                 onOpenJournal={(date) => {
                   setJournalTargetDate(date);
@@ -3214,6 +3232,22 @@ const App: React.FC = () => {
           />
         </React.Suspense>
       )}
+
+      {/* Warning modal — pokud user odchází z AI stránky během streamu. */}
+      <ConfirmationModal
+        isOpen={!!pendingNav}
+        onClose={() => setPendingNav(null)}
+        onConfirm={() => {
+          const fn = pendingNav;
+          setPendingNav(null);
+          if (fn) fn();
+        }}
+        title="Coach pořád pracuje"
+        message="Mentor analyzuje data a píše odpověď. Pokud teď odejdeš, ztratíš ji a budeš muset poslat dotaz znovu. Chceš počkat nebo odejít přesto?"
+        confirmText="Odejít přesto"
+        cancelText="Počkat"
+        theme={theme}
+      />
 
       <UserProfileModal
         isOpen={isProfileOpen}

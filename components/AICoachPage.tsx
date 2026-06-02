@@ -99,6 +99,8 @@ interface Props {
   onInitialPromptConsumed?: () => void;
   /** Klik na "Přidat" v action card v Coach response. Parent rozhodne co se stane (přidá rule / cíl / atd.) */
   onApplyAction?: (action: import('../services/aiService').SuggestedAction) => void;
+  /** Reportuje rodičovi (App.tsx), zda coach právě streamuje — pro nav warning modal. */
+  onStreamingChange?: (isStreaming: boolean) => void;
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -108,6 +110,7 @@ const AICoachPage: React.FC<Props> = ({
   dailyPreps, dailyReviews, theme,
   onOpenTrade, onOpenJournal, onApplyAction,
   initialConversationId, initialPrompt, onInitialPromptConsumed,
+  onStreamingChange,
 }) => {
   // Init z globálního cache (persisted v localStorage) — žádný flash prázdného seznamu po reloadu.
   // useEffect níž pak refresh z DB na pozadí.
@@ -195,31 +198,12 @@ const AICoachPage: React.FC<Props> = ({
   // Reduces React re-renders during streaming (less frame-drop interference with RAF)
   const chunkBufferRef = useRef('');
   const chunkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Throttle pro průběžné ukládání asistentovy zprávy do DB (každé ~3s).
-  // Přežije F5/odchod — při návratu se načte z DB to co stihlo.
-  const dbSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastDbSavedRef = useRef<string>('');
-  // Refs pro aktivně streamovanou zprávu — umožní flush do DB při unmount
-  // (přepnutí pryč z AI tabu během streamu nesmí ztratit rozdělanou odpověď).
-  const streamingMsgIdRef = useRef<string | null>(null);
-  const streamingContentRef = useRef<string>('');
 
-  // Flush rozdělané zprávy do DB při unmount AI Coach stránky (přepnutí na dashboard
-  // atd.). Bez tohohle by se posledních ~2s odpovědi ztratilo (mezi throttle ticky).
-  // Když je obsah úplně prázdný (stream se nestihl rozjet), smaž pahýl — jinak by
-  // user při návratu viděl prázdnou bublinu.
+  // Notify rodiče (App.tsx) o streaming stavu — používá se pro warning modal
+  // při pokusu odejít z AI stránky během streamu (ztratil bys odpověď).
   useEffect(() => {
-    return () => {
-      const id = streamingMsgIdRef.current;
-      const content = streamingContentRef.current;
-      if (!id) return;
-      if (!content || !content.trim()) {
-        storageService.deleteMessage(id).catch(() => {});
-      } else if (content !== lastDbSavedRef.current) {
-        storageService.updateMessage(id, content).catch(() => {});
-      }
-    };
-  }, []);
+    onStreamingChange?.(isStreaming);
+  }, [isStreaming, onStreamingChange]);
 
   const traderContext = React.useMemo(
     () => buildTraderContext({ trades, accounts, ironRules, playbookItems, dailyPreps, dailyReviews }),
@@ -295,51 +279,6 @@ const AICoachPage: React.FC<Props> = ({
       setLoadingConv(false);
     });
   }, [activeConvId, trades, dailyPreps, dailyReviews]);
-
-  // Realtime subscription na ai_messages pro aktivní konverzaci. Když stream
-  // pokračuje v jiné instanci AICoachPage (user přepnul tab/konverzaci a vrátil
-  // se), dostáváme live updaty přímo z DB — místo prázdné bubliny vidí user
-  // aktuální obsah průběžně tak, jak coach píše.
-  useEffect(() => {
-    if (!activeConvId) return;
-    let channelRef: { unsubscribe?: () => void } | null = null;
-    let cancelled = false;
-    (async () => {
-      const { supabase } = await import('../services/supabase');
-      if (cancelled) return;
-      const channel = supabase
-        .channel(`ai-messages-${activeConvId}`)
-        .on('postgres_changes', {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'ai_messages',
-          filter: `conversation_id=eq.${activeConvId}`,
-        }, (payload) => {
-          const updated = payload.new as { id: string; content: string; role: string };
-          if (updated.role !== 'assistant') return;
-          setMessages(prev => {
-            const next = [...prev];
-            // Najdi poslední assistant zprávu (typicky streamovaný pahýl) a updatuj.
-            for (let i = next.length - 1; i >= 0; i--) {
-              if (next[i].role === 'assistant') {
-                if (next[i].content !== updated.content) {
-                  next[i] = { ...next[i], content: updated.content };
-                }
-                break;
-              }
-            }
-            return next;
-          });
-        })
-        .subscribe();
-      channelRef = { unsubscribe: () => supabase.removeChannel(channel) };
-      if (cancelled) channelRef.unsubscribe?.();
-    })();
-    return () => {
-      cancelled = true;
-      channelRef?.unsubscribe?.();
-    };
-  }, [activeConvId]);
 
   // Scroll to bottom when a new message is added.
   // FORCE pokud poslední zpráva je od usera (právě poslal) — chceme ho posunout k odpovědi.
@@ -514,11 +453,6 @@ const AICoachPage: React.FC<Props> = ({
 
     // Save user message to DB
     await storageService.appendMessage(convId, 'user', text.trim());
-    // Vlož PAHÝL asistentovy zprávy hned — během streamu ho budeme updatovat,
-    // takže když user odejde/F5, při návratu uvidí to co stihlo, ne prázdno.
-    const assistantMsgId = await storageService.appendMessageReturning(convId, 'assistant', '');
-    streamingMsgIdRef.current = assistantMsgId;
-    streamingContentRef.current = '';
 
     // If this is the first message, auto-update conversation title
     if (isFirstMessage) {
@@ -549,26 +483,7 @@ const AICoachPage: React.FC<Props> = ({
       // which prevents React from dropping RAF animation frames.
       (chunk) => {
         finalContent += chunk;
-        streamingContentRef.current = finalContent;
         chunkBufferRef.current += chunk;
-
-        // PRVNÍ chunk → uložit HNED do DB (i kdyby user okamžitě přepl tab, máme aspoň začátek).
-        // Další chunky → throttle 2s, ať to nezahltí Supabase.
-        if (assistantMsgId) {
-          const isFirstSave = !lastDbSavedRef.current;
-          if (isFirstSave && finalContent.trim().length > 0) {
-            lastDbSavedRef.current = finalContent;
-            storageService.updateMessage(assistantMsgId, finalContent).catch(() => {});
-          } else if (!dbSaveTimerRef.current) {
-            dbSaveTimerRef.current = setTimeout(() => {
-              dbSaveTimerRef.current = null;
-              if (finalContent && finalContent !== lastDbSavedRef.current) {
-                lastDbSavedRef.current = finalContent;
-                storageService.updateMessage(assistantMsgId, finalContent).catch(() => {});
-              }
-            }, 2000);
-          }
-        }
 
         if (!chunkTimerRef.current) {
           chunkTimerRef.current = setTimeout(() => {
@@ -639,24 +554,10 @@ const AICoachPage: React.FC<Props> = ({
         }
         setIsStreaming(false);
         setToolStatus(null);
-        // Finální flush DB throttle.
-        if (dbSaveTimerRef.current) {
-          clearTimeout(dbSaveTimerRef.current);
-          dbSaveTimerRef.current = null;
-        }
-        // Update finálního obsahu pahýlu (vložil jsem ho hned po user message).
-        // Když pahýl neexistuje (selhal insert), fallback na append.
         if (finalContent) {
-          if (assistantMsgId) {
-            await storageService.updateMessage(assistantMsgId, finalContent);
-          } else {
-            await storageService.appendMessage(convId, 'assistant', finalContent);
-          }
+          await storageService.appendMessage(convId, 'assistant', finalContent);
         } else {
-          // Stream skončil bez textu (např. samé tool calls bez výstupu).
-          // Smaž prázdný pahýl z DB a placeholder z UI — místo prázdné bubliny ukaž
-          // chybovou zprávu, ať user ví, co se stalo.
-          if (assistantMsgId) storageService.deleteMessage(assistantMsgId).catch(() => {});
+          // Stream skončil bez textu (samé tool calls). Ukaž chybu místo prázdné bubliny.
           setMessages(prev => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
@@ -669,10 +570,6 @@ const AICoachPage: React.FC<Props> = ({
             return updated;
           });
         }
-        // Vyčisti streaming refs — dokončeno, unmount už nemá co flushovat.
-        streamingMsgIdRef.current = null;
-        streamingContentRef.current = '';
-        lastDbSavedRef.current = '';
         // Update conversation's updated_at in local state
         setConversations(prev => {
           const updated = prev.map(c =>
@@ -691,29 +588,15 @@ const AICoachPage: React.FC<Props> = ({
         console.error('[AICoachPage] stream error:', err);
         setIsStreaming(false);
         setToolStatus(null);
-        if (dbSaveTimerRef.current) {
-          clearTimeout(dbSaveTimerRef.current);
-          dbSaveTimerRef.current = null;
-        }
-        // Uloženo co stihlo — neházet pryč to, co user už vidí.
-        // Pokud nic neproudilo, ukaž chybovou zprávu místo prázdné bubliny.
-        if (!finalContent) {
-          if (assistantMsgId) storageService.deleteMessage(assistantMsgId).catch(() => {});
-          setMessages(prev => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last?.role === 'assistant' && !last.content) {
-              updated[updated.length - 1] = { ...last, content: `⚠️ Chyba: ${err}` };
-            }
-            return updated;
-          });
-        } else if (assistantMsgId) {
-          // Final flush rozpracovaného obsahu do DB.
-          storageService.updateMessage(assistantMsgId, finalContent).catch(() => {});
-        }
-        streamingMsgIdRef.current = null;
-        streamingContentRef.current = '';
-        lastDbSavedRef.current = '';
+        // Ukaž chybu v bublině místo tichého smazání — user ví, co se stalo.
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === 'assistant' && !last.content) {
+            updated[updated.length - 1] = { ...last, content: `⚠️ Chyba: ${err}` };
+          }
+          return updated;
+        });
       },
       // options — tool-use mode
       {
