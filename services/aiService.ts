@@ -767,7 +767,7 @@ Vzorové ❌: "V poslední době vidím že máš problém s timing." (bez konkr
 
 ${useTools ? `=== NÁSTROJE (TOOL USE) ===
 Data nástroje:
-- **search_history(query, source_types?, date_from?, date_to?, limit?)** — sémantické vyhledání v obchodech / přípravách / reviews.
+- **search_history(query, source_types?, date_from?, date_to?, limit?, account?)** — sémantické vyhledání v obchodech / přípravách / reviews; s "account" zúží trade záznamy na daný účet.
 - **get_stats(date_from?, date_to?, instrument?, direction?, session?, mistakes_contain?, account?, tag?, weekday?, min_r?, max_r?, include_missed?, group_by?)** — agregované statistiky (winrate, PnL, profit factor, avg R, top chyby). Filtruj podle ÚČTU (account = název/ID), tagu, chyby, dne v týdnu (weekday), R-rozsahu. **group_by** (account|instrument|direction|session|weekday|tag|mistake|outcome) vrátí rozpad po skupinách seřazený dle PnL — použij pro "který den/účet/setup je nejlepší/nejhorší".
 - **list_accounts(status?)** — VŠECHNY účty (i spálené/neaktivní) se stavem, fází, výsledkem (Passed/Failed), P&L a počtem obchodů. Pro "kolik mám účtů", "který jsem spálil", nebo než budeš filtrovat podle účtu.
 - **find_similar_trades(trade_id? OR description?, limit?, account?)** — sémanticky podobné obchody, lze zúžit na konkrétní účet.
@@ -813,7 +813,7 @@ ${tradesText}`;
   const apiMessages: ApiMessage[] = messages.map(m => ({ role: m.role, content: m.content }));
 
   let fullText = ''; // accumulated final-answer text across iterations (for ref parsing)
-  const MAX_ITER = 6;
+  const MAX_ITER = 10;
 
   try {
     for (let iter = 0; iter < MAX_ITER; iter++) {

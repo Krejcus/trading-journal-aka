@@ -2488,6 +2488,39 @@ export const storageService = {
     await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversationId);
   },
 
+  /**
+   * Vloží novou zprávu a vrátí její ID — používá se pro streamování,
+   * kdy chceme držet pahýl v DB a postupně ho updatovat (přežije F5/odchod).
+   */
+  async appendMessageReturning(conversationId: string, role: 'user' | 'assistant', content: string): Promise<string | null> {
+    const { data, error } = await supabase
+      .from('ai_messages')
+      .insert({ conversation_id: conversationId, role, content })
+      .select('id')
+      .single();
+    if (error) {
+      console.warn('[storage] appendMessageReturning error:', error);
+      return null;
+    }
+    await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversationId);
+    return data?.id ? String(data.id) : null;
+  },
+
+  /**
+   * Update obsahu existující zprávy. Používá se během streamu pro průběžné
+   * ukládání rozpracované odpovědi (každé ~3s + finální flush).
+   */
+  async updateMessage(messageId: string, content: string): Promise<void> {
+    const { error } = await supabase.from('ai_messages').update({ content }).eq('id', messageId);
+    if (error) console.warn('[storage] updateMessage error:', error);
+  },
+
+  /** Smaže zprávu (např. prázdný pahýl při onError před prvním chunkem). */
+  async deleteMessage(messageId: string): Promise<void> {
+    const { error } = await supabase.from('ai_messages').delete().eq('id', messageId);
+    if (error) console.warn('[storage] deleteMessage error:', error);
+  },
+
   // ─── SCREENSHOT STORAGE MIGRATION ────────────────────────────────────────
 
   /** Upload a base64 data URL to Supabase Storage and return the public URL */

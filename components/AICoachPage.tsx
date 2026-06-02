@@ -138,6 +138,15 @@ const AICoachPage: React.FC<Props> = ({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Auto-resize textarea — roste s obsahem (jako Claude/ChatGPT). Scrollbar
+  // až po překročení max výšky (~50vh) pro fakt extrémní texty.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
+
   // ─── Stick-to-bottom scroll chování (jako Claude.ai / ChatGPT) ───────────
   // Když je user "u dna" (< 80px od konce), auto-scroll je aktivní.
   // Když odscroluje nahoru, auto-scroll se vypne — user může číst v klidu.
@@ -186,6 +195,31 @@ const AICoachPage: React.FC<Props> = ({
   // Reduces React re-renders during streaming (less frame-drop interference with RAF)
   const chunkBufferRef = useRef('');
   const chunkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Throttle pro průběžné ukládání asistentovy zprávy do DB (každé ~3s).
+  // Přežije F5/odchod — při návratu se načte z DB to co stihlo.
+  const dbSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastDbSavedRef = useRef<string>('');
+  // Refs pro aktivně streamovanou zprávu — umožní flush do DB při unmount
+  // (přepnutí pryč z AI tabu během streamu nesmí ztratit rozdělanou odpověď).
+  const streamingMsgIdRef = useRef<string | null>(null);
+  const streamingContentRef = useRef<string>('');
+
+  // Flush rozdělané zprávy do DB při unmount AI Coach stránky (přepnutí na dashboard
+  // atd.). Bez tohohle by se posledních ~2s odpovědi ztratilo (mezi throttle ticky).
+  // Když je obsah úplně prázdný (stream se nestihl rozjet), smaž pahýl — jinak by
+  // user při návratu viděl prázdnou bublinu.
+  useEffect(() => {
+    return () => {
+      const id = streamingMsgIdRef.current;
+      const content = streamingContentRef.current;
+      if (!id) return;
+      if (!content || !content.trim()) {
+        storageService.deleteMessage(id).catch(() => {});
+      } else if (content !== lastDbSavedRef.current) {
+        storageService.updateMessage(id, content).catch(() => {});
+      }
+    };
+  }, []);
 
   const traderContext = React.useMemo(
     () => buildTraderContext({ trades, accounts, ironRules, playbookItems, dailyPreps, dailyReviews }),
@@ -435,6 +469,11 @@ const AICoachPage: React.FC<Props> = ({
 
     // Save user message to DB
     await storageService.appendMessage(convId, 'user', text.trim());
+    // Vlož PAHÝL asistentovy zprávy hned — během streamu ho budeme updatovat,
+    // takže když user odejde/F5, při návratu uvidí to co stihlo, ne prázdno.
+    const assistantMsgId = await storageService.appendMessageReturning(convId, 'assistant', '');
+    streamingMsgIdRef.current = assistantMsgId;
+    streamingContentRef.current = '';
 
     // If this is the first message, auto-update conversation title
     if (isFirstMessage) {
@@ -465,7 +504,26 @@ const AICoachPage: React.FC<Props> = ({
       // which prevents React from dropping RAF animation frames.
       (chunk) => {
         finalContent += chunk;
+        streamingContentRef.current = finalContent;
         chunkBufferRef.current += chunk;
+
+        // PRVNÍ chunk → uložit HNED do DB (i kdyby user okamžitě přepl tab, máme aspoň začátek).
+        // Další chunky → throttle 2s, ať to nezahltí Supabase.
+        if (assistantMsgId) {
+          const isFirstSave = !lastDbSavedRef.current;
+          if (isFirstSave && finalContent.trim().length > 0) {
+            lastDbSavedRef.current = finalContent;
+            storageService.updateMessage(assistantMsgId, finalContent).catch(() => {});
+          } else if (!dbSaveTimerRef.current) {
+            dbSaveTimerRef.current = setTimeout(() => {
+              dbSaveTimerRef.current = null;
+              if (finalContent && finalContent !== lastDbSavedRef.current) {
+                lastDbSavedRef.current = finalContent;
+                storageService.updateMessage(assistantMsgId, finalContent).catch(() => {});
+              }
+            }, 2000);
+          }
+        }
 
         if (!chunkTimerRef.current) {
           chunkTimerRef.current = setTimeout(() => {
@@ -536,10 +594,40 @@ const AICoachPage: React.FC<Props> = ({
         }
         setIsStreaming(false);
         setToolStatus(null);
-        // Save assistant message to DB
-        if (finalContent) {
-          await storageService.appendMessage(convId, 'assistant', finalContent);
+        // Finální flush DB throttle.
+        if (dbSaveTimerRef.current) {
+          clearTimeout(dbSaveTimerRef.current);
+          dbSaveTimerRef.current = null;
         }
+        // Update finálního obsahu pahýlu (vložil jsem ho hned po user message).
+        // Když pahýl neexistuje (selhal insert), fallback na append.
+        if (finalContent) {
+          if (assistantMsgId) {
+            await storageService.updateMessage(assistantMsgId, finalContent);
+          } else {
+            await storageService.appendMessage(convId, 'assistant', finalContent);
+          }
+        } else {
+          // Stream skončil bez textu (např. samé tool calls bez výstupu).
+          // Smaž prázdný pahýl z DB a placeholder z UI — místo prázdné bubliny ukaž
+          // chybovou zprávu, ať user ví, co se stalo.
+          if (assistantMsgId) storageService.deleteMessage(assistantMsgId).catch(() => {});
+          setMessages(prev => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === 'assistant' && !last.content) {
+              updated[updated.length - 1] = {
+                ...last,
+                content: '⚠️ Agent skončil bez odpovědi (možná příliš mnoho tool volání). Zkus dotaz jinak nebo konkrétněji.',
+              };
+            }
+            return updated;
+          });
+        }
+        // Vyčisti streaming refs — dokončeno, unmount už nemá co flushovat.
+        streamingMsgIdRef.current = null;
+        streamingContentRef.current = '';
+        lastDbSavedRef.current = '';
         // Update conversation's updated_at in local state
         setConversations(prev => {
           const updated = prev.map(c =>
@@ -558,7 +646,29 @@ const AICoachPage: React.FC<Props> = ({
         console.error('[AICoachPage] stream error:', err);
         setIsStreaming(false);
         setToolStatus(null);
-        setMessages(prev => prev.slice(0, -1));
+        if (dbSaveTimerRef.current) {
+          clearTimeout(dbSaveTimerRef.current);
+          dbSaveTimerRef.current = null;
+        }
+        // Uloženo co stihlo — neházet pryč to, co user už vidí.
+        // Pokud nic neproudilo, ukaž chybovou zprávu místo prázdné bubliny.
+        if (!finalContent) {
+          if (assistantMsgId) storageService.deleteMessage(assistantMsgId).catch(() => {});
+          setMessages(prev => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === 'assistant' && !last.content) {
+              updated[updated.length - 1] = { ...last, content: `⚠️ Chyba: ${err}` };
+            }
+            return updated;
+          });
+        } else if (assistantMsgId) {
+          // Final flush rozpracovaného obsahu do DB.
+          storageService.updateMessage(assistantMsgId, finalContent).catch(() => {});
+        }
+        streamingMsgIdRef.current = null;
+        streamingContentRef.current = '';
+        lastDbSavedRef.current = '';
       },
       // options — tool-use mode
       {
@@ -914,7 +1024,7 @@ const AICoachPage: React.FC<Props> = ({
               placeholder="Napiš zprávu... (Enter = odeslat)"
               rows={1}
               disabled={isStreaming}
-              className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder-slate-500 resize-none outline-none max-h-32 scrollbar-thin disabled:opacity-50"
+              className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder-slate-500 resize-none outline-none max-h-[50vh] overflow-y-auto scrollbar-thin disabled:opacity-50"
               style={{ lineHeight: '1.5' }}
             />
             <VoiceMemoButton
