@@ -1,6 +1,6 @@
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview } from '../types';
 import { COACH_TOOLS, executeTool, describeToolCall } from './coachTools';
-import { getProfile, recallMemory, renderProfileForPrompt } from './coachMemoryService';
+import { getProfile, recallMemory, renderProfileForPrompt, getActiveCommitments, getRecentConversationSummaries } from './coachMemoryService';
 import { supabase } from './supabase';
 
 // Anthropic API access goes through the `chat` Supabase Edge Function so the
@@ -559,12 +559,47 @@ export async function streamAIResponse(
 
   let memoryBlock = '';
   try {
-    const [profile, recalled] = await Promise.all([
+    const [profile, recalled, commitments, recentSummaries] = await Promise.all([
       getProfile(),
       recallQuery ? recallMemory({ query: recallQuery, limit: 6, similarity_threshold: 0.25 }) : Promise.resolve([]),
+      // VŽDY načti aktivní commitmenty (závazky) — coach JE MUSÍ respektovat
+      getActiveCommitments(),
+      // Posledních 5 conversation summaries — kontinuita napříč chaty
+      getRecentConversationSummaries(5),
     ]);
 
     const profileBlock = renderProfileForPrompt(profile, { initialBalance: options.initialBalance });
+
+    // KRITICKÝ BLOK: aktivní commitmenty/dohody. Coach NESMÍ navrhovat nic v rozporu s nimi.
+    const commitmentsBlock = (() => {
+      if (!commitments || commitments.length === 0) return '';
+      const lines = ['=== ⚡⚡⚡ AKTIVNÍ ZÁVAZKY (MUSÍŠ JE RESPEKTOVAT) ⚡⚡⚡ ==='];
+      for (const c of commitments) {
+        const date = c.memory_date ? `[uloženo ${c.memory_date}] ` : '';
+        const exp = (c.metadata as any)?.expires_at ? ` (platí do ${(c.metadata as any).expires_at})` : ' (trvalý)';
+        lines.push(`▸ ${date}${c.content}${exp}`);
+      }
+      lines.push('');
+      lines.push('PRAVIDLA pro práci se závazky:');
+      lines.push('1. NIKDY nenavrhuj akci v rozporu s aktivním závazkem ("jdi do live" když je commit "jen sim").');
+      lines.push('2. POKUD user navrhuje akci proti závazku, PŘIPOMEŇ mu závazek a zeptej se jestli ho chce změnit.');
+      lines.push('3. Závazky NEMĚŇ bez explicitního souhlasu usera (typu "ruším ten commit", "už jsem připraven na live").');
+      lines.push('4. Pokud se závazek změní, ZAVOLEJ forget_memory na starý a remember s novým.');
+      return lines.join('\n');
+    })();
+
+    // Kontinuita konverzací — posledních 5 summary chronologicky.
+    const summariesBlock = (() => {
+      if (!recentSummaries || recentSummaries.length === 0) return '';
+      const lines = ['=== POSLEDNÍ KONVERZACE (kontinuita) ==='];
+      for (const s of recentSummaries) {
+        const date = s.memory_date || (s.created_at ? String(s.created_at).slice(0, 10) : '?');
+        lines.push(`[${date}] ${s.content}`);
+      }
+      lines.push('Když user navazuje na předchozí téma, znej kontext.');
+      return lines.join('\n');
+    })();
+
     const recallBlock = (() => {
       if (!recalled || recalled.length === 0) return '';
       const lines = ['=== RELEVANTNÍ DLOUHODOBÁ PAMĚŤ (vyhledáno k aktuálnímu dotazu) ==='];
@@ -578,7 +613,9 @@ export async function streamAIResponse(
       return lines.join('\n');
     })();
 
-    memoryBlock = [profileBlock, recallBlock].filter(Boolean).join('\n\n');
+    // Pořadí v promptu: commitments NEJDŘÍV (musí ovlivnit reasoning),
+    // pak summaries (kontext), pak profile, pak ad-hoc recall.
+    memoryBlock = [commitmentsBlock, summariesBlock, profileBlock, recallBlock].filter(Boolean).join('\n\n');
   } catch (e) {
     console.warn('[aiService] memory injection failed (continuing without):', e);
   }
@@ -772,6 +809,7 @@ Data nástroje:
 - **list_accounts(status?)** — VŠECHNY účty (i spálené/neaktivní) se stavem, fází, výsledkem (Passed/Failed), P&L a počtem obchodů. Pro "kolik mám účtů", "který jsem spálil", nebo než budeš filtrovat podle účtu.
 - **find_similar_trades(trade_id? OR description?, limit?, account?)** — sémanticky podobné obchody, lze zúžit na konkrétní účet.
 - **get_recent_context(limit?, account?)** — poslední trades/preps/reviews pro vágní dotazy; s "account" filtruje obchody na daný účet (preps/reviews jsou globální).
+- **get_business_summary(period?, date_from?, date_to?, include?)** — finanční data z Business Hubu: výdaje (nákupy challenges, software), výplaty z funded účtů, breakdown po kategoriích. Period: this_month (default) | last_month | this_year | all_time | custom. POUŽIJ pro otázky typu "kolik jsem utratil za účty/challenge", "kolik mě stály challenge tento měsíc", "kolik mi prišlo z payoutů", "jsem v plusu / mínusu celkově", "kolik mě stojí provoz". Vrací reálná čísla z business_expenses + business_payouts tabulek.
 
 Paměťové nástroje (DLOUHODOBÁ PAMĚŤ):
 - **remember(type, content, importance?, memory_date?, key?, value?)** — ulož trvalý insight. type=observation pro vzorce, episode pro události, fact/preference pro statické pravdy (s key+value).
@@ -785,6 +823,18 @@ Pokud user řekne JAKOUKOLI z těchto věcí, MUSÍŠ ihned zavolat remember() P
 - "Hlavně obchoduji X" / "Můj styl je X" → remember({type:'fact', key:'trading_style', value:'X', content:'User trading style: X.'})
 - "Pamatuj si že..." / "Důležité je..." → remember({type:'observation' nebo 'fact', content:'...'})
 - Identifikuješ NOVÝ pattern v dotazech / chování → remember({type:'observation', content:'Pattern: ...', importance:6-8})
+
+⚡ KRITICKÉ — COMMITMENTS (ZÁVAZKY):
+Pokud user řekne / dohodnete se na JAKÉMKOLI závazku / pravidlu / plánu, MUSÍŠ zavolat remember({type:'commitment'}) PŘED odpovědí. Příklady:
+- "Budu jet na sim do X dní" → remember({type:'commitment', content:'Do <datum> jen sim trading', expires_at:'<datum>', importance:9})
+- "Už nebudu obchodovat NQ ve čtvrtek" → remember({type:'commitment', content:'Zákaz NQ ve čtvrtek', importance:9})
+- "Max 1% risk per trade" → remember({type:'commitment', content:'Max 1% risk per trade', importance:9})
+- "Pauza do pondělí" → remember({type:'commitment', content:'Pauza v tradingu do <datum>', expires_at:'<datum>', importance:10})
+- "Tenhle měsíc nebudu kupovat další challku" → remember({type:'commitment', content:'V <měsíc> žádný nákup challenge', expires_at:'<konec_měsíce>', importance:9})
+- Dohodnete spolu plán/strategii → remember({type:'commitment', content:'Plán: ...', importance:8})
+
+Commitmenty jdou DO SYSTEM PROMPTU každého dalšího chatu — musíš je RESPEKTOVAT a nesmíš navrhovat akce v rozporu s nimi.
+Pokud jsi tu commit už uložil dnes a user ho opakuje, ZACHOVEJ existující (nezdvojuj). Pokud user ho ruší ("už to neplatí"), zavolej forget_memory.
 
 Klíčové: NEŘÍKEJ jen "beru na vědomí" / "ok" / "rozumím". Když user vysloví preferenci nebo trvalý fakt, VŽDY nejdřív zavolej remember(), pak potvrď.
 
@@ -820,12 +870,25 @@ ${tradesText}`;
       const body: any = {
         model: 'claude-sonnet-4-5',
         max_tokens: 12000, // bump → thinking budget (8k) + final answer + tool args
-        system: systemPrompt,
+        // Prompt caching: system prompt je statický napříč iteracemi i v rámci
+        // 5min konverzačního okna → cache_control: ephemeral.
+        // Anthropic vyžaduje min 1024 tokenů pro cache hit (Sonnet) — náš
+        // system prompt + memory + trades je vždy mnohem víc, takže OK.
+        // Druhá+ zpráva v <5min: ~80% sleva na cached tokeny + ~50% rychlejší TTFT.
+        system: [
+          { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }
+        ],
         messages: apiMessages,
         stream: true,
       };
       if (useTools) {
-        body.tools = COACH_TOOLS;
+        // Tools jsou taky statické → cache_control na posledním toolu cache-uje
+        // celou tools sekci (cache breakpoint platí pro vše PŘED ním v requestu).
+        body.tools = COACH_TOOLS.map((t, i) =>
+          i === COACH_TOOLS.length - 1
+            ? { ...t, cache_control: { type: 'ephemeral' as const } }
+            : t
+        );
         // Interleaved thinking — Claude může přemýšlet MEZI tool calls v rámci
         // jednoho assistant turn. Stojí to víc tokenů (myšlenkové tokeny se
         // účtují), ale dramaticky zlepší kvalitu komplexních analýz.

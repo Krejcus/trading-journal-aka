@@ -102,6 +102,12 @@ export function parseContractRoot(contract: string): string {
   return c;
 }
 
+/** Vrátí point value (USD per 1 point move) pro kontrakt. Fallback = 1 (orientační). */
+export function pointValueFor(contract: string | undefined): number {
+  if (!contract) return FALLBACK_POINT_VALUE;
+  return specFor(contract).pointValue;
+}
+
 function specFor(contract: string): { pointValue: number; tickSize: number; known: boolean } {
   const root = parseContractRoot(contract);
   const spec = CONTRACT_SPECS[root];
@@ -117,6 +123,11 @@ const COLS = {
   price: ['avgprice', 'price', 'fillprice', 'avg', 'averageprice', 'execprice', 'avgfillprice'],
   symbol: ['contract', 'symbol', 'instrument', 'product', 'ticker'],
   time: ['filltime', 'timestamp', 'time', 'datetime', 'executiontime', 'filledtime', 'date', 'fillts'],
+  // PRO BRACKET ORDERY: čteme PLACED time (= kdy user nastavil SL/TP), NE Fill time
+  // (= kdy SL/TP hit). Fill time pro stop = +X minut po vstupu → falešně vypadá
+  // jako "SL přidán pozdě". Tradovate Orders export má 'Timestamp' = placed time
+  // a 'Fill Time' = execution time.
+  placedTime: ['timestamp', 'placedtime', 'submittedat', 'submittime', 'time'],
   orderId: ['orderid', 'order', 'id', 'lastcommandid'],
   status: ['status', 'orderstatus', 'state'],
   pnl: ['pnl', 'realizedpnl', 'netpnl', 'pl', 'plusd', 'netplusd', 'realized'],
@@ -305,7 +316,9 @@ export function parseTradovateFills(rows: any[], accountId: string): TradovateIm
     if (!contract) continue;
     const priceRaw = bt === 'stop' ? num(pick(r, COLS.stopPrice)) : num(pick(r, COLS.limitPrice));
     if (isNaN(priceRaw)) continue;
-    const timeRaw = pick(r, COLS.time);
+    // PRO BRACKET ORDERY: čti PLACED time (= kdy user nastavil SL/TP) z `Timestamp`
+    // column, ne fill time. Fallback na `Fill Time` pokud `Timestamp` chybí.
+    const timeRaw = pick(r, COLS.placedTime) ?? pick(r, COLS.time);
     const t = timeRaw !== undefined ? new Date(timeRaw).getTime() : NaN;
     if (isNaN(t)) continue;
     if (!bracketsByContract.has(contract)) bracketsByContract.set(contract, []);
@@ -412,9 +425,37 @@ export function parseTradovateFills(rows: any[], accountId: string): TradovateIm
       const cands = contractBrackets.filter(b => b.buy === exitBuy && b.time >= lo && b.time <= hi);
       const nearestEntry = (a: BracketOrder, b: BracketOrder) =>
         Math.abs(a.time - acc!.firstTime) - Math.abs(b.time - acc!.firstTime);
-      const stopCand = cands.filter(b => b.type === 'stop').sort(nearestEntry)[0];
+      const stopCandRaw = cands.filter(b => b.type === 'stop').sort(nearestEntry)[0];
       const limitCand = cands.filter(b => b.type === 'limit').sort(nearestEntry)[0];
-      const stopLoss = stopCand?.price;
+
+      // Detekce posunutého / pozdě přidaného SL (Tradovate exportuje jen FINAL stav
+      // orderů, ne historii modifikací). Dvě heuristiky:
+      //
+      //  1) SL na nesprávné straně entry — Long s SL nad entry / Short s SL pod entry
+      //     = jasný profit-lock (nikdy nebyl original SL).
+      //  2) SL placed >30s PO entry = manuální setup po pohybu trhu (nebyl bracket).
+      //     Original SL = neznámý.
+      //
+      // V obou případech nepoužij stopLoss → trade nebude mít riskAmount → display
+      // ukáže jen P&L bez R-multiple (žádné nesmyslné "+100R").
+      let stopLoss: number | undefined = stopCandRaw?.price;
+      let stopWasMoved = false;
+      if (stopLoss !== undefined && stopCandRaw) {
+        const isShort = acc.dirSign === -1;
+        const slOnWrongSide = isShort ? stopLoss < entryVWAP : stopLoss > entryVWAP;
+        const slPlacedLate = (stopCandRaw.time - acc.firstTime) > 30000; // 30s threshold
+        if (slOnWrongSide) {
+          stopLoss = undefined;
+          stopWasMoved = true;
+          notesParts.push('🔁 SL posunut (lock profitu) — původní risk neznámý');
+        } else if (slPlacedLate) {
+          stopLoss = undefined;
+          stopWasMoved = true;
+          const delaySec = Math.round((stopCandRaw.time - acc.firstTime) / 1000);
+          notesParts.push(`🔁 SL přidán ${delaySec}s po vstupu (bez bracket orderu) — původní risk neznámý`);
+        }
+      }
+
       const takeProfit = limitCand?.price;
       if (stopLoss !== undefined || takeProfit !== undefined) withSLTP++;
 

@@ -266,6 +266,24 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                             />
                         </div>
 
+                        {/* Datum spálení — důležité, AI Coach ho čte ("včera", "před 3 dny")
+                            Často účet padne večer/noc a Funeral se vyplní druhý den → uživatel
+                            si může opravit datum ručně. */}
+                        <div>
+                            <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                                <Calendar size={11} className="inline mr-1.5" />
+                                Datum spálení <span className="text-rose-500">*</span>
+                                <span className="ml-2 font-normal normal-case tracking-normal text-[9px] opacity-60">(opraf pokud Funeral vyplňuješ až další den)</span>
+                            </label>
+                            <input
+                                type="date"
+                                value={failureDate}
+                                max={today}
+                                onChange={e => setFailureDate(e.target.value)}
+                                className={`w-full px-4 py-3 rounded-xl border text-sm font-mono ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}
+                            />
+                        </div>
+
                         {/* Amount lost + days */}
                         <div className="grid grid-cols-2 gap-3">
                             <div>

@@ -1555,14 +1555,21 @@ const Dashboard: React.FC<DashboardProps> = ({
                     </motion.div>
                   </div>
                 );
+              } else if (item.isKpi) {
+                // Unpaired KPI (lichý počet) — na mobilu poloviční šířka,
+                // ne natažený přes celé pole (vypadalo by to směšně velké)
+                rows.push(
+                  <div key={`kpi-solo-${item.widget.id}`} className="grid grid-cols-2 gap-3">
+                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                      {item.content}
+                    </motion.div>
+                  </div>
+                );
               } else {
-                // Unpaired KPI (odd count) or full-width widget
+                // Full-width widget (komplexní karty)
                 const fixedHeight = chartHeights[item.widget.id];
-                // daily_insight a pending_ai_review widgety se samy určí podle obsahu — nepotřebují min výšku
                 const isSelfSizing = item.widget.id === 'daily_insight' || item.widget.id === 'pending_ai_review';
-                const style = item.isKpi
-                  ? { minHeight: 160 }
-                  : isSelfSizing
+                const style = isSelfSizing
                   ? {}
                   : fixedHeight ? { height: fixedHeight } : { minHeight: 260 };
                 rows.push(
@@ -1647,10 +1654,10 @@ const Dashboard: React.FC<DashboardProps> = ({
               {/* Widget list */}
               <div className="overflow-y-auto flex-1 px-4 py-3 flex flex-col gap-2">
                 <AnimatePresence initial={false}>
-                {[...layout].sort((a, b) => (a.y - b.y) || (a.x - b.x)).map((widget, idx, arr) => {
+                {[...layout].filter(w => w.visible !== false).sort((a, b) => (a.y - b.y) || (a.x - b.x)).map((widget, idx, arr) => {
                   const master = MASTER_WIDGET_LIST.find(m => m.id === widget.id);
-                  const isVisible = widget.visible !== false;
-                  const visibleArr = arr.filter(w => w.visible !== false);
+                  const isVisible = true; // jsme už filtrovaní jen na visible
+                  const visibleArr = arr;
                   const visibleIdx = visibleArr.findIndex(w => w.id === widget.id);
                   return (
                     <motion.div
@@ -1700,6 +1707,41 @@ const Dashboard: React.FC<DashboardProps> = ({
                   );
                 })}
                 </AnimatePresence>
+
+                {/* Vypnuté + nikdy-nepřidané widgety → přidat */}
+                {(() => {
+                  const missingWidgets = MASTER_WIDGET_LIST.filter(m => {
+                    const inLayout = layout.find(w => w.id === m.id);
+                    return !inLayout || inLayout.visible === false;
+                  });
+                  if (missingWidgets.length === 0) return null;
+                  return (
+                    <>
+                      <div className="px-1 pt-4 pb-2">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Přidat další</p>
+                      </div>
+                      {missingWidgets.map(master => (
+                        <button
+                          key={`add-${master.id}`}
+                          onClick={() => updateWidgetStatus(master.id, true)}
+                          className={`flex items-center gap-3 px-4 py-3 rounded-2xl border border-dashed transition-all active:scale-95 ${isDark ? 'border-white/15 hover:bg-white/5 hover:border-emerald-500/40' : 'border-slate-300 hover:bg-slate-50 hover:border-emerald-500/40'}`}
+                        >
+                          <div className={`w-10 h-6 rounded-full border flex items-center justify-start shrink-0 ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'}`}>
+                            <div className="w-4 h-4 rounded-full bg-emerald-500 mx-1 shadow-sm" />
+                          </div>
+                          <div className={`p-1.5 rounded-lg ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+                            {React.cloneElement(master.icon as React.ReactElement<any>, { size: 14 })}
+                          </div>
+                          <div className="flex-1 text-left">
+                            <span className="text-xs font-bold block">{master.label}</span>
+                            <span className="text-[9px] text-slate-500 line-clamp-1">{master.description}</span>
+                          </div>
+                          <span className="text-[9px] font-black uppercase tracking-widest text-emerald-500 shrink-0">Přidat</span>
+                        </button>
+                      ))}
+                    </>
+                  );
+                })()}
               </div>
             </motion.div>
           </>

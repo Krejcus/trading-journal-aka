@@ -76,6 +76,28 @@ Deno.serve(async (req: Request) => {
   const wins = realTrades.filter((t: any) => Number(t.pnl) > 0.01).length;
   const losses = realTrades.filter((t: any) => Number(t.pnl) < -0.01).length;
 
+  // Rozdělení trades na "tento týden" (od pondělí) vs. "minulý týden".
+  // Bez tohoto coach říkal "máš za sebou týden 2W/1L" i když všechny obchody
+  // byly z minulého týdne a tento týden neměl žádný real trade.
+  const dayOfWeek = (now.getDay() + 6) % 7; // 0 = pondělí
+  const mondayOfThisWeek = subDays(now, dayOfWeek);
+  const mondayIso = isoTZ(mondayOfThisWeek);
+  const isOnOrAfter = (dateStr: string, isoBoundary: string) => String(dateStr).slice(0, 10) >= isoBoundary;
+  const thisWeekTrades = realTrades.filter((t: any) => isOnOrAfter(t.date, mondayIso));
+  const lastWeekTrades = realTrades.filter((t: any) => !isOnOrAfter(t.date, mondayIso));
+  const tw = {
+    n: thisWeekTrades.length,
+    pnl: thisWeekTrades.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0),
+    w: thisWeekTrades.filter((t: any) => Number(t.pnl) > 0.01).length,
+    l: thisWeekTrades.filter((t: any) => Number(t.pnl) < -0.01).length,
+  };
+  const lw = {
+    n: lastWeekTrades.length,
+    pnl: lastWeekTrades.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0),
+    w: lastWeekTrades.filter((t: any) => Number(t.pnl) > 0.01).length,
+    l: lastWeekTrades.filter((t: any) => Number(t.pnl) < -0.01).length,
+  };
+
   const todayIso = isoTZ(now);
   const wdShort = weekdayShort(now);
   const isWeekend = wdShort === 'Sat' || wdShort === 'Sun';
@@ -128,6 +150,7 @@ Deno.serve(async (req: Request) => {
   p.push('- Pokud je VÍKEND nebo den bez obchodů (trh NQ/MNQ zavřený): NEvyčítej chybějící přípravu/review — je to normální. Reflektuj uplynulý týden nebo poslední velký moment.');
   p.push('- Chybějící přípravu/review řeš JEN v obchodní den.');
   p.push('- Negeneruj generické "doplň přípravu". Buď konkrétní.');
+  p.push('- ČAS přesně: NIKDY neříkej "tento týden" pro obchody z minulého týdne. Použij konkrétní formulaci podle dat výše ("Tento týden" / "Minulý týden"). Pokud TENTO TÝDEN má 0 trades a obchody jsou z MINULÉHO týdne, řekni to explicitně ("minulý týden").');
   p.push('');
   p.push('NAVRHOVANÁ TÉMATA: krátká (max 50 znaků), akce-zaměřená, různorodá.');
   p.push('');
@@ -135,7 +158,14 @@ Deno.serve(async (req: Request) => {
   p.push('');
   p.push('=== AKTUÁLNÍ KONTEXT ===');
   p.push(`Dnes: ${todayIso} (${weekdayCs(now)})${isWeekend ? ' — VÍKEND, trh zavřený, příprava/review se NEočekává' : ''}`);
-  p.push(`Posledních 7 dní: ${realTrades.length} trades, ${wins}W/${losses}L, PnL $${totalPnl.toFixed(0)}`);
+  // KRITICKÉ: nemíchej "tento týden" a "minulý týden". Coach často chyboval —
+  // říkal "týden 2W/1L" když všechny obchody byly z minulého týdne a tento týden
+  // user neměl žádný real trade.
+  p.push(`Tento týden (od pondělí ${mondayIso}): ${tw.n} trades${tw.n > 0 ? `, ${tw.w}W/${tw.l}L, PnL $${tw.pnl.toFixed(0)}` : ' — zatím nic'}`);
+  if (lw.n > 0) {
+    p.push(`Minulý týden: ${lw.n} trades, ${lw.w}W/${lw.l}L, PnL $${lw.pnl.toFixed(0)}`);
+  }
+  p.push(`Celkem 7 dní zpět: ${realTrades.length} trades, ${wins}W/${losses}L, PnL $${totalPnl.toFixed(0)} (referenční číslo)`);
   if (!isWeekend) {
     p.push(`Dnes: ${todayHasTrades ? 'má obchody' : 'bez obchodů'}, ${todayHasPrep ? 'příprava VYPLNĚNÁ' : 'příprava CHYBÍ'}, ${todayHasReview ? 'review VYPLNĚNÁ' : 'review CHYBÍ'}`);
   }

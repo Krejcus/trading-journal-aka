@@ -75,6 +75,20 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     return formatPnL(val, mode, bal, rr, sign, targetCurrency, exchangeRates);
   };
 
+  // Price-based RR helper (jako TradingView) — preferuje entry/exit/stopLoss diff
+  // před pnl/riskAmount poměrem (který zahrnuje fees).
+  const priceBasedRR = (t: Trade): number | undefined => {
+    if (t.entryPrice && t.exitPrice && t.stopLoss) {
+      const profitMove = Math.abs(t.entryPrice - t.exitPrice);
+      const riskMove = Math.abs(t.entryPrice - t.stopLoss);
+      if (riskMove > 0) {
+        const sign = (t.pnl || 0) >= 0 ? 1 : -1;
+        return sign * (profitMove / riskMove);
+      }
+    }
+    return t.riskAmount ? (t.pnl || 0) / t.riskAmount : undefined;
+  };
+
   // Get account phase for a trade (account is source of truth, not trade.phase)
   const getTradePhase = (trade: Trade): string | null => {
     const account = accounts.find(a => a.id === trade.accountId);
@@ -871,7 +885,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         trade.pnl,
                         pnlDisplayMode,
                         accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
-                        trade.riskAmount ? trade.pnl / trade.riskAmount : undefined
+                        priceBasedRR(trade)
                       )}
                     </span>
                   </div>
@@ -1096,7 +1110,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                             trade.pnl,
                             pnlDisplayMode,
                             accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
-                            trade.riskAmount ? (trade.pnl / trade.riskAmount) : undefined
+                            priceBasedRR(trade)
                           )}
                         </span>
                       </td>

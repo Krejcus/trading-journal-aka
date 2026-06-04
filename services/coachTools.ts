@@ -179,29 +179,33 @@ export const COACH_TOOLS = [
   {
     name: 'remember',
     description:
-      'Persist a durable insight about the trader for future conversations. Use this ONLY for non-trivial learnings — patterns, preferences, breakthroughs, recurring issues. NEVER store transient facts ("user said hi", "user is tired today"). The memory lives across sessions and is retrieved when relevant. Choose type carefully: observation = pattern/behavior, episode = notable event (large win/loss, regime change), fact = static truth about user (style, account), preference = how user wants Coach to communicate.',
+      'Persist a durable insight about the trader for future conversations. Use this ONLY for non-trivial learnings — patterns, preferences, breakthroughs, recurring issues, COMMITMENTS (dohody). NEVER store transient facts ("user said hi", "user is tired today"). The memory lives across sessions and is retrieved when relevant. CHOOSE TYPE CAREFULLY:\n- observation = recurring pattern/behavior\n- episode = notable event (large win/loss, regime change)\n- fact = static truth about user (style, account)\n- preference = how user wants Coach to communicate\n- commitment = AKTIVNÍ DOHODA/ZÁVAZEK uživatele co MUSÍŠ respektovat v každém dalším chatu ("do 10. jedu na sim", "max 1% risk", "už nebudu obchodovat NQ ve čtvrtek"). VŽDY použij když user vyjádří závazek nebo dohodnete plán. Commitmenty jdou DOdo system promptu příště — nesmíš jim odporovat.',
     input_schema: {
       type: 'object',
       properties: {
         type: {
           type: 'string',
-          enum: ['observation', 'episode', 'fact', 'preference'],
+          enum: ['observation', 'episode', 'fact', 'preference', 'commitment'],
           description:
-            'observation = recurring behavior/pattern · episode = notable event · fact = static truth (use sparingly) · preference = comm style',
+            'observation = pattern · episode = notable event · fact = static truth · preference = comm style · commitment = aktivní dohoda/závazek (KRITICKÉ — coach musí respektovat)',
         },
         content: {
           type: 'string',
           description:
-            'Short Czech sentence capturing the insight. Be specific. Example: "User opakovaně porušuje iron rule \'max 2 trades/day\' v pondělcích" (good) vs. "User má problém s disciplínou" (too vague).',
+            'Short Czech sentence capturing the insight. Be specific. Example: "User opakovaně porušuje iron rule \'max 2 trades/day\' v pondělcích" (good) vs. "User má problém s disciplínou" (too vague). Pro commitment: konkrétní + měřitelné, např. "Do 10.6.2026 jen sim trading, žádný live účet" (good) vs. "Bude opatrný" (vague).',
         },
         importance: {
           type: 'integer',
           description:
-            '1–10. 10 = critical (breakthrough, major drawdown), 5 = useful (pattern), 1 = trivial. Default 5.',
+            '1–10. 10 = critical (commitment / breakthrough / major drawdown), 5 = useful (pattern), 1 = trivial. Default 5. COMMITMENTS = vždy importance >=8.',
         },
         memory_date: {
           type: 'string',
           description: 'YYYY-MM-DD — when the event happened (not when you noticed it). Omit for general observations.',
+        },
+        expires_at: {
+          type: 'string',
+          description: 'YYYY-MM-DD — pro type=commitment: kdy závazek vyprší ("do pondělí", "do konce týdne"). Omit pro trvalé commitmenty.',
         },
         key: {
           type: 'string',
@@ -227,8 +231,8 @@ export const COACH_TOOLS = [
         },
         types: {
           type: 'array',
-          items: { type: 'string', enum: ['observation', 'episode', 'conversation_summary'] },
-          description: 'Optional filter. Omit to search all memory types.',
+          items: { type: 'string', enum: ['observation', 'episode', 'conversation_summary', 'commitment'] },
+          description: 'Optional filter. Omit to search all memory types. Pozn.: commitments jsou už VŽDY v system promptu, nemusíš je hledat zde.',
         },
         limit: { type: 'integer', description: 'Max results (1–20). Default 5.' },
       },
@@ -245,6 +249,28 @@ export const COACH_TOOLS = [
         memory_id: { type: 'string', description: 'UUID of the memory to delete.' },
       },
       required: ['memory_id'],
+    },
+  },
+  {
+    name: 'get_business_summary',
+    description:
+      'Returns business hub financial summary: expenses (nákupy challenges, software, hardware atd.) and payouts (výplaty z funded účtů). Use when user asks about money spent on accounts/challenges, total operating costs, payouts received, ROI, or net financial position. Defaults to current month if no period given.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        period: {
+          type: 'string',
+          enum: ['this_month', 'last_month', 'this_year', 'all_time', 'custom'],
+          description: 'Time window. Default this_month.',
+        },
+        date_from: { type: 'string', description: 'YYYY-MM-DD (used when period=custom)' },
+        date_to: { type: 'string', description: 'YYYY-MM-DD (used when period=custom)' },
+        include: {
+          type: 'array',
+          items: { type: 'string', enum: ['expenses', 'payouts', 'breakdown_by_category'] },
+          description: 'What to include. Default: all three.',
+        },
+      },
     },
   },
 ];
@@ -647,10 +673,11 @@ export interface ToolContext {
 }
 
 interface RememberArgs {
-  type: 'observation' | 'episode' | 'fact' | 'preference';
+  type: 'observation' | 'episode' | 'fact' | 'preference' | 'commitment';
   content: string;
   importance?: number;
   memory_date?: string;
+  expires_at?: string;
   key?: string;
   value?: unknown;
 }
@@ -664,12 +691,18 @@ async function rememberHandler(args: RememberArgs) {
     await setProfileKey(args.type === 'fact' ? 'facts' : 'preferences', args.key, args.value);
     return { ok: true, type: args.type, key: args.key };
   }
-  // Observation/episode go to embedded long-term memory.
+  // Observation/episode/commitment go to embedded long-term memory.
+  // Commitments default to importance 8 (musí být vidět nad ostatními).
+  const importance = args.importance ?? (args.type === 'commitment' ? 8 : undefined);
+  const metadata: Record<string, unknown> = {};
+  if (args.expires_at) metadata.expires_at = args.expires_at;
+
   const result = await addMemory({
     type: args.type as MemoryType,
     content: args.content,
-    importance: args.importance,
+    importance,
     memory_date: args.memory_date,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
   });
   if (!result) return { error: 'Failed to persist memory' };
   return { ok: true, id: result.id, type: result.type, importance: result.importance };
@@ -677,7 +710,7 @@ async function rememberHandler(args: RememberArgs) {
 
 interface RecallArgs {
   query: string;
-  types?: ('observation' | 'episode' | 'conversation_summary')[];
+  types?: ('observation' | 'episode' | 'conversation_summary' | 'commitment')[];
   limit?: number;
 }
 
@@ -711,6 +744,95 @@ async function forgetHandler(args: { memory_id: string }) {
  * Dispatch a tool call by name and arguments. Returns a JSON-serializable result
  * that gets fed back to Claude as the tool_result content.
  */
+interface BusinessSummaryArgs {
+  period?: 'this_month' | 'last_month' | 'this_year' | 'all_time' | 'custom';
+  date_from?: string;
+  date_to?: string;
+  include?: ('expenses' | 'payouts' | 'breakdown_by_category')[];
+}
+
+async function getBusinessSummary(args: BusinessSummaryArgs): Promise<unknown> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { error: 'no-session' };
+
+  // Compute period bounds
+  const now = new Date();
+  const tzIso = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(d);
+  const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+  const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  const startOfYear = (d: Date) => new Date(d.getFullYear(), 0, 1);
+  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  let dateFrom: string | null = null;
+  let dateTo: string | null = null;
+  const period = args.period || 'this_month';
+  if (period === 'this_month') { dateFrom = tzIso(startOfMonth(now)); dateTo = tzIso(endOfMonth(now)); }
+  else if (period === 'last_month') { dateFrom = tzIso(startOfMonth(lastMonth)); dateTo = tzIso(endOfMonth(lastMonth)); }
+  else if (period === 'this_year') { dateFrom = tzIso(startOfYear(now)); dateTo = tzIso(now); }
+  else if (period === 'all_time') { dateFrom = null; dateTo = null; }
+  else if (period === 'custom') { dateFrom = args.date_from || null; dateTo = args.date_to || null; }
+
+  const include = new Set(args.include?.length ? args.include : ['expenses', 'payouts', 'breakdown_by_category']);
+
+  // Fetch expenses
+  let expensesQuery = supabase.from('business_expenses').select('date, category, amount, description');
+  if (dateFrom) expensesQuery = expensesQuery.gte('date', dateFrom);
+  if (dateTo) expensesQuery = expensesQuery.lte('date', dateTo + 'T23:59:59');
+  const { data: expenses } = await expensesQuery.order('date', { ascending: false });
+
+  // Fetch payouts
+  let payoutsQuery = supabase.from('business_payouts').select('date, amount, description, payout_method');
+  if (dateFrom) payoutsQuery = payoutsQuery.gte('date', dateFrom);
+  if (dateTo) payoutsQuery = payoutsQuery.lte('date', dateTo + 'T23:59:59');
+  const { data: payouts } = await payoutsQuery.order('date', { ascending: false });
+
+  const totalExpenses = (expenses || []).reduce((s: number, e: any) => s + Number(e.amount || 0), 0);
+  const totalPayouts = (payouts || []).reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+
+  const result: any = {
+    period: { type: period, from: dateFrom, to: dateTo },
+    summary: {
+      total_expenses_usd: Math.round(totalExpenses * 100) / 100,
+      total_payouts_usd: Math.round(totalPayouts * 100) / 100,
+      net_usd: Math.round((totalPayouts - totalExpenses) * 100) / 100,
+      expense_count: expenses?.length || 0,
+      payout_count: payouts?.length || 0,
+    },
+  };
+
+  if (include.has('expenses')) {
+    result.expenses = (expenses || []).slice(0, 20).map((e: any) => ({
+      date: String(e.date).slice(0, 10),
+      category: e.category,
+      amount: Number(e.amount),
+      description: e.description,
+    }));
+  }
+  if (include.has('payouts')) {
+    result.payouts = (payouts || []).slice(0, 20).map((p: any) => ({
+      date: String(p.date).slice(0, 10),
+      amount: Number(p.amount),
+      method: p.payout_method,
+      description: typeof p.description === 'string' ? p.description : JSON.stringify(p.description),
+    }));
+  }
+  if (include.has('breakdown_by_category')) {
+    const byCat = new Map<string, { count: number; total: number }>();
+    for (const e of expenses || []) {
+      const k = (e as any).category || '(bez kategorie)';
+      const cur = byCat.get(k) || { count: 0, total: 0 };
+      cur.count++;
+      cur.total += Number((e as any).amount || 0);
+      byCat.set(k, cur);
+    }
+    result.breakdown_by_category = Array.from(byCat.entries())
+      .map(([category, v]) => ({ category, count: v.count, total: Math.round(v.total * 100) / 100 }))
+      .sort((a, b) => b.total - a.total);
+  }
+
+  return result;
+}
+
 export async function executeTool(
   name: string,
   args: any,
@@ -734,6 +856,8 @@ export async function executeTool(
         return await recallHandler(args);
       case 'forget_memory':
         return await forgetHandler(args);
+      case 'get_business_summary':
+        return await getBusinessSummary(args);
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -777,6 +901,11 @@ export function describeToolCall(name: string, args: any): string {
       return `💭 Vybavuji si "${(args?.query || '').slice(0, 40)}${(args?.query?.length || 0) > 40 ? '…' : ''}"`;
     case 'forget_memory':
       return `🗑️ Mažu z paměti`;
+    case 'get_business_summary': {
+      const period = args?.period || 'this_month';
+      const label: Record<string, string> = { this_month: 'tento měsíc', last_month: 'minulý měsíc', this_year: 'letos', all_time: 'celkem', custom: 'vlastní období' };
+      return `💰 Načítám finance (${label[period] || period})`;
+    }
     default:
       return `⚙️ ${name}`;
   }

@@ -3343,7 +3343,10 @@ const App: React.FC = () => {
           onClose={() => setDailyStartOpen(false)}
           onConfirm={(data) => {
             // Ulož commit do daily_preps pro dnešek (merge, ne overwrite).
+            // Pro každé committed pravidlo vyrob ritualCompletion se status 'Pass'
+            // — tak to Deník (ranní checklist) přečte jako "hotovo".
             const today = new Date().toISOString().slice(0, 10);
+            const newCompletions = data.committedRuleIds.map(ruleId => ({ ruleId, status: 'Pass' as const }));
             setDailyPreps(prev => {
               const idx = prev.findIndex(p => p.date === today);
               if (idx === -1) {
@@ -3352,7 +3355,7 @@ const App: React.FC = () => {
                   scenarios: { bullish: '', bearish: '' }, goals: [],
                   checklist: { sleptWell: false, planReady: false, disciplineCommitted: true, newsChecked: false },
                   mindsetState: data.affirmation, confidence: 70,
-                  ritualCompletions: [],
+                  ritualCompletions: newCompletions,
                   startedAt: Date.now(),
                   committedRuleIds: data.committedRuleIds,
                   dailyFocus: data.focus,
@@ -3360,7 +3363,22 @@ const App: React.FC = () => {
                 isPrepsDirty.current = true;
                 return [newPrep, ...prev];
               }
-              const merged = { ...prev[idx], startedAt: Date.now(), committedRuleIds: data.committedRuleIds, dailyFocus: data.focus };
+              // Merge: zachovej existující ritualCompletions, jen overrideni těch které user
+              // teď v modalu odškrtnul (přepiš status na Pass — modal vždy posílá co je hotové)
+              const existingCompletions = prev[idx].ritualCompletions || [];
+              const mergedCompletions = [...existingCompletions];
+              for (const c of newCompletions) {
+                const ei = mergedCompletions.findIndex(x => x.ruleId === c.ruleId);
+                if (ei >= 0) mergedCompletions[ei] = c;
+                else mergedCompletions.push(c);
+              }
+              const merged = {
+                ...prev[idx],
+                startedAt: Date.now(),
+                committedRuleIds: data.committedRuleIds,
+                dailyFocus: data.focus,
+                ritualCompletions: mergedCompletions,
+              };
               if (!prev[idx].mindsetState) (merged as any).mindsetState = data.affirmation;
               isPrepsDirty.current = true;
               return prev.map((p, i) => i === idx ? merged : p);

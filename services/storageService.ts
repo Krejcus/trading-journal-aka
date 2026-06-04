@@ -4,6 +4,8 @@ import { supabase } from './supabase';
 import { get, set } from 'idb-keyval';
 import { embedTrade, embedPrep, embedReview } from './embeddingService';
 import { maybeDetectEpisodes } from './coachMemoryService';
+import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
+import { stripAndUploadBase64Images, hasBase64Images } from './stripBase64';
 
 // Helper to validate UUID
 const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -1294,6 +1296,16 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
+    // KRITICKÉ: stripni base64 obrázky z preps PŘED save do DB.
+    // Bez tohoto se base64 ukládá inline do JSONB → enormní velikost (až 700 KB/row),
+    // špatný query performance a disk IO budget overage. Šetří 90%+ velikosti tabulky.
+    for (const p of preps) {
+      if (hasBase64Images(p)) {
+        const n = await stripAndUploadBase64Images(p, `prep_${p.date}`);
+        if (n > 0) console.info(`[saveDailyPreps] uploaded ${n} base64 image(s) → URL pro ${p.date}`);
+      }
+    }
+
     // Sync to Supabase FIRST (cache written after success to prevent phantom data)
     const prepsToUpsert = preps.map(p => ({ user_id: userId, date: p.date, data: p }));
     const { error } = await supabase.from('daily_preps').upsert(prepsToUpsert, { onConflict: 'user_id,date' });
@@ -1305,6 +1317,59 @@ export const storageService = {
     // Cache AFTER successful DB write
     await set(`alphatrade_daily_preps_${userId}`, preps);
     await updateCacheTimestamp();
+  },
+
+  /**
+   * One-time migration: projde existující daily_preps + daily_reviews, najde
+   * base64 image inline data v JSONB, uploadne je do Storage a v JSONB
+   * nahradí URL. Šetří 90%+ velikosti tabulky a IO budget.
+   * Idempotentní — po prvním běhu nemá co dělat.
+   */
+  async migrateBase64InJournals(
+    onProgress?: (msg: string) => void
+  ): Promise<{ preps: number; reviews: number; uploaded: number }> {
+    const userId = await getUserId();
+    if (!userId) throw new Error('Not authenticated');
+
+    const result = { preps: 0, reviews: 0, uploaded: 0 };
+
+    // Preps
+    const { data: preps } = await supabase.from('daily_preps').select('id, date, data').eq('user_id', userId);
+    for (const row of preps || []) {
+      const data = row.data as any;
+      if (!hasBase64Images(data)) continue;
+      const n = await stripAndUploadBase64Images(data, `prep_${row.date}_migrate`);
+      if (n > 0) {
+        const { error } = await supabase.from('daily_preps').update({ data }).eq('id', row.id);
+        if (!error) {
+          result.preps++;
+          result.uploaded += n;
+          onProgress?.(`Prep ${row.date}: ${n} obrázek/ů`);
+        } else {
+          console.warn(`[migrate] update failed for prep ${row.date}:`, error);
+        }
+      }
+    }
+
+    // Reviews
+    const { data: reviews } = await supabase.from('daily_reviews').select('id, date, data').eq('user_id', userId);
+    for (const row of reviews || []) {
+      const data = row.data as any;
+      if (!hasBase64Images(data)) continue;
+      const n = await stripAndUploadBase64Images(data, `review_${row.date}_migrate`);
+      if (n > 0) {
+        const { error } = await supabase.from('daily_reviews').update({ data }).eq('id', row.id);
+        if (!error) {
+          result.reviews++;
+          result.uploaded += n;
+          onProgress?.(`Review ${row.date}: ${n} obrázek/ů`);
+        } else {
+          console.warn(`[migrate] update failed for review ${row.date}:`, error);
+        }
+      }
+    }
+
+    return result;
   },
 
   async deleteDailyPrep(date: string): Promise<void> {
@@ -1343,6 +1408,14 @@ export const storageService = {
   async saveDailyReviews(reviews: DailyReview[]): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
+
+    // KRITICKÉ: stripni base64 obrázky z reviews PŘED save (viz saveDailyPreps)
+    for (const r of reviews) {
+      if (hasBase64Images(r)) {
+        const n = await stripAndUploadBase64Images(r, `review_${r.date}`);
+        if (n > 0) console.info(`[saveDailyReviews] uploaded ${n} base64 image(s) → URL pro ${r.date}`);
+      }
+    }
 
     // Sync to Supabase FIRST (cache written after success to prevent phantom data)
     const reviewsToUpsert = reviews.map(r => ({ user_id: userId, date: r.date, data: r }));
@@ -2523,17 +2596,39 @@ export const storageService = {
 
   // ─── SCREENSHOT STORAGE MIGRATION ────────────────────────────────────────
 
-  /** Upload a base64 data URL to Supabase Storage and return the public URL */
+  /** Upload a base64 data URL to Supabase Storage and return the public URL.
+   *  Client-side resize na max 1600px wide JPEG q85 PŘED uploadem — šetří
+   *  Image Transformations quotu, bandwidth a storage. Vizuálně neznatelný rozdíl. */
   async uploadScreenshot(base64DataUrl: string, tradeId: string | number): Promise<string> {
     const userId = await getUserId();
     if (!userId) throw new Error('Not authenticated');
     const isBase64 = base64DataUrl.startsWith('data:');
     if (!isBase64) return base64DataUrl; // Already a URL — return as-is
-    const base64 = base64DataUrl.replace(/^data:image\/\w+;base64,/, '');
+
+    // Resize na max 1600×1600 JPEG q92 (skip pokud origin <250 KB).
+    // 1600px wide + q92 = ostré screenshoty pro 4K zoom, žádné viditelné ztráty
+    // detailu pro candle bars / M1 timeframe / wicky. Origin ~300-500 KB.
+    // Pro plán má 100 origin transformations zdarma + $5/100 overage — drobný náklad
+    // za výrazně lepší kvalitu.
+    const sizeBefore = dataUrlSizeKB(base64DataUrl);
+    const resized = await resizeImageDataUrl(base64DataUrl, {
+      maxWidth: 1600,
+      maxHeight: 1600,
+      quality: 0.92,
+      outputType: 'image/jpeg',
+      skipIfSmallerThanKB: 250,
+    });
+    const sizeAfter = dataUrlSizeKB(resized);
+    if (sizeBefore !== sizeAfter) {
+      console.info(`[uploadScreenshot] resize ${sizeBefore} KB → ${sizeAfter} KB (${Math.round((1 - sizeAfter / sizeBefore) * 100)}% úspora)`);
+    }
+
+    const base64 = resized.replace(/^data:image\/\w+;base64,/, '');
     const byteChars = atob(base64);
     const buffer = new Uint8Array(byteChars.length);
     for (let i = 0; i < byteChars.length; i++) buffer[i] = byteChars.charCodeAt(i);
-    const ext = base64DataUrl.includes('image/png') ? 'png' : 'jpg';
+    // Po resize je výstup vždy JPEG (kromě skip-malé který může být PNG)
+    const ext = resized.includes('image/png') ? 'png' : 'jpg';
     const fileName = `${userId}/${tradeId}_${Date.now()}.${ext}`;
     const { error } = await supabase.storage.from('trade-images').upload(fileName, buffer, {
       contentType: `image/${ext}`, upsert: true

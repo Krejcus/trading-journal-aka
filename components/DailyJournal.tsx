@@ -4,6 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, WeeklyFocus, PsychoMetricConfig, SessionConfig, SessionAnalysis, GoalResult } from '../types';
 import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimeline from './TacticalTimeline';
+import TacticalTimelineV2 from './TacticalTimelineV2';
+import { useFeatureFlag } from '../services/featureFlags';
 import ImageZoomModal from './ImageZoomModal';
 import WeeklyOverview from './WeeklyOverview';
 import { storageService } from '../services/storageService';
@@ -91,6 +93,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const getToday = () => new Date().toLocaleDateString('en-CA');
   const [selectedDate, setSelectedDate] = useState(initialDate ?? getToday());
   const today = getToday();
+
+  // Feature flag: nový Deník layout (V2). Přepíná se v Settings.
+  const [denikV2] = useFeatureFlag('denik_v2');
 
   // Přeskočit na datum z AI Chatu
   useEffect(() => {
@@ -1141,34 +1146,71 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             </div>
 
             <div id="tactical-timeline-anchor" />
-            <TacticalTimeline
-              date={selectedDate}
-              prep={currentPrep}
-              review={currentReview}
-              trades={currentTrades}
-              theme={theme}
-              autoExpand={autoExpand}
-              onAutoExpandConsumed={() => setAutoExpand(null)}
-              onEditPrep={() => setView('edit-prep')}
-              onEditReview={() => setView('edit-review')}
-              onDeletePrep={onDeletePrep}
-              onDeleteReview={onDeleteReview}
-              sessions={sessions}
-              sessionBreakdowns={reviewForm.sessionBreakdowns}
-              onUpdateBreakdown={handleUpdateBreakdown}
-              prepForm={prepForm}
-              reviewForm={reviewForm}
-              editPrepForm={editPrepForm as any}
-              editReviewForm={editReviewForm as any}
-              onSavePrep={onSavePrep}
-              onSaveReview={onSaveReview}
-              rituals={rituals}
-              tradeRules={tradeRules}
-              psychoMetrics={psychoMetrics}
-              currentWeekFocus={currentWeekFocus}
-              isSaving={isSaving}
-              lastSaved={lastSaved}
-            />
+            {denikV2 ? (
+              <TacticalTimelineV2
+                date={selectedDate}
+                prep={currentPrep}
+                review={currentReview}
+                trades={currentTrades}
+                theme={theme}
+                sessions={sessions}
+                sessionBreakdowns={reviewForm.sessionBreakdowns}
+                rituals={rituals}
+                onEditPrep={() => setView('edit-prep')}
+                onEditReview={() => setView('edit-review')}
+                onDeletePrep={onDeletePrep}
+                onDeleteReview={onDeleteReview}
+                onAddQuickNote={(note) => {
+                  const existing = (reviewForm?.quickNotes as any[]) || [];
+                  editReviewForm({ ...reviewForm, quickNotes: [...existing, note] });
+                }}
+                onDeleteQuickNote={(id) => {
+                  const existing = (reviewForm?.quickNotes as any[]) || [];
+                  editReviewForm({ ...reviewForm, quickNotes: existing.filter(n => n.id !== id) });
+                }}
+                onUpdatePrepSession={(sessionId, sessionLabel, updates) => {
+                  const sessions = (prepForm?.scenarios?.sessions || []) as any[];
+                  const idx = sessions.findIndex(s => s.id === sessionId);
+                  const merged: any = idx >= 0
+                    ? sessions.map((s, i) => i === idx ? { ...s, ...updates } : s)
+                    : [...sessions, { id: sessionId, label: sessionLabel, plan: '', ...updates }];
+                  editPrepForm((prev: any) => ({
+                    ...prev,
+                    scenarios: { ...(prev?.scenarios || {}), sessions: merged },
+                  }));
+                }}
+                onUpdateBreakdown={handleUpdateBreakdown}
+              />
+            ) : (
+              <TacticalTimeline
+                date={selectedDate}
+                prep={currentPrep}
+                review={currentReview}
+                trades={currentTrades}
+                theme={theme}
+                autoExpand={autoExpand}
+                onAutoExpandConsumed={() => setAutoExpand(null)}
+                onEditPrep={() => setView('edit-prep')}
+                onEditReview={() => setView('edit-review')}
+                onDeletePrep={onDeletePrep}
+                onDeleteReview={onDeleteReview}
+                sessions={sessions}
+                sessionBreakdowns={reviewForm.sessionBreakdowns}
+                onUpdateBreakdown={handleUpdateBreakdown}
+                prepForm={prepForm}
+                reviewForm={reviewForm}
+                editPrepForm={editPrepForm as any}
+                editReviewForm={editReviewForm as any}
+                onSavePrep={onSavePrep}
+                onSaveReview={onSaveReview}
+                rituals={rituals}
+                tradeRules={tradeRules}
+                psychoMetrics={psychoMetrics}
+                currentWeekFocus={currentWeekFocus}
+                isSaving={isSaving}
+                lastSaved={lastSaved}
+              />
+            )}
           </div>
 
           {/* Sidebar: Stats — slim s hover expand */}

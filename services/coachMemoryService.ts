@@ -6,13 +6,17 @@
 //   L3 Observations — Coach-written notes about trader behaviour (embedded)
 //   L4 Episodes     — auto-detected notable events (drawdowns, breakthroughs, regime changes)
 //   L5 Summaries    — auto-generated recaps of past conversations
+//   L6 Commitments  — aktivní dohody/závazky ("do 10. jedu na sim", "max 1% risk")
+//                     — VŠECHNY se vždy injectují do system promptu (ne přes recall)
+//                     — coach NESMÍ navrhovat nic v rozporu s commitmenty
 //
 // L1+L2 live in ai_coach_profile (flat JSONB, injected verbatim into every Coach prompt).
-// L3-L5 live in ai_coach_memory (embedded, retrieved via match_coach_memory RPC).
+// L3-L6 live in ai_coach_memory (embedded, retrieved via match_coach_memory RPC + commitments
+// injected via getActiveCommitments()).
 
 import { supabase } from './supabase';
 
-export type MemoryType = 'observation' | 'episode' | 'conversation_summary';
+export type MemoryType = 'observation' | 'episode' | 'conversation_summary' | 'commitment';
 
 export interface CoachProfile {
   facts: Record<string, unknown>;
@@ -261,6 +265,58 @@ export async function clearAllMemory(): Promise<void> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return;
   await supabase.from('ai_coach_memory').delete().eq('user_id', user.id);
+}
+
+/**
+ * Aktivní commitmenty — závazky které coach v každém chatu MUSÍ respektovat.
+ * Filter: type='commitment' + metadata.expires_at v budoucnosti (nebo null = trvalý).
+ * Vrací max 15 nejnovějších, importance-sorted. Injektuje se přímo do system promptu,
+ * NE přes recall_memory (commitmenty nesmí coach "přehlédnout").
+ */
+export async function getActiveCommitments(): Promise<MemoryEntry[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from('ai_coach_memory')
+    .select('id, type, content, metadata, importance, memory_date, source_ref, created_at')
+    .eq('user_id', user.id)
+    .eq('type', 'commitment')
+    .order('importance', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(15);
+  if (error) {
+    console.warn('[coachMemory] getActiveCommitments error:', error);
+    return [];
+  }
+  // Filter expired (metadata.expires_at < today). Trvalé (bez expires_at) projdou.
+  return (data || []).filter((m: any) => {
+    const exp = m.metadata?.expires_at;
+    if (!exp) return true;
+    return String(exp) >= todayIso;
+  }) as MemoryEntry[];
+}
+
+/**
+ * Posledních N conversation summaries chronologicky. Injektuje se do system promptu
+ * jako "co jsme řešili předtím" timeline. Bez tohohle coach neviděl kontinuitu napříč chaty.
+ */
+export async function getRecentConversationSummaries(limit = 5): Promise<MemoryEntry[]> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data, error } = await supabase
+    .from('ai_coach_memory')
+    .select('id, type, content, metadata, importance, memory_date, source_ref, created_at')
+    .eq('user_id', user.id)
+    .eq('type', 'conversation_summary')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.warn('[coachMemory] getRecentConversationSummaries error:', error);
+    return [];
+  }
+  // Reverse to get chronological (oldest first)
+  return ((data || []) as MemoryEntry[]).reverse();
 }
 
 // ─── Conversation summarization ──────────────────────────────────────────────

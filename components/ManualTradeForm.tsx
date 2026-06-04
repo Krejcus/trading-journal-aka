@@ -67,9 +67,13 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   // Lazy initializer — pokud edit mode, pre-fill z editTrade
   const [formData, setFormData] = useState(() => {
     if (editTrade) {
-      const entryDateMs = editTrade.entryTime || (editTrade as any).entryDate
-        ? new Date(editTrade.entryTime || (editTrade as any).entryDate).getTime()
-        : new Date(editTrade.date || Date.now()).getTime();
+      // Entry timestamp — preferuj entryDate (ISO string, spolehlivější),
+      // pak entryTime (number ms), nakonec date jako fallback.
+      // POZN.: dříve byl bug že entryTime byl občas přepsaný na exit timestamp,
+      // proto entryDate má vyšší prioritu.
+      const entryFromDate = (editTrade as any).entryDate ? new Date((editTrade as any).entryDate).getTime() : null;
+      const entryFromTime = editTrade.entryTime ? new Date(editTrade.entryTime).getTime() : null;
+      const entryDateMs = entryFromDate || entryFromTime || new Date(editTrade.date || Date.now()).getTime();
       const exitDateMs = editTrade.timestamp || new Date(editTrade.date || Date.now()).getTime();
       return {
         accountIds: [editTrade.accountId as string],
@@ -186,7 +190,14 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
     if (!isNaN(entry) && !isNaN(sl) && !isNaN(size)) {
       riskVal = Math.abs(entry - sl) * size * multiplier;
-      if (riskVal !== 0) rr = Math.abs(pnl) / riskVal;
+      // Price-based RR (jako TradingView) — čistý cenový poměr bez fees.
+      // Strategie má RR 1:4, fees jsou cost of business mimo.
+      const exitForRR = !isNaN(exit) ? exit : NaN;
+      if (!isNaN(exitForRR)) {
+        const profitMove = Math.abs(entry - exitForRR);
+        const riskMove = Math.abs(entry - sl);
+        if (riskMove !== 0) rr = profitMove / riskMove;
+      }
     }
 
     const durationMinutes = (new Date(formData.exitDate).getTime() - new Date(formData.entryDate).getTime()) / 60000;
@@ -308,6 +319,9 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       const newExitDateIso = safeIsoFromForm(formData.exitDate, editTrade.date);
       const newExitTimestamp = safeTimestampFromForm(formData.exitDate, editTrade.timestamp);
       const newEntryTimestamp = safeTimestampFromForm(formData.entryDate, editTrade.entryTime || editTrade.timestamp);
+      // KRITICKÉ: ukládej OBOJÍ — entryTime (number) i entryDate (ISO string).
+      // Bez tohoto se rozcházely a vznikal bug "START 16:06 (= exit čas)".
+      const newEntryDateIso = safeIsoFromForm(formData.entryDate, (editTrade as any).entryDate || editTrade.entryTime || editTrade.timestamp);
       const newDurationMinutes = safeNum(calculations.durationMinutes, editTrade.durationMinutes);
       const finalPnl = safeNum(pnlNum, editTrade.pnl);
 
@@ -322,6 +336,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
         durationMinutes: newDurationMinutes,
         duration: `${Math.floor(newDurationMinutes)}m`,
         entryTime: newEntryTimestamp,
+        entryDate: newEntryDateIso as any, // typ Trade.entryDate? — uložíme přes any
         notes: formData.notes,
         htfConfluence: formData.htfConfluence,
         ltfConfluence: formData.ltfConfluence,

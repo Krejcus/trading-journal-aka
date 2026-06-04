@@ -19,6 +19,7 @@ import {
 import ConfirmationModal from './ConfirmationModal';
 import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus, SystemSettings } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
+import { useFeatureFlag } from '../services/featureFlags';
 
 interface SettingsProps {
   theme: 'dark' | 'light' | 'oled';
@@ -87,6 +88,69 @@ const EmojiPicker = ({ onSelect, onClose, isDark }: { onSelect: (e: string) => v
 );
 
 // Visual Components defined OUTSIDE to prevent remounting on every parent render
+// Tlačítko pro one-time migraci base64 → Storage v daily_preps + daily_reviews.
+// Šetří disk IO a DB velikost (až 7+ MB úspora pro 27 záznamů).
+const Base64MigrationButton: React.FC<{ isDark: boolean; showToast: (m: string) => void }> = ({ isDark, showToast }) => {
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<string[]>([]);
+  const [done, setDone] = useState<{ preps: number; reviews: number; uploaded: number } | null>(null);
+
+  const handleRun = async () => {
+    setRunning(true);
+    setProgress([]);
+    setDone(null);
+    try {
+      const result = await storageService.migrateBase64InJournals((msg) => {
+        setProgress(prev => [...prev, msg]);
+      });
+      setDone(result);
+      showToast(result.uploaded > 0
+        ? `Migrace hotová: ${result.uploaded} obrázků přesunuto`
+        : 'Žádné base64 obrázky k migraci — vše je čisté.');
+    } catch (e: any) {
+      showToast(`Chyba: ${e?.message || 'unknown'}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className={`p-4 rounded-2xl border ${isDark ? 'bg-amber-500/5 border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
+      <div className="mb-3">
+        <p className="text-sm font-black uppercase tracking-widest mb-1">Migrace base64 → Storage</p>
+        <p className={`text-[11px] leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+          Starší přípravy mají obrázky uložené inline v JSONB (až 700 KB/záznam). Tato akce je uploadne do Storage a nahradí URL — výsledek: rychlejší queries, menší DB, žádný IO overage. <strong>Idempotentní</strong> — bezpečné pustit kdykoli, dělá nic když není co.
+        </p>
+      </div>
+      <button
+        onClick={handleRun}
+        disabled={running}
+        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+          running
+            ? 'bg-slate-300 text-slate-500 cursor-wait'
+            : 'bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/30'
+        }`}
+      >
+        {running ? '⏳ Migruji...' : '🧹 Spustit migraci'}
+      </button>
+      {progress.length > 0 && (
+        <div className="mt-3 max-h-32 overflow-y-auto space-y-1">
+          {progress.map((m, i) => (
+            <p key={i} className={`text-[10px] font-mono ${isDark ? 'text-slate-500' : 'text-slate-600'}`}>✓ {m}</p>
+          ))}
+        </div>
+      )}
+      {done && (
+        <div className={`mt-3 p-3 rounded-xl ${done.uploaded > 0 ? 'bg-emerald-500/10 text-emerald-700' : 'bg-slate-500/10 text-slate-600'}`}>
+          <p className="text-[11px] font-black">
+            ✅ Hotovo: {done.uploaded} obrázků, {done.preps} preps, {done.reviews} reviews
+          </p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SectionHeader = ({ icon: Icon, title, subtitle, color, isDark }: any) => (
   <div className="flex items-center gap-4 mb-6">
     <div className={`p-3 rounded-2xl ${color} text-white shadow-lg`}>
@@ -189,6 +253,9 @@ const Settings: React.FC<SettingsProps> = ({
   onTabChange
 }) => {
   const isDark = theme !== 'light';
+
+  // Feature flags
+  const [denikV2, setDenikV2] = useFeatureFlag('denik_v2');
 
   // Local State for adding items
   const [newHtf, setNewHtf] = useState('');
@@ -913,6 +980,36 @@ const Settings: React.FC<SettingsProps> = ({
                     )}
                   </div>
                 )}
+              </Card>
+
+              {/* Migrace dat — base64 → Storage */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Sliders} title="🧹 Údržba" subtitle="Jednorázové migrační úkony" color="bg-gradient-to-br from-amber-500 to-orange-600" isDark={isDark} />
+                <Base64MigrationButton isDark={isDark} showToast={showToast} />
+              </Card>
+
+              {/* Experimentální features */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Sliders} title="🧪 Experimentální" subtitle="Beta features — můžeš kdykoli vypnout" color="bg-gradient-to-br from-violet-600 to-fuchsia-600" isDark={isDark} />
+                <div className={`flex items-start justify-between gap-4 p-4 rounded-2xl border ${isDark ? 'bg-violet-500/5 border-violet-500/20' : 'bg-violet-50 border-violet-200'}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-black uppercase tracking-widest">Nový Deník (V2)</span>
+                      <span className="px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-600 text-[8px] font-black uppercase">Beta</span>
+                    </div>
+                    <p className={`text-[11px] leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                      Sbalené session karty s visual strip (analýza → trades → breakdown).
+                      Compressed ranní aktivace + audit. Quick Notes přes floating 💭 tlačítko.
+                      Edit přes existující modaly. <strong>Plně reverzibilní</strong> — kdykoli vypni.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { setDenikV2(!denikV2); showToast(denikV2 ? 'Deník V2 vypnut' : 'Deník V2 zapnut'); }}
+                    className={`relative w-14 h-7 rounded-full transition-all shrink-0 ${denikV2 ? 'bg-violet-600' : isDark ? 'bg-slate-700' : 'bg-slate-300'}`}
+                  >
+                    <div className={`absolute top-0.5 w-6 h-6 rounded-full bg-white shadow-md transition-all ${denikV2 ? 'left-7' : 'left-0.5'}`} />
+                  </button>
+                </div>
               </Card>
 
             </div>

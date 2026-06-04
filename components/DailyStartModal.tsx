@@ -94,10 +94,10 @@ const DailyStartModal: React.FC<Props> = ({ isOpen, onClose, onConfirm, theme, i
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-            className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+            className={`max-w-2xl w-full max-h-[90vh] flex flex-col rounded-[32px] border shadow-2xl ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
           >
-            {/* Header */}
-            <div className="relative p-6 lg:p-8 border-b border-amber-500/20 bg-gradient-to-b from-amber-500/5 to-transparent">
+            {/* Header (fixed at top) */}
+            <div className="shrink-0 relative p-6 lg:p-8 border-b border-amber-500/20 bg-gradient-to-b from-amber-500/5 to-transparent">
               <button onClick={onClose} className={`absolute top-4 right-4 p-2 rounded-full ${isDark ? 'hover:bg-white/10 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`}>
                 <X size={18} />
               </button>
@@ -114,7 +114,8 @@ const DailyStartModal: React.FC<Props> = ({ isOpen, onClose, onConfirm, theme, i
               </div>
             </div>
 
-            <div className="p-6 lg:p-8 space-y-6">
+            {/* Scrollable content (flex-1, takes remaining height) */}
+            <div className="flex-1 overflow-y-auto p-6 lg:p-8 space-y-6">
               {loading && (
                 <div className="flex items-center justify-center py-12 gap-3">
                   <Loader2 size={20} className="animate-spin text-amber-500" />
@@ -215,30 +216,60 @@ const DailyStartModal: React.FC<Props> = ({ isOpen, onClose, onConfirm, theme, i
                     )}
                   </div>
 
-                  {/* Akce */}
-                  <div className="flex gap-3 pt-2">
-                    <button
-                      onClick={onClose}
-                      className={`px-5 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${isDark ? 'bg-white/5 hover:bg-white/10 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}
-                    >
-                      Později
-                    </button>
-                    <button
-                      onClick={() => {
-                        onConfirm({
-                          committedRuleIds: Array.from(committedRules),
-                          affirmation: brief.affirmation,
-                          focus: brief.focus,
-                        });
-                      }}
-                      className="flex-1 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-xl shadow-amber-500/30 hover:shadow-amber-500/50 transition-all active:scale-95"
-                    >
-                      Připraven k tradingu →
-                    </button>
-                  </div>
                 </>
               )}
             </div>
+
+            {/* Sticky footer — glassmorphism akce. Frosted bg s amber glow,
+                inner highlight a inset shadow pro 3D efekt. */}
+            {brief && !loading && (
+              <div
+                className={`shrink-0 flex gap-3 p-4 lg:p-6 border-t rounded-b-[32px] backdrop-blur-xl ${
+                  isDark
+                    ? 'bg-gradient-to-b from-slate-900/70 to-slate-950/90 border-white/10'
+                    : 'bg-gradient-to-b from-white/40 to-slate-100/80 border-amber-500/20'
+                }`}
+                style={isDark ? undefined : { boxShadow: '0 -10px 30px -10px rgba(245,158,11,0.15), inset 0 1px 0 rgba(255,255,255,0.6)' }}
+              >
+                <button
+                  onClick={onClose}
+                  className={`shrink-0 px-5 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest backdrop-blur-md transition-all hover:scale-[1.02] active:scale-95 ${
+                    isDark
+                      ? 'bg-white/5 hover:bg-white/10 text-slate-400 border border-white/10'
+                      : 'bg-white/60 hover:bg-white/90 border border-white/80 text-slate-700'
+                  }`}
+                  style={!isDark ? { boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.9), 0 2px 8px rgba(0,0,0,0.04)' } : undefined}
+                >
+                  Později
+                </button>
+                <button
+                  onClick={() => {
+                    onConfirm({
+                      committedRuleIds: Array.from(committedRules),
+                      affirmation: brief.affirmation,
+                      focus: brief.focus,
+                    });
+                  }}
+                  className="relative flex-1 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest text-white transition-all hover:scale-[1.02] active:scale-95 overflow-hidden group"
+                  style={{
+                    background: 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%)',
+                    boxShadow: '0 8px 24px -4px rgba(245,158,11,0.5), 0 4px 12px -2px rgba(245,158,11,0.3), inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -2px 4px rgba(0,0,0,0.15)',
+                  }}
+                >
+                  {/* Inner glass highlight overlay */}
+                  <span
+                    className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+                    style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.25) 0%, transparent 60%)' }}
+                  />
+                  {/* Top shine line — classic glass effect */}
+                  <span
+                    className="absolute top-0 left-4 right-4 h-px pointer-events-none"
+                    style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.7), transparent)' }}
+                  />
+                  <span className="relative drop-shadow-[0_1px_2px_rgba(0,0,0,0.2)]">Připraven k tradingu →</span>
+                </button>
+              </div>
+            )}
           </motion.div>
         </div>
       )}

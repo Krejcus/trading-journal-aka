@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { pointValueFor } from '../services/tradovateImport';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Play, X, Edit3, Trash2, Clock, Image as ImageIcon,
@@ -38,6 +39,77 @@ const Property = React.memo(({ label, value, subValue, color, icon: Icon, isDark
         </div>
     </div>
 ));
+
+// Editovatelná verze Property — pro SL/TP dodatečné doplnění
+// (typicky když byl SL posunut po vstupu a parser ho ignoroval).
+// Klik na value → input, Enter/blur uloží, Esc zruší.
+const EditableNumberProperty: React.FC<{
+  label: string;
+  value: number | undefined;
+  placeholder?: string;
+  color?: string;
+  icon: any;
+  isDark: boolean;
+  onSave: (value: number | undefined) => void;
+}> = ({ label, value, placeholder, color, icon: Icon, isDark, onSave }) => {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(value !== undefined ? String(value) : '');
+
+  useEffect(() => { setText(value !== undefined ? String(value) : ''); }, [value]);
+
+  const commit = () => {
+    const trimmed = text.trim().replace(',', '.');
+    if (trimmed === '') {
+      onSave(undefined);
+    } else {
+      const n = parseFloat(trimmed);
+      if (!isNaN(n) && n > 0) onSave(n);
+    }
+    setEditing(false);
+  };
+
+  return (
+    <div className={`py-1.5 px-1 lg:py-2.5 group/prop lg:border-b ${isDark ? 'lg:border-white/[0.03]' : 'lg:border-slate-100'} lg:last:border-0`}>
+      <div className="flex items-center gap-1 lg:gap-1.5 mb-0.5 lg:mb-1 opacity-40 group-hover/prop:opacity-60 transition-opacity">
+        {Icon && <Icon size={9} className="text-slate-400" />}
+        <span className="text-[8px] font-black uppercase tracking-[0.15em] lg:tracking-[0.2em]">{label}</span>
+        {value === undefined && (
+          <span className={`text-[7px] font-black uppercase tracking-widest px-1 py-0 rounded ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}`}>+ doplnit</span>
+        )}
+      </div>
+      <div>
+        {editing ? (
+          <input
+            type="number"
+            step="0.25"
+            autoFocus
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commit();
+              if (e.key === 'Escape') { setText(value !== undefined ? String(value) : ''); setEditing(false); }
+            }}
+            placeholder={placeholder}
+            className={`w-full text-[11px] lg:text-[12px] font-black font-mono tracking-tighter outline-none border rounded px-1.5 py-0.5 ${
+              isDark ? 'bg-white/5 border-white/20 text-white' : 'bg-white border-slate-300 text-slate-900'
+            }`}
+          />
+        ) : (
+          <button
+            onClick={() => setEditing(true)}
+            className={`text-[11px] lg:text-[12px] font-black font-mono tracking-tighter text-left w-full hover:bg-white/5 rounded transition-colors ${
+              color || (isDark ? 'text-slate-200' : 'text-slate-900')
+            } ${value === undefined ? 'opacity-50 italic' : ''}`}
+            title="Klikni pro úpravu"
+          >
+            {value !== undefined ? value : (placeholder || '—')}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
 
 interface TradeDetailModalProps {
     trade: Trade;
@@ -260,7 +332,23 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     // Defensive RRR calculation
     const pnl = safeValue(activeTrade.pnl);
-    const realRRR = (riskAmount > 0) ? (pnl / riskAmount) : 0;
+    // Price-based RR (jako TradingView) — čistý cenový poměr bez fees.
+    // Pokud máme entry + exit + stopLoss, použij to (přesnější, matches TV).
+    // Fallback na pnl/risk pokud něco chybí (např. SL doplněno ručně bez exit price).
+    const priceBasedRR = (() => {
+      if (entryPrice > 0 && exitPrice > 0 && stopLoss > 0) {
+        const profitMove = Math.abs(entryPrice - exitPrice);
+        const riskMove = Math.abs(entryPrice - stopLoss);
+        if (riskMove > 0) {
+          const sign = pnl >= 0 ? 1 : -1;
+          return sign * (profitMove / riskMove);
+        }
+      }
+      return null;
+    })();
+    const realRRR = priceBasedRR !== null
+      ? priceBasedRR
+      : (riskAmount > 0 ? pnl / riskAmount : 0);
 
     const exitTime = activeTrade.timestamp || new Date(activeTrade.date).getTime();
     const tradeEntryTime = activeTrade.entryTime || activeTrade.entryDate || (exitTime - (safeValue(activeTrade.durationMinutes) * 60 * 1000));
@@ -314,7 +402,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         }
     };
 
-    const formattedPnL = formatValue(pnl, pnlDisplayMode, initialBalance || accounts.find(a => a.id === activeTrade.accountId)?.initialBalance, (riskAmount > 0) ? pnl / riskAmount : undefined);
+    // Preferuj price-based RR (jako TradingView) pro PnL display v R mode
+    const formattedPnL = formatValue(pnl, pnlDisplayMode, initialBalance || accounts.find(a => a.id === activeTrade.accountId)?.initialBalance, priceBasedRR !== null ? priceBasedRR : ((riskAmount > 0) ? pnl / riskAmount : undefined));
 
     return (
         <ErrorBoundary name="TradeDetailModal">
@@ -395,8 +484,47 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 <div className="grid grid-cols-3 gap-x-2 gap-y-3 lg:grid-cols-2 lg:gap-x-6 lg:gap-y-4">
                                     <Property label="ENTRY" value={entryPrice || '—'} icon={Target} isDark={isDark} />
                                     <Property label="EXIT" value={exitPrice || '—'} color={isWin ? 'text-emerald-400' : 'text-rose-400'} icon={ArrowRight} isDark={isDark} />
-                                    <Property label="STOP" value={stopLoss || '—'} color="text-rose-500/80" icon={ShieldCheck} isDark={isDark} />
-                                    <Property label="TARGET" value={takeProfit || '—'} color="text-emerald-500/80" icon={Zap} isDark={isDark} />
+                                    <EditableNumberProperty
+                                      label="STOP"
+                                      value={activeTrade.stopLoss}
+                                      placeholder="—"
+                                      color="text-rose-500/80"
+                                      icon={ShieldCheck}
+                                      isDark={isDark}
+                                      onSave={(val) => {
+                                        if (!onUpdateTrade) return;
+                                        // Při změně SL spočítej i riskAmount (pro RR display)
+                                        const updates: Partial<Trade> = { stopLoss: val };
+                                        if (val !== undefined && activeTrade.entryPrice && activeTrade.positionSize) {
+                                          const pv = pointValueFor(activeTrade.instrument);
+                                          const risk = Math.abs(activeTrade.entryPrice - val) * activeTrade.positionSize * pv;
+                                          updates.riskAmount = risk > 0 ? risk : undefined;
+                                        } else {
+                                          updates.riskAmount = undefined;
+                                        }
+                                        onUpdateTrade(updates);
+                                      }}
+                                    />
+                                    <EditableNumberProperty
+                                      label="TARGET"
+                                      value={activeTrade.takeProfit}
+                                      placeholder="—"
+                                      color="text-emerald-500/80"
+                                      icon={Zap}
+                                      isDark={isDark}
+                                      onSave={(val) => {
+                                        if (!onUpdateTrade) return;
+                                        const updates: Partial<Trade> = { takeProfit: val };
+                                        if (val !== undefined && activeTrade.entryPrice && activeTrade.positionSize) {
+                                          const pv = pointValueFor(activeTrade.instrument);
+                                          const target = Math.abs(val - activeTrade.entryPrice) * activeTrade.positionSize * pv;
+                                          updates.targetAmount = target > 0 ? target : undefined;
+                                        } else {
+                                          updates.targetAmount = undefined;
+                                        }
+                                        onUpdateTrade(updates);
+                                      }}
+                                    />
                                     <Property label="POSITION" value={activeTrade.positionSize || 1} icon={Layers} isDark={isDark} />
                                     <Property label="HOLD" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} isDark={isDark} />
                                 </div>

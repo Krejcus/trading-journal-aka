@@ -393,6 +393,12 @@ export interface SessionBreakdown {
   screenshot?: string;
 }
 
+export interface QuickNote {
+  id: string;
+  timestamp: number;
+  text: string;
+}
+
 export interface DailyReview {
   id: string;
   date: string;
@@ -408,6 +414,10 @@ export interface DailyReview {
   psycho?: PsychoState;
   sessionBreakdowns?: SessionBreakdown[];
   completed?: boolean;
+  /** Free-form myšlenky během dne (timestamp + text). Přidáváno přes FAB v V2 Deníku. */
+  quickNotes?: QuickNote[];
+  /** Auto-debrief flag pro loss day debrief modal. */
+  autoDebrief?: boolean;
 }
 
 export interface WeeklyGoal {
