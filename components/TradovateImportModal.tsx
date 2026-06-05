@@ -304,6 +304,25 @@ const TradovateImportModal: React.FC<Props> = ({
               >
                 {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
+              {/* Cash History stav — aby user věděl, jestli má sazby nebo musí přidat CSV */}
+              {(() => {
+                const rates = loadFeeRates(accountId);
+                if (rates) {
+                  const symbols = Object.keys(rates);
+                  return (
+                    <div className="mt-2 flex items-center gap-1.5 text-[10px] font-bold text-emerald-500">
+                      <CheckCircle2 size={11} />
+                      <span>Cash History uloženo — sazby aktivní ({symbols.join(', ')})</span>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="mt-2 flex items-center gap-1.5 text-[10px] font-bold text-amber-500">
+                    <AlertTriangle size={11} />
+                    <span>Cash History ještě nenahrané · přidej ho pro přesný net P&L</span>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Dropzone / soubor */}
