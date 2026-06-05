@@ -3118,6 +3118,7 @@ const App: React.FC = () => {
                       onTabChange={setJournalActiveTab}
                       sessions={sessions}
                       initialDate={journalTargetDate}
+                      userMistakes={userMistakes}
                     />
                   )}
 

@@ -10,7 +10,7 @@
 //
 // Fáze 2 (budoucnost): inline edit přímo v Session kartách.
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sun, Moon, ChevronDown, MessageSquare, Sparkles, CheckCircle2, Image as ImageIcon,
@@ -43,6 +43,12 @@ interface Props {
   onUpdatePrepSession?: (sessionId: string, sessionLabel: string, updates: Partial<SessionAnalysis>) => void;
   /** Inline edit — aktualizuje review.sessionBreakdowns[] (notes + screenshot). */
   onUpdateBreakdown?: (sessionId: string, sessionLabel: string, notes: string, screenshot?: string) => void;
+  /** Inline edit Ranní aktivace — toggle rituálu (Pass/Fail), update afirmace + cíle. */
+  onUpdatePrep?: (updates: Partial<DailyPrep>) => void;
+  /** Inline edit Večerní audit — takeaway, tomorrow plan, mistakes. */
+  onUpdateReview?: (updates: Partial<DailyReview>) => void;
+  /** User mistakes katalog (z Settings) — pro chip toggle ve Večerním auditu. */
+  userMistakes?: string[];
 }
 
 const TacticalTimelineV2: React.FC<Props> = ({
@@ -52,6 +58,7 @@ const TacticalTimelineV2: React.FC<Props> = ({
   onEditPrep, onEditReview, onDeletePrep, onDeleteReview,
   onAddQuickNote, onDeleteQuickNote,
   onUpdatePrepSession, onUpdateBreakdown,
+  onUpdatePrep, onUpdateReview, userMistakes = [],
 }) => {
   const isDark = theme !== 'light';
 
@@ -174,6 +181,8 @@ const TacticalTimelineV2: React.FC<Props> = ({
             onEdit={onEditPrep}
             onDelete={prep && onDeletePrep ? () => onDeletePrep(date) : undefined}
             onCollapse={() => setMorningExpanded(false)}
+            onUpdatePrep={onUpdatePrep}
+            date={date}
           />
         )}
       </TimelineNode>
@@ -249,6 +258,9 @@ const TacticalTimelineV2: React.FC<Props> = ({
             onDelete={review && onDeleteReview ? () => onDeleteReview(date) : undefined}
             onCollapse={() => setAuditExpanded(false)}
             onDeleteNote={onDeleteQuickNote}
+            onUpdateReview={onUpdateReview}
+            userMistakes={userMistakes}
+            date={date}
           />
         )}
       </TimelineNode>
@@ -288,7 +300,14 @@ const TacticalTimelineV2: React.FC<Props> = ({
                 <textarea
                   value={quickNoteText}
                   onChange={(e) => setQuickNoteText(e.target.value)}
-                  placeholder="Co tě právě napadlo? (nebo klikni 🎙)"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSaveQuickNote();
+                    }
+                    if (e.key === 'Escape') setQuickNoteOpen(false);
+                  }}
+                  placeholder="Co tě právě napadlo? Enter = uložit · Shift+Enter = nový řádek · 🎙 diktuj"
                   autoFocus
                   rows={4}
                   className={`w-full p-3 pr-12 rounded-2xl backdrop-blur-sm text-xs resize-none outline-none transition-all border ${
@@ -574,10 +593,35 @@ const ExpandedMorningCard: React.FC<{
   onEdit: () => void;
   onDelete?: () => void;
   onCollapse: () => void;
-}> = ({ isDark, prep, rituals, completedRituals, commitments, onEdit, onDelete, onCollapse }) => {
+  onUpdatePrep?: (updates: Partial<DailyPrep>) => void;
+  date: string;
+}> = ({ isDark, prep, rituals, commitments, onDelete, onCollapse, onUpdatePrep, date }) => {
   const cardClass = isDark
     ? 'bg-gradient-to-br from-amber-500/10 to-transparent border-amber-500/30'
     : 'bg-gradient-to-br from-amber-50 to-white border-amber-200 shadow-sm';
+
+  // Optimistický local state — instant UI reakce, async propagace do parenta.
+  // Bez tohoto by každý klik na ritual čekal na parent re-render (lag).
+  const [localCompletions, setLocalCompletions] = useState<any[]>((prep?.ritualCompletions || []) as any[]);
+  useEffect(() => {
+    setLocalCompletions((prep?.ritualCompletions || []) as any[]);
+  }, [prep?.ritualCompletions]);
+
+  const toggleRitual = (ruleId: string) => {
+    const ei = localCompletions.findIndex(c => c.ruleId === ruleId);
+    const current = ei >= 0 ? localCompletions[ei].status : 'Pending';
+    const next = current === 'Pass' ? 'Pending' : 'Pass';
+    const merged = ei >= 0
+      ? localCompletions.map((c, i) => i === ei ? { ...c, status: next } : c)
+      : [...localCompletions, { ruleId, status: next }];
+    setLocalCompletions(merged); // instant UI
+    if (onUpdatePrep) onUpdatePrep({ ritualCompletions: merged }); // async propagate
+  };
+
+  const focus = (prep as any)?.dailyFocus || '';
+  const affirmation = (prep as any)?.mindsetState || '';
+  const completedRituals = rituals.filter(r => localCompletions.find(c => c.ruleId === r.id && c.status === 'Pass')).length;
+
   return (
     <div className={`p-5 rounded-3xl border ${cardClass}`}>
       <div className="flex items-center justify-between mb-4">
@@ -585,11 +629,10 @@ const ExpandedMorningCard: React.FC<{
           <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 grid place-items-center"><Sun size={16} className="text-amber-500" /></div>
           <div>
             <h3 className="text-sm font-black uppercase tracking-widest">Ranní aktivace</h3>
-            <p className="text-[10px] text-slate-500">Vědomá kotva</p>
+            <p className="text-[10px] text-slate-500">{completedRituals}/{rituals.length} rituálů · {commitments.length} závazků</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-amber-500/10 text-amber-600 text-[9px] font-black uppercase tracking-widest">Upravit</button>
           {onDelete && (
             <button onClick={onDelete} className="p-1.5 rounded-lg hover:bg-rose-500/10 text-slate-400 hover:text-rose-500" title="Smazat"><Trash2 size={12} /></button>
           )}
@@ -597,34 +640,245 @@ const ExpandedMorningCard: React.FC<{
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        {/* Rituály */}
-        <div className={`p-3 rounded-xl border ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-          <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1.5">Rituály</p>
-          <p className={`text-sm font-black ${completedRituals === rituals.length && rituals.length > 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-            {completedRituals}/{rituals.length} {completedRituals === rituals.length && rituals.length > 0 && '✓'}
+      {/* RITUÁLY — checkboxy */}
+      {rituals.length > 0 && (
+        <div className="mb-3">
+          <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">✓ Rituály</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {rituals.map(r => {
+              const comp = localCompletions.find((c: any) => c.ruleId === r.id);
+              const done = comp?.status === 'Pass';
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => toggleRitual(r.id)}
+                  disabled={!onUpdatePrep}
+                  className={`flex items-center gap-2 p-2.5 rounded-xl border text-left transition-all active:scale-95 ${
+                    done
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700'
+                      : isDark ? 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded border-2 grid place-items-center shrink-0 ${done ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300'}`}>
+                    {done && <CheckCircle2 size={10} className="text-white" />}
+                  </div>
+                  <span className="text-xs font-bold flex-1">{r.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* COMMITMENTS — read-only */}
+      {commitments.length > 0 && (
+        <div className="mb-3 p-3 rounded-xl bg-blue-50 border border-blue-100">
+          <p className="text-[9px] font-black uppercase tracking-widest text-blue-600 mb-2">⚡ Aktivní závazky</p>
+          <ul className="space-y-1">
+            {commitments.slice(0, 4).map((c, i) => (
+              <li key={i} className="text-[11px] text-slate-700">▸ {c.content}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* RANNÍ AFIRMACE — AI generated */}
+      <MorningAffirmationBlock
+        isDark={isDark}
+        affirmation={affirmation}
+        focus={focus}
+        onUpdate={(text, newFocus) => {
+          if (!onUpdatePrep) return;
+          const updates: any = { mindsetState: text };
+          if (newFocus !== undefined) updates.dailyFocus = newFocus;
+          onUpdatePrep(updates);
+        }}
+        disabled={!onUpdatePrep}
+      />
+    </div>
+  );
+};
+
+const QuickNoteRow: React.FC<{
+  note: QuickNote;
+  isDark: boolean;
+  onDelete?: () => void;
+  onUpdate?: (newText: string) => void;
+}> = ({ note, isDark, onDelete, onUpdate }) => {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(note.text);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const confirmTimerRef = useRef<number | null>(null);
+
+  useEffect(() => { setText(note.text); }, [note.text]);
+  useEffect(() => {
+    // Auto-cancel confirm po 4 sec pokud user neklikl
+    if (confirmDelete) {
+      confirmTimerRef.current = window.setTimeout(() => setConfirmDelete(false), 4000);
+      return () => { if (confirmTimerRef.current) window.clearTimeout(confirmTimerRef.current); };
+    }
+  }, [confirmDelete]);
+
+  const commit = () => {
+    if (onUpdate && text.trim() && text !== note.text) onUpdate(text.trim());
+    setEditing(false);
+  };
+
+  const time = new Date(note.timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div className={`p-2.5 rounded-lg border ${isDark ? 'bg-white/5 border-violet-500/20' : 'bg-white border-violet-100'}`}>
+      <div className="flex items-start gap-2">
+        <span className="text-[10px] font-mono font-black text-violet-500 shrink-0 mt-0.5">{time}</span>
+        {editing && onUpdate ? (
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => {
+              // Enter = uložit, Shift+Enter = nový řádek
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commit();
+              }
+              if (e.key === 'Escape') { setText(note.text); setEditing(false); }
+            }}
+            autoFocus
+            rows={2}
+            placeholder="Enter = uložit · Shift+Enter = nový řádek · Esc = zrušit"
+            className={`flex-1 p-1.5 rounded text-[11px] leading-relaxed resize-none outline-none border focus:ring-2 focus:ring-violet-500/20 ${
+              isDark ? 'bg-violet-500/10 border-violet-500/30 text-slate-200' : 'bg-violet-50 border-violet-200 text-slate-700'
+            }`}
+          />
+        ) : (
+          <p
+            onClick={() => onUpdate && setEditing(true)}
+            className={`text-[11px] text-slate-700 leading-relaxed italic flex-1 ${onUpdate ? 'cursor-text hover:bg-violet-50/50 -mx-1 px-1 rounded' : ''}`}
+            title={onUpdate ? 'Klikni pro úpravu' : undefined}
+          >
+            "{note.text}"
           </p>
-          <p className="text-[10px] text-slate-500 truncate">{rituals.map(r => r.label).join(' · ')}</p>
+        )}
+        {onDelete && !editing && (
+          <div className="shrink-0 flex items-center gap-1">
+            {/* Trash ikona — klik = enter confirm mode */}
+            <button
+              onClick={() => setConfirmDelete(v => !v)}
+              className={`p-1.5 rounded transition-all active:scale-90 ${
+                confirmDelete
+                  ? 'text-rose-500 bg-rose-50'
+                  : 'text-slate-400 hover:text-rose-500 hover:bg-rose-50'
+              }`}
+              title={confirmDelete ? 'Klikni "Smazat" pro potvrzení' : 'Smazat myšlenku'}
+            >
+              <Trash2 size={12} />
+            </button>
+            {/* Inline confirm tlačítko — viditelné jen po prvním klik */}
+            {confirmDelete && (
+              <button
+                onClick={onDelete}
+                className="px-2 py-1 rounded bg-rose-500 hover:bg-rose-600 text-white text-[9px] font-black uppercase tracking-widest animate-in fade-in slide-in-from-left-2 duration-150"
+              >
+                Smazat
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const MorningAffirmationBlock: React.FC<{
+  isDark: boolean;
+  affirmation: string;
+  focus: string;
+  onUpdate: (text: string, focus?: string) => void;
+  disabled: boolean;
+}> = ({ isDark, affirmation, focus, onUpdate, disabled }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchAffirmation = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { supabase } = await import('../services/supabase');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { setError('Nejsi přihlášený.'); return; }
+      const baseUrl = (supabase as any).supabaseUrl || (import.meta as any).env?.VITE_SUPABASE_URL || '';
+      const res = await fetch(`${baseUrl}/functions/v1/daily-start-brief`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        onUpdate(data.affirmation || '', data.focus);
+      } else {
+        setError('Coach selhal — zkus znovu.');
+      }
+    } catch {
+      setError('Chyba spojení.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="text-[9px] font-black uppercase tracking-widest text-violet-600">✨ Ranní afirmace (AI)</p>
+          {!disabled && (
+            <button
+              onClick={fetchAffirmation}
+              disabled={loading}
+              className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-widest transition-all ${
+                loading
+                  ? 'bg-slate-200 text-slate-400 cursor-wait'
+                  : 'bg-violet-500 hover:bg-violet-600 text-white shadow-sm'
+              }`}
+            >
+              {loading ? '⏳ Generuju...' : (affirmation ? '↻ Znovu' : '✨ Vygeneruj')}
+            </button>
+          )}
         </div>
-        {/* Závazky */}
-        <div className={`p-3 rounded-xl border ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-          <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1.5">Aktivní závazky</p>
-          <p className="text-sm font-black text-blue-600">{commitments.length}</p>
-          <p className="text-[10px] text-slate-500 truncate">{commitments.slice(0, 2).map(c => c.content.slice(0, 30)).join(' · ') || 'Žádné'}</p>
-        </div>
+        {affirmation ? (
+          <textarea
+            value={affirmation}
+            onChange={e => onUpdate(e.target.value, focus)}
+            rows={3}
+            disabled={disabled}
+            className={`w-full p-3 rounded-xl border text-xs leading-relaxed italic resize-none outline-none focus:ring-2 focus:ring-violet-500/20 transition-all ${
+              isDark ? 'bg-violet-500/5 border-violet-500/20 text-slate-200' : 'bg-violet-50 border-violet-200 text-slate-700'
+            }`}
+          />
+        ) : (
+          <div className={`p-4 rounded-xl border-2 border-dashed text-center text-xs italic ${
+            isDark ? 'border-violet-500/20 text-slate-500' : 'border-violet-200 text-violet-400'
+          }`}>
+            Klikni „✨ Vygeneruj" pro personalizovanou afirmaci od AI coache
+          </div>
+        )}
+        {error && <p className="text-[10px] text-rose-500 mt-1">{error}</p>}
       </div>
 
-      {(prep as any)?.mindsetState && (
-        <div className="p-3 rounded-xl bg-violet-50 border border-violet-200">
-          <p className="text-[9px] font-black uppercase tracking-widest text-violet-600 mb-1">⚡ Heslo dne</p>
-          <p className="text-xs text-slate-700 italic">"{(prep as any).mindsetState}"</p>
-        </div>
-      )}
-
-      {!prep && (
-        <button onClick={onEdit} className="w-full py-3 rounded-xl bg-amber-500 text-white text-[10px] font-black uppercase tracking-widest">Vyplnit ranní aktivaci →</button>
-      )}
-    </div>
+      {/* CÍL DNE — auto-vyplněn AI, ale editovatelný */}
+      <div>
+        <p className="text-[9px] font-black uppercase tracking-widest text-amber-600 mb-1.5">🎯 Co dnes hlídat</p>
+        <input
+          type="text"
+          value={focus}
+          onChange={e => onUpdate(affirmation, e.target.value)}
+          placeholder="Jedna věc na kterou se dnes zaměřím (nebo to AI vyplní s afirmací)..."
+          disabled={disabled}
+          className={`w-full px-3 py-2 rounded-xl border text-xs outline-none focus:ring-2 focus:ring-amber-500/20 transition-all ${
+            isDark ? 'bg-amber-500/5 border-amber-500/20 text-slate-200 placeholder:text-slate-600' : 'bg-white border-amber-200 text-slate-700 placeholder:text-amber-400'
+          }`}
+        />
+      </div>
+    </>
   );
 };
 
@@ -1070,13 +1324,24 @@ const ExpandedAuditCard: React.FC<{
   onDelete?: () => void;
   onCollapse: () => void;
   onDeleteNote?: (id: string) => void;
-}> = ({ isDark, review, trades, quickNotes, onEdit, onDelete, onCollapse, onDeleteNote }) => {
+  onUpdateReview?: (updates: Partial<DailyReview>) => void;
+  userMistakes?: string[];
+  date: string;
+}> = ({ isDark, review, trades, quickNotes, onDelete, onCollapse, onDeleteNote, onUpdateReview, userMistakes = [] }) => {
   const realTrades = trades.filter(t => t.executionStatus !== 'Missed');
   const pnl = realTrades.reduce((s, t) => s + (t.pnl || 0), 0);
   const pnlClass = pnl > 0 ? 'text-emerald-600' : pnl < 0 ? 'text-rose-600' : 'text-slate-500';
   const cardClass = isDark
     ? 'bg-gradient-to-br from-indigo-500/10 to-transparent border-indigo-500/30'
     : 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200 shadow-sm';
+
+  const takeaway = (review?.psycho?.notes as string) || '';
+
+  const updateTakeaway = (v: string) => {
+    if (!onUpdateReview) return;
+    onUpdateReview({ psycho: { ...(review?.psycho || {}), notes: v } as any });
+  };
+
   return (
     <div className={`p-5 rounded-3xl border ${cardClass}`}>
       <div className="flex items-center justify-between mb-4">
@@ -1084,11 +1349,10 @@ const ExpandedAuditCard: React.FC<{
           <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 grid place-items-center"><Moon size={16} className="text-indigo-500" /></div>
           <div>
             <h3 className="text-sm font-black uppercase tracking-widest">Večerní audit</h3>
-            <p className="text-[10px] text-slate-500">Compressed reflexe — co si odnášíš</p>
+            <p className="text-[10px] text-slate-500">Co si odnášíš · plán na zítra</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-indigo-500/10 text-indigo-600 text-[9px] font-black uppercase tracking-widest">Upravit</button>
           {onDelete && <button onClick={onDelete} className="p-1.5 rounded-lg hover:bg-rose-500/10 text-slate-400 hover:text-rose-500"><Trash2 size={12} /></button>}
           <button onClick={onCollapse} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400"><ChevronDown size={14} className="rotate-180" /></button>
         </div>
@@ -1100,15 +1364,16 @@ const ExpandedAuditCard: React.FC<{
           <p className="text-[9px] font-black uppercase tracking-widest text-violet-600 mb-3">💭 Myšlenky z dnešku ({quickNotes.length})</p>
           <div className="space-y-2">
             {quickNotes.map(n => (
-              <div key={n.id} className="p-2.5 rounded-lg bg-white border border-violet-100 group">
-                <div className="flex items-start gap-2">
-                  <span className="text-[10px] font-mono font-black text-violet-400 shrink-0 mt-0.5">{new Date(n.timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}</span>
-                  <p className="text-[11px] text-slate-700 leading-relaxed italic flex-1">"{n.text}"</p>
-                  {onDeleteNote && (
-                    <button onClick={() => onDeleteNote(n.id)} className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-rose-500 shrink-0"><Trash2 size={11} /></button>
-                  )}
-                </div>
-              </div>
+              <QuickNoteRow
+                key={n.id}
+                note={n}
+                isDark={isDark}
+                onDelete={onDeleteNote ? () => onDeleteNote(n.id) : undefined}
+                onUpdate={onUpdateReview ? (newText) => {
+                  const updated = quickNotes.map(qn => qn.id === n.id ? { ...qn, text: newText } : qn);
+                  onUpdateReview({ quickNotes: updated });
+                } : undefined}
+              />
             ))}
           </div>
         </div>
@@ -1120,17 +1385,27 @@ const ExpandedAuditCard: React.FC<{
         <p className={`text-lg font-black font-mono ${pnlClass}`}>{pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}</p>
       </div>
 
-      {/* Reflexe */}
-      {(review as any)?.psycho?.notes ? (
-        <div className={`p-3 rounded-xl border mb-3 ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-          <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-2">Co si odnášíš</p>
-          <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{(review as any).psycho.notes}</p>
+      {/* CO SI ODNÁŠÍŠ */}
+      <div className="mb-3">
+        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1.5">📝 Co si odnášíš</p>
+        <div className="relative">
+          <textarea
+            value={takeaway}
+            onChange={e => updateTakeaway(e.target.value)}
+            placeholder="Co dnes prošlo dobře? Co se zalomilo? Klíčový insight..."
+            rows={4}
+            disabled={!onUpdateReview}
+            className={`w-full p-3 pr-12 rounded-xl border text-xs leading-relaxed resize-none outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all ${
+              isDark ? 'bg-white/5 border-white/10 text-slate-200 placeholder:text-slate-600' : 'bg-white border-slate-200 text-slate-700 placeholder:text-slate-400'
+            }`}
+          />
+          <div className="absolute bottom-2 right-2">
+            <VoiceMemoButton size="sm" title="Diktuj reflexi" onTranscribed={(t) => updateTakeaway(takeaway + (takeaway.trim() ? '\n\n' : '') + t)} />
+          </div>
         </div>
-      ) : (
-        <button onClick={onEdit} className="w-full py-4 border-2 border-dashed border-slate-300 rounded-2xl text-xs text-slate-500 hover:bg-slate-50">
-          <span className="block text-[10px] text-indigo-500 font-black uppercase tracking-widest">Udělej reflexi →</span>
-        </button>
-      )}
+      </div>
+
+      {/* Chyby vyhozené — vyplňují se per-trade, ne per-day */}
     </div>
   );
 };

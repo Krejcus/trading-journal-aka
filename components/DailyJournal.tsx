@@ -79,6 +79,7 @@ interface DailyJournalProps {
   standardGoals: string[];
   ironRules: IronRule[];
   psychoMetrics?: PsychoMetricConfig[];
+  userMistakes?: string[];
   viewMode: 'individual' | 'combined';
   weeklyFocusList: WeeklyFocus[];
   activeTab: 'daily' | 'weekly' | 'archives';
@@ -88,7 +89,7 @@ interface DailyJournalProps {
 }
 
 const DailyJournal: React.FC<DailyJournalProps> = ({
-  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = [], initialDate
+  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = [], initialDate, userMistakes = []
 }) => {
   const getToday = () => new Date().toLocaleDateString('en-CA');
   const [selectedDate, setSelectedDate] = useState(initialDate ?? getToday());
@@ -400,7 +401,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     if (!saved || normalizeReview(reviewForm) !== normalizeReview(saved)) {
       // Don't auto-save a brand new review if it's still empty
       if (!saved) {
-        const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes && !reviewForm.psycho?.stressors?.trim() && !reviewForm.psycho?.gratitude?.trim() && !reviewForm.ruleAdherence?.some(a => a.status !== 'Pending') && !reviewForm.sessionBreakdowns?.some(b => b.notes?.trim());
+        const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes && !reviewForm.psycho?.stressors?.trim() && !reviewForm.psycho?.gratitude?.trim() && !reviewForm.ruleAdherence?.some(a => a.status !== 'Pending') && !reviewForm.sessionBreakdowns?.some(b => b.notes?.trim()) && !reviewForm.quickNotes?.length && !reviewForm.mistakes?.length;
         if (isEmpty) return;
       }
       // Skip autosave when tab is hidden — prevents concurrent writes when multiple clients are open
@@ -1149,8 +1150,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             {denikV2 ? (
               <TacticalTimelineV2
                 date={selectedDate}
-                prep={currentPrep}
-                review={currentReview}
+                // V2 čte z formularů (reviewForm/prepForm) ne saved data —
+                // jinak edit/delete quick notes a další inline změny by se
+                // nepropisovaly v UI dokud autosave neproběhne.
+                prep={prepForm}
+                review={reviewForm}
                 trades={currentTrades}
                 theme={theme}
                 sessions={sessions}
@@ -1180,6 +1184,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   }));
                 }}
                 onUpdateBreakdown={handleUpdateBreakdown}
+                onUpdatePrep={(updates) => editPrepForm((prev: any) => ({ ...prev, ...updates }))}
+                onUpdateReview={(updates) => editReviewForm((prev: any) => ({ ...prev, ...updates }))}
+                userMistakes={userMistakes}
               />
             ) : (
               <TacticalTimeline
@@ -1508,8 +1515,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         </div>
       )}
 
-      {/* EDIT FORMS — now rendered inline in TacticalTimeline */}
-      {false && (
+      {/* EDIT FORMS — V1 renderuje inline v TacticalTimeline, V2 deleguje sem.
+          Zobrazit jen pokud:
+            - jsme na denním tabu
+            - view === 'edit-prep' nebo 'edit-review' (= klik Upravit z V2 Deníku)
+          V1 (denik_v2 = false) tento blok nikdy nepotřebuje. */}
+      {activeTab === 'daily' && (view === 'edit-prep' || view === 'edit-review') && denikV2 && (
         <div className="max-w-7xl mx-auto animate-in slide-in-from-right-4 duration-500">
           {view === 'edit-prep' && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
