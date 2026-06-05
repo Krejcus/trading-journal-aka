@@ -697,8 +697,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           {visibleTrades.map((trade) => {
             const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
             const isMissed = status === 'Missed';
-            const isBE = Math.abs(trade.pnl) <= 0.01;
-            const isWin = trade.pnl > 0.01;
+            const isBE = (trade as any).isBE === true || Math.abs(trade.pnl) <= 0.01;
+            const isWin = !isBE && trade.pnl > 0.01;
 
             let glowClass = isWin
               ? 'neon-border-green neon-glow-green'
@@ -979,8 +979,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                 {visibleTrades.map((trade) => {
                   const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
                   const isMissed = status === 'Missed';
-                  const isBE = Math.abs(trade.pnl) <= 0.01;
-                  const isWin = trade.pnl > 0.01;
+                  const isBE = (trade as any).isBE === true || Math.abs(trade.pnl) <= 0.01;
+                  const isWin = !isBE && trade.pnl > 0.01;
                   const pnlColor = isMissed
                     ? 'text-blue-400'
                     : isBE
