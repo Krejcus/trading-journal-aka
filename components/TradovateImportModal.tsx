@@ -8,20 +8,38 @@ import { parseTradovateFills, isTradovateFills, applyCashHistory, applyEstimated
 
 // --- Uložené sazby poplatků per účet (poplatek/strana je pro účet konstantní) ---
 // Díky tomu stačí Cash History nahrát jednou; další importy spočítají net P&L samy.
+// Tradovate fees jsou stejné napříč všemi účty/prop firmami u stejného brokera.
+// Ukládáme tedy GLOBÁLNĚ (per user/zařízení), s account-specific override jako fallback.
+const GLOBAL_FEE_KEY = 'tradovate-fee-rates-global';
 const feeRatesKey = (accountId: string) => `tradovate-fee-rates-${accountId}`;
-function loadFeeRates(accountId: string): FeeRates | null {
+
+function readKey(key: string): FeeRates | null {
   try {
-    const raw = localStorage.getItem(feeRatesKey(accountId));
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return parsed && parsed.rates && Object.keys(parsed.rates).length > 0 ? parsed.rates as FeeRates : null;
   } catch { return null; }
 }
+
+function loadFeeRates(accountId: string): FeeRates | null {
+  // Merge global + account-specific (account override má přednost).
+  const global = readKey(GLOBAL_FEE_KEY) || {};
+  const account = readKey(feeRatesKey(accountId)) || {};
+  const merged = { ...global, ...account };
+  return Object.keys(merged).length > 0 ? merged : null;
+}
+
 function saveFeeRates(accountId: string, rates: FeeRates) {
   try {
-    const existing = loadFeeRates(accountId) || {};
-    const merged = { ...existing, ...rates }; // nové sazby přepíšou/doplní staré
-    localStorage.setItem(feeRatesKey(accountId), JSON.stringify({ rates: merged, updatedAt: Date.now() }));
+    // 1) global — sdíleno napříč všemi účty
+    const globalExisting = readKey(GLOBAL_FEE_KEY) || {};
+    const globalMerged = { ...globalExisting, ...rates };
+    localStorage.setItem(GLOBAL_FEE_KEY, JSON.stringify({ rates: globalMerged, updatedAt: Date.now() }));
+    // 2) account-specific — pro audit/budoucnost (kdyby user měl jiné rates per účet)
+    const accountExisting = readKey(feeRatesKey(accountId)) || {};
+    const accountMerged = { ...accountExisting, ...rates };
+    localStorage.setItem(feeRatesKey(accountId), JSON.stringify({ rates: accountMerged, updatedAt: Date.now() }));
   } catch { /* localStorage nedostupné — tichý fallback */ }
 }
 

@@ -364,7 +364,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     // Status MUSÍ číst z nejnovějšího trade propu (ne z fullTrade, který může být přepsán stale DB fetchem)
     const status = trade.executionStatus || activeTrade.executionStatus || ((trade.isValid === false || activeTrade.isValid === false) ? 'Invalid' : 'Valid');
     const isMissed = status === 'Missed';
-    const isWin = pnl >= 0;
+    // Manual BE override má přednost před auto detekcí z pnl
+    const isBEOverride = activeTrade.isBE === true;
+    const isWin = !isBEOverride && pnl >= 0;
 
     const pnlColor = isMissed ? 'text-blue-400' : (isWin ? 'text-emerald-500' : 'text-rose-500');
     const directionColor = isMissed ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' : (activeTrade.direction === 'Long' ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' : 'text-rose-500 bg-rose-500/10 border-rose-500/20');
@@ -467,10 +469,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         {/* LEFT: Pure trade data only */}
                         <div className={`order-2 lg:order-1 w-full lg:w-[320px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/40'} backdrop-blur-xl overflow-y-auto no-scrollbar`}>
                             {/* PnL hero card */}
-                            <div className={`p-5 border-b relative ${isDark ? 'border-white/5' : 'border-slate-100'} ${isMissed ? 'bg-blue-500/[0.04]' : isWin ? 'bg-emerald-500/[0.04]' : 'bg-rose-500/[0.04]'}`}>
+                            <div className={`p-5 border-b relative ${isDark ? 'border-white/5' : 'border-slate-100'} ${isMissed ? 'bg-blue-500/[0.04]' : isBEOverride ? 'bg-amber-500/[0.04]' : isWin ? 'bg-emerald-500/[0.04]' : 'bg-rose-500/[0.04]'}`}>
                                 <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">Profit / Loss</p>
                                 <div className="flex items-baseline justify-between gap-4 flex-wrap">
-                                    <h3 className={`text-4xl lg:text-4xl font-black font-mono tracking-tighter leading-none ${pnlColor}`} style={{ color: isMissed ? '#60a5fa' : isWin ? '#10b981' : '#f43f5e' }}>
+                                    <h3 className={`text-4xl lg:text-4xl font-black font-mono tracking-tighter leading-none ${pnlColor}`} style={{ color: isMissed ? '#60a5fa' : isBEOverride ? '#f59e0b' : isWin ? '#10b981' : '#f43f5e' }}>
                                         {formattedPnL || '—'}
                                     </h3>
                                     <div className="flex flex-col items-end">
@@ -478,6 +480,20 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                         <span className="text-[8px] font-bold text-slate-600 uppercase tracking-widest leading-none mt-1">Reward/Risk</span>
                                     </div>
                                 </div>
+                                {/* BE override — když trade byl fakticky BE ale fees/slippage daly +/- pár dolarů */}
+                                {!isMissed && onUpdateTrade && (
+                                  <button
+                                    onClick={() => onUpdateTrade({ isBE: !isBEOverride } as any)}
+                                    className={`mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all active:scale-95 ${
+                                      isBEOverride
+                                        ? 'bg-amber-500 text-white shadow-sm'
+                                        : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10 border border-white/10' : 'bg-white text-slate-500 hover:bg-amber-50 hover:text-amber-600 border border-slate-200'
+                                    }`}
+                                    title={isBEOverride ? 'Odznačit jako BE (vrátit auto detekci podle pnl)' : 'Označit jako BE (počítá se jako break-even ve statistikách bez ohledu na pnl)'}
+                                  >
+                                    {isBEOverride ? '✓ Označeno jako BE' : '⚖ Označit jako BE'}
+                                  </button>
+                                )}
                             </div>
                             {/* Metrics — 3-col na mobile (kompaktnější), 2-col na desktop */}
                             <div className="p-3 lg:p-5">

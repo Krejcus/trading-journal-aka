@@ -179,6 +179,8 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
     const isMissed = status === 'Missed';
     const isInvalid = status === 'Invalid';
     const isValid = status === 'Valid';
+    // Manual BE override — i když pnl ≠ 0, počítá se jako BE (slippage/fees offset)
+    const beOverride = trade.isBE === true;
 
     // Reálné Equity (vše kromě zmeškaných)
     if (!isMissed) {
@@ -227,18 +229,23 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
       const dayName = days[d.getDay()];
       const dm = dayMap.get(dayName);
       dm.pnl += trade.pnl; dm.count++;
-      if (trade.pnl > 0.01) { dm.profit += trade.pnl; dm.wins++; }
+      if (beOverride) { dm.be = (dm.be || 0) + 1; }
+      else if (trade.pnl > 0.01) { dm.profit += trade.pnl; dm.wins++; }
       else if (trade.pnl < -0.01) { dm.loss += trade.pnl; }
       else { dm.be = (dm.be || 0) + 1; }
 
       const hr = d.getHours().toString();
       const hm = hourMap.get(hr);
       hm.pnl += trade.pnl; hm.count++;
-      if (trade.pnl > 0.01) { hm.profit += trade.pnl; hm.wins++; }
+      if (beOverride) { hm.be = (hm.be || 0) + 1; }
+      else if (trade.pnl > 0.01) { hm.profit += trade.pnl; hm.wins++; }
       else if (trade.pnl < -0.01) { hm.loss += trade.pnl; }
       else { hm.be = (hm.be || 0) + 1; }
 
-      if (trade.pnl > 0.01) {
+      if (beOverride) {
+        // BE override — pnl jde do equity, ale do win/loss buckets ne
+        breakEvenTrades++;
+      } else if (trade.pnl > 0.01) {
         grossProfit += trade.pnl; winningTrades++; totalWinDuration += trade.durationMinutes;
         currentWinStreak++; maxWin = Math.max(maxWin, trade.pnl);
         winPcts.push(tradePct);
@@ -254,11 +261,12 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
 
       const sig = trade.signal;
       const sm = signalMap.get(sig) || { pnl: 0, wins: 0, count: 0, be: 0 };
+      const isBEForSignal = beOverride || Math.abs(trade.pnl) <= 0.01;
       signalMap.set(sig, {
         pnl: sm.pnl + trade.pnl,
-        wins: sm.wins + (trade.pnl > 0.01 ? 1 : 0),
+        wins: sm.wins + (!beOverride && trade.pnl > 0.01 ? 1 : 0),
         count: sm.count + 1,
-        be: (sm.be || 0) + (Math.abs(trade.pnl) <= 0.01 ? 1 : 0),
+        be: (sm.be || 0) + (isBEForSignal ? 1 : 0),
       });
     } else {
       missedTrades++;

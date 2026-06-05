@@ -185,6 +185,9 @@ export interface Trade {
   symbol?: string;    // Added for AI context
   direction: 'Long' | 'Short';
   outcome?: 'Win' | 'Loss' | 'BE'; // Added for AI context
+  /** Manual override — i když pnl ≠ 0, počítá se jako BE ve statistikách.
+   *  Použij pro obchody co byly fakticky BE ale fees / slippage daly +/-$10. */
+  isBE?: boolean;
   timestamp: number;
   duration: string;
   durationMinutes: number;

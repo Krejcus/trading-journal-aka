@@ -127,6 +127,14 @@ export const storageService = {
         miniViewSecondaryTimeframe: d.miniViewSecondaryTimeframe,
         // AI návrhy z enrich-trade Edge Function (HTF/LTF/mistakes/emotions + reasoning)
         aiSuggestions: d.aiSuggestions || undefined,
+        // KRITICKÉ: pole co se používají v TradeDetailModal a fee přepočtech.
+        // Bez nich modal zobrazí POSITION=1 (fallback) i pro Tradovate trades s pos=2/4.
+        positionSize: d.positionSize ? Number(d.positionSize) : undefined,
+        isMaster: d.isMaster === 'true' || d.isMaster === true,
+        masterTradeId: d.masterTradeId || undefined,
+        entryTime: d.entryTime ? Number(d.entryTime) : undefined,
+        entryDate: d.entryDate || undefined,
+        isBE: d.isBE === true || d.isBE === 'true',
         data: {}
       };
     }) as Trade[];
