@@ -2038,6 +2038,10 @@ const App: React.FC = () => {
 
   const baseFilteredTrades = useMemo(() => {
     const now = new Date();
+    // KRITICKÉ: account lookup musí brát i archivované účty, jinak obchody z archivovaných
+    // (např. spálené Tradeify 50k) zmizí z Deníku/Dashboardu, i když jsou v Historii vidět.
+    // Bug: AlphaBridge trade na archived účtu → acc undefined → phase check fail → hidden.
+    const accountsLookup = [...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))];
     return displayTrades.filter(t => {
       // DEBUG: Log Alpha Bridge trades to see why they're filtered
       const isAlphaBridge = t.signal === 'Alpha Bridge v2';
@@ -2045,19 +2049,19 @@ const App: React.FC = () => {
       // Filter by phase based on dashboardMode
       // ALWAYS use account phase as source of truth, not trade phase
       if (dashboardMode === 'challenge') {
-        const acc = accounts.find(a => a.id === t.accountId);
+        const acc = accountsLookup.find(a => a.id === t.accountId);
         const isChallenge = acc?.type === 'Funded' && acc?.phase === 'Challenge';
         if (!isChallenge) {
           return false;
         }
       } else if (dashboardMode === 'backtesting') {
-        const acc = accounts.find(a => a.id === t.accountId);
+        const acc = accountsLookup.find(a => a.id === t.accountId);
         const isBacktest = acc?.type === 'Backtest';
         if (!isBacktest) {
           return false;
         }
       } else if (dashboardMode === 'funded') {
-        const acc = accounts.find(a => a.id === t.accountId);
+        const acc = accountsLookup.find(a => a.id === t.accountId);
         const isFunded = acc?.type === 'Live' || (acc?.type === 'Funded' && acc?.phase === 'Funded');
         if (!isFunded) {
           return false;
@@ -2086,7 +2090,7 @@ const App: React.FC = () => {
             const isTarget = t.accountId === filterId;
             const isChildOfTarget = t.masterTradeId && t.accountId !== filterId; // Simplified check
             // More robust: does this trade's account have a parent that is in filters?
-            const acc = accounts.find(a => a.id === t.accountId);
+            const acc = accountsLookup.find(a => a.id === t.accountId);
             return isTarget || (acc?.parentAccountId && filters.accounts.includes(acc.parentAccountId));
           });
         }
