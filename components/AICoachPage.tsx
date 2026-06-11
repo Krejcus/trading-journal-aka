@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, ChevronDown, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, ChevronDown, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen, Headphones, Brain, Zap } from 'lucide-react';
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation } from '../types';
-import { streamAIResponse, buildTraderContext, parseAllRefs, type AIMessage } from '../services/aiService';
+import { streamAIResponse, buildTraderContext, parseAllRefs, prewarmCoachMemory, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
 import { summarizeConversation } from '../services/coachMemoryService';
 import { MessageBubble, type ExtendedMessage } from './AICards';
 import ConfirmationModal from './ConfirmationModal';
 import TradeDetailModal from './TradeDetailModal';
 import VoiceMemoButton from './VoiceMemoButton';
+import VoiceModeOverlay from './VoiceModeOverlay';
+import { enqueueSpeak, cleanForSpeech, cancelSpeech } from '../services/ttsService';
 
 // ─── Quick prompts ────────────────────────────────────────────────────────────
 
@@ -123,6 +125,26 @@ const AICoachPage: React.FC<Props> = ({
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
+  const [aiModel, setAiModel] = useState<'analytical' | 'fast'>(() => {
+    try {
+      const saved = localStorage.getItem('alphatrade_ai_model');
+      return (saved as 'analytical' | 'fast') || 'analytical';
+    } catch {
+      return 'analytical';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('alphatrade_ai_model', aiModel);
+    } catch (e) {
+      console.warn('[AICoachPage] Failed to save AI model choice:', e);
+    }
+  }, [aiModel]);
+
+  // Nahřej memory cache (profil/závazky/summaries) hned při otevření stránky —
+  // první zpráva pak nečeká na 3 DB roundtripy.
+  useEffect(() => { prewarmCoachMemory(); }, []);
   // Warning modal — pokud user mění konverzaci (nebo zakládá novou) během streamu.
   // Stejný princip jako navigace v App.tsx: stream se odpojí → odpověď zmizí.
   const [pendingConvAction, setPendingConvAction] = useState<(() => void) | null>(null);
@@ -134,6 +156,7 @@ const AICoachPage: React.FC<Props> = ({
   const [renameValue, setRenameValue] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 
   // Proactive greeting state: Coach generates a personalized greeting + 3 suggested topics
   // when user opens AI Coach without an active conversation.
@@ -455,10 +478,10 @@ const AICoachPage: React.FC<Props> = ({
 
   // ─── Send message ──────────────────────────────────────────────────────────
 
-  const sendMessage = useCallback(async (text: string, overrideConvId?: string) => {
-    if (!text.trim() || isStreaming) return;
+  const sendMessage = useCallback(async (text: string, overrideConvId?: string, voiceMode = false): Promise<string> => {
+    if (!text.trim() || isStreaming) return '';
     const convId = overrideConvId ?? activeConvId;
-    if (!convId) return;
+    if (!convId) return '';
 
     const isFirstMessage = !firstMessageSentRef.current;
     firstMessageSentRef.current = true;
@@ -470,10 +493,12 @@ const AICoachPage: React.FC<Props> = ({
     setInput('');
     setIsStreaming(true);
 
-    // Save user message to DB
-    await storageService.appendMessage(convId, 'user', text.trim());
+    // Save user message to DB — fire-and-forget. Blokující await tady zdržoval
+    // start AI volání o celý DB roundtrip; persistence zprávy nemusí předcházet streamu.
+    storageService.appendMessage(convId, 'user', text.trim())
+      .catch(err => console.error('[AICoachPage] appendMessage failed:', err));
 
-    // If this is the first message, auto-update conversation title
+    // If this is the first message, auto-update conversation title (taky fire-and-forget)
     if (isFirstMessage) {
       // Strip hidden [CONTEXT]...[/CONTEXT] block so the title reflects the visible question, not the context.
       const visible = text.trim().replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]\s*/g, '').trim();
@@ -481,7 +506,8 @@ const AICoachPage: React.FC<Props> = ({
       const autoTitle = titleSource.slice(0, 50).replace(/\n/g, ' ');
       const titleCapitalized = autoTitle.charAt(0).toUpperCase() + autoTitle.slice(1);
       const category = detectCategory(text.trim());
-      await storageService.updateConversation(convId, { title: titleCapitalized, category });
+      storageService.updateConversation(convId, { title: titleCapitalized, category })
+        .catch(err => console.error('[AICoachPage] updateConversation failed:', err));
       setConversations(prev => prev.map(c =>
         c.id === convId
           ? { ...c, title: titleCapitalized, category, updated_at: new Date().toISOString() }
@@ -493,6 +519,30 @@ const AICoachPage: React.FC<Props> = ({
 
     let finalContent = '';
 
+    // Voice mód: streamuj TTS po větách. Jakmile coach dopíše větu, hned ji pošli
+    // k přečtení (zatímco píše dál) → zvuk začne hrát skoro okamžitě, ne až po celé odpovědi.
+    let voiceBuf = '';
+    if (voiceMode) cancelSpeech(); // vyčisti případný zbytek z minula
+    const flushVoiceSentences = (final = false) => {
+      if (!voiceMode) return;
+      // Rozsekej na věty: ender ([.!?] následovaný mezerou, nebo nový řádek).
+      // Tečka uvnitř čísla ("2.5") se NEsplitne (není za ní mezera).
+      const re = /[.!?]+(?=\s)|\n+/g;
+      let lastCut = 0; let m: RegExpExecArray | null;
+      while ((m = re.exec(voiceBuf)) !== null) {
+        const end = m.index + m[0].length;
+        const spoken = cleanForSpeech(voiceBuf.slice(lastCut, end));
+        if (spoken) enqueueSpeak(spoken);
+        lastCut = end;
+      }
+      voiceBuf = voiceBuf.slice(lastCut);
+      if (final && voiceBuf.trim()) {
+        const spoken = cleanForSpeech(voiceBuf);
+        if (spoken) enqueueSpeak(spoken);
+        voiceBuf = '';
+      }
+    };
+
     await streamAIResponse(
       history,
       traderContext,
@@ -503,6 +553,7 @@ const AICoachPage: React.FC<Props> = ({
       (chunk) => {
         finalContent += chunk;
         chunkBufferRef.current += chunk;
+        if (voiceMode) { voiceBuf += chunk; flushVoiceSentences(); }
 
         if (!chunkTimerRef.current) {
           chunkTimerRef.current = setTimeout(() => {
@@ -554,6 +605,8 @@ const AICoachPage: React.FC<Props> = ({
       },
       // onDone
       async () => {
+        // Voice mód: dořekni zbytek (poslední věta bez koncové mezery).
+        flushVoiceSentences(true);
         // Flush any remaining buffered chunks before finishing
         if (chunkTimerRef.current) {
           clearTimeout(chunkTimerRef.current);
@@ -605,6 +658,7 @@ const AICoachPage: React.FC<Props> = ({
       // onError
       (err) => {
         console.error('[AICoachPage] stream error:', err);
+        if (voiceMode) cancelSpeech(); // zastav rozečtené věty při chybě
         setIsStreaming(false);
         setToolStatus(null);
         // Ukaž chybu v bublině místo tichého smazání — user ví, co se stalo.
@@ -628,9 +682,14 @@ const AICoachPage: React.FC<Props> = ({
           .filter(a => a.status !== 'Archived')
           .reduce((sum, a) => sum + (a.initialBalance || 0), 0) || undefined,
         onToolUse: (label) => setToolStatus(label),
+        voiceMode,
+        aiModel: voiceMode ? 'fast' : aiModel,
       },
     );
-  }, [messages, traderContext, trades, dailyPreps, dailyReviews, isStreaming, activeConvId]);
+
+    // Vrať finální text — voice mód ho přečte nahlas.
+    return finalContent;
+  }, [messages, traderContext, trades, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel]);
 
   // ─── Start with quick prompt (declared after sendMessage to avoid TDZ) ──────
 
@@ -839,6 +898,34 @@ const AICoachPage: React.FC<Props> = ({
             <span className="text-sm font-bold text-[var(--text-primary)]">AI Coach</span>
           )}
         </div>
+
+        {/* Model Selector Toggle */}
+        <div className="flex items-center gap-1 bg-[var(--bg-page)] border border-[var(--border-subtle)] p-0.5 rounded-xl flex-shrink-0">
+          <button
+            onClick={() => setAiModel('analytical')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              aiModel === 'analytical'
+                ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-transparent'
+            }`}
+            title="Hluboká analýza s Claude Sonnet 4.5"
+          >
+            <Brain size={14} />
+            <span className="hidden sm:inline">Analytický</span>
+          </button>
+          <button
+            onClick={() => setAiModel('fast')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              aiModel === 'fast'
+                ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-transparent'
+            }`}
+            title="Bleskově rychlý s Gemini 3.5 Flash"
+          >
+            <Zap size={14} />
+            <span className="hidden sm:inline">Rychlý</span>
+          </button>
+        </div>
       </div>
 
       {/* Messages */}
@@ -962,39 +1049,69 @@ const AICoachPage: React.FC<Props> = ({
       {/* Input area */}
       {activeConvId && (
         <div className="px-4 py-3 border-t border-[var(--border-subtle)] flex-shrink-0">
-          <div className="flex items-end gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-3">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Napiš zprávu... (Enter = odeslat)"
-              rows={1}
-              disabled={isStreaming}
-              className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder-slate-500 resize-none outline-none max-h-[50vh] overflow-y-auto scrollbar-thin disabled:opacity-50"
-              style={{ lineHeight: '1.5' }}
+          {voiceModeOpen ? (
+            /* Hlasový mód — input se promění v živou vlnu reagující na hlas (nezasahuje do chatu). */
+            <VoiceModeOverlay
+              onClose={() => setVoiceModeOpen(false)}
+              onSend={(text) => sendMessage(text, undefined, true)}
             />
-            <VoiceMemoButton
-              size="sm"
-              disabled={isStreaming}
-              title="Nadiktovat dotaz (Whisper, česky)"
-              onTranscribed={(text) => {
-                // Append to input so user can edit / append more before sending
-                setInput(prev => (prev.trim() ? prev.trim() + ' ' : '') + text);
-                setTimeout(() => inputRef.current?.focus(), 50);
-              }}
-            />
-            <button
-              onClick={() => sendMessage(input)}
-              disabled={!input.trim() || isStreaming}
-              className="w-8 h-8 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center flex-shrink-0 transition-all active:scale-95"
-            >
-              {isStreaming
-                ? <Loader2 size={14} className="text-white animate-spin" />
-                : <Send size={14} className="text-white" />
-              }
-            </button>
-          </div>
+          ) : (
+            <div className="flex items-end gap-2 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-3">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Napiš zprávu... (Enter = odeslat)"
+                rows={1}
+                disabled={isStreaming}
+                className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder-slate-500 resize-none outline-none max-h-[50vh] overflow-y-auto scrollbar-thin disabled:opacity-50"
+                style={{ lineHeight: '1.5' }}
+              />
+              <VoiceMemoButton
+                size="sm"
+                disabled={isStreaming}
+                title="Nadiktovat dotaz (Whisper, česky)"
+                onTranscribed={(text) => {
+                  // Append to input so user can edit / append more before sending
+                  setInput(prev => (prev.trim() ? prev.trim() + ' ' : '') + text);
+                  setTimeout(() => inputRef.current?.focus(), 50);
+                }}
+              />
+              {/* Voice mód — hands-free konverzace (coach mluví a poslouchá ve smyčce) */}
+              <button
+                onClick={() => {
+                  setVoiceModeOpen(true);
+                  // Aktivovat (odemknout) Web Speech API v prohlížeči přehráním prázdné promluvy.
+                  // Chrome/Safari blokují asynchronní řeč spuštěnou po síťovém volání,
+                  // pokud předtím v rámci stejného kliknutí neproběhl přímý synchronní speak().
+                  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                    try {
+                      const utter = new SpeechSynthesisUtterance('');
+                      window.speechSynthesis.speak(utter);
+                    } catch (e) {
+                      console.warn('[Speech] Synchronous unlock failed:', e);
+                    }
+                  }
+                }}
+                disabled={isStreaming}
+                title="Hlasový mód — mluv s coachem"
+                className="w-8 h-8 rounded-xl bg-emerald-500/10 hover:bg-emerald-500 text-emerald-500 hover:text-white border border-emerald-500/30 hover:border-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center flex-shrink-0 transition-all active:scale-95"
+              >
+                <Headphones size={14} />
+              </button>
+              <button
+                onClick={() => sendMessage(input)}
+                disabled={!input.trim() || isStreaming}
+                className="w-8 h-8 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center flex-shrink-0 transition-all active:scale-95"
+              >
+                {isStreaming
+                  ? <Loader2 size={14} className="text-white animate-spin" />
+                  : <Send size={14} className="text-white" />
+                }
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

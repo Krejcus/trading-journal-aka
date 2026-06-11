@@ -3,9 +3,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 import { DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, WeeklyFocus, PsychoMetricConfig, SessionConfig, SessionAnalysis, GoalResult } from '../types';
 import DisciplineDashboard from './DisciplineDashboard';
-import TacticalTimeline from './TacticalTimeline';
 import TacticalTimelineV2 from './TacticalTimelineV2';
-import { useFeatureFlag } from '../services/featureFlags';
 import ImageZoomModal from './ImageZoomModal';
 import WeeklyOverview from './WeeklyOverview';
 import { storageService } from '../services/storageService';
@@ -94,9 +92,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const getToday = () => new Date().toLocaleDateString('en-CA');
   const [selectedDate, setSelectedDate] = useState(initialDate ?? getToday());
   const today = getToday();
-
-  // Feature flag: nový Deník layout (V2). Přepíná se v Settings.
-  const [denikV2] = useFeatureFlag('denik_v2');
 
   // Přeskočit na datum z AI Chatu
   useEffect(() => {
@@ -1147,7 +1142,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             </div>
 
             <div id="tactical-timeline-anchor" />
-            {denikV2 ? (
+            {(
               <TacticalTimelineV2
                 date={selectedDate}
                 // V2 čte z formularů (reviewForm/prepForm) ne saved data —
@@ -1160,6 +1155,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 sessions={sessions}
                 sessionBreakdowns={reviewForm.sessionBreakdowns}
                 rituals={rituals}
+                tradeRules={tradeRules}
                 onEditPrep={() => setView('edit-prep')}
                 onEditReview={() => setView('edit-review')}
                 onDeletePrep={onDeletePrep}
@@ -1187,35 +1183,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 onUpdatePrep={(updates) => editPrepForm((prev: any) => ({ ...prev, ...updates }))}
                 onUpdateReview={(updates) => editReviewForm((prev: any) => ({ ...prev, ...updates }))}
                 userMistakes={userMistakes}
-              />
-            ) : (
-              <TacticalTimeline
-                date={selectedDate}
-                prep={currentPrep}
-                review={currentReview}
-                trades={currentTrades}
-                theme={theme}
-                autoExpand={autoExpand}
-                onAutoExpandConsumed={() => setAutoExpand(null)}
-                onEditPrep={() => setView('edit-prep')}
-                onEditReview={() => setView('edit-review')}
-                onDeletePrep={onDeletePrep}
-                onDeleteReview={onDeleteReview}
-                sessions={sessions}
-                sessionBreakdowns={reviewForm.sessionBreakdowns}
-                onUpdateBreakdown={handleUpdateBreakdown}
-                prepForm={prepForm}
-                reviewForm={reviewForm}
-                editPrepForm={editPrepForm as any}
-                editReviewForm={editReviewForm as any}
-                onSavePrep={onSavePrep}
-                onSaveReview={onSaveReview}
-                rituals={rituals}
-                tradeRules={tradeRules}
-                psychoMetrics={psychoMetrics}
-                currentWeekFocus={currentWeekFocus}
-                isSaving={isSaving}
-                lastSaved={lastSaved}
               />
             )}
           </div>
@@ -1358,37 +1325,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               )}
             </div>
           </div>
-
-          {activeTab === 'daily' && view === 'timeline' && (
-            <TacticalTimeline
-              date={selectedDate}
-              prep={currentPrep}
-              review={currentReview}
-              trades={currentTrades}
-              theme={theme}
-              autoExpand={autoExpand}
-              onAutoExpandConsumed={() => setAutoExpand(null)}
-              onEditPrep={() => setView('edit-prep')}
-              onEditReview={() => setView('edit-review')}
-              onDeletePrep={onDeletePrep}
-              onDeleteReview={onDeleteReview}
-              sessions={sessions}
-              sessionBreakdowns={reviewForm.sessionBreakdowns}
-              onUpdateBreakdown={handleUpdateBreakdown}
-              prepForm={prepForm}
-              reviewForm={reviewForm}
-              editPrepForm={editPrepForm as any}
-              editReviewForm={editReviewForm as any}
-              onSavePrep={onSavePrep}
-              onSaveReview={onSaveReview}
-              rituals={rituals}
-              tradeRules={tradeRules}
-              psychoMetrics={psychoMetrics}
-              currentWeekFocus={currentWeekFocus}
-              isSaving={isSaving}
-              lastSaved={lastSaved}
-            />
-          )}
         </>
       )}
 
@@ -1518,9 +1454,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       {/* EDIT FORMS — V1 renderuje inline v TacticalTimeline, V2 deleguje sem.
           Zobrazit jen pokud:
             - jsme na denním tabu
-            - view === 'edit-prep' nebo 'edit-review' (= klik Upravit z V2 Deníku)
-          V1 (denik_v2 = false) tento blok nikdy nepotřebuje. */}
-      {activeTab === 'daily' && (view === 'edit-prep' || view === 'edit-review') && denikV2 && (
+            - view === 'edit-prep' nebo 'edit-review' (= klik Upravit z Deníku) */}
+      {activeTab === 'daily' && (view === 'edit-prep' || view === 'edit-review') && (
         <div className="max-w-7xl mx-auto animate-in slide-in-from-right-4 duration-500">
           {view === 'edit-prep' && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">

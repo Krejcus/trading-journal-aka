@@ -522,9 +522,18 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
               <motion.div variants={itemVariants}>
                 <div className={sectionLabelClass}><Wallet size={10} /> Portfolia & Účty</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {accounts.filter(a => dashboardMode === 'archive' ? a.status === 'Inactive' : a.status === 'Active').map(acc => (
+                  {accounts.filter(a => {
+                    // V "Vše" / "Archiv" módu chceme i Inactive (archivované/spálené) účty.
+                    // V ostatních módech jen Active.
+                    if (dashboardMode === 'archive') return a.status === 'Inactive';
+                    if (dashboardMode === 'combined') return true;
+                    return a.status === 'Active';
+                  }).map(acc => (
                     <button key={acc.id} onClick={() => setFilters(f => ({ ...f, accounts: toggleItem(f.accounts, acc.id) }))} className={`w-full py-2.5 px-3 flex items-center justify-between rounded-xl ${getGlassBtnClass(filters.accounts.includes(acc.id))}`}>
-                      <span className="truncate">{acc.name}</span>
+                      <span className={`truncate ${acc.status === 'Inactive' ? 'opacity-60' : ''}`}>
+                        {acc.name}
+                        {acc.status === 'Inactive' && <span className="ml-1.5 text-[8px] text-rose-400">·spálený</span>}
+                      </span>
                       {filters.accounts.includes(acc.id) && <Check size={12} />}
                     </button>
                   ))}

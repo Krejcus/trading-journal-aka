@@ -55,12 +55,13 @@ function timeToMinutes(t: string): number {
     return h * 60 + m;
 }
 
-// Find which session from user's preferences matches the current local time
-function detectBestSession(sessions: SessionConfig[]): string {
+// Find which session from user's preferences matches a given time-of-day.
+// atMinutes = minuty od půlnoci (z času VSTUPU obchodu). Bez parametru = aktuální čas.
+function detectBestSession(sessions: SessionConfig[], atMinutes?: number): string {
     if (sessions.length === 0) return detectSession();
 
     const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const currentMinutes = atMinutes ?? (now.getHours() * 60 + now.getMinutes());
 
     const matches: { name: string; rangeSize: number }[] = [];
 
@@ -234,9 +235,12 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                     if (signals.length > 0) {
                         setTrade(prev => ({ ...prev, signal: prev.signal || signals[0] }));
                     }
-                    // Auto-detect session from user's configured sessions
+                    // Auto-detect session z času VSTUPU obchodu (ne z aktuálního času).
                     if (sessions.length > 0) {
-                        setTrade(prev => ({ ...prev, session: detectBestSession(sessions) }));
+                        setTrade(prev => {
+                            const mins = prev.entryTime ? timeToMinutes(prev.entryTime) : NaN;
+                            return { ...prev, session: detectBestSession(sessions, isNaN(mins) ? undefined : mins) };
+                        });
                     }
                 }
             } catch (err) {
@@ -458,6 +462,16 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                 }
             }
 
+            // Calculate exit price based on pnl if manually entered, otherwise default to tp/sl/entry
+            let calculatedExitPrice = trade.outcome === 'WIN' ? tp : trade.outcome === 'LOSS' ? sl : entry;
+            if (entry && sl && trade.pnl && risk && !isNaN(pnl)) {
+                const directionSign = trade.direction === 'SHORT' ? -1 : 1;
+                const riskMove = Math.abs(entry - sl);
+                if (riskMove > 0) {
+                    calculatedExitPrice = entry + directionSign * (pnl / risk) * riskMove;
+                }
+            }
+
             const baseDateStr = trade.entryDate || new Date().toISOString().split('T')[0];
             const baseTimeStr = trade.entryTime || new Date().toTimeString().split(' ')[0].slice(0, 5);
             // Konvence appky: `date` / `timestamp` = EXIT time (close trade), entry je oddělené.
@@ -543,7 +557,7 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                     accountId: accId,
                     instrument: finalInstrument,
                     entryPrice: entry,
-                    exitPrice: trade.outcome === 'WIN' ? tp : trade.outcome === 'LOSS' ? sl : entry,
+                    exitPrice: calculatedExitPrice,
                     stopLoss: sl,
                     takeProfit: tp,
                     riskAmount: risk,
@@ -766,7 +780,18 @@ export function TradeForm({ isWide = false }: { isWide?: boolean }) {
                                 <input
                                     type="time"
                                     value={trade.entryTime}
-                                    onChange={(e) => updateField('entryTime')(e.target.value)}
+                                    onChange={(e) => {
+                                        const v = e.target.value;
+                                        // Auto-detekce session z času VSTUPU (ne z aktuálního času).
+                                        setTrade(prev => {
+                                            const next: any = { ...prev, entryTime: v };
+                                            if (options.sessions.length > 0 && v) {
+                                                const mins = timeToMinutes(v);
+                                                if (!isNaN(mins)) next.session = detectBestSession(options.sessions, mins);
+                                            }
+                                            return next;
+                                        });
+                                    }}
                                     onKeyDown={(e) => e.stopPropagation()}
                                     className={`w-full border rounded-xl px-2 py-2 text-sm outline-none transition-all duration-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 ${theme === 'dark' ? 'bg-slate-800/80 border-slate-700/50 text-slate-100' : 'bg-white/80 border-slate-300/50 text-slate-800'}`}
                                 />

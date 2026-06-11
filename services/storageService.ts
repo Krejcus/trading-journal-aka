@@ -127,6 +127,7 @@ export const storageService = {
         miniViewSecondaryTimeframe: d.miniViewSecondaryTimeframe,
         // AI návrhy z enrich-trade Edge Function (HTF/LTF/mistakes/emotions + reasoning)
         aiSuggestions: d.aiSuggestions || undefined,
+        visionAnalysis: d.visionAnalysis || undefined,
         // KRITICKÉ: pole co se používají v TradeDetailModal a fee přepočtech.
         // Bez nich modal zobrazí POSITION=1 (fallback) i pro Tradovate trades s pos=2/4.
         positionSize: d.positionSize ? Number(d.positionSize) : undefined,
@@ -366,7 +367,8 @@ export const storageService = {
         entryTime:data->>entryTime,
         screenshot:data->>screenshot,
         screenshots:data->screenshots,
-        aiSuggestions:data->aiSuggestions
+        aiSuggestions:data->aiSuggestions,
+        visionAnalysis:data->visionAnalysis
       `)
       .eq('user_id', userId)
       .order('timestamp', { ascending: false });
@@ -422,6 +424,7 @@ export const storageService = {
       screenshot: t.screenshot && !String(t.screenshot).startsWith('data:') ? t.screenshot : undefined,
       screenshots: t.screenshots?.filter((s: string) => s && !String(s).startsWith('data:')) || undefined,
       aiSuggestions: t.aiSuggestions || undefined,
+      visionAnalysis: t.visionAnalysis || undefined,
       miniViewRange: t.miniViewRange,
       miniViewLayout: t.miniViewLayout,
       miniViewSecondaryRange: t.miniViewSecondaryRange,
@@ -1042,7 +1045,10 @@ export const storageService = {
         result: a.meta?.result,
         phase: a.meta?.phase
       }))
-      .filter(a => a.isArchived === true);
+      // Považuj za "neaktivní/spálený" cokoliv s isArchived=true NEBO status=Inactive.
+      // Bez tohoto se ztrácí staré účty (status=Inactive, isArchived=null/false), kde sedí
+      // až desítky trades — v Historie/Deník/Combined dashboardu se vůbec nezobrazí.
+      .filter(a => a.isArchived === true || a.status === 'Inactive');
   },
 
   async saveAccounts(accounts: Account[]): Promise<Account[]> {

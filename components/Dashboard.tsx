@@ -5,6 +5,7 @@ import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, Sessi
 import { formatPnL, calculateTotalRR, formatCurrency } from '../utils/formatPnL';
 import { currencyService, ExchangeRates } from '../services/currencyService';
 import { t } from '../services/translations';
+import { getTradeEntryMinuteOfDay } from '../services/tradeTime';
 import Charts from './Charts';
 import DashboardCalendar from './DashboardCalendar';
 import DisciplineDashboard from './DisciplineDashboard';
@@ -1138,8 +1139,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
 
           const sessionTrades = trades.filter(t => {
             if (t.executionStatus === 'Missed') return false; // missed nepočítej do session P&L
-            const d = new Date(t.timestamp);
-            const tm = d.getHours() * 60 + d.getMinutes();
+            const tm = getTradeEntryMinuteOfDay(t);
             return startMin <= endMin ? (tm >= startMin && tm < endMin) : (tm >= startMin || tm < endMin);
           });
 

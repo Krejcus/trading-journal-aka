@@ -1,6 +1,7 @@
 
 import { Trade, TradeStats, SignalStat, TimeStat, CalendarDay, MonthlyData, EquityPoint } from '../types';
 import { isTradovateFills, parseTradovateFills } from './tradovateImport';
+import { getTradeEntryDate } from './tradeTime';
 
 export const parseCurrency = (val: string | number): number => {
   if (typeof val === 'number') return val;
@@ -234,7 +235,10 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
       else if (trade.pnl < -0.01) { dm.loss += trade.pnl; }
       else { dm.be = (dm.be || 0) + 1; }
 
-      const hr = d.getHours().toString();
+      // Hourly bucket podle ENTRY času — odpoví na otázku "v kolik hodin obchoduješ",
+      // ne "v kolik se ti zavírají pozice". Dayname zůstává podle exit (daily P&L bucket).
+      const entryD = getTradeEntryDate(trade);
+      const hr = entryD.getHours().toString();
       const hm = hourMap.get(hr);
       hm.pnl += trade.pnl; hm.count++;
       if (beOverride) { hm.be = (hm.be || 0) + 1; }

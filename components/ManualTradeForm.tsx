@@ -273,7 +273,8 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       return;
     }
 
-    const pnlNum = parseFloat(formData.pnl || calculations.pnl.toString());
+    const hasCalculatedPnL = !isNaN(parseFloat(formData.entryPrice)) && !isNaN(parseFloat(formData.exitPrice)) && !isNaN(parseFloat(formData.positionSize));
+    const pnlNum = hasCalculatedPnL ? calculations.pnl : parseFloat(formData.pnl || calculations.pnl.toString());
     const groupId = formData.accountIds.length > 1 ? 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
       var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
       return v.toString(16);

@@ -437,7 +437,10 @@ export const ReviewMiniCard: React.FC<{ review: DailyReview; onOpen?: () => void
 // → pokud React zablokuje main thread na 1–2 snímky, animace naváže plynule
 //   místo aby "sekla" (frame-based to nedokáže).
 
-const CHARS_PER_SEC = 75; // znaků za sekundu — klidné, čitelné tempo
+// Rychlost psaní: 75 zn/s působilo "přemýšlivě", ale 600znaková odpověď se
+// dopisovala 8 s PO doručení — uměle zpomalovalo coache. 400 zn/s = stále plynulé,
+// ale text drží krok se streamem.
+const CHARS_PER_SEC = 400;
 
 function useTypewriter(fullContent: string, active: boolean) {
   const isPreloaded = !active && fullContent !== '';
@@ -500,7 +503,12 @@ function useTypewriter(fullContent: string, active: boolean) {
         // Kolik znaků bychom měli mít zobrazeno teď dle uplynulého času
         const elapsed = timestamp - r.current.startTime;
         const target = r.current.charsShown + Math.floor(elapsed * CHARS_PER_SEC / 1000);
-        const toReveal = Math.max(0, target - r.current.text.length);
+        let toReveal = Math.max(0, target - r.current.text.length);
+        // Anti-lag: když stream předbíhá psaní o víc než ~300 znaků, dorovnej
+        // skokem — uživatel nesmí čekat na "dopisování" textu co už dávno dorazil.
+        if (r.current.queue.length > 300) {
+          toReveal = Math.max(toReveal, r.current.queue.length - 300);
+        }
 
         if (toReveal > 0) {
           const n = Math.min(toReveal, r.current.queue.length);
@@ -591,13 +599,7 @@ export const ActionPanel: React.FC<{
   };
 
   return (
-    <div className="w-full mt-2 space-y-1.5">
-      <div className="flex items-center gap-1.5 px-1 mb-1">
-        <Target size={11} className="text-blue-500" />
-        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)]">
-          Doporučené akce
-        </span>
-      </div>
+    <div className="w-full space-y-1.5">
       {actions.map((action, i) => {
         // Applied pokud (a) right-now v session kliknutý, NEBO (b) label už existuje v Iron Rules/Goals.
         // (b) přežije reload — pravidlo zůstává v Supabase, načte se zpět.
@@ -708,21 +710,15 @@ export const ActionPanel: React.FC<{
 // Když je víc než PRAH karet, sbalí je do collapsable bloku s ikonou a počtem.
 // Méně než PRAH → renderuje karty inline (žádný zbytečný UI overhead).
 
-const COLLAPSE_THRESHOLD = 3;
-
 const CollapsibleCardSection: React.FC<{
   icon: React.ReactNode;
   label: string;
   count: number;
   children: React.ReactNode;
 }> = ({ icon, label, count, children }) => {
-  // Default sbalené pokud je víc karet než práh
-  const [expanded, setExpanded] = useState(count <= COLLAPSE_THRESHOLD);
-
-  if (count <= COLLAPSE_THRESHOLD) {
-    // Pod práh — renderuj inline bez collapsable wrapperu
-    return <div className="w-full space-y-2">{children}</div>;
-  }
+  // VŽDY sbalené defaultně — pod zprávou je jen čistý kompaktní řádek "Použité X (N)",
+  // uživatel si rozbalí když chce vidět karty. (Dřív se ≤3 karty renderovaly natvrdo rozbalené.)
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <div className="w-full">
@@ -813,38 +809,21 @@ export const MessageBubble: React.FC<{
           </div>
         )}
 
-        {msg.tradeCards && msg.tradeCards.length > 0 && (
+        {/* Použité podklady — obchody + přípravy + audity dohromady v jedné sbalené sekci. */}
+        {((msg.tradeCards?.length || 0) + (msg.prepCards?.length || 0) + (msg.reviewCards?.length || 0)) > 0 && (
           <CollapsibleCardSection
             icon={<BarChart3 size={13} className="text-blue-500" />}
-            label="Použité obchody"
-            count={msg.tradeCards.length}
+            label="Použité podklady"
+            count={(msg.tradeCards?.length || 0) + (msg.prepCards?.length || 0) + (msg.reviewCards?.length || 0)}
           >
-            {msg.tradeCards.map(trade => (
-              <TradeMiniCard key={trade.id} trade={trade} onClick={() => onOpenTrade?.(trade)} />
+            {msg.tradeCards?.map(trade => (
+              <TradeMiniCard key={`t-${trade.id}`} trade={trade} onClick={() => onOpenTrade?.(trade)} />
             ))}
-          </CollapsibleCardSection>
-        )}
-
-        {msg.prepCards && msg.prepCards.length > 0 && (
-          <CollapsibleCardSection
-            icon={<BookOpen size={13} className="text-blue-500" />}
-            label="Použité přípravy"
-            count={msg.prepCards.length}
-          >
-            {msg.prepCards.map(prep => (
-              <PrepMiniCard key={prep.id} prep={prep} onOpen={() => onOpenJournal?.(prep.date)} />
+            {msg.prepCards?.map(prep => (
+              <PrepMiniCard key={`p-${prep.id}`} prep={prep} onOpen={() => onOpenJournal?.(prep.date)} />
             ))}
-          </CollapsibleCardSection>
-        )}
-
-        {msg.reviewCards && msg.reviewCards.length > 0 && (
-          <CollapsibleCardSection
-            icon={<FileText size={13} className="text-blue-500" />}
-            label="Použité audity"
-            count={msg.reviewCards.length}
-          >
-            {msg.reviewCards.map(review => (
-              <ReviewMiniCard key={review.id} review={review} onOpen={() => onOpenJournal?.(review.date)} />
+            {msg.reviewCards?.map(review => (
+              <ReviewMiniCard key={`r-${review.id}`} review={review} onOpen={() => onOpenJournal?.(review.date)} />
             ))}
           </CollapsibleCardSection>
         )}
@@ -858,14 +837,21 @@ export const MessageBubble: React.FC<{
         )}
 
         {/* Action panel — Coach generates [ACTION:{...}] markers.
-            Renderujeme pouze po dokončení streamu, aby user neklikal half-parsed akce. */}
+            Renderujeme pouze po dokončení streamu, aby user neklikal half-parsed akce.
+            Sbalené defaultně (jako karty) — uživatel si rozbalí. */}
         {!isUser && !isStreaming && msg.actions && msg.actions.length > 0 && onApplyAction && messageIndex !== undefined && (
-          <ActionPanel
-            actions={msg.actions}
-            appliedIds={msg.appliedActionIds || []}
-            existingLabels={existingActionLabels}
-            onApply={(action, idx) => onApplyAction(action, messageIndex, idx)}
-          />
+          <CollapsibleCardSection
+            icon={<Target size={13} className="text-blue-500" />}
+            label="Doporučené akce"
+            count={msg.actions.length}
+          >
+            <ActionPanel
+              actions={msg.actions}
+              appliedIds={msg.appliedActionIds || []}
+              existingLabels={existingActionLabels}
+              onApply={(action, idx) => onApplyAction(action, messageIndex, idx)}
+            />
+          </CollapsibleCardSection>
         )}
 
         {/* Follow-up suggestion pills — Coach generates these as [FOLLOWUP:text] at message end.

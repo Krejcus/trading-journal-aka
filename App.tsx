@@ -1135,14 +1135,15 @@ const App: React.FC = () => {
         }
 
 
-        // Update state with fresh data
-        setTrades(dbTrades || []);
+        // OCHRANA: nepřepisuj prázdným polem pokud RPC selhal a fb fallback vrátil [].
+        // Bez tohoto cache z předchozí session zmizí při dočasné chybě sítě.
+        setTrades(prev => (dbTrades && dbTrades.length > 0) ? dbTrades : (prev.length > 0 ? prev : []));
 
         if (dbAccounts && dbAccounts.length > 0) {
           setAccounts(dbAccounts);
           const activeId = storageService.getActiveAccountId();
           setActiveAccountId(activeId || dbAccounts[0].id);
-        } else {
+        } else if (accounts.length === 0) {
           setAccounts([DEFAULT_ACCOUNT]);
           setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
@@ -1406,7 +1407,8 @@ const App: React.FC = () => {
     // (b) otevře stránku Účty (kvůli zobrazení Hřbitova spálených účtů).
     // History/Deník/AI také potřebují, aby se v UI místo "Neznámý účet" objevil
     // název archivovaného (spáleného) účtu pro jeho staré obchody.
-    const needsArchived = (dashboardMode === 'archive' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai');
+    // Combined ("Vše") na dashboardu chce zahrnout i archivované obchody → musíme načíst.
+    const needsArchived = (dashboardMode === 'archive' || dashboardMode === 'combined' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai');
     if (needsArchived && session && !isArchivedLoaded) {
       storageService.getArchivedAccounts().then(archived => {
         setArchivedAccounts(archived || []);
@@ -1795,15 +1797,38 @@ const App: React.FC = () => {
   }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
 
   // Handle Dashboard Mode Switching
+  // Sleduj POUZE skutečnou změnu módu — bez tohoto se efekt spouští při každé změně
+  // accounts/archivedAccounts (např. realtime sync, lazy load) a PŘEPÍŠE uživatelův
+  // ručně toggle v dropdownu zpět na "všechny vybrané".
+  const lastAppliedModeRef = useRef<string | null>(null);
+  // Pamatuje si, jestli jsme pro combined mode už jednou domergeli i lazy-loaded archived účty.
+  // Po té už se filters.accounts nikdy nepřepisuje — patří uživateli.
+  const combinedArchivedMergedRef = useRef(false);
   useEffect(() => {
-    // Only auto-update filters if we are on dashboard to avoid disrupting other views, 
+    // Only auto-update filters if we are on dashboard to avoid disrupting other views,
     // though "activePage" dependency might be enough.
     if (activePage === 'dashboard' || isInitialLoadDone) {
+      const modeChanged = lastAppliedModeRef.current !== dashboardMode;
+      // Jen pro combined mode: jednorázový merge archivovaných ID až po jejich lazy loadu.
+      const combinedFirstArchivedLoad =
+        dashboardMode === 'combined' &&
+        !modeChanged &&
+        !combinedArchivedMergedRef.current &&
+        archivedAccounts.length > 0;
+      if (!modeChanged && !combinedFirstArchivedLoad) {
+        return; // User klikl v dropdownu — neresetujeme jeho výběr.
+      }
+      lastAppliedModeRef.current = dashboardMode;
+      if (dashboardMode !== 'combined') combinedArchivedMergedRef.current = false;
+
       if (dashboardMode === 'combined') {
-        // Show all accounts (clear filter)
-        // Only clear if we are switching TO combined, or maybe just leave it?
-        // User said: "All-in". Usually implies no filter.
-        setFilters(prev => ({ ...prev, accounts: [] }));
+        if (archivedAccounts.length > 0) combinedArchivedMergedRef.current = true;
+        // "Vše" — chceme OPRAVDU vše, včetně obchodů ze spálených/archivovaných účtů.
+        const seen = new Set<string>();
+        const allIds: string[] = [];
+        accounts.forEach(a => { if (!seen.has(a.id)) { seen.add(a.id); allIds.push(a.id); } });
+        archivedAccounts.forEach(a => { if (!seen.has(a.id)) { seen.add(a.id); allIds.push(a.id); } });
+        setFilters(prev => ({ ...prev, accounts: allIds }));
       } else if (dashboardMode === 'funded') {
         // Select Live accounts and Prop accounts that are in Funded phase
         const fundedIds = accounts
@@ -1853,7 +1878,12 @@ const App: React.FC = () => {
       const seen = new Set(accounts.map(a => a.id));
       return [...accounts, ...archivedAccounts.filter(a => !seen.has(a.id))];
     }
-    if (dashboardMode === 'combined') return accounts;
+    if (dashboardMode === 'combined') {
+      // "Vše" — vrať active i archivované, aby na dashboardu byly všechny obchody
+      // (včetně spálených) započítané do stats/widgetů.
+      const seen = new Set(accounts.map(a => a.id));
+      return [...accounts, ...archivedAccounts.filter(a => !seen.has(a.id))];
+    }
     if (dashboardMode === 'funded') return accounts.filter(a => a.status === 'Active' && ((a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live'));
     if (dashboardMode === 'challenge') return accounts.filter(a => a.status === 'Active' && a.type === 'Funded' && a.phase === 'Challenge');
     if (dashboardMode === 'backtesting') return accounts.filter(a => a.status === 'Active' && a.type === 'Backtest');
@@ -1898,18 +1928,26 @@ const App: React.FC = () => {
   }, [contextAccounts, accounts, trades, filters.accounts, activeAccount, activeAccountId]);
 
   const displayBalance = useMemo(() => {
-    if (viewMode === 'individual') return effectiveActiveAccount.initialBalance || 0;
+    // Balance přes účty které prošly dropdown filtrem. Active i Inactive — když user explicitně
+    // přepnul i "spálené" do filtru, jejich initialBalance se taky započítá pro fair % výpočet.
+    const selectedIds = new Set(filters.accounts);
+    const inFilter = (a: any) => selectedIds.size === 0 ? true : selectedIds.has(a.id);
 
-    // Filter out archived accounts - only use active accounts for balance calculation
-    const activeContextAccounts = contextAccounts.filter(a => a.status === 'Active');
+    if (viewMode === 'individual') {
+      // Indiv. mód: pokud má user manuálně zvolené účty, sečti je. Jinak fallback na aktivní účet.
+      if (filters.accounts.length > 0) {
+        return contextAccounts
+          .filter(inFilter)
+          .reduce((sum, a) => sum + (a.initialBalance || 0), 0);
+      }
+      return effectiveActiveAccount.initialBalance || 0;
+    }
 
-    // If no active accounts, return 0 instead of summing archived accounts
-    if (activeContextAccounts.length === 0) return 0;
-
-    // Sum initial balances of all active accounts that are in the current context
-    return activeContextAccounts
-      .reduce((sum, a) => sum + (a.initialBalance || 0), 0);
-  }, [contextAccounts, effectiveActiveAccount, viewMode]);
+    // Combined: sum balances přes účty v contextAccounts které jsou v filtru.
+    const candidates = contextAccounts.filter(inFilter);
+    if (candidates.length === 0) return 0;
+    return candidates.reduce((sum, a) => sum + (a.initialBalance || 0), 0);
+  }, [contextAccounts, effectiveActiveAccount, viewMode, filters.accounts]);
 
   const [quickNote, setQuickNote] = useState('');
 
@@ -1922,31 +1960,11 @@ const App: React.FC = () => {
 
   const displayTrades = useMemo(() => {
     if (viewMode === 'individual') {
-      // Strategie:
-      //   1. Primárně zkus zobrazit trades z aktivního účtu + jeho kopií (jeho "rodiny")
-      //   2. Pokud má aktivní účet 0 trades (typický case: prázdný master account jako "Hlavní účet"),
-      //      fallback na všechny účty v contextAccounts (= v aktuálním dashboardMode).
-      //      Tím uživatel uvidí všechny své challenge/funded trades i když má aktivní prázdný účet.
-      const activeId = effectiveActiveAccount.id;
-      const childIds = accounts.filter(a => a.parentAccountId === activeId).map(a => a.id);
-      const familyIds = new Set([activeId, ...childIds]);
-      // Pokud je aktivní účet kopie, přidej i master a sourozence
-      const masterId = effectiveActiveAccount.parentAccountId;
-      if (masterId) {
-        familyIds.add(masterId as string);
-        accounts.filter(a => a.parentAccountId === masterId).forEach(a => familyIds.add(a.id));
-      }
-      const familyResult = trades.filter(t => familyIds.has(t.accountId as string));
-
-      if (familyResult.length > 0) return familyResult;
-
-      // Fallback: žádné trades v rodině → ukaž všechny účty z contextAccounts
-      // (= účty co prošly dashboardMode filtrem, např. všechny challenge účty)
-      if (contextAccounts.length > 0) {
-        const contextIds = new Set(contextAccounts.map(a => a.id));
-        return trades.filter(t => contextIds.has(t.accountId as string));
-      }
-      return [];
+      // Indiv. mód = každý obchod zvlášť (žádné agregování přes master/groupId).
+      // Account scoping NEDĚLÁME tady — to řídí čistě dropdown přes filters.accounts
+      // v baseFilteredTrades. Bez tohoto byl Indiv. zaseklý na "active account family"
+      // a klikání na ostatní účty v dropdownu nic neudělalo.
+      return trades;
     }
 
     const grouped = new Map<string, Trade[]>();
@@ -2008,8 +2026,9 @@ const App: React.FC = () => {
 
       if (dbUser) { setCurrentUser(dbUser); setIsUserFromDb(true); }
 
-      // No longer filter weekends at data level - this should be a UI filter
-      setTrades(dbTrades || []);
+      // OCHRANA: nepřepisuj trades prázdným polem pokud DB call selhal/timeoutoval.
+      // Bez tohoto bliká dashboard na 0pnl/0RR při dočasné chybě sítě nebo Supabase glitch.
+      setTrades(prev => (dbTrades && dbTrades.length > 0) ? dbTrades : prev);
 
       if (dbAccounts && dbAccounts.length > 0) {
         setAccounts(dbAccounts);

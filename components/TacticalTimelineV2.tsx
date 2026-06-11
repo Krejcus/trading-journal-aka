@@ -19,6 +19,7 @@ import {
 import { DailyPrep, DailyReview, Trade, SessionConfig, SessionBreakdown, IronRule, QuickNote, SessionAnalysis } from '../types';
 import { storageService } from '../services/storageService';
 import { thumbSmall, thumbLarge, fullSize } from '../services/imageUrlService';
+import { getTradeEntryMinuteOfDay } from '../services/tradeTime';
 import ImageZoomModal from './ImageZoomModal';
 import { getActiveCommitments } from '../services/coachMemoryService';
 import VoiceMemoButton from './VoiceMemoButton';
@@ -32,6 +33,7 @@ interface Props {
   sessions?: SessionConfig[];
   sessionBreakdowns?: SessionBreakdown[];
   rituals?: IronRule[];
+  tradeRules?: IronRule[];
   onEditPrep: () => void;
   onEditReview: () => void;
   onDeletePrep?: (date: string) => void;
@@ -54,7 +56,7 @@ interface Props {
 const TacticalTimelineV2: React.FC<Props> = ({
   date, prep, review, trades, theme,
   sessions = [], sessionBreakdowns = [],
-  rituals = [],
+  rituals = [], tradeRules = [],
   onEditPrep, onEditReview, onDeletePrep, onDeleteReview,
   onAddQuickNote, onDeleteQuickNote,
   onUpdatePrepSession, onUpdateBreakdown,
@@ -96,8 +98,8 @@ const TacticalTimelineV2: React.FC<Props> = ({
       const endMin = endH * 60 + endM;
       const sessionTrades = trades.filter(t => {
         if (!t.timestamp || t.executionStatus === 'Missed') return false;
-        const d = new Date(t.timestamp);
-        const tm = d.getHours() * 60 + d.getMinutes();
+        // Bin podle ENTRY času — obchod uzavřený po skončení session jinak padá mimo.
+        const tm = getTradeEntryMinuteOfDay(t);
         return endMin <= startMin ? (tm >= startMin || tm < endMin) : (tm >= startMin && tm < endMin);
       }).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
       const breakdown = sessionBreakdowns.find(b => b.sessionId === session.id);
@@ -176,6 +178,7 @@ const TacticalTimelineV2: React.FC<Props> = ({
             isDark={isDark}
             prep={prep}
             rituals={rituals}
+            tradeRules={tradeRules}
             completedRituals={completedRituals}
             commitments={commitments}
             onEdit={onEditPrep}
@@ -588,6 +591,7 @@ const ExpandedMorningCard: React.FC<{
   isDark: boolean;
   prep?: DailyPrep;
   rituals: IronRule[];
+  tradeRules?: IronRule[];
   completedRituals: number;
   commitments: Array<{ content: string; metadata?: any }>;
   onEdit: () => void;
@@ -595,7 +599,7 @@ const ExpandedMorningCard: React.FC<{
   onCollapse: () => void;
   onUpdatePrep?: (updates: Partial<DailyPrep>) => void;
   date: string;
-}> = ({ isDark, prep, rituals, commitments, onDelete, onCollapse, onUpdatePrep, date }) => {
+}> = ({ isDark, prep, rituals, tradeRules = [], commitments, onDelete, onCollapse, onUpdatePrep, date }) => {
   const cardClass = isDark
     ? 'bg-gradient-to-br from-amber-500/10 to-transparent border-amber-500/30'
     : 'bg-gradient-to-br from-amber-50 to-white border-amber-200 shadow-sm';
@@ -616,6 +620,14 @@ const ExpandedMorningCard: React.FC<{
       : [...localCompletions, { ruleId, status: next }];
     setLocalCompletions(merged); // instant UI
     if (onUpdatePrep) onUpdatePrep({ ritualCompletions: merged }); // async propagate
+  };
+
+  // Cíle dne — optimistický local state (instant UI, async propagace).
+  const [localGoals, setLocalGoals] = useState<string[]>((prep?.goals || []) as string[]);
+  useEffect(() => { setLocalGoals((prep?.goals || []) as string[]); }, [prep?.goals]);
+  const commitGoals = (next: string[]) => {
+    setLocalGoals(next);
+    if (onUpdatePrep) onUpdatePrep({ goals: next.filter(g => g.trim() !== '') });
   };
 
   const focus = (prep as any)?.dailyFocus || '';
@@ -669,6 +681,63 @@ const ExpandedMorningCard: React.FC<{
           </div>
         </div>
       )}
+
+      {/* TRADING PRAVIDLA — checkboxy (commit dodržet dnes) */}
+      {tradeRules.length > 0 && (
+        <div className="mb-3">
+          <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">⚖ Trading pravidla</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {tradeRules.map(r => {
+              const comp = localCompletions.find((c: any) => c.ruleId === r.id);
+              const done = comp?.status === 'Pass';
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => toggleRitual(r.id)}
+                  disabled={!onUpdatePrep}
+                  className={`flex items-center gap-2 p-2.5 rounded-xl border text-left transition-all active:scale-95 ${
+                    done
+                      ? 'bg-blue-500/10 border-blue-500/30 text-blue-700'
+                      : isDark ? 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded border-2 grid place-items-center shrink-0 ${done ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
+                    {done && <CheckCircle2 size={10} className="text-white" />}
+                  </div>
+                  <span className="text-xs font-bold flex-1">{r.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* CÍLE DNE — editovatelné */}
+      <div className="mb-3">
+        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">🎯 Cíle dne</p>
+        <div className="space-y-1.5">
+          {localGoals.map((g, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="text-slate-400 text-xs shrink-0">{i + 1}.</span>
+              <input
+                value={g}
+                onChange={e => setLocalGoals(localGoals.map((x, idx) => idx === i ? e.target.value : x))}
+                onBlur={() => commitGoals(localGoals)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+                disabled={!onUpdatePrep}
+                placeholder="Napiš cíl…"
+                className={`flex-1 text-xs font-medium rounded-lg border px-2.5 py-2 outline-none ${isDark ? 'bg-white/5 border-white/10 text-slate-200' : 'bg-white border-slate-200 text-slate-700'} focus:border-amber-400`}
+              />
+              {onUpdatePrep && (
+                <button onClick={() => commitGoals(localGoals.filter((_, idx) => idx !== i))} className="p-1 rounded text-slate-400 hover:text-rose-500 shrink-0"><Trash2 size={12} /></button>
+              )}
+            </div>
+          ))}
+          {onUpdatePrep && (
+            <button onClick={() => setLocalGoals([...localGoals, ''])} className="text-[11px] font-bold text-amber-600 hover:text-amber-700 mt-1">+ přidat cíl</button>
+          )}
+        </div>
+      </div>
 
       {/* COMMITMENTS — read-only */}
       {commitments.length > 0 && (

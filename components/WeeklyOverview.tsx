@@ -9,6 +9,7 @@ import {
   Check, X, Edit3, Clock, Coffee, BarChart3
 } from 'lucide-react';
 import { thumbSmall, thumbMedium, fullSize } from '../services/imageUrlService';
+import { getTradeEntryMinuteOfDay } from '../services/tradeTime';
 
 interface WeeklyOverviewProps {
   weekDays: string[];
@@ -654,8 +655,8 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
               const startMin = startH * 60 + startM;
               const endMin = endH * 60 + endM;
               const sessionTrades = trades.filter(t => {
-                const td = new Date(t.timestamp);
-                const tMin = td.getHours() * 60 + td.getMinutes();
+                // Bin podle ENTRY času (jako ostatní session widgety) — exit po session by jinak obchod vyřadil.
+                const tMin = getTradeEntryMinuteOfDay(t);
                 return tMin >= startMin && tMin <= endMin;
               });
 

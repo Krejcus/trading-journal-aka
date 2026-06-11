@@ -11,6 +11,50 @@ const EDGE_BASE = (() => {
 })();
 const CHAT_ENDPOINT = `${EDGE_BASE}/functions/v1/chat`;
 
+// ── Memory fetch cache ───────────────────────────────────────────────────────
+// Profil + commitmenty + summaries se mění jen když coach uloží/smaže paměť.
+// Cachujeme je ~2 min, ať se před každou zprávou netahají 3 DB roundtripy.
+const MEMORY_CACHE_TTL_MS = 2 * 60 * 1000;
+let memoryFetchCache: {
+  profile: Awaited<ReturnType<typeof getProfile>>;
+  commitments: Awaited<ReturnType<typeof getActiveCommitments>>;
+  summaries: Awaited<ReturnType<typeof getRecentConversationSummaries>>;
+  fetchedAt: number;
+} | null = null;
+
+/** Zahodí cache — volat po remember/forget toolu, ať nový závazek platí hned. */
+export function invalidateMemoryCache(): void {
+  memoryFetchCache = null;
+}
+
+/** Načte (nebo vrátí z cache) profil + závazky + summaries. Dedupuje souběžná volání. */
+let memoryFetchInflight: Promise<NonNullable<typeof memoryFetchCache>> | null = null;
+async function loadMemoryFetches(): Promise<NonNullable<typeof memoryFetchCache>> {
+  const now = Date.now();
+  if (memoryFetchCache && now - memoryFetchCache.fetchedAt <= MEMORY_CACHE_TTL_MS) {
+    return memoryFetchCache;
+  }
+  if (!memoryFetchInflight) {
+    memoryFetchInflight = Promise.all([
+      getProfile(),
+      getActiveCommitments(),
+      getRecentConversationSummaries(5),
+    ]).then(([profile, commitments, summaries]) => {
+      memoryFetchCache = { profile, commitments, summaries, fetchedAt: Date.now() };
+      return memoryFetchCache;
+    }).finally(() => { memoryFetchInflight = null; });
+  }
+  return memoryFetchInflight;
+}
+
+/**
+ * Nahřej memory cache dopředu (volat při otevření AI Coach stránky).
+ * První zpráva pak nečeká na 3 DB roundtripy. Tiše ignoruje chyby.
+ */
+export function prewarmCoachMemory(): void {
+  loadMemoryFetches().catch(() => {});
+}
+
 export interface AIMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -145,6 +189,11 @@ export function buildTraderContext(ctx: TraderContext): string {
             if (s.notes) lines.push(`Session ${s.sessionLabel || s.sessionId}: ${s.notes}`);
           });
         }
+        // Quick notes (myšlenky během dne přidané přes FAB) — coach je MUSÍ vidět.
+        if (r.quickNotes?.length) {
+          const notes = r.quickNotes.map(n => n.text?.trim()).filter(Boolean);
+          if (notes.length) lines.push(`Poznámky během dne: ${notes.join(' | ')}`);
+        }
         return lines.join('\n');
       }).join('\n\n')
     : 'Žádné audity';
@@ -235,6 +284,59 @@ export function formatTradesForAI(trades: Trade[], limit = 100): string {
       return fields.filter(Boolean).join(' | ');
     })
     .join('\n');
+}
+
+// ─── Škálovatelné okno obchodů (90 dní plně + měsíční rollup staršího) ────────
+//
+// Místo aby coach tahal data přes nástroje (každé = round-trip = latence), nacpeme
+// mu do promptu OHRANIČENÉ okno: posledních WINDOW_DAYS dní kompletně + měsíční
+// souhrn všeho staršího. Front-loaded blok tak NEROSTE donekonečna (zůstává ~konstantní
+// ať je historie jakkoli dlouhá), takže 80% dotazů zodpoví na jeden round-trip BEZ nástrojů.
+//   - "tento týden / poslední měsíc"  → v okně, instant
+//   - "dlouhodobý trend"              → měsíční rollup je taky v promptu, instant
+//   - "konkrétní starý obchod"        → mimo okno → coach sáhne po nástroji (vzácné)
+const WINDOW_DAYS = 90;
+
+export function buildTradeWindow(allTrades: Trade[]): {
+  windowText: string;
+  rollupText: string;
+  windowCount: number;
+  olderCount: number;
+} {
+  const cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const sorted = [...allTrades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const recent = sorted.filter(t => new Date(t.date).getTime() > cutoff);
+  const older = sorted.filter(t => new Date(t.date).getTime() <= cutoff);
+
+  // Okno: plný detail (žádný limit — okno je přirozeně ohraničené časem)
+  const windowText = recent.length > 0 ? formatTradesForAI(recent, recent.length) : 'Žádné obchody za posledních 90 dní.';
+
+  // Rollup staršího: agregace po měsících (YYYY-MM)
+  let rollupText = 'Žádné starší obchody.';
+  if (older.length > 0) {
+    const byMonth = new Map<string, { count: number; wins: number; pnl: number; mistakes: Record<string, number> }>();
+    for (const t of older) {
+      const key = (t.date || '').slice(0, 7); // YYYY-MM
+      if (!key) continue;
+      if (!byMonth.has(key)) byMonth.set(key, { count: 0, wins: 0, pnl: 0, mistakes: {} });
+      const m = byMonth.get(key)!;
+      m.count++;
+      if (t.pnl > 0) m.wins++;
+      m.pnl += t.pnl;
+      (t.mistakes || []).forEach(mi => { m.mistakes[mi] = (m.mistakes[mi] || 0) + 1; });
+    }
+    rollupText = [...byMonth.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([month, m]) => {
+        const wr = m.count > 0 ? (m.wins / m.count * 100).toFixed(0) : '0';
+        const topMistakes = Object.entries(m.mistakes).sort((a, b) => b[1] - a[1]).slice(0, 3)
+          .map(([mi, c]) => `${mi}(${c}×)`).join(', ');
+        return `${month}: ${m.count} obchodů | WR ${wr}% | PnL $${m.pnl.toFixed(0)}${topMistakes ? ` | Top chyby: ${topMistakes}` : ''}`;
+      })
+      .join('\n');
+  }
+
+  return { windowText, rollupText, windowCount: recent.length, olderCount: older.length };
 }
 
 // ─── Parsování referencí ─────────────────────────────────────────────────────
@@ -506,6 +608,337 @@ export interface StreamOptions {
   onToolUse?: (label: string) => void;
   /** Disable tool-use mode (fallback to old static-context behaviour). */
   disableTools?: boolean;
+  /** Voice mód — coach odpovídá KRÁTCE (přečte se nahlas), bez markdown/karet/výčtů. */
+  voiceMode?: boolean;
+  /** Model volba — 'analytical' (Sonnet) vs 'fast' (Haiku) */
+  aiModel?: 'analytical' | 'fast';
+}
+
+function findToolNameById(messages: any[], id: string): string {
+  for (const msg of messages) {
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === 'tool_use' && block.id === id) {
+          return block.name;
+        }
+      }
+    }
+  }
+  return 'unknown_tool';
+}
+
+function translateMessagesToGemini(messages: any[]): any[] {
+  return messages.map(msg => {
+    const role = msg.role === 'assistant' ? 'model' : 'user';
+    if (typeof msg.content === 'string') {
+      return {
+        role,
+        parts: [{ text: msg.content }]
+      };
+    }
+    if (Array.isArray(msg.content)) {
+      const parts = msg.content.map((block: any) => {
+        if (block.type === 'text') {
+          return { text: block.text };
+        } else if (block.type === 'tool_use') {
+          const part: any = {
+            functionCall: {
+              name: block.name,
+              args: block.input || {}
+            }
+          };
+          const sig = block.thoughtSignature || block.thought_signature;
+          if (sig) {
+            part.thought_signature = sig;
+          }
+          return part;
+        } else if (block.type === 'tool_result') {
+          let parsedResponse = block.content;
+          try {
+            parsedResponse = JSON.parse(block.content);
+          } catch {
+            parsedResponse = { result: block.content };
+          }
+          return {
+            functionResponse: {
+              name: findToolNameById(messages, block.tool_use_id),
+              response: typeof parsedResponse === 'object' && parsedResponse !== null ? parsedResponse : { result: parsedResponse }
+            }
+          };
+        }
+        return null;
+      }).filter(Boolean);
+      return { role, parts };
+    }
+    return { role, parts: [] };
+  });
+}
+
+function convertSchemaToGemini(schema: any): any {
+  if (!schema) return undefined;
+  const converted: any = {};
+  if (schema.type) {
+    converted.type = schema.type.toUpperCase();
+  }
+  if (schema.description) {
+    converted.description = schema.description;
+  }
+  if (schema.properties) {
+    converted.properties = {};
+    for (const key of Object.keys(schema.properties)) {
+      converted.properties[key] = convertSchemaToGemini(schema.properties[key]);
+    }
+  }
+  if (schema.items) {
+    converted.items = convertSchemaToGemini(schema.items);
+  }
+  if (schema.required) {
+    converted.required = schema.required;
+  }
+  if (schema.enum) {
+    converted.enum = schema.enum;
+  }
+  return converted;
+}
+
+function convertToolsToGemini(tools: any[]): any[] {
+  return [
+    {
+      functionDeclarations: tools.map(t => ({
+        name: t.name,
+        description: t.description,
+        parameters: convertSchemaToGemini(t.input_schema)
+      }))
+    }
+  ];
+}
+
+function shouldExcludeHistoryStatsTools(query: string): boolean {
+  const q = query.toLowerCase();
+  const hasOldMonth = /[lI]eden|[uú]nor|b[rř]ezen|duben|kv[eě]ten|[cč]erven|[cč]ervenec|srpen|z[aá]r[ií]|[rř][ií]jen|listopad|prosinec|january|february|march|april|june|july|august|september|october|november|december/.test(q);
+  const hasOldYear = /2023|2024|2025|lo[nň]sk|minul[yý] rok|minul[eé]ho roku/.test(q);
+  const isCasual = q.length < 15 || /ahoj|[cč]us|zdar|dnes|v[cč]era|z[aá]v[aá]z|pamatuj|skv[eě]le|super|d[ií]k|ahojky/.test(q);
+  const isRecentFaq = /nejhor[sš]|nejlep[sš]|chyb|mistake|nej[cč]ast[eě]j[sš]|posledn[ií]|dohod|[pP]ravidl/i.test(q);
+  return (isCasual || isRecentFaq) && !hasOldMonth && !hasOldYear;
+}
+
+async function streamGeminiResponse(
+  messages: AIMessage[],
+  systemPrompt: string,
+  onChunk: (text: string) => void,
+  onRefs: (refs: ParsedRefs) => void,
+  onDone: () => void,
+  onError: (err: string) => void,
+  allTrades: Trade[],
+  options: StreamOptions,
+): Promise<void> {
+  // Klíč už NENÍ v klientu — voláme přes `gemini-chat` edge proxy (klíč v Supabase secrets).
+  const { data: { session: gSession } } = await supabase.auth.getSession();
+  if (!gSession) { onError('Nejsi přihlášen — přihlas se znovu.'); return; }
+  const geminiAccessToken = gSession.access_token;
+  const modelName = (import.meta as any).env?.VITE_GEMINI_MODEL || 'gemini-2.5-flash';
+
+  const geminiInstructions = `
+=== DOPLŇUJÍCÍ METODICKÉ POKYNY PRO GEMINI (KVALITA A REASONING) ===
+- ABSOLUTNĚ ZAKÁZÁNO volat nástroje (search_history, get_stats, list_accounts atd.) pro dotazy týkající se posledních 90 dní. Všechny obchody z tohoto období máš kompletně vypsané níže! Pokud se tě uživatel zeptá na nejčastější chyby, nejhorší obchody nebo týdenní/měsíční PnL, spočítej to přímo z dat v promptu bez spouštění nástrojů. Nástroje použij POUZE a EXKLUZIVNĚ pro obchody starší než 90 dní, nebo při sémantickém hledání mimo toto období.
+- NIKDY neodpovídej vágně nebo obecně ("buď opatrný", "pracuj na disciplíně"). Buď maximálně konkrétní na základě poskytnutých dat o obchodech a paměti.
+- Před samotnou odpovědí si v duchu udělej rychlý interní rozbor:
+  1. Zjisti, zda dotaz/chování neporušuje Filipovy aktivní závazky (závazky vidíš výše).
+  2. Spoj chování s konkrétními daty (přesný datum obchodu, PnL, chybové tagy).
+  3. Identifikuj přesné ICT tradingové chyby (např. chase, FOMO, široký stop, revenge trading).
+- Piš vysoce strukturovaně, věcně, analyticky a profesionálním tradingovým jazykem (FVG, sweeps, BoS, ChoCh, vwap, deviace).
+- Odstraň z odpovědí zbytečnou vatu, úvody a závěry. Odpověď musí mít vysokou informační hustotu a jít přímo k jádru věci.
+`;
+
+  const useTools = !options.disableTools;
+  const apiMessages = [...messages];
+  let fullText = '';
+  const MAX_ITER = 10;
+
+  const lastUserMessage = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+  const excludeHistoryStats = shouldExcludeHistoryStatsTools(lastUserMessage);
+
+  try {
+    for (let iter = 0; iter < MAX_ITER; iter++) {
+      const contents = translateMessagesToGemini(apiMessages);
+      const filteredToolsList = excludeHistoryStats
+        ? COACH_TOOLS.filter(t => 
+            t.name !== 'search_history' && 
+            t.name !== 'get_stats' && 
+            t.name !== 'recall_memory' &&
+            t.name !== 'find_similar_trades' &&
+            t.name !== 'get_recent_context'
+          )
+        : COACH_TOOLS;
+      const tools = useTools ? convertToolsToGemini(filteredToolsList) : undefined;
+
+      const body: any = {
+        contents,
+        systemInstruction: {
+          parts: [{ text: systemPrompt + '\n\n' + geminiInstructions }]
+        },
+        generationConfig: {
+          temperature: options.voiceMode ? 0.6 : 0.3,
+          maxOutputTokens: 4000
+        }
+      };
+      if (tools) {
+        body.tools = tools;
+      }
+
+      const response = await fetch(
+        `${EDGE_BASE}/functions/v1/gemini-chat`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${geminiAccessToken}`,
+          },
+          body: JSON.stringify({ model: modelName, payload: body }),
+        }
+      );
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        onError(`Gemini API chyba: ${response.statusText} (${errText})`);
+        return;
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      let textChunkAcc = '';
+      const modelParts: any[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (!data) continue;
+          let event: any;
+          try {
+            event = JSON.parse(data);
+          } catch {
+            continue;
+          }
+
+          const candidate = event.candidates?.[0];
+          if (candidate?.content?.parts) {
+            candidate.content.parts.forEach((part: any, partIdx: number) => {
+              if (!modelParts[partIdx]) {
+                modelParts[partIdx] = {};
+              }
+              const accumulatedPart = modelParts[partIdx];
+
+              if (part.text) {
+                accumulatedPart.text = (accumulatedPart.text || '') + part.text;
+                textChunkAcc += part.text;
+                fullText += part.text;
+                onChunk(part.text);
+              }
+              if (part.functionCall) {
+                if (!accumulatedPart.functionCall) {
+                  accumulatedPart.functionCall = { name: '', args: {} };
+                }
+                if (part.functionCall.name) {
+                  accumulatedPart.functionCall.name = part.functionCall.name;
+                }
+                if (part.functionCall.args) {
+                  accumulatedPart.functionCall.args = {
+                    ...accumulatedPart.functionCall.args,
+                    ...part.functionCall.args
+                  };
+                }
+                if (part.functionCall.id) {
+                  accumulatedPart.functionCall.id = part.functionCall.id;
+                }
+              }
+              if (part.thoughtSignature || part.thought_signature) {
+                accumulatedPart.thoughtSignature = (accumulatedPart.thoughtSignature || '') + (part.thoughtSignature || part.thought_signature);
+              }
+            });
+          }
+        }
+      }
+
+      const functionCalls = modelParts.filter(p => p.functionCall);
+
+      if (functionCalls.length === 0) {
+        onRefs(parseAllRefs(fullText));
+        onDone();
+        return;
+      }
+
+      const toolUseBlocks = functionCalls.map(p => {
+        const fc = p.functionCall;
+        const block: any = {
+          type: 'tool_use' as const,
+          id: `call_${Math.random().toString(36).slice(2, 11)}`,
+          name: fc.name,
+          input: fc.args || {}
+        };
+        const sig = p.thoughtSignature;
+        if (sig) {
+          block.thoughtSignature = sig;
+        }
+        return block;
+      });
+
+      apiMessages.push({
+        role: 'assistant',
+        content: [
+          ...(textChunkAcc ? [{ type: 'text' as const, text: textChunkAcc }] : []),
+          ...toolUseBlocks
+        ] as any
+      });
+
+      const ctx = {
+        trades: allTrades,
+        preps: options.preps || [],
+        reviews: options.reviews || [],
+        accounts: options.accounts || []
+      };
+
+      const results = await Promise.all(
+        toolUseBlocks.map(async (call) => {
+          if (options.onToolUse) {
+            // Hezký label ("📊 Počítám statistiky") místo syrového názvu toolu.
+            try { options.onToolUse(describeToolCall(call.name, call.input)); } catch { options.onToolUse(call.name); }
+          }
+          let result: any;
+          try {
+            result = await executeTool(call.name, call.input, ctx as any);
+          } catch (e: any) {
+            result = { error: e.message || String(e) };
+          }
+          // Nový/zrušený závazek musí platit hned — parita s Anthropic větví.
+          if (call.name === 'remember' || call.name === 'forget_memory') invalidateMemoryCache();
+          return {
+            type: 'tool_result' as const,
+            tool_use_id: call.id,
+            content: JSON.stringify(result).slice(0, 12000),
+          };
+        })
+      );
+      const toolResultParts = [...results];
+
+      apiMessages.push({
+        role: 'user',
+        content: toolResultParts as any
+      });
+    }
+
+    onError('Překročen maximální počet iterací nástrojů.');
+  } catch (e: any) {
+    onError(`Interní chyba streamování Gemini: ${e.message || String(e)}`);
+  }
 }
 
 export async function streamAIResponse(
@@ -526,10 +959,11 @@ export async function streamAIResponse(
   }
   const accessToken = session.access_token;
 
-  // In tool-use mode the full trade dump is no longer needed in the system prompt —
-  // Coach will fetch what it needs via tools. Keep a tiny recent snapshot for context.
+  // Škálovatelné okno: posledních 90 dní plně + měsíční rollup staršího.
+  // Cílem je aby coach zodpověděl většinu dotazů (nedávno + dlouhodobé trendy) BEZ nástrojů
+  // = jeden round-trip = rychle. Nástroje zůstávají fallback pro konkrétní starší záznamy.
   const useTools = !options.disableTools;
-  const tradesText = useTools ? formatTradesForAI(allTrades, 25) : formatTradesForAI(allTrades, 100);
+  const tradeWindow = buildTradeWindow(allTrades);
 
   // ── Dnešní datum + týdenní kontext ────────────────────────────────────────
   const now = new Date();
@@ -559,14 +993,24 @@ export async function streamAIResponse(
 
   let memoryBlock = '';
   try {
-    const [profile, recalled, commitments, recentSummaries] = await Promise.all([
-      getProfile(),
-      recallQuery ? recallMemory({ query: recallQuery, limit: 6, similarity_threshold: 0.25 }) : Promise.resolve([]),
-      // VŽDY načti aktivní commitmenty (závazky) — coach JE MUSÍ respektovat
-      getActiveCommitments(),
-      // Posledních 5 conversation summaries — kontinuita napříč chaty
-      getRecentConversationSummaries(5),
-    ]);
+    // Semantic recall dělá embed query (network) + vector RPC — nejpomalejší část memory injection.
+    // Dáme mu timeout ~0.8s: když se nestihne, raději odpovíme rychle bez ad-hoc recallu
+    // (commitmenty + summaries + front-loaded data stejně pokrývají většinu kontextu).
+    const withTimeout = <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      Promise.race([p, new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms))]);
+
+    // Recall (embed + vector RPC) nastartuj HNED — poběží souběžně s případným
+    // cold-cache fetchem profilu/závazků níže, ne až po něm.
+    const recallPromise = recallQuery
+      ? withTimeout(recallMemory({ query: recallQuery, limit: 6, similarity_threshold: 0.25 }), 800, [] as Awaited<ReturnType<typeof recallMemory>>)
+      : Promise.resolve([] as Awaited<ReturnType<typeof recallMemory>>);
+
+    // Profil/commitmenty/summaries se mění zřídka — cache na ~2 min ušetří 3 DB
+    // roundtripy před KAŽDOU zprávou (znatelné na TTFT). Prewarm při otevření Coach
+    // stránky (prewarmCoachMemory) znamená, že i PRVNÍ zpráva je obvykle cache hit.
+    // Invalidace: po remember/forget toolu nebo po vypršení TTL.
+    const { profile, commitments, summaries: recentSummaries } = await loadMemoryFetches();
+    const recalled = await recallPromise;
 
     const profileBlock = renderProfileForPrompt(profile, { initialBalance: options.initialBalance });
 
@@ -620,10 +1064,20 @@ export async function streamAIResponse(
     console.warn('[aiService] memory injection failed (continuing without):', e);
   }
 
+  const voiceBlock = options.voiceMode ? `
+=== 🎧 HLASOVÝ MÓD (KRITICKÉ — TVÁ ODPOVĚĎ SE ČTE NAHLAS) ===
+- Odpovídej MAXIMÁLNĚ 2-3 krátké věty. Mluvená řeč, ne esej.
+- ŽÁDNÝ markdown, ŽÁDNÉ odrážky, ŽÁDNÉ tabulky, ŽÁDNÉ emoji.
+- ŽÁDNÉ karty/markery [TRADE:..] [CHART:..] [PREP:..] [REVIEW:..] — nevkládej je (nejdou přečíst).
+- Čísla říkej přirozeně ("mínus pětasedmdesát dolarů", ne "-$75").
+- Buď konkrétní a lidský, jako bys mluvil s kamarádem. Pokud chceš víc, polož JEDNU otázku a počkej.
+- Akci ([ACTION:..]) smíš použít MAXIMÁLNĚ jednu a krátce ji slovně zmiň ("přidám ti to jako pravidlo, ano?").
+` : '';
+
   const systemPrompt = `Jsi AI trading coach specializovaný na analýzu výkonu traderů. Komunikuješ v češtině, stručně a konkrétně.
 Máš KOMPLETNÍ přístup ke všem datům tradera — odpovídej vždy na základě jeho skutečných dat.
 Trader se jmenuje Filip. Pokud ho oslovuješ jménem, používej VÝHRADNĚ "Filipe" — NIKDY si nevymýšlej jiné jméno.
-
+${voiceBlock}
 === ČASOVÝ KONTEXT (KRITICKÉ) ===
 DNES: ${todayISO} (${weekday})
 AKTUÁLNÍ TÝDEN: ${mondayISO} až ${fridayISO} (Po–Pá)
@@ -838,17 +1292,40 @@ Pokud jsi tu commit už uložil dnes a user ho opakuje, ZACHOVEJ existující (n
 
 Klíčové: NEŘÍKEJ jen "beru na vědomí" / "ok" / "rozumím". Když user vysloví preferenci nebo trvalý fakt, VŽDY nejdřív zavolej remember(), pak potvrď.
 
-OBECNÁ PRAVIDLA TOOL USE:
-1. Než odpovíš, ZAVOLEJ data nástroje pokud dotaz vyžaduje konkrétní data. NIKDY si nevymýšlej čísla, datumy ani události.
-2. Zřetěz nástroje když má smysl (např. recall_memory → get_stats → search_history).
-3. Pokud nástroj vrátí prázdný výsledek, řekni to upřímně.
+OBECNÁ PRAVIDLA TOOL USE (RYCHLOST — ČTI POZORNĚ):
+0. ⚡ DATA UŽ MÁŠ V PROMPTU. Níže jsou KOMPLETNÍ obchody za posledních ${WINDOW_DAYS} dní + měsíční souhrn celé historie + přípravy + audity (vč. poznámek během dne). Pro naprostou většinu dotazů NEPOTŘEBUJEŠ žádný nástroj — odpověz ROVNOU z těchto dat. Každé volání nástroje = sekundy navíc, takže volej JEN když je to nutné.
+1. NEVOLEJ nástroj pokud odpověď najdeš v datech níže. To zahrnuje: konkrétní obchod z posledních ${WINDOW_DAYS} dní, dnešní/včerejší obchod, statistiky za týden/měsíc, dlouhodobé trendy (z měsíčního souhrnu), poznámky a audity z okna. Na tohle odpověz BEZ nástroje.
+2. Nástroje použij POUZE pro: (a) konkrétní obchod/záznam STARŠÍ než ${WINDOW_DAYS} dní, (b) sémantické hledání napříč celou historií když okno nestačí (search_history), (c) ukládání do paměti (remember).
+3. find_similar_trades volej JEN když user EXPLICITNĚ chce porovnání s podobnými obchody z minulosti — ne automaticky u každé analýzy. U analýzy obchodu z okna nejdřív odpověz z dat co máš.
+4. NIKDY si nevymýšlej čísla, datumy ani události. Když data nemáš ani v promptu ani z nástroje, řekni to upřímně.
 
 ` : ''}${memoryBlock ? memoryBlock + '\n\n' : ''}${traderContext}
 
-${useTools ? '=== POSLEDNÍ OBCHODY (rychlý kontext) ===' : '=== KOMPLETNÍ SEZNAM OBCHODŮ ==='}
+=== OBCHODY: POSLEDNÍCH ${WINDOW_DAYS} DNÍ (kompletní detail, ${tradeWindow.windowCount} obchodů) ===
 Formát: ID | Datum | Směr Nástroj | PnL | Setup | Entry | Exit | SL | TP | Pozice | Doba | Plán | Emoce | Chyby | HTF | LTF | Session | Tagy | Poznámka
 
-${tradesText}`;
+${tradeWindow.windowText}
+
+=== STARŠÍ OBCHODY: MĚSÍČNÍ SOUHRN (${tradeWindow.olderCount} obchodů celkem) ===
+Toto je agregovaný přehled pro dlouhodobé trendy. Pro KONKRÉTNÍ starší obchod (mimo posledních ${WINDOW_DAYS} dní) použij nástroj search_history nebo get_stats s date_from/date_to.
+
+${tradeWindow.rollupText}`;
+
+  // VITE_USE_GEMINI_FAST je jen neutajovaný toggle (true/false) — skutečný klíč žije
+  // v Supabase secrets (GEMINI_API_KEY) a používá ho edge proxy `gemini-chat`.
+  const useGeminiFast = (import.meta as any).env?.VITE_USE_GEMINI_FAST === 'true';
+  if (options.aiModel === 'fast' && useGeminiFast) {
+    return streamGeminiResponse(
+      messages,
+      systemPrompt,
+      onChunk,
+      onRefs,
+      onDone,
+      onError,
+      allTrades,
+      options
+    );
+  }
 
   // Conversation messages we send to the API. They grow with each agent iteration
   // as we append assistant turn (with tool_use) and synthetic user turn (with tool_result).
@@ -867,9 +1344,12 @@ ${tradesText}`;
 
   try {
     for (let iter = 0; iter < MAX_ITER; iter++) {
+      const modelName = options.aiModel === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-5';
       const body: any = {
-        model: 'claude-sonnet-4-5',
-        max_tokens: 12000, // bump → thinking budget (8k) + final answer + tool args
+        model: modelName,
+        // Sníženo z 12k → 8k. Většinu dotazů teď coach zodpoví z front-loaded okna
+        // na JEDEN round-trip bez nástrojů, takže nepotřebuje tak velký rozpočet.
+        max_tokens: options.aiModel === 'fast' ? 4000 : 8000,
         // Prompt caching: system prompt je statický napříč iteracemi i v rámci
         // 5min konverzačního okna → cache_control: ephemeral.
         // Anthropic vyžaduje min 1024 tokenů pro cache hit (Sonnet) — náš
@@ -889,11 +1369,12 @@ ${tradesText}`;
             ? { ...t, cache_control: { type: 'ephemeral' as const } }
             : t
         );
-        // Interleaved thinking — Claude může přemýšlet MEZI tool calls v rámci
-        // jednoho assistant turn. Stojí to víc tokenů (myšlenkové tokeny se
-        // účtují), ale dramaticky zlepší kvalitu komplexních analýz.
-        // Edge funkce posílá `anthropic-beta: interleaved-thinking-2025-05-14`.
-        body.thinking = { type: 'enabled', budget_tokens: 8000 };
+        // Thinking VYPNUTO (dřív budget 8000 → 4000 → 0): byl to hlavní zdroj latence —
+        // model "přemýšlel" několik sekund PŘED prvním viditelným tokenem. S front-loaded
+        // 90denním oknem v promptu coach pro běžné dotazy hluboké uvažování nepotřebuje
+        // a odpověď začne streamovat téměř okamžitě. Tools fungují i bez thinkingu.
+        // (Stream parser thinking bloky stále umí — kdybychom ho někdy vrátili pro
+        // "deep analysis" mód, stačí sem přidat body.thinking zpět.)
       }
 
       // Go through the Supabase Edge Function proxy so the Anthropic API key
@@ -1021,6 +1502,8 @@ ${tradesText}`;
           preps: options.preps || [],
           reviews: options.reviews || [],
         });
+        // Nový/zrušený závazek či fakt musí platit hned v další zprávě — zahoď cache.
+        if (b.name === 'remember' || b.name === 'forget_memory') invalidateMemoryCache();
         return { type: 'tool_result' as const, tool_use_id: b.id, content: JSON.stringify(result).slice(0, 12000) };
       }));
 

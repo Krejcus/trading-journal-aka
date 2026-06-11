@@ -119,6 +119,15 @@ export function buildReviewContent(r: DailyReview): { content: string; metadata:
   if (r.psycho?.notes) parts.push(`Psycho notes: ${cleanText(r.psycho.notes, 300)}`);
   if (r.psycho?.stressors) parts.push(`Stresory: ${cleanText(r.psycho.stressors, 200)}`);
   if (r.psycho?.gratitude) parts.push(`Vděčnost: ${cleanText(r.psycho.gratitude, 200)}`);
+  // Quick notes (myšlenky během dne přidané přes FAB v V2 Deníku) — KRITICKÉ pro to,
+  // aby je coach našel přes search_history. Bez tohoto byly poznámky neviditelné.
+  if (r.quickNotes?.length) {
+    const notesText = r.quickNotes
+      .map(n => n.text?.trim())
+      .filter(Boolean)
+      .join(' | ');
+    if (notesText) parts.push(`Poznámky během dne: ${cleanText(notesText, 800)}`);
+  }
 
   const content = parts.join('. ');
 
@@ -127,6 +136,7 @@ export function buildReviewContent(r: DailyReview): { content: string; metadata:
     scenarioResult: r.scenarioResult || null,
     mistakes: r.mistakes || [],
     hasBreakdowns: (r.sessionBreakdowns || []).some(b => b.notes?.trim()),
+    quickNoteCount: r.quickNotes?.length || 0,
   };
 
   return { content, metadata };

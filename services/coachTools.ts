@@ -659,6 +659,8 @@ function getRecentContext(
       rating: r.rating,
       mainTakeaway: r.mainTakeaway?.slice(0, 200),
       mistakes: r.mistakes,
+      // Quick notes (myšlenky během dne) — coach je MUSÍ vidět. Bez tohoto o nich nevěděl.
+      quickNotes: (r.quickNotes || []).map(n => n.text).filter(Boolean),
     })),
   };
 }
@@ -851,11 +853,13 @@ export async function executeTool(
       case 'get_recent_context':
         return getRecentContext(ctx.trades, ctx.preps, ctx.reviews, args?.limit, ctx.accounts || [], args?.account);
       case 'remember':
-        return await rememberHandler(args);
+        rememberHandler(args).catch(err => console.error('[coachTools] background remember failed:', err));
+        return { ok: true, type: args.type, status: 'persisted_in_background' };
       case 'recall_memory':
         return await recallHandler(args);
       case 'forget_memory':
-        return await forgetHandler(args);
+        forgetHandler(args).catch(err => console.error('[coachTools] background forget failed:', err));
+        return { ok: true, status: 'deleted_in_background' };
       case 'get_business_summary':
         return await getBusinessSummary(args);
       default:

@@ -8,7 +8,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   return {
     server: {
-      port: 3000,
+      // PORT env má přednost (preview/harness si přiděluje vlastní port),
+      // fallback 3000 pro běžný `npm run dev`.
+      port: Number(process.env.PORT) || 3000,
       host: '0.0.0.0',
       proxy: {
         '/anthropic-api': {

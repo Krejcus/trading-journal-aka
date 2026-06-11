@@ -29,13 +29,33 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
       return day !== 0 && day !== 6;
     }).slice(-30); // Keep last 30 weekdays
 
+    // Prep/review se počítá jako "hotový" podle OBSAHU, ne jen podle `completed` flagu.
+    // V2 inline editace flag `completed` nenastavuje (jen patchuje rituály/cíle/atd.),
+    // takže bez tohoto by dnešek blikal červeně i když máš přípravu vyplněnou.
+    const prepDone = (p: any) => !!(p && (
+      p.completed
+      || p.ritualCompletions?.some((c: any) => c.status === 'Pass')
+      || (Array.isArray(p.goals) && p.goals.some((g: any) => g && String(g).trim()))
+      || p.mindsetState
+      || p.scenarios?.sessions?.length
+    ));
+    const reviewDone = (r: any) => !!(r && (
+      r.completed
+      || (r.mainTakeaway && r.mainTakeaway.trim())
+      || (r.mistakes && r.mistakes.length)
+      || (r.lessons && r.lessons.trim())
+      || (r.sessionBreakdowns && r.sessionBreakdowns.some((b: any) => b.notes && b.notes.trim()))
+      || r.quickNotes?.length
+      || r.rating
+    ));
+
     // Celkový streak rituálů
     let currentStreak = 0;
     const sortedDatesForStreak = [...weekdaysOnly].reverse();
 
     for (const date of sortedDatesForStreak) {
-      const hasPrep = preps.some(p => p.date === date && p.completed);
-      const hasReview = reviews.some(r => r.date === date && r.completed);
+      const hasPrep = preps.some(p => p.date === date && prepDone(p));
+      const hasReview = reviews.some(r => r.date === date && reviewDone(r));
       const hasTrades = trades.some(t => t.date.startsWith(date));
       const isToday = date === todayStr;
 
@@ -104,8 +124,8 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
     });
 
     const heatmapData = weekdaysOnly.map(date => {
-      const hasPrep = preps.some(p => p.date === date && p.completed);
-      const hasReview = reviews.some(r => r.date === date && r.completed);
+      const hasPrep = preps.some(p => p.date === date && prepDone(p));
+      const hasReview = reviews.some(r => r.date === date && reviewDone(r));
       const hasTrades = trades.some(t => t.date.startsWith(date));
       let status: 'full' | 'partial' | 'trades-only' | 'none' = 'none';
       if (hasPrep && hasReview) status = 'full';
@@ -179,9 +199,22 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
           {/* Heatmap Area */}
           <div className="w-full">
             <div className="grid grid-cols-[repeat(15,minmax(0,1fr))] gap-1">
-              {stats.heatmapData.slice(-30).map((d, i) => (
-                <div key={i} title={`${d.date}`} className={`aspect-square w-full rounded-[2px] transition-all hover:scale-125 cursor-help ${getStatusColor(d.status)}`} />
-              ))}
+              {stats.heatmapData.slice(-30).map((d, i) => {
+                const label = d.status === 'full' ? '✓ Den hotový'
+                  : d.status === 'partial' ? 'Částečně'
+                  : d.status === 'trades-only' ? 'Bez přípravy'
+                  : 'Žádná aktivita';
+                const dateFmt = new Date(d.date).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' });
+                const weekday = new Date(d.date).toLocaleDateString('cs-CZ', { weekday: 'short' });
+                return (
+                  <div key={i} className="relative group aspect-square w-full">
+                    <div className={`w-full h-full rounded-[2px] transition-all group-hover:scale-125 cursor-help ${getStatusColor(d.status)}`} />
+                    <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded-lg bg-slate-900 text-white text-[9px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-30 shadow-lg">
+                      {weekday} {dateFmt} · {label}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

@@ -234,6 +234,14 @@ export interface Trade {
     generatedAt?: string;
     unreviewed?: boolean;
   };
+  /** Vision debrief — Claude-vision rozbor grafu (analyze-chart edge function). */
+  visionAnalysis?: {
+    verdict: string;
+    observations: string[];
+    lesson: string;
+    confidence: 'high' | 'medium' | 'low';
+    generatedAt: string;
+  };
 }
 
 export interface SignalStat {
