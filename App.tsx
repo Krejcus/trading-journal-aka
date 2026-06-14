@@ -2910,14 +2910,18 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-6">
             {/* Apple iOS-Style Grouped Actions Segment */}
-            <div className={`p-1.5 rounded-2xl border flex items-center gap-1 transition-all duration-200 ${
+            <div className={`p-1 rounded-2xl border flex items-center gap-1.5 transition-all duration-200 ${
               theme !== 'light'
-                ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm'
-                : 'bg-white/40 border-black/5 shadow-sm backdrop-blur-sm'
+                ? 'bg-black/25 border-white/5 shadow-[0_2px_8px_rgba(0,0,0,0.2)]'
+                : 'bg-slate-100 border-slate-200/80 shadow-xs'
             }`}>
               {/* Item 1: Dashboard Mode Status */}
               <div className="hidden md:flex items-center">
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all duration-200 select-none">
+                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all duration-200 select-none ${
+                  theme !== 'light'
+                    ? 'bg-white/5 border-white/10 text-white shadow-inner'
+                    : 'bg-white border-slate-200/80 text-slate-800 shadow-xs'
+                }`}>
                   <div className="relative flex h-1.5 w-1.5">
                     <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
                       dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' :
@@ -2943,9 +2947,6 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* Divider 1 */}
-              <div className={`hidden md:block w-px h-5 self-center ${theme !== 'light' ? 'bg-white/10' : 'bg-black/10'}`} />
-
               {/* Item 2: Filter Dropdown */}
               <FilterDropdown
                 filters={filters}
@@ -2968,9 +2969,6 @@ const App: React.FC = () => {
                 grouped={true}
               />
 
-              {/* Divider 2 */}
-              <div className={`w-px h-5 self-center ${theme !== 'light' ? 'bg-white/10' : 'bg-black/10'}`} />
-
               {/* Item 3: Theme Toggle Button */}
               <button
                 onClick={() => {
@@ -2979,10 +2977,10 @@ const App: React.FC = () => {
                   else if (theme === 'light') newTheme = 'oled';
                   setTheme(newTheme);
                 }}
-                className={`p-2.5 rounded-xl transition-all duration-200 ${
+                className={`p-2.5 rounded-xl border transition-all duration-200 ${
                   theme !== 'light'
-                    ? 'hover:bg-white/10 text-slate-400 hover:text-white'
-                    : 'hover:bg-slate-200/60 text-slate-700'
+                    ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white shadow-inner'
+                    : 'bg-white border-slate-200/80 hover:bg-slate-50 text-slate-700 shadow-xs'
                 }`}
               >
                 {theme === 'light' ? <Sun size={20} /> : (theme === 'oled' ? <Zap size={20} className="text-blue-500" /> : <Moon size={20} />)}
