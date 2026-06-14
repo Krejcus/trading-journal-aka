@@ -2767,21 +2767,27 @@ const App: React.FC = () => {
         onClose={() => setLockedFeatureModal(null)}
       />
 
-      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!pl-0' : ''} pb-[72px] lg:pb-0`}>
-        <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-2 flex items-center justify-between transition-all bg-[var(--bg-page)]/30 border-[var(--border-subtle)] ${isNetworkSpectating ? 'hidden' : ''}`}>
-          <div className="flex items-center gap-4">
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
+        <header className={`absolute top-0 left-0 right-0 z-40 border-b px-6 py-2 flex items-center justify-between transition-all ${theme !== 'light' ? 'bg-black/5 border-white/5 backdrop-blur-[32px] shadow-[0_1px_0_rgba(255,255,255,0.06)_inset]' : 'bg-white/5 border-black/5 backdrop-blur-[32px] shadow-[0_1px_0_rgba(255,255,255,0.8)_inset]'} ${isNetworkSpectating ? 'hidden' : ''}`}>
+          <div className="flex items-center gap-3">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
-            <h2 className="text-xl font-black uppercase tracking-tighter">
-              {activePage === 'dashboard' && 'Dashboard'}
-              {activePage === 'history' && 'Historie obchodu'}
-              {activePage === 'insights' && 'Insights'}
-              {activePage === 'journal' && 'Deník'}
-              {activePage === 'accounts' && 'Portfolio'}
-              {activePage === 'settings' && 'Nastavení'}
-              {activePage === 'network' && 'Síť'}
-              {activePage === 'business' && 'Business Hub'}
-              {activePage === 'ai' && 'AI Coach'}
-            </h2>
+            <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border transition-all duration-200 ${
+              theme !== 'light'
+                ? 'bg-white/5 border-white/10 text-white shadow-[0_2px_8px_rgba(0,0,0,0.2)] shadow-inner'
+                : 'bg-white/40 border-black/5 text-slate-800 shadow-sm backdrop-blur-sm'
+            }`}>
+              <h2 className="text-xl font-black uppercase tracking-tighter whitespace-nowrap">
+                {activePage === 'dashboard' && 'Dashboard'}
+                {activePage === 'history' && 'Historie obchodu'}
+                {activePage === 'insights' && 'Insights'}
+                {activePage === 'journal' && 'Deník'}
+                {activePage === 'accounts' && 'Portfolio'}
+                {activePage === 'settings' && 'Nastavení'}
+                {activePage === 'network' && 'Síť'}
+                {activePage === 'business' && 'Business Hub'}
+                {activePage === 'ai' && 'AI Coach'}
+              </h2>
+            </div>
           </div>
 
           {activePage === 'journal' && (
@@ -2903,14 +2909,33 @@ const App: React.FC = () => {
           )}
 
           <div className="flex items-center gap-6">
-            {/* Dashboard Mode Status - Clean Text Design */}
-            <div className="hidden md:flex items-center h-8 px-4">
-              <div className="flex items-center gap-2.5">
-                <div className="relative flex h-2 w-2">
-                  <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' : 'hidden'}`}></span>
-                  <span className={`relative inline-flex rounded-full h-2 w-2 ${dashboardMode === 'funded' ? 'bg-emerald-500' : dashboardMode === 'challenge' ? 'bg-blue-500' : dashboardMode === 'backtesting' ? 'bg-violet-500' : 'bg-orange-500'}`}></span>
+            {/* Dashboard Mode Status - Premium Glass Badge Design */}
+            <div className="hidden md:flex items-center">
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all duration-200 ${
+                theme !== 'light'
+                  ? 'bg-white/5 border-white/10 shadow-[0_2px_8px_rgba(0,0,0,0.2)] shadow-inner'
+                  : 'bg-white/40 border-black/5 backdrop-blur-sm shadow-sm'
+              }`}>
+                <div className="relative flex h-1.5 w-1.5">
+                  <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' :
+                    dashboardMode === 'challenge' ? 'animate-ping bg-blue-400' :
+                    dashboardMode === 'backtesting' ? 'animate-ping bg-violet-400' :
+                    'animate-ping bg-orange-400'
+                  }`}></span>
+                  <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
+                    dashboardMode === 'funded' ? 'bg-emerald-500' :
+                    dashboardMode === 'challenge' ? 'bg-blue-500' :
+                    dashboardMode === 'backtesting' ? 'bg-violet-500' :
+                    'bg-orange-500'
+                  }`}></span>
                 </div>
-                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${dashboardMode === 'funded' ? 'text-emerald-400' : dashboardMode === 'challenge' ? 'text-blue-400' : dashboardMode === 'backtesting' ? 'text-violet-400' : 'text-orange-400'}`}>
+                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${
+                  dashboardMode === 'funded' ? 'text-emerald-400' :
+                  dashboardMode === 'challenge' ? 'text-blue-400' :
+                  dashboardMode === 'backtesting' ? 'text-violet-400' :
+                  'text-orange-400'
+                }`}>
                   {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : dashboardMode === 'backtesting' ? 'Backtesting' : 'All'}
                 </span>
               </div>
@@ -2944,7 +2969,7 @@ const App: React.FC = () => {
                   else if (theme === 'light') newTheme = 'oled';
                   setTheme(newTheme);
                 }}
-                className={`p-3 rounded-xl border transition-all ${theme !== 'light' ? 'bg-white/5 border-white/10 hover:bg-white/10 text-white' : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700 shadow-sm'}`}
+                className={`p-3 rounded-xl border transition-all duration-200 ${theme !== 'light' ? 'bg-white/5 border-white/10 hover:bg-white/10 text-white' : 'bg-white/40 border-black/5 hover:bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm'}`}
               >
                 {theme === 'light' ? <Sun size={20} /> : (theme === 'oled' ? <Zap size={20} className="text-blue-500" /> : <Moon size={20} />)}
               </button>
@@ -2954,7 +2979,7 @@ const App: React.FC = () => {
 
         {/* AI Coach — renders directly in <main>, bypasses PullToRefresh/scroll container */}
         {activePage === 'ai' && (
-          <div className="flex-1 overflow-hidden h-full">
+          <div className="flex-1 overflow-hidden h-full pt-[57px]">
             <React.Suspense fallback={<div className="flex-1" />}>
               <AICoachPage
                 trades={trades}
@@ -3054,12 +3079,17 @@ const App: React.FC = () => {
           </div>
         )}
 
-        <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''}`}>
+        <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''} pt-[64px]`}>
           <PullToRefresh
             onRefresh={handleRefreshData}
             disabled={!session || loading}
           >
-            <div className="flex-1 overflow-x-hidden p-4 lg:p-8 pb-12">
+            <div className="flex-1 overflow-x-hidden p-4 lg:p-6 pb-12">
+              <div className={`w-full max-w-[1600px] mx-auto rounded-[32px] border transition-all duration-300 backdrop-blur-[32px] ${
+                theme !== 'light'
+                  ? 'bg-black/20 border-white/5 shadow-[0_8px_32px_rgba(0,0,0,0.35)] shadow-[inset_0_1.5px_2px_rgba(255,255,255,0.05)]'
+                  : 'bg-white/40 border-black/5 shadow-[0_8px_32px_rgba(15,23,42,0.03)] shadow-[inset_0_1.5px_2px_rgba(255,255,255,0.65)]'
+              } p-4 md:p-6 lg:p-8`}>
               {syncError && (
                 <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
                   <AlertTriangle size={16} />
@@ -3356,6 +3386,7 @@ const App: React.FC = () => {
 
                 </React.Suspense>
               )}
+              </div>
             </div>
           </PullToRefresh>
         </div>

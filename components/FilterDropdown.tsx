@@ -597,15 +597,16 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
       <button
         ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-2 p-2 rounded-xl text-xs font-bold transition-all relative border ${isOpen
-          ? (isDark ? 'bg-white/10 border-white/20 text-white backdrop-blur-md' : 'bg-slate-900 border-slate-800 text-white shadow-md')
-          : (isDark ? 'bg-transparent border-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200' : 'bg-transparent border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-900')
-          }`}
+        className={`p-3 rounded-xl border transition-all duration-200 relative ${
+          isOpen
+            ? (isDark ? 'bg-white/15 border-white/25 text-white backdrop-blur-md shadow-[0_0_15px_rgba(255,255,255,0.05)]' : 'bg-white/80 border-slate-300 text-slate-900 shadow-sm backdrop-blur-sm')
+            : (isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white' : 'bg-white/40 border-black/5 hover:bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm')
+        }`}
         title="Filtrovat data & Nástroje"
       >
-        <Filter size={16} />
+        <Filter size={20} />
         {activeFilterCount > 0 && (
-          <span className={`absolute -top-1 -right-0.5 text-[8px] font-black flex items-center justify-center w-3.5 h-3.5 rounded-full ${isDark ? 'bg-indigo-500 text-white' : 'bg-indigo-600 text-white shadow-sm'}`}>
+          <span className={`absolute -top-1 -right-1 text-[8px] font-black flex items-center justify-center w-4.5 h-4.5 rounded-full ${isDark ? 'bg-indigo-500 text-white' : 'bg-indigo-600 text-white shadow-sm'}`}>
             {activeFilterCount}
           </span>
         )}
