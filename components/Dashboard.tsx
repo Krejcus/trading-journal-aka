@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
+import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, DashboardLayouts, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
 import { formatPnL, calculateTotalRR, formatCurrency } from '../utils/formatPnL';
 import { currencyService, ExchangeRates } from '../services/currencyService';
 import { t } from '../services/translations';
@@ -58,10 +58,10 @@ interface DashboardProps {
   theme: 'dark' | 'light' | 'oled';
   preps: DailyPrep[];
   reviews: DailyReview[];
-  layout: DashboardWidgetConfig[];
+  layouts: DashboardLayouts;
   sessions: SessionConfig[];
   ironRules: IronRule[];
-  onUpdateLayout: (newLayout: DashboardWidgetConfig[]) => void;
+  onUpdateLayouts: (newLayouts: DashboardLayouts) => void;
   isEditing: boolean;
   onCloseEdit?: () => void;
   accounts: Account[];
@@ -95,8 +95,8 @@ import { Responsive as ResponsiveGridLayout, useContainerWidth } from 'react-gri
 import type { Layout, LayoutItem } from 'react-grid-layout';
 
 // react-grid-layout configuration
-const GRID_BREAKPOINTS = { lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 };
-const GRID_COLS = { lg: 12, md: 12, sm: 6, xs: 4, xxs: 2 };
+const GRID_BREAKPOINTS = { xxl: 1920, lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 };
+const GRID_COLS = { xxl: 24, lg: 12, md: 12, sm: 6, xs: 4, xxs: 2 };
 const GRID_ROW_HEIGHT = 80;
 
 const COLORS = {
@@ -115,6 +115,7 @@ const COLORS = {
 
 // --- NEW WIDGET: DISTANCE TO TARGET ---
 const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[], theme: 'dark' | 'light' | 'oled', currency: 'USD' | 'CZK' | 'EUR', rates: any, payouts?: BusinessPayout[] }> = ({ stats, accounts, theme, currency, rates, payouts = [] }) => {
+  const isDark = theme !== 'light';
   const format = (val: number) => formatCurrency(val, currency, rates);
   const initial = stats.initialBalance;
 
@@ -148,34 +149,66 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
   const progress = target === initial ? 0 : Math.min(100, Math.max(0, ((current - initial) / (target - initial)) * 100));
   const remaining = target - current;
   const isPassed = current >= target;
-  const color = isPassed ? COLORS.profit : '#3b82f6';
+
+  // Dynamically calculate color: starts red and transitions via orange/yellow to green (closer to target = greener)
+  const progressRatio = Math.min(100, Math.max(0, progress)) / 100;
+  let r, g, b;
+  if (progressRatio < 0.5) {
+    // Phase 1: Red (239, 68, 68) -> Yellow (234, 179, 8)
+    const ratio = progressRatio * 2;
+    r = Math.round(239 + (234 - 239) * ratio);
+    g = Math.round(68 + (179 - 68) * ratio);
+    b = Math.round(68 + (8 - 68) * ratio);
+  } else {
+    // Phase 2: Yellow (234, 179, 8) -> Emerald Green (16, 185, 129)
+    const ratio = (progressRatio - 0.5) * 2;
+    r = Math.round(234 + (16 - 234) * ratio);
+    g = Math.round(179 + (185 - 179) * ratio);
+    b = Math.round(8 + (129 - 8) * ratio);
+  }
+  const currentRGB = `${r}, ${g}, ${b}`;
+
   return (
     <div className="p-6 rounded-[32px] glass-panel relative overflow-visible h-full flex flex-col justify-between">
       <div className="flex justify-between items-start mb-4">
         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
           <Flag size={16} className="text-blue-500" /> Challenge Cíl
         </h3>
-        <div className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase ${isPassed ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-400'}`}>
+        <div className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase ${isPassed ? 'bg-emerald-500 text-white' : (isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-600')}`}>
           {isPassed ? 'Splněno' : 'In Progress'}
         </div>
       </div>
+
       <div className="flex-1 flex flex-col justify-center">
         <div className="flex justify-between items-end mb-2">
-          <span className="text-3xl font-black tracking-tighter text-white">{format(current)}</span>
+          <span className={`text-3xl font-black tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{format(current)}</span>
           <div className="text-right">
             <span className="text-[10px] font-bold text-slate-500 uppercase block">Cíl ({targetPctLabel}%)</span>
-            <span className="text-sm font-black text-slate-300">{format(target)}</span>
+            <span className={`text-sm font-black ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{format(target)}</span>
           </div>
         </div>
-        <div className="h-4 w-full bg-slate-900 rounded-full overflow-hidden relative border border-white/5">
-          <div className="absolute top-0 bottom-0 left-0 transition-all duration-1000 ease-out flex items-center justify-end pr-1" style={{ width: `${progress}%`, backgroundColor: color }}>
-            {progress > 15 && <span className="text-[9px] font-black text-white/90">{progress.toFixed(1)}%</span>}
+        
+        <div className="relative w-full h-5 my-2">
+          {/* Track and Progress Fill */}
+          <div className={`h-full w-full rounded-full overflow-hidden relative border ${isDark ? 'bg-slate-950/60 border-white/5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)]' : 'bg-slate-100 border-slate-200 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1)]'}`}>
+            <div 
+              className="absolute top-0 bottom-0 left-0 transition-all duration-1000 ease-out flex items-center justify-end pr-3" 
+              style={{ 
+                width: `${progress}%`,
+                background: `linear-gradient(to right, rgb(239, 68, 68), rgb(${currentRGB}))`
+              }}
+            >
+              {progress > 15 && <span className="text-[10px] font-black text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]">{progress.toFixed(1)}%</span>}
+            </div>
+            
+            {/* 50% Milestone indicator */}
+            <div className={`absolute top-0 bottom-0 w-px left-[50%] border-l border-dashed ${isDark ? 'border-white/20' : 'border-slate-400/30'}`}></div>
           </div>
-          <div className="absolute top-0 bottom-0 w-px bg-white/20 left-[50%]"></div>
         </div>
+
         <div className="mt-3 flex justify-between items-center text-[10px] font-bold text-slate-500">
           <span>Start: {format(initial)}</span>
-          <span>Zbývá: <span className="text-white">{format(Math.max(0, remaining))}</span></span>
+          <span>Zbývá: <span className={isDark ? 'text-white' : 'text-slate-900'}>{format(Math.max(0, remaining))}</span></span>
         </div>
       </div>
     </div>
@@ -1169,7 +1202,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
 };
 
 const Dashboard: React.FC<DashboardProps> = ({
-  stats, theme, preps, reviews, layout, sessions, ironRules, onUpdateLayout,
+  stats, theme, preps, reviews, layouts, sessions, ironRules, onUpdateLayouts,
   isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
   allTrades = [], payouts = [],
@@ -1199,12 +1232,41 @@ const Dashboard: React.FC<DashboardProps> = ({
   const formatRawCurrency = (val: number, showSign: boolean = false) => {
     return formatCurrency(val, targetCurrency, exchangeRates, showSign);
   };
+
+  // Detect current breakpoint from container width
+  const [currentBreakpoint, setCurrentBreakpoint] = useState<string>('lg');
+
+  // Get the layout for the current breakpoint, falling back to lg
+  const activeLayout = useMemo(() => {
+    return layouts[currentBreakpoint] || layouts.lg || [];
+  }, [layouts, currentBreakpoint]);
+
+  // Helper: update layout for a specific breakpoint
+  const updateBreakpointLayout = useCallback((bp: string, updater: (prev: DashboardWidgetConfig[]) => DashboardWidgetConfig[]) => {
+    const current = layouts[bp] || [];
+    const updated = updater(current);
+    onUpdateLayouts({ ...layouts, [bp]: updated });
+  }, [layouts, onUpdateLayouts]);
+
+  // Helper: update layout for ALL breakpoints (used for add/remove/toggle visible)
+  const updateAllBreakpointLayouts = useCallback((updater: (prev: DashboardWidgetConfig[], bp: string) => DashboardWidgetConfig[]) => {
+    const result: DashboardLayouts = {};
+    for (const bp of Object.keys(layouts)) {
+      result[bp] = updater(layouts[bp] || [], bp);
+    }
+    onUpdateLayouts(result);
+  }, [layouts, onUpdateLayouts]);
+
   // Check if we need to auto-inject the Challenge widget when in Challenge mode
   useEffect(() => {
-    if (dashboardMode === 'challenge' && !layout.some(w => w.id === 'challenge_target')) {
-      onUpdateLayout([{ id: 'challenge_target', label: 'Challenge Cíl', visible: true, x: 0, y: 0, w: 6, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 }, ...layout]);
+    if (dashboardMode === 'challenge' && !activeLayout.some(w => w.id === 'challenge_target')) {
+      updateAllBreakpointLayouts((bpLayout, bp) => {
+        if (bpLayout.some(w => w.id === 'challenge_target')) return bpLayout;
+        const isXxl = bp === 'xxl';
+        return [{ id: 'challenge_target', label: 'Challenge Cíl', visible: true, x: 0, y: 0, w: isXxl ? 12 : 6, h: 2, minW: isXxl ? 3 : 2, minH: 2, maxW: isXxl ? 12 : 6, maxH: 4 }, ...bpLayout];
+      });
     }
-  }, [dashboardMode, layout, onUpdateLayout]);
+  }, [dashboardMode, activeLayout, updateAllBreakpointLayouts]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isArmoryOpen, setIsArmoryOpen] = useState(false);
   const [selectedTradeId, setSelectedTradeId] = useState<string | number | null>(null);
@@ -1218,12 +1280,12 @@ const Dashboard: React.FC<DashboardProps> = ({
     else if (!isEditing) setIsArmoryOpen(false);
   }, [isEditing]);
   const currentLayout = useMemo(() => {
-    return [...layout].filter(w => w.visible).map(w => {
+    return [...activeLayout].filter(w => w.visible).map(w => {
       if (w.h) return w;
       const master = MASTER_WIDGET_LIST.find(m => m.id === w.id);
       return { ...w, h: (master as any)?.defaultRowSpan || 1, w: w.w || 4, x: w.x || 0, y: w.y || 0 };
     }).sort((a, b) => (a.y - b.y) || (a.x - b.x));
-  }, [layout]);
+  }, [activeLayout]);
   const categories = useMemo(() => {
     const cats: Record<string, any[]> = {};
     MASTER_WIDGET_LIST.forEach(w => {
@@ -1233,94 +1295,157 @@ const Dashboard: React.FC<DashboardProps> = ({
     return cats;
   }, []);
   const updateWidgetStatus = (id: string, visible: boolean) => {
-    const exists = layout.some(w => w.id === id);
-    if (exists) {
-      onUpdateLayout(layout.map(w => w.id === id ? { ...w, visible } : w));
-    } else {
-      const template = MASTER_WIDGET_LIST.find(m => m.id === id);
-      if (template) {
-        const isKpi = (template as any).defaultRowSpan === 1;
-        const defaultW = isKpi ? 2 : 6;
-        const defaultH = isKpi ? 2 : 4;
-        onUpdateLayout([...layout, {
-          id: template.id,
-          label: template.label,
-          visible: true,
-          x: 0,
-          y: Infinity,
-          w: defaultW,
-          h: defaultH,
-          minW: isKpi ? 2 : 4,
-          minH: isKpi ? 2 : 3,
-          maxW: isKpi ? 6 : 12,
-          maxH: isKpi ? 4 : 8,
-        }]);
+    updateAllBreakpointLayouts((bpLayout, bp) => {
+      const exists = bpLayout.some(w => w.id === id);
+      if (exists) {
+        return bpLayout.map(w => w.id === id ? { ...w, visible } : w);
+      } else if (visible) {
+        const template = MASTER_WIDGET_LIST.find(m => m.id === id);
+        if (template) {
+          const isKpi = (template as any).defaultRowSpan === 1;
+          const isXxl = bp === 'xxl';
+          const defaultW = isKpi ? (isXxl ? 4 : 2) : (isXxl ? 12 : 6);
+          const defaultH = isKpi ? 2 : 4;
+          return [...bpLayout, {
+            id: template.id,
+            label: template.label,
+            visible: true,
+            x: 0,
+            y: Infinity,
+            w: defaultW,
+            h: defaultH,
+            minW: isKpi ? (isXxl ? 3 : 2) : (isXxl ? 6 : 4),
+            minH: isKpi ? 2 : 3,
+            maxW: isKpi ? (isXxl ? 8 : 6) : (isXxl ? 24 : 12),
+            maxH: isKpi ? 4 : 8,
+          }];
+        }
       }
-    }
+      return bpLayout;
+    });
     if (visible && window.innerWidth < 1024) setIsArmoryOpen(false);
   };
   const toggleDisciplinedCurve = (id: string) => {
-    onUpdateLayout(layout.map(w => {
-      if (w.id === id) {
-        return { ...w, showDisciplinedCurve: !w.showDisciplinedCurve };
-      }
+    updateAllBreakpointLayouts((bpLayout) => bpLayout.map(w => {
+      if (w.id === id) return { ...w, showDisciplinedCurve: !w.showDisciplinedCurve };
       return w;
     }));
   };
 
   const moveMobileWidget = (id: string, direction: 'up' | 'down') => {
-    const sorted = [...layout].filter(w => w.visible).sort((a, b) => (a.y - b.y) || (a.x - b.x));
-    const idx = sorted.findIndex(w => w.id === id);
-    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (swapIdx < 0 || swapIdx >= sorted.length) return;
-    const aY = sorted[idx].y;
-    const bY = sorted[swapIdx].y;
-    const newY = aY === bY ? (direction === 'up' ? aY - 1 : aY + 1) : bY;
-    const swapNewY = aY === bY ? aY : aY;
-    onUpdateLayout(layout.map(w => {
-      if (w.id === sorted[idx].id) return { ...w, y: newY };
-      if (w.id === sorted[swapIdx].id) return { ...w, y: swapNewY };
-      return w;
-    }));
+    updateBreakpointLayout(currentBreakpoint, (bpLayout) => {
+      const sorted = [...bpLayout].filter(w => w.visible).sort((a, b) => (a.y - b.y) || (a.x - b.x));
+      const idx = sorted.findIndex(w => w.id === id);
+      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (swapIdx < 0 || swapIdx >= sorted.length) return bpLayout;
+      const aY = sorted[idx].y;
+      const bY = sorted[swapIdx].y;
+      const newY = aY === bY ? (direction === 'up' ? aY - 1 : aY + 1) : bY;
+      const swapNewY = aY === bY ? aY : aY;
+      return bpLayout.map(w => {
+        if (w.id === sorted[idx].id) return { ...w, y: newY };
+        if (w.id === sorted[swapIdx].id) return { ...w, y: swapNewY };
+        return w;
+      });
+    });
   };
 
   // react-grid-layout: width measurement
   const { width: containerWidth, containerRef, mounted: widthMounted } = useContainerWidth({ initialWidth: 1280 });
 
-  // react-grid-layout: convert DashboardWidgetConfig[] to Layout
+  // react-grid-layout: convert DashboardLayouts to per-breakpoint Layout objects
   const rglLayouts = useMemo(() => {
-    const lgLayout: LayoutItem[] = currentLayout.map(widget => ({
-      i: widget.id,
-      x: widget.x,
-      y: widget.y,
-      w: widget.w,
-      h: widget.h,
-      minW: widget.minW,
-      minH: widget.minH,
-      maxW: widget.maxW,
-      maxH: widget.maxH,
-      static: !isEditing,
-    }));
+    const makeLayoutItems = (bpLayout: DashboardWidgetConfig[]): LayoutItem[] =>
+      bpLayout.filter(w => w.visible).map(widget => ({
+        i: widget.id,
+        x: widget.x,
+        y: widget.y,
+        w: widget.w,
+        h: widget.h,
+        minW: widget.minW,
+        minH: widget.minH,
+        maxW: widget.maxW,
+        maxH: widget.maxH,
+        static: !isEditing,
+      }));
+
+    const xxlItems = makeLayoutItems(layouts.xxl || []);
+    const lgItems = makeLayoutItems(layouts.lg || []);
 
     return {
-      lg: lgLayout,
-      md: lgLayout,
-      sm: lgLayout.map(item => ({ ...item, w: Math.min(item.w, 6) })),
-      xs: lgLayout.map(item => ({ ...item, w: Math.min(item.w, 4), static: true })),
-      xxs: lgLayout.map(item => ({ ...item, x: 0, w: 2, static: true })),
+      xxl: xxlItems.length > 0 ? xxlItems : lgItems, // fallback to lg if xxl empty
+      lg: lgItems,
+      md: lgItems,
+      sm: lgItems.map(item => ({ ...item, w: Math.min(item.w, 6) })),
+      xs: lgItems.map(item => ({ ...item, w: Math.min(item.w, 4), static: true })),
+      xxs: lgItems.map(item => ({ ...item, x: 0, w: 2, static: true })),
     };
-  }, [currentLayout, isEditing]);
+  }, [layouts, isEditing]);
 
-  // react-grid-layout: handle layout changes from drag/resize
-  const handleRglLayoutChange = useCallback((newLayout: Layout) => {
-    if (!isEditing) return;
-    const updatedConfigs = layout.map(config => {
+  // react-grid-layout: handle layout changes ONLY when drag or resize completes (avoids lag and breakpoint overwrite bugs)
+  const handleDragOrResizeStop = useCallback((newLayout: Layout) => {
+    const storageKey = currentBreakpoint === 'xxl' ? 'xxl' : 'lg';
+    
+    const activeLayout = layouts[storageKey] || [];
+    const updatedActive = activeLayout.map(config => {
       const rglItem = newLayout.find(item => item.i === config.id);
       if (!rglItem) return config;
       return { ...config, x: rglItem.x, y: rglItem.y, w: rglItem.w, h: rglItem.h };
     });
-    onUpdateLayout(updatedConfigs);
-  }, [isEditing, layout, onUpdateLayout]);
+
+    const nextLayouts = {
+      ...layouts,
+      [storageKey]: updatedActive
+    };
+
+    // Two-way mirroring for newly added widgets (still at y === Infinity)
+    if (storageKey === 'lg') {
+      // Notebook -> Large Screen (scale up coordinates)
+      const xxlLayout = layouts.xxl || [];
+      const updatedXxl = xxlLayout.map(xxlConfig => {
+        if (xxlConfig.y !== Infinity && xxlConfig.y !== null && xxlConfig.y !== undefined) {
+          return xxlConfig;
+        }
+        const lgConfig = updatedActive.find(item => item.id === xxlConfig.id);
+        if (!lgConfig || lgConfig.y === Infinity) return xxlConfig;
+
+        return {
+          ...xxlConfig,
+          x: Math.min(lgConfig.x * 2, 20),
+          y: lgConfig.y,
+          w: Math.min(lgConfig.w * 2, 24),
+          h: lgConfig.h
+        };
+      });
+      nextLayouts.xxl = updatedXxl;
+    } else if (storageKey === 'xxl') {
+      // Large Screen -> Notebook (scale down coordinates)
+      const lgLayout = layouts.lg || [];
+      const updatedLg = lgLayout.map(lgConfig => {
+        if (lgConfig.y !== Infinity && lgConfig.y !== null && lgConfig.y !== undefined) {
+          return lgConfig;
+        }
+        const xxlConfig = updatedActive.find(item => item.id === lgConfig.id);
+        if (!xxlConfig || xxlConfig.y === Infinity) return lgConfig;
+
+        return {
+          ...lgConfig,
+          x: Math.min(Math.round(xxlConfig.x / 2), 10),
+          y: xxlConfig.y,
+          w: Math.max(Math.round(xxlConfig.w / 2), 2),
+          h: xxlConfig.h
+        };
+      });
+      nextLayouts.lg = updatedLg;
+    }
+
+    onUpdateLayouts(nextLayouts);
+  }, [currentBreakpoint, layouts, onUpdateLayouts]);
+
+  // Track breakpoint changes from react-grid-layout
+  const handleBreakpointChange = useCallback((newBreakpoint: string) => {
+    setCurrentBreakpoint(newBreakpoint);
+  }, []);
 
   const renderWidget = (id: string, config?: DashboardWidgetConfig) => {
     switch (id) {
@@ -1472,7 +1597,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         <div className="fixed inset-0 z-0 bg-slate-900/10 dark:bg-black/40 pointer-events-none transition-opacity duration-500" />
       )}
 
-      <div className={`space-y-6 lg:space-y-10 pb-40 relative z-10 w-full transition-all duration-500 ${isEditing ? 'scale-[0.98] transform origin-top' : ''}`}>
+      <div className={`space-y-6 lg:space-y-10 pb-40 relative z-10 w-full mx-auto transition-all duration-500 ${isEditing ? 'scale-[0.98] transform origin-top' : ''}`}>
         <div className={`flex justify-between items-center px-4 pt-4 ${!isEditing ? 'hidden lg:flex' : ''}`}>
           <div>
             <div className="flex items-center gap-4">
@@ -1594,7 +1719,9 @@ const Dashboard: React.FC<DashboardProps> = ({
               margin={[16, 16] as [number, number]}
               dragConfig={{ enabled: isEditing }}
               resizeConfig={{ enabled: isEditing, handles: ['se'] }}
-              onLayoutChange={handleRglLayoutChange}
+              onDragStop={handleDragOrResizeStop}
+              onResizeStop={handleDragOrResizeStop}
+              onBreakpointChange={handleBreakpointChange}
               autoSize
             >
               {currentLayout.map(widget => (
@@ -1654,7 +1781,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               {/* Widget list */}
               <div className="overflow-y-auto flex-1 px-4 py-3 flex flex-col gap-2">
                 <AnimatePresence initial={false}>
-                {[...layout].filter(w => w.visible !== false).sort((a, b) => (a.y - b.y) || (a.x - b.x)).map((widget, idx, arr) => {
+                {[...activeLayout].filter(w => w.visible !== false).sort((a, b) => (a.y - b.y) || (a.x - b.x)).map((widget, idx, arr) => {
                   const master = MASTER_WIDGET_LIST.find(m => m.id === widget.id);
                   const isVisible = true; // jsme už filtrovaní jen na visible
                   const visibleArr = arr;
@@ -1711,7 +1838,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 {/* Vypnuté + nikdy-nepřidané widgety → přidat */}
                 {(() => {
                   const missingWidgets = MASTER_WIDGET_LIST.filter(m => {
-                    const inLayout = layout.find(w => w.id === m.id);
+                    const inLayout = activeLayout.find(w => w.id === m.id);
                     return !inLayout || inLayout.visible === false;
                   });
                   if (missingWidgets.length === 0) return null;
@@ -1759,10 +1886,10 @@ const Dashboard: React.FC<DashboardProps> = ({
             className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] w-[95%] max-w-4xl p-3 md:p-4 rounded-3xl border shadow-2xl backdrop-blur-3xl flex items-center gap-4 ${isDark ? 'bg-slate-800/90 border-slate-700/50 shadow-black/80' : 'bg-white/95 border-slate-200 shadow-slate-300/50'}`}
           >
             <div className="flex-1 overflow-x-auto no-scrollbar flex items-center gap-3 snap-x px-2">
-              {MASTER_WIDGET_LIST.filter(master => !layout.find(w => w.id === master.id)?.visible).length === 0 && (
+              {MASTER_WIDGET_LIST.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).length === 0 && (
                 <div className="w-full text-center text-xs font-bold text-slate-500 py-3">Všechny moduly jsou aktivní</div>
               )}
-              {MASTER_WIDGET_LIST.filter(master => !layout.find(w => w.id === master.id)?.visible).map(master => (
+              {MASTER_WIDGET_LIST.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).map(master => (
                 <motion.button
                   whileHover={{ y: -4, scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -1779,10 +1906,10 @@ const Dashboard: React.FC<DashboardProps> = ({
               ))}
             </div>
 
-            <div className="shrink-0 w-px h-16 bg-gradient-to-b from-transparent via-slate-500/20 to-transparent block" />
+            <div className="shrink-0 w-px h-16 bg-linear-to-b from-transparent via-slate-500/20 to-transparent block" />
 
             <div className="shrink-0 pl-2">
-              <button onClick={onCloseEdit} className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-lg shadow-emerald-500/20 flex flex-col items-center justify-center gap-1 hover:scale-105 active:scale-95 transition-all">
+              <button onClick={onCloseEdit} className="w-16 h-16 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-lg shadow-emerald-500/20 flex flex-col items-center justify-center gap-1 hover:scale-105 active:scale-95 transition-all">
                 <CheckCircle2 size={24} />
                 <span className="text-[9px] font-black uppercase tracking-widest">Hotovo</span>
               </button>

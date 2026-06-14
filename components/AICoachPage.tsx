@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, ChevronDown, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen, Headphones, Brain, Zap } from 'lucide-react';
-import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation } from '../types';
+import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation, SessionConfig, RuleCompletion, SessionAnalysis } from '../types';
 import { streamAIResponse, buildTraderContext, parseAllRefs, prewarmCoachMemory, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
 import { summarizeConversation } from '../services/coachMemoryService';
@@ -10,6 +10,62 @@ import TradeDetailModal from './TradeDetailModal';
 import VoiceMemoButton from './VoiceMemoButton';
 import VoiceModeOverlay from './VoiceModeOverlay';
 import { enqueueSpeak, cleanForSpeech, cancelSpeech } from '../services/ttsService';
+import { COACH_SESSIONS, buildDynamicSessionPrompt } from '../services/coachPrompts';
+import { CoachSessionPreview } from './CoachSessionPreview';
+
+// ─── Session start cards ──────────────────────────────────────────────────────
+
+const SessionStartCards: React.FC<{
+  onStart: (mode: 'morning_prep' | 'post_session' | 'evening_review') => void;
+}> = ({ onStart }) => {
+  return (
+    <div className="w-full space-y-2.5">
+      <div className="text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)] text-center mb-1">
+        Řízené seance (Live synchronizace)
+      </div>
+      <div className="grid grid-cols-1 gap-2">
+        <button
+          onClick={() => onStart('morning_prep')}
+          className="flex items-center gap-3 p-3 text-left rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:border-blue-500/40 hover:bg-blue-500/5 transition-all group cursor-pointer"
+        >
+          <div className="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 group-hover:scale-105 transition-transform flex-shrink-0 text-lg">
+            ☕
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-[11px] font-black text-[var(--text-primary)]">Spustit Ranní přípravu</h4>
+            <p className="text-[9px] text-[var(--text-secondary)] leading-normal mt-0.5">Rituály, bias, scénáře a denní cíle před startem trhu.</p>
+          </div>
+        </button>
+
+        <button
+          onClick={() => onStart('post_session')}
+          className="flex items-center gap-3 p-3 text-left rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:border-amber-500/40 hover:bg-amber-500/5 transition-all group cursor-pointer"
+        >
+          <div className="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 group-hover:scale-105 transition-transform flex-shrink-0 text-lg">
+            📊
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-[11px] font-black text-[var(--text-primary)]">Po-obchodní debrief</h4>
+            <p className="text-[9px] text-[var(--text-secondary)] leading-normal mt-0.5">Rychlé vyhodnocení pocitů a plánů ihned po seanci (Londýn/NY).</p>
+          </div>
+        </button>
+
+        <button
+          onClick={() => onStart('evening_review')}
+          className="flex items-center gap-3 p-3 text-left rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all group cursor-pointer"
+        >
+          <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition-transform flex-shrink-0 text-lg">
+            🌙
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-[11px] font-black text-[var(--text-primary)]">Spustit Večerní audit</h4>
+            <p className="text-[9px] text-[var(--text-secondary)] leading-normal mt-0.5">Zhodnocení dne, chyb, cílů a celkového psychologického stavu.</p>
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+};
 
 // ─── Quick prompts ────────────────────────────────────────────────────────────
 
@@ -92,6 +148,7 @@ interface Props {
   playbookItems: PlaybookItem[];
   dailyPreps: DailyPrep[];
   dailyReviews: DailyReview[];
+  sessions?: SessionConfig[];
   theme?: string;
   onOpenTrade?: (trade: Trade) => void;
   onOpenJournal?: (date: string) => void;
@@ -113,7 +170,7 @@ const AICoachPage: React.FC<Props> = ({
   dailyPreps, dailyReviews, theme,
   onOpenTrade, onOpenJournal, onApplyAction,
   initialConversationId, initialPrompt, onInitialPromptConsumed,
-  onStreamingChange,
+  onStreamingChange, sessions = []
 }) => {
   // Init z globálního cache (persisted v localStorage) — žádný flash prázdného seznamu po reloadu.
   // useEffect níž pak refresh z DB na pozadí.
@@ -125,6 +182,42 @@ const AICoachPage: React.FC<Props> = ({
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
+  const [activeSessionMode, setActiveSessionMode] = useState<'morning_prep' | 'post_session' | 'evening_review' | null>(() => {
+    try {
+      const savedSessionStr = localStorage.getItem('active_coach_session');
+      if (savedSessionStr) {
+        const saved = JSON.parse(savedSessionStr);
+        const todayStr = new Date().toLocaleDateString('en-CA');
+        if (
+          saved.conversationId === (initialConversationId ?? null) &&
+          (saved.formState?.date === todayStr || saved.formState?.sessionId)
+        ) {
+          return saved.mode;
+        }
+      }
+    } catch {}
+    return null;
+  });
+
+  const [sessionFormState, setSessionFormState] = useState<any>(() => {
+    try {
+      const savedSessionStr = localStorage.getItem('active_coach_session');
+      if (savedSessionStr) {
+        const saved = JSON.parse(savedSessionStr);
+        const todayStr = new Date().toLocaleDateString('en-CA');
+        if (
+          saved.conversationId === (initialConversationId ?? null) &&
+          (saved.formState?.date === todayStr || saved.formState?.sessionId)
+        ) {
+          return saved.formState;
+        }
+      }
+    } catch {}
+    return null;
+  });
+
+  const [isSavingSession, setIsSavingSession] = useState(false);
+  const [activeSessionTab, setActiveSessionTab] = useState<'chat' | 'preview'>('chat');
   const [aiModel, setAiModel] = useState<'analytical' | 'fast'>(() => {
     try {
       const saved = localStorage.getItem('alphatrade_ai_model');
@@ -134,6 +227,31 @@ const AICoachPage: React.FC<Props> = ({
     }
   });
 
+  const isTodayWeekend = useMemo(() => {
+    const d = new Date();
+    const day = d.getDay();
+    return day === 0 || day === 6;
+  }, []);
+
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
+        setShowModelDropdown(false);
+      }
+    };
+    if (showModelDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showModelDropdown]);
+
+  const sessionConvIdRef = useRef<string | null>(initialConversationId ?? null);
+
   useEffect(() => {
     try {
       localStorage.setItem('alphatrade_ai_model', aiModel);
@@ -141,6 +259,74 @@ const AICoachPage: React.FC<Props> = ({
       console.warn('[AICoachPage] Failed to save AI model choice:', e);
     }
   }, [aiModel]);
+
+  // Sync state on conversation change
+  useEffect(() => {
+    try {
+      const savedSessionStr = localStorage.getItem('active_coach_session');
+      if (savedSessionStr) {
+        const saved = JSON.parse(savedSessionStr);
+        const todayStr = new Date().toLocaleDateString('en-CA');
+        if (
+          saved.conversationId === activeConvId &&
+          (saved.formState?.date === todayStr || saved.formState?.sessionId)
+        ) {
+          sessionConvIdRef.current = activeConvId;
+          setActiveSessionMode(saved.mode);
+          setSessionFormState(saved.formState);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('[AICoachPage] Failed to parse saved session:', e);
+    }
+    sessionConvIdRef.current = activeConvId;
+    setActiveSessionMode(null);
+    setSessionFormState(null);
+  }, [activeConvId]);
+
+  // Persist session state to localStorage on changes
+  useEffect(() => {
+    if (!activeConvId || sessionConvIdRef.current !== activeConvId) return;
+    
+    try {
+      if (activeSessionMode && sessionFormState) {
+        const payload = {
+          conversationId: activeConvId,
+          mode: activeSessionMode,
+          formState: sessionFormState
+        };
+        localStorage.setItem('active_coach_session', JSON.stringify(payload));
+      } else {
+        const savedSessionStr = localStorage.getItem('active_coach_session');
+        if (savedSessionStr) {
+          const saved = JSON.parse(savedSessionStr);
+          if (saved.conversationId === activeConvId) {
+            localStorage.removeItem('active_coach_session');
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[AICoachPage] Failed to save active session:', e);
+    }
+  }, [activeSessionMode, sessionFormState, activeConvId]);
+
+  const handleModelChange = (model: 'analytical' | 'fast') => {
+    if (aiModel === model) return;
+    setAiModel(model);
+
+    if (activeConvId) {
+      const systemMessage: ExtendedMessage = {
+        role: 'assistant',
+        content: '',
+        isSystemEvent: true,
+        systemEventText: model === 'fast'
+          ? 'Přepnuto na Rychlého kouče (Gemini 3.5 Flash)'
+          : 'Přepnuto na Analytického kouče (Claude 4.5)'
+      };
+      setMessages(prev => [...prev, systemMessage]);
+    }
+  };
 
   // Nahřej memory cache (profil/závazky/summaries) hned při otevření stránky —
   // první zpráva pak nečeká na 3 DB roundtripy.
@@ -176,6 +362,328 @@ const AICoachPage: React.FC<Props> = ({
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
+
+  // ─── AI Seance Cockpit Handlers ──────────────────────────────────────────────
+  const handleStartSession = async (mode: 'morning_prep' | 'post_session' | 'evening_review') => {
+    let convId = activeConvId;
+    const todayStr = new Date().toLocaleDateString('en-CA');
+    
+    // Generování čitelného českého data pro titulek
+    const dateParts = todayStr.split('-');
+    const czDateStr = `${dateParts[2]}.${dateParts[1]}.`;
+    const title = mode === 'morning_prep'
+      ? `☕ Ranní příprava (${czDateStr})`
+      : mode === 'evening_review'
+      ? `🌙 Večerní audit (${czDateStr})`
+      : `📊 Debrief seance (${czDateStr})`;
+    const category = mode === 'morning_prep' ? 'general' : mode === 'evening_review' ? 'report' : 'analysis';
+
+    if (!convId) {
+      try {
+        const conv = await storageService.createConversation();
+        if (conv) {
+          await storageService.updateConversation(conv.id, { title, category });
+          conv.title = title;
+          conv.category = category;
+          justCreatedConvIdsRef.current.add(conv.id);
+          setConversations(prev => [conv, ...prev]);
+          setActiveConvId(conv.id);
+          convId = conv.id;
+          setMobileView('chat');
+        }
+      } catch (e) {
+        console.error('[AICoachPage] failed to create conversation for session:', e);
+        alert('Nepodařilo se zahájit seanci. Zkuste to prosím znovu.');
+        return;
+      }
+    } else {
+      try {
+        await storageService.updateConversation(convId, { title, category });
+        setConversations(prev => prev.map(c => c.id === convId ? { ...c, title, category } : c));
+      } catch (e) {
+        console.warn('[AICoachPage] failed to update conversation title for session:', e);
+      }
+    }
+
+    setActiveSessionMode(mode);
+    setActiveSessionTab('chat');
+    
+    if (mode === 'morning_prep') {
+      const existingPrep = dailyPreps.find(p => p.date === todayStr);
+      const configSessions = (sessions && sessions.length > 0) ? sessions : [
+        { id: 'asia', name: 'Asia', startTime: '02:00', endTime: '08:00', color: '#64748b' },
+        { id: 'london', name: 'London', startTime: '09:00', endTime: '16:00', color: '#3b82f6' },
+        { id: 'ny', name: 'New York', startTime: '15:30', endTime: '22:00', color: '#f97316' }
+      ];
+      const rituals = ironRules.filter(r => r.type === 'ritual');
+
+      let initialRitualCompletions: RuleCompletion[] = rituals.map(r => ({ ruleId: r.id, status: 'Pending' as const, label: r.label }));
+      let initialSessions: SessionAnalysis[] = configSessions.map(s => ({ id: s.id, label: s.name, color: s.color, plan: '', image: '', bias: 'Neutral' as const }));
+
+      if (existingPrep) {
+        if (existingPrep.ritualCompletions) {
+          initialRitualCompletions = rituals.map(r => {
+            const ext = existingPrep.ritualCompletions?.find(c => c.ruleId === r.id);
+            return {
+              ruleId: r.id,
+              status: ext?.status || 'Pending',
+              label: r.label
+            };
+          });
+        }
+        if (existingPrep.scenarios?.sessions) {
+          initialSessions = configSessions.map(s => {
+            const ext = existingPrep.scenarios.sessions?.find(x => x.id === s.id);
+            return {
+              id: s.id,
+              label: s.name,
+              color: s.color,
+              plan: ext?.plan || '',
+              image: ext?.image || '',
+              bias: ext?.bias || 'Neutral'
+            };
+          });
+        }
+      }
+
+      setSessionFormState({
+        id: existingPrep?.id || `prep-${todayStr}`,
+        date: todayStr,
+        sleepHours: (existingPrep as any)?.sleepHours ?? null,
+        sleptWell: existingPrep?.checklist?.sleptWell ?? true,
+        planReady: existingPrep?.checklist?.planReady ?? false,
+        newsChecked: existingPrep?.checklist?.newsChecked ?? false,
+        disciplineCommitted: existingPrep?.checklist?.disciplineCommitted ?? false,
+        bias: existingPrep?.bias || 'Neutral',
+        goals: existingPrep?.goals || [],
+        confidence: existingPrep?.confidence ?? 50,
+        ritualCompletions: initialRitualCompletions,
+        scenarios: {
+          ...(existingPrep?.scenarios || {}),
+          sessions: initialSessions
+        },
+        committedRuleIds: (existingPrep as any)?.committedRuleIds || [],
+        mindsetState: existingPrep?.mindsetState || '',
+        dailyFocus: (existingPrep as any)?.dailyFocus || ''
+      });
+    } else if (mode === 'evening_review') {
+      const existingReview = dailyReviews.find(r => r.date === todayStr);
+      let goalsList: string[] = [];
+      try {
+        const preps = await storageService.getDailyPreps();
+        const todayPrep = preps.find(p => p.date === todayStr);
+        if (todayPrep?.goals) goalsList = todayPrep.goals;
+      } catch (e) {
+        console.warn('[AICoachPage] failed to load today prep for goals:', e);
+      }
+      
+      const tradingRules = ironRules.filter(r => r.type === 'trading');
+      let initialRuleAdherence: RuleCompletion[] = tradingRules.map(r => ({ ruleId: r.id, status: 'Pending' as const, label: r.label }));
+
+      if (existingReview) {
+        if (existingReview.ruleAdherence) {
+          initialRuleAdherence = tradingRules.map(r => {
+            const ext = existingReview.ruleAdherence?.find(c => c.ruleId === r.id);
+            return {
+              ruleId: r.id,
+              status: ext?.status || 'Pending',
+              label: r.label
+            };
+          });
+        }
+      }
+
+      setSessionFormState({
+        id: existingReview?.id || `review-${todayStr}`,
+        date: todayStr,
+        rating: existingReview?.rating ?? 3,
+        mainTakeaway: existingReview?.mainTakeaway || '',
+        lessons: existingReview?.lessons || '',
+        mistakes: existingReview?.mistakes || [],
+        scenarioResult: existingReview?.scenarioResult || 'Neutral',
+        goalResults: existingReview?.goalResults || goalsList.map(g => ({ text: g, achieved: false })),
+        psycho: {
+          stressors: existingReview?.psycho?.stressors || '',
+          gratitude: existingReview?.psycho?.gratitude || '',
+          notes: existingReview?.psycho?.notes || ''
+        },
+        ruleAdherence: initialRuleAdherence
+      });
+    } else if (mode === 'post_session') {
+      const existingReview = dailyReviews.find(r => r.date === todayStr);
+      let sessionNotes = '';
+      let sessionId: 'london' | 'ny' | 'asia' = 'ny';
+      if (existingReview && existingReview.sessionBreakdowns) {
+        const bd = existingReview.sessionBreakdowns.find(b => b.sessionId === 'ny');
+        if (bd) {
+          sessionNotes = bd.notes || '';
+          sessionId = bd.sessionId as 'london' | 'ny' | 'asia';
+        }
+      }
+      setSessionFormState({
+        sessionId,
+        notes: sessionNotes
+      });
+    }
+
+    setMessages([]);
+    firstMessageSentRef.current = false;
+
+    const isAnalytical = aiModel === 'analytical';
+    const coachLabel = isAnalytical ? 'Analytický kouč (Claude)' : 'Rychlý kouč (Gemini)';
+    const welcomeText = mode === 'morning_prep'
+      ? `Ahoj Filipe! Jsem tvůj ${coachLabel} a vítám tě u Ranní přípravy. Pojďme se připravit na dnešní obchodní den. Jaké máš pro dnešek cíle a jak to vypadá s tvými ranními rituály?`
+      : mode === 'evening_review'
+      ? `Vítej u Večerního auditu. Pojďme zhodnotit tvůj dnešní obchodní den. Jak bys ho celkově ohodnotil od 1 do 5 hvězd a co byl tvůj hlavní poznatek dne?`
+      : `Vítej u Po-obchodního debriefu seance. Kterou seanci dnes vyhodnocujeme (Londýn / New York) a jaké jsou tvé hlavní poznatky?`;
+
+    const assistantMsg: ExtendedMessage = {
+      role: 'assistant',
+      content: welcomeText,
+      aiModel
+    };
+
+    setMessages([assistantMsg]);
+
+    if (convId) {
+      storageService.appendMessage(convId, 'assistant', welcomeText)
+        .catch(err => console.error('[AICoachPage] failed to save greeting:', err));
+    }
+  };
+
+  const handleSaveSession = async () => {
+    if (!sessionFormState || !activeSessionMode) return;
+    setIsSavingSession(true);
+    try {
+      const todayStr = new Date().toLocaleDateString('en-CA');
+      
+      if (activeSessionMode === 'morning_prep') {
+        const preps = await storageService.getDailyPreps();
+        const existing = preps.find(p => p.date === todayStr);
+        const prep: DailyPrep = {
+          confidence: 50,
+          checklist: {
+            sleptWell: true,
+            planReady: false,
+            disciplineCommitted: false,
+            newsChecked: false
+          },
+          scenarios: {
+            bullish: '',
+            bearish: '',
+            sessions: []
+          },
+          ...(existing || {}),
+          id: existing?.id || sessionFormState.id || `prep-${todayStr}`,
+          date: todayStr,
+          bias: existing?.bias || 'Neutral',
+          goals: sessionFormState.goals || existing?.goals || [],
+          ritualCompletions: sessionFormState.ritualCompletions || existing?.ritualCompletions || [],
+          committedRuleIds: sessionFormState.committedRuleIds || (existing as any)?.committedRuleIds || [],
+          mindsetState: sessionFormState.mindsetState || existing?.mindsetState || '',
+          dailyFocus: sessionFormState.dailyFocus || (existing as any)?.dailyFocus || '',
+          completed: true
+        } as any;
+        await storageService.saveSinglePrep(prep);
+        
+      } else if (activeSessionMode === 'evening_review') {
+        const reviews = await storageService.getDailyReviews();
+        const existing = reviews.find(r => r.date === todayStr);
+        const review: DailyReview = {
+          ...(existing || {}),
+          id: existing?.id || sessionFormState.id || `review-${todayStr}`,
+          date: todayStr,
+          mainTakeaway: sessionFormState.mainTakeaway || '',
+          lessons: sessionFormState.lessons || '',
+          mistakes: sessionFormState.mistakes || [],
+          rating: sessionFormState.rating || 3,
+          goalResults: sessionFormState.goalResults || [],
+          scenarioResult: sessionFormState.scenarioResult || 'Neutral',
+          psycho: {
+            ...(existing?.psycho || {}),
+            stressors: sessionFormState.psycho?.stressors || '',
+            gratitude: sessionFormState.psycho?.gratitude || '',
+            notes: sessionFormState.psycho?.notes || ''
+          },
+          ruleAdherence: sessionFormState.ruleAdherence || [],
+          completed: true
+        };
+        await storageService.saveSingleReview(review);
+        
+      } else if (activeSessionMode === 'post_session') {
+        const reviews = await storageService.getDailyReviews();
+        let review = reviews.find(r => r.date === todayStr);
+        if (!review) {
+          review = {
+            id: `review-${todayStr}`,
+            date: todayStr,
+            mainTakeaway: '',
+            lessons: '',
+            mistakes: [],
+            rating: 3,
+            completed: false
+          };
+        }
+        
+        const sessionLabel = sessionFormState.sessionId === 'london' 
+          ? 'London' 
+          : sessionFormState.sessionId === 'ny' 
+          ? 'New York (NY)' 
+          : 'Asia';
+          
+        const breakdown = {
+          sessionId: sessionFormState.sessionId || 'ny',
+          sessionLabel,
+          notes: sessionFormState.notes || ''
+        };
+        
+        review.sessionBreakdowns = [
+          ...(review.sessionBreakdowns || []).filter(b => b.sessionId !== breakdown.sessionId),
+          breakdown
+        ];
+        
+        await storageService.saveSingleReview(review);
+      }
+      
+      const modeLabel = COACH_SESSIONS[activeSessionMode]?.label || 'Seance';
+      const confirmationMsg: ExtendedMessage = {
+        role: 'assistant',
+        content: '',
+        isSystemEvent: true,
+        systemEventText: `✅ ${modeLabel} byla úspěšně dokončena a uložena do tvého deníku.`
+      };
+      
+      setMessages(prev => [...prev, confirmationMsg]);
+      setActiveSessionMode(null);
+      setSessionFormState(null);
+    } catch (e) {
+      console.error('[AICoachPage] Failed to save session:', e);
+      alert('Chyba při ukládání seance do deníku.');
+    } finally {
+      setIsSavingSession(false);
+    }
+  };
+
+  // Real-time parsing of form_state comments
+  useEffect(() => {
+    if (messages.length === 0 || !activeSessionMode) return;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') {
+      const match = lastMsg.content.match(/<!--\s*form_state:\s*([\s\S]*?)\s*-->/);
+      if (match && match[1]) {
+        try {
+          const parsed = JSON.parse(match[1].trim());
+          setSessionFormState((prev: any) => {
+            if (!prev) return parsed;
+            const isDifferent = JSON.stringify(prev) !== JSON.stringify({ ...prev, ...parsed });
+            return isDifferent ? { ...prev, ...parsed } : prev;
+          });
+        } catch (e) {
+          // Incomplete JSON during stream typing — ignore
+        }
+      }
+    }
+  }, [messages, activeSessionMode]);
 
   // ─── Stick-to-bottom scroll chování (jako Claude.ai / ChatGPT) ───────────
   // Když je user "u dna" (< 80px od konce), auto-scroll je aktivní.
@@ -273,6 +781,9 @@ const AICoachPage: React.FC<Props> = ({
         };
         // Rehydratuj karty z markerů v contentu (assistant zprávy)
         if (m.role === 'assistant') {
+          const isFast = m.content.includes('<!-- model:fast -->');
+          const isAnalytical = m.content.includes('<!-- model:analytical  -->') || m.content.includes('<!-- model:analytical -->');
+          base.aiModel = isFast ? 'fast' : (isAnalytical ? 'analytical' : 'analytical');
           const refs = parseAllRefs(m.content);
           if (refs.tradeIds.length) {
             base.tradeCards = refs.tradeIds
@@ -344,13 +855,14 @@ const AICoachPage: React.FC<Props> = ({
 
   const flushSummaryFor = useCallback((convId: string, msgs: ExtendedMessage[]) => {
     if (!convId) return;
-    if (msgs.length < 4) return; // too short to be worth summarizing
+    const filteredMsgs = msgs.filter(m => !m.isSystemEvent);
+    if (filteredMsgs.length < 4) return; // too short to be worth summarizing
     if (summarizedConvsRef.current.has(convId)) return; // already done this session
     summarizedConvsRef.current.add(convId);
     // Fire-and-forget — silent on failure
     summarizeConversation({
       conversation_id: convId,
-      messages: msgs.map(m => ({ role: m.role, content: m.content })),
+      messages: filteredMsgs.map(m => ({ role: m.role, content: m.content })),
     }).catch(() => {});
   }, []);
 
@@ -487,7 +999,7 @@ const AICoachPage: React.FC<Props> = ({
     firstMessageSentRef.current = true;
 
     const userMsg: ExtendedMessage = { role: 'user', content: text.trim() };
-    const assistantMsg: ExtendedMessage = { role: 'assistant', content: '' };
+    const assistantMsg: ExtendedMessage = { role: 'assistant', content: '', aiModel: voiceMode ? 'fast' : aiModel };
 
     setMessages(prev => [...prev, userMsg, assistantMsg]);
     setInput('');
@@ -515,7 +1027,9 @@ const AICoachPage: React.FC<Props> = ({
       ));
     }
 
-    const history: AIMessage[] = [...messages, userMsg].map(m => ({ role: m.role, content: m.content }));
+    const history: AIMessage[] = [...messages, userMsg]
+      .filter(m => !m.isSystemEvent)
+      .map(m => ({ role: m.role, content: m.content }));
 
     let finalContent = '';
 
@@ -627,7 +1141,8 @@ const AICoachPage: React.FC<Props> = ({
         setIsStreaming(false);
         setToolStatus(null);
         if (finalContent) {
-          await storageService.appendMessage(convId, 'assistant', finalContent);
+          const modelTag = `\n<!-- model:${voiceMode ? 'fast' : aiModel} -->`;
+          await storageService.appendMessage(convId, 'assistant', finalContent + modelTag);
         } else {
           // Stream skončil bez textu (samé tool calls). Ukaž chybu místo prázdné bubliny.
           setMessages(prev => {
@@ -684,12 +1199,13 @@ const AICoachPage: React.FC<Props> = ({
         onToolUse: (label) => setToolStatus(label),
         voiceMode,
         aiModel: voiceMode ? 'fast' : aiModel,
+        sessionPrompt: activeSessionMode ? buildDynamicSessionPrompt(activeSessionMode, ironRules, sessions || []) : undefined,
       },
     );
 
     // Vrať finální text — voice mód ho přečte nahlas.
     return finalContent;
-  }, [messages, traderContext, trades, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel]);
+  }, [messages, traderContext, trades, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, ironRules, sessions]);
 
   // ─── Start with quick prompt (declared after sendMessage to avoid TDZ) ──────
 
@@ -890,7 +1406,27 @@ const AICoachPage: React.FC<Props> = ({
           {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
         </button>
         <div className="flex-1 min-w-0">
-          {activeConvId ? (
+          {activeSessionMode ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs px-2 py-0.5 rounded-lg bg-red-500/10 border border-red-500/25 text-red-400 font-bold flex items-center gap-1 flex-shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                Live Seance
+              </span>
+              <button
+                onClick={() => {
+                  if (confirm('Opravdu chceš ukončit aktivní seanci? Všechny neuložené změny budou ztraceny.')) {
+                    setActiveSessionMode(null);
+                    setSessionFormState(null);
+                  }
+                }}
+                className="text-[10px] text-rose-400 hover:text-rose-300 font-bold flex items-center gap-0.5 px-2 py-1 rounded-lg bg-rose-500/5 hover:bg-rose-500/10 transition-all border border-rose-500/10 cursor-pointer"
+                title="Zrušit a zahodit aktivní seanci"
+              >
+                <X size={10} />
+                <span>Zrušit seanci</span>
+              </button>
+            </div>
+          ) : activeConvId ? (
             <span className="text-sm font-bold text-[var(--text-primary)] truncate block">
               {conversations.find(c => c.id === activeConvId)?.title ?? 'Konverzace'}
             </span>
@@ -899,32 +1435,70 @@ const AICoachPage: React.FC<Props> = ({
           )}
         </div>
 
-        {/* Model Selector Toggle */}
-        <div className="flex items-center gap-1 bg-[var(--bg-page)] border border-[var(--border-subtle)] p-0.5 rounded-xl flex-shrink-0">
+        {/* Model Selector Dropdown */}
+        <div ref={modelDropdownRef} className="relative flex-shrink-0">
           <button
-            onClick={() => setAiModel('analytical')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              aiModel === 'analytical'
-                ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-transparent'
-            }`}
-            title="Hluboká analýza s Claude Sonnet 4.5"
+            onClick={() => setShowModelDropdown(prev => !prev)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-page)] border border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[var(--text-secondary)] transition-all cursor-pointer select-none"
+            title="Vyber AI kouče"
           >
-            <Brain size={14} />
-            <span className="hidden sm:inline">Analytický</span>
+            {aiModel === 'analytical' ? (
+              <>
+                <Brain size={14} className="text-blue-400" />
+                <span>Analytik</span>
+              </>
+            ) : (
+              <>
+                <Zap size={14} className="text-amber-400" />
+                <span>Rychlý</span>
+              </>
+            )}
+            <ChevronDown size={14} className={`text-[var(--text-secondary)] transition-transform duration-200 ${showModelDropdown ? 'rotate-180' : ''}`} />
           </button>
-          <button
-            onClick={() => setAiModel('fast')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              aiModel === 'fast'
-                ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20'
-                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-transparent'
-            }`}
-            title="Bleskově rychlý s Gemini 3.5 Flash"
-          >
-            <Zap size={14} />
-            <span className="hidden sm:inline">Rychlý</span>
-          </button>
+
+          {showModelDropdown && (
+            <div className="absolute right-0 top-full mt-1.5 w-60 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-xl shadow-xl p-1.5 z-50 flex flex-col gap-1 animate-in fade-in duration-100">
+              <button
+                onClick={() => {
+                  handleModelChange('analytical');
+                  setShowModelDropdown(false);
+                }}
+                className={`flex items-start gap-2.5 p-2.5 rounded-lg text-left transition-all cursor-pointer ${
+                  aiModel === 'analytical'
+                    ? 'bg-blue-600/10 text-blue-400 border border-blue-500/20'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] border border-transparent'
+                }`}
+              >
+                <Brain size={16} className={`mt-0.5 flex-shrink-0 ${aiModel === 'analytical' ? 'text-blue-400' : 'text-[var(--text-secondary)]'}`} />
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold">Analytik</span>
+                  <span className="text-[10px] text-[var(--text-secondary)] leading-normal mt-0.5">
+                    Hluboká analýza s Claude 4.5. Ideální pro post-session debriefy a psychologii.
+                  </span>
+                </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  handleModelChange('fast');
+                  setShowModelDropdown(false);
+                }}
+                className={`flex items-start gap-2.5 p-2.5 rounded-lg text-left transition-all cursor-pointer ${
+                  aiModel === 'fast'
+                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] border border-transparent'
+                }`}
+              >
+                <Zap size={16} className={`mt-0.5 flex-shrink-0 ${aiModel === 'fast' ? 'text-amber-400' : 'text-[var(--text-secondary)]'}`} />
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold">Rychlý</span>
+                  <span className="text-[10px] text-[var(--text-secondary)] leading-normal mt-0.5">
+                    Bleskově rychlé odpovědi s Gemini 3.5 Flash. Skvělé pro ranní přípravu a rychlé dotazy.
+                  </span>
+                </div>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -932,7 +1506,7 @@ const AICoachPage: React.FC<Props> = ({
       <div ref={messagesContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-6 space-y-4 scrollbar-thin">
         {!activeConvId ? (
           // No conversation selected — show empty state with quick prompts
-          <div className="flex flex-col items-center justify-center h-full gap-6 max-w-sm mx-auto">
+          <div className="flex flex-col items-center justify-center h-full gap-6 max-w-sm mx-auto py-6">
             <div className="text-center">
               <div className="w-14 h-14 rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-4">
                 <Bot size={24} className="text-blue-400" />
@@ -940,12 +1514,30 @@ const AICoachPage: React.FC<Props> = ({
               <p className="text-base font-black text-[var(--text-primary)]">Ahoj! Jsem tvůj AI Coach.</p>
               <p className="text-sm text-[var(--text-secondary)] mt-1">Vyber konverzaci nebo začni novou.</p>
             </div>
+
+            {/* guided session triggers */}
+            <div className="w-full">
+              {isTodayWeekend ? (
+                <div className="p-4 text-center border border-[var(--border-subtle)] bg-[var(--bg-card)] rounded-xl">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-1">
+                    ☕ Víkendový režim
+                  </p>
+                  <p className="text-[9px] text-[var(--text-secondary)] leading-relaxed">
+                    Trhy jsou zavřené a seance jsou neaktivní. Můžeš ale analyzovat minulý týden, studovat statistiky nebo si popovídat s koučem o psychologii.
+                  </p>
+                </div>
+              ) : (
+                <SessionStartCards onStart={handleStartSession} />
+              )}
+            </div>
+
             <div className="w-full space-y-2">
+              <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] text-center mb-1">Rychlé dotazy</div>
               {QUICK_PROMPTS.map(q => (
                 <button
                   key={q}
                   onClick={() => startWithPrompt(q)}
-                  className="w-full text-left px-4 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:opacity-80 text-xs text-[var(--text-primary)] transition-all"
+                  className="w-full text-left px-4 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:opacity-80 text-xs text-[var(--text-primary)] transition-all cursor-pointer"
                 >
                   {q}
                 </button>
@@ -958,8 +1550,8 @@ const AICoachPage: React.FC<Props> = ({
           </div>
         ) : (
           <>
-            {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full gap-5 max-w-md mx-auto px-2">
+            {messages.filter(m => !m.isSystemEvent).length === 0 && (
+              <div className="flex flex-col items-center justify-center h-full gap-5 max-w-md mx-auto px-2 py-4">
                 <div className="text-center w-full">
                   <div className="w-12 h-12 rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center mx-auto mb-3">
                     <Sparkles size={20} className="text-blue-400" />
@@ -980,12 +1572,30 @@ const AICoachPage: React.FC<Props> = ({
                     </>
                   )}
                 </div>
+
+                {/* guided session triggers */}
+                <div className="w-full">
+                  {isTodayWeekend ? (
+                    <div className="p-4 text-center border border-[var(--border-subtle)] bg-[var(--bg-card)] rounded-xl">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-1">
+                        ☕ Víkendový režim
+                      </p>
+                      <p className="text-[9px] text-[var(--text-secondary)] leading-relaxed">
+                        Trhy jsou zavřené a seance jsou neaktivní. Můžeš ale analyzovat minulý týden, studovat statistiky nebo si popovídat s koučem o psychologii.
+                      </p>
+                    </div>
+                  ) : (
+                    <SessionStartCards onStart={handleStartSession} />
+                  )}
+                </div>
+
                 <div className="w-full space-y-2">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] text-center mb-1">Rychlé dotazy</div>
                   {(proactive?.suggestions && proactive.suggestions.length > 0 ? proactive.suggestions : QUICK_PROMPTS).map(q => (
                     <button
                       key={q}
                       onClick={() => sendMessage(q)}
-                      className="w-full text-left px-4 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:border-blue-500/40 hover:bg-blue-500/5 text-xs text-[var(--text-primary)] transition-all active:scale-[0.98]"
+                      className="w-full text-left px-4 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:border-blue-500/40 hover:bg-blue-500/5 text-xs text-[var(--text-primary)] transition-all active:scale-[0.98] cursor-pointer"
                     >
                       {q}
                     </button>
@@ -1145,7 +1755,58 @@ const AICoachPage: React.FC<Props> = ({
           flex-1 h-full overflow-hidden min-w-0
           ${mobileView === 'list' && !sidebarCollapsed ? 'hidden lg:flex' : 'flex'}
         `}>
-          {ChatArea}
+          {activeSessionMode ? (
+            <div className="flex flex-col lg:flex-row h-full w-full overflow-hidden p-2 lg:p-4 gap-4 bg-[var(--bg-page)]">
+              {/* Mobile Tab Toggle */}
+              <div className="lg:hidden flex bg-[var(--bg-card)] border border-[var(--border-subtle)] p-1 rounded-xl w-full flex-shrink-0 mb-2">
+                <button
+                  onClick={() => setActiveSessionTab('chat')}
+                  className={`flex-1 py-2 rounded-lg text-xs font-bold text-center transition-all ${
+                    activeSessionTab === 'chat'
+                      ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  Chat s koučem
+                </button>
+                <button
+                  onClick={() => setActiveSessionTab('preview')}
+                  className={`flex-1 py-2 rounded-lg text-xs font-bold text-center transition-all ${
+                    activeSessionTab === 'preview'
+                      ? 'bg-blue-600/15 text-blue-400 border border-blue-500/20'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  Náhled formuláře
+                </button>
+              </div>
+
+              {/* Left Panel: Chat Area */}
+              <div className={`flex-1 h-full overflow-hidden min-w-0 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)]/30 ${
+                activeSessionTab === 'chat' ? 'flex flex-col' : 'hidden lg:flex lg:flex-col'
+              }`}>
+                {ChatArea}
+              </div>
+
+              {/* Right Panel: Live Bento Preview */}
+              <div className={`w-full lg:w-1/2 xl:w-[45%] h-full overflow-hidden flex-shrink-0 min-w-0 ${
+                activeSessionTab === 'preview' ? 'flex flex-col' : 'hidden lg:flex lg:flex-col'
+              }`}>
+                <CoachSessionPreview
+                  mode={activeSessionMode}
+                  state={sessionFormState}
+                  onChange={setSessionFormState}
+                  onSave={handleSaveSession}
+                  isSaving={isSavingSession}
+                  coachType={aiModel}
+                  sessions={sessions}
+                  ironRules={ironRules}
+                />
+              </div>
+            </div>
+          ) : (
+            ChatArea
+          )}
         </div>
       </div>
 

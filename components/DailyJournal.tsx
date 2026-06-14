@@ -93,6 +93,13 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   const [selectedDate, setSelectedDate] = useState(initialDate ?? getToday());
   const today = getToday();
 
+  const isWeekend = useMemo(() => {
+    if (!selectedDate) return false;
+    const d = new Date(selectedDate + 'T00:00:00');
+    const day = d.getDay();
+    return day === 0 || day === 6;
+  }, [selectedDate]);
+
   // Přeskočit na datum z AI Chatu
   useEffect(() => {
     if (initialDate) setSelectedDate(initialDate);
@@ -848,11 +855,21 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     const doNavigate = () => {
       const d = new Date(selectedDate);
       const step = direction === 'prev' ? -1 : 1;
-      // Posuň o 1 den, pak přeskoč víkendy (so/ne) — trh je zavřený
+      
       d.setDate(d.getDate() + step);
+      // Přeskoč víkendy (so/ne), ale pouze pokud to není dnešek (today) a nemají žádný vyplněný obsah
       while (d.getDay() === 0 || d.getDay() === 6) {
+        const dateStr = d.toLocaleDateString('en-CA');
+        const isTodayWeekend = dateStr === today;
+        const hasContent = reviews.some(r => r.date === dateStr && (r.psycho?.notes?.trim() || r.quickNotes?.length || r.mainTakeaway?.trim() || r.lessons?.trim())) ||
+                           preps.some(p => p.date === dateStr && (p.mindsetState?.trim() || p.goals?.length || p.dailyFocus?.trim()));
+        
+        if (isTodayWeekend || hasContent) {
+          break; // Zastav se na tomto víkendovém dni
+        }
         d.setDate(d.getDate() + step);
       }
+      
       const newDateStr = d.toLocaleDateString('en-CA');
       if (newDateStr <= today) { setSelectedDate(newDateStr); setView('timeline'); }
     };
@@ -945,6 +962,10 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   useEffect(() => {
     const dateActuallyChanged = prevSelectedDateRef.current !== selectedDate;
     prevSelectedDateRef.current = selectedDate;
+
+    if (dateActuallyChanged && isWeekend) {
+      setView('timeline');
+    }
 
     // 1. Force save the PREVIOUS date's review if date changed, was dirty, and not empty
     if (dateActuallyChanged && lastReviewForm.current.date && lastReviewForm.current.date !== selectedDate && reviewFormDirty.current) {
@@ -1142,7 +1163,71 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             </div>
 
             <div id="tactical-timeline-anchor" />
-            {(
+            {isWeekend ? (
+              <div className="space-y-4 pb-32">
+                {/* Weekend Banner */}
+                <div 
+                  className={`p-6 rounded-3xl border text-center flex flex-col items-center justify-center gap-3 transition-all ${
+                    theme !== 'light' 
+                      ? 'bg-slate-900/30 border-slate-800/60' 
+                      : 'bg-slate-50 border-slate-200'
+                  }`}
+                >
+                  <div className={`w-12 h-12 rounded-full grid place-items-center text-xl shrink-0 ${theme !== 'light' ? 'bg-amber-500/10 text-amber-400' : 'bg-amber-50 text-amber-600'}`}>
+                    ☕
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-widest text-[var(--text-primary)]">
+                      Víkendový režim
+                    </h3>
+                    <p className="text-xs text-[var(--text-secondary)] mt-1 max-w-md mx-auto leading-relaxed">
+                      Trhy jsou dnes zavřené a není co obchodovat. Ideální čas na odpočinek, studium minulých obchodů nebo zápis poznámek a postřehů.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Weekend Notes Card */}
+                <div 
+                  className={`p-6 rounded-3xl border transition-all ${
+                    theme !== 'light' 
+                      ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' 
+                      : 'bg-white border-slate-200 shadow-sm'
+                  } space-y-4`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <FileText size={16} className="text-amber-500" />
+                    <h3 className="text-xs font-black uppercase tracking-widest text-[var(--text-primary)]">
+                      Poznámky & Studium
+                    </h3>
+                  </div>
+
+                  <textarea
+                    value={reviewForm.psycho?.notes || ''}
+                    onChange={(e) => {
+                      const existingPsycho = reviewForm.psycho || { notes: '', stressors: '', gratitude: '' };
+                      editReviewForm({
+                        ...reviewForm,
+                        psycho: {
+                          ...existingPsycho,
+                          notes: e.target.value
+                        }
+                      });
+                    }}
+                    placeholder="Sem si zapiš své víkendové myšlenky, analýzu grafů, chyby, které jsi studoval, nebo plány na další týden..."
+                    rows={12}
+                    className={`w-full p-4 rounded-2xl text-xs resize-none outline-none border focus:border-amber-500 transition-all ${
+                      theme !== 'light'
+                        ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-200 placeholder:text-slate-600 focus:bg-[var(--bg-card)]'
+                        : 'bg-slate-50 border-slate-200 text-slate-700 placeholder:text-slate-400 focus:bg-white'
+                    }`}
+                  />
+                  
+                  <div className="text-[10px] text-slate-500 italic text-right font-semibold">
+                    Poznámky se automaticky ukládají do deníku k tomuto dni.
+                  </div>
+                </div>
+              </div>
+            ) : (
               <TacticalTimelineV2
                 date={selectedDate}
                 // V2 čte z formularů (reviewForm/prepForm) ne saved data —

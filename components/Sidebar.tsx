@@ -86,19 +86,21 @@ const Sidebar: React.FC<SidebarProps> = ({
     // Base classes preserved from original (minus the width which is now animated)
     const sidebarBaseClasses = `
     fixed inset-y-0 left-0 z-[60] 
-    ${isDark ? 'bg-black/40' : 'bg-[var(--bg-sidebar)]'} 
-    border-r border-white/5 backdrop-blur-[32px]
-    flex flex-col shadow-[20px_0_50px_rgba(0,0,0,0.1)]
+    ${isDark ? 'bg-transparent border-r border-white/5 shadow-[20px_0_60px_-15px_rgba(0,0,0,0.3)]' : 'bg-transparent border-r border-white/10 shadow-[20px_0_60px_-15px_rgba(15,23,42,0.04)]'} 
+    liquid-glass-base
+    flex flex-col
     lg:translate-x-0 lg:fixed lg:top-0 lg:h-screen overflow-hidden
   `;
 
     const navItemClass = (isActive: boolean) => `
-    w-full flex items-center gap-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 border relative group overflow-hidden h-10
+    w-full flex items-center gap-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 relative group overflow-hidden h-10 liquid-glass-lens
     ${isActive
             ? (isDark
-                ? 'bg-white/10 border-white/20 text-white shadow-[0_0_20px_rgba(255,255,255,0.1)] shadow-inner'
-                : 'bg-[var(--bg-page)] border-[var(--border-active)] text-[var(--text-primary)] shadow-[0_4px_12px_rgba(15,23,42,0.08)]')
-            : `bg-transparent border-transparent theme-text-secondary ${isDark ? 'lg:hover:bg-white/5' : 'lg:hover:bg-black/5'} lg:hover:text-[var(--text-primary)] active:scale-95`
+                ? 'glass-lens-active-dark text-white'
+                : 'glass-lens-active-light text-slate-800')
+            : (isDark
+                ? 'glass-lens-dark theme-text-secondary hover:text-white hover:scale-[0.98] active:scale-95'
+                : 'glass-lens-light theme-text-secondary hover:text-slate-950 hover:scale-[0.98] active:scale-95')
         }
   `;
 
@@ -138,6 +140,9 @@ const Sidebar: React.FC<SidebarProps> = ({
                     setIsClicked(false); // Reset click state on leave so it can re-expand on next hover
                 }}
             >
+                {/* Glossy Top Reflection */}
+                <div className={`absolute top-0 inset-x-0 h-48 bg-gradient-to-b ${isDark ? 'from-white/[0.05]' : 'from-white/60'} to-transparent pointer-events-none z-0`} />
+
                 {/* Header - Logo & Toggle */}
                 <div className="flex-shrink-0 relative">
                     {/* BRANDING SECTION - AURORA HALO STYLE */}
@@ -205,9 +210,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 onAddTrade();
                             }}
                             title={!isExpanded ? "Zapsat obchod" : ""}
-                            className={`flex items-center justify-center gap-3 transition-all duration-300 border backdrop-blur-md active:scale-95 group h-10
-                bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.15)] lg:hover:bg-emerald-500/20 lg:hover:border-emerald-500/50
-                ${!isExpanded ? 'w-10 rounded-2xl mx-auto' : 'w-full rounded-[20px] px-6'}
+                            className={`flex items-center justify-center gap-3 transition-all duration-300 border liquid-glass-lens hover:scale-[0.98] active:scale-95 group h-10 relative z-10
+                ${isDark
+                                ? 'bg-transparent border-emerald-500/25 text-emerald-400 shadow-[inset_0_1.5px_1.5px_rgba(0,0,0,0.05),inset_0_-1.5px_1.5px_rgba(255,255,255,0.2),0_3px_1.5px_-1.5px_rgba(16,185,129,0.15),0_0_1px_2px_inset_rgba(255,255,255,0.1)] hover:border-emerald-500/55 hover:text-emerald-300'
+                                : 'bg-transparent border-emerald-500/40 text-emerald-700 shadow-[inset_0_1.5px_1.5px_rgba(0,0,0,0.03),inset_0_-1.5px_1.5px_rgba(255,255,255,0.6),0_3px_1.5px_-1.5px_rgba(16,185,129,0.08),0_0_1px_2px_inset_rgba(255,255,255,0.15)] hover:border-emerald-500/70 hover:text-emerald-800'
+                            }
+                ${!isExpanded ? 'w-10 rounded-xl mx-auto' : 'w-full rounded-xl px-6'}
               `}
                         >
                             <Plus size={18} strokeWidth={3} className="group-hover:rotate-90 transition-transform duration-500" />
@@ -228,7 +236,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
 
                 {/* Navigation - Scrollable Area */}
-                <nav className="flex-1 px-2 space-y-1 overflow-y-auto custom-scrollbar no-scrollbar py-2">
+                <nav className="flex-1 px-2 space-y-1 overflow-y-auto custom-scrollbar no-scrollbar py-2 relative z-10">
                     {[...mainItems, ...secondaryItems].map((item, idx) => {
                         const Icon = item.icon;
                         const isActive = activePage === item.id;
@@ -240,7 +248,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 {isFirstSecondary && <div className="h-2" />}
                                 <button
                                     onClick={() => handleNavClick(item.id)}
-                                    className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto' : 'px-6 mx-2'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
+                                    className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto rounded-xl' : 'px-6 mx-2 rounded-xl'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
                                     title={!isExpanded ? item.label + (locked ? ' (uzamčeno)' : '') : ''}
                                 >
                                     <span className="relative shrink-0 flex">
@@ -267,9 +275,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                     {locked && !isExpanded && (
                                         <Lock size={9} className="absolute -top-0.5 -right-0.5 text-amber-400/70 bg-[var(--bg-page)] rounded-full p-0.5" />
                                     )}
-                                    {isActive && isExpanded && !locked && (
-                                        <div className={`absolute right-4 w-1 h-3 rounded-full ${isDark ? 'bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-[var(--text-primary)] shadow-[0_0_8px_rgba(15,23,42,0.3)]'}`}></div>
-                                    )}
+
                                 </button>
                             </React.Fragment>
                         );
@@ -277,14 +283,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </nav>
 
                 {/* User Profile - Fixed at the Bottom - CLICKABLE */}
-                <div className="px-3 py-4 mt-auto border-t border-white/5 transition-colors">
+                <div className={`px-3 py-4 mt-auto border-t transition-colors relative z-10 ${isDark ? 'border-white/5' : 'border-slate-200/50'}`}>
                     <div
                         onClick={onOpenProfile}
                         className={`
-              flex items-center transition-all relative overflow-hidden group cursor-pointer 
-              ${isDark ? 'bg-white/[0.03] border border-white/10 hover:bg-white/[0.05] hover:border-white/20' : 'bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:bg-black/[0.04] hover:border-[var(--border-active)] hover:shadow-lg'} 
-              lg:hover:shadow-2xl active:scale-95 
-              ${!isExpanded ? 'w-12 h-12 rounded-full justify-center mx-auto' : 'h-14 rounded-[24px] justify-between px-4 gap-3'}
+              flex items-center transition-all relative overflow-hidden group cursor-pointer liquid-glass-lens hover:scale-[0.98] active:scale-95 
+              ${isDark ? 'glass-lens-dark' : 'glass-lens-light'} 
+              ${!isExpanded ? 'w-12 h-12 rounded-xl justify-center mx-auto' : 'h-14 rounded-xl justify-between px-4 gap-3'}
             `}
                     >
                         <div className={`flex items-center min-w-0 relative z-10 ${!isExpanded ? 'justify-center' : 'gap-4 w-full'}`}>
@@ -334,6 +339,21 @@ const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                 </div>
             </motion.aside>
+            {/* SVG Filters for Liquid Glass Refraction Effect */}
+            <svg width="0" height="0" className="absolute pointer-events-none" style={{ position: 'absolute', width: 0, height: 0 }}>
+                <defs>
+                    {/* Base Panel Filter - subtle distortion */}
+                    <filter id="liquid-glass-prism-base" x="-10%" y="-10%" width="120%" height="120%">
+                        <feTurbulence type="fractalNoise" baseFrequency="0.005 0.005" numOctaves="2" result="noise" seed="1" />
+                        <feDisplacementMap in="SourceGraphic" in2="noise" scale="18" xChannelSelector="R" yChannelSelector="G" />
+                    </filter>
+                    {/* Lens/Button Filter - magnifying/refraction glass effect */}
+                    <filter id="liquid-glass-prism-lens" x="-20%" y="-20%" width="140%" height="140%">
+                        <feTurbulence type="fractalNoise" baseFrequency="0.015 0.015" numOctaves="1" result="noise" seed="2" />
+                        <feDisplacementMap in="SourceGraphic" in2="noise" scale="25" xChannelSelector="R" yChannelSelector="G" />
+                    </filter>
+                </defs>
+            </svg>
         </>
     );
 };

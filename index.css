@@ -963,3 +963,142 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0; }
 }
+
+/* ===== COACH AVATAR ANIMATIONS & STYLES ===== */
+@keyframes coach-breath {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-1.5px) scale(1.02);
+  }
+}
+
+@keyframes coach-talk {
+  0%, 100% {
+    transform: scale(1) translateY(0) rotate(0deg);
+  }
+  25% {
+    transform: scale(1.04) translateY(-2px) rotate(-1deg);
+  }
+  50% {
+    transform: scale(0.98) translateY(0.5px) rotate(0.5deg);
+  }
+  75% {
+    transform: scale(1.05) translateY(-2.5px) rotate(-0.5deg);
+  }
+}
+
+.coach-avatar-breath {
+  animation: coach-breath 6s ease-in-out infinite;
+}
+
+.coach-avatar-talk {
+  animation: coach-talk 1.4s ease-in-out infinite;
+}
+
+.coach-avatar-container {
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.coach-avatar-container:hover {
+  transform: scale(1.1);
+  cursor: pointer;
+}
+
+.coach-avatar-fast:hover {
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.4), 0 0 25px rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.5) !important;
+}
+
+.coach-avatar-analytical:hover {
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.4), 0 0 25px rgba(139, 92, 246, 0.2);
+  border-color: rgba(139, 92, 246, 0.5) !important;
+}
+
+/* Liquid glass base and lens style configurations */
+.liquid-glass-base {
+  background: rgba(10, 15, 30, 0.01) !important; /* 99% transparent dark theme base (1% opacity) */
+  backdrop-filter: none !important; /* No blur on base so cards receive a sharp backdrop for their blur! */
+  -webkit-backdrop-filter: none !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+.light-theme .liquid-glass-base {
+  background: rgba(255, 255, 255, 0.01) !important; /* 99% transparent light theme base (1% opacity) */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-right: 1px solid rgba(15, 23, 42, 0.05) !important;
+}
+
+.oled-theme .liquid-glass-base {
+  background: rgba(0, 0, 0, 0.02) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+.liquid-glass-lens {
+  background: rgba(255, 255, 255, 0.03) !important; /* Soft dark-mode translucent */
+  backdrop-filter: blur(16px) saturate(140%) !important; /* Restored deep blur for the card look */
+  -webkit-backdrop-filter: blur(16px) saturate(140%) !important;
+  transition: backdrop-filter 0.3s ease, -webkit-backdrop-filter 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease, border-color 0.3s ease, background 0.3s ease;
+}
+
+.light-theme .liquid-glass-lens {
+  background: rgba(255, 255, 255, 0.08) !important; /* Soft light-mode translucent */
+  backdrop-filter: blur(16px) saturate(140%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(140%) !important;
+}
+
+/* 3D Glass Lens droplets based on Petr Knoll's specifications */
+.glass-lens-dark {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 
+    inset 0 1px 1px rgba(255, 255, 255, 0.2),
+    0 4px 12px rgba(0, 0, 0, 0.2) !important;
+}
+
+.glass-lens-dark:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+  box-shadow: 
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.35),
+    0 6px 16px rgba(0, 0, 0, 0.25) !important;
+}
+
+.glass-lens-light {
+  background: rgba(255, 255, 255, 0.35) !important; /* Premium frosted light-glass card */
+  border: 1px solid rgba(255, 255, 255, 0.45) !important;
+  box-shadow: 
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.6),
+    0 4px 12px rgba(15, 23, 42, 0.03) !important;
+}
+
+.glass-lens-light:hover {
+  background: rgba(255, 255, 255, 0.5) !important;
+  border-color: rgba(255, 255, 255, 0.6) !important;
+  box-shadow: 
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.75),
+    0 6px 16px rgba(15, 23, 42, 0.06) !important;
+}
+
+/* Active 3D Glass Lens droplets */
+.glass-lens-active-dark {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border: 1px solid rgba(255, 255, 255, 0.45) !important;
+  box-shadow: 
+    inset 0 1.5px 2px rgba(255, 255, 255, 0.45),
+    0 6px 16px rgba(0, 0, 0, 0.3) !important;
+}
+
+.glass-lens-active-light {
+  background: rgba(255, 255, 255, 0.65) !important;
+  border: 1px solid rgba(255, 255, 255, 0.8) !important;
+  box-shadow: 
+    inset 0 1px 2px rgba(255, 255, 255, 0.9),
+    0 6px 16px rgba(15, 23, 42, 0.08) !important;
+}
+

@@ -86,19 +86,34 @@ export function buildTraderContext(ctx: TraderContext): string {
     .filter(t => new Date(t.date).getTime() > cutoff)
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  const wins = recentTrades.filter(t => t.pnl > 0);
-  const losses = recentTrades.filter(t => t.pnl < 0);
-  const totalPnl = recentTrades.reduce((s, t) => s + t.pnl, 0);
-  const winRate = recentTrades.length > 0 ? (wins.length / recentTrades.length * 100).toFixed(1) : '0';
+  // Filtrujeme obchody na reálně realizované vs. ušlé (Missed)
+  const executedTrades = trades.filter(t => t.executionStatus !== 'Missed');
+  const allMissedTrades = trades.filter(t => t.executionStatus === 'Missed');
+
+  const allWins = executedTrades.filter(t => t.pnl > 0);
+  const allTotalPnl = executedTrades.reduce((s, t) => s + t.pnl, 0);
+  const allWinRate = executedTrades.length > 0 ? (allWins.length / executedTrades.length * 100).toFixed(1) : '0';
+
+  const recentExecutedTrades = recentTrades.filter(t => t.executionStatus !== 'Missed');
+  const recentMissedTrades = recentTrades.filter(t => t.executionStatus === 'Missed');
+
+  const wins = recentExecutedTrades.filter(t => t.pnl > 0);
+  const losses = recentExecutedTrades.filter(t => t.pnl < 0);
+  const totalPnl = recentExecutedTrades.reduce((s, t) => s + t.pnl, 0);
+  const winRate = recentExecutedTrades.length > 0 ? (wins.length / recentExecutedTrades.length * 100).toFixed(1) : '0';
   const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
   const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0;
+
+  // Ušlé statistiky (Opportunity cost / ušlý zisk nebo ztráta)
+  const allMissedPnl = allMissedTrades.reduce((s, t) => s + t.pnl, 0);
+  const recentMissedPnl = recentMissedTrades.reduce((s, t) => s + t.pnl, 0);
 
   const mistakeCounts: Record<string, number> = {};
   recentTrades.forEach(t => (t.mistakes || []).forEach(m => { mistakeCounts[m] = (mistakeCounts[m] || 0) + 1; }));
   const topMistakes = Object.entries(mistakeCounts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([m, c]) => `${m} (${c}×)`);
 
   const setupStats: Record<string, { count: number; wins: number; pnl: number }> = {};
-  recentTrades.forEach(t => {
+  recentExecutedTrades.forEach(t => {
     if (t.signal) {
       if (!setupStats[t.signal]) setupStats[t.signal] = { count: 0, wins: 0, pnl: 0 };
       setupStats[t.signal].count++;
@@ -199,14 +214,10 @@ export function buildTraderContext(ctx: TraderContext): string {
     : 'Žádné audity';
 
   // ── Rychlý přehled ──────────────────────────────────────────────────────
-  const lastTrade = [...trades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+  const lastRealTrade = [...executedTrades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+  const lastMissedTrade = [...allMissedTrades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
   const lastPrep = [...dailyPreps].sort((a, b) => b.date.localeCompare(a.date))[0];
   const lastReview = [...dailyReviews].sort((a, b) => b.date.localeCompare(a.date))[0];
-
-  // ── Celkové statistiky (všechny obchody) ───────────────────────────────
-  const allWins = trades.filter(t => t.pnl > 0);
-  const allTotalPnl = trades.reduce((s, t) => s + t.pnl, 0);
-  const allWinRate = trades.length > 0 ? (allWins.length / trades.length * 100).toFixed(1) : '0';
 
   return `
 === PROFIL TRADERA ===
@@ -215,22 +226,27 @@ export function buildTraderContext(ctx: TraderContext): string {
 ${accountInfo || 'Není k dispozici'}
 
 POSLEDNÍ AKTIVITA (přesné hodnoty):
-- Poslední obchod: ${lastTrade ? `${lastTrade.date?.slice(0, 10)} | ${lastTrade.direction} ${lastTrade.instrument} | PnL: $${lastTrade.pnl.toFixed(0)}` : 'žádný'}
+- Poslední reálný obchod: ${lastRealTrade ? `${lastRealTrade.date?.slice(0, 10)} | ${lastRealTrade.direction} ${lastRealTrade.instrument} | PnL: $${lastRealTrade.pnl.toFixed(0)}` : 'žádný'}
+- Poslední ušlý obchod (Missed): ${lastMissedTrade ? `${lastMissedTrade.date?.slice(0, 10)} | ${lastMissedTrade.direction} ${lastMissedTrade.instrument} | Potenciální PnL: $${lastMissedTrade.pnl.toFixed(0)}` : 'žádný'}
 - Poslední příprava: ${lastPrep ? lastPrep.date : 'žádná'}
 - Poslední audit: ${lastReview ? `${lastReview.date} (${stars(lastReview.rating)})` : 'žádný'}
 
 VÝKON CELKEM (všechny obchody historicky):
-- Celkem obchodů: ${trades.length}
-- Win rate: ${allWinRate}%
-- Celkové PnL: $${allTotalPnl.toFixed(0)}
+- Celkem realizovaných obchodů: ${executedTrades.length}
+- Win rate realizovaných: ${allWinRate}%
+- Celkové reálné PnL: $${allTotalPnl.toFixed(0)}
+- Počet ušlých obchodů: ${allMissedTrades.length}
+- Celkové potenciální PnL z ušlých obchodů: $${allMissedPnl.toFixed(0)}
 
 VÝKON (posledních 90 dní):
-- Obchodů za 90 dní: ${recentTrades.length}
-- Win rate: ${winRate}%
-- Celkové PnL: $${totalPnl.toFixed(0)}
+- Realizovaných obchodů za 90 dní: ${recentExecutedTrades.length}
+- Win rate realizovaných: ${winRate}%
+- Celkové reálné PnL: $${totalPnl.toFixed(0)}
 - Průměrná výhra: $${avgWin.toFixed(0)}
 - Průměrná ztráta: $${avgLoss.toFixed(0)}
 - RR ratio: ${avgLoss !== 0 ? Math.abs(avgWin / avgLoss).toFixed(2) : 'N/A'}
+- Ušlých obchodů za 90 dní: ${recentMissedTrades.length}
+- Celkové potenciální PnL z ušlých: $${recentMissedPnl.toFixed(0)}
 
 NEJČASTĚJŠÍ CHYBY:
 ${topMistakes.length > 0 ? topMistakes.map(m => `- ${m}`).join('\n') : '- Žádné zaznamenané chyby'}
@@ -264,7 +280,9 @@ export function formatTradesForAI(trades: Trade[], limit = 100): string {
         `ID:${t.id}`,
         t.date?.slice(0, 10),
         `${t.direction} ${t.instrument || ''}`,
-        `PnL:$${t.pnl.toFixed(0)}`,
+        t.executionStatus === 'Missed'
+          ? `STAV:UŠELÝ OBCHOD (Missed) | Potenciální PnL:$${t.pnl.toFixed(0)}`
+          : `PnL:$${t.pnl.toFixed(0)}`,
         t.signal ? `Setup:${t.signal}` : '',
         t.entryPrice ? `Entry:${t.entryPrice}` : '',
         t.exitPrice ? `Exit:${t.exitPrice}` : '',
@@ -584,7 +602,9 @@ export function stripAllRefs(text: string): string {
     .replace(/\[TRADE:[^\]]*\]?/g, '')
     .replace(/\[PREP:[^\]]*\]?/g, '')
     .replace(/\[REVIEW:[^\]]*\]?/g, '')
-    .replace(/\[FOLLOWUP:[^\]]*\]?/g, '');
+    .replace(/\[FOLLOWUP:[^\]]*\]?/g, '')
+    .replace(/<!-- model:(fast|analytical) -->/g, '')
+    .replace(/<!--\s*form_state:[\s\S]*?(-->|$)/g, '');
 
   // JSON markery (CHART, ACTION) — používají brace-counting kvůli libovolné hloubce zanoření
   out = stripJsonMarkers(out, 'CHART');
@@ -612,6 +632,7 @@ export interface StreamOptions {
   voiceMode?: boolean;
   /** Model volba — 'analytical' (Sonnet) vs 'fast' (Haiku) */
   aiModel?: 'analytical' | 'fast';
+  sessionPrompt?: string;
 }
 
 function findToolNameById(messages: any[], id: string): string {
@@ -732,11 +753,10 @@ async function streamGeminiResponse(
   allTrades: Trade[],
   options: StreamOptions,
 ): Promise<void> {
-  // Klíč už NENÍ v klientu — voláme přes `gemini-chat` edge proxy (klíč v Supabase secrets).
-  const { data: { session: gSession } } = await supabase.auth.getSession();
-  if (!gSession) { onError('Nejsi přihlášen — přihlas se znovu.'); return; }
-  const geminiAccessToken = gSession.access_token;
-  const modelName = (import.meta as any).env?.VITE_GEMINI_MODEL || 'gemini-2.5-flash';
+  // Klíč už NENÍ v klientu — voláme přes `gemini-chat` edge proxy (klíč v Supabase secrets)
+  // pokud není lokálně nastavený VITE_GEMINI_API_KEY na localhostu.
+  const localApiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  const modelName = (import.meta as any).env?.VITE_GEMINI_MODEL || 'gemini-3.5-flash';
 
   const geminiInstructions = `
 === DOPLŇUJÍCÍ METODICKÉ POKYNY PRO GEMINI (KVALITA A REASONING) ===
@@ -786,17 +806,33 @@ async function streamGeminiResponse(
         body.tools = tools;
       }
 
-      const response = await fetch(
-        `${EDGE_BASE}/functions/v1/gemini-chat`,
-        {
+      let response: Response;
+      if (localApiKey) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${localApiKey}`;
+        response = await fetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${geminiAccessToken}`,
           },
-          body: JSON.stringify({ model: modelName, payload: body }),
-        }
-      );
+          body: JSON.stringify(body),
+        });
+      } else {
+        const { data: { session: gSession } } = await supabase.auth.getSession();
+        if (!gSession) { onError('Nejsi přihlášen — přihlas se znovu.'); return; }
+        const geminiAccessToken = gSession.access_token;
+
+        response = await fetch(
+          `${EDGE_BASE}/functions/v1/gemini-chat`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${geminiAccessToken}`,
+            },
+            body: JSON.stringify({ model: modelName, payload: body }),
+          }
+        );
+      }
 
       if (!response.ok) {
         const errText = await response.text().catch(() => '');
@@ -969,6 +1005,7 @@ export async function streamAIResponse(
   const now = new Date();
   const todayISO = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
   const weekday = now.toLocaleDateString('cs-CZ', { weekday: 'long' });
+  const currentTime = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
   // Monday-anchored "current week" range
   const day = now.getDay(); // 0=Sun
   const daysFromMonday = day === 0 ? 6 : day - 1;
@@ -1074,21 +1111,25 @@ export async function streamAIResponse(
 - Akci ([ACTION:..]) smíš použít MAXIMÁLNĚ jednu a krátce ji slovně zmiň ("přidám ti to jako pravidlo, ano?").
 ` : '';
 
-  const systemPrompt = `Jsi AI trading coach specializovaný na analýzu výkonu traderů. Komunikuješ v češtině, stručně a konkrétně.
+  let systemPrompt = `Jsi AI trading coach specializovaný na analýzu výkonu traderů. Komunikuješ v češtině, stručně a konkrétně.
 Máš KOMPLETNÍ přístup ke všem datům tradera — odpovídej vždy na základě jeho skutečných dat.
 Trader se jmenuje Filip. Pokud ho oslovuješ jménem, používej VÝHRADNĚ "Filipe" — NIKDY si nevymýšlej jiné jméno.
 ${voiceBlock}
 === ČASOVÝ KONTEXT (KRITICKÉ) ===
 DNES: ${todayISO} (${weekday})
+AKTUÁLNÍ ČAS: ${currentTime}
 AKTUÁLNÍ TÝDEN: ${mondayISO} až ${fridayISO} (Po–Pá)
 MINULÝ TÝDEN: ${lastMondayISO} až ${lastFridayISO}
 
 Pravidlo: Když uživatel říká "tento týden", "aktuální týden" nebo "tenhle týden", filtruj POUZE obchody/přípravy/audity s datumy v rozmezí ${mondayISO}–${fridayISO}.
 Když říká "minulý týden", filtruj POUZE rozmezí ${lastMondayISO}–${lastFridayISO}.
 NIKDY neuváděj obchody mimo požadovaný rozsah. Pokud žádné obchody v rozsahu nejsou, řekni to upřímně ("V tomto týdnu žádné obchody").
-NIKDY si nevymýšlej datumy ani je neaproximuj — používej pouze data co reálně vidíš v seznamu obchodů níže.
+NIKDY si nevymýšlej datumy ani je neaproximuj — používej pouze data co reálně vidíš v seznamu obchodů níže.`;
+  if (options.sessionPrompt) {
+    systemPrompt += `\n\n=== AKTIVNÍ INTERAKTIVNÍ SEANCE (KRITICKÉ) ===\n${options.sessionPrompt}\n\n`;
+  }
 
-VIZUÁLNÍ KARTY — POVINNÉ PRAVIDLO:
+  systemPrompt += `\n\nVIZUÁLNÍ KARTY — POVINNÉ PRAVIDLO:
 Kdykoliv zmiňuješ konkrétní příprav, audit nebo obchod — VŽDY vlož příslušný marker. NIKDY nepřepisuj data z příprav nebo auditů jako text — místo toho použij kartu.
 
 - [TRADE:ID_OBCHODU] — pro konkrétní obchod
@@ -1311,9 +1352,9 @@ Toto je agregovaný přehled pro dlouhodobé trendy. Pro KONKRÉTNÍ starší ob
 
 ${tradeWindow.rollupText}`;
 
-  // VITE_USE_GEMINI_FAST je jen neutajovaný toggle (true/false) — skutečný klíč žije
-  // v Supabase secrets (GEMINI_API_KEY) a používá ho edge proxy `gemini-chat`.
-  const useGeminiFast = (import.meta as any).env?.VITE_USE_GEMINI_FAST === 'true';
+  // VITE_USE_GEMINI_FAST je toggle, který defaultuje na 'true' pokud není nastaven na 'false'.
+  // Skutečný klíč žije v Supabase secrets nebo lokálně ve VITE_GEMINI_API_KEY.
+  const useGeminiFast = (import.meta as any).env?.VITE_USE_GEMINI_FAST !== 'false';
   if (options.aiModel === 'fast' && useGeminiFast) {
     return streamGeminiResponse(
       messages,

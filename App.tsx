@@ -5,7 +5,7 @@ import { normalizeTrades, calculateStats } from './services/analysis';
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { safeSetItem } from './utils/safeStorage';
-import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings } from './types';
+import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
@@ -22,6 +22,7 @@ const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
 const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
 const TradovateImportModal = React.lazy(() => import('./components/TradovateImportModal'));
+
 
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
@@ -96,7 +97,7 @@ const DEFAULT_ACCOUNT: Account = {
   instrumentFees: { 'NQ': 2.8, 'MNQ': 0.74 }
 };
 
-// Widget min/max constraints for react-grid-layout
+// Widget min/max constraints for react-grid-layout (lg = 12 cols)
 const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: number; maxH: number }> = {
   avg_win_loss: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   streak: { minW: 4, minH: 2, maxW: 6, maxH: 4 },
@@ -115,9 +116,45 @@ const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: num
   session_performance: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   hourly_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   daily_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
-  calendar: { minW: 6, minH: 5, maxW: 12, maxH: 10 },
+  calendar: { minW: 4, minH: 5, maxW: 12, maxH: 10 },
   daily_insight: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
 };
+
+// Widget constraints for xxl breakpoint (24 cols) — doubled widths
+const WIDGET_CONSTRAINTS_XXL: Record<string, { minW: number; minH: number; maxW: number; maxH: number }> = {
+  avg_win_loss: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  streak: { minW: 3, minH: 2, maxW: 12, maxH: 4 },
+  discipline_streak: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  challenge_target: { minW: 2, minH: 2, maxW: 12, maxH: 4 },
+  kpi_pnl: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  kpi_winrate: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  kpi_execution_rate: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  kpi_profit_factor: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  kpi_day_winrate: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  kpi_max_drawdown: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  discipline: { minW: 8, minH: 3, maxW: 24, maxH: 8 },
+  winners_losers: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
+  monthly_performance: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
+  equity: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
+  session_performance: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
+  hourly_edge: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
+  daily_edge: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
+  calendar: { minW: 6, minH: 5, maxW: 24, maxH: 10 },
+  daily_insight: { minW: 3, minH: 2, maxW: 8, maxH: 4 },
+};
+
+/** Generate a 24-column xxl layout from a 12-column lg layout by scaling positions & widths ×2 */
+function generateXxlFromLg(lgLayout: DashboardWidgetConfig[]): DashboardWidgetConfig[] {
+  return lgLayout.map(widget => {
+    const c = WIDGET_CONSTRAINTS_XXL[widget.id] || { minW: 4, minH: 2, maxW: 24, maxH: 8 };
+    return {
+      ...widget,
+      x: widget.x * 2,
+      w: Math.min(widget.w * 2, 24),
+      ...c,
+    };
+  });
+}
 
 const SIZE_TO_W: Record<string, number> = { small: 2, medium: 4, large: 6, full: 12 };
 
@@ -148,14 +185,23 @@ function migrateOldLayout(oldLayout: DashboardWidgetConfig[]): DashboardWidgetCo
   });
 }
 
-const DEFAULT_WIDGETS: DashboardWidgetConfig[] = [
+// Default layout for lg (12 cols, notebook)
+const DEFAULT_WIDGETS_LG: DashboardWidgetConfig[] = [
   { id: 'kpi_pnl', label: 'Net P&L', visible: true, x: 0, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
   { id: 'kpi_winrate', label: 'Win Rate', visible: true, x: 2, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
   { id: 'kpi_profit_factor', label: 'Profit Factor', visible: true, x: 4, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
   { id: 'discipline', label: 'Disciplína', visible: true, x: 0, y: 2, w: 12, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
   { id: 'equity', label: 'Equity Curve', visible: true, x: 0, y: 6, w: 6, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
-  { id: 'calendar', label: 'Kalendář', visible: true, x: 6, y: 6, w: 6, h: 6, minW: 6, minH: 5, maxW: 12, maxH: 10 },
+  { id: 'calendar', label: 'Kalendář', visible: true, x: 6, y: 6, w: 6, h: 6, minW: 4, minH: 5, maxW: 12, maxH: 10 },
 ];
+
+// Default layout for xxl (24 cols, ultrawide) — more widgets side-by-side
+const DEFAULT_WIDGETS_XXL: DashboardWidgetConfig[] = generateXxlFromLg(DEFAULT_WIDGETS_LG);
+
+const DEFAULT_LAYOUTS: DashboardLayouts = {
+  lg: DEFAULT_WIDGETS_LG,
+  xxl: DEFAULT_WIDGETS_XXL,
+};
 
 const DEFAULT_SESSIONS: SessionConfig[] = [
   { id: 'asia', name: 'Asia', startTime: '02:00', endTime: '08:00', color: '#64748b' },
@@ -325,6 +371,7 @@ const App: React.FC = () => {
         isReviewsDirty.current = false;
         isWeeklyFocusDirty.current = false;
         isPreferencesDirty.current = false;
+        isSyncedWithDbRef.current = false;
 
         // Optional: clear entire localStorage on logout for ultimate safety
         localStorage.clear();
@@ -354,6 +401,15 @@ const App: React.FC = () => {
   const [pendingNav, setPendingNav] = useState<(() => void) | null>(null);
   const [journalTargetDate, setJournalTargetDate] = useState<string | undefined>(undefined);
   const isPreferencesDirty = useRef(false);
+  const isApplyingPrefsRef = useRef(false);
+  const isSyncedWithDbRef = useRef(false);
+  const markPreferencesDirty = () => {
+    if (isSyncedWithDbRef.current) {
+      isPreferencesDirty.current = true;
+    } else {
+      console.log('[Preferences] markPreferencesDirty BLOCKED — not synced with DB yet');
+    }
+  };
   const [networkNotifications, setNetworkNotifications] = useState<Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }> | null>(null);
   const isPrepsDirty = useRef(false);
   const isReviewsDirty = useRef(false);
@@ -439,9 +495,9 @@ const App: React.FC = () => {
   const [htfOptions, setHtfOptions] = useState<string[]>(['4H Demand', '4H Supply', 'Daily Level', 'Weekly High/Low']);
   const [ltfOptions, setLtfOptions] = useState<string[]>(['M5 BoS', 'M1 Choch', 'Liquidity Sweep', 'FVG Entry']);
   const [standardGoals, setStandardGoals] = useState<string[]>(['Dodržet max risk 1%', 'Žádný obchod po 11:00', 'Počkat na setup A+']);
-  // Init `[]` ne DEFAULT_WIDGETS — zabraní flashe defaultních widgetů před DB loadem.
-  // applyPreferences pak nastaví buď DB layout nebo DEFAULT_WIDGETS (pro nového usera).
-  const [dashboardLayout, setDashboardLayout] = useState<DashboardWidgetConfig[]>([]);
+  // Init `{}` ne DEFAULT_LAYOUTS — zabraní flashe defaultních widgetů před DB loadem.
+  // applyPreferences pak nastaví buď DB layout nebo DEFAULT_LAYOUTS (pro nového usera).
+  const [dashboardLayouts, setDashboardLayouts] = useState<DashboardLayouts>({});
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => {
     // Try to load from local storage first for immediate persistence
     const saved = localStorage.getItem('alphatrade_dash_mode');
@@ -619,7 +675,7 @@ const App: React.FC = () => {
     emotions: userEmotions,
     standardGoals,
     standardMistakes: userMistakes,
-    dashboardLayout,
+    dashboardLayouts,
     sessions,
     htfOptions,
     ltfOptions,
@@ -859,7 +915,6 @@ const App: React.FC = () => {
       })
       .finally(() => {
         savingReviewDate.current = null;
-        // Flush pending save if a newer version arrived while we were in-flight
         if (pendingReviewSave.current?.date === rev.date) {
           const pending = pendingReviewSave.current;
           pendingReviewSave.current = null;
@@ -869,56 +924,80 @@ const App: React.FC = () => {
   }, [saveWithRetry]);
 
   const applyPreferences = useCallback((prefs: UserPreferences) => {
+    isApplyingPrefsRef.current = true;
+    
     // DIAGNOSTIC: track what fields are present in incoming prefs
     console.log('[applyPreferences] called with dirty=', isPreferencesDirty.current, 'fields:', {
       sessions: prefs.sessions?.length,
       htfOptions: prefs.htfOptions?.length,
       ltfOptions: prefs.ltfOptions?.length,
       ironRules: prefs.ironRules?.length,
-      dashboardLayout: prefs.dashboardLayout?.length,
+      dashboardLayouts: prefs.dashboardLayouts ? Object.keys(prefs.dashboardLayouts) : prefs.dashboardLayout?.length,
       systemSettings: !!prefs.systemSettings,
     });
     if (isPreferencesDirty.current) {
       console.log('[applyPreferences] SKIPPED — dirty=true');
       // I když přeskočíme apply (uživatel má rozdělanou změnu), aspoň označíme že
-      // preference už dorazily z DB/cache — autosave se může pustit a nepřepíše DB
+      // preference už dorazily z DB/cache — autosave se může spustit a nepřepíše DB
       // defaulty z useState (které by jinak vznikly při saves PŘED prvním applyPreferences).
       prefsAppliedRef.current = true;
+      isApplyingPrefsRef.current = false;
       return;
     }
 
-    // PRO NOVÉ USERY: DB má default preferences s prázdnými poli [].
-    // Ignorujeme je — necháme useState defaulty (DEFAULT_WIDGETS, DEFAULT_SESSIONS, atd.).
-    // Auto-save pak při první user akci uloží skutečné defaulty místo prázdných.
-    const hasItems = (arr: any) => Array.isArray(arr) && arr.length > 0;
-
-    if (hasItems(prefs.emotions)) setUserEmotions(prefs.emotions);
-    if (hasItems(prefs.standardMistakes)) setUserMistakes(prefs.standardMistakes);
-    if (hasItems(prefs.standardGoals)) setStandardGoals(prefs.standardGoals);
-    if (hasItems(prefs.dashboardLayout)) {
+    // PRO NOVÉ USERY: Pokud pole v databázi vůbec neexistuje (nový user), necháme defaulty.
+    // Pokud je pole definované jako prázdné pole [], respektujeme volbu uživatele (nesmíme ji přebít defaulty).
+    if (Array.isArray(prefs.emotions)) setUserEmotions(prefs.emotions);
+    if (Array.isArray(prefs.standardMistakes)) setUserMistakes(prefs.standardMistakes);
+    if (Array.isArray(prefs.standardGoals)) setStandardGoals(prefs.standardGoals);
+    // --- Dashboard Layouts (per-breakpoint) ---
+    // Priority: 1) new dashboardLayouts object  2) legacy flat dashboardLayout  3) defaults
+    if (prefs.dashboardLayouts && typeof prefs.dashboardLayouts === 'object' && !Array.isArray(prefs.dashboardLayouts)) {
+      // New format: per-breakpoint layouts
+      const result: DashboardLayouts = {};
+      for (const [bp, bpLayout] of Object.entries(prefs.dashboardLayouts)) {
+        if (!Array.isArray(bpLayout) || bpLayout.length === 0) continue;
+        const constraints = bp === 'xxl' ? WIDGET_CONSTRAINTS_XXL : WIDGET_CONSTRAINTS;
+        const validBp = bpLayout.filter(w => w.id in WIDGET_CONSTRAINTS); // lg constraints as canonical widget list
+        result[bp] = validBp.map(w => {
+          const c = constraints[w.id] || (bp === 'xxl' ? { minW: 4, minH: 2, maxW: 24, maxH: 8 } : { minW: 2, minH: 2, maxW: 12, maxH: 8 });
+          return { ...w, ...c };
+        });
+      }
+      // Ensure both lg and xxl exist
+      if (!result.lg || result.lg.length === 0) result.lg = DEFAULT_WIDGETS_LG;
+      if (!result.xxl || result.xxl.length === 0) result.xxl = generateXxlFromLg(result.lg);
+      setDashboardLayouts(result);
+    } else if (Array.isArray(prefs.dashboardLayout) && prefs.dashboardLayout.length > 0) {
+      // Legacy format: flat array (12-col) — migrate to per-breakpoint
       const dl = prefs.dashboardLayout!;
-      // Remove any widget IDs that no longer exist in the app (orphaned widgets show as empty boxes)
       const validDl = dl.filter(w => w.id in WIDGET_CONSTRAINTS);
       const isOld = validDl.length > 0 && (validDl[0] as any).x === undefined && (validDl[0] as any).size !== undefined;
+      let lgLayout: DashboardWidgetConfig[];
       if (isOld) {
-        setDashboardLayout(migrateOldLayout(validDl));
+        lgLayout = migrateOldLayout(validDl);
       } else {
-        // Detect layouts saved with old rowHeight=160 (all h values ≤ 4) and double them
         const needsHeightMigration = validDl.length > 0 && validDl.every(w => (w.h || 0) <= 4);
         if (needsHeightMigration) {
-          setDashboardLayout(validDl.map(w => {
+          lgLayout = validDl.map(w => {
             const c = WIDGET_CONSTRAINTS[w.id] || { minW: 2, minH: 2, maxW: 12, maxH: 8 };
             return { ...w, h: (w.h || 2) * 2, ...c };
-          }));
+          });
         } else {
-          setDashboardLayout(validDl);
+          lgLayout = validDl.map(w => {
+            const c = WIDGET_CONSTRAINTS[w.id] || { minW: 2, minH: 2, maxW: 12, maxH: 8 };
+            return { ...w, ...c };
+          });
         }
       }
+      setDashboardLayouts({ lg: lgLayout, xxl: generateXxlFromLg(lgLayout) });
+    } else if (prefs.dashboardLayout) {
+      setDashboardLayouts({ lg: [], xxl: [] });
     } else {
       // DB nemá uložený dashboard layout → nový user nebo prázdný blob → set defaulty
-      setDashboardLayout(DEFAULT_WIDGETS);
+      setDashboardLayouts(DEFAULT_LAYOUTS);
     }
-    if (hasItems(prefs.sessions)) {
+    if (Array.isArray(prefs.sessions)) {
       const migratedSessions = (prefs.sessions as any[]).map(s => ({
         ...s,
         startTime: s.startTime || `${String(s.startHour ?? 9).padStart(2, '0')}:00`,
@@ -927,16 +1006,16 @@ const App: React.FC = () => {
       }));
       setSessions(migratedSessions);
     }
-    if (hasItems(prefs.htfOptions)) setHtfOptions(prefs.htfOptions);
-    if (hasItems(prefs.ltfOptions)) setLtfOptions(prefs.ltfOptions);
-    if (hasItems(prefs.ironRules)) setIronRules(prefs.ironRules);
+    if (Array.isArray(prefs.htfOptions)) setHtfOptions(prefs.htfOptions);
+    if (Array.isArray(prefs.ltfOptions)) setLtfOptions(prefs.ltfOptions);
+    if (Array.isArray(prefs.ironRules)) setIronRules(prefs.ironRules);
     // Business Hub data (expenses, payouts, goals, resources) now use dedicated Supabase tables
     // DO NOT apply from preferences - prevents stale data overwriting fresh table data
-    if (hasItems(prefs.playbookItems)) setPlaybookItems(prefs.playbookItems);
-    if (hasItems(prefs.constitutionRules)) setConstitutionRules(prefs.constitutionRules);
-    if (hasItems(prefs.careerRoadmap)) setCareerRoadmap(prefs.careerRoadmap);
+    if (Array.isArray(prefs.playbookItems)) setPlaybookItems(prefs.playbookItems);
+    if (Array.isArray(prefs.constitutionRules)) setConstitutionRules(prefs.constitutionRules);
+    if (Array.isArray(prefs.careerRoadmap)) setCareerRoadmap(prefs.careerRoadmap);
     if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
-    if (hasItems(prefs.psychoMetricsConfig)) setPsychoMetrics(prefs.psychoMetricsConfig);
+    if (Array.isArray(prefs.psychoMetricsConfig)) setPsychoMetrics(prefs.psychoMetricsConfig);
     // Theme is NOT applied here — it has its own persistence via localStorage
     // to prevent cross-tab sync or focus sync from reverting user's theme choice.
     // Theme is applied only on initial load (useState initializer).
@@ -946,6 +1025,11 @@ const App: React.FC = () => {
     // Mark prefs as applied — autosave se teď může spustit, nehrozí přepsání DB
     // defaulty z useState (HTF/LTF, sessions, emotions, …).
     prefsAppliedRef.current = true;
+    
+    // Zámek uvolníme až po dokončení re-renderů a inicializace v Reactu (zabraňuje samovolnému znečištění refs)
+    setTimeout(() => {
+      isApplyingPrefsRef.current = false;
+    }, 1500);
   }, []);
 
   const [filters, setFilters] = useState<TradeFilters>({
@@ -1012,13 +1096,8 @@ const App: React.FC = () => {
       // --- CACHE-FIRST LOADING: Instant from IndexedDB, then background refresh ---
       const cached = await storageService.getCachedDashboardData(session.user.id);
 
-      // Cache staleness check — cache starší než 24h nepoužij, načti čerstvě z DB.
-      // Zabraňuje "po noci se to vrátilo do defaultu" — staré cache by overwrite čerstvé prefs.
-      const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
-      const savedAtRaw = localStorage.getItem(`alphatrade_preferences_${session.user.id}_savedAt`);
-      const cacheAge = savedAtRaw ? Date.now() - parseInt(savedAtRaw, 10) : Infinity;
-      const cacheIsFresh = cacheAge < CACHE_MAX_AGE_MS;
-
+      // Načteme preferences z IndexedDB cache ihned při startu (i když jsou starší než 24h),
+      // abychom zabránili probliknutí výchozího nastavení. DB reload na pozadí je tiše přepíše, pokud se liší.
       if (cached) {
         setTrades(cached.trades || []);
         if (cached.accounts && cached.accounts.length > 0) {
@@ -1029,15 +1108,9 @@ const App: React.FC = () => {
           setAccounts([DEFAULT_ACCOUNT]);
           setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
-        // User profile NEČTEME z cache — vždy z DB. Cache může mít zastaralou role
-        // (např. před přiřazením 'owner'). DB call je rychlý (1 řádek, 3 fieldy).
-        // Před DB loadem zůstává DEFAULT_USER s role='friend' (safe — flash locked → unlocked).
-        // Apply cached preferences POUZE pokud cache je fresh — jinak počkáme na background refresh.
-        // To zabrání aplikování zastaralých prefs (sessions, htf, atd.) co byly přepsány z DB.
-        if (cached.preferences && cacheIsFresh) {
+        // User profile NEČTEME z cache — vždy z DB.
+        if (cached.preferences) {
           applyPreferences(cached.preferences);
-        } else if (cached.preferences && !cacheIsFresh) {
-          console.log('[Cache] Skipping stale cached preferences (age:', Math.round(cacheAge / 1000 / 60), 'min), waiting for fresh DB load');
         }
         setDailyPreps(cached.preps || []);
         setDailyReviews(cached.reviews || []);
@@ -1071,9 +1144,12 @@ const App: React.FC = () => {
             console.log('[BG-Refresh] received fresh prefs, dirty=', isPreferencesDirty.current, 'fields:', {
               sessions: fresh.preferences.sessions?.length,
               htfOptions: fresh.preferences.htfOptions?.length,
-              dashboardLayout: fresh.preferences.dashboardLayout?.length,
+              dashboardLayouts: fresh.preferences.dashboardLayouts ? Object.keys(fresh.preferences.dashboardLayouts) : fresh.preferences.dashboardLayout?.length,
             });
             if (!isPreferencesDirty.current) applyPreferences(fresh.preferences);
+          } else {
+            console.log('[BG-Refresh] received null/empty fresh prefs, dirty=', isPreferencesDirty.current);
+            if (!isPreferencesDirty.current) applyPreferences({});
           }
           setDailyPreps(prev =>
             fingerprintSimple(fresh.preps) !== fingerprintSimple(prev) ? (fresh.preps || []) : prev
@@ -1084,7 +1160,11 @@ const App: React.FC = () => {
           setWeeklyFocusList(prev =>
             fingerprintSimple(fresh.weeklyFocus) !== fingerprintSimple(prev) ? (fresh.weeklyFocus || []) : prev
           );
-        }).catch(err => console.warn('[Load] Background refresh failed:', err));
+          isSyncedWithDbRef.current = true; // Mark as synced
+        }).catch(err => {
+          console.warn('[Load] Background refresh failed:', err);
+          isSyncedWithDbRef.current = true; // Fallback
+        });
         return;
       }
 
@@ -1149,7 +1229,12 @@ const App: React.FC = () => {
         }
 
         if (dbUser) { setCurrentUser(dbUser); setIsUserFromDb(true); }
-        if (dbPrefs) applyPreferences(dbPrefs);
+        if (dbPrefs) {
+          applyPreferences(dbPrefs);
+        } else {
+          applyPreferences({});
+        }
+        isSyncedWithDbRef.current = true; // Mark as synced
         setDailyPreps(dbPreps || []);
         setDailyReviews(dbReviews || []);
         setWeeklyFocusList(dbWeeklyFocus || []);
@@ -1175,6 +1260,7 @@ const App: React.FC = () => {
         setAppError(error.message || "Nepodařilo se načíst data ze serveru");
         setLoading(false);
         setIsInitialLoadDone(true);
+        isSyncedWithDbRef.current = true; // Fallback
       } finally {
         isFetchingRef.current = false;
         clearTimeout(safetyTimer);
@@ -1516,10 +1602,14 @@ const App: React.FC = () => {
             console.log('[FocusSync] applying fresh prefs from DB:', {
               sessions: freshPrefs.sessions?.length,
               htfOptions: freshPrefs.htfOptions?.length,
-              dashboardLayout: freshPrefs.dashboardLayout?.length,
+              dashboardLayouts: freshPrefs.dashboardLayouts ? Object.keys(freshPrefs.dashboardLayouts) : freshPrefs.dashboardLayout?.length,
             });
             applyPreferences(freshPrefs);
+          } else {
+            console.log('[FocusSync] applying empty fresh prefs from DB');
+            applyPreferences({});
           }
+          isSyncedWithDbRef.current = true;
         } else {
           console.log('[FocusSync] SKIPPED prefs fetch — dirty=true (uživatel má rozdělanou změnu)');
         }
@@ -1683,7 +1773,7 @@ const App: React.FC = () => {
           htfOptions: (prefs.htfOptions || []).length,
           ltfOptions: (prefs.ltfOptions || []).length,
           ironRules: (prefs.ironRules || []).length,
-          dashboardLayout: (prefs.dashboardLayout || []).length,
+          dashboardLayouts: prefs.dashboardLayouts ? Object.keys(prefs.dashboardLayouts) : 0,
         });
         // CRITICAL FIX: Clear dirty flag BEFORE saving, not after
         // This prevents background sync from skipping fresh data while save is in progress
@@ -1701,7 +1791,7 @@ const App: React.FC = () => {
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
+  }, [userEmotions, userMistakes, standardGoals, dashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
 
   // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
   // Backup save every 30s if user is still editing
@@ -1748,7 +1838,7 @@ const App: React.FC = () => {
     return () => {
       clearInterval(interval);
     };
-  }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
+  }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
 
   // Flush dirty data to DB when user leaves tab (visibilitychange) or closes browser (beforeunload)
   useEffect(() => {
@@ -1794,7 +1884,7 @@ const App: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', flushDirtyData);
     };
-  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayout, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
+  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
 
   // Handle Dashboard Mode Switching
   // Sleduj POUZE skutečnou změnu módu — bez tohoto se efekt spouští při každé změně
@@ -2630,6 +2720,8 @@ const App: React.FC = () => {
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
+
+
       {/* Sidebar — pouze desktop */}
       <div className="hidden lg:block">
         <Sidebar
@@ -2675,7 +2767,7 @@ const App: React.FC = () => {
         onClose={() => setLockedFeatureModal(null)}
       />
 
-      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:ml-[72px]' : 'lg:ml-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!pl-0' : ''} pb-[72px] lg:pb-0`}>
         <header className={`sticky top-0 z-40 border-b backdrop-blur-md px-6 py-2 flex items-center justify-between transition-all bg-[var(--bg-page)]/30 border-[var(--border-subtle)] ${isNetworkSpectating ? 'hidden' : ''}`}>
           <div className="flex items-center gap-4">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
@@ -2836,7 +2928,7 @@ const App: React.FC = () => {
                 isMobileEditing={activePage === 'dashboard' ? isMobileEditing : undefined}
                 setIsMobileEditing={activePage === 'dashboard' ? setIsMobileEditing : undefined}
                 dashboardMode={dashboardMode}
-                setDashboardMode={(v) => { setDashFocusAccount(null); setDashboardMode(v); isPreferencesDirty.current = true; }}
+                setDashboardMode={(v) => { setDashFocusAccount(null); setDashboardMode(v); markPreferencesDirty(); }}
                 viewMode={viewMode}
                 setViewMode={setViewMode}
                 pnlDisplayMode={pnlDisplayMode}
@@ -2872,6 +2964,7 @@ const App: React.FC = () => {
                 playbookItems={playbookItems}
                 dailyPreps={dailyPreps}
                 dailyReviews={dailyReviews}
+                sessions={sessions}
                 theme={theme}
                 initialConversationId={aiActiveConvId}
                 initialPrompt={aiInitialPrompt}
@@ -2886,7 +2979,7 @@ const App: React.FC = () => {
                   // Aplikuje doporučenou akci z AI Coache do uživatelova systému.
                   // Každý typ akce má jiný target — Iron Rule, Goal (standardGoals), atd.
                   // KRITICKÉ: setIronRules / setStandardGoals MUSÍ být doprovozeny
-                  // `isPreferencesDirty.current = true`, jinak background sync přepíše tvoje změny.
+                  // markPreferencesDirty(), jinak background sync přepíše tvoje změny.
                   switch (action.type) {
                     case 'rule':
                     case 'experiment': {
@@ -2903,7 +2996,7 @@ const App: React.FC = () => {
                         type: 'trading',
                       };
                       setIronRules(prev => [...prev, newRule]);
-                      isPreferencesDirty.current = true;
+                      markPreferencesDirty();
                       break;
                     }
                     case 'goal': {
@@ -2911,7 +3004,7 @@ const App: React.FC = () => {
                       setStandardGoals(prev =>
                         prev.includes(action.label) ? prev : [...prev, action.label]
                       );
-                      isPreferencesDirty.current = true;
+                      markPreferencesDirty();
                       break;
                     }
                     case 'checklist': {
@@ -2928,7 +3021,7 @@ const App: React.FC = () => {
                         type: 'trading',
                       };
                       setIronRules(prev => [...prev, newRule]);
-                      isPreferencesDirty.current = true;
+                      markPreferencesDirty();
                       break;
                     }
                     case 'modify_rule': {
@@ -2940,7 +3033,7 @@ const App: React.FC = () => {
                         (tid && r.id.toLowerCase() === tid) ||
                         (oldL && r.label.trim().toLowerCase().startsWith(oldL));
                       setIronRules(prev => prev.map(r => matches(r) ? { ...r, label: action.label } : r));
-                      isPreferencesDirty.current = true;
+                      markPreferencesDirty();
                       break;
                     }
                     case 'remove_rule': {
@@ -2951,7 +3044,7 @@ const App: React.FC = () => {
                         (tid && r.id.toLowerCase() === tid) ||
                         (oldL && r.label.trim().toLowerCase().startsWith(oldL));
                       setIronRules(prev => prev.filter(r => !matches(r)));
-                      isPreferencesDirty.current = true;
+                      markPreferencesDirty();
                       break;
                     }
                   }
@@ -3003,31 +3096,27 @@ const App: React.FC = () => {
                       theme={theme}
                       preps={dailyPreps}
                       reviews={dailyReviews}
-                      layout={dashboardLayout}
+                      layouts={dashboardLayouts}
                       sessions={sessions}
                       ironRules={ironRules}
-                      onUpdateLayout={(v) => {
-                          // GATE: před DB loadem (prefsAppliedRef=false) je layout v state pouze
-                          // DEFAULT_WIDGETS. react-grid-layout fires onLayoutChange automaticky při
-                          // mount s normalizovanými coords (různé od defaultů ale stále NE user input).
-                          // Bez tohoto gate by dirty=true → BG-Refresh SKIPNE fresh prefs → auto-save
-                          // přepíše DB defaultem. User akce není možná před loadem (loading screen).
-                          if (!prefsAppliedRef.current) {
-                              console.log('[Setter] setDashboardLayout BLOCKED (prefs not yet applied)');
+                      onUpdateLayouts={(v: DashboardLayouts) => {
+                          // GATE: Blokujeme automatické mount-time změny z react-grid-layout nebo během aplikace preferencí
+                          if (!prefsAppliedRef.current || isApplyingPrefsRef.current || !isSyncedWithDbRef.current) {
+                              console.log('[Setter] setDashboardLayouts BLOCKED (applying prefs lock or not synced)');
                               return;
                           }
                           // Identity check pro post-load auto-fires (resize, theme change atd.)
                           try {
-                              if (JSON.stringify(v) === JSON.stringify(dashboardLayout)) return;
+                              if (JSON.stringify(v) === JSON.stringify(dashboardLayouts)) return;
                           } catch { /* fallthrough */ }
-                          setDashboardLayout(v);
-                          isPreferencesDirty.current = true;
-                          console.log('[Setter] setDashboardLayout (widgets:', v.length, ') → dirty=true');
+                          setDashboardLayouts(v);
+                          markPreferencesDirty();
+                          console.log('[Setter] setDashboardLayouts (breakpoints:', Object.keys(v), ') → dirty=true');
                       }}
                       isEditing={isDashboardEditing}
                       onCloseEdit={() => setIsDashboardEditing(false)}
                       dashboardMode={dashboardMode}
-                      setDashboardMode={(v) => { setDashboardMode(v); isPreferencesDirty.current = true; }}
+                      setDashboardMode={(v) => { setDashboardMode(v); markPreferencesDirty(); }}
                       accounts={accounts}
                       emotions={userEmotions}
                       viewMode={viewMode}
@@ -3107,7 +3196,7 @@ const App: React.FC = () => {
                           // Přidá insight jako nové Iron Rule (type:'trading' — jinak propadne filtry).
                           const newRule: IronRule = { id: `rule_${Date.now()}`, label: rule, type: 'trading' };
                           setIronRules(prev => [...prev, newRule]);
-                          isPreferencesDirty.current = true;
+                          markPreferencesDirty();
                         }}
                         onAskAI={(prompt) => {
                           // Otevře AI Coach s pre-fill promptem
@@ -3165,7 +3254,7 @@ const App: React.FC = () => {
                           setActiveAccountId(id);
                           setViewMode('individual');
                           setDashboardMode('archive');
-                          isPreferencesDirty.current = true;
+                          markPreferencesDirty();
                           setActivePage('dashboard');
                         }}
                         onImportTradovate={(id) => {
@@ -3202,7 +3291,7 @@ const App: React.FC = () => {
                       exchangeRates={exchangeRates}
                       activeTab={networkActiveTab}
                       onTabChange={setNetworkActiveTab}
-                      onNetworkNotificationsChange={(prefs) => { setNetworkNotifications(prefs); isPreferencesDirty.current = true; }}
+                      onNetworkNotificationsChange={(prefs) => { setNetworkNotifications(prefs); markPreferencesDirty(); }}
                       onSpectatingChange={setIsNetworkSpectating}
                     />
                   )}
@@ -3212,21 +3301,21 @@ const App: React.FC = () => {
                       theme={theme}
                       activeTab={settingsActiveTab}
                       onTabChange={setSettingsActiveTab}
-                      userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); isPreferencesDirty.current = true; }}
-                      userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); isPreferencesDirty.current = true; }}
-                      htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); isPreferencesDirty.current = true; }}
-                      ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); isPreferencesDirty.current = true; }}
-                      sessions={sessions} setSessions={(v) => { setSessions(v); isPreferencesDirty.current = true; console.log('[Setter] setSessions → dirty=true'); }}
+                      userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); markPreferencesDirty(); }}
+                      userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); markPreferencesDirty(); }}
+                      htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); markPreferencesDirty(); }}
+                      ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); markPreferencesDirty(); }}
+                      sessions={sessions} setSessions={(v) => { setSessions(v); markPreferencesDirty(); console.log('[Setter] setSessions → dirty=true'); }}
                       ironRules={ironRules}
-                      setIronRules={(v) => { setIronRules(v); isPreferencesDirty.current = true; }}
+                      setIronRules={(v) => { setIronRules(v); markPreferencesDirty(); }}
                       psychoMetrics={psychoMetrics}
-                      setPsychoMetrics={(v) => { setPsychoMetrics(v); isPreferencesDirty.current = true; }}
+                      setPsychoMetrics={(v) => { setPsychoMetrics(v); markPreferencesDirty(); }}
                       weeklyFocusList={weeklyFocusList}
                       setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isWeeklyFocusDirty.current = true; }}
                       systemSettings={systemSettings}
-                      setSystemSettings={(v: SystemSettings) => { setSystemSettings(v); isPreferencesDirty.current = true; }}
+                      setSystemSettings={(v: SystemSettings) => { setSystemSettings(v); markPreferencesDirty(); }}
                       standardGoals={standardGoals}
-                      setStandardGoals={(v) => { setStandardGoals(v); isPreferencesDirty.current = true; }}
+                      setStandardGoals={(v) => { setStandardGoals(v); markPreferencesDirty(); }}
                       appVersion={APP_VERSION}
                       onHardRefresh={handleHardRefresh}
                       accentColor={accentColor}
@@ -3249,15 +3338,15 @@ const App: React.FC = () => {
                       settings={businessSettings}
                       onUpdateExpenses={handleUpdateExpenses}
                       onUpdatePayouts={handleUpdatePayouts}
-                      onUpdatePlaybook={(v) => { setPlaybookItems(v); isPreferencesDirty.current = true; }}
+                      onUpdatePlaybook={(v) => { setPlaybookItems(v); markPreferencesDirty(); }}
                       onUpdateGoals={handleUpdateGoals}
                       onUpdateResources={handleUpdateResources}
-                      onUpdateSettings={(v) => { setBusinessSettings(v); isPreferencesDirty.current = true; }}
+                      onUpdateSettings={(v) => { setBusinessSettings(v); markPreferencesDirty(); }}
                       onUpdateAccounts={setAccounts}
                       constitutionRules={constitutionRules}
-                      onUpdateConstitution={(v) => { setConstitutionRules(v); isPreferencesDirty.current = true; }}
+                      onUpdateConstitution={(v) => { setConstitutionRules(v); markPreferencesDirty(); }}
                       careerRoadmap={careerRoadmap}
-                      onUpdateRoadmap={(v) => { setCareerRoadmap(v); isPreferencesDirty.current = true; }}
+                      onUpdateRoadmap={(v) => { setCareerRoadmap(v); markPreferencesDirty(); }}
                       dailyReviews={dailyReviews}
                       weeklyFocusList={weeklyFocusList}
                       activeTab={businessActiveTab}
@@ -3449,7 +3538,7 @@ const App: React.FC = () => {
                 const label = `${prefix}${action.label}`;
                 const newRule: IronRule = { id: `rule_${Date.now()}`, label, type: 'trading' };
                 setIronRules(prev => [...prev, newRule]);
-                isPreferencesDirty.current = true;
+                markPreferencesDirty();
                 break;
               }
               case 'modify_rule': {
@@ -3459,7 +3548,7 @@ const App: React.FC = () => {
                 const matches = (r: IronRule) =>
                   r.id.toLowerCase() === tid || (oldL && r.label.trim().toLowerCase().startsWith(oldL));
                 setIronRules(prev => prev.map(r => matches(r) ? { ...r, label: action.label } : r));
-                isPreferencesDirty.current = true;
+                markPreferencesDirty();
                 break;
               }
             }

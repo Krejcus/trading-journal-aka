@@ -5,7 +5,7 @@ import {
   X, ZoomIn, ChevronLeft, ChevronRight, TrendingUp, TrendingDown,
   Calendar, ExternalLink, Moon, Sun, CheckCircle2, XCircle, Target,
   Brain, Star, Loader2, Sparkles, Shield, FlaskConical, ListChecks, Flag, Check,
-  ChevronDown, ChevronUp, BarChart3, BookOpen, FileText, Pencil, Trash2,
+  ChevronDown, ChevronUp, BarChart3, BookOpen, FileText, Pencil, Trash2, Zap,
 } from 'lucide-react';
 import type { Trade, DailyPrep, DailyReview } from '../types';
 import { stripAllRefs, type AIMessage, type ChartSpec, type SuggestedAction } from '../services/aiService';
@@ -23,6 +23,9 @@ export type ExtendedMessage = AIMessage & {
   actions?: SuggestedAction[];
   /** ID akcí které user už aplikoval — slouží jako vizuální indikátor */
   appliedActionIds?: number[];
+  aiModel?: 'analytical' | 'fast';
+  isSystemEvent?: boolean;
+  systemEventText?: string;
 };
 
 // ─── Lightbox ─────────────────────────────────────────────────────────────────
@@ -762,6 +765,16 @@ export const MessageBubble: React.FC<{
    *  Předává AICoachPage z props. */
   existingActionLabels?: Set<string>;
 }> = ({ msg, trades, dailyPreps, dailyReviews, isStreaming = false, toolStatus = null, onOpenTrade, onOpenJournal, onFollowup, onApplyAction, messageIndex, existingActionLabels }) => {
+  if (msg.isSystemEvent) {
+    return (
+      <div className="w-full flex justify-center my-2 px-4">
+        <span className="text-xs text-[var(--text-secondary)] font-medium text-center opacity-85 select-none transition-colors duration-200">
+          {msg.systemEventText}
+        </span>
+      </div>
+    );
+  }
+
   const isUser = msg.role === 'user';
   // Strip [CONTEXT]...[/CONTEXT] block from user messages — it's the hidden analytical context
   // sent from "Analyze with AI" buttons. AI receives it, user shouldn't see the noise.
@@ -775,8 +788,21 @@ export const MessageBubble: React.FC<{
   return (
     <div className={`flex gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       {!isUser && (
-        <div className="w-7 h-7 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0 mt-1">
-          <Sparkles size={13} className="text-blue-400" />
+        <div
+          className={`w-9 h-9 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-1 overflow-hidden coach-avatar-container ${
+            (msg.aiModel || 'analytical') === 'fast'
+              ? 'bg-amber-500/10 border-amber-500/50 coach-avatar-fast'
+              : 'bg-violet-500/10 border-violet-500/50 coach-avatar-analytical'
+          } ${
+            isStreaming ? 'coach-avatar-talk' : 'coach-avatar-breath'
+          }`}
+          title={(msg.aiModel || 'analytical') === 'fast' ? 'Rychlý kouč (Gemini)' : 'Analytický kouč (Claude)'}
+        >
+          <img
+            src={(msg.aiModel || 'analytical') === 'fast' ? '/fast-coach-option1-trans.png' : '/analytical-coach-option1-trans.png'}
+            alt={(msg.aiModel || 'analytical') === 'fast' ? 'Gemini' : 'Claude'}
+            className="w-full h-full object-cover animate-none"
+          />
         </div>
       )}
       <div className={`max-w-[85%] space-y-2 ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>

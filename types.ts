@@ -602,6 +602,9 @@ export interface DashboardWidgetConfig {
   showDisciplinedCurve?: boolean;
 }
 
+/** Per-breakpoint layout storage. Keys: 'lg' (12 cols, notebook), 'xxl' (24 cols, ultrawide). */
+export type DashboardLayouts = Record<string, DashboardWidgetConfig[]>;
+
 export interface SessionConfig {
   id: string;
   name: string;
@@ -616,7 +619,8 @@ export interface UserPreferences {
   emotions: CustomEmotion[];
   standardGoals: string[];
   standardMistakes?: string[];
-  dashboardLayout?: DashboardWidgetConfig[];
+  dashboardLayout?: DashboardWidgetConfig[]; // Legacy — flat array (pre-migration)
+  dashboardLayouts?: DashboardLayouts; // New — per-breakpoint layouts
   defaultRisk?: number; // % of account
   defaultStopLoss?: number; // ticks
   soundEnabled?: boolean;

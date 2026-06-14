@@ -282,12 +282,55 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
   // Baseline pro gradient — v USD mode je to initialCap (start kapitálu),
   // v RR mode je to 0 (start na 0R).
   const baseline = isRRMode ? 0 : initialCap;
+
+  // Dynamické vygenerování ticků na ose Y, aby obsahovaly i počáteční hodnotu (baseline)
+  const yAxisTicks = React.useMemo(() => {
+    if (equityData.length === 0) return [];
+    const values = equityData.map(d => d.equity);
+    const minVal = Math.min(...values, initialCap);
+    const maxVal = Math.max(...values, initialCap);
+    const range = maxVal - minVal;
+
+    // Určení kroku (step) podle velikosti rozpětí
+    let step = 1000;
+    if (isRRMode) {
+      if (range <= 2) step = 0.5;
+      else if (range <= 5) step = 1;
+      else if (range <= 10) step = 2;
+      else step = 5;
+    } else {
+      if (range <= 1000) step = 200;
+      else if (range <= 2500) step = 500;
+      else if (range <= 5000) step = 1000;
+      else if (range <= 15000) step = 2000;
+      else if (range <= 30000) step = 5000;
+      else step = 10000;
+    }
+
+    const ticksDown: number[] = [];
+    let currentTick = initialCap - step;
+    while (currentTick >= minVal - step * 0.5 || ticksDown.length < 1) {
+      ticksDown.unshift(currentTick);
+      currentTick -= step;
+    }
+
+    const ticksUp: number[] = [];
+    currentTick = initialCap + step;
+    while (currentTick <= maxVal + step * 0.5 || ticksUp.length < 1) {
+      ticksUp.push(currentTick);
+      currentTick += step;
+    }
+
+    return [...ticksDown, initialCap, ...ticksUp];
+  }, [equityData, initialCap, isRRMode]);
+
   const getGradientOffset = () => {
-    const dataMax = Math.max(...equityData.map((i) => i.equity));
-    const dataMin = Math.min(...equityData.map((i) => i.equity));
-    if (dataMax <= baseline) return 0;
-    if (dataMin >= baseline) return 1;
-    return (dataMax - baseline) / (dataMax - dataMin);
+    if (yAxisTicks.length < 2) return 0.5;
+    const yMax = yAxisTicks[yAxisTicks.length - 1];
+    const yMin = yAxisTicks[0];
+    if (yMax <= baseline) return 0;
+    if (yMin >= baseline) return 1;
+    return (yMax - baseline) / (yMax - yMin);
   };
 
   const off = getGradientOffset();
@@ -301,14 +344,12 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
             <div>
               <h3 className={`text-xs font-black uppercase tracking-widest flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
-                <Activity size={16} className="text-blue-500" /> Kapitálová křivka účtu
+                <Activity size={16} className="text-blue-500" /> Equity křivka
               </h3>
-              <p className="text-[9px] font-bold text-slate-500 uppercase mt-1">Live Performance vs. Strategy Logic</p>
             </div>
 
-            <div className="flex items-center gap-3">
-              {/* Tlačítko se zobrazí pouze v režimu editace dashboardu a je propojené s props */}
-              {isEditing && (
+            {isEditing && (
+              <div className="flex items-center gap-3">
                 <button
                   onClick={onToggleDisciplined}
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-[10px] font-black uppercase transition-all active:scale-95 animate-in slide-in-from-right-4 duration-300 ${showDisciplinedCurve
@@ -318,15 +359,8 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                 >
                   <ShieldCheck size={14} /> Disciplined Curve
                 </button>
-              )}
-              <div className="h-8 w-px bg-slate-800 mx-1 hidden md:block"></div>
-              <div className="flex flex-col items-end">
-                <span className="text-[8px] uppercase font-black text-slate-500">Začátek</span>
-                <span className="text-sm font-mono font-black text-blue-500">
-                  {isRRMode ? '0R' : `$${initialCap.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
-                </span>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="flex-1 min-h-0 w-full min-w-[1px]" style={{ outline: 'none' }}>
@@ -364,17 +398,26 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   stroke={axisColor}
                   tick={false}
                   axisLine={false}
+                  padding={{ left: 0, right: 0 }}
                 />
                 <YAxis
                   stroke={axisColor}
                   axisLine={false} tickLine={false}
-                  tickFormatter={(val) =>
-                    isRRMode
-                      ? `${val >= 0 ? '+' : ''}${val.toFixed(val % 1 === 0 ? 0 : 1)}R`
-                      : `$${Math.abs(val) >= 1000 ? (val / 1000).toFixed(0) + 'k' : val}`
-                  }
+                  tickFormatter={(val) => {
+                    if (isRRMode) {
+                      return `${val >= 0 ? '+' : ''}${val.toFixed(val % 1 === 0 ? 0 : 1)}R`;
+                    }
+                    const absVal = Math.abs(val);
+                    if (absVal >= 1000) {
+                      const kVal = val / 1000;
+                      const hasDecimals = val % 1000 !== 0;
+                      return `${val < 0 ? '-' : ''}$${Math.abs(kVal).toFixed(hasDecimals ? 1 : 0)}k`;
+                    }
+                    return `${val < 0 ? '-' : ''}$${absVal}`;
+                  }}
                   width={45}
-                  domain={['auto', 'auto']}
+                  ticks={yAxisTicks}
+                  domain={[yAxisTicks[0], yAxisTicks[yAxisTicks.length - 1]]}
                   tick={{ fontSize: 10, fontStyle: 'italic', fontWeight: 'bold' }}
                 />
                 <Tooltip content={<CustomEquityTooltip theme={theme} isRR={isRRMode} />} cursor={{ stroke: axisColor, strokeDasharray: '5 5' }} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
@@ -413,18 +456,14 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
             </ResponsiveContainer>
           </div>
 
-          <div className="mt-4 flex gap-6 justify-center">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-1 bg-blue-500 rounded"></div>
-              <span className="text-[9px] font-black uppercase text-slate-500">Reálný vývoj</span>
-            </div>
-            {showDisciplinedCurve && (
+          {showDisciplinedCurve && (
+            <div className="mt-4 flex justify-center">
               <div className="flex items-center gap-2">
                 <div className="w-3 h-0.5 border-t-2 border-dashed border-amber-400"></div>
                 <span className="text-[9px] font-black uppercase text-amber-500/80">Disciplinovaný (Zlatá cesta)</span>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 

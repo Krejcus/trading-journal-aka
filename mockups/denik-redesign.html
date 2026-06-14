@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<title>Deník — Redesign Mockup v2 (collapse + notes)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .glass { backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .timeline-line { background: linear-gradient(to bottom, transparent, #e2e8f0 5%, #e2e8f0 95%, transparent); }
+  .dot { box-shadow: 0 0 0 4px white, 0 0 0 5px #e2e8f0; }
+  .note-dot { box-shadow: 0 0 0 4px white, 0 0 0 5px #c4b5fd; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+
+<div class="max-w-3xl mx-auto p-6 lg:p-8">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl lg:text-3xl font-black tracking-tighter">DENÍK <span class="text-amber-500">— v2</span></h1>
+    <div class="flex gap-2">
+      <button onclick="setState('morning')" class="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest bg-slate-900 text-white">8:30 Ráno</button>
+      <button onclick="setState('midday')" class="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest bg-white border border-slate-200">10:30</button>
+      <button onclick="setState('afternoon')" class="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest bg-white border border-slate-200">13:00</button>
+      <button onclick="setState('evening')" class="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest bg-white border border-slate-200">18:00</button>
+    </div>
+  </div>
+
+  <div class="p-3 rounded-xl bg-violet-50 border border-violet-200 mb-6 text-[11px] text-violet-900">
+    <strong>v2 změny:</strong> sessions se rozbalí jen ta aktuální (collapsed = 1 řádek). + <strong>Quick Notes</strong> (💭) jako uzly v timeline. Floating "+" tlačítko vpravo dole pro rychlou poznámku kdykoli.
+  </div>
+
+  <!-- Tab nav -->
+  <div class="flex w-full p-1 rounded-2xl border border-slate-200 bg-white/40 backdrop-blur-md gap-1 mb-6">
+    <button class="flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider bg-white shadow-sm text-slate-900 border border-slate-200/60">Dnešek</button>
+    <button class="flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider text-slate-400">Týden</button>
+    <button class="flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider text-slate-400">Deník</button>
+  </div>
+
+  <!-- Date picker -->
+  <div class="flex items-center gap-3 p-3 rounded-2xl border border-slate-200 bg-white shadow-sm mb-8">
+    <button class="p-2 hover:bg-slate-100 rounded-xl">←</button>
+    <div class="flex-1 text-center">
+      <p class="text-xl font-black italic tracking-tight uppercase">čtvrtek</p>
+      <p class="text-xs text-slate-500">4. června 2026</p>
+    </div>
+    <button class="p-2 hover:bg-slate-100 rounded-xl">→</button>
+  </div>
+
+  <!-- Timeline -->
+  <div class="relative">
+    <!-- Vertical line -->
+    <div class="absolute left-6 top-0 bottom-0 w-px timeline-line"></div>
+
+    <!-- ========== 08:00 RANNÍ AKTIVACE ========== -->
+    <div class="relative mb-3 pl-16">
+      <div class="absolute left-6 top-4 -translate-x-1/2 w-3 h-3 rounded-full bg-amber-500 dot"></div>
+      <div class="absolute left-0 top-2 text-[10px] font-black text-slate-400 tracking-widest">08:00</div>
+
+      <!-- COLLAPSED -->
+      <div id="morning-collapsed" class="hidden p-4 rounded-2xl border border-amber-200 bg-amber-50/30 cursor-pointer hover:bg-amber-50">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-xl bg-amber-500 text-white grid place-items-center text-base">☀️</div>
+            <div>
+              <h3 class="text-xs font-black uppercase tracking-widest">Ranní aktivace</h3>
+              <p class="text-[10px] text-slate-500">Rituály 3/3 · 2 závazky aktivní</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase">✓</div>
+            <span class="text-slate-400 text-xs">▾</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPANDED -->
+      <div id="morning-expanded" class="p-5 rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-white shadow-sm">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-amber-500 text-white grid place-items-center text-lg">☀️</div>
+            <div>
+              <h3 class="text-sm font-black uppercase tracking-widest">Ranní aktivace</h3>
+              <p class="text-[10px] text-slate-500">Vědomá kotva — 60 sekund</p>
+            </div>
+          </div>
+          <div class="px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase">✓ Hotovo</div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="p-3 rounded-xl bg-white border border-slate-200">
+            <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Rituály</p>
+            <p class="text-xs font-black text-emerald-600">3/3 ✓</p>
+            <p class="text-[10px] text-slate-500">Meditace · News · Trénink</p>
+          </div>
+          <div class="p-3 rounded-xl bg-white border border-slate-200">
+            <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Závazky</p>
+            <p class="text-xs font-black text-blue-600">2 aktivní</p>
+            <p class="text-[10px] text-slate-500">Max 1% risk · Sim do 10.6.</p>
+          </div>
+        </div>
+
+        <div class="mt-3 p-3 rounded-xl bg-violet-50 border border-violet-100">
+          <p class="text-[9px] font-black uppercase tracking-widest text-violet-600 mb-1">⚡ Heslo dne</p>
+          <p class="text-xs text-slate-700 italic">"Jeden setup, jedna pozice, žádné revenge."</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick notes z timeline odstraněny — jen v Večerním auditu jako summary -->
+    <div id="note-0845" class="hidden"></div>
+
+    <!-- ========== LONDON SESSION ========== -->
+    <div class="relative mb-3 pl-16">
+      <div class="absolute left-6 top-4 -translate-x-1/2 w-3 h-3 rounded-full bg-blue-500 dot"></div>
+      <div class="absolute left-0 top-2 text-[10px] font-black text-slate-400 tracking-widest">09:00</div>
+
+      <!-- COLLAPSED — visual strip jako aktuální Session Breakdown -->
+      <div id="london-collapsed" class="hidden rounded-2xl border border-blue-200 bg-blue-50/30 cursor-pointer hover:bg-blue-50 overflow-hidden">
+        <!-- Header -->
+        <div class="flex items-center justify-between p-4 pb-3">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-xl bg-blue-500 text-white grid place-items-center text-base">🌅</div>
+            <div>
+              <h3 class="text-xs font-black uppercase tracking-widest">London <span id="london-collapsed-summary" class="text-slate-500 ml-1 font-normal">— bearish · 2 trades · <span class="text-emerald-600 font-mono">+$57</span></span></h3>
+              <p class="text-[10px] text-slate-500">09:00 – 11:00</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div id="london-collapsed-status" class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase">✓ Hotovo</div>
+            <span class="text-slate-400 text-xs">▾</span>
+          </div>
+        </div>
+        <!-- Visual strip: analýza → trades (screen+pnl) → breakdown -->
+        <div class="flex gap-2 px-4 pb-4 items-stretch">
+          <div class="shrink-0 flex flex-col gap-1">
+            <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">Analýza</p>
+            <div class="w-28 h-20 rounded-lg overflow-hidden border border-blue-200 bg-gradient-to-br from-slate-100 to-slate-200 grid place-items-center text-slate-400 text-[9px]">📊 chart</div>
+          </div>
+          <div class="flex flex-col justify-center items-center gap-1 px-1 shrink-0 text-slate-300">→</div>
+          <div class="flex-1 min-w-0 flex gap-1.5 items-center overflow-x-auto">
+            <!-- Trade 1: má screenshot → mini screen s PnL overlay -->
+            <div class="shrink-0 flex flex-col gap-1">
+              <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">09:42</p>
+              <div class="relative w-24 h-16 rounded-lg overflow-hidden border border-rose-200 bg-gradient-to-br from-slate-100 to-slate-200">
+                <div class="absolute inset-0 grid place-items-center text-slate-400 text-[8px]">📈 trade</div>
+                <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent p-1">
+                  <p class="text-[10px] font-black font-mono text-white text-right leading-none">-$40</p>
+                </div>
+              </div>
+            </div>
+            <!-- Trade 2: má screenshot -->
+            <div class="shrink-0 flex flex-col gap-1">
+              <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">10:15</p>
+              <div class="relative w-24 h-16 rounded-lg overflow-hidden border border-emerald-200 bg-gradient-to-br from-slate-100 to-slate-200">
+                <div class="absolute inset-0 grid place-items-center text-slate-400 text-[8px]">📈 trade</div>
+                <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent p-1">
+                  <p class="text-[10px] font-black font-mono text-white text-right leading-none">+$97</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="flex flex-col justify-center items-center gap-1 px-1 shrink-0 text-slate-300">→</div>
+          <div class="shrink-0 flex flex-col gap-1">
+            <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">Breakdown</p>
+            <div class="w-28 h-20 rounded-lg overflow-hidden border border-violet-200 bg-gradient-to-br from-slate-100 to-slate-200 grid place-items-center text-slate-400 text-[9px]">📊 result</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPANDED -->
+      <div id="london-expanded" class="rounded-3xl border border-blue-200 bg-white shadow-sm overflow-hidden">
+        <!-- Header -->
+        <div class="flex items-center justify-between p-5 border-b border-slate-100">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-blue-500 text-white grid place-items-center text-lg">🌅</div>
+            <div>
+              <h3 class="text-sm font-black uppercase tracking-widest">London Session</h3>
+              <p class="text-[10px] text-slate-500">09:00 – 11:00 · Bias: <span class="font-black text-rose-600">🐻 Bearish</span></p>
+            </div>
+          </div>
+          <div id="london-status" class="px-3 py-1 rounded-full bg-blue-500/10 text-blue-600 text-[9px] font-black uppercase">Kick-off pending</div>
+        </div>
+
+        <!-- KICK-OFF SECTION -->
+        <div class="p-5 border-b border-dashed border-slate-200 bg-slate-50/50">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <div class="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
+              <p class="text-[10px] font-black uppercase tracking-widest text-blue-600">① Kick-off — Plán</p>
+            </div>
+            <p class="text-[9px] text-slate-400">Otevři ~30 min před session</p>
+          </div>
+
+          <div id="london-kickoff-empty" class="text-center py-8 border-2 border-dashed border-slate-300 rounded-2xl">
+            <p class="text-3xl mb-2">📊</p>
+            <p class="text-xs text-slate-500 mb-3">Před 09:00 si naplánuj London — bias, levely, kde vstoupíš.</p>
+            <button class="px-4 py-2 rounded-xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest">
+              Naplánuj London →
+            </button>
+          </div>
+
+          <div id="london-kickoff-filled" class="hidden">
+            <div class="p-3 rounded-xl bg-white border border-slate-200 mb-3">
+              <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">HTF Bias</p>
+              <p class="text-xs font-black text-rose-600">🐻 Bearish · 4H</p>
+            </div>
+            <div class="p-3 rounded-xl bg-blue-50 border border-blue-100 mb-3">
+              <p class="text-[8px] font-black uppercase text-blue-600 tracking-widest mb-1">Plán</p>
+              <p class="text-xs text-slate-700 leading-relaxed">Čekat retrace do 4H FVG, BOS na M5, entry na pullback do prvního retest. SL nad swing high. TP 1:3.</p>
+            </div>
+            <div class="aspect-video rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 grid place-items-center text-slate-400 text-xs">
+              📈 Screenshot analýzy (TradingView)
+            </div>
+          </div>
+        </div>
+
+        <!-- LIVE / TRADES SECTION -->
+        <div id="london-live" class="p-5 border-b border-slate-100 hidden">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <div class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+              <p class="text-[10px] font-black uppercase tracking-widest text-emerald-600">② Live — Probíhá</p>
+            </div>
+            <p class="text-[9px] font-black text-slate-400">2 trades</p>
+          </div>
+          <div class="space-y-2">
+            <div class="flex items-center justify-between p-2.5 rounded-lg bg-rose-50 border border-rose-100">
+              <div class="flex items-center gap-2 text-[10px]"><span class="text-rose-500">●</span> <span class="font-mono">09:42</span> <span class="px-1.5 py-0.5 bg-rose-500/10 text-rose-600 rounded font-black uppercase text-[8px]">Short</span></div>
+              <span class="text-xs font-black font-mono text-rose-600">-$40</span>
+            </div>
+            <div class="flex items-center justify-between p-2.5 rounded-lg bg-emerald-50 border border-emerald-100">
+              <div class="flex items-center gap-2 text-[10px]"><span class="text-emerald-500">●</span> <span class="font-mono">10:15</span> <span class="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-600 rounded font-black uppercase text-[8px]">Short</span></div>
+              <span class="text-xs font-black font-mono text-emerald-600">+$97</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- DEBRIEF SECTION -->
+        <div class="p-5 bg-slate-50/30">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <div class="w-1.5 h-1.5 rounded-full bg-violet-500"></div>
+              <p class="text-[10px] font-black uppercase tracking-widest text-violet-600">③ Debrief — Reflexe</p>
+            </div>
+            <p class="text-[9px] text-slate-400">Vyplň po 11:00</p>
+          </div>
+
+          <div id="london-debrief-empty" class="text-center py-6 border-2 border-dashed border-slate-300 rounded-2xl">
+            <p class="text-xs text-slate-500 mb-3">London skončil. Jak to dopadlo vs. plán?</p>
+            <button class="px-4 py-2 rounded-xl bg-violet-600 text-white text-[10px] font-black uppercase tracking-widest">
+              Udělej debrief →
+            </button>
+          </div>
+
+          <div id="london-debrief-filled" class="hidden">
+            <div class="p-3 rounded-xl bg-white border border-slate-200 mb-3">
+              <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">P&L</p>
+              <p class="text-base font-black font-mono text-emerald-600">+$57</p>
+            </div>
+            <div class="p-3 rounded-xl bg-violet-50 border border-violet-100 mb-3">
+              <p class="text-[8px] font-black uppercase text-violet-600 tracking-widest mb-1">Plán vs realita</p>
+              <p class="text-xs text-slate-700 leading-relaxed">První entry byl podle plánu, ale příliš brzy — nepočkal jsem na retest. SL. Druhý vstup byl už pure plan execution → win. <strong>Lesson:</strong> čekat na CONFIRM, ne lovit první impulse.</p>
+            </div>
+            <div class="flex gap-2 flex-wrap mb-3">
+              <span class="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-600 text-[8px] font-black uppercase">Brzký entry</span>
+              <span class="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-600 text-[8px] font-black uppercase">Bez confirm</span>
+            </div>
+            <div class="aspect-video rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 grid place-items-center text-slate-400 text-xs">
+              📊 Screenshot výsledku
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="note-1315" class="hidden"></div>
+
+    <!-- ========== NEW YORK SESSION ========== -->
+    <div class="relative mb-3 pl-16">
+      <div class="absolute left-6 top-4 -translate-x-1/2 w-3 h-3 rounded-full bg-orange-500 dot"></div>
+      <div class="absolute left-0 top-2 text-[10px] font-black text-slate-400 tracking-widest">15:30</div>
+
+      <!-- COLLAPSED — buď prázdné (čeká) nebo visual strip (hotovo) -->
+      <div id="ny-collapsed" class="rounded-2xl border border-orange-200 bg-orange-50/30 cursor-pointer hover:bg-orange-50 overflow-hidden">
+        <div class="flex items-center justify-between p-4 pb-3">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-xl bg-orange-500 text-white grid place-items-center text-base">🇺🇸</div>
+            <div>
+              <h3 class="text-xs font-black uppercase tracking-widest">New York <span id="ny-collapsed-summary" class="text-slate-500 ml-1 font-normal"></span></h3>
+              <p id="ny-collapsed-time" class="text-[10px] text-slate-500">15:30 – 17:00 · NY otevírá za 6h 30m</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div id="ny-collapsed-status" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[9px] font-black uppercase">Čeká</div>
+            <span class="text-slate-400 text-xs">▾</span>
+          </div>
+        </div>
+        <!-- Visual strip — viditelný jen když je hotovo -->
+        <div id="ny-collapsed-strip" class="hidden flex gap-2 px-4 pb-4 items-stretch">
+          <div class="shrink-0 flex flex-col gap-1">
+            <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">Analýza</p>
+            <div class="w-28 h-20 rounded-lg overflow-hidden border border-orange-200 bg-gradient-to-br from-slate-100 to-slate-200 grid place-items-center text-slate-400 text-[9px]">📊 chart</div>
+          </div>
+          <div class="flex flex-col justify-center items-center gap-1 px-1 shrink-0 text-slate-300">→</div>
+          <div class="flex-1 min-w-0 flex gap-1.5 items-center overflow-x-auto">
+            <div class="shrink-0 flex flex-col gap-1">
+              <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">16:08</p>
+              <div class="relative w-24 h-16 rounded-lg overflow-hidden border border-rose-200 bg-gradient-to-br from-slate-100 to-slate-200">
+                <div class="absolute inset-0 grid place-items-center text-slate-400 text-[8px]">📈 trade</div>
+                <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent p-1">
+                  <p class="text-[10px] font-black font-mono text-white text-right leading-none">-$30</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="flex flex-col justify-center items-center gap-1 px-1 shrink-0 text-slate-300">→</div>
+          <div class="shrink-0 flex flex-col gap-1">
+            <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">Breakdown</p>
+            <div class="w-28 h-20 rounded-lg overflow-hidden border border-violet-200 bg-gradient-to-br from-slate-100 to-slate-200 grid place-items-center text-slate-400 text-[9px]">📊 result</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPANDED (hidden by default in this mockup) -->
+      <div id="ny-expanded" class="hidden rounded-3xl border border-orange-200 bg-white shadow-sm overflow-hidden">
+        <div class="flex items-center justify-between p-5 border-b border-slate-100">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-orange-500 text-white grid place-items-center text-lg">🇺🇸</div>
+            <div>
+              <h3 class="text-sm font-black uppercase tracking-widest">New York Session</h3>
+              <p class="text-[10px] text-slate-500">15:30 – 17:00</p>
+            </div>
+          </div>
+          <div class="px-3 py-1 rounded-full bg-orange-500/10 text-orange-600 text-[9px] font-black uppercase">Kick-off čeká</div>
+        </div>
+        <div class="p-5 text-center py-8 border-2 border-dashed border-slate-300 m-5 rounded-2xl">
+          <p class="text-3xl mb-2">📊</p>
+          <p class="text-xs text-slate-500 mb-3">15:00 - naplánuj NY (bias, levely, plán)</p>
+          <button class="px-4 py-2 rounded-xl bg-orange-600 text-white text-[10px] font-black uppercase tracking-widest">
+            Naplánuj NY →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 18:00 VEČERNÍ AUDIT ========== -->
+    <div class="relative pl-16">
+      <div class="absolute left-6 top-4 -translate-x-1/2 w-3 h-3 rounded-full bg-indigo-500 dot"></div>
+      <div class="absolute left-0 top-2 text-[10px] font-black text-slate-400 tracking-widest">18:00</div>
+
+      <!-- COLLAPSED (default for non-evening) -->
+      <div id="audit-collapsed" class="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/30 cursor-pointer hover:bg-indigo-50">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-xl bg-indigo-500 text-white grid place-items-center text-base">🌙</div>
+            <div>
+              <h3 class="text-xs font-black uppercase tracking-widest">Večerní audit</h3>
+              <p class="text-[10px] text-slate-500">Vyplníš po obou sessions · 2 quick notes čekají</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[9px] font-black uppercase">Čeká</div>
+            <span class="text-slate-400 text-xs">▾</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPANDED -->
+      <div id="audit-expanded" class="hidden p-5 rounded-3xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-white shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-indigo-500 text-white grid place-items-center text-lg">🌙</div>
+            <div>
+              <h3 class="text-sm font-black uppercase tracking-widest">Večerní audit</h3>
+              <p class="text-[10px] text-slate-500">Compressed reflexe — co si odnášíš</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick notes summary -->
+        <div class="p-4 rounded-xl bg-violet-50 border border-violet-200 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <p class="text-[9px] font-black uppercase tracking-widest text-violet-600">💭 Myšlenky z dnešku (2)</p>
+            <button class="text-[9px] font-black uppercase tracking-widest text-violet-500 hover:text-violet-700">+ přidat</button>
+          </div>
+          <div class="space-y-2">
+            <div class="p-2.5 rounded-lg bg-white border border-violet-100">
+              <div class="flex items-start gap-2 mb-1">
+                <span class="text-[10px] font-mono font-black text-violet-400">08:45</span>
+                <p class="text-[11px] text-slate-700 leading-relaxed italic flex-1">"Dneska se cítím lépe než včera, ale pořád ten tlak s miminkem. Soustředit se na proces, ne na peníze."</p>
+              </div>
+            </div>
+            <div class="p-2.5 rounded-lg bg-white border border-violet-100">
+              <div class="flex items-start gap-2 mb-1">
+                <span class="text-[10px] font-mono font-black text-violet-400">13:15</span>
+                <p class="text-[11px] text-slate-700 leading-relaxed italic flex-1">"Včerejší debrief mi pořád sedí v hlavě. Trpělivost je všechno. Možná bych měl psát si mood check každou hodinu."</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-3 rounded-xl bg-white border border-slate-200 mb-4">
+          <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Den P&L</p>
+          <p class="text-base font-black font-mono text-emerald-600">+$57</p>
+        </div>
+
+        <div class="p-3 rounded-xl bg-white border border-slate-200 mb-3">
+          <p class="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-2">Co si odnášíš</p>
+          <p class="text-xs text-slate-700 leading-relaxed">Trpělivost mi pořád dělá problém. London příliš brzy, NY už lépe. Sim mě zachraňuje od zbytečných ztrát.</p>
+        </div>
+
+        <div class="p-3 rounded-xl bg-blue-50 border border-blue-100">
+          <p class="text-[8px] font-black uppercase text-blue-600 tracking-widest mb-2">Plán na zítra</p>
+          <p class="text-xs text-slate-700 leading-relaxed">Pre-market checklist přidat: počkat na M1 BOS po retest, nelovit první impulse.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== FLOATING QUICK NOTE BUTTON ========== -->
+  <div class="fixed bottom-8 right-8 z-50">
+    <button class="w-14 h-14 rounded-full bg-violet-600 text-white shadow-2xl shadow-violet-600/40 grid place-items-center hover:scale-110 transition-all">
+      <span class="text-2xl">💭</span>
+    </button>
+    <div class="absolute bottom-full right-0 mb-2 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest whitespace-nowrap pointer-events-none opacity-90">
+      Quick note (cokoli tě napadne)
+    </div>
+  </div>
+
+  <!-- Footer pozn. -->
+  <div class="mt-10 p-5 rounded-2xl bg-slate-900 text-white">
+    <h4 class="text-sm font-black uppercase tracking-widest mb-3">🎯 Klíčové rozdíly oproti současnému Deníku</h4>
+    <ul class="space-y-2 text-xs leading-relaxed">
+      <li>• <strong>Session karta = full lifecycle</strong> (kick-off plán + live trades + debrief reflexe — vše na 1 místě)</li>
+      <li>• <strong>Ranní aktivace zhubla</strong> — jen rituály + commitments + afirmace (60 sekund místo 10 min)</li>
+      <li>• <strong>Pre-session analýza tam kde patří</strong> — v Session kartě, otevřeš ji ~30 min před start</li>
+      <li>• <strong>Večerní audit compressed</strong> — jen high-level reflexe (detail je v per-session debriefech)</li>
+      <li>• <strong>Časová osa dává smysl</strong> — 8:00 rituál, 9:00 London kick-off, 11:00 London debrief, 15:30 NY...</li>
+      <li>• <strong>Status indikátory</strong> — vidíš jasně co je vyplněno / čeká / probíhá</li>
+    </ul>
+  </div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function show(id, visible = true) { $(id)?.classList.toggle('hidden', !visible); }
+
+function setState(state) {
+  // Helpers
+  const lkEmpty = $('london-kickoff-empty');
+  const lkFilled = $('london-kickoff-filled');
+  const lLive = $('london-live');
+  const ldEmpty = $('london-debrief-empty');
+  const ldFilled = $('london-debrief-filled');
+  const lStatus = $('london-status');
+
+  if (state === 'morning') {
+    // 8:30 — ranní aktivace EXPANDED, sessions collapsed, žádné notes
+    show('morning-expanded', true); show('morning-collapsed', false);
+    show('note-0845', false);
+    // London collapsed empty
+    show('london-collapsed', true); show('london-expanded', false);
+    $('london-collapsed-summary').textContent = '— Kick-off pending';
+    $('london-collapsed-status').textContent = 'Pending';
+    $('london-collapsed-status').className = 'px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 text-[9px] font-black uppercase';
+    show('note-1315', false);
+    show('ny-collapsed', true); show('ny-expanded', false);
+    show('audit-collapsed', true); show('audit-expanded', false);
+  } else if (state === 'midday') {
+    // 10:30 — ranní collapsed, London EXPANDED live, note 8:45 viditelný
+    show('morning-expanded', false); show('morning-collapsed', true);
+    show('note-0845', true);
+    // London expanded mid-session
+    show('london-collapsed', false); show('london-expanded', true);
+    lkEmpty.classList.add('hidden'); lkFilled.classList.remove('hidden');
+    lLive.classList.remove('hidden');
+    ldEmpty.classList.remove('hidden'); ldFilled.classList.add('hidden');
+    lStatus.textContent = '● Live';
+    lStatus.className = 'px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase';
+    show('note-1315', false);
+    show('ny-collapsed', true); show('ny-expanded', false);
+    show('audit-collapsed', true); show('audit-expanded', false);
+  } else if (state === 'afternoon') {
+    // 13:00 — vše collapsed, 2 notes, NY čeká
+    show('morning-expanded', false); show('morning-collapsed', true);
+    show('note-0845', true);
+    show('london-collapsed', true); show('london-expanded', false);
+    $('london-collapsed-summary').textContent = '— bearish · 2 trades · +$57';
+    $('london-collapsed-status').textContent = '✓ Hotovo';
+    $('london-collapsed-status').className = 'px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase';
+    show('note-1315', true);
+    show('ny-collapsed', true); show('ny-expanded', false);
+    show('audit-collapsed', true); show('audit-expanded', false);
+  } else if (state === 'evening') {
+    // 18:00 — vše collapsed s visual strip, audit EXPANDED s quick notes
+    show('morning-expanded', false); show('morning-collapsed', true);
+    show('london-collapsed', true); show('london-expanded', false);
+    show('ny-collapsed', true); show('ny-expanded', false);
+    $('ny-collapsed-summary').innerHTML = '— neutral · 1 trade · <span class="text-rose-600 font-mono">−$30</span>';
+    $('ny-collapsed-time').textContent = '15:30 – 17:00';
+    $('ny-collapsed-status').textContent = '✓ Hotovo';
+    $('ny-collapsed-status').className = 'px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase';
+    $('ny-collapsed-strip').classList.remove('hidden');
+    $('ny-collapsed-strip').classList.add('flex');
+    show('audit-collapsed', false); show('audit-expanded', true);
+  }
+}
+// Default: morning
+setState('morning');
+
+// Make collapsed cards clickable for quick toggle preview
+['morning', 'london', 'ny', 'audit'].forEach(name => {
+  $(`${name}-collapsed`)?.addEventListener('click', () => {
+    show(`${name}-collapsed`, false); show(`${name}-expanded`, true);
+  });
+});
+</script>
+
+</body>
+</html>
