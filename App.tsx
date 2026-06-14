@@ -2768,7 +2768,7 @@ const App: React.FC = () => {
       />
 
       <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
-        <header className={`absolute top-0 right-0 z-40 px-6 py-2 flex items-center justify-between transition-all liquid-glass-header ${isSidebarCollapsed ? 'lg:left-[72px]' : 'lg:left-[240px]'} left-0 ${isNetworkSpectating ? 'hidden' : ''}`}>
+        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-2xl floating-glass-header ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
           <div className="flex items-center gap-3">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border transition-all duration-200 ${
@@ -2991,7 +2991,7 @@ const App: React.FC = () => {
 
         {/* AI Coach — renders directly in <main>, bypasses PullToRefresh/scroll container */}
         {activePage === 'ai' && (
-          <div className="flex-1 overflow-hidden h-full pt-[57px]">
+          <div className="flex-1 overflow-hidden h-full pt-[80px] lg:pt-[96px]">
             <React.Suspense fallback={<div className="flex-1" />}>
               <AICoachPage
                 trades={trades}
@@ -3096,7 +3096,7 @@ const App: React.FC = () => {
             onRefresh={handleRefreshData}
             disabled={!session || loading}
           >
-            <div className="flex-1 overflow-x-hidden px-4 lg:px-8 pb-12 pt-[57px]">
+            <div className="flex-1 overflow-x-hidden px-4 lg:px-8 pb-12 pt-[80px] lg:pt-[96px]">
               {syncError && (
                 <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
                   <AlertTriangle size={16} />
