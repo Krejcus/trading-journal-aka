@@ -3079,12 +3079,12 @@ const App: React.FC = () => {
           </div>
         )}
 
-        <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''} pt-[57px]`}>
+        <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''}`}>
           <PullToRefresh
             onRefresh={handleRefreshData}
             disabled={!session || loading}
           >
-            <div className="flex-1 overflow-x-hidden p-4 lg:p-8 pb-12">
+            <div className="flex-1 overflow-x-hidden px-4 lg:px-8 pb-12 pt-[57px]">
               {syncError && (
                 <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
                   <AlertTriangle size={16} />
