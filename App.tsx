@@ -29,6 +29,7 @@ import BottomNav from './components/BottomNav';
 import LockedFeatureModal from './components/LockedFeatureModal';
 import { canAccess } from './utils/featureGating';
 import FilterDropdown from './components/FilterDropdown';
+import { LiquidGlassHeader } from './components/LiquidGlassHeader';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
 import { PullToRefresh } from './components/PullToRefresh';
@@ -2769,29 +2770,25 @@ const App: React.FC = () => {
 
       <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
         <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-2xl floating-glass-header ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
-          <div className="flex items-center gap-3">
+          <LiquidGlassHeader theme={theme} />
+          
+          <div className="flex items-center gap-3 relative z-10">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
-            <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border transition-all duration-200 ${
-              theme !== 'light'
-                ? 'bg-white/5 border-white/10 text-white shadow-[0_2px_8px_rgba(0,0,0,0.2)] shadow-inner'
-                : 'bg-white/40 border-black/5 text-slate-800 shadow-sm backdrop-blur-sm'
-            }`}>
-              <h2 className="text-xl font-black uppercase tracking-tighter whitespace-nowrap">
-                {activePage === 'dashboard' && 'Dashboard'}
-                {activePage === 'history' && 'Historie obchodu'}
-                {activePage === 'insights' && 'Insights'}
-                {activePage === 'journal' && 'Deník'}
-                {activePage === 'accounts' && 'Portfolio'}
-                {activePage === 'settings' && 'Nastavení'}
-                {activePage === 'network' && 'Síť'}
-                {activePage === 'business' && 'Business Hub'}
-                {activePage === 'ai' && 'AI Coach'}
-              </h2>
-            </div>
+            <h2 className={`text-xl font-black uppercase tracking-tighter whitespace-nowrap ${theme !== 'light' ? 'text-white' : 'text-slate-800'}`}>
+              {activePage === 'dashboard' && 'Dashboard'}
+              {activePage === 'history' && 'Historie obchodu'}
+              {activePage === 'insights' && 'Insights'}
+              {activePage === 'journal' && 'Deník'}
+              {activePage === 'accounts' && 'Portfolio'}
+              {activePage === 'settings' && 'Nastavení'}
+              {activePage === 'network' && 'Síť'}
+              {activePage === 'business' && 'Business Hub'}
+              {activePage === 'ai' && 'AI Coach'}
+            </h2>
           </div>
 
           {activePage === 'journal' && (
-            <div className="hidden md:flex flex-1 justify-center">
+            <div className="hidden md:flex flex-1 justify-center relative z-10">
               <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'daily', label: 'Dnešek', icon: Clock },
@@ -2820,7 +2817,7 @@ const App: React.FC = () => {
           )}
 
           {activePage === 'business' && (
-            <div className="hidden md:flex flex-1 justify-center">
+            <div className="hidden md:flex flex-1 justify-center relative z-10">
               <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'financials', label: 'Finance', icon: DollarSign },
@@ -2848,7 +2845,7 @@ const App: React.FC = () => {
           )}
 
           {activePage === 'network' && (
-            <div className="hidden md:flex flex-1 justify-center">
+            <div className="hidden md:flex flex-1 justify-center relative z-10">
               <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'feed', label: 'Feed', icon: Activity },
@@ -2879,7 +2876,7 @@ const App: React.FC = () => {
           )}
 
           {activePage === 'settings' && (
-            <div className="hidden md:flex flex-1 justify-center">
+            <div className="hidden md:flex flex-1 justify-center relative z-10">
               <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'psychology', label: 'Psychologie', icon: Brain },
@@ -2908,84 +2905,77 @@ const App: React.FC = () => {
             </div>
           )}
 
-          <div className="flex items-center gap-6">
-            {/* Apple iOS-Style Grouped Actions Segment */}
-            <div className={`p-1 rounded-2xl border flex items-center gap-1.5 transition-all duration-200 ${
-              theme !== 'light'
-                ? 'bg-black/25 border-white/5 shadow-[0_2px_8px_rgba(0,0,0,0.2)]'
-                : 'bg-slate-100 border-slate-200/80 shadow-xs'
-            }`}>
-              {/* Item 1: Dashboard Mode Status */}
-              <div className="hidden md:flex items-center">
-                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all duration-200 select-none ${
-                  theme !== 'light'
-                    ? 'bg-white/5 border-white/10 text-white shadow-inner'
-                    : 'bg-white border-slate-200/80 text-slate-800 shadow-xs'
-                }`}>
-                  <div className="relative flex h-1.5 w-1.5">
-                    <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                      dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' :
-                      dashboardMode === 'challenge' ? 'animate-ping bg-blue-400' :
-                      dashboardMode === 'backtesting' ? 'animate-ping bg-violet-400' :
-                      'animate-ping bg-orange-400'
-                    }`}></span>
-                    <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
-                      dashboardMode === 'funded' ? 'bg-emerald-500' :
-                      dashboardMode === 'challenge' ? 'bg-blue-500' :
-                      dashboardMode === 'backtesting' ? 'bg-violet-500' :
-                      'bg-orange-500'
-                    }`}></span>
-                  </div>
-                  <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${
-                    dashboardMode === 'funded' ? 'text-emerald-400' :
-                    dashboardMode === 'challenge' ? 'text-blue-400' :
-                    dashboardMode === 'backtesting' ? 'text-violet-400' :
-                    'text-orange-400'
-                  }`}>
-                    {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : dashboardMode === 'backtesting' ? 'Backtesting' : 'All'}
-                  </span>
+          <div className="flex items-center gap-2 md:gap-3 relative z-10">
+            {/* Item 1: Dashboard Mode Status */}
+            <div className="hidden md:flex items-center">
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all duration-200 select-none ${
+                theme !== 'light'
+                  ? 'bg-white/5 border-white/10 text-white shadow-inner'
+                  : 'bg-white border-slate-200/80 text-slate-800 shadow-xs'
+              }`}>
+                <div className="relative flex h-1.5 w-1.5">
+                  <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' :
+                    dashboardMode === 'challenge' ? 'animate-ping bg-blue-400' :
+                    dashboardMode === 'backtesting' ? 'animate-ping bg-violet-400' :
+                    'animate-ping bg-orange-400'
+                  }`}></span>
+                  <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
+                    dashboardMode === 'funded' ? 'bg-emerald-500' :
+                    dashboardMode === 'challenge' ? 'bg-blue-500' :
+                    dashboardMode === 'backtesting' ? 'bg-violet-500' :
+                    'bg-orange-500'
+                  }`}></span>
                 </div>
+                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${
+                  dashboardMode === 'funded' ? 'text-emerald-400' :
+                  dashboardMode === 'challenge' ? 'text-blue-400' :
+                  dashboardMode === 'backtesting' ? 'text-violet-400' :
+                  'text-orange-400'
+                }`}>
+                  {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : dashboardMode === 'backtesting' ? 'Backtesting' : 'All'}
+                </span>
               </div>
-
-              {/* Item 2: Filter Dropdown */}
-              <FilterDropdown
-                filters={filters}
-                setFilters={setFilters}
-                accounts={contextAccounts}
-                trades={trades}
-                theme={theme}
-                isDashboardEditing={activePage === 'dashboard' ? isDashboardEditing : undefined}
-                setIsDashboardEditing={activePage === 'dashboard' ? setIsDashboardEditing : undefined}
-                isMobileEditing={activePage === 'dashboard' ? isMobileEditing : undefined}
-                setIsMobileEditing={activePage === 'dashboard' ? setIsMobileEditing : undefined}
-                dashboardMode={dashboardMode}
-                setDashboardMode={(v) => { setDashFocusAccount(null); setDashboardMode(v); markPreferencesDirty(); }}
-                viewMode={viewMode}
-                setViewMode={setViewMode}
-                pnlDisplayMode={pnlDisplayMode}
-                setPnlDisplayMode={setPnlDisplayMode}
-                historyLayoutMode={activePage === 'history' ? historyLayoutMode : undefined}
-                setHistoryLayoutMode={activePage === 'history' ? setHistoryLayoutMode : undefined}
-                grouped={true}
-              />
-
-              {/* Item 3: Theme Toggle Button */}
-              <button
-                onClick={() => {
-                  let newTheme: 'dark' | 'light' | 'oled' = 'dark';
-                  if (theme === 'dark') newTheme = 'light';
-                  else if (theme === 'light') newTheme = 'oled';
-                  setTheme(newTheme);
-                }}
-                className={`p-2.5 rounded-xl border transition-all duration-200 ${
-                  theme !== 'light'
-                    ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white shadow-inner'
-                    : 'bg-white border-slate-200/80 hover:bg-slate-50 text-slate-700 shadow-xs'
-                }`}
-              >
-                {theme === 'light' ? <Sun size={20} /> : (theme === 'oled' ? <Zap size={20} className="text-blue-500" /> : <Moon size={20} />)}
-              </button>
             </div>
+
+            {/* Item 2: Filter Dropdown */}
+            <FilterDropdown
+              filters={filters}
+              setFilters={setFilters}
+              accounts={contextAccounts}
+              trades={trades}
+              theme={theme}
+              isDashboardEditing={activePage === 'dashboard' ? isDashboardEditing : undefined}
+              setIsDashboardEditing={activePage === 'dashboard' ? setIsDashboardEditing : undefined}
+              isMobileEditing={activePage === 'dashboard' ? isMobileEditing : undefined}
+              setIsMobileEditing={activePage === 'dashboard' ? setIsMobileEditing : undefined}
+              dashboardMode={dashboardMode}
+              setDashboardMode={(v) => { setDashFocusAccount(null); setDashboardMode(v); markPreferencesDirty(); }}
+              viewMode={viewMode}
+              setViewMode={setViewMode}
+              pnlDisplayMode={pnlDisplayMode}
+              setPnlDisplayMode={setPnlDisplayMode}
+              historyLayoutMode={activePage === 'history' ? historyLayoutMode : undefined}
+              setHistoryLayoutMode={activePage === 'history' ? setHistoryLayoutMode : undefined}
+              grouped={false}
+            />
+
+            {/* Item 3: Theme Toggle Button */}
+            <button
+              onClick={() => {
+                let newTheme: 'dark' | 'light' | 'oled' = 'dark';
+                if (theme === 'dark') newTheme = 'light';
+                else if (theme === 'light') newTheme = 'oled';
+                setTheme(newTheme);
+              }}
+              className={`p-2.5 rounded-xl border transition-all duration-200 ${
+                theme !== 'light'
+                  ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white shadow-inner'
+                  : 'bg-white border-slate-200/80 hover:bg-slate-50 text-slate-700 shadow-xs'
+              }`}
+            >
+              {theme === 'light' ? <Sun size={20} /> : (theme === 'oled' ? <Zap size={20} className="text-blue-500" /> : <Moon size={20} />)}
+            </button>
           </div>
         </header>
 

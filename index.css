@@ -1102,26 +1102,29 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
     0 6px 16px rgba(15, 23, 42, 0.08) !important;
 }
 
-/* Liquid Glass Top Header styles for light, dark, and oled themes */
-.liquid-glass-header {
-  background: rgba(10, 15, 30, 0.01) !important;
+/* Floating Glass Top Header styles for WebGL shader transparency */
+.floating-glass-header {
+  background: transparent !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
-.light-theme .liquid-glass-header {
-  background: rgba(255, 255, 255, 0.01) !important;
+.light-theme .floating-glass-header {
+  background: transparent !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.05) !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
-.oled-theme .liquid-glass-header {
-  background: rgba(0, 0, 0, 0.01) !important;
+.oled-theme .floating-glass-header {
+  background: transparent !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
 
