@@ -23,6 +23,7 @@ interface FilterDropdownProps {
   setPnlDisplayMode?: (mode: PnLDisplayMode) => void;
   historyLayoutMode?: 'grid' | 'table';
   setHistoryLayoutMode?: (mode: 'grid' | 'table') => void;
+  grouped?: boolean;
 }
 
 const TRADING_DAYS = ['Po', 'Út', 'St', 'Čt', 'Pá'];
@@ -45,7 +46,8 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   pnlDisplayMode,
   setPnlDisplayMode,
   historyLayoutMode,
-  setHistoryLayoutMode
+  setHistoryLayoutMode,
+  grouped = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
@@ -597,11 +599,19 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
       <button
         ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
-        className={`p-3 rounded-xl border transition-all duration-200 relative ${
-          isOpen
-            ? (isDark ? 'bg-white/15 border-white/25 text-white backdrop-blur-md shadow-[0_0_15px_rgba(255,255,255,0.05)]' : 'bg-white/80 border-slate-300 text-slate-900 shadow-sm backdrop-blur-sm')
-            : (isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white' : 'bg-white/40 border-black/5 hover:bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm')
-        }`}
+        className={grouped ? (
+          `p-2.5 rounded-lg transition-all duration-200 relative ${
+            isOpen
+              ? (isDark ? 'bg-white/15 text-white' : 'bg-slate-200/80 text-slate-900 shadow-xs')
+              : (isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-200/60 text-slate-700')
+          }`
+        ) : (
+          `p-3 rounded-xl border transition-all duration-200 relative ${
+            isOpen
+              ? (isDark ? 'bg-white/15 border-white/25 text-white backdrop-blur-md shadow-[0_0_15px_rgba(255,255,255,0.05)]' : 'bg-white/80 border-slate-300 text-slate-900 shadow-sm backdrop-blur-sm')
+              : (isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white' : 'bg-white/40 border-black/5 hover:bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm')
+          }`
+        )}
         title="Filtrovat data & Nástroje"
       >
         <Filter size={20} />

@@ -2768,7 +2768,7 @@ const App: React.FC = () => {
       />
 
       <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
-        <header className={`absolute top-0 left-0 right-0 z-40 px-6 py-2 flex items-center justify-between transition-all liquid-glass-header ${isNetworkSpectating ? 'hidden' : ''}`}>
+        <header className={`absolute top-0 right-0 z-40 px-6 py-2 flex items-center justify-between transition-all liquid-glass-header ${isSidebarCollapsed ? 'lg:left-[72px]' : 'lg:left-[240px]'} left-0 ${isNetworkSpectating ? 'hidden' : ''}`}>
           <div className="flex items-center gap-3">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border transition-all duration-200 ${
@@ -2909,40 +2909,45 @@ const App: React.FC = () => {
           )}
 
           <div className="flex items-center gap-6">
-            {/* Dashboard Mode Status - Premium Glass Badge Design */}
-            <div className="hidden md:flex items-center">
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all duration-200 ${
-                theme !== 'light'
-                  ? 'bg-white/5 border-white/10 shadow-[0_2px_8px_rgba(0,0,0,0.2)] shadow-inner'
-                  : 'bg-white/40 border-black/5 backdrop-blur-sm shadow-sm'
-              }`}>
-                <div className="relative flex h-1.5 w-1.5">
-                  <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                    dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' :
-                    dashboardMode === 'challenge' ? 'animate-ping bg-blue-400' :
-                    dashboardMode === 'backtesting' ? 'animate-ping bg-violet-400' :
-                    'animate-ping bg-orange-400'
-                  }`}></span>
-                  <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
-                    dashboardMode === 'funded' ? 'bg-emerald-500' :
-                    dashboardMode === 'challenge' ? 'bg-blue-500' :
-                    dashboardMode === 'backtesting' ? 'bg-violet-500' :
-                    'bg-orange-500'
-                  }`}></span>
+            {/* Apple iOS-Style Grouped Actions Segment */}
+            <div className={`p-1.5 rounded-2xl border flex items-center gap-1 transition-all duration-200 ${
+              theme !== 'light'
+                ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm'
+                : 'bg-white/40 border-black/5 shadow-sm backdrop-blur-sm'
+            }`}>
+              {/* Item 1: Dashboard Mode Status */}
+              <div className="hidden md:flex items-center">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all duration-200 select-none">
+                  <div className="relative flex h-1.5 w-1.5">
+                    <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                      dashboardMode === 'funded' ? 'animate-ping bg-emerald-400' :
+                      dashboardMode === 'challenge' ? 'animate-ping bg-blue-400' :
+                      dashboardMode === 'backtesting' ? 'animate-ping bg-violet-400' :
+                      'animate-ping bg-orange-400'
+                    }`}></span>
+                    <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
+                      dashboardMode === 'funded' ? 'bg-emerald-500' :
+                      dashboardMode === 'challenge' ? 'bg-blue-500' :
+                      dashboardMode === 'backtesting' ? 'bg-violet-500' :
+                      'bg-orange-500'
+                    }`}></span>
+                  </div>
+                  <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${
+                    dashboardMode === 'funded' ? 'text-emerald-400' :
+                    dashboardMode === 'challenge' ? 'text-blue-400' :
+                    dashboardMode === 'backtesting' ? 'text-violet-400' :
+                    'text-orange-400'
+                  }`}>
+                    {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : dashboardMode === 'backtesting' ? 'Backtesting' : 'All'}
+                  </span>
                 </div>
-                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${
-                  dashboardMode === 'funded' ? 'text-emerald-400' :
-                  dashboardMode === 'challenge' ? 'text-blue-400' :
-                  dashboardMode === 'backtesting' ? 'text-violet-400' :
-                  'text-orange-400'
-                }`}>
-                  {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : dashboardMode === 'backtesting' ? 'Backtesting' : 'All'}
-                </span>
               </div>
-            </div>
 
-            <div className="flex items-center gap-3">
-<FilterDropdown
+              {/* Divider 1 */}
+              <div className={`hidden md:block w-px h-5 self-center ${theme !== 'light' ? 'bg-white/10' : 'bg-black/10'}`} />
+
+              {/* Item 2: Filter Dropdown */}
+              <FilterDropdown
                 filters={filters}
                 setFilters={setFilters}
                 accounts={contextAccounts}
@@ -2960,8 +2965,13 @@ const App: React.FC = () => {
                 setPnlDisplayMode={setPnlDisplayMode}
                 historyLayoutMode={activePage === 'history' ? historyLayoutMode : undefined}
                 setHistoryLayoutMode={activePage === 'history' ? setHistoryLayoutMode : undefined}
+                grouped={true}
               />
 
+              {/* Divider 2 */}
+              <div className={`w-px h-5 self-center ${theme !== 'light' ? 'bg-white/10' : 'bg-black/10'}`} />
+
+              {/* Item 3: Theme Toggle Button */}
               <button
                 onClick={() => {
                   let newTheme: 'dark' | 'light' | 'oled' = 'dark';
@@ -2969,7 +2979,11 @@ const App: React.FC = () => {
                   else if (theme === 'light') newTheme = 'oled';
                   setTheme(newTheme);
                 }}
-                className={`p-3 rounded-xl border transition-all duration-200 ${theme !== 'light' ? 'bg-white/5 border-white/10 hover:bg-white/10 text-white' : 'bg-white/40 border-black/5 hover:bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm'}`}
+                className={`p-2.5 rounded-xl transition-all duration-200 ${
+                  theme !== 'light'
+                    ? 'hover:bg-white/10 text-slate-400 hover:text-white'
+                    : 'hover:bg-slate-200/60 text-slate-700'
+                }`}
               >
                 {theme === 'light' ? <Sun size={20} /> : (theme === 'oled' ? <Zap size={20} className="text-blue-500" /> : <Moon size={20} />)}
               </button>
