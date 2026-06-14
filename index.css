@@ -1104,21 +1104,21 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 
 /* Liquid Glass Top Header styles for light, dark, and oled themes */
 .liquid-glass-header {
-  background: rgba(10, 15, 30, 0.05) !important;
+  background: rgba(10, 15, 30, 0.03) !important;
   backdrop-filter: blur(32px) saturate(140%) !important;
   -webkit-backdrop-filter: blur(32px) saturate(140%) !important;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
 
 .light-theme .liquid-glass-header {
-  background: rgba(255, 255, 255, 0.05) !important;
+  background: rgba(255, 255, 255, 0.03) !important;
   backdrop-filter: blur(32px) saturate(140%) !important;
   -webkit-backdrop-filter: blur(32px) saturate(140%) !important;
   border-bottom: 1px solid rgba(15, 23, 42, 0.05) !important;
 }
 
 .oled-theme .liquid-glass-header {
-  background: rgba(0, 0, 0, 0.02) !important;
+  background: rgba(0, 0, 0, 0.03) !important;
   backdrop-filter: blur(32px) saturate(140%) !important;
   -webkit-backdrop-filter: blur(32px) saturate(140%) !important;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
