@@ -2768,7 +2768,7 @@ const App: React.FC = () => {
       />
 
       <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
-        <header className={`absolute top-0 left-0 right-0 z-40 border-b px-6 py-2 flex items-center justify-between transition-all ${theme !== 'light' ? 'bg-black/5 border-white/5 backdrop-blur-[32px] shadow-[0_1px_0_rgba(255,255,255,0.06)_inset]' : 'bg-white/5 border-black/5 backdrop-blur-[32px] shadow-[0_1px_0_rgba(255,255,255,0.8)_inset]'} ${isNetworkSpectating ? 'hidden' : ''}`}>
+        <header className={`absolute top-0 left-0 right-0 z-40 px-6 py-2 flex items-center justify-between transition-all liquid-glass-header ${isNetworkSpectating ? 'hidden' : ''}`}>
           <div className="flex items-center gap-3">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl border transition-all duration-200 ${
@@ -3079,17 +3079,12 @@ const App: React.FC = () => {
           </div>
         )}
 
-        <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''} pt-[64px]`}>
+        <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''} pt-[57px]`}>
           <PullToRefresh
             onRefresh={handleRefreshData}
             disabled={!session || loading}
           >
-            <div className="flex-1 overflow-x-hidden p-4 lg:p-6 pb-12">
-              <div className={`w-full max-w-[1600px] mx-auto rounded-[32px] border transition-all duration-300 backdrop-blur-[32px] ${
-                theme !== 'light'
-                  ? 'bg-black/20 border-white/5 shadow-[0_8px_32px_rgba(0,0,0,0.35)] shadow-[inset_0_1.5px_2px_rgba(255,255,255,0.05)]'
-                  : 'bg-white/40 border-black/5 shadow-[0_8px_32px_rgba(15,23,42,0.03)] shadow-[inset_0_1.5px_2px_rgba(255,255,255,0.65)]'
-              } p-4 md:p-6 lg:p-8`}>
+            <div className="flex-1 overflow-x-hidden p-4 lg:p-8 pb-12">
               {syncError && (
                 <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
                   <AlertTriangle size={16} />
@@ -3386,7 +3381,6 @@ const App: React.FC = () => {
 
                 </React.Suspense>
               )}
-              </div>
             </div>
           </PullToRefresh>
         </div>
