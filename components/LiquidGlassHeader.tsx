@@ -43,12 +43,12 @@ const fragmentShaderSource = `
     f = mix(f, cos(q.x * 2.0 - q.y * 2.0 - time * 0.3) * 0.5 + 0.5, 0.4);
 
     if (theme == 1.0) {
-      // Light Theme: soft slate-silvers, golds, whites, and light ice-blues
-      vec3 colBase = vec3(0.97, 0.98, 0.99); 
-      vec3 colBlue = vec3(0.91, 0.94, 0.97); 
-      vec3 colGold = vec3(0.98, 0.95, 0.88); 
+      // Light Theme: cool silver-grey base with distinct pastel ice-blue and rose-gold swirls
+      vec3 colBase = vec3(0.93, 0.94, 0.96); 
+      vec3 colBlue = vec3(0.82, 0.88, 0.95); 
+      vec3 colGold = vec3(0.96, 0.88, 0.76); 
       vec3 color = mix(colBase, colBlue, f);
-      color = mix(color, colGold, dot(q, r) * 0.3 + 0.3);
+      color = mix(color, colGold, dot(q, r) * 0.4 + 0.3);
       return color;
     } else if (theme == 2.0) {
       // OLED Theme: pure black with very subtle dark slate and deep indigo highlights
@@ -132,7 +132,8 @@ const fragmentShaderSource = `
     float borderOpacity = u_theme == 1.0 ? 0.12 : 0.06;
     glassColor = mix(glassColor, borderCol, border * borderOpacity);
 
-    gl_FragColor = vec4(glassColor, 0.75);
+    float alpha = u_theme == 1.0 ? 0.55 : (u_theme == 2.0 ? 0.90 : 0.70);
+    gl_FragColor = vec4(glassColor, alpha);
   }
 `;
 
