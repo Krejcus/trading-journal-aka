@@ -29,7 +29,6 @@ import BottomNav from './components/BottomNav';
 import LockedFeatureModal from './components/LockedFeatureModal';
 import { canAccess } from './utils/featureGating';
 import FilterDropdown from './components/FilterDropdown';
-import { LiquidGlassHeader } from './components/LiquidGlassHeader';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
 import { PullToRefresh } from './components/PullToRefresh';
@@ -78,6 +77,35 @@ import type { Session } from '@supabase/supabase-js';
 import MorningBriefBanner from './components/MorningBriefBanner';
 
 const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
+
+// Liquid-glass displacement mapa — strukturovaný "bevel" (ne náhodný šum jako feTurbulence).
+// R kanál = horizontální offset, G = vertikální. Střed = 128/128 (neutrální, žádné zkreslení),
+// hladký lineární ramp jen na okrajích → ROVNÝ lom u hrany, žádné zvlnění.
+// Dvě crossed gradient vrstvy blendnuté přes mix-blend-mode:screen (R z horizontální, G z vertikální).
+// ASYMETRICKÝ: silný "fold" na horní hraně (obsah zespoda se přehne přes okraj = iluze
+// reflexe), jemná lupa dole, mírné boky. G kanál (vertikál): nahoře 255 (max → vzorkuje
+// zespoda = přehyb), rychle zpět na 128 (fold jen v úzkém horním pásu), střed flat, dole 190 (jemné).
+const GLASS_DISPLACEMENT_MAP = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  `<svg xmlns='http://www.w3.org/2000/svg' width='600' height='120'>` +
+  `<defs>` +
+  `<linearGradient id='h' x1='0' y1='0' x2='1' y2='0'>` +
+  `<stop offset='0' stop-color='rgb(64,0,0)'/>` +
+  `<stop offset='0.16' stop-color='rgb(128,0,0)'/>` +
+  `<stop offset='0.84' stop-color='rgb(128,0,0)'/>` +
+  `<stop offset='1' stop-color='rgb(192,0,0)'/>` +
+  `</linearGradient>` +
+  `<linearGradient id='v' x1='0' y1='0' x2='0' y2='1'>` +
+  `<stop offset='0' stop-color='rgb(0,190,0)'/>` +     /* horní fold (rim reflex) — vzorkuje zespoda */
+  `<stop offset='0.10' stop-color='rgb(0,128,0)'/>` +  /* fold jen v horních 10%, pak neutrál */
+  `<stop offset='0.92' stop-color='rgb(0,128,0)'/>` +  /* neutrál až dolů */
+  `<stop offset='1' stop-color='rgb(0,122,0)'/>` +     /* dolní hrana téměř neutrální = čistá, žádná lupa
+                                                          (backdrop-filter dole nemá co zrcadlit — viz výše) */
+  `</linearGradient>` +
+  `</defs>` +
+  `<rect width='600' height='120' fill='url(#h)'/>` +
+  `<rect width='600' height='120' fill='url(#v)' style='mix-blend-mode:screen'/>` +
+  `</svg>`
+);
 
 const DEFAULT_USER: User = {
   id: 'default_user',
@@ -2768,12 +2796,29 @@ const App: React.FC = () => {
         onClose={() => setLockedFeatureModal(null)}
       />
 
-      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[72px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[88px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
+        {/* SVG displacement filter pro liquid-glass edge refrakci (Stage 2).
+            Nízká baseFrequency = velké hladké blobу (jemné lámání), ne wavy koupelnové sklo.
+            scale řídí sílu ohybu — laditelné. Použito přes backdrop-filter: url(#liquid-glass). */}
+        <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute', pointerEvents: 'none' }}>
+          <filter id="liquid-glass" x="-25%" y="-25%" width="150%" height="150%" colorInterpolationFilters="sRGB">
+            {/* Strukturovaná bevel mapa = rovný lom na okrajích, žádné zvlnění (vs feTurbulence).
+                Větší region (150%) = displacement má kam "přetéct" → fold funguje na obou hranách. */}
+            <feImage href={GLASS_DISPLACEMENT_MAP} x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="map" />
+            <feDisplacementMap in="SourceGraphic" in2="map" scale={20} xChannelSelector="R" yChannelSelector="G" />
+          </filter>
+        </svg>
         <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-2xl floating-glass-header ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
-          <LiquidGlassHeader theme={theme} />
-          
           <div className="flex items-center gap-3 relative z-10">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
+            <div className="flex items-center gap-2.5 pr-1">
+              <img
+                src="/logos/at_logo_light_clean.png"
+                alt="Alpha Trade"
+                className={`h-8 w-8 object-contain shrink-0 ${theme !== 'light' ? 'drop-shadow-[0_0_12px_rgba(34,211,238,0.35)]' : ''}`}
+              />
+              <div className={`hidden xl:block h-6 w-px ${theme !== 'light' ? 'bg-white/15' : 'bg-slate-300/60'}`}></div>
+            </div>
             <h2 className={`text-xl font-black uppercase tracking-tighter whitespace-nowrap ${theme !== 'light' ? 'text-white' : 'text-slate-800'}`}>
               {activePage === 'dashboard' && 'Dashboard'}
               {activePage === 'history' && 'Historie obchodu'}
@@ -2938,6 +2983,8 @@ const App: React.FC = () => {
               </div>
             </div>
 
+            {/* Filtr + přepínač režimu — vlastní skupina blízko u sebe */}
+            <div className="flex items-center gap-1.5">
             {/* Item 2: Filter Dropdown */}
             <FilterDropdown
               filters={filters}
@@ -2976,6 +3023,7 @@ const App: React.FC = () => {
             >
               {theme === 'light' ? <Sun size={20} /> : (theme === 'oled' ? <Zap size={20} className="text-blue-500" /> : <Moon size={20} />)}
             </button>
+            </div>
           </div>
         </header>
 

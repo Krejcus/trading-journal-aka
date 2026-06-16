@@ -7,8 +7,22 @@ if (workbox) {
     workbox.precaching.precacheAndRoute(self.__WB_MANIFEST || []);
 }
 
-const CACHE_NAME = 'alphatrade-v6-build';
-const RUNTIME_CACHE = 'alphatrade-runtime';
+const CACHE_NAME = 'alphatrade-v7-build';
+const RUNTIME_CACHE = 'alphatrade-runtime-v7';
+
+// Dev/LAN host? (localhost, 127.x, *.local, privátní IP). Na těchto hostech je SW
+// jen na obtíž (drží starou verzi), proto se na nich kompletně odsekne.
+function isDevHost() {
+    const h = self.location.hostname;
+    return (
+        h === 'localhost' ||
+        h === '127.0.0.1' ||
+        h.endsWith('.local') ||
+        /^192\.168\./.test(h) ||
+        /^10\./.test(h) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(h)
+    );
+}
 
 // Install event - skip waiting immediately
 self.addEventListener('install', (event) => {
@@ -16,9 +30,23 @@ self.addEventListener('install', (event) => {
     self.skipWaiting();
 });
 
-// Activate event - cleanup old caches
+// Activate event
 self.addEventListener('activate', (event) => {
     console.log('[Service Worker] Activating...');
+    if (isDevHost()) {
+        // DEV KILL-SWITCH: smaž VŠECHNY cache, odregistruj sám sebe a reloadni
+        // všechny otevřené klienty (PWA na ploše). Tím se zaseklá stará verze
+        // natrvalo odsekne a appka pak bere vždy čerstvý kód ze sítě.
+        event.waitUntil((async () => {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+            await self.registration.unregister();
+            const clientList = await self.clients.matchAll({ type: 'window' });
+            clientList.forEach((client) => client.navigate(client.url));
+        })());
+        return;
+    }
+    // PROD: jen vyčistit staré cache, převzít klienty (offline zůstává funkční).
     event.waitUntil(
         caches.keys().then((cacheNames) => {
             return Promise.all(
@@ -37,6 +65,21 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
     const { request } = event;
     const url = new URL(request.url);
+
+    // DEV: na localhostu/LAN nikdy nekešovat — jinak Cache-First servíruje starý
+    // bundle a změny se projeví až po hard refresh. Necháme projít na síť.
+    // Pokrývá localhost, 127.x, *.local a privátní IP rozsahy (test na telefonu přes IP Macu).
+    const h = url.hostname;
+    const isDevHost =
+        h === 'localhost' ||
+        h === '127.0.0.1' ||
+        h.endsWith('.local') ||
+        /^192\.168\./.test(h) ||
+        /^10\./.test(h) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+    if (isDevHost) {
+        return;
+    }
 
     // Skip non-GET requests
     if (request.method !== 'GET') {

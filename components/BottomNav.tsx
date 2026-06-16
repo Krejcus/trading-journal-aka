@@ -89,9 +89,12 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
         )}
       </AnimatePresence>
 
-      {/* Bottom Navigation Bar */}
-      <nav className={`fixed bottom-0 left-0 right-0 z-[60] lg:hidden border-t ${isDark ? 'bg-black/80 border-white/10 backdrop-blur-2xl' : 'bg-white/90 border-slate-200 backdrop-blur-xl'}`}>
-        <div className="flex items-center justify-around px-2 pb-safe">
+      {/* Bottom Navigation Bar — plovoucí liquid glass pruh (stejné sklo jako desktop header) */}
+      <nav
+        style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' }}
+        className="fixed left-3 right-3 z-[60] lg:hidden rounded-2xl floating-glass-header glass-bar-clear"
+      >
+        <div className="relative z-10 flex items-center justify-around px-2">
           {mainItems.slice(0, 2).map((item) => {
             const Icon = item.icon;
             const isActive = activePage === item.id;

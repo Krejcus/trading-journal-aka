@@ -84,12 +84,14 @@ const Sidebar: React.FC<SidebarProps> = ({
     const isDark = theme !== 'light';
 
     // Base classes preserved from original (minus the width which is now animated)
+    // Aside = jen průhledný poziční kontejner (žádné sklo). Sklo má teď vnitřní
+    // plovoucí obdélník (floating-glass-header). p-3 = odsazení ostrůvků od kraje.
     const sidebarBaseClasses = `
-    fixed inset-y-0 left-0 z-[60] 
-    ${isDark ? 'bg-transparent border-r border-white/5 shadow-[20px_0_60px_-15px_rgba(0,0,0,0.3)]' : 'bg-transparent border-r border-white/10 shadow-[20px_0_60px_-15px_rgba(15,23,42,0.04)]'} 
-    liquid-glass-base
-    flex flex-col
-    lg:translate-x-0 lg:fixed lg:top-0 lg:h-screen overflow-hidden
+    fixed inset-y-0 left-0 z-[60]
+    bg-transparent
+    flex flex-col justify-center
+    p-3 gap-2
+    lg:translate-x-0 lg:fixed lg:top-0 lg:h-screen
   `;
 
     const navItemClass = (isActive: boolean) => `
@@ -129,7 +131,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             <motion.aside
                 initial={false}
                 animate={{
-                    width: isExpanded ? 240 : 72,
+                    width: isExpanded ? 240 : 88,
                     x: isOpen ? 0 : (window.innerWidth < 1024 ? -240 : 0)
                 }}
                 transition={{ type: "spring", stiffness: 300, damping: 30 }}
@@ -140,70 +142,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                     setIsClicked(false); // Reset click state on leave so it can re-expand on next hover
                 }}
             >
-                {/* Glossy Top Reflection */}
-                <div className={`absolute top-0 inset-x-0 h-48 bg-gradient-to-b ${isDark ? 'from-white/[0.05]' : 'from-white/60'} to-transparent pointer-events-none z-0`} />
+                {/* Plovoucí glass panel — čistá navigace (logo je v headeru) */}
+                <div className="floating-glass-header rounded-2xl flex flex-col max-h-full min-h-0 overflow-hidden relative">
 
-                {/* Header - Logo & Toggle */}
-                <div className="flex-shrink-0 relative">
-                    {/* BRANDING SECTION - AURORA HALO STYLE */}
-                    <div className="relative pt-6 h-[170px] flex items-center justify-center">
-                        {/* Background Aurora Effect */}
-                        {isExpanded && isDark && (
-                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-cyan-500/10 blur-[60px] rounded-full animate-pulse pointer-events-none"></div>
-                        )}
-
-                        <div
-                            className="relative flex flex-col items-center gap-3 transition-all duration-500 group cursor-default"
-                        >
-                            {/* Logo with Hover Glow */}
-                            <div className="h-[96px] flex items-center justify-center">
-                                <motion.div
-                                    initial={{ width: isExpanded ? 96 : 64, height: isExpanded ? 96 : 64 }}
-                                    animate={{ width: isExpanded ? 96 : 64, height: isExpanded ? 96 : 64 }}
-                                    className="relative shrink-0 flex items-center justify-center transition-all duration-500 text-center"
-                                >
-                                    <img
-                                        src="/logos/at_logo_light_clean.png"
-                                        alt="Alpha Trade Logo"
-                                        className={`
-                      w-full h-full object-contain transition-all duration-500 
-                      group-hover:scale-110
-                      ${isDark
-                                                ? 'drop-shadow-[0_0_20px_rgba(34,211,238,0.3)] group-hover:drop-shadow-[0_0_35px_rgba(34,211,238,0.6)]'
-                                                : 'group-hover:drop-shadow-[0_0_25px_rgba(34,211,238,0.4)]'
-                                            }
-                    `}
-                                    />
-                                </motion.div>
-                            </div>
-
-                            {/* Typography */}
-                            <div className="h-[24px] flex items-center justify-center">
-                                <AnimatePresence>
-                                    {isExpanded && (
-                                        <motion.div
-                                            initial={{ opacity: 0, y: 5 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            exit={{ opacity: 0, y: 5 }}
-                                            className="flex flex-col items-center text-center"
-                                        >
-                                            <h1 className={`
-                        uppercase leading-none whitespace-nowrap transition-all duration-500 font-extralight text-[18px] tracking-[0.5em]
-                        ${isDark ? 'text-white' : 'text-[var(--text-primary)]'}
-                      `}>
-                                                ALPHA <span className="text-cyan-500 font-normal">TRADE</span>
-                                            </h1>
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
-                            </div>
-                        </div>
-
-                        <button onClick={() => setIsOpen(false)} className="lg:hidden absolute top-6 right-6 p-2 hover:bg-white/10 rounded-full text-slate-400"><X size={20} /></button>
-                    </div>
+                    {/* Mobilní zavírací tlačítko */}
+                    <button onClick={() => setIsOpen(false)} className="lg:hidden absolute top-3 right-3 z-20 p-2 hover:bg-white/10 rounded-full text-slate-400"><X size={18} /></button>
 
                     {/* ZAPSAT OBCHOD - EMERALD GLASS STYLE */}
-                    <div className="px-4 mb-4 mt-6 h-10 flex items-center">
+                    <div className="px-2 pt-4 mb-2 h-10 flex items-center shrink-0">
                         <button
                             onClick={() => {
                                 setIsClicked(true);
@@ -233,10 +179,9 @@ const Sidebar: React.FC<SidebarProps> = ({
                             </AnimatePresence>
                         </button>
                     </div>
-                </div>
 
                 {/* Navigation - Scrollable Area */}
-                <nav className="flex-1 px-2 space-y-1 overflow-y-auto custom-scrollbar no-scrollbar py-2 relative z-10">
+                <nav className="flex-1 px-2 space-y-0.5 overflow-y-auto custom-scrollbar no-scrollbar py-1 relative z-10">
                     {[...mainItems, ...secondaryItems].map((item, idx) => {
                         const Icon = item.icon;
                         const isActive = activePage === item.id;
@@ -283,7 +228,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </nav>
 
                 {/* User Profile - Fixed at the Bottom - CLICKABLE */}
-                <div className={`px-3 py-4 mt-auto border-t transition-colors relative z-10 ${isDark ? 'border-white/5' : 'border-slate-200/50'}`}>
+                <div className={`px-2 py-4 border-t transition-colors relative z-10 ${isDark ? 'border-white/5' : 'border-slate-200/50'}`}>
                     <div
                         onClick={onOpenProfile}
                         className={`
@@ -337,6 +282,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                         {/* Subtle profile glow */}
                         <div className="absolute -inset-0 bg-gradient-to-br from-cyan-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
                     </div>
+                </div>
+                {/* /Sjednocený plovoucí glass obdélník */}
                 </div>
             </motion.aside>
             {/* SVG Filters for Liquid Glass Refraction Effect */}

@@ -606,7 +606,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
               : (isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white shadow-inner' : 'bg-white border-slate-200/80 hover:bg-slate-50 text-slate-700 shadow-xs')
           }`
         ) : (
-          `p-3 rounded-xl border transition-all duration-200 relative ${
+          `p-2.5 rounded-xl border transition-all duration-200 relative ${
             isOpen
               ? (isDark ? 'bg-white/15 border-white/25 text-white backdrop-blur-md shadow-[0_0_15px_rgba(255,255,255,0.05)]' : 'bg-white/80 border-slate-300 text-slate-900 shadow-sm backdrop-blur-sm')
               : (isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white' : 'bg-white/40 border-black/5 hover:bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm')
