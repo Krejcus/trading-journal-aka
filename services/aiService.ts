@@ -1,6 +1,7 @@
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview } from '../types';
 import { COACH_TOOLS, executeTool, describeToolCall } from './coachTools';
 import { getProfile, recallMemory, renderProfileForPrompt, getActiveCommitments, getRecentConversationSummaries } from './coachMemoryService';
+import { getPersonaBlock, DEFAULT_PERSONA, type CoachPersonaId } from './coachPersonas';
 import { supabase } from './supabase';
 
 // Anthropic API access goes through the `chat` Supabase Edge Function so the
@@ -632,6 +633,8 @@ export interface StreamOptions {
   voiceMode?: boolean;
   /** Model volba — 'analytical' (Sonnet) vs 'fast' (Haiku) */
   aiModel?: 'analytical' | 'fast';
+  /** Vyřešená persona coache (tón/osobnost) — řeší caller přes resolvePersona(). */
+  coachPersona?: CoachPersonaId;
   sessionPrompt?: string;
 }
 
@@ -648,334 +651,6 @@ function findToolNameById(messages: any[], id: string): string {
   return 'unknown_tool';
 }
 
-function translateMessagesToGemini(messages: any[]): any[] {
-  return messages.map(msg => {
-    const role = msg.role === 'assistant' ? 'model' : 'user';
-    if (typeof msg.content === 'string') {
-      return {
-        role,
-        parts: [{ text: msg.content }]
-      };
-    }
-    if (Array.isArray(msg.content)) {
-      const parts = msg.content.map((block: any) => {
-        if (block.type === 'text') {
-          return { text: block.text };
-        } else if (block.type === 'tool_use') {
-          const part: any = {
-            functionCall: {
-              name: block.name,
-              args: block.input || {}
-            }
-          };
-          const sig = block.thoughtSignature || block.thought_signature;
-          if (sig) {
-            part.thought_signature = sig;
-          }
-          return part;
-        } else if (block.type === 'tool_result') {
-          let parsedResponse = block.content;
-          try {
-            parsedResponse = JSON.parse(block.content);
-          } catch {
-            parsedResponse = { result: block.content };
-          }
-          return {
-            functionResponse: {
-              name: findToolNameById(messages, block.tool_use_id),
-              response: typeof parsedResponse === 'object' && parsedResponse !== null ? parsedResponse : { result: parsedResponse }
-            }
-          };
-        }
-        return null;
-      }).filter(Boolean);
-      return { role, parts };
-    }
-    return { role, parts: [] };
-  });
-}
-
-function convertSchemaToGemini(schema: any): any {
-  if (!schema) return undefined;
-  const converted: any = {};
-  if (schema.type) {
-    converted.type = schema.type.toUpperCase();
-  }
-  if (schema.description) {
-    converted.description = schema.description;
-  }
-  if (schema.properties) {
-    converted.properties = {};
-    for (const key of Object.keys(schema.properties)) {
-      converted.properties[key] = convertSchemaToGemini(schema.properties[key]);
-    }
-  }
-  if (schema.items) {
-    converted.items = convertSchemaToGemini(schema.items);
-  }
-  if (schema.required) {
-    converted.required = schema.required;
-  }
-  if (schema.enum) {
-    converted.enum = schema.enum;
-  }
-  return converted;
-}
-
-function convertToolsToGemini(tools: any[]): any[] {
-  return [
-    {
-      functionDeclarations: tools.map(t => ({
-        name: t.name,
-        description: t.description,
-        parameters: convertSchemaToGemini(t.input_schema)
-      }))
-    }
-  ];
-}
-
-function shouldExcludeHistoryStatsTools(query: string): boolean {
-  const q = query.toLowerCase();
-  const hasOldMonth = /[lI]eden|[uú]nor|b[rř]ezen|duben|kv[eě]ten|[cč]erven|[cč]ervenec|srpen|z[aá]r[ií]|[rř][ií]jen|listopad|prosinec|january|february|march|april|june|july|august|september|october|november|december/.test(q);
-  const hasOldYear = /2023|2024|2025|lo[nň]sk|minul[yý] rok|minul[eé]ho roku/.test(q);
-  const isCasual = q.length < 15 || /ahoj|[cč]us|zdar|dnes|v[cč]era|z[aá]v[aá]z|pamatuj|skv[eě]le|super|d[ií]k|ahojky/.test(q);
-  const isRecentFaq = /nejhor[sš]|nejlep[sš]|chyb|mistake|nej[cč]ast[eě]j[sš]|posledn[ií]|dohod|[pP]ravidl/i.test(q);
-  return (isCasual || isRecentFaq) && !hasOldMonth && !hasOldYear;
-}
-
-async function streamGeminiResponse(
-  messages: AIMessage[],
-  systemPrompt: string,
-  onChunk: (text: string) => void,
-  onRefs: (refs: ParsedRefs) => void,
-  onDone: () => void,
-  onError: (err: string) => void,
-  allTrades: Trade[],
-  options: StreamOptions,
-): Promise<void> {
-  // Klíč už NENÍ v klientu — voláme přes `gemini-chat` edge proxy (klíč v Supabase secrets)
-  // pokud není lokálně nastavený VITE_GEMINI_API_KEY na localhostu.
-  const localApiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-  const modelName = (import.meta as any).env?.VITE_GEMINI_MODEL || 'gemini-3.5-flash';
-
-  const geminiInstructions = `
-=== DOPLŇUJÍCÍ METODICKÉ POKYNY PRO GEMINI (KVALITA A REASONING) ===
-- ABSOLUTNĚ ZAKÁZÁNO volat nástroje (search_history, get_stats, list_accounts atd.) pro dotazy týkající se posledních 90 dní. Všechny obchody z tohoto období máš kompletně vypsané níže! Pokud se tě uživatel zeptá na nejčastější chyby, nejhorší obchody nebo týdenní/měsíční PnL, spočítej to přímo z dat v promptu bez spouštění nástrojů. Nástroje použij POUZE a EXKLUZIVNĚ pro obchody starší než 90 dní, nebo při sémantickém hledání mimo toto období.
-- NIKDY neodpovídej vágně nebo obecně ("buď opatrný", "pracuj na disciplíně"). Buď maximálně konkrétní na základě poskytnutých dat o obchodech a paměti.
-- Před samotnou odpovědí si v duchu udělej rychlý interní rozbor:
-  1. Zjisti, zda dotaz/chování neporušuje Filipovy aktivní závazky (závazky vidíš výše).
-  2. Spoj chování s konkrétními daty (přesný datum obchodu, PnL, chybové tagy).
-  3. Identifikuj přesné ICT tradingové chyby (např. chase, FOMO, široký stop, revenge trading).
-- Piš vysoce strukturovaně, věcně, analyticky a profesionálním tradingovým jazykem (FVG, sweeps, BoS, ChoCh, vwap, deviace).
-- Odstraň z odpovědí zbytečnou vatu, úvody a závěry. Odpověď musí mít vysokou informační hustotu a jít přímo k jádru věci.
-`;
-
-  const useTools = !options.disableTools;
-  const apiMessages = [...messages];
-  let fullText = '';
-  const MAX_ITER = 10;
-
-  const lastUserMessage = [...messages].reverse().find(m => m.role === 'user')?.content || '';
-  const excludeHistoryStats = shouldExcludeHistoryStatsTools(lastUserMessage);
-
-  try {
-    for (let iter = 0; iter < MAX_ITER; iter++) {
-      const contents = translateMessagesToGemini(apiMessages);
-      const filteredToolsList = excludeHistoryStats
-        ? COACH_TOOLS.filter(t => 
-            t.name !== 'search_history' && 
-            t.name !== 'get_stats' && 
-            t.name !== 'recall_memory' &&
-            t.name !== 'find_similar_trades' &&
-            t.name !== 'get_recent_context'
-          )
-        : COACH_TOOLS;
-      const tools = useTools ? convertToolsToGemini(filteredToolsList) : undefined;
-
-      const body: any = {
-        contents,
-        systemInstruction: {
-          parts: [{ text: systemPrompt + '\n\n' + geminiInstructions }]
-        },
-        generationConfig: {
-          temperature: options.voiceMode ? 0.6 : 0.3,
-          maxOutputTokens: 4000
-        }
-      };
-      if (tools) {
-        body.tools = tools;
-      }
-
-      let response: Response;
-      if (localApiKey) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${localApiKey}`;
-        response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(body),
-        });
-      } else {
-        const { data: { session: gSession } } = await supabase.auth.getSession();
-        if (!gSession) { onError('Nejsi přihlášen — přihlas se znovu.'); return; }
-        const geminiAccessToken = gSession.access_token;
-
-        response = await fetch(
-          `${EDGE_BASE}/functions/v1/gemini-chat`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${geminiAccessToken}`,
-            },
-            body: JSON.stringify({ model: modelName, payload: body }),
-          }
-        );
-      }
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => '');
-        onError(`Gemini API chyba: ${response.statusText} (${errText})`);
-        return;
-      }
-
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      let textChunkAcc = '';
-      const modelParts: any[] = [];
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (!data) continue;
-          let event: any;
-          try {
-            event = JSON.parse(data);
-          } catch {
-            continue;
-          }
-
-          const candidate = event.candidates?.[0];
-          if (candidate?.content?.parts) {
-            candidate.content.parts.forEach((part: any, partIdx: number) => {
-              if (!modelParts[partIdx]) {
-                modelParts[partIdx] = {};
-              }
-              const accumulatedPart = modelParts[partIdx];
-
-              if (part.text) {
-                accumulatedPart.text = (accumulatedPart.text || '') + part.text;
-                textChunkAcc += part.text;
-                fullText += part.text;
-                onChunk(part.text);
-              }
-              if (part.functionCall) {
-                if (!accumulatedPart.functionCall) {
-                  accumulatedPart.functionCall = { name: '', args: {} };
-                }
-                if (part.functionCall.name) {
-                  accumulatedPart.functionCall.name = part.functionCall.name;
-                }
-                if (part.functionCall.args) {
-                  accumulatedPart.functionCall.args = {
-                    ...accumulatedPart.functionCall.args,
-                    ...part.functionCall.args
-                  };
-                }
-                if (part.functionCall.id) {
-                  accumulatedPart.functionCall.id = part.functionCall.id;
-                }
-              }
-              if (part.thoughtSignature || part.thought_signature) {
-                accumulatedPart.thoughtSignature = (accumulatedPart.thoughtSignature || '') + (part.thoughtSignature || part.thought_signature);
-              }
-            });
-          }
-        }
-      }
-
-      const functionCalls = modelParts.filter(p => p.functionCall);
-
-      if (functionCalls.length === 0) {
-        onRefs(parseAllRefs(fullText));
-        onDone();
-        return;
-      }
-
-      const toolUseBlocks = functionCalls.map(p => {
-        const fc = p.functionCall;
-        const block: any = {
-          type: 'tool_use' as const,
-          id: `call_${Math.random().toString(36).slice(2, 11)}`,
-          name: fc.name,
-          input: fc.args || {}
-        };
-        const sig = p.thoughtSignature;
-        if (sig) {
-          block.thoughtSignature = sig;
-        }
-        return block;
-      });
-
-      apiMessages.push({
-        role: 'assistant',
-        content: [
-          ...(textChunkAcc ? [{ type: 'text' as const, text: textChunkAcc }] : []),
-          ...toolUseBlocks
-        ] as any
-      });
-
-      const ctx = {
-        trades: allTrades,
-        preps: options.preps || [],
-        reviews: options.reviews || [],
-        accounts: options.accounts || []
-      };
-
-      const results = await Promise.all(
-        toolUseBlocks.map(async (call) => {
-          if (options.onToolUse) {
-            // Hezký label ("📊 Počítám statistiky") místo syrového názvu toolu.
-            try { options.onToolUse(describeToolCall(call.name, call.input)); } catch { options.onToolUse(call.name); }
-          }
-          let result: any;
-          try {
-            result = await executeTool(call.name, call.input, ctx as any);
-          } catch (e: any) {
-            result = { error: e.message || String(e) };
-          }
-          // Nový/zrušený závazek musí platit hned — parita s Anthropic větví.
-          if (call.name === 'remember' || call.name === 'forget_memory') invalidateMemoryCache();
-          return {
-            type: 'tool_result' as const,
-            tool_use_id: call.id,
-            content: JSON.stringify(result).slice(0, 12000),
-          };
-        })
-      );
-      const toolResultParts = [...results];
-
-      apiMessages.push({
-        role: 'user',
-        content: toolResultParts as any
-      });
-    }
-
-    onError('Překročen maximální počet iterací nástrojů.');
-  } catch (e: any) {
-    onError(`Interní chyba streamování Gemini: ${e.message || String(e)}`);
-  }
-}
 
 export async function streamAIResponse(
   messages: AIMessage[],
@@ -1111,9 +786,11 @@ export async function streamAIResponse(
 - Akci ([ACTION:..]) smíš použít MAXIMÁLNĚ jednu a krátce ji slovně zmiň ("přidám ti to jako pravidlo, ano?").
 ` : '';
 
-  let systemPrompt = `Jsi AI trading coach specializovaný na analýzu výkonu traderů. Komunikuješ v češtině, stručně a konkrétně.
+  let systemPrompt = `Jsi AI trading coach pro Filipa (ICT/SMC futures trader, NQ/MNQ). Komunikuješ v češtině, stručně a konkrétně.
 Máš KOMPLETNÍ přístup ke všem datům tradera — odpovídej vždy na základě jeho skutečných dat.
 Trader se jmenuje Filip. Pokud ho oslovuješ jménem, používej VÝHRADNĚ "Filipe" — NIKDY si nevymýšlej jiné jméno.
+
+${getPersonaBlock(options.coachPersona || DEFAULT_PERSONA)}
 ${voiceBlock}
 === ČASOVÝ KONTEXT (KRITICKÉ) ===
 DNES: ${todayISO} (${weekday})
@@ -1352,21 +1029,10 @@ Toto je agregovaný přehled pro dlouhodobé trendy. Pro KONKRÉTNÍ starší ob
 
 ${tradeWindow.rollupText}`;
 
-  // VITE_USE_GEMINI_FAST je toggle, který defaultuje na 'true' pokud není nastaven na 'false'.
-  // Skutečný klíč žije v Supabase secrets nebo lokálně ve VITE_GEMINI_API_KEY.
-  const useGeminiFast = (import.meta as any).env?.VITE_USE_GEMINI_FAST !== 'false';
-  if (options.aiModel === 'fast' && useGeminiFast) {
-    return streamGeminiResponse(
-      messages,
-      systemPrompt,
-      onChunk,
-      onRefs,
-      onDone,
-      onError,
-      allTrades,
-      options
-    );
-  }
+  // Rychlý i analytický režim jedou na CLAUDE (přes Supabase chat proxy):
+  //   fast       → claude-haiku-4-5   (rychlá, levná, dobrá kvalita)
+  //   analytical → claude-sonnet-4-6  (hloubková analýza)
+  // Gemini cesta byla odstraněna (dělala mizernou kvalitu + obcházela caching/streaming).
 
   // Conversation messages we send to the API. They grow with each agent iteration
   // as we append assistant turn (with tool_use) and synthetic user turn (with tool_result).
@@ -1385,7 +1051,7 @@ ${tradeWindow.rollupText}`;
 
   try {
     for (let iter = 0; iter < MAX_ITER; iter++) {
-      const modelName = options.aiModel === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-5';
+      const modelName = options.aiModel === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-6';
       const body: any = {
         model: modelName,
         // Sníženo z 12k → 8k. Většinu dotazů teď coach zodpoví z front-loaded okna

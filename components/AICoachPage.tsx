@@ -11,6 +11,7 @@ import VoiceMemoButton from './VoiceMemoButton';
 import VoiceModeOverlay from './VoiceModeOverlay';
 import { enqueueSpeak, cleanForSpeech, cancelSpeech } from '../services/ttsService';
 import { COACH_SESSIONS, buildDynamicSessionPrompt } from '../services/coachPrompts';
+import { COACH_PERSONAS, resolvePersona, type CoachPersonaSetting, type CoachPersonaId } from '../services/coachPersonas';
 import { CoachSessionPreview } from './CoachSessionPreview';
 
 // ─── Session start cards ──────────────────────────────────────────────────────
@@ -227,6 +228,30 @@ const AICoachPage: React.FC<Props> = ({
     }
   });
 
+  // Persona coache (osobnost/tón) — nezávislá osa na modelu. 'auto' = vybere se dle kontextu.
+  const [coachPersona, setCoachPersona] = useState<CoachPersonaSetting>(() => {
+    try {
+      const saved = localStorage.getItem('alphatrade_coach_persona');
+      return (saved as CoachPersonaSetting) || 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+  const [showPersonaDropdown, setShowPersonaDropdown] = useState(false);
+  const personaDropdownRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    try { localStorage.setItem('alphatrade_coach_persona', coachPersona); } catch { /* no-op */ }
+  }, [coachPersona]);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (personaDropdownRef.current && !personaDropdownRef.current.contains(e.target as Node)) {
+        setShowPersonaDropdown(false);
+      }
+    };
+    if (showPersonaDropdown) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showPersonaDropdown]);
+
   const isTodayWeekend = useMemo(() => {
     const d = new Date();
     const day = d.getDay();
@@ -251,6 +276,9 @@ const AICoachPage: React.FC<Props> = ({
   }, [showModelDropdown]);
 
   const sessionConvIdRef = useRef<string | null>(initialConversationId ?? null);
+  // Když právě startuje seance (handleStartSession), drží convId — [activeConvId]
+  // effect pak NEresetuje activeSessionMode na null (jinak by formulář zmizel).
+  const sessionStartingRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
@@ -262,6 +290,13 @@ const AICoachPage: React.FC<Props> = ({
 
   // Sync state on conversation change
   useEffect(() => {
+    // Právě startuje seance pro tuhle konverzaci → handleStartSession nastavuje
+    // activeSessionMode/sessionFormState sám, NEresetuj je (jinak formulář zmizí).
+    if (sessionStartingRef.current && sessionStartingRef.current === activeConvId) {
+      sessionStartingRef.current = null;
+      sessionConvIdRef.current = activeConvId;
+      return;
+    }
     try {
       const savedSessionStr = localStorage.getItem('active_coach_session');
       if (savedSessionStr) {
@@ -321,8 +356,8 @@ const AICoachPage: React.FC<Props> = ({
         content: '',
         isSystemEvent: true,
         systemEventText: model === 'fast'
-          ? 'Přepnuto na Rychlého kouče (Gemini 3.5 Flash)'
-          : 'Přepnuto na Analytického kouče (Claude 4.5)'
+          ? 'Přepnuto na Rychlého kouče (Haiku 4.5)'
+          : 'Přepnuto na Analytického kouče (Sonnet 4.6)'
       };
       setMessages(prev => [...prev, systemMessage]);
     }
@@ -405,9 +440,12 @@ const AICoachPage: React.FC<Props> = ({
       }
     }
 
+    // Označ, že pro tuhle konverzaci právě startuje seance → [activeConvId] effect
+    // pak activeSessionMode nepřepíše na null.
+    if (convId) sessionStartingRef.current = convId;
     setActiveSessionMode(mode);
     setActiveSessionTab('chat');
-    
+
     if (mode === 'morning_prep') {
       const existingPrep = dailyPreps.find(p => p.date === todayStr);
       const configSessions = (sessions && sessions.length > 0) ? sessions : [
@@ -507,7 +545,15 @@ const AICoachPage: React.FC<Props> = ({
           gratitude: existingReview?.psycho?.gratitude || '',
           notes: existingReview?.psycho?.notes || ''
         },
-        ruleAdherence: initialRuleAdherence
+        ruleAdherence: initialRuleAdherence,
+        // Rozbor po seancích — předvyplníme z konfigurace seancí (notes z existujícího auditu).
+        sessionBreakdowns: ((sessions && sessions.length > 0)
+          ? sessions
+          : [{ id: 'london', name: 'London' }, { id: 'ny', name: 'New York' }, { id: 'asia', name: 'Asia' }]
+        ).map((s: any) => {
+          const ext = existingReview?.sessionBreakdowns?.find(b => b.sessionId === s.id);
+          return { sessionId: s.id, sessionLabel: s.name, notes: ext?.notes || '', ...(ext?.screenshot ? { screenshot: ext.screenshot } : {}) };
+        })
       });
     } else if (mode === 'post_session') {
       const existingReview = dailyReviews.find(r => r.date === todayStr);
@@ -529,20 +575,13 @@ const AICoachPage: React.FC<Props> = ({
     setMessages([]);
     firstMessageSentRef.current = false;
 
-    const isAnalytical = aiModel === 'analytical';
-    const coachLabel = isAnalytical ? 'Analytický kouč (Claude)' : 'Rychlý kouč (Gemini)';
     const welcomeText = mode === 'morning_prep'
-      ? `Ahoj Filipe! Jsem tvůj ${coachLabel} a vítám tě u Ranní přípravy. Pojďme se připravit na dnešní obchodní den. Jaké máš pro dnešek cíle a jak to vypadá s tvými ranními rituály?`
+      ? `Ahoj Filipe! Vítám tě u Ranní přípravy. Než se vrhneme na dnešek — mrkni, jak ti šel poslední den a co sis vzal jako lekci. Pojďme nastavit dnešek tak, ať na to navážeš. Jak to vypadá s ranními rituály a jaký máš dnes hlavní cíl?`
       : mode === 'evening_review'
-      ? `Vítej u Večerního auditu. Pojďme zhodnotit tvůj dnešní obchodní den. Jak bys ho celkově ohodnotil od 1 do 5 hvězd a co byl tvůj hlavní poznatek dne?`
-      : `Vítej u Po-obchodního debriefu seance. Kterou seanci dnes vyhodnocujeme (Londýn / New York) a jaké jsou tvé hlavní poznatky?`;
+      ? `Vítej u Večerního auditu, Filipe. Pojďme v klidu projít dnešek — co se povedlo, co zabolelo a co si z toho odneseš. Jak bys den ohodnotil od 1 do 5 a co byl tvůj hlavní poznatek?`
+      : `Debrief seance, ať to máme čerstvé. Kterou seanci vyhodnocujeme (Londýn / New York / Asia) a jak na tom byla hlava během čekání na vstupy?`;
 
-    const assistantMsg: ExtendedMessage = {
-      role: 'assistant',
-      content: welcomeText,
-      aiModel
-    };
-
+    const assistantMsg: ExtendedMessage = { role: 'assistant', content: welcomeText, aiModel };
     setMessages([assistantMsg]);
 
     if (convId) {
@@ -606,6 +645,8 @@ const AICoachPage: React.FC<Props> = ({
             notes: sessionFormState.psycho?.notes || ''
           },
           ruleAdherence: sessionFormState.ruleAdherence || [],
+          // Rozbor po seancích (Londýn/NY/Asia) — z AI auditu nebo zachovej existující.
+          sessionBreakdowns: sessionFormState.sessionBreakdowns || existing?.sessionBreakdowns || [],
           completed: true
         };
         await storageService.saveSingleReview(review);
@@ -690,7 +731,8 @@ const AICoachPage: React.FC<Props> = ({
   // Když odscroluje nahoru, auto-scroll se vypne — user může číst v klidu.
   // Když znovu doscroluje na konec, auto-scroll se obnoví.
   const STICK_THRESHOLD_PX = 80;
-  const isAtBottomRef = useRef(true); // tracking flag — synchronní s aktuálním scroll pozicí
+  const isAtBottomRef = useRef(true); // tracking flag — má auto-scroll sledovat dno?
+  const lastScrollTopRef = useRef(0); // poslední scrollTop — pro detekci směru scrollu
   const [showScrollToBottom, setShowScrollToBottom] = useState(false); // UI state pro floating tlačítko
 
   const isNearBottom = useCallback((el: HTMLElement | null): boolean => {
@@ -699,13 +741,22 @@ const AICoachPage: React.FC<Props> = ({
     return distanceFromBottom <= STICK_THRESHOLD_PX;
   }, []);
 
-  // User scroll handler — aktualizuje isAtBottomRef pri každém scroll eventu.
-  // React si pri setState s nezměněnou hodnotou interně skipne re-render, takže
-  // tlačítko se rerenderuje jen když user opravdu překročí threshold.
+  // User scroll handler — sledování dna vypneme JEN když user reálně odscrolluje
+  // NAHORU (scrollTop klesl). Když obsah jen roste / lerp dohání (scrollTop stoupá
+  // nebo stojí), sledování NEvypínáme — jinak by se to po odeslání zprávy nezaseklo.
   const handleScroll = useCallback(() => {
-    const atBottom = isNearBottom(messagesContainerRef.current);
-    isAtBottomRef.current = atBottom;
-    setShowScrollToBottom(!atBottom);
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const st = el.scrollTop;
+    const scrolledUp = st < lastScrollTopRef.current - 2;
+    lastScrollTopRef.current = st;
+    if (isNearBottom(el)) {
+      isAtBottomRef.current = true;   // zpět u dna → zase sleduj
+      setShowScrollToBottom(false);
+    } else if (scrolledUp) {
+      isAtBottomRef.current = false;  // user odscroloval nahoru → přestaň sledovat
+      setShowScrollToBottom(true);
+    }
   }, [isNearBottom]);
 
   // Direct scroll — respektuje stick-to-bottom flag (force=true vynutí scroll i když user není u dna)
@@ -827,12 +878,34 @@ const AICoachPage: React.FC<Props> = ({
     scrollToBottom('smooth', isUserMessage);
   }, [messages.length, lastMsgRole, scrollToBottom]);
 
-  // Scroll to bottom during streaming — respektuje stick flag (NEFORCE).
-  // Když user odscroluje nahoru číst, scroll-down se vypne. Když znovu doscroluje
-  // na konec, isAtBottomRef se obnoví v handleScroll a auto-scroll se zapne zpátky.
+  // Plynulé sledování dna během streamování — pinuje scroll na konec KAŽDÝ frame
+  // (RAF), takže view hladce sleduje rostoucí text (typewriter ~60fps) místo cukání
+  // po 50ms dávkách. Respektuje stick flag: když user odscroluje nahoru číst, pin
+  // se vypne (isAtBottomRef=false) a obnoví se, až znovu doscroluje na konec.
   useEffect(() => {
-    if (isStreaming) scrollToBottom('instant');
-  }, [messages[messages.length - 1]?.content, isStreaming, scrollToBottom]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!isStreaming) return;
+    // Start streamu = user právě poslal zprávu → vždy sleduj odpověď ke dnu.
+    isAtBottomRef.current = true;
+    setShowScrollToBottom(false);
+    let raf = 0;
+    const pin = () => {
+      const el = messagesContainerRef.current;
+      if (el && isAtBottomRef.current) {
+        // PLYNULÉ doklouzání ke dnu místo skoku. Když naskočí markdown blok
+        // (+100px), `scrollTop = scrollHeight` by celý view cuknul nahoru o 100px
+        // naráz (to bylo to "hrozné skákání"). Místo toho vezmeme jen ~22% rozdílu
+        // za frame → velký skok se rozloží do ~12 framů (plynulý glide jako Claude).
+        const target = el.scrollHeight - el.clientHeight;
+        const diff = target - el.scrollTop;
+        if (diff > 0) {
+          el.scrollTop += diff < 2 ? diff : diff * 0.12;
+        }
+      }
+      raf = requestAnimationFrame(pin);
+    };
+    raf = requestAnimationFrame(pin);
+    return () => cancelAnimationFrame(raf);
+  }, [isStreaming]);
 
   // Scroll to bottom when cards are added below the last message (respektuje stick)
   const lastMsg = messages[messages.length - 1];
@@ -990,7 +1063,9 @@ const AICoachPage: React.FC<Props> = ({
 
   // ─── Send message ──────────────────────────────────────────────────────────
 
-  const sendMessage = useCallback(async (text: string, overrideConvId?: string, voiceMode = false): Promise<string> => {
+  // hideUserMsg = true → user zpráva jde do API (kontext), ale NEzobrazí se ani neukládá.
+  // Používá se pro proaktivní otvírák seance (skrytý "kickoff", coach začne sám z dat).
+  const sendMessage = useCallback(async (text: string, overrideConvId?: string, voiceMode = false, hideUserMsg = false): Promise<string> => {
     if (!text.trim() || isStreaming) return '';
     const convId = overrideConvId ?? activeConvId;
     if (!convId) return '';
@@ -1001,17 +1076,20 @@ const AICoachPage: React.FC<Props> = ({
     const userMsg: ExtendedMessage = { role: 'user', content: text.trim() };
     const assistantMsg: ExtendedMessage = { role: 'assistant', content: '', aiModel: voiceMode ? 'fast' : aiModel };
 
-    setMessages(prev => [...prev, userMsg, assistantMsg]);
+    // Skrytý kickoff → do UI jen prázdná asistentova bublina (user zpráva neviditelná).
+    setMessages(prev => hideUserMsg ? [...prev, assistantMsg] : [...prev, userMsg, assistantMsg]);
     setInput('');
     setIsStreaming(true);
 
-    // Save user message to DB — fire-and-forget. Blokující await tady zdržoval
-    // start AI volání o celý DB roundtrip; persistence zprávy nemusí předcházet streamu.
-    storageService.appendMessage(convId, 'user', text.trim())
-      .catch(err => console.error('[AICoachPage] appendMessage failed:', err));
+    // Save user message to DB — fire-and-forget. Skrytý kickoff neukládáme (jen otvírák).
+    if (!hideUserMsg) {
+      storageService.appendMessage(convId, 'user', text.trim())
+        .catch(err => console.error('[AICoachPage] appendMessage failed:', err));
+    }
 
-    // If this is the first message, auto-update conversation title (taky fire-and-forget)
-    if (isFirstMessage) {
+    // If this is the first message, auto-update conversation title (taky fire-and-forget).
+    // U skrytého kickoffu titulek NEpřepisujeme — nastavil ho handleStartSession (název seance).
+    if (isFirstMessage && !hideUserMsg) {
       // Strip hidden [CONTEXT]...[/CONTEXT] block so the title reflects the visible question, not the context.
       const visible = text.trim().replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]\s*/g, '').trim();
       const titleSource = visible || text.trim();
@@ -1083,12 +1161,8 @@ const AICoachPage: React.FC<Props> = ({
               }
               return updated;
             });
-            // Scroll to bottom s každým batch chunk — ale respektuje stick flag
-            // (pokud user skroluje historií, scroll se nepřeruší)
-            if (isAtBottomRef.current) {
-              const el = messagesContainerRef.current;
-              if (el) el.scrollTop = el.scrollHeight;
-            }
+            // Scroll řeší plynulá RAF pin smyčka (viz useEffect na isStreaming),
+            // takže tady už scrollovat nemusíme — jinak by to cukalo po 50ms.
           }, 50);
         }
       },
@@ -1199,13 +1273,19 @@ const AICoachPage: React.FC<Props> = ({
         onToolUse: (label) => setToolStatus(label),
         voiceMode,
         aiModel: voiceMode ? 'fast' : aiModel,
+        // Vyřeš personu: 'auto' → dle kontextu (seance, tilt/série ztrát), jinak ručně zvolená.
+        coachPersona: resolvePersona(coachPersona, {
+          sessionMode: activeSessionMode,
+          trades,
+          todayISO: new Date().toISOString().slice(0, 10),
+        }),
         sessionPrompt: activeSessionMode ? buildDynamicSessionPrompt(activeSessionMode, ironRules, sessions || []) : undefined,
       },
     );
 
     // Vrať finální text — voice mód ho přečte nahlas.
     return finalContent;
-  }, [messages, traderContext, trades, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, ironRules, sessions]);
+  }, [messages, traderContext, trades, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, coachPersona, activeSessionMode, ironRules, sessions]);
 
   // ─── Start with quick prompt (declared after sendMessage to avoid TDZ) ──────
 
@@ -1435,6 +1515,61 @@ const AICoachPage: React.FC<Props> = ({
           )}
         </div>
 
+        {/* Persona Selector Dropdown — osobnost/tón coache (nezávislé na modelu) */}
+        <div ref={personaDropdownRef} className="relative flex-shrink-0">
+          <button
+            onClick={() => setShowPersonaDropdown(prev => !prev)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-page)] border border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[var(--text-secondary)] transition-all cursor-pointer select-none"
+            title="Vyber osobnost kouče"
+          >
+            {coachPersona === 'auto' ? (
+              <><Sparkles size={14} className="text-violet-400" /><span>Auto</span></>
+            ) : (
+              <><span className="text-sm leading-none">{COACH_PERSONAS[coachPersona].emoji}</span><span>{COACH_PERSONAS[coachPersona].label}</span></>
+            )}
+            <ChevronDown size={14} className={`text-[var(--text-secondary)] transition-transform duration-200 ${showPersonaDropdown ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showPersonaDropdown && (
+            <div className="absolute right-0 top-full mt-1.5 w-64 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-xl shadow-xl p-1.5 z-50 flex flex-col gap-1 animate-in fade-in duration-100">
+              <button
+                onClick={() => { setCoachPersona('auto'); setShowPersonaDropdown(false); }}
+                className={`flex items-start gap-2.5 p-2.5 rounded-lg text-left transition-all cursor-pointer ${
+                  coachPersona === 'auto'
+                    ? 'bg-violet-600/10 text-violet-400 border border-violet-500/20'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] border border-transparent'
+                }`}
+              >
+                <Sparkles size={16} className={`mt-0.5 flex-shrink-0 ${coachPersona === 'auto' ? 'text-violet-400' : 'text-[var(--text-secondary)]'}`} />
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold">Auto</span>
+                  <span className="text-[10px] text-[var(--text-secondary)] leading-normal mt-0.5">
+                    Persona se přizpůsobí kontextu — ráno hecuje, večer reflektuje, po sérii ztrát podrží.
+                  </span>
+                </div>
+              </button>
+
+              {(Object.values(COACH_PERSONAS)).map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => { setCoachPersona(p.id); setShowPersonaDropdown(false); }}
+                  className={`flex items-start gap-2.5 p-2.5 rounded-lg text-left transition-all cursor-pointer ${
+                    coachPersona === p.id
+                      ? 'bg-[var(--bg-page)] text-[var(--text-primary)] border border-[var(--border-subtle)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] border border-transparent'
+                  }`}
+                >
+                  <span className="text-base leading-none mt-0.5 flex-shrink-0">{p.emoji}</span>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-xs font-bold">{p.label}</span>
+                    <span className="text-[10px] text-[var(--text-secondary)] leading-normal mt-0.5">{p.tagline}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Model Selector Dropdown */}
         <div ref={modelDropdownRef} className="relative flex-shrink-0">
           <button
@@ -1493,7 +1628,7 @@ const AICoachPage: React.FC<Props> = ({
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-bold">Rychlý</span>
                   <span className="text-[10px] text-[var(--text-secondary)] leading-normal mt-0.5">
-                    Bleskově rychlé odpovědi s Gemini 3.5 Flash. Skvělé pro ranní přípravu a rychlé dotazy.
+                    Bleskově rychlé odpovědi s Claude Haiku 4.5. Skvělé pro ranní přípravu a rychlé dotazy.
                   </span>
                 </div>
               </button>

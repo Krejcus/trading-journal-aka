@@ -448,14 +448,39 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
             </div>
             <div>
               <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">Mentální poznámky</span>
-              <textarea 
-                value={r.psycho?.notes || ''} 
+              <textarea
+                value={r.psycho?.notes || ''}
                 onChange={(e) => updateField('psycho', { ...r.psycho, notes: e.target.value })}
                 placeholder="Jak se ti dnes reálně tradovalo..."
                 rows={2}
                 className="w-full text-xs bg-[var(--bg-page)] border border-[var(--border-subtle)] rounded-xl p-2.5 outline-none focus:border-blue-500/30 text-[var(--text-primary)]"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Rozbor po seancích — coach plní notes ke každé seanci (Londýn/NY/Asia) */}
+        <div className={`p-4 md:col-span-2 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('sessionBreakdowns')}`}>
+          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-3">Rozbor po seancích</span>
+          <div className="space-y-3">
+            {(r.sessionBreakdowns || []).map((b: any, idx: number) => (
+              <div key={b.sessionId || idx}>
+                <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">{b.sessionLabel || b.sessionId}</span>
+                <textarea
+                  value={b.notes || ''}
+                  onChange={(e) => {
+                    const updated = (r.sessionBreakdowns || []).map((x: any) => x.sessionId === b.sessionId ? { ...x, notes: e.target.value } : x);
+                    updateField('sessionBreakdowns', updated);
+                  }}
+                  placeholder="Poznámky k seanci…"
+                  rows={2}
+                  className="w-full text-xs bg-[var(--bg-page)] border border-[var(--border-subtle)] rounded-xl p-2.5 outline-none focus:border-blue-500/30 text-[var(--text-primary)]"
+                />
+              </div>
+            ))}
+            {(!r.sessionBreakdowns || r.sessionBreakdowns.length === 0) && (
+              <p className="text-[10px] text-[var(--text-secondary)] italic">Coach doplní během rozboru seancí…</p>
+            )}
           </div>
         </div>
       </div>

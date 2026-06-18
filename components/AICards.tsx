@@ -443,7 +443,7 @@ export const ReviewMiniCard: React.FC<{ review: DailyReview; onOpen?: () => void
 // Rychlost psaní: 75 zn/s působilo "přemýšlivě", ale 600znaková odpověď se
 // dopisovala 8 s PO doručení — uměle zpomalovalo coache. 400 zn/s = stále plynulé,
 // ale text drží krok se streamem.
-const CHARS_PER_SEC = 400;
+const CHARS_PER_SEC = 200;
 
 function useTypewriter(fullContent: string, active: boolean) {
   const isPreloaded = !active && fullContent !== '';
@@ -507,18 +507,22 @@ function useTypewriter(fullContent: string, active: boolean) {
         const elapsed = timestamp - r.current.startTime;
         const target = r.current.charsShown + Math.floor(elapsed * CHARS_PER_SEC / 1000);
         let toReveal = Math.max(0, target - r.current.text.length);
-        // Anti-lag: když stream předbíhá psaní o víc než ~300 znaků, dorovnej
-        // skokem — uživatel nesmí čekat na "dopisování" textu co už dávno dorazil.
-        if (r.current.queue.length > 300) {
-          toReveal = Math.max(toReveal, r.current.queue.length - 300);
+        // Plynulé dohánění místo skokového dumpu: když stream (Haiku) předbíhá
+        // psaní, zrychli HLADCE — ber ~1/12 backlogu za frame. Tím to teče
+        // písmeno po písmenu i při rychlém streamu, nikdy neskočí celá věta.
+        if (r.current.queue.length > 0) {
+          toReveal = Math.max(toReveal, Math.ceil(r.current.queue.length / 12));
         }
 
         if (toReveal > 0) {
+          // Odhaluj PO ZNACÍCH (písmeno po písmenu) — jako chat tady.
           const n = Math.min(toReveal, r.current.queue.length);
-          r.current.text += r.current.queue.slice(0, n);
-          r.current.queue = r.current.queue.slice(n);
-          // Aktualizujeme React state → ReactMarkdown renderuje průběžně
-          setDisplayText(r.current.text);
+          if (n > 0) {
+            r.current.text += r.current.queue.slice(0, n);
+            r.current.queue = r.current.queue.slice(n);
+            // Aktualizujeme React state → ReactMarkdown renderuje průběžně
+            setDisplayText(r.current.text);
+          }
         }
       }
 
@@ -796,11 +800,11 @@ export const MessageBubble: React.FC<{
           } ${
             isStreaming ? 'coach-avatar-talk' : 'coach-avatar-breath'
           }`}
-          title={(msg.aiModel || 'analytical') === 'fast' ? 'Rychlý kouč (Gemini)' : 'Analytický kouč (Claude)'}
+          title={(msg.aiModel || 'analytical') === 'fast' ? 'Rychlý kouč (Haiku 4.5)' : 'Analytický kouč (Sonnet 4.6)'}
         >
           <img
             src={(msg.aiModel || 'analytical') === 'fast' ? '/fast-coach-option1-trans.png' : '/analytical-coach-option1-trans.png'}
-            alt={(msg.aiModel || 'analytical') === 'fast' ? 'Gemini' : 'Claude'}
+            alt={(msg.aiModel || 'analytical') === 'fast' ? 'Haiku' : 'Sonnet'}
             className="w-full h-full object-cover animate-none"
           />
         </div>
@@ -820,9 +824,10 @@ export const MessageBubble: React.FC<{
           ) : isUser ? (
             <span className="whitespace-pre-wrap">{rawContent}</span>
           ) : (
-            /* Markdown rendering — jak při streamování, tak po dokončení */
+            /* Markdown rendering — živě i po dokončení (žádné přerovnání na konci,
+               žádný kurzor). Plynulost zajišťuje frame-by-frame pin scrollu v AICoachPage. */
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-              {done ? rawContent : displayText + '▌'}
+              {done ? rawContent : displayText}
             </ReactMarkdown>
           )}
         </div>
