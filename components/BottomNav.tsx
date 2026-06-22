@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock } from 'lucide-react';
+import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock, FlaskConical, Radio, Layers } from 'lucide-react';
 import type { UserRole } from '../types';
 import { isLocked } from '../utils/featureGating';
 
@@ -13,11 +13,16 @@ interface BottomNavProps {
   onLockedFeature?: (featureId: string) => void;
   /** Počet importovaných obchodů k doplnění — malý glass badge u Historie. */
   enrichCount?: number;
+  /** Aktuální mód dashboardu — 'backtesting' zrcadlí sidebar (skryje Byznys/Síť, Účty→Session). */
+  dashboardMode?: string;
+  /** Přepnutí live ↔ backtest svět (spustí World Shift přechod). */
+  onToggleBacktest?: () => void;
 }
 
-const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrade, theme, userRole, onLockedFeature, enrichCount = 0 }) => {
+const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrade, theme, userRole, onLockedFeature, enrichCount = 0, dashboardMode, onToggleBacktest }) => {
   const [moreOpen, setMoreOpen] = useState(false);
   const isDark = theme !== 'light';
+  const isBacktest = dashboardMode === 'backtesting';
 
   const mainItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -26,12 +31,17 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
     { id: 'ai', label: 'AI', icon: Bot },
   ];
 
-  const moreItems = [
-    { id: 'business', label: 'Byznys', icon: Briefcase },
-    { id: 'network', label: 'Síť', icon: Globe },
-    { id: 'accounts', label: 'Účty', icon: Wallet },
-    { id: 'settings', label: 'Nastavení', icon: Settings },
-  ];
+  const moreItems = (isBacktest
+    ? [
+        { id: 'accounts', label: 'Session', icon: Layers },
+        { id: 'settings', label: 'Nastavení', icon: Settings },
+      ]
+    : [
+        { id: 'business', label: 'Byznys', icon: Briefcase },
+        { id: 'network', label: 'Síť', icon: Globe },
+        { id: 'accounts', label: 'Účty', icon: Wallet },
+        { id: 'settings', label: 'Nastavení', icon: Settings },
+      ]);
 
   const handleNavigate = (page: string) => {
     // Locked feature pro non-owner → otevřít info modal
@@ -64,6 +74,23 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
               transition={{ type: 'spring', stiffness: 400, damping: 30 }}
               className={`fixed bottom-24 right-4 z-[80] lg:hidden rounded-2xl border shadow-2xl overflow-hidden ${isDark ? 'bg-black/80 border-white/10 backdrop-blur-2xl' : 'bg-white border-slate-200'}`}
             >
+              {/* Přepínač live ↔ backtest svět */}
+              {onToggleBacktest && (
+                <>
+                  <button
+                    onClick={() => { onToggleBacktest(); setMoreOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-black uppercase tracking-wider transition-colors ${
+                      isBacktest
+                        ? 'text-emerald-500 hover:bg-emerald-500/10'
+                        : 'text-violet-500 hover:bg-violet-500/10'
+                    }`}
+                  >
+                    {isBacktest ? <Radio size={18} /> : <FlaskConical size={18} />}
+                    <span className="flex-1 text-left">{isBacktest ? 'Zpět na Live' : 'Backtest'}</span>
+                  </button>
+                  <div className={`h-px mx-3 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
+                </>
+              )}
               {moreItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = activePage === item.id;

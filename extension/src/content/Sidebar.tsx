@@ -4,10 +4,24 @@ import { Input, Button } from './components/UI';
 import { supabase } from '../lib/supabase';
 import { useTheme } from './components/ThemeContext';
 import { Sun, Moon, Maximize2, Minimize2 } from 'lucide-react';
+import { readActivePosition } from '../lib/positionReader';
 
 export function Sidebar() {
     const [isOpen, setIsOpen] = useState(false);
     const [isWide, setIsWide] = useState(false);
+    // Auto-load: klik na logo s pozicí na grafu → otevři + signál pro TradeForm (read + screen).
+    const [autoLoadSignal, setAutoLoadSignal] = useState(0);
+    const [noBoxAlert, setNoBoxAlert] = useState(false);
+    const [checkingBox, setCheckingBox] = useState(false);
+    // Režim Live/Backtest — řízen z headeru, persistuje v chrome.storage (čte ho i TradeForm).
+    const [mode, setMode] = useState<'normal' | 'backtest'>('normal');
+    useEffect(() => {
+        try { chrome.storage?.local?.get(['ab_mode'], (r: any) => { if (r?.ab_mode === 'backtest' || r?.ab_mode === 'normal') setMode(r.ab_mode); }); } catch { /* storage nedostupné */ }
+    }, []);
+    const changeMode = (m: 'normal' | 'backtest') => {
+        setMode(m);
+        try { chrome.storage?.local?.set({ ab_mode: m }); } catch { /* ignore */ }
+    };
     const [session, setSession] = useState<any>(null);
     const [isLoadingAuth, setIsLoadingAuth] = useState(true);
     const { theme, toggleTheme } = useTheme();
@@ -52,16 +66,33 @@ export function Sidebar() {
         await supabase.auth.signOut();
     };
 
+    // Smart klik na logo: když je na grafu pozice (box) → otevři + auto-vyplň + screen.
+    // Když pozice není → hláška „nakresli pozici" + možnost otevřít přesto (prázdný panel).
+    const handleLogoClick = async () => {
+        if (isOpen) { setIsOpen(false); return; }
+        if (!session) { setIsOpen(true); return; } // nepřihlášený → otevři (login)
+        setCheckingBox(true);
+        const r = await readActivePosition();
+        setCheckingBox(false);
+        if (r.ok) {
+            setIsOpen(true);
+            setAutoLoadSignal(s => s + 1);
+        } else {
+            setNoBoxAlert(true);
+        }
+    };
+
     return (
         <>
             <button
-                onClick={() => setIsOpen(!isOpen)}
+                onClick={handleLogoClick}
+                title="Klik: načti pozici + screen a otevři (nebo otevři prázdný)"
                 className="fixed right-[3px] top-[215px] w-[38px] h-[38px] bg-transparent border-none rounded flex items-center justify-center cursor-pointer z-[2000001] transition-all hover:bg-black/5 overflow-visible focus:outline-none"
             >
                 <img
                     src={chrome.runtime.getURL('icons/at_logo_light_clean.png')}
                     alt="AlphaTrade"
-                    className="w-7 h-7 object-contain opacity-70 hover:opacity-100 transition-opacity drop-shadow-md"
+                    className={`w-7 h-7 object-contain opacity-70 hover:opacity-100 transition-opacity drop-shadow-md ${checkingBox ? 'animate-pulse' : ''}`}
                 />
             </button>
 
@@ -86,23 +117,38 @@ export function Sidebar() {
                     }
                 )}
             >
-                <div className={`pt-6 px-6 pb-4 border-b flex justify-between items-center ${theme === 'dark' ? 'border-white/5 bg-white/[0.02]' : 'border-black/5 bg-black/[0.02]'}`}>
-                    <h1 className={`m-0 text-lg font-extrabold tracking-widest flex items-center gap-3 ${theme === 'dark' ? 'text-blue-400' : 'text-blue-600'}`}>
-                        <div className="w-10 h-10 flex items-center justify-center transition-all duration-300 hover:scale-105">
+                <div className={`pt-5 px-5 pb-3 border-b flex justify-between items-center gap-2 ${theme === 'dark' ? 'border-white/5 bg-white/[0.02]' : 'border-black/5 bg-black/[0.02]'}`}>
+                    <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-9 h-9 flex items-center justify-center shrink-0 transition-all duration-300 hover:scale-105">
                             <img
                                 src={chrome.runtime.getURL('icons/at_logo_light_clean.png')}
                                 alt="Alpha Trade Logo"
                                 className={`w-full h-full object-contain filter transition-all duration-300 ${theme === 'dark' ? 'drop-shadow-[0_0_12px_rgba(34,211,238,0.4)]' : 'drop-shadow-[0_0_8px_rgba(8,145,178,0.15)] brightness-[0.85] contrast-[1.1]'}`}
                             />
                         </div>
-                        ALPHA BRIDGE
-                    </h1>
-                    <div className="flex items-center gap-3">
+                        {session && (
+                            <div className={`flex p-0.5 rounded-lg ${theme === 'dark' ? 'bg-slate-800/80 border border-slate-700/50' : 'bg-slate-100 border border-slate-200'}`}>
+                                {([['normal', 'Live'], ['backtest', 'Backtest']] as const).map(([m, label]) => {
+                                    const active = mode === m;
+                                    const activeCls = m === 'backtest'
+                                        ? 'bg-violet-600 text-white shadow-sm'
+                                        : (theme === 'dark' ? 'bg-slate-700 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm');
+                                    return (
+                                        <button key={m} type="button" onClick={() => changeMode(m)}
+                                            className={`px-2.5 py-1 rounded-[8px] text-[10px] font-black uppercase tracking-wider transition-all ${active ? activeCls : (theme === 'dark' ? 'text-slate-400' : 'text-slate-500')}`}>
+                                            {m === 'backtest' ? `🧪 ${label}` : label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-2.5 shrink-0">
                         {session && (
                             <button
                                 onClick={handleLogout}
                                 title="Odhlásit se"
-                                className={`bg-transparent border-none text-xs font-bold cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-red-400 hover:text-red-300' : 'text-red-500 hover:text-red-600'}`}
+                                className={`bg-transparent border-none text-[11px] font-bold cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-red-400 hover:text-red-300' : 'text-red-500 hover:text-red-600'}`}
                             >
                                 Odhlásit
                             </button>
@@ -112,14 +158,14 @@ export function Sidebar() {
                             className={`bg-transparent border-none cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-slate-400 hover:text-blue-400' : 'text-slate-500 hover:text-blue-600'}`}
                             title={isWide ? 'Zúžit okno' : 'Rozšířit okno'}
                         >
-                            {isWide ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                            {isWide ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
                         </button>
                         <button
                             onClick={toggleTheme}
                             className={`bg-transparent border-none cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-slate-400 hover:text-blue-400' : 'text-slate-500 hover:text-blue-600'}`}
                             title={theme === 'dark' ? 'Přepnout na světlý motiv' : 'Přepnout na tmavý motiv'}
                         >
-                            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+                            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
                         </button>
                         <button
                             onClick={() => setIsOpen(false)}
@@ -155,11 +201,38 @@ export function Sidebar() {
                                 </form>
                             </div>
                         ) : (
-                            <TradeForm isWide={isWide} />
+                            <TradeForm isWide={isWide} autoLoadSignal={autoLoadSignal} mode={mode} active={isOpen} />
                         )}
                     </div>
                 </div>
             </div>
+
+            {noBoxAlert && (
+                <div className="fixed inset-0 z-[2000002] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.45)' }} onClick={() => setNoBoxAlert(false)}>
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        className={`w-[300px] mx-4 p-5 rounded-2xl border ${theme === 'dark' ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-800'}`}
+                        style={{ boxShadow: '0 25px 50px -12px rgba(0,0,0,0.4)' }}
+                    >
+                        <p className="text-sm font-black mb-1">Na grafu není pozice</p>
+                        <p className={`text-xs ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Nakresli Long/Short box na grafu — obchod se pak vyplní a vyfotí sám. Nebo otevři prázdný panel (session, ruční zápis).</p>
+                        <div className="flex gap-2 mt-4">
+                            <button
+                                onClick={() => setNoBoxAlert(false)}
+                                className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${theme === 'dark' ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                            >
+                                Zrušit
+                            </button>
+                            <button
+                                onClick={() => { setNoBoxAlert(false); setIsOpen(true); }}
+                                className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-blue-600 hover:bg-blue-500 transition-all"
+                            >
+                                Otevřít přesto
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     );
 }

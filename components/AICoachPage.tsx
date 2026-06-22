@@ -162,6 +162,8 @@ interface Props {
   onApplyAction?: (action: import('../services/aiService').SuggestedAction) => void;
   /** Reportuje rodičovi (App.tsx), zda coach právě streamuje — pro nav warning modal. */
   onStreamingChange?: (isStreaming: boolean) => void;
+  /** Aktuální mód dashboardu — 'backtesting' automaticky přepne coach scope. */
+  dashboardMode?: string;
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -171,7 +173,7 @@ const AICoachPage: React.FC<Props> = ({
   dailyPreps, dailyReviews, theme,
   onOpenTrade, onOpenJournal, onApplyAction,
   initialConversationId, initialPrompt, onInitialPromptConsumed,
-  onStreamingChange, sessions = []
+  onStreamingChange, sessions = [], dashboardMode
 }) => {
   // Init z globálního cache (persisted v localStorage) — žádný flash prázdného seznamu po reloadu.
   // useEffect níž pak refresh z DB na pozadí.
@@ -415,7 +417,7 @@ const AICoachPage: React.FC<Props> = ({
 
     if (!convId) {
       try {
-        const conv = await storageService.createConversation();
+        const conv = await storageService.createConversation(title, coachScope);
         if (conv) {
           await storageService.updateConversation(conv.id, { title, category });
           conv.title = title;
@@ -791,10 +793,68 @@ const AICoachPage: React.FC<Props> = ({
     onStreamingChange?.(isStreaming);
   }, [isStreaming, onStreamingChange]);
 
-  const traderContext = React.useMemo(
-    () => buildTraderContext({ trades, accounts, ironRules, playbookItems, dailyPreps, dailyReviews }),
-    [trades, accounts, ironRules, playbookItems, dailyPreps, dailyReviews],
+  // ── Scope mentora: live (default) vs backtest ────────────────────────────
+  // Tvrdá přepážka — live coach NIKDY nevidí backtest data. Scope se automaticky
+  // derivuje z dashboardMode (backtesting → backtest scope) nebo ručně přes /backtest /live.
+  const [coachScope, setCoachScope] = useState<'live' | 'backtest'>(
+    () => dashboardMode === 'backtesting' ? 'backtest' : 'live'
   );
+  // Zrcadlo aktuálního scope pro sync effect — drží poslední hodnotu bez stale closure
+  // a bez nutnosti dávat coachScope do deps (jinak by reset proběhl i u manuálního /backtest).
+  const coachScopeRef = useRef(coachScope);
+  useEffect(() => { coachScopeRef.current = coachScope; }, [coachScope]);
+
+  // Sync scope při přepnutí dashboardMode v Sidebar.
+  // setState updater zůstává ČISTÝ; resety + porovnání jsou v těle effectu (ne v updateru),
+  // takže se pod StrictMode/concurrent nespustí vedlejší efekty víckrát.
+  useEffect(() => {
+    const newScope = dashboardMode === 'backtesting' ? 'backtest' : 'live';
+    if (coachScopeRef.current === newScope) return;
+    coachScopeRef.current = newScope;
+    setCoachScope(newScope);
+    // Scope se reálně mění (přechod mezi světy) → resetuj aktivní konverzaci.
+    setActiveConvId(null);
+    setMessages([]);
+    firstMessageSentRef.current = false;
+  }, [dashboardMode]);
+  const backtestAccountIds = React.useMemo(
+    () => new Set(accounts.filter(a => a.type === 'Backtest').map(a => String(a.id))),
+    [accounts],
+  );
+  const scopedTrades = React.useMemo(
+    () => coachScope === 'backtest'
+      ? trades.filter(t => backtestAccountIds.has(String(t.accountId)))
+      : trades.filter(t => !backtestAccountIds.has(String(t.accountId))),
+    [trades, coachScope, backtestAccountIds],
+  );
+  const scopedAccounts = React.useMemo(
+    () => coachScope === 'backtest'
+      ? accounts.filter(a => backtestAccountIds.has(String(a.id)))
+      : accounts.filter(a => !backtestAccountIds.has(String(a.id))),
+    [accounts, coachScope, backtestAccountIds],
+  );
+  // daily_preps/daily_reviews = LIVE deník (globální, ne per-account). V backtest
+  // scope je coachovi NEdáváme — backtest má vlastní poznámky v backtest_sessions.
+  const scopedPreps = coachScope === 'backtest' ? [] : dailyPreps;
+  const scopedReviews = coachScope === 'backtest' ? [] : dailyReviews;
+
+  const traderContext = React.useMemo(
+    () => buildTraderContext({ trades: scopedTrades, accounts: scopedAccounts, ironRules, playbookItems, dailyPreps: scopedPreps, dailyReviews: scopedReviews }),
+    [scopedTrades, scopedAccounts, ironRules, playbookItems, scopedPreps, scopedReviews],
+  );
+
+  // Načti backtest session poznámky (bias/pre/post) a naformátuj do bloku pro prompt.
+  // Voláno ČERSTVĚ při odeslání zprávy (ne přes effect) — žádný timing race po /backtest.
+  const fetchBacktestSessionsText = useCallback(async (): Promise<string> => {
+    const accIds = scopedAccounts.map(a => String(a.id));
+    if (!accIds.length) return '';
+    const sessions = await storageService.getBacktestSessions(accIds);
+    if (!sessions.length) return '';
+    const lines = sessions
+      .sort((a, b) => (a.date + a.block).localeCompare(b.date + b.block))
+      .map(s => `${s.date} ${s.block} | bias: ${s.bias || '–'} | pre: ${s.preNotes || '–'} | post: ${s.postNotes || '–'}`);
+    return `=== BACKTEST SESSIONS (tvoje pre/post přípravy a audity pro backtest, ${sessions.length}) ===\n${lines.join('\n')}`;
+  }, [scopedAccounts]);
 
   /** Sada labelů již existujících pravidel + cílů — pro ActionPanel "applied" detekci.
    *  Když se label akce shoduje s existujícím pravidlem, tlačítko ukáže ✓ Přidáno
@@ -1001,7 +1061,7 @@ const AICoachPage: React.FC<Props> = ({
     }
     setCreateError(null);
     try {
-      const conv = await storageService.createConversation();
+      const conv = await storageService.createConversation('Nová konverzace', coachScope);
       if (!conv) return;
       setConversations(prev => [conv, ...prev]);
       setActiveConvId(conv.id);
@@ -1070,6 +1130,22 @@ const AICoachPage: React.FC<Props> = ({
     const convId = overrideConvId ?? activeConvId;
     if (!convId) return '';
 
+    // ── Slash příkazy pro scope mentora — nejdou do AI, jen přepnou zdroj dat ──
+    const cmd = text.trim().toLowerCase();
+    if (cmd === '/backtest' || cmd === '/live') {
+      const newScope: 'live' | 'backtest' = cmd === '/backtest' ? 'backtest' : 'live';
+      setCoachScope(newScope);
+      const info: ExtendedMessage = {
+        role: 'assistant',
+        content: newScope === 'backtest'
+          ? '🧪 Přepnuto na **backtest data**. Od teď čtu jen z backtest účtů. Zpět na živá data: `/live`.'
+          : '✅ Přepnuto zpět na **živá data**. Backtest je opět skrytý.',
+      };
+      setMessages(prev => [...prev, info]);
+      setInput('');
+      return '';
+    }
+
     const isFirstMessage = !firstMessageSentRef.current;
     firstMessageSentRef.current = true;
 
@@ -1135,10 +1211,13 @@ const AICoachPage: React.FC<Props> = ({
       }
     };
 
+    // Backtest session poznámky — čerstvě, ať je prompt má i hned po /backtest.
+    const btSessionsText = coachScope === 'backtest' ? await fetchBacktestSessionsText() : '';
+
     await streamAIResponse(
       history,
       traderContext,
-      trades,
+      scopedTrades,
       // onChunk — buffer chunks, flush to React state every 50ms
       // This reduces re-renders from ~100/sec → ~20/sec during streaming,
       // which prevents React from dropping RAF animation frames.
@@ -1262,12 +1341,16 @@ const AICoachPage: React.FC<Props> = ({
       },
       // options — tool-use mode
       {
-        preps: dailyPreps,
-        reviews: dailyReviews,
-        // Všechny účty (i spálené) — tools umí filtrovat a reportovat per účet.
-        accounts,
+        preps: scopedPreps,
+        reviews: scopedReviews,
+        // Rozsah dat — coach v promptu ví, jestli čte live nebo backtest.
+        scope: coachScope,
+        // Backtest session poznámky (jen v backtest scope) — kvalitativní kontext.
+        backtestSessions: btSessionsText || undefined,
+        // Účty v aktuálním scope (live/backtest) — tools filtrují a reportují jen v rámci scope.
+        accounts: scopedAccounts,
         // Sum of active account starting balances — Coach uses for $ → % conversion when user prefers %.
-        initialBalance: accounts
+        initialBalance: scopedAccounts
           .filter(a => a.status !== 'Archived')
           .reduce((sum, a) => sum + (a.initialBalance || 0), 0) || undefined,
         onToolUse: (label) => setToolStatus(label),
@@ -1285,14 +1368,14 @@ const AICoachPage: React.FC<Props> = ({
 
     // Vrať finální text — voice mód ho přečte nahlas.
     return finalContent;
-  }, [messages, traderContext, trades, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, coachPersona, activeSessionMode, ironRules, sessions]);
+  }, [messages, traderContext, trades, scopedTrades, scopedAccounts, coachScope, fetchBacktestSessionsText, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, coachPersona, activeSessionMode, ironRules, sessions]);
 
   // ─── Start with quick prompt (declared after sendMessage to avoid TDZ) ──────
 
   const startWithPrompt = useCallback(async (prompt: string) => {
     setCreateError(null);
     try {
-      const conv = await storageService.createConversation();
+      const conv = await storageService.createConversation('Nová konverzace', coachScope);
       if (!conv) return;
       // Mark BEFORE setActiveConvId so the [activeConvId] effect skips the DB load
       justCreatedConvIdsRef.current.add(conv.id);
@@ -1325,18 +1408,23 @@ const AICoachPage: React.FC<Props> = ({
     }
   };
 
-  // ─── Group conversations ───────────────────────────────────────────────────
+  // ─── Group conversations (filtrovano podle coachScope) ─────────────────────
+
+  const scopedConversations = React.useMemo(
+    () => conversations.filter(c => (c.scope ?? 'live') === coachScope),
+    [conversations, coachScope],
+  );
 
   const groupedConversations = React.useMemo(() => {
     const groups: Record<string, AIConversation[]> = {};
     const ORDER = ['Dnes', 'Včera', 'Tento týden', 'Starší'];
-    for (const conv of conversations) {
+    for (const conv of scopedConversations) {
       const group = getDateGroup(conv.updated_at);
       if (!groups[group]) groups[group] = [];
       groups[group].push(conv);
     }
     return ORDER.filter(g => groups[g]).map(g => ({ label: g, items: groups[g] }));
-  }, [conversations]);
+  }, [scopedConversations]);
 
   // ─── Sidebar ───────────────────────────────────────────────────────────────
 
@@ -1349,6 +1437,11 @@ const AICoachPage: React.FC<Props> = ({
             <Sparkles size={13} className="text-blue-400" />
           </div>
           <span className="text-sm font-black uppercase tracking-widest text-[var(--text-primary)]">AI Coach</span>
+          {coachScope === 'backtest' && (
+            <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[9px] font-black uppercase tracking-wider border border-emerald-500/20">
+              BT
+            </span>
+          )}
         </div>
         <button
           onClick={handleNewConversation}
@@ -1369,10 +1462,12 @@ const AICoachPage: React.FC<Props> = ({
 
       {/* Conversation list */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden py-2 scrollbar-thin min-w-0 w-full">
-        {conversations.length === 0 ? (
+        {scopedConversations.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 px-4 text-center">
             <Bot size={28} className="text-[var(--text-secondary)]" />
-            <p className="text-xs text-[var(--text-secondary)]">Zatím žádné konverzace</p>
+            <p className="text-xs text-[var(--text-secondary)]">
+              {coachScope === 'backtest' ? 'Žádné backtest konverzace' : 'Zatím žádné konverzace'}
+            </p>
             <button
               onClick={handleNewConversation}
               className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all"

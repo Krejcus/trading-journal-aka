@@ -11,7 +11,9 @@ interface Account {
 }
 import { useTheme } from './ThemeContext';
 
-export function AccountList({ onSelectionChange }: { onSelectionChange: (selectedIds: string[]) => void }) {
+const isBacktestAcc = (a: any) => a?.type === 'Backtest' || a?.meta?.type === 'Backtest';
+
+export function AccountList({ onSelectionChange, mode = 'normal' }: { onSelectionChange: (selectedIds: string[]) => void; mode?: 'normal' | 'backtest' }) {
     const { theme } = useTheme();
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -55,24 +57,6 @@ export function AccountList({ onSelectionChange }: { onSelectionChange: (selecte
 
                 setAccounts(formattedAccounts as Account[]);
 
-                // On FX Replay: auto-select Backtest accounts; otherwise select master accounts
-                const isFXReplay = window.location.hostname.includes('fxreplay.com');
-                let defaults: string[];
-
-                if (isFXReplay) {
-                    const backtestAccounts = formattedAccounts.filter((a: any) => a.type === 'Backtest' || a.meta?.type === 'Backtest');
-                    defaults = backtestAccounts.map((a: any) => a.id);
-                    // Removed fallback to all masters if no backtest accounts exist, as per instruction
-                    console.log('[AlphaBridge AccountList] 🧪 FX Replay detected, auto-selected Backtest accounts:', defaults);
-                } else {
-                    const masters = formattedAccounts.filter((a: any) => !a.parentAccountId);
-                    defaults = masters.map(m => m.id);
-                    console.log('[AlphaBridge AccountList] ✅ Auto-selected master accounts:', defaults);
-                }
-
-                setSelectedIds(defaults);
-                onSelectionChange(defaults);
-
             } catch (err) {
                 console.error("Failed to load accounts:", err);
             } finally {
@@ -81,6 +65,17 @@ export function AccountList({ onSelectionChange }: { onSelectionChange: (selecte
         }
         loadAccounts();
     }, []);
+
+    // Default výběr reaguje na mód: backtest → všechny backtest účty; normal → master (ne-backtest) účty.
+    useEffect(() => {
+        if (isLoading) return;
+        const visible = accounts.filter(a => mode === 'backtest' ? isBacktestAcc(a) : !isBacktestAcc(a));
+        const defaults = mode === 'backtest'
+            ? visible.map(a => a.id)
+            : visible.filter(a => !a.parentAccountId).map(a => a.id);
+        setSelectedIds(defaults);
+        onSelectionChange(defaults);
+    }, [mode, accounts, isLoading]);
 
     const handleToggle = (id: string, isMaster: boolean) => {
         setSelectedIds(prev => {
@@ -112,8 +107,12 @@ export function AccountList({ onSelectionChange }: { onSelectionChange: (selecte
     if (isLoading) return <div className={`text-xs italic p-3 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Načítám účty...</div>;
     if (accounts.length === 0) return <div className={`text-xs p-3 font-bold border rounded-xl ${theme === 'dark' ? 'text-red-400 border-red-500/20 bg-red-500/10' : 'text-red-600 border-red-200 bg-red-50'}`}>Nejste přihlášen, nebo nemáte aktivované účty. Pročistěte cache Chrome rozšíření a zkuste to znovu.</div>;
 
-    const masters = accounts.filter(a => !a.parentAccountId);
-    const copies = accounts.filter(a => !!a.parentAccountId);
+    // Viditelné účty dle módu: backtest → jen Backtest účty; normal → bez nich.
+    const visibleAccounts = accounts.filter(a => mode === 'backtest' ? isBacktestAcc(a) : !isBacktestAcc(a));
+    if (visibleAccounts.length === 0) return <div className={`text-xs p-3 font-bold border rounded-xl ${theme === 'dark' ? 'text-amber-400 border-amber-500/20 bg-amber-500/10' : 'text-amber-600 border-amber-200 bg-amber-50'}`}>{mode === 'backtest' ? 'Nemáš žádný účet typu Backtest. Vytvoř ho v AlphaTrade (Účty → typ Backtest).' : 'Žádné živé účty.'}</div>;
+
+    const masters = visibleAccounts.filter(a => !a.parentAccountId);
+    const copies = visibleAccounts.filter(a => !!a.parentAccountId);
 
     return (
         <div className="flex flex-col mb-4">

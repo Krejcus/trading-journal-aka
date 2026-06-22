@@ -745,10 +745,11 @@ export const storageService = {
     }
   },
 
-  async markTradeAsPublic(id: string): Promise<void> {
+  async markTradeAsPublic(id: string, shareNotes = false): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
-    await supabase.from('trades').update({ is_public: true }).eq('id', id).eq('user_id', userId);
+    // share_notes řídí, jestli veřejný link smí ukázat poznámku (default false).
+    await supabase.from('trades').update({ is_public: true, share_notes: shareNotes }).eq('id', id).eq('user_id', userId);
   },
 
   async getTradeById(id: string): Promise<Trade | null> {
@@ -780,13 +781,11 @@ export const storageService = {
    * Vrací trade + ownerName + ownerAvatar pro SharedTradeView.
    */
   async getPublicTradeById(id: string): Promise<{ trade: Trade; ownerName?: string; ownerAvatar?: string } | null> {
-    // Trade fetch — bez user_id filtru, ale RLS dovolí jen is_public=true
+    // SECURITY DEFINER RPC: vrátí veřejný trade s `data.notes` ODSTŘIŽENÝM na serveru,
+    // pokud `share_notes` není true. Důležité pro soukromí — přes `select('*')` by poznámka
+    // tekla v payloadu i bez zobrazení. RLS dál chrání (vrací jen is_public=true).
     const { data: tradeRow, error: tradeErr } = await supabase
-      .from('trades')
-      .select('*')
-      .eq('id', id)
-      .eq('is_public', true)
-      .maybeSingle();
+      .rpc('get_public_trade', { p_id: id });
     if (tradeErr || !tradeRow) return null;
 
     // Owner profile fetch — paralelně by bylo lepší ale jednorázové
@@ -815,6 +814,7 @@ export const storageService = {
       timestamp: tradeRow.timestamp,
       drawings: tradeRow.drawings || tradeRow.data?.drawings || [],
       isPublic: tradeRow.is_public,
+      shareNotes: tradeRow.share_notes,
       createdAt: tradeRow.created_at,
     };
 
@@ -1281,6 +1281,21 @@ export const storageService = {
     if (userId) set(`alphatrade_daily_preps_${userId}`, dbPreps);
 
     return dbPreps;
+  },
+
+  // Backtest session pre/post poznámky (samostatná tabulka, mimo RAG/embeddings).
+  // Volitelně omezené na konkrétní backtest účty.
+  async getBacktestSessions(accountIds?: string[], targetUserId?: string): Promise<Array<{ id: string; accountId: string; date: string; block: string; bias?: string; preNotes?: string; postNotes?: string }>> {
+    const userId = targetUserId || await getUserId();
+    if (!userId) return [];
+    let query = supabase.from('backtest_sessions').select('id, account_id, date, block, data').eq('user_id', userId);
+    if (accountIds && accountIds.length) query = query.in('account_id', accountIds);
+    const { data, error } = await query;
+    if (error) { console.error('Supabase getBacktestSessions error:', error); return []; }
+    return (data || []).map((r: any) => ({
+      id: r.id, accountId: r.account_id, date: r.date, block: r.block,
+      bias: r.data?.bias, preNotes: r.data?.preNotes, postNotes: r.data?.postNotes,
+    }));
   },
 
   async saveSinglePrep(prep: DailyPrep): Promise<void> {
@@ -2520,23 +2535,23 @@ export const storageService = {
     return list;
   },
 
-  async createConversation(title = 'Nová konverzace'): Promise<AIConversation | null> {
+  async createConversation(title = 'Nová konverzace', scope: 'live' | 'backtest' = 'live'): Promise<AIConversation | null> {
     const userId = await getUserId();
     if (!userId) {
       console.error('[AI] createConversation: no userId');
       return null;
     }
 
-    // Try inserting with category (column may or may not exist)
     let { data, error } = await supabase
       .from('ai_conversations')
-      .insert({ user_id: userId, title, category: 'general' })
+      .insert({ user_id: userId, title, category: 'general', scope })
       .select()
       .single();
 
-    // If category column doesn't exist yet, retry without it
-    if (error && (error.message.includes('category') || error.code === '42703')) {
-      console.warn('[AI] category column missing, retrying without it');
+    // Fallback pro starší schéma bez sloupce `category` NEBO `scope` — vlož jen
+    // minimální sadu, ať vytvoření konverzace degraduje místo throwu (42703 = undefined_column).
+    if (error && (error.message.includes('category') || error.message.includes('scope') || error.code === '42703')) {
+      console.warn('[AI] category/scope column missing, retrying with minimal columns');
       ({ data, error } = await supabase
         .from('ai_conversations')
         .insert({ user_id: userId, title })
@@ -2546,10 +2561,10 @@ export const storageService = {
 
     if (error) {
       console.error('[AI] createConversation error:', error.message, error.code);
-      throw new Error(error.message); // throw so callers can show UI feedback
+      throw new Error(error.message);
     }
 
-    return { ...data, category: (data.category ?? 'general') as AIConversation['category'] };
+    return { ...data, category: (data.category ?? 'general') as AIConversation['category'], scope: (data.scope ?? 'live') as 'live' | 'backtest' };
   },
 
   async updateConversation(id: string, updates: { title?: string; category?: AIConversation['category'] }): Promise<void> {

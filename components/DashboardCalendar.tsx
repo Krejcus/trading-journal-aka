@@ -329,7 +329,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
          </div>
 
          {/* Desktop header */}
-         <div className={`hidden md:flex px-6 py-6 border-b flex-row justify-between items-center gap-4 ${theme !== 'light' ? 'border-white/5' : 'border-slate-100 bg-slate-50/80'}`}>
+         <div className={`hidden md:flex px-6 py-3 border-b flex-row justify-between items-center gap-4 ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'}`}>
             <div className="flex flex-col gap-4">
                <h3 className={`text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2 ${theme !== 'light' ? 'text-slate-400' : 'text-slate-500'}`}>
                   <LayoutGrid size={14} className="text-blue-500" /> Obchodní Kalendář

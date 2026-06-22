@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import {
   Activity,
+  Maximize2,
   BarChart3,
   LayoutGrid,
   Trophy,
@@ -91,6 +92,7 @@ interface DashboardProps {
 // ... MASTER_WIDGET_LIST update ...
 import TradeDetailModal from './TradeDetailModal';
 import WidgetEditOverlay from './WidgetEditOverlay';
+import MonteCarloLab from './MonteCarloLab';
 import { Responsive as ResponsiveGridLayout, useContainerWidth } from 'react-grid-layout';
 import type { Layout, LayoutItem } from 'react-grid-layout';
 
@@ -492,6 +494,273 @@ const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light
   );
 };
 
+// ── BACKTEST widgety ──────────────────────────────────────────────────────────
+const _isBEt = (t: Trade) => t.isBE === true || t.outcome === 'BE' || (t.pnl || 0) === 0;
+const _isWin = (t: Trade) => !_isBEt(t) && (t.pnl || 0) > 0;
+const _isLoss = (t: Trade) => !_isBEt(t) && (t.pnl || 0) < 0;
+
+function _sampleTier(n: number): { label: string; cls: string; pct: number } {
+  if (n < 5) return { label: 'kriticky málo', cls: 'text-rose-400 bg-rose-500/10 border-rose-500/20', pct: (n / 30) * 100 };
+  if (n < 10) return { label: 'malý vzorek', cls: 'text-amber-400 bg-amber-500/10 border-amber-500/20', pct: (n / 30) * 100 };
+  if (n < 30) return { label: 'ok vzorek', cls: 'text-sky-400 bg-sky-500/10 border-sky-500/20', pct: (n / 30) * 100 };
+  return { label: 'solidní vzorek', cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20', pct: 100 };
+}
+
+// Win rate dle počtu confluencí
+const BtConfluenceWrWidget: React.FC<{ stats: TradeStats; theme: any }> = ({ stats, theme }) => {
+  const isDark = theme !== 'light';
+  const buckets = useMemo(() => {
+    const m = new Map<string, { count: number; wins: number; losses: number; pnl: number }>();
+    for (const t of stats.trades) {
+      if (t.executionStatus === 'Missed') continue;
+      const n = (t.htfConfluence?.length || 0) + (t.ltfConfluence?.length || 0);
+      const k = n >= 4 ? '4+' : String(n);
+      const g = m.get(k) || { count: 0, wins: 0, losses: 0, pnl: 0 };
+      g.count++; g.pnl += t.pnl || 0;
+      if (_isWin(t)) g.wins++; else if (_isLoss(t)) g.losses++;
+      m.set(k, g);
+    }
+    return ['0', '1', '2', '3', '4+']
+      .filter(k => m.has(k))
+      .map(k => { const g = m.get(k)!; const d = g.wins + g.losses; return { k, ...g, wr: d ? (g.wins / d) * 100 : 0 }; });
+  }, [stats.trades]);
+
+  return (
+    <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col">
+      <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400 mb-4">
+        WR dle počtu confluencí <InfoIcon text="Win rate podle počtu HTF+LTF confluencí. Testuje hypotézu víc confluencí = vyšší WR." theme={theme} />
+      </h3>
+      <div className="flex-1 flex flex-col justify-center gap-3 min-h-0">
+        {buckets.length === 0 ? (
+          <p className="text-xs text-slate-500 text-center">Obchody nemají vyplněné confluence.</p>
+        ) : buckets.map(b => (
+          <div key={b.k}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] font-bold">{b.k} {b.k === '1' ? 'confluence' : 'confluencí'}</span>
+              <span className="text-[10px] font-bold text-slate-500">{b.count}× ({b.wins}/{b.losses})</span>
+            </div>
+            <div className={`relative h-5 rounded-lg overflow-hidden ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+              <div className={`absolute inset-y-0 left-0 ${b.wr >= 50 ? 'bg-emerald-500' : 'bg-rose-500'} opacity-80`} style={{ width: `${Math.max(b.wr, 3)}%` }} />
+              <span className="absolute inset-0 flex items-center px-2 text-[10px] font-black text-white mix-blend-luminosity">{b.wr.toFixed(0)}% WR</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// Sample-size přehled
+const BtSampleSizeWidget: React.FC<{ stats: TradeStats; theme: any }> = ({ stats, theme }) => {
+  // Jeden průchod místo trojího filtrování.
+  const { total, wins, losses } = useMemo(() => {
+    let total = 0, wins = 0, losses = 0;
+    for (const t of stats.trades) {
+      if (t.executionStatus === 'Missed') continue;
+      total++;
+      if (_isWin(t)) wins++; else if (_isLoss(t)) losses++;
+    }
+    return { total, wins, losses };
+  }, [stats.trades]);
+  const be = total - wins - losses;
+  const tier = _sampleTier(total);
+  return (
+    <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col justify-between">
+      <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+        Sample-size <InfoIcon text="Statistická důvěra: pod 30 obchodů ber výsledky s rezervou. Pod 5 je to jen náhoda." theme={theme} />
+      </h3>
+      <div className="flex-1 flex flex-col justify-center gap-3">
+        <div className="flex items-end gap-3">
+          <span className="text-4xl font-black font-mono leading-none">{total}</span>
+          <span className="text-[11px] font-bold text-slate-500 mb-1">obchodů</span>
+        </div>
+        <div className="relative h-2.5 rounded-full overflow-hidden bg-slate-500/15">
+          <div className={`absolute inset-y-0 left-0 ${total >= 30 ? 'bg-emerald-500' : total >= 10 ? 'bg-sky-500' : total >= 5 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${Math.min(tier.pct, 100)}%` }} />
+        </div>
+        <div className="flex items-center justify-between">
+          <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded border ${tier.cls}`}>{tier.label}</span>
+          <span className="text-[10px] font-bold text-slate-500">{wins}V · {losses}P{be ? ` · ${be}BE` : ''}</span>
+        </div>
+        {total < 30 && <p className="text-[9px] text-slate-500">Do „solidního" vzorku zbývá {30 - total} obchodů.</p>}
+      </div>
+    </div>
+  );
+};
+
+// Monte Carlo simulace — bootstrap resampling existujících obchodů.
+// Odpovídá na otázku „je edge reálná, nebo klika?": rozdělení výsledků, max DD, riziko ztráty.
+const _percentile = (sorted: number[], p: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * p)))];
+const _money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(Math.round(n)).toLocaleString('en-US')}`;
+
+const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: () => void }> = ({ stats, theme, onExpand }) => {
+  const isDark = theme !== 'light';
+  const SIMS = 600, PATHS = 36;
+  const sim = useMemo(() => {
+    const pnls = stats.trades.filter(t => t.executionStatus !== 'Missed').map(t => t.pnl || 0);
+    const n = pnls.length;
+    if (n < 10) return null;
+    const len = n;
+    const startBalance = stats.initialBalance || 0;
+    const BANDS = Math.min(len, 60);
+    const stepIdx: number[] = [];
+    for (let b = 0; b <= BANDS; b++) stepIdx.push(Math.round((b / BANDS) * len));
+    const cols: number[][] = stepIdx.map(() => new Array(SIMS));
+    const paths: number[][] = Array.from({ length: PATHS }, () => new Array(stepIdx.length));
+    const finals = new Array<number>(SIMS);
+    const maxDDs = new Array<number>(SIMS);
+    for (let s = 0; s < SIMS; s++) {
+      let eq = 0, peak = 0, maxdd = 0, bi = 0;
+      if (stepIdx[0] === 0) { cols[0][s] = 0; if (s < PATHS) paths[s][0] = 0; bi = 1; }
+      for (let i = 0; i < len; i++) {
+        eq += pnls[(Math.random() * n) | 0];
+        if (eq > peak) peak = eq;
+        const dd = peak - eq;
+        if (dd > maxdd) maxdd = dd;
+        if (bi < stepIdx.length && i + 1 === stepIdx[bi]) { cols[bi][s] = eq; if (s < PATHS) paths[s][bi] = eq; bi++; }
+      }
+      finals[s] = eq;
+      maxDDs[s] = maxdd;
+    }
+    const fSorted = [...finals].sort((a, b) => a - b);
+    const ddSorted = [...maxDDs].sort((a, b) => a - b);
+    const band = (p: number) => cols.map(c => _percentile([...c].sort((a, b) => a - b), p));
+    const expectancy = pnls.reduce((a, b) => a + b, 0) / n;
+    return {
+      len, startBalance, expectancy,
+      p5: _percentile(fSorted, 0.05), p25: _percentile(fSorted, 0.25), p50: _percentile(fSorted, 0.5),
+      p75: _percentile(fSorted, 0.75), p95: _percentile(fSorted, 0.95),
+      ddMed: _percentile(ddSorted, 0.5), ddP95: _percentile(ddSorted, 0.95),
+      pLoss: (finals.filter(f => f < 0).length / SIMS) * 100,
+      ruinPct: startBalance > 0 ? (maxDDs.filter(d => d >= startBalance).length / SIMS) * 100 : null,
+      b5: band(0.05), b25: band(0.25), b50: band(0.5), b75: band(0.75), b95: band(0.95),
+      paths,
+    };
+  }, [stats.trades]);
+
+  if (!sim) {
+    return (
+      <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col">
+        <div className="flex items-start justify-between mb-1">
+          <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+            Monte Carlo <InfoIcon text="Simuluje stovky náhodných pořadí tvých obchodů (bootstrap) — ukáže rozptyl výsledků, drawdown a riziko. Odpoví: je edge reálná, nebo klika?" theme={theme} />
+          </h3>
+          {onExpand && (
+            <button onClick={onExpand} title="Otevřít Monte Carlo Lab (celá obrazovka)"
+              className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all ${isDark ? 'text-slate-400 hover:text-violet-400 hover:bg-violet-500/10' : 'text-slate-400 hover:text-violet-600 hover:bg-violet-50'}`}>
+              <Maximize2 size={13} />
+            </button>
+          )}
+        </div>
+        <div className="flex-1 flex flex-col items-center justify-center gap-1 text-center">
+          <Activity size={26} className="text-violet-400/60" />
+          <p className="text-xs font-bold text-slate-500">Potřebuješ aspoň 10 obchodů pro mini-graf</p>
+          <p className="text-[10px] text-slate-500">Nebo otevři Lab (↗) a simuluj z parametrů.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Fan chart geometrie ──
+  const W = 1000, H = 175, padX = 4, padY = 6;
+  const minY = Math.min(0, ...sim.b5), maxY = Math.max(0, ...sim.b95);
+  const range = maxY - minY || 1;
+  const x = (i: number, total: number) => padX + (i / (total - 1)) * (W - padX * 2);
+  const y = (v: number) => H - padY - ((v - minY) / range) * (H - padY * 2);
+  const yFrac = (v: number) => `${(1 - (v - minY) / range) * 100}%`; // pro HTML overlay
+  const line = (arr: number[], move = true) => arr.map((v, i) => `${i === 0 && move ? 'M' : 'L'}${x(i, arr.length).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const areaBetween = (top: number[], bot: number[]) =>
+    `${line(top)} ${bot.map((_, i) => `L${x(bot.length - 1 - i, bot.length).toFixed(1)},${y(bot[bot.length - 1 - i]).toFixed(1)}`).join(' ')} Z`;
+  const zeroY = y(0);
+
+  const Metric: React.FC<{ label: string; value: string; sub?: string; cls?: string }> = ({ label, value, sub, cls }) => (
+    <div className="min-w-0">
+      <div className="text-[8px] font-black uppercase tracking-widest text-slate-500 truncate">{label}</div>
+      <div className={`text-[15px] font-black font-mono leading-tight ${cls || (isDark ? 'text-white' : 'text-slate-800')}`}>{value}</div>
+      {sub && <div className="text-[8px] font-bold text-slate-500 truncate">{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col">
+      <div className="flex items-start justify-between mb-0.5">
+        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+          Monte Carlo <InfoIcon text="Bootstrap: stovky náhodných přeskládání tvých obchodů. Tmavé pásmo = pravděpodobná zóna (P25–P75), světlé = krajní (P5–P95), čára = medián. Tenké čáry jsou ukázkové simulace. Ukazuje, kolik z výsledku je edge a kolik náhoda." theme={theme} />
+        </h3>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[9px] font-bold text-slate-500">{SIMS} sim. · {sim.len} obchodů</span>
+          {onExpand && (
+            <button onClick={onExpand} title="Otevřít Monte Carlo Lab (celá obrazovka)"
+              className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all ${isDark ? 'text-slate-400 hover:text-violet-400 hover:bg-violet-500/10' : 'text-slate-400 hover:text-violet-600 hover:bg-violet-50'}`}>
+              <Maximize2 size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="text-[10px] text-slate-500 mb-2 leading-snug">Kam až se může equity reálně rozejít při stejné edge.</p>
+
+      <div className="flex-1 min-h-0 flex flex-col gap-2.5">
+        {/* Equity fan chart s osami */}
+        <div className="relative flex-1 min-h-[96px]">
+          <svg viewBox={`0 0 ${W} ${H}`} className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="mc-outer" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.16" />
+                <stop offset="100%" stopColor="#8b5cf6" stopOpacity="0.02" />
+              </linearGradient>
+            </defs>
+            <line x1={padX} y1={zeroY} x2={W - padX} y2={zeroY} stroke={isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)'} strokeWidth="1" strokeDasharray="5 5" />
+            {/* krajní pásmo P5–P95 */}
+            <path d={areaBetween(sim.b95, sim.b5)} fill="url(#mc-outer)" />
+            {/* pravděpodobná zóna P25–P75 */}
+            <path d={areaBetween(sim.b75, sim.b25)} fill="#8b5cf6" fillOpacity="0.18" />
+            {/* ukázkové simulace (spaghetti) */}
+            {sim.paths.map((p, k) => (
+              <path key={k} d={line(p)} fill="none" stroke="#a78bfa" strokeWidth="1" strokeOpacity="0.07" vectorEffect="non-scaling-stroke" />
+            ))}
+            <path d={line(sim.b95)} fill="none" stroke="#a78bfa" strokeWidth="1.25" strokeOpacity="0.55" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+            <path d={line(sim.b5)} fill="none" stroke="#a78bfa" strokeWidth="1.25" strokeOpacity="0.55" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+            <path d={line(sim.b50)} fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          </svg>
+          {/* Y osa */}
+          <span className="absolute left-0 top-0 text-[8px] font-bold text-slate-500 leading-none">{_money(maxY)}</span>
+          <span className="absolute left-0 bottom-0 text-[8px] font-bold text-slate-500 leading-none">{_money(minY)}</span>
+          <span className="absolute left-0 text-[8px] font-bold text-slate-400 leading-none -translate-y-1/2" style={{ top: yFrac(0) }}>$0</span>
+          {/* P-popisky na pravém okraji */}
+          <span className="absolute right-0 text-[8px] font-black text-violet-300 leading-none -translate-y-1/2 px-1 rounded bg-violet-500/10" style={{ top: yFrac(sim.b95[sim.b95.length - 1]) }}>P95</span>
+          <span className="absolute right-0 text-[8px] font-black text-violet-400 leading-none -translate-y-1/2 px-1 rounded bg-violet-500/15" style={{ top: yFrac(sim.b50[sim.b50.length - 1]) }}>P50</span>
+          <span className="absolute right-0 text-[8px] font-black text-violet-300 leading-none -translate-y-1/2 px-1 rounded bg-violet-500/10" style={{ top: yFrac(sim.b5[sim.b5.length - 1]) }}>P5</span>
+        </div>
+        {/* X osa */}
+        <div className="flex justify-between text-[8px] font-bold text-slate-500 -mt-1">
+          <span>start</span><span>po {sim.len} obchodech</span>
+        </div>
+
+        {/* Rozpětí konečných výsledků */}
+        <div>
+          <div className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">Konečný výsledek (rozpětí 90 % scénářů)</div>
+          <div className="grid grid-cols-3 gap-2">
+            <Metric label="Nepříznivý · P5" value={_money(sim.p5)} sub="1 z 20 horší" cls={sim.p5 >= 0 ? COLORS.textProfit : COLORS.textLoss} />
+            <Metric label="Pravděpodobný · P50" value={_money(sim.p50)} sub="medián" cls={sim.p50 >= 0 ? COLORS.textProfit : COLORS.textLoss} />
+            <Metric label="Příznivý · P95" value={_money(sim.p95)} sub="1 z 20 lepší" cls={sim.p95 >= 0 ? COLORS.textProfit : COLORS.textLoss} />
+          </div>
+        </div>
+
+        {/* Riziko */}
+        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[var(--border-subtle)]">
+          <Metric label="Riziko ztráty" value={`${sim.pLoss.toFixed(0)}%`} sub="sim. v mínusu"
+            cls={sim.pLoss <= 20 ? 'text-emerald-400' : sim.pLoss <= 40 ? 'text-amber-400' : 'text-rose-400'} />
+          <Metric label="Max drawdown" value={`−$${Math.round(sim.ddMed).toLocaleString('en-US')}`} sub={`nejhorší −$${Math.round(sim.ddP95).toLocaleString('en-US')}`} cls="text-rose-400" />
+          {sim.ruinPct != null
+            ? <Metric label="Riziko ruinu" value={`${sim.ruinPct.toFixed(sim.ruinPct < 10 ? 1 : 0)}%`} sub="ztráta celého účtu"
+                cls={sim.ruinPct <= 1 ? 'text-emerald-400' : sim.ruinPct <= 5 ? 'text-amber-400' : 'text-rose-400'} />
+            : <Metric label="Expectancy" value={_money(sim.expectancy)} sub="/ obchod"
+                cls={sim.expectancy >= 0 ? COLORS.textProfit : COLORS.textLoss} />}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const MASTER_WIDGET_LIST = [
   { id: 'avg_win_loss', label: 'Avg Win/Loss', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Poměr průměrného zisku a ztráty.', preview: <div className="text-emerald-500 font-black text-xl">3.40</div>, defaultRowSpan: 1 },
   { id: 'streak', label: 'Current Streak', category: 'Psychologie', icon: <Zap size={18} />, description: 'Aktuální série výher/proher.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 1 },
@@ -514,7 +783,24 @@ const MASTER_WIDGET_LIST = [
   { id: 'daily_insight', label: 'Insight Dne (AI)', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Coach každý den vygeneruje jeden personalizovaný insight z tvé historie.', preview: <div className="text-purple-500 font-black text-xs">Sparkles ✨</div>, defaultRowSpan: 1 },
   { id: 'pending_ai_review', label: 'AI Návrhy k Review', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Obchody čekající na schválení/úpravu AI návrhů tagů.', preview: <div className="text-amber-500 font-black text-xs">3 čekají</div>, defaultRowSpan: 1 },
   { id: 'daily_focus', label: 'Dnes Hlídat', category: 'Chování', icon: <Target size={18} />, description: 'Aktivní Iron Rules a checklisty z AI Coache — připomínka co dnes hlídat.', preview: <div className="text-blue-500 font-black text-xs">📋 3 pravidla</div>, defaultRowSpan: 2 },
+  { id: 'bt_avg_r', label: 'Avg R / Expectancy', category: 'Backtest', icon: <Target size={18} />, description: 'Průměrný R-multiple a expectancy na obchod.', preview: <div className="text-violet-500 font-black text-xl">+1.38R</div>, defaultRowSpan: 1 },
+  { id: 'bt_confluence_wr', label: 'WR dle confluencí', category: 'Backtest', icon: <Layers size={18} />, description: 'Win rate podle počtu confluencí — testuje „víc confluencí = vyšší WR".', preview: <div className="text-violet-500 font-black text-xs">0→4+ conf.</div>, defaultRowSpan: 2 },
+  { id: 'bt_sample_size', label: 'Sample-size', category: 'Backtest', icon: <BarChart3 size={18} />, description: 'Statistická důvěra tvého vzorku obchodů.', preview: <div className="text-violet-500 font-black text-xs">solidní vzorek</div>, defaultRowSpan: 1 },
+  { id: 'bt_monte_carlo', label: 'Monte Carlo', category: 'Backtest', icon: <Activity size={18} />, description: '500 simulací náhodného pořadí obchodů — rozptyl výsledků, max DD, riziko ztráty.', preview: <div className="text-violet-500 font-black text-xs">P5–P95 fan</div>, defaultRowSpan: 2 },
 ];
+
+// Widgety dostupné v backtest světě (subset live + backtest specifické). Žádné rituály,
+// challenge cíl, execution %, AI insight/review ani „dnes hlídat" (to je live coaching).
+const BACKTEST_WIDGET_IDS = new Set<string>([
+  'kpi_pnl', 'kpi_winrate', 'kpi_profit_factor', 'avg_win_loss', 'kpi_day_winrate', 'kpi_max_drawdown',
+  'streak', 'discipline_streak',
+  'equity', 'winners_losers', 'monthly_performance', 'session_performance', 'hourly_edge', 'daily_edge', 'calendar',
+  'bt_avg_r', 'bt_confluence_wr', 'bt_sample_size', 'bt_monte_carlo',
+]);
+
+// Widgety, které patří VÝHRADNĚ do backtest světa (mimo něj se nenabízí ani nerenderují).
+// bt_monte_carlo zde NENÍ — Monte Carlo je užitečné i pro live ("je živá edge reálná?").
+const BACKTEST_ONLY_IDS = new Set<string>(['bt_avg_r', 'bt_confluence_wr', 'bt_sample_size']);
 
 // Module-level mouse tracker — no re-renders, just reads position at tooltip render time
 let _mx = 0, _my = 0;
@@ -1270,6 +1556,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isArmoryOpen, setIsArmoryOpen] = useState(false);
   const [selectedTradeId, setSelectedTradeId] = useState<string | number | null>(null);
+  const [mcLabOpen, setMcLabOpen] = useState(false);
 
   const selectedTrade = useMemo(() => {
     if (!selectedTradeId) return null;
@@ -1280,20 +1567,30 @@ const Dashboard: React.FC<DashboardProps> = ({
     else if (!isEditing) setIsArmoryOpen(false);
   }, [isEditing]);
   const currentLayout = useMemo(() => {
-    return [...activeLayout].filter(w => w.visible).map(w => {
+    // Mimo backtest svět nikdy nerenderuj backtest-specifické widgety (bt_*),
+    // i kdyby zůstaly uložené v live layoutu z dřívějška — ať nezůstane prázdný box.
+    return [...activeLayout].filter(w => w.visible && !(BACKTEST_ONLY_IDS.has(w.id) && dashboardMode !== 'backtesting')).map(w => {
       if (w.h) return w;
       const master = MASTER_WIDGET_LIST.find(m => m.id === w.id);
       return { ...w, h: (master as any)?.defaultRowSpan || 1, w: w.w || 4, x: w.x || 0, y: w.y || 0 };
     }).sort((a, b) => (a.y - b.y) || (a.x - b.x));
-  }, [activeLayout]);
+  }, [activeLayout, dashboardMode]);
+  // V backtest světě nabízíme jen vybranou podmnožinu + backtest widgety;
+  // v live světě NIKDY nenabízíme backtest-specifické widgety (bt_*).
+  const visibleMaster = useMemo(
+    () => dashboardMode === 'backtesting'
+      ? MASTER_WIDGET_LIST.filter(w => BACKTEST_WIDGET_IDS.has(w.id))
+      : MASTER_WIDGET_LIST.filter(w => !BACKTEST_ONLY_IDS.has(w.id)),
+    [dashboardMode],
+  );
   const categories = useMemo(() => {
     const cats: Record<string, any[]> = {};
-    MASTER_WIDGET_LIST.forEach(w => {
+    visibleMaster.forEach(w => {
       if (!cats[w.category!]) cats[w.category!] = [];
       cats[w.category!].push(w);
     });
     return cats;
-  }, []);
+  }, [visibleMaster]);
   const updateWidgetStatus = (id: string, visible: boolean) => {
     updateAllBreakpointLayouts((bpLayout, bp) => {
       const exists = bpLayout.some(w => w.id === id);
@@ -1448,6 +1745,9 @@ const Dashboard: React.FC<DashboardProps> = ({
   }, []);
 
   const renderWidget = (id: string, config?: DashboardWidgetConfig) => {
+    // Pojistka: backtest-only widgety se nikdy nevykreslí mimo backtest svět
+    // (Monte Carlo je povolené i v live, proto BACKTEST_ONLY_IDS, ne prefix bt_).
+    if (BACKTEST_ONLY_IDS.has(id) && dashboardMode !== 'backtesting') return null;
     switch (id) {
       case 'challenge_target': return <DistanceToTargetWidget stats={stats} accounts={accounts} theme={theme} currency={targetCurrency} rates={exchangeRates} payouts={payouts} />;
       case 'discipline': return <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={stats.trades} ironRules={ironRules} />;
@@ -1585,6 +1885,26 @@ const Dashboard: React.FC<DashboardProps> = ({
       case 'daily_insight': return <DailyInsightWidget theme={theme} trades={allTrades.length > 0 ? allTrades : stats.trades} onOpenTrade={(t) => setSelectedTradeId(String(t.id))} />;
       case 'pending_ai_review': return <PendingReviewWidget theme={theme} trades={allTrades.length > 0 ? allTrades : stats.trades} onOpenTrade={(t) => setSelectedTradeId(String(t.id))} />;
       case 'daily_focus': return <DailyFocusWidget ironRules={ironRules} theme={theme} onManage={onNavigateToSettings} />;
+      case 'bt_avg_r': {
+        const valid = stats.trades.filter(t => t.executionStatus !== 'Missed');
+        const rTrades = valid.filter(t => t.riskAmount && (t.riskAmount as number) > 0);
+        const avgR = rTrades.length ? rTrades.reduce((s, t) => s + (t.pnl || 0) / (t.riskAmount as number), 0) / rTrades.length : null;
+        const exp = valid.length ? valid.reduce((s, t) => s + (t.pnl || 0), 0) / valid.length : 0;
+        const pos = (avgR ?? 0) >= 0;
+        return (
+          <ProKpiCard
+            theme={theme}
+            label="Avg R"
+            value={avgR == null ? '—' : `${pos ? '+' : ''}${avgR.toFixed(2)}R`}
+            subValue={avgR == null ? 'vyplň risk u obchodů' : `${exp >= 0 ? '+' : '−'}$${Math.abs(Math.round(exp)).toLocaleString('en-US')} / obchod`}
+            info="Průměrný R-multiple na obchod (pnl ÷ risk). Expectancy = průměrný $ výdělek na obchod."
+            icon={<div className="bg-violet-100 text-violet-600 p-1 rounded-lg dark:bg-violet-500/20"><Target size={14} /></div>}
+          />
+        );
+      }
+      case 'bt_confluence_wr': return <BtConfluenceWrWidget stats={stats} theme={theme} />;
+      case 'bt_sample_size': return <BtSampleSizeWidget stats={stats} theme={theme} />;
+      case 'bt_monte_carlo': return <BtMonteCarloWidget stats={stats} theme={theme} onExpand={() => setMcLabOpen(true)} />;
       default: return null;
     }
   };
@@ -1837,7 +2157,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
                 {/* Vypnuté + nikdy-nepřidané widgety → přidat */}
                 {(() => {
-                  const missingWidgets = MASTER_WIDGET_LIST.filter(m => {
+                  const missingWidgets = visibleMaster.filter(m => {
                     const inLayout = activeLayout.find(w => w.id === m.id);
                     return !inLayout || inLayout.visible === false;
                   });
@@ -1886,10 +2206,10 @@ const Dashboard: React.FC<DashboardProps> = ({
             className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] w-[95%] max-w-4xl p-3 md:p-4 rounded-3xl border shadow-2xl backdrop-blur-3xl flex items-center gap-4 ${isDark ? 'bg-slate-800/90 border-slate-700/50 shadow-black/80' : 'bg-white/95 border-slate-200 shadow-slate-300/50'}`}
           >
             <div className="flex-1 overflow-x-auto no-scrollbar flex items-center gap-3 snap-x px-2">
-              {MASTER_WIDGET_LIST.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).length === 0 && (
+              {visibleMaster.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).length === 0 && (
                 <div className="w-full text-center text-xs font-bold text-slate-500 py-3">Všechny moduly jsou aktivní</div>
               )}
-              {MASTER_WIDGET_LIST.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).map(master => (
+              {visibleMaster.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).map(master => (
                 <motion.button
                   whileHover={{ y: -4, scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -1938,6 +2258,15 @@ const Dashboard: React.FC<DashboardProps> = ({
           />
         )
       }
+
+      {mcLabOpen && (
+        <MonteCarloLab
+          theme={theme}
+          trades={stats.trades}
+          initialBalance={stats.initialBalance}
+          onClose={() => setMcLabOpen(false)}
+        />
+      )}
     </div >
   );
 };

@@ -1,0 +1,21 @@
+App.tsx: error TS2345: Argument of type '{}' is not assignable to parameter of type 'UserPreferences'.
+components/DailyFocusWidget.tsx: error TS2339: Property 'isActive' does not exist on type 'IronRule'.
+components/DailyJournal.tsx: error TS2339: Property 'dailyFocus' does not exist on type 'DailyPrep'.
+index.tsx: error TS2307: Cannot find module 'virtual:pwa-register' or its corresponding type declarations.
+scripts/audit-data.ts: error TS2304: Cannot find name 'stats'.
+scripts/check-business-data.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/check-journal.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/debug-db-connection.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/debug-get-trades.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/debug-old-trades.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/debug-old-trades.ts: error TS2339: Property 'screenshot' does not exist on type '{ id: any; date: any; data: any; }'.
+scripts/debug-old-trades.ts: error TS2339: Property 'screenshots' does not exist on type '{ id: any; date: any; data: any; }'.
+scripts/debug-old-trades.ts: error TS2339: Property 'substring' does not exist on type 'unknown'.
+scripts/debug-preferences.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/dump-legacy.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/list-tables.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/sync-local.ts: error TS2307: Cannot find module 'dukascopy-node' or its corresponding type declarations.
+scripts/test-db.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/test-discord.ts: error TS2305: Module '"../services/discord/webhook"' has no exported member 'sendDiscordNotification'.
+scripts/test-discord.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
+scripts/test-interact.ts: error TS2307: Cannot find module 'discord-interactions' or its corresponding type declarations.

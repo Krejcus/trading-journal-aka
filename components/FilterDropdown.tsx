@@ -216,23 +216,23 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   };
 
   const containerVariants = {
-    hidden: { opacity: 0, scale: 0.98, y: -5 },
+    hidden: { opacity: 0, scale: 0.15, y: -8 },
     visible: {
       opacity: 1,
       scale: 1,
       y: 0,
       transition: {
         type: "spring" as const,
-        stiffness: 400,
-        damping: 35,
+        stiffness: 320,
+        damping: 26,
         staggerChildren: 0.03
       }
     },
     exit: {
       opacity: 0,
-      scale: 0.98,
-      y: -5,
-      transition: { duration: 0.15 }
+      scale: 0.15,
+      y: -8,
+      transition: { type: "spring" as const, stiffness: 400, damping: 30 }
     }
   };
 
@@ -266,18 +266,19 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   right: window.innerWidth - buttonRect.right,
                   left: 'auto',
                   bottom: 'auto',
+                  transformOrigin: 'top right',
                 }
-                : undefined
+                : { transformOrigin: 'bottom center' }
             }
             ref={panelRef}
-            className={`fixed inset-x-0 bottom-0 top-auto sm:relative sm:inset-auto w-full sm:w-[320px] md:w-[400px] overflow-hidden border-t sm:border z-[1000] backdrop-blur-3xl rounded-t-[32px] sm:rounded-[24px] max-h-[85vh] sm:max-h-[80vh] flex flex-col ${isDark
-              ? 'bg-theme-page-90 border-white/10 shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.5)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]'
-              : 'bg-white/95 border-slate-200 shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.05)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.1)]'
+            className={`fixed inset-x-0 bottom-0 top-auto sm:relative sm:inset-auto w-full sm:w-[320px] md:w-[400px] overflow-hidden border-t sm:border z-[1000] backdrop-blur-2xl rounded-t-[32px] sm:rounded-[24px] max-h-[85vh] sm:max-h-[80vh] flex flex-col ${isDark
+              ? 'bg-[rgba(15,18,28,0.06)] border-[rgba(255,255,255,0.04)] shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.5)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]'
+              : 'bg-[rgba(255,255,255,0.06)] border-[rgba(255,255,255,0.18)] shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.05)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.1)]'
               }`}
           >
             <div className="absolute inset-0 opacity-[0.02] pointer-events-none bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
 
-            <div className={`px-4 py-3 border-b flex justify-between items-center relative z-10 shrink-0 ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50/50'}`}>
+            <div className={`px-4 py-3 border-b flex justify-between items-center relative z-10 shrink-0 ${isDark ? 'border-white/5 bg-white/[0.03]' : 'border-black/[0.06] bg-white/[0.04]'}`}>
               <div className="flex flex-col">
                 <h4 className={`font-black text-[9px] uppercase tracking-[0.2em] flex items-center gap-1.5 ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>
                   <Filter size={11} className="text-indigo-500" /> Filtry
@@ -305,38 +306,42 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
             </div>
 
             <div className="flex-1 p-4 space-y-5 overflow-y-auto no-scrollbar relative z-10">
-              {dashboardMode && setDashboardMode && (
-                <motion.div variants={itemVariants}>
-                  <div className={sectionLabelClass}><Monitor size={10} /> Režim</div>
-                  <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
-                    <motion.div
-                      animate={{ x: (dashboardMode === 'funded' ? 0 : dashboardMode === 'combined' ? 100 : dashboardMode === 'challenge' ? 200 : dashboardMode === 'backtesting' ? 300 : 400) + '%' }}
-                      transition={{ type: 'spring', stiffness: 400, damping: 35 }}
-                      className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/5)] rounded-lg border ${
-                        dashboardMode === 'funded' ? (isDark ? 'bg-emerald-500/20 border-emerald-500/40' : 'bg-emerald-500 shadow-sm') :
-                        dashboardMode === 'combined' ? (isDark ? 'bg-orange-500/20 border-orange-500/40' : 'bg-orange-500 shadow-sm') :
-                        dashboardMode === 'backtesting' ? (isDark ? 'bg-violet-500/20 border-violet-500/40' : 'bg-violet-500 shadow-sm') :
-                        dashboardMode === 'archive' ? (isDark ? 'bg-slate-500/20 border-slate-500/40' : 'bg-slate-500 shadow-sm') :
-                        (isDark ? 'bg-blue-500/20 border-blue-500/40' : 'bg-blue-500 shadow-sm')
-                      } ${!isDark ? 'text-white' : ''}`}
-                    />
-                    {['funded', 'combined', 'challenge', 'backtesting', 'archive'].map((m) => (
-                      <button
-                        key={m}
-                        onClick={() => setDashboardMode(m as DashboardMode)}
-                        className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${
-                          dashboardMode === m
-                            ? (isDark
-                              ? m === 'funded' ? 'text-emerald-400' : m === 'combined' ? 'text-orange-400' : m === 'backtesting' ? 'text-violet-400' : m === 'archive' ? 'text-slate-300' : 'text-blue-400'
-                              : 'text-white')
-                            : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
-                      >
-                        {m === 'combined' ? 'Vše' : m === 'backtesting' ? 'BT' : m === 'archive' ? 'Archiv' : m}
-                      </button>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
+              {/* Režim — jen v live světě (backtest má vlastní svět přes sidebar, žádný výběr módu) */}
+              {dashboardMode && setDashboardMode && dashboardMode !== 'backtesting' && (() => {
+                const liveModes = ['funded', 'combined', 'challenge', 'archive'];
+                const idx = Math.max(0, liveModes.indexOf(dashboardMode));
+                return (
+                  <motion.div variants={itemVariants}>
+                    <div className={sectionLabelClass}><Monitor size={10} /> Režim</div>
+                    <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                      <motion.div
+                        animate={{ x: (idx * 100) + '%' }}
+                        transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+                        className={`absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/4)] rounded-lg border ${
+                          dashboardMode === 'funded' ? (isDark ? 'bg-emerald-500/20 border-emerald-500/40' : 'bg-emerald-500 shadow-sm') :
+                          dashboardMode === 'combined' ? (isDark ? 'bg-orange-500/20 border-orange-500/40' : 'bg-orange-500 shadow-sm') :
+                          dashboardMode === 'archive' ? (isDark ? 'bg-slate-500/20 border-slate-500/40' : 'bg-slate-500 shadow-sm') :
+                          (isDark ? 'bg-blue-500/20 border-blue-500/40' : 'bg-blue-500 shadow-sm')
+                        } ${!isDark ? 'text-white' : ''}`}
+                      />
+                      {liveModes.map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => setDashboardMode(m as DashboardMode)}
+                          className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${
+                            dashboardMode === m
+                              ? (isDark
+                                ? m === 'funded' ? 'text-emerald-400' : m === 'combined' ? 'text-orange-400' : m === 'archive' ? 'text-slate-300' : 'text-blue-400'
+                                : 'text-white')
+                              : (isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-500 hover:text-slate-900')}`}
+                        >
+                          {m === 'combined' ? 'Vše' : m === 'archive' ? 'Archiv' : m}
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                );
+              })()}
 
               <div className="grid grid-cols-2 gap-4">
                 <motion.div variants={itemVariants}>
@@ -522,11 +527,11 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
               </div>
 
               <motion.div variants={itemVariants}>
-                <div className={sectionLabelClass}><Wallet size={10} /> Portfolia & Účty</div>
+                <div className={sectionLabelClass}><Wallet size={10} /> {dashboardMode === 'backtesting' ? 'Sessions' : 'Portfolia & Účty'}</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                   {accounts.filter(a => {
-                    // V "Vše" / "Archiv" módu chceme i Inactive (archivované/spálené) účty.
-                    // V ostatních módech jen Active.
+                    if (dashboardMode === 'backtesting') return a.type === 'Backtest' && a.status === 'Active';
+                    if (a.type === 'Backtest') return false;
                     if (dashboardMode === 'archive') return a.status === 'Inactive';
                     if (dashboardMode === 'combined') return true;
                     return a.status === 'Active';
@@ -545,7 +550,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
 
             </div>
 
-            <div className={`px-4 py-3 border-t backdrop-blur-md flex items-center justify-between relative z-10 ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50/50'}`}>
+            <div className={`px-4 py-3 border-t flex items-center justify-between relative z-10 ${isDark ? 'border-white/5 bg-white/[0.03]' : 'border-black/[0.06] bg-white/[0.04]'}`}>
               <span className={`text-[8px] font-black uppercase tracking-widest ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>{activeFilterCount} aktivních</span>
               <div className="flex items-center gap-2">
                 {/* Desktop: edit grid layout */}

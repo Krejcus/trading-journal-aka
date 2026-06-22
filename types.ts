@@ -196,6 +196,7 @@ export interface Trade {
   screenshot?: string;
   screenshots?: string[];
   notes?: string;
+  shareNotes?: boolean; // Při sdílení veřejného linku: smí se zobrazit poznámka? (default false)
   drawings?: DrawingObject[]; // Array of drawing objects (lines, rects, text, fib, etc.)
   entryPrice?: number;
   exitPrice?: number;
@@ -621,6 +622,7 @@ export interface UserPreferences {
   standardMistakes?: string[];
   dashboardLayout?: DashboardWidgetConfig[]; // Legacy — flat array (pre-migration)
   dashboardLayouts?: DashboardLayouts; // New — per-breakpoint layouts
+  backtestDashboardLayouts?: DashboardLayouts; // Separátní layout pro backtest svět
   defaultRisk?: number; // % of account
   defaultStopLoss?: number; // ticks
   soundEnabled?: boolean;
@@ -672,6 +674,7 @@ export interface AIConversation {
   user_id?: string;
   title: string;
   category: 'general' | 'analysis' | 'report';
+  scope?: 'live' | 'backtest';
   created_at: string;
   updated_at: string;
 }

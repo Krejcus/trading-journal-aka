@@ -316,14 +316,25 @@ export function formatTradesForAI(trades: Trade[], limit = 100): string {
 //   - "konkrétní starý obchod"        → mimo okno → coach sáhne po nástroji (vzácné)
 const WINDOW_DAYS = 90;
 
-export function buildTradeWindow(allTrades: Trade[]): {
+export function buildTradeWindow(allTrades: Trade[], opts: { allTime?: boolean } = {}): {
   windowText: string;
   rollupText: string;
   windowCount: number;
   olderCount: number;
 } {
-  const cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const sorted = [...allTrades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  // Backtest scope: obchody jsou z libovolných historických dat (často dávno
+  // mimo 90 dní), datasety jsou malé → dej coachovi VŠECHNY v plném detailu,
+  // ať umí říct rozmezí, první/poslední obchod i jednotlivé záznamy.
+  if (opts.allTime) {
+    const windowText = sorted.length > 0
+      ? formatTradesForAI(sorted, Math.min(sorted.length, 500))
+      : 'Žádné obchody.';
+    return { windowText, rollupText: 'Žádné starší obchody.', windowCount: sorted.length, olderCount: 0 };
+  }
+
+  const cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const recent = sorted.filter(t => new Date(t.date).getTime() > cutoff);
   const older = sorted.filter(t => new Date(t.date).getTime() <= cutoff);
 
@@ -636,6 +647,10 @@ export interface StreamOptions {
   /** Vyřešená persona coache (tón/osobnost) — řeší caller přes resolvePersona(). */
   coachPersona?: CoachPersonaId;
   sessionPrompt?: string;
+  /** Rozsah dat: 'live' (default) = jen živé účty; 'backtest' = jen backtest účty. */
+  scope?: 'live' | 'backtest';
+  /** Předformátovaný blok backtest session poznámek (pre/post) — jen v backtest scope. */
+  backtestSessions?: string;
 }
 
 function findToolNameById(messages: any[], id: string): string {
@@ -674,7 +689,7 @@ export async function streamAIResponse(
   // Cílem je aby coach zodpověděl většinu dotazů (nedávno + dlouhodobé trendy) BEZ nástrojů
   // = jeden round-trip = rychle. Nástroje zůstávají fallback pro konkrétní starší záznamy.
   const useTools = !options.disableTools;
-  const tradeWindow = buildTradeWindow(allTrades);
+  const tradeWindow = buildTradeWindow(allTrades, { allTime: options.scope === 'backtest' });
 
   // ── Dnešní datum + týdenní kontext ────────────────────────────────────────
   const now = new Date();
@@ -802,6 +817,24 @@ Pravidlo: Když uživatel říká "tento týden", "aktuální týden" nebo "tenh
 Když říká "minulý týden", filtruj POUZE rozmezí ${lastMondayISO}–${lastFridayISO}.
 NIKDY neuváděj obchody mimo požadovaný rozsah. Pokud žádné obchody v rozsahu nejsou, řekni to upřímně ("V tomto týdnu žádné obchody").
 NIKDY si nevymýšlej datumy ani je neaproximuj — používej pouze data co reálně vidíš v seznamu obchodů níže.`;
+
+  // ── Scope dat (live ↔ backtest) ──────────────────────────────────────────
+  if (options.scope === 'backtest') {
+    systemPrompt += `\n\n=== ROZSAH DAT (SCOPE) — KRITICKÉ ===
+Aktuálně čteš POUZE BACKTEST data (uživatel přepnul příkazem /backtest). Všechny staty, obchody a vzorce se týkají backtestu, NE živého obchodování. Zpět na živá data se uživatel vrátí příkazem /live.
+Jsi backtest analytik — hledej vzorce: které setupy/confluence fungují vs. ne, podle dne/času/biasu. U závěrů zohledni velikost vzorku (pod ~30 obchodů = orientační, ne spolehlivé).`;
+    if (options.backtestSessions) {
+      systemPrompt += `\n\n${options.backtestSessions}
+DŮLEŽITÉ: Tohle JSOU tvoje backtest přípravy/audity (pre/post session). Když se uživatel ptá "kolik mám příprav/auditů/sessions" nebo na jejich obsah, ber je ODSUD — NE ze search_history (tam backtest sessions NEJSOU). Pre = záměr/bias před session, Post = co pozoroval a co doladit. Propoj je s obchody.`;
+    } else {
+      systemPrompt += `\n\nBACKTEST SESSIONS: zatím žádné zapsané pre/post poznámky pro tyto backtest účty.`;
+    }
+  } else {
+    systemPrompt += `\n\n=== ROZSAH DAT (SCOPE) — KRITICKÉ ===
+Aktuálně vidíš POUZE ŽIVÁ (live) data. Backtest data EXISTUJÍ, ale jsou ZÁMĚRNĚ SKRYTÁ — v živém režimu k nim NEMÁŠ přístup (oddělení backtestu od reálného obchodování, abys nikdy neradil z backtest dat).
+Když se uživatel zeptá, jestli vidíš backtest / backtest data: upřímně řekni, že je teď NEVIDÍŠ, protože jsi v živém režimu a backtest je oddělený přepážkou. Dodej, že je můžeš zpřístupnit, když přepne příkazem /backtest. NIKDY si backtest data nevymýšlej ani neodhaduj.`;
+  }
+
   if (options.sessionPrompt) {
     systemPrompt += `\n\n=== AKTIVNÍ INTERAKTIVNÍ SEANCE (KRITICKÉ) ===\n${options.sessionPrompt}\n\n`;
   }
@@ -1208,6 +1241,8 @@ ${tradeWindow.rollupText}`;
           trades: allTrades,
           preps: options.preps || [],
           reviews: options.reviews || [],
+          accounts: options.accounts || [],
+          scope: options.scope || 'live',
         });
         // Nový/zrušený závazek či fakt musí platit hned v další zprávě — zahoď cache.
         if (b.name === 'remember' || b.name === 'forget_memory') invalidateMemoryCache();

@@ -21,5 +21,14 @@
       "mcp__Claude_in_Chrome__find",
       "mcp__tradingview__tv_health_check"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/tsc-regression.sh" }
+        ]
+      }
+    ]
   }
 }

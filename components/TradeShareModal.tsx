@@ -33,6 +33,11 @@ const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', avatarU
     const [generating, setGenerating] = useState(false);
     const [feedback, setFeedback] = useState<string | null>(null);
     const [scale, setScale] = useState(0.6);
+    // Sdílet i poznámku? Default vypnuto (soukromí). Pamatuje si poslední volbu.
+    const hasNotes = !!(trade.notes && String(trade.notes).trim());
+    const [shareNotes, setShareNotes] = useState<boolean>(() => {
+        try { return localStorage.getItem('alphatrade_share_notes') === '1'; } catch { return false; }
+    });
 
     // Sestaví share URL — `/share/:id` route s OG meta tagy přes Vercel rewrite na /api/share/:id.
     // Crawlery (Discord/X/Slack) si stáhnou preview z meta tagů, humany JS redirect na app.
@@ -43,15 +48,16 @@ const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', avatarU
         return window.location.origin;
     })();
 
-    // Mark trade as public for QR scan flow
+    // Mark trade as public for QR scan flow + propaguj share_notes flag (přepíná, jestli
+    // veřejný link smí ukázat poznámku). Re-běží i při změně toggle.
     useEffect(() => {
         const isUUID = typeof trade.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trade.id);
         if (isUUID) {
-            storageService.markTradeAsPublic(trade.id as string).catch(err => {
+            storageService.markTradeAsPublic(trade.id as string, shareNotes && hasNotes).catch(err => {
                 console.warn('[Share] Failed to mark trade as public:', err);
             });
         }
-    }, [trade.id]);
+    }, [trade.id, shareNotes, hasNotes]);
 
     // Lock scroll while modal open
     useEffect(() => {
@@ -218,10 +224,27 @@ const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', avatarU
                     className="shadow-2xl shadow-black/50"
                 >
                     <div ref={cardRef} style={{ width: CARD_W, height: CARD_H, borderRadius: 24, overflow: 'hidden' }}>
-                        <TradeShareCard trade={trade} username={username} avatarUrl={avatarUrl} shareUrl={shareUrl} showQR={true} />
+                        <TradeShareCard trade={trade} username={username} avatarUrl={avatarUrl} shareUrl={shareUrl} showQR={true} showNotes={shareNotes && hasNotes} />
                     </div>
                 </motion.div>
             </div>
+
+            {/* Toggle: sdílet i poznámku (jen když trade poznámku má) */}
+            {hasNotes && (
+                <button
+                    onClick={() => {
+                        const next = !shareNotes;
+                        setShareNotes(next);
+                        try { localStorage.setItem('alphatrade_share_notes', next ? '1' : '0'); } catch { /* ignore */ }
+                    }}
+                    className="relative z-10 flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/15 text-white border border-white/15 backdrop-blur transition-all"
+                >
+                    <span className={`relative w-9 h-5 rounded-full transition-colors ${shareNotes ? 'bg-emerald-500' : 'bg-white/20'}`}>
+                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${shareNotes ? 'translate-x-4' : ''}`} />
+                    </span>
+                    <span className="text-[11px] font-black uppercase tracking-widest">Sdílet i poznámku</span>
+                </button>
+            )}
 
             {/* Action buttons — centered under card via flex parent */}
             <div className="relative z-10 flex items-center gap-3">

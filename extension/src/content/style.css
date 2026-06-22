@@ -20,6 +20,6 @@
     }
 
     .tactical-btn.active {
-        @apply bg-[#0891b2] text-white border-[#0891b2] shadow-[0_4px_12px_rgba(8, 145, 178, 0.3)];
+        @apply bg-[#0891b2] text-white border-[#0891b2] shadow-[0_4px_12px_rgba(8,145,178,0.3)];
     }
 }

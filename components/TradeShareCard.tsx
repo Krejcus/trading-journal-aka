@@ -23,6 +23,8 @@ interface Props {
     shareUrl?: string;
     /** Pokud true, ukáže "Scan for full detail" + QR. Default true. */
     showQR?: boolean;
+    /** Pokud true a trade má poznámku, vyrenderuje ji jako kartu. Default false (soukromí). */
+    showNotes?: boolean;
 }
 
 /** Formátuje datum trade do "DD. MM. YYYY · HH:MM" */
@@ -53,7 +55,8 @@ function calcR(trade: Trade): number | null {
     return trade.pnl / trade.riskAmount;
 }
 
-const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUrl, shareUrl, showQR = true }) => {
+const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUrl, shareUrl, showQR = true, showNotes = false }) => {
+    const notes = (showNotes && trade.notes) ? String(trade.notes).trim() : '';
     const pnl = Number(trade.pnl || 0);
     const isWin = pnl > 0;
     const isLong = String(trade.direction || '').toLowerCase() === 'long';
@@ -191,6 +194,28 @@ const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUr
                             {r != null ? `${r >= 0 ? '+' : ''}${r.toFixed(1)}R` : '—'}
                         </div>
                     </div>
+
+                    {/* Notes — jen když showNotes && trade.notes (default skryto, soukromí) */}
+                    {notes && (
+                        <div style={{
+                            flex: 1, minHeight: 0,
+                            padding: 28, borderRadius: 24,
+                            background: 'rgba(255,255,255,0.025)',
+                            backdropFilter: 'blur(20px)',
+                            border: '1px solid rgba(34,211,238,0.12)',
+                            display: 'flex', flexDirection: 'column',
+                        }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 12 }}>Poznámka</div>
+                            <div style={{
+                                fontSize: 19, fontWeight: 400, lineHeight: 1.5,
+                                color: 'rgba(255,255,255,0.82)',
+                                overflow: 'hidden',
+                                display: '-webkit-box',
+                                WebkitLineClamp: 6,
+                                WebkitBoxOrient: 'vertical',
+                            }}>{notes}</div>
+                        </div>
+                    )}
                 </div>
 
                 {/* RIGHT: confluence + chart + stats */}

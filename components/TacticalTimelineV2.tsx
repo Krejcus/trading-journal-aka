@@ -430,7 +430,7 @@ const CollapsedCard: React.FC<{
   status: 'done' | 'pending' | 'live';
 }> = ({ isDark, borderColor, onClick, icon, iconBg, title, subtitle, status }) => {
   const borderClass = isDark
-    ? `border-${borderColor}-500/20 bg-${borderColor}-500/5`
+    ? `border-[var(--border-subtle)] bg-${borderColor}-500/5`
     : `border-${borderColor}-200 bg-${borderColor}-50/30`;
   const statusBadge = status === 'done'
     ? <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase">✓ Hotovo</span>
@@ -477,7 +477,7 @@ const CollapsedSessionCard: React.FC<{
 
   return (
     <div className={`rounded-2xl border overflow-hidden cursor-pointer transition-all hover:shadow-md ${
-      isDark ? `border-${color}-500/20 bg-[var(--bg-card)]` : `border-${color}-200 bg-${color}-50/30 hover:bg-${color}-50/50`
+      isDark ? `border-[var(--border-subtle)] bg-[var(--bg-card)]` : `border-${color}-200 bg-${color}-50/30 hover:bg-${color}-50/50`
     }`} onClick={onClick}>
       {/* Header — compact: malé logo + name + čas inline */}
       <div className="flex items-center justify-between p-3 pb-2.5">
@@ -601,7 +601,7 @@ const ExpandedMorningCard: React.FC<{
   date: string;
 }> = ({ isDark, prep, rituals, tradeRules = [], commitments, onDelete, onCollapse, onUpdatePrep, date }) => {
   const cardClass = isDark
-    ? 'bg-gradient-to-br from-amber-500/10 to-transparent border-amber-500/30'
+    ? 'bg-gradient-to-br from-amber-500/10 to-transparent border-[var(--border-subtle)]'
     : 'bg-gradient-to-br from-amber-50 to-white border-amber-200 shadow-sm';
 
   // Optimistický local state — instant UI reakce, async propagace do parenta.
@@ -1401,7 +1401,7 @@ const ExpandedAuditCard: React.FC<{
   const pnl = realTrades.reduce((s, t) => s + (t.pnl || 0), 0);
   const pnlClass = pnl > 0 ? 'text-emerald-600' : pnl < 0 ? 'text-rose-600' : 'text-slate-500';
   const cardClass = isDark
-    ? 'bg-gradient-to-br from-indigo-500/10 to-transparent border-indigo-500/30'
+    ? 'bg-gradient-to-br from-indigo-500/10 to-transparent border-[var(--border-subtle)]'
     : 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200 shadow-sm';
 
   const takeaway = (review?.psycho?.notes as string) || '';

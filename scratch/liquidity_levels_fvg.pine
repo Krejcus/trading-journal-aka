@@ -1,0 +1,1371 @@
+// @version=6
+indicator("Liquidity Levels CZ - Advanced", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// Vynucení bufferu pro bezpečné dynamické indexování historie
+max_bars_back(high, 2000)
+max_bars_back(low, 2000)
+
+// ════════════════════════════════════════════════════════════════════════════
+//                              SESSIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+// Asia
+showAsia = input.bool(true, title="", inline="asia", group="Sessions")
+asiaColor = input.color(color.new(#E91E63, 0), title="ASIA", inline="asia", group="Sessions")
+asiaStart = input.int(1, title="", minval=0, maxval=23, inline="asia", group="Sessions")
+asiaEnd = input.int(9, title="-", minval=0, maxval=23, inline="asia", group="Sessions")
+showAsiaLines = input.bool(true, title="Čáry", inline="asia", group="Sessions")
+
+// London
+showLondon = input.bool(true, title="", inline="lon", group="Sessions")
+londonColor = input.color(color.new(#2196F3, 0), title="LONDON", inline="lon", group="Sessions")
+londonStart = input.int(9, title="", minval=0, maxval=23, inline="lon", group="Sessions")
+londonEnd = input.int(14, title="-", minval=0, maxval=23, inline="lon", group="Sessions")
+showLondonLines = input.bool(true, title="Čáry", inline="lon", group="Sessions")
+
+// New York
+showNY = input.bool(true, title="", inline="ny", group="Sessions")
+nyColor = input.color(color.new(#4CAF50, 0), title="NEW YORK", inline="ny", group="Sessions")
+nyStart = input.int(14, title="", minval=0, maxval=23, inline="ny", group="Sessions")
+nyEnd = input.int(22, title="-", minval=0, maxval=23, inline="ny", group="Sessions")
+showNYLines = input.bool(true, title="Čáry", inline="ny", group="Sessions")
+
+// Session styl
+sessionLineWidth = input.int(1, title="Tloušťka", minval=1, maxval=4, inline="sstyle", group="Sessions")
+sessionLineStyle = input.string("Čárkovaná", title="Styl", options=["Plná", "Čárkovaná", "Tečkovaná"], inline="sstyle", group="Sessions")
+showSessionBoxes = input.bool(true, title="Boxy", inline="sbox", group="Sessions")
+sessionBoxTransp = input.int(92, title="Průhlednost", minval=80, maxval=98, inline="sbox", group="Sessions")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                           DENNI / TYDENNI
+// ════════════════════════════════════════════════════════════════════════════
+
+// Current Day H/L
+showCD = input.bool(true, title="", inline="cd", group="Denni/Tydenni")
+cdColor = input.color(color.new(#00BCD4, 0), title="Current Day H/L", inline="cd", group="Denni/Tydenni")
+cdWidth = input.int(2, title="", minval=1, maxval=4, inline="cd", group="Denni/Tydenni")
+cdStyle = input.string("Čárkovaná", title="", options=["Plná", "Čárkovaná", "Tečkovaná"], inline="cd", group="Denni/Tydenni")
+
+// PDH/PDL
+showPD = input.bool(true, title="", inline="pd", group="Denni/Tydenni")
+pdColor = input.color(color.new(#FF9800, 0), title="PDH/PDL", inline="pd", group="Denni/Tydenni")
+pdWidth = input.int(2, title="", minval=1, maxval=4, inline="pd", group="Denni/Tydenni")
+pdStyle = input.string("Plná", title="", options=["Plná", "Čárkovaná", "Tečkovaná"], inline="pd", group="Denni/Tydenni")
+
+// PWH/PWL
+showPW = input.bool(true, title="", inline="pw", group="Denni/Tydenni")
+pwColor = input.color(color.new(#9C27B0, 0), title="PWH/PWL", inline="pw", group="Denni/Tydenni")
+pwWidth = input.int(2, title="", minval=1, maxval=4, inline="pw", group="Denni/Tydenni")
+pwStyle = input.string("Plná", title="", options=["Plná", "Čárkovaná", "Tečkovaná"], inline="pw", group="Denni/Tydenni")
+
+// Open
+showOpen = input.bool(false, title="", inline="open", group="Denni/Tydenni")
+dayOpenColor = input.color(color.new(#FFC107, 0), title="Day Open", inline="open", group="Denni/Tydenni")
+weekOpenColor = input.color(color.new(#00BCD4, 0), title="Week Open", inline="open", group="Denni/Tydenni")
+openWidth = input.int(1, title="Tloušťka", minval=1, maxval=4, inline="open2", group="Denni/Tydenni")
+openStyle = input.string("Čárkovaná", title="Styl", options=["Plná", "Čárkovaná", "Tečkovaná"], inline="open2", group="Denni/Tydenni")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                             VOLUME PROFILE
+// ════════════════════════════════════════════════════════════════════════════
+
+showCurrentVP = input.bool(true, title="Current Day", inline="vp1", group="Volume Profile")
+showPrevVP = input.bool(true, title="Previous Day", inline="vp1", group="Volume Profile")
+pocColor = input.color(color.new(#E91E63, 0), title="POC", inline="vp2", group="Volume Profile")
+vaColor = input.color(color.new(#2196F3, 0), title="VAH/VAL", inline="vp2", group="Volume Profile")
+
+vpWidth = input.int(2, title="Tloušťka", minval=1, maxval=4, inline="vp3", group="Volume Profile")
+vpStyle = input.string("Plná", title="Styl", options=["Plná", "Čárkovaná", "Tečkovaná"], inline="vp3", group="Volume Profile")
+
+valueAreaPct = input.float(70, title="Value Area %", minval=10, maxval=100, step=5, inline="vp4", group="Volume Profile")
+ticksPerRow = input.int(10, title="Ticků/Řádek", minval=1, maxval=500, inline="vp4", group="Volume Profile", tooltip="Velikost cenového bloku pro výpočet profilu.")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                             VWAP
+// ════════════════════════════════════════════════════════════════════════════
+
+showVWAP = input.bool(true, title="Zobrazit VWAP", inline="vw1", group="VWAP")
+vwapColor = input.color(color.new(#FF9800, 0), title="VWAP Barva", inline="vw1", group="VWAP")
+showPrevVWAP = input.bool(true, title="Zobrazit Prev VWAP", inline="pvw1", group="VWAP")
+showBands = input.bool(true, title="Zobrazit Deviace", inline="vw2", group="VWAP")
+bandColor = input.color(color.new(#FF9800, 50), title="Bands Barva", inline="vw2", group="VWAP")
+dev1Multiplier = input.float(1.0, title="Deviace 1", step=0.5, inline="vw3", group="VWAP")
+dev2Multiplier = input.float(2.0, title="Deviace 2", step=0.5, inline="vw4", group="VWAP")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                            📊 FAIR VALUE GAP (FVG)
+// ════════════════════════════════════════════════════════════════════════════
+
+showFVG = input.bool(true, title="Zobrazit FVG", inline="fvg", group="📊 FVG")
+fvgBullColor = input.color(color.new(#2196F3, 70), title="Bull", inline="fvg", group="📊 FVG")
+fvgBearColor = input.color(color.new(#FF9800, 70), title="Bear", inline="fvg", group="📊 FVG")
+fvgMitigatedTransp = input.int(93, title="Mitig %", minval=80, maxval=98, inline="fvg2", group="📊 FVG", tooltip="Průhlednost po mitigaci")
+fvgMaxCount = input.int(10, title="Max", minval=1, maxval=30, inline="fvg2", group="📊 FVG", tooltip="Max počet aktivních FVG na grafu")
+fvgLabelText = input.string("", title="Text", inline="fvg4", group="📊 FVG", tooltip="Vlastní text zobrazený v FVG")
+fvgLabelSize = input.string("Malé", title="Velikost", options=["Mikro", "Malé", "Střední"], inline="fvg4", group="📊 FVG")
+fvgLabelColor = input.color(color.white, title="Barva", inline="fvg4", group="📊 FVG")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                          📊 HTF FAIR VALUE GAP (HTF FVG)
+// ════════════════════════════════════════════════════════════════════════════
+
+showHTFFVG = input.bool(false, title="Zobrazit HTF FVG", inline="htffvg", group="📊 HTF FVG")
+htfFvgTimeframe = input.timeframe("60", title="TF", inline="htffvg", group="📊 HTF FVG", tooltip="Timeframe pro HTF FVG (např. 60 = 1H)")
+htfFvgBullColor = input.color(color.new(#9C27B0, 60), title="Bull", inline="htffvg", group="📊 HTF FVG")
+htfFvgBearColor = input.color(color.new(#FF5722, 60), title="Bear", inline="htffvg", group="📊 HTF FVG")
+htfFvgMitigatedTransp = input.int(90, title="Mitig %", minval=80, maxval=98, inline="htffvg2", group="📊 HTF FVG")
+htfFvgMaxCount = input.int(5, title="Max", minval=1, maxval=20, inline="htffvg2", group="📊 HTF FVG")
+htfFvgLabelText = input.string("HTF", title="Text", inline="htffvg3", group="📊 HTF FVG", tooltip="Vlastní text pro HTF FVG")
+htfFvgLabelSize = input.string("Malé", title="Velikost", options=["Mikro", "Malé", "Střední"], inline="htffvg3", group="📊 HTF FVG")
+htfFvgLabelColor = input.color(color.white, title="Barva", inline="htffvg3", group="📊 HTF FVG")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                               ALERTY
+// ════════════════════════════════════════════════════════════════════════════
+
+alertPDHL = input.bool(true, title="PDH / PDL Sweeps", group="Alerty")
+alertVP = input.bool(true, title="Untested POC / VAH / VAL", group="Alerty")
+alertNewHL = input.bool(true, title="Nové denní High / Low", group="Alerty")
+alertSessions = input.bool(true, title="Session Sweeps (Asia, Lon, NY)", group="Alerty")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                            📊 BoS / ChoCh
+// ════════════════════════════════════════════════════════════════════════════
+
+show_bos_choch = input.bool(true, title="Zobrazit BoS/ChoCh", group="BoS/ChoCh")
+pivot_lb = input.int(1, title="Pivot Level vlevo (lb)", minval=1, group="BoS/ChoCh")
+pivot_rb = input.int(1, title="Pivot Level vpravo (rb)", minval=1, group="BoS/ChoCh")
+breakout_type = input.string("Close", title="Potvrzení průrazu", options=["Close", "Wick"], group="BoS/ChoCh")
+
+show_hh_ll = input.bool(false, title="Zobrazit HH/LL", group="BoS/ChoCh")
+show_hl_lh = input.bool(false, title="Zobrazit HL/LH", group="BoS/ChoCh")
+show_bos = input.bool(true, title="Zobrazit BOS", group="BoS/ChoCh")
+show_choch = input.bool(true, title="Zobrazit CHoCH", group="BoS/ChoCh")
+
+color_bull = input.color(color.new(#26A69A, 0), title="Bullish barva čar a textu", group="BoS/ChoCh")
+color_bear = input.color(color.new(#EF5350, 0), title="Bearish barva čar a textu", group="BoS/ChoCh")
+line_width_bc = input.int(1, title="Šířka čáry", minval=1, maxval=4, group="BoS/ChoCh")
+size_bc = input.string("Střední", title="Velikost textu", options=["Mikro", "Malé", "Střední", "Velké"], group="BoS/ChoCh")
+align_bc = input.string("Na čáře", title="Vertikální umístění textu", options=["Na čáře", "Středem", "Pod čárou"], group="BoS/ChoCh")
+align_bc_h = input.string("Střed", title="Horizontální umístění textu", options=["Střed", "Vpravo", "Vlevo"], group="BoS/ChoCh")
+show_bg_bc = input.bool(false, title="Zobrazit pozadí textu", group="BoS/ChoCh")
+bg_color_bc = input.color(color.white, title="Barva pozadí textu", group="BoS/ChoCh")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                               VZHLED
+// ════════════════════════════════════════════════════════════════════════════
+
+tz = input.string("Europe/Prague", title="Časové pásmo", group="Vzhled")
+showLabels = input.bool(true, title="Popisky", inline="lbl", group="Vzhled")
+labelSize = input.string("Malé", title="", options=["Malé", "Střední", "Velké"], inline="lbl", group="Vzhled")
+extendLines = input.int(5, title="Prodloužení", minval=0, maxval=100, inline="ext", group="Vzhled")
+showZones = input.bool(false, title="Zóny", inline="zone", group="Vzhled")
+zoneSize = input.float(2, title="Velikost", minval=0.5, maxval=10, step=0.5, inline="zone", group="Vzhled")
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔧 HELPER FUNKCE A STRUKTURY (Pine Script v6 UDT)
+// ════════════════════════════════════════════════════════════════════════════
+
+type LevelInfo
+    string name
+    float price
+    color col
+    int startBar    // -1 = bez počítání doteků (dynamická úroveň nebo extremum)
+    int width
+    string styleStr
+    bool showLine
+    bool showLabel
+    bool isSwept
+    bool drawZone
+
+type FVGData
+    box[] boxes         // Pole segmentů boxů pro vykreslení schodovitého částečného vyplnění (UNFILLED část)
+    box[] grayBoxes     // Pole segmentů boxů pro FILLED (šedou) část zóny
+    label lbl
+    float top
+    float bottom
+    bool isBull
+    bool mitigated
+    bool touched        // Zóna byla dotknuta (pro vizualizaci)
+    int touchBar         // Bar kde došlo k prvnímu dotyku
+    int createBar        // Bar kde se FVG vytvořilo
+    int invalidBar       // Bar kde došlo k invalidaci
+
+getLineStyle(styleStr) =>
+    switch styleStr
+        "Plná" => line.style_solid
+        "Čárkovaná" => line.style_dashed
+        "Tečkovaná" => line.style_dotted
+        => line.style_solid
+
+getLabelSize(sizeStr) =>
+    switch sizeStr
+        "Mikro" => size.tiny
+        "Malé" => size.small
+        "Střední" => size.normal
+        "Velké" => size.large
+        => size.small
+
+getFvgLabelSize(sizeStr) =>
+    switch sizeStr
+        "Mikro" => size.tiny
+        "Malé" => size.small
+        "Střední" => size.normal
+        => size.small
+
+// Funkce pro kontrolu času v session
+isInSession(startHour, endHour) =>
+    currentHour = hour(time, tz)
+    if startHour < endHour
+        currentHour >= startHour and currentHour < endHour
+    else
+        currentHour >= startHour or currentHour < endHour
+
+// Globální detekce nového dne/týdne (sjednoceno na exchange rollover)
+newDay = ta.change(time("D")) != 0
+newWeek = ta.change(time("W")) != 0
+
+// Sledování startovacích barů pro testování úrovní
+var int currentDayStartBar = 0
+var int currentWeekStartBar = 0
+
+if newDay
+    currentDayStartBar := bar_index
+if newWeek
+    currentWeekStartBar := bar_index
+
+// Pomocná funkce pro spočítání testů (doteků) úrovně
+countHits(float levelPrice, int startBar) =>
+    int hits = 0
+    if not na(levelPrice) and not na(startBar)
+        // Omezení historie na max 2000 svíček
+        int s = math.max(bar_index - 2000, startBar)
+        s := math.max(0, s)
+        if s <= bar_index
+            for i = s to bar_index
+                if low[bar_index - i] <= levelPrice and high[bar_index - i] >= levelPrice
+                    hits += 1
+    hits
+
+atrVal = ta.atr(14)
+
+draw_structure_line(x1, y, x2, is_bos, is_bull) =>
+    col = is_bull ? color_bull : color_bear
+    style = line.style_solid
+    line.new(x1, y, x2, y, color=col, width=line_width_bc, style=style)
+    txt = is_bos ? "BOS" : "CHoCH"
+    
+    // Výpočet offsetu na základě ATR pro text bez pozadí (style_none)
+    float offset = (not na(atrVal) and atrVal > 0) ? atrVal * 0.08 : (high - low) * 0.1
+    if na(offset) or offset <= 0
+        offset := syminfo.mintick * 5
+        
+    float label_y = y
+    label_style = label.style_none
+    label_color = color.new(color.white, 100)
+    
+    if show_bg_bc
+        // Pokud je zapnuté pozadí, použijeme standardní tvary popisků s barvou pozadí
+        label_color := bg_color_bc
+        if align_bc == "Na čáře"
+            label_style := label.style_label_down
+        else if align_bc == "Pod čárou"
+            label_style := label.style_label_up
+        else
+            label_style := label.style_label_center
+    else
+        // Pokud je pozadí vypnuté (výchozí), vykreslíme čistý text (style_none) s ATR posunem
+        label_style := label.style_none
+        if align_bc == "Na čáře"
+            label_y := y + offset
+        else if align_bc == "Pod čárou"
+            label_y := y - offset
+            
+    // Určení horizontální pozice popisku
+    int label_x = math.round((x1 + x2) / 2)
+    if align_bc_h == "Vpravo"
+        label_x := x2
+    else if align_bc_h == "Vlevo"
+        label_x := x1
+        
+    label.new(label_x, label_y, txt, 
+              color=label_color, 
+              textcolor=col, 
+              style=label_style, 
+              size=getLabelSize(size_bc))
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📅 PREVIOUS DAY / WEEK HIGH/LOW
+// ════════════════════════════════════════════════════════════════════════════
+
+[pdHigh, pdLow] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+[pwHigh, pwLow] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+// Tolerance pro de-cluttering popisků (atrVal definováno výše)
+
+// Sweep tracking pro PDH/PDL/PWH/PWL
+var bool pdhSwept = false
+var bool pdlSwept = false
+var bool pwhSwept = false
+var bool pwlSwept = false
+
+if newDay
+    pdhSwept := false
+    pdlSwept := false
+
+if newWeek
+    pwhSwept := false
+    pwlSwept := false
+
+if high > pdHigh and not pdhSwept
+    pdhSwept := true
+    if alertPDHL
+        alert("🚨 [" + syminfo.ticker + "] PDH Sweep! Cena vybrala včerejší High (" + str.tostring(pdHigh, format.mintick) + ").", alert.freq_once_per_bar)
+if low < pdLow and not pdlSwept
+    pdlSwept := true
+    if alertPDHL
+        alert("🩸 [" + syminfo.ticker + "] PDL Sweep! Cena vybrala včerejší Low (" + str.tostring(pdLow, format.mintick) + ").", alert.freq_once_per_bar)
+if high > pwHigh and not pwhSwept
+    pwhSwept := true
+if low < pwLow and not pwlSwept
+    pwlSwept := true
+
+// ════════════════════════════════════════════════════════════════════════════
+// SESSION TRACKING (Asia, London, NY)
+// ════════════════════════════════════════════════════════════════════════════
+
+// === CURRENT DAY H/L ===
+var float currentDayHigh = na
+var float currentDayLow = na
+
+if newDay
+    currentDayHigh := high
+    currentDayLow := low
+else
+    if high > nz(currentDayHigh, high)
+        if alertNewHL
+            alert("🚀 [" + syminfo.ticker + "] Nové High Dne! (" + str.tostring(high, format.mintick) + ")", alert.freq_once_per_bar)
+        currentDayHigh := high
+    if low < nz(currentDayLow, low)
+        if alertNewHL
+            alert("🪂 [" + syminfo.ticker + "] Nové Low Dne! (" + str.tostring(low, format.mintick) + ")", alert.freq_once_per_bar)
+        currentDayLow := low
+
+// === VOLUME PROFILE ===
+var float prevPOC = na
+var float prevVAH = na
+var float prevVAL = na
+var float currentPOC = na
+var float currentVAH = na
+var float currentVAL = na
+var vpMap = map.new<float, float>()
+
+footprint fp = request.footprint(ticksPerRow, math.round(valueAreaPct))
+
+calcVP() =>
+    float[] keys = vpMap.keys()
+    float _poc = na
+    float _vah = na
+    float _val = na
+    if keys.size() > 0
+        keys.sort()
+        float totalVol = 0.0
+        float maxVol = -1.0
+        int pocIdx = -1
+        for int i = 0 to keys.size() - 1
+            float v = vpMap.get(keys.get(i))
+            totalVol += v
+            if v > maxVol
+                maxVol := v
+                pocIdx := i
+        if pocIdx != -1
+            _poc := keys.get(pocIdx)
+            float targetVol = totalVol * (valueAreaPct / 100.0)
+            float areaVol = maxVol
+            int up = pocIdx
+            int dn = pocIdx
+            while areaVol < targetVol
+                float nUp = up < keys.size() - 1 ? vpMap.get(keys.get(up + 1)) : 0.0
+                float nDn = dn > 0 ? vpMap.get(keys.get(dn - 1)) : 0.0
+                if nUp == 0.0 and nDn == 0.0
+                    break
+                if nUp >= nDn
+                    up += 1
+                    areaVol += nUp
+                else
+                    dn -= 1
+                    areaVol += nDn
+            _vah := keys.get(up)
+            _val := keys.get(dn)
+    [_poc, _vah, _val]
+
+if newDay
+    [p, h, l] = calcVP()
+    if not na(p)
+        prevPOC := p
+        prevVAH := h
+        prevVAL := l
+    vpMap.clear()
+
+// OPRAVA zamezení hromadění v reálném čase: Zapisujeme jen potvrzené (uzavřené) svíčky
+if not na(fp) and (barstate.isconfirmed or not barstate.islast)
+    array<volume_row> rows = fp.rows()
+    for row in rows
+        float midPrice = (row.up_price() + row.down_price()) / 2.0
+        float roundedPrice = math.round(midPrice / syminfo.mintick) * syminfo.mintick
+        float rowVol = row.buy_volume() + row.sell_volume()
+        float existing = nz(vpMap.get(roundedPrice))
+        vpMap.put(roundedPrice, existing + rowVol)
+
+if showCurrentVP and barstate.islast
+    [cp, ch, cl] = calcVP()
+    currentPOC := cp
+    currentVAH := ch
+    currentVAL := cl
+
+float barVol = nz(volume)
+
+// === ALERTY PRO UNTESTED VOLUME PROFILE ===
+var bool pocTested = false
+var bool vahTested = false
+var bool valTested = false
+
+if newDay
+    pocTested := false
+    vahTested := false
+    valTested := false
+
+if not newDay
+    if not na(prevPOC) and not pocTested
+        if (high >= prevPOC and low <= prevPOC)
+            pocTested := true
+            if alertVP
+                alert("🎯 [" + syminfo.ticker + "] Untested POC Test! Cena narazila na včerejší POC (" + str.tostring(prevPOC, format.mintick) + ").", alert.freq_once_per_bar)
+    if not na(prevVAH) and not vahTested
+        if (high >= prevVAH and low <= prevVAH)
+            vahTested := true
+            if alertVP
+                alert("🛡️ [" + syminfo.ticker + "] VAH Test! Cena testuje včerejší Value Area High (" + str.tostring(prevVAH, format.mintick) + ").", alert.freq_once_per_bar)
+    if not na(prevVAL) and not valTested
+        if (high >= prevVAL and low <= prevVAL)
+            valTested := true
+            if alertVP
+                alert("🟢 [" + syminfo.ticker + "] VAL Test! Cena testuje včerejší Value Area Low (" + str.tostring(prevVAL, format.mintick) + ").", alert.freq_once_per_bar)
+
+// === ASIA SESSION ===
+var float asiaHigh = na
+var float asiaLow = na
+var int asiaStartBar = na
+var float asiaHighFrozen = na
+var float asiaLowFrozen = na
+var int asiaFrozenBar = na
+var bool asiaWasActive = false
+
+bool asiaActive = isInSession(asiaStart, asiaEnd)
+bool asiaJustStarted = asiaActive and not asiaWasActive
+bool asiaJustEnded = not asiaActive and asiaWasActive
+
+if asiaJustStarted
+    asiaHigh := high
+    asiaLow := low
+    asiaStartBar := bar_index
+    asiaHighFrozen := na
+    asiaLowFrozen := na
+    asiaFrozenBar := na
+
+if asiaActive
+    asiaHigh := math.max(nz(asiaHigh, high), high)
+    asiaLow := math.min(nz(asiaLow, low), low)
+
+if asiaJustEnded
+    asiaHighFrozen := asiaHigh
+    asiaLowFrozen := asiaLow
+    asiaFrozenBar := bar_index
+
+asiaWasActive := asiaActive
+
+// === LONDON SESSION ===
+var float londonHigh = na
+var float londonLow = na
+var int londonStartBar = na
+var float londonHighFrozen = na
+var float londonLowFrozen = na
+var int londonFrozenBar = na
+var bool londonWasActive = false
+
+bool londonActive = isInSession(londonStart, londonEnd)
+bool londonJustStarted = londonActive and not londonWasActive
+bool londonJustEnded = not londonActive and londonWasActive
+
+if londonJustStarted
+    londonHigh := high
+    londonLow := low
+    londonStartBar := bar_index
+    londonHighFrozen := na
+    londonLowFrozen := na
+    londonFrozenBar := na
+
+if londonActive
+    londonHigh := math.max(nz(londonHigh, high), high)
+    londonLow := math.min(nz(londonLow, low), low)
+
+if londonJustEnded
+    londonHighFrozen := londonHigh
+    londonLowFrozen := londonLow
+    londonFrozenBar := bar_index
+
+londonWasActive := londonActive
+
+// === NEW YORK SESSION ===
+var float nyHigh = na
+var float nyLow = na
+var int nyStartBar = na
+var float nyHighFrozen = na
+var float nyLowFrozen = na
+var int nyFrozenBar = na
+var bool nyWasActive = false
+
+bool nyActive = isInSession(nyStart, nyEnd)
+bool nyJustStarted = nyActive and not nyWasActive
+bool nyJustEnded = not nyActive and nyWasActive
+
+if nyJustStarted
+    nyHigh := high
+    nyLow := low
+    nyStartBar := bar_index
+    nyHighFrozen := na
+    nyLowFrozen := na
+    nyFrozenBar := na
+
+if nyActive
+    nyHigh := math.max(nz(nyHigh, high), high)
+    nyLow := math.min(nz(nyLow, low), low)
+
+if nyJustEnded
+    nyHighFrozen := nyHigh
+    nyLowFrozen := nyLow
+    nyFrozenBar := bar_index
+
+nyWasActive := nyActive
+
+// === SESSION BOXY ===
+var box asiaBox = na
+var box londonBox = na
+var box nyBox = na
+var label asiaBoxLabel = na
+var label londonBoxLabel = na
+var label nyBoxLabel = na
+
+if newDay
+    box.delete(asiaBox)
+    box.delete(londonBox)
+    box.delete(nyBox)
+    label.delete(asiaBoxLabel)
+    label.delete(londonBoxLabel)
+    label.delete(nyBoxLabel)
+    asiaBox := na
+    londonBox := na
+    nyBox := na
+    asiaBoxLabel := na
+    londonBoxLabel := na
+    nyBoxLabel := na
+
+var bool asiaHighSwept = false
+var bool asiaLowSwept = false
+var bool londonHighSwept = false
+var bool londonLowSwept = false
+var bool nyHighSwept = false
+var bool nyLowSwept = false
+
+if asiaJustStarted
+    asiaHighSwept := false
+    asiaLowSwept := false
+if londonJustStarted
+    londonHighSwept := false
+    londonLowSwept := false
+if nyJustStarted
+    nyHighSwept := false
+    nyLowSwept := false
+
+if not asiaActive and not na(asiaHighFrozen) and high > asiaHighFrozen and not asiaHighSwept
+    asiaHighSwept := true
+    if alertSessions
+        alert("🌙 [" + syminfo.ticker + "] Asia High Sweep! (" + str.tostring(asiaHighFrozen, format.mintick) + ")", alert.freq_once_per_bar)
+if not asiaActive and not na(asiaLowFrozen) and low < asiaLowFrozen and not asiaLowSwept
+    asiaLowSwept := true
+    if alertSessions
+        alert("🌙 [" + syminfo.ticker + "] Asia Low Sweep! (" + str.tostring(asiaLowFrozen, format.mintick) + ")", alert.freq_once_per_bar)
+
+if not londonActive and not na(londonHighFrozen) and high > londonHighFrozen and not londonHighSwept
+    londonHighSwept := true
+    if alertSessions
+        alert("🏙️ [" + syminfo.ticker + "] London High Sweep! (" + str.tostring(londonHighFrozen, format.mintick) + ")", alert.freq_once_per_bar)
+if not londonActive and not na(londonLowFrozen) and low < londonLowFrozen and not londonLowSwept
+    londonLowSwept := true
+    if alertSessions
+        alert("🏙️ [" + syminfo.ticker + "] London Low Sweep! (" + str.tostring(londonLowFrozen, format.mintick) + ")", alert.freq_once_per_bar)
+
+if not nyActive and not na(nyHighFrozen) and high > nyHighFrozen and not nyHighSwept
+    nyHighSwept := true
+    if alertSessions
+        alert("🗽 [" + syminfo.ticker + "] NY High Sweep! (" + str.tostring(nyHighFrozen, format.mintick) + ")", alert.freq_once_per_bar)
+if not nyActive and not na(nyLowFrozen) and low < nyLowFrozen and not nyLowSwept
+    nyLowSwept := true
+    if alertSessions
+        alert("🗽 [" + syminfo.ticker + "] NY Low Sweep! (" + str.tostring(nyLowFrozen, format.mintick) + ")", alert.freq_once_per_bar)
+
+// Asia Box
+if showSessionBoxes and showAsia
+    if asiaJustStarted
+        box.delete(asiaBox)
+        label.delete(asiaBoxLabel)
+        asiaBox := box.new(bar_index, high, bar_index, low, bgcolor=color.new(asiaColor, sessionBoxTransp), border_color=color.new(color.white, 100), border_width=0)
+        asiaBoxLabel := label.new(bar_index, high, "ASIA", color=color.new(asiaColor, 100), textcolor=asiaColor, style=label.style_label_down, size=size.tiny)
+    if asiaActive and not na(asiaBox)
+        box.set_top(asiaBox, asiaHigh)
+        box.set_bottom(asiaBox, asiaLow)
+        box.set_right(asiaBox, bar_index)
+        if not na(asiaBoxLabel)
+            int midBar = math.round((asiaStartBar + bar_index) / 2)
+            label.set_x(asiaBoxLabel, midBar)
+            label.set_y(asiaBoxLabel, asiaHigh)
+
+// London Box
+if showSessionBoxes and showLondon
+    if londonJustStarted
+        box.delete(londonBox)
+        label.delete(londonBoxLabel)
+        londonBox := box.new(bar_index, high, bar_index, low, bgcolor=color.new(londonColor, sessionBoxTransp), border_color=color.new(color.white, 100), border_width=0)
+        londonBoxLabel := label.new(bar_index, high, "LONDON", color=color.new(londonColor, 100), textcolor=londonColor, style=label.style_label_down, size=size.tiny)
+    if londonActive and not na(londonBox)
+        box.set_top(londonBox, londonHigh)
+        box.set_bottom(londonBox, londonLow)
+        box.set_right(londonBox, bar_index)
+        if not na(londonBoxLabel)
+            int midBar = math.round((londonStartBar + bar_index) / 2)
+            label.set_x(londonBoxLabel, midBar)
+            label.set_y(londonBoxLabel, londonHigh)
+
+// NY Box
+if showSessionBoxes and showNY
+    if nyJustStarted
+        box.delete(nyBox)
+        label.delete(nyBoxLabel)
+        nyBox := box.new(bar_index, high, bar_index, low, bgcolor=color.new(nyColor, sessionBoxTransp), border_color=color.new(color.white, 100), border_width=0)
+        nyBoxLabel := label.new(bar_index, high, "NEW YORK", color=color.new(nyColor, 100), textcolor=nyColor, style=label.style_label_down, size=size.tiny)
+    if nyActive and not na(nyBox)
+        box.set_top(nyBox, nyHigh)
+        box.set_bottom(nyBox, nyLow)
+        box.set_right(nyBox, bar_index)
+        if not na(nyBoxLabel)
+            int midBar = math.round((nyStartBar + bar_index) / 2)
+            label.set_x(nyBoxLabel, midBar)
+            label.set_y(nyBoxLabel, nyHigh)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  OPENING PRICES
+// ════════════════════════════════════════════════════════════════════════════
+
+dayOpen = request.security(syminfo.tickerid, "D", open, lookahead=barmerge.lookahead_on)
+weekOpen = request.security(syminfo.tickerid, "W", open, lookahead=barmerge.lookahead_on)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  VWAP CALCULATION
+// ════════════════════════════════════════════════════════════════════════════
+
+var float cumVol = 0.0
+var float cumPV = 0.0
+var float cumPV2 = 0.0
+var float prevVWAP = na
+
+if newDay
+    prevVWAP := cumVol[1] > 0 ? cumPV[1] / cumVol[1] : na
+    cumVol := 0.0
+    cumPV := 0.0
+    cumPV2 := 0.0
+
+float typPrice = hlc3
+cumVol += barVol
+cumPV += barVol * typPrice
+cumPV2 += barVol * typPrice * typPrice
+
+float dVWAP = cumVol > 0 ? cumPV / cumVol : na
+float variance = cumVol > 0 ? (cumPV2 / cumVol) - (dVWAP * dVWAP) : 0
+float stdev = variance > 0 ? math.sqrt(variance) : 0
+
+float upper1 = dVWAP + stdev * dev1Multiplier
+float lower1 = dVWAP - stdev * dev1Multiplier
+float upper2 = dVWAP + stdev * dev2Multiplier
+float lower2 = dVWAP - stdev * dev2Multiplier
+
+plot(showVWAP ? dVWAP : na, color=vwapColor, title="VWAP", linewidth=2)
+plot(showVWAP and showBands ? upper1 : na, color=bandColor, title="VWAP Upper 1", linewidth=1)
+plot(showVWAP and showBands ? lower1 : na, color=bandColor, title="VWAP Lower 1", linewidth=1)
+plot(showVWAP and showBands ? upper2 : na, color=bandColor, title="VWAP Upper 2", linewidth=1)
+plot(showVWAP and showBands ? lower2 : na, color=bandColor, title="VWAP Lower 2", linewidth=1)
+
+// Cenovky na ose Y
+plot(showPD and showLabels ? pdHigh : na, title="PDH Scale", color=pdColor, display=display.price_scale, editable=false)
+plot(showPD and showLabels ? pdLow : na, title="PDL Scale", color=pdColor, display=display.price_scale, editable=false)
+plot(showPW and showLabels ? pwHigh : na, title="PWH Scale", color=pwColor, display=display.price_scale, editable=false)
+plot(showPW and showLabels ? pwLow : na, title="PWL Scale", color=pwColor, display=display.price_scale, editable=false)
+plot(showCD and showLabels ? currentDayHigh : na, title="CDH Scale", color=cdColor, display=display.price_scale, editable=false)
+plot(showCD and showLabels ? currentDayLow : na, title="CDL Scale", color=cdColor, display=display.price_scale, editable=false)
+
+plot(showAsia and showAsiaLines and (asiaActive or not asiaHighSwept) ? (asiaActive ? asiaHigh : asiaHighFrozen) : na, title="Asia H Scale", color=asiaColor, display=display.price_scale, editable=false)
+plot(showAsia and showAsiaLines and (asiaActive or not asiaLowSwept) ? (asiaActive ? asiaLow : asiaLowFrozen) : na, title="Asia L Scale", color=asiaColor, display=display.price_scale, editable=false)
+plot(showLondon and showLondonLines and (londonActive or not londonHighSwept) ? (londonActive ? londonHigh : londonHighFrozen) : na, title="London H Scale", color=londonColor, display=display.price_scale, editable=false)
+plot(showLondon and showLondonLines and (londonActive or not londonLowSwept) ? (londonActive ? londonLow : londonLowFrozen) : na, title="London L Scale", color=londonColor, display=display.price_scale, editable=false)
+plot(showNY and showNYLines and (nyActive or not nyHighSwept) ? (nyActive ? nyHigh : nyHighFrozen) : na, title="NY H Scale", color=nyColor, display=display.price_scale, editable=false)
+plot(showNY and showNYLines and (nyActive or not nyLowSwept) ? (nyActive ? nyLow : nyLowFrozen) : na, title="NY L Scale", color=nyColor, display=display.price_scale, editable=false)
+
+plot(showPrevVP and showLabels ? prevPOC : na, title="P.POC Scale", color=pocColor, display=display.price_scale, editable=false)
+plot(showPrevVP and showLabels ? prevVAH : na, title="P.VAH Scale", color=vaColor, display=display.price_scale, editable=false)
+plot(showPrevVP and showLabels ? prevVAL : na, title="P.VAL Scale", color=vaColor, display=display.price_scale, editable=false)
+plot(showPrevVWAP and showLabels ? prevVWAP : na, title="P.VWAP Scale", color=vwapColor, display=display.price_scale, editable=false)
+
+plot(showCurrentVP and showLabels ? currentPOC : na, title="C.POC Scale", color=pocColor, display=display.price_scale, editable=false)
+plot(showCurrentVP and showLabels ? currentVAH : na, title="C.VAH Scale", color=vaColor, display=display.price_scale, editable=false)
+plot(showCurrentVP and showLabels ? currentVAL : na, title="C.VAL Scale", color=vaColor, display=display.price_scale, editable=false)
+
+plot(showOpen and showLabels ? dayOpen : na, title="DO Scale", color=dayOpenColor, display=display.price_scale, editable=false)
+plot(showOpen and showLabels ? weekOpen : na, title="WO Scale", color=weekOpenColor, display=display.price_scale, editable=false)
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📊 DETEKCE A AKTUALIZACE FAIR VALUE GAP (FVG / HTF FVG)
+// ════════════════════════════════════════════════════════════════════════════
+
+var FVGData[] fvgArray = array.new<FVGData>()
+var FVGData[] htfFvgArray = array.new<FVGData>()
+
+// === KLASICKÉ FVG (Lokální Timeframe) ===
+bullishFVG = low > high[2]
+bearishFVG = high < low[2]
+
+color fvgBullTouched = color.new(fvgBullColor, 85)
+color fvgBearTouched = color.new(fvgBearColor, 85)
+fvgSize = getFvgLabelSize(fvgLabelSize)
+
+if showFVG and barstate.isconfirmed
+    if bullishFVG
+        fvgTop = low
+        fvgBottom = high[2]
+        newBox = box.new(bar_index - 1, fvgTop, bar_index + 20, fvgBottom, 
+             bgcolor=fvgBullColor, border_color=na)
+        label newLbl = na
+        if fvgLabelText != ""
+            newLbl := label.new(bar_index + 15, (fvgTop + fvgBottom) / 2, fvgLabelText,
+                 style=label.style_label_left, textcolor=fvgLabelColor, size=fvgSize, color=na)
+        
+        box[] boxes = array.new<box>()
+        array.push(boxes, newBox)
+        
+        box[] grayBoxes = array.new<box>()
+        
+        newFVG = FVGData.new(boxes, grayBoxes, newLbl, fvgTop, fvgBottom, true, false, false, 0, bar_index, 0)
+        array.push(fvgArray, newFVG)
+    
+    if bearishFVG
+        fvgTop = low[2]
+        fvgBottom = high
+        newBox = box.new(bar_index - 1, fvgTop, bar_index + 20, fvgBottom, 
+             bgcolor=fvgBearColor, border_color=na)
+        label newLbl = na
+        if fvgLabelText != ""
+            newLbl := label.new(bar_index + 15, (fvgTop + fvgBottom) / 2, fvgLabelText,
+                 style=label.style_label_left, textcolor=fvgLabelColor, size=fvgSize, color=na)
+        
+        box[] boxes = array.new<box>()
+        array.push(boxes, newBox)
+        
+        box[] grayBoxes = array.new<box>()
+        
+        newFVG = FVGData.new(boxes, grayBoxes, newLbl, fvgTop, fvgBottom, false, false, false, 0, bar_index, 0)
+        array.push(fvgArray, newFVG)
+    
+    while array.size(fvgArray) > fvgMaxCount * 2
+        oldFVG = array.shift(fvgArray)
+        for b in oldFVG.boxes
+            box.delete(b)
+        for b in oldFVG.grayBoxes
+            box.delete(b)
+        label.delete(oldFVG.lbl)
+
+// Aktualizace lokálních FVG (Možnost A - schodovité částečné vyplnění zóny)
+if showFVG and array.size(fvgArray) > 0
+    for i = array.size(fvgArray) - 1 to 0
+        fvg = array.get(fvgArray, i)
+        bool needsUpdate = false
+        
+        box activeBox = array.get(fvg.boxes, array.size(fvg.boxes) - 1)
+        
+        if fvg.mitigated
+            if fvg.invalidBar > 0
+                box.set_right(activeBox, fvg.invalidBar)
+                for gb in fvg.grayBoxes
+                    box.set_right(gb, fvg.invalidBar)
+            continue
+            
+        // Detekce částečného vyplnění zóny knotem svíčky v reálném čase
+        float currentTop = fvg.top
+        float currentBottom = fvg.bottom
+        
+        if bar_index > fvg.createBar
+            if fvg.isBull
+                currentTop := math.min(fvg.top, low)
+            else
+                currentBottom := math.max(fvg.bottom, high)
+        
+        // První dotyk (reakce) - přesunuto nahoru pro konzistentní obarvení
+        if not fvg.touched and bar_index > fvg.createBar
+            bool wickTouch = high >= fvg.bottom and low <= fvg.top
+            if wickTouch
+                fvg.touched := true
+                // Obarvíme všechny existující boxy v tomto FVG na touched barvu
+                for j = 0 to array.size(fvg.boxes) - 1
+                    color touchedCol = fvg.isBull ? fvgBullTouched : fvgBearTouched
+                    box.set_bgcolor(array.get(fvg.boxes, j), touchedCol)
+                needsUpdate := true
+        
+        // Zda došlo k plnému vyplnění zóny (unfilled část klesla na 0) nebo k invalidaci na základě Close
+        bool fullyFilled = fvg.isBull ? (currentTop <= fvg.bottom) : (currentBottom >= fvg.top)
+        bool closeInvalidated = fvg.isBull ? (close < fvg.bottom) : (close > fvg.top)
+        
+        if bar_index > fvg.createBar and (fullyFilled or closeInvalidated)
+            if barstate.isconfirmed
+                fvg.mitigated := true
+                fvg.invalidBar := bar_index
+                
+                box.set_right(activeBox, bar_index)
+                label.delete(fvg.lbl)
+                
+                for gb in fvg.grayBoxes
+                    box.set_right(gb, bar_index)
+            else
+                box.set_right(activeBox, bar_index)
+                for gb in fvg.grayBoxes
+                    box.set_right(gb, bar_index)
+            needsUpdate := true
+        else if not fvg.mitigated
+            if currentTop < fvg.top or currentBottom > fvg.bottom
+                if barstate.isconfirmed
+                    // 1. Zkrátíme stávající aktivní box k aktuálnímu baru (konec staré výšky zóny)
+                    box.set_right(activeBox, bar_index)
+                    
+                    // 2. Vytvoříme nový box s novou výškou od aktuálního baru doprava (UNFILLED část)
+                    box newBox = na
+                    color boxCol = fvg.touched ? (fvg.isBull ? fvgBullTouched : fvgBearTouched) : (fvg.isBull ? fvgBullColor : fvgBearColor)
+                    if fvg.isBull
+                        newBox := box.new(bar_index, currentTop, bar_index + 20, fvg.bottom, 
+                             bgcolor=boxCol, border_color=na)
+                    else
+                        newBox := box.new(bar_index, fvg.top, bar_index + 20, currentBottom, 
+                             bgcolor=boxCol, border_color=na)
+                    array.push(fvg.boxes, newBox)
+                    
+                    // 3. Vytvoříme nový šedý box pro FILLED část od aktuálního baru doprava
+                    box newGrayBox = na
+                    color grayCol = color.new(color.gray, fvgMitigatedTransp)
+                    if fvg.isBull
+                        newGrayBox := box.new(bar_index, fvg.top, bar_index + 20, currentTop, 
+                             bgcolor=grayCol, border_color=na)
+                    else
+                        newGrayBox := box.new(bar_index, currentBottom, bar_index + 20, fvg.bottom, 
+                             bgcolor=grayCol, border_color=na)
+                    array.push(fvg.grayBoxes, newGrayBox)
+                    
+                    fvg.top := currentTop
+                    fvg.bottom := currentBottom
+                    needsUpdate := true
+                else
+                    // V REÁLNÉM ČASE (neuzavřený bar):
+                    // 1. Dočasně zkrátíme stávající aktivní box k aktuálnímu baru
+                    box.set_right(activeBox, bar_index)
+                    
+                    // 2. Dočasně vykreslíme nový zúžený box doprava (bude automaticky smazán na dalším ticku)
+                    color boxCol = fvg.touched ? (fvg.isBull ? fvgBullTouched : fvgBearTouched) : (fvg.isBull ? fvgBullColor : fvgBearColor)
+                    if fvg.isBull
+                        box.new(bar_index, currentTop, bar_index + 20, fvg.bottom, 
+                             bgcolor=boxCol, border_color=na)
+                    else
+                        box.new(bar_index, fvg.top, bar_index + 20, currentBottom, 
+                             bgcolor=boxCol, border_color=na)
+                             
+                    // 3. Dočasně vykreslíme šedý box pro FILLED část doprava
+                    color grayCol = color.new(color.gray, fvgMitigatedTransp)
+                    if fvg.isBull
+                        box.new(bar_index, fvg.top, bar_index + 20, currentTop, 
+                             bgcolor=grayCol, border_color=na)
+                    else
+                        box.new(bar_index, currentBottom, bar_index + 20, fvg.bottom, 
+                             bgcolor=grayCol, border_color=na)
+                             
+                    // 4. Dočasně prodloužíme všechny stávající šedé boxy
+                    for gb in fvg.grayBoxes
+                        box.set_right(gb, bar_index + 20)
+            else
+                // Pokud bar ještě běží, nebo nedošlo k novému vyplnění, jen prodlužujeme aktivní box a šedé boxy
+                box.set_right(activeBox, bar_index + 20)
+                for gb in fvg.grayBoxes
+                    box.set_right(gb, bar_index + 20)
+                
+            if not na(fvg.lbl)
+                label.set_x(fvg.lbl, bar_index + 15)
+                label.set_y(fvg.lbl, (currentTop + currentBottom) / 2)
+        
+        if needsUpdate
+            array.set(fvgArray, i, fvg)
+
+// === HTF FVG (Vyšší Timeframe) ===
+[htfHigh, htfLow, htfClose, htfHighPrev2, htfLowPrev2, htfBarIdx] = request.security(
+     syminfo.tickerid, htfFvgTimeframe, [high, low, close, high[2], low[2], bar_index], lookahead=barmerge.lookahead_off)
+
+htfBullishFVG = htfLow > htfHighPrev2
+htfBearishFVG = htfHigh < htfLowPrev2
+
+color htfFvgBullTouched = color.new(htfFvgBullColor, 85)
+color htfFvgBearTouched = color.new(htfFvgBearColor, 85)
+htfFvgSize = getFvgLabelSize(htfFvgLabelSize)
+
+var float lastHtfBullTop = na
+var float lastHtfBearBottom = na
+
+if showHTFFVG and barstate.isconfirmed
+    if htfBullishFVG
+        htfFvgTop = htfLow
+        htfFvgBottom = htfHighPrev2
+        if na(lastHtfBullTop) or htfFvgTop != lastHtfBullTop
+            lastHtfBullTop := htfFvgTop
+            newBox = box.new(bar_index - 1, htfFvgTop, bar_index + 20, htfFvgBottom, 
+                 bgcolor=htfFvgBullColor, border_color=na)
+            label newLbl = na
+            if htfFvgLabelText != ""
+                newLbl := label.new(bar_index + 15, (htfFvgTop + htfFvgBottom) / 2, htfFvgLabelText,
+                     style=label.style_label_left, textcolor=htfFvgLabelColor, size=htfFvgSize, color=na)
+            
+            box[] boxes = array.new<box>()
+            array.push(boxes, newBox)
+            
+            box[] grayBoxes = array.new<box>()
+            
+            newFVG = FVGData.new(boxes, grayBoxes, newLbl, htfFvgTop, htfFvgBottom, true, false, false, 0, bar_index, 0)
+            array.push(htfFvgArray, newFVG)
+    
+    if htfBearishFVG
+        htfFvgTop = htfLowPrev2
+        htfFvgBottom = htfHigh
+        if na(lastHtfBearBottom) or htfFvgBottom != lastHtfBearBottom
+            lastHtfBearBottom := htfFvgBottom
+            newBox = box.new(bar_index - 1, htfFvgTop, bar_index + 20, htfFvgBottom, 
+                 bgcolor=htfFvgBearColor, border_color=na)
+            label newLbl = na
+            if htfFvgLabelText != ""
+                newLbl := label.new(bar_index + 15, (htfFvgTop + htfFvgBottom) / 2, htfFvgLabelText,
+                     style=label.style_label_left, textcolor=htfFvgLabelColor, size=htfFvgSize, color=na)
+            
+            box[] boxes = array.new<box>()
+            array.push(boxes, newBox)
+            
+            box[] grayBoxes = array.new<box>()
+            
+            newFVG = FVGData.new(boxes, grayBoxes, newLbl, htfFvgTop, htfFvgBottom, false, false, false, 0, bar_index, 0)
+            array.push(htfFvgArray, newFVG)
+            
+    while array.size(htfFvgArray) > htfFvgMaxCount * 2
+        oldFVG = array.shift(htfFvgArray)
+        for b in oldFVG.boxes
+            box.delete(b)
+        for b in oldFVG.grayBoxes
+            box.delete(b)
+        label.delete(oldFVG.lbl)
+
+// Aktualizace HTF FVG (Možnost A - schodovité částečné vyplnění zóny)
+if showHTFFVG and array.size(htfFvgArray) > 0
+    for i = array.size(htfFvgArray) - 1 to 0
+        fvg = array.get(htfFvgArray, i)
+        bool needsUpdate = false
+        
+        box activeBox = array.get(fvg.boxes, array.size(fvg.boxes) - 1)
+        
+        if fvg.mitigated
+            if fvg.invalidBar > 0
+                box.set_right(activeBox, fvg.invalidBar)
+                for gb in fvg.grayBoxes
+                    box.set_right(gb, fvg.invalidBar)
+            continue
+            
+        float currentTop = fvg.top
+        float currentBottom = fvg.bottom
+        
+        if bar_index > fvg.createBar
+            if fvg.isBull
+                currentTop := math.min(fvg.top, low)
+            else
+                currentBottom := math.max(fvg.bottom, high)
+        
+        // První dotyk (reakce) - přesunuto nahoru pro konzistentní obarvení
+        if not fvg.touched and bar_index > fvg.createBar
+            bool wickTouch = high >= fvg.bottom and low <= fvg.top
+            if wickTouch
+                fvg.touched := true
+                for j = 0 to array.size(fvg.boxes) - 1
+                    color touchedCol = fvg.isBull ? htfFvgBullTouched : htfFvgBearTouched
+                    box.set_bgcolor(array.get(fvg.boxes, j), touchedCol)
+                needsUpdate := true
+        
+        bool fullyFilled = fvg.isBull ? (currentTop <= fvg.bottom) : (currentBottom >= fvg.top)
+        bool closeInvalidated = fvg.isBull ? (close < fvg.bottom) : (close > fvg.top)
+        
+        if bar_index > fvg.createBar and (fullyFilled or closeInvalidated)
+            if barstate.isconfirmed
+                fvg.mitigated := true
+                fvg.invalidBar := bar_index
+                box.set_right(activeBox, bar_index)
+                label.delete(fvg.lbl)
+                for gb in fvg.grayBoxes
+                    box.set_right(gb, bar_index)
+            else
+                box.set_right(activeBox, bar_index)
+                for gb in fvg.grayBoxes
+                    box.set_right(gb, bar_index)
+            needsUpdate := true
+        else if not htfFvgArray.get(i).mitigated
+            if currentTop < fvg.top or currentBottom > fvg.bottom
+                if barstate.isconfirmed
+                    box.set_right(activeBox, bar_index)
+                    
+                    box newBox = na
+                    color boxCol = fvg.touched ? (fvg.isBull ? htfFvgBullTouched : htfFvgBearTouched) : (fvg.isBull ? htfFvgBullColor : htfFvgBearColor)
+                    if fvg.isBull
+                        newBox := box.new(bar_index, currentTop, bar_index + 20, fvg.bottom, 
+                             bgcolor=boxCol, border_color=na)
+                    else
+                        newBox := box.new(bar_index, fvg.top, bar_index + 20, currentBottom, 
+                             bgcolor=boxCol, border_color=na)
+                    array.push(fvg.boxes, newBox)
+                    
+                    // Vytvoříme nový šedý box pro FILLED část od aktuálního baru doprava
+                    box newGrayBox = na
+                    color grayCol = color.new(color.gray, htfFvgMitigatedTransp)
+                    if fvg.isBull
+                        newGrayBox := box.new(bar_index, fvg.top, bar_index + 20, currentTop, 
+                             bgcolor=grayCol, border_color=na)
+                    else
+                        newGrayBox := box.new(bar_index, currentBottom, bar_index + 20, fvg.bottom, 
+                             bgcolor=grayCol, border_color=na)
+                    array.push(fvg.grayBoxes, newGrayBox)
+                    
+                    fvg.top := currentTop
+                    fvg.bottom := currentBottom
+                    needsUpdate := true
+                else
+                    // V REÁLNÉM ČASE (neuzavřený bar):
+                    // 1. Dočasně zkrátíme stávající aktivní box k aktuálnímu baru
+                    box.set_right(activeBox, bar_index)
+                    
+                    // 2. Dočasně vykreslíme nový zúžený box doprava (bude automaticky smazán na dalším ticku)
+                    color boxCol = fvg.touched ? (fvg.isBull ? htfFvgBullTouched : htfFvgBearTouched) : (fvg.isBull ? htfFvgBullColor : htfFvgBearColor)
+                    if fvg.isBull
+                        box.new(bar_index, currentTop, bar_index + 20, fvg.bottom, 
+                             bgcolor=boxCol, border_color=na)
+                    else
+                        box.new(bar_index, fvg.top, bar_index + 20, currentBottom, 
+                             bgcolor=boxCol, border_color=na)
+                             
+                    // 3. Dočasně vykreslíme šedý box pro FILLED část doprava
+                    color grayCol = color.new(color.gray, htfFvgMitigatedTransp)
+                    if fvg.isBull
+                        box.new(bar_index, fvg.top, bar_index + 20, currentTop, 
+                             bgcolor=grayCol, border_color=na)
+                    else
+                        box.new(bar_index, currentBottom, bar_index + 20, fvg.bottom, 
+                             bgcolor=grayCol, border_color=na)
+                             
+                    // 4. Dočasně prodloužíme všechny stávající šedé boxy
+                    for gb in fvg.grayBoxes
+                        box.set_right(gb, bar_index + 20)
+            else
+                box.set_right(activeBox, bar_index + 20)
+                for gb in fvg.grayBoxes
+                    box.set_right(gb, bar_index + 20)
+                
+            if not na(fvg.lbl)
+                label.set_x(fvg.lbl, bar_index + 15)
+                label.set_y(fvg.lbl, (currentTop + currentBottom) / 2)
+        
+        if needsUpdate
+            array.set(htfFvgArray, i, fvg)
+
+// ════════════════════════════════════════════════════════════════════════════
+// 👁️ DYNAMICKÉ VYKRESLOVÁNÍ A DE-CLUTTERING HLADIN (POUZE NA KONCI)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Uchování kreslených objektů pro mazání předchozího ticku
+var line[] drawnLines = array.new<line>()
+var label[] drawnLabels = array.new<label>()
+var box[] drawnBoxes = array.new<box>()
+
+// Seznam aktivních hladin
+var LevelInfo[] activeLevels = array.new<LevelInfo>()
+
+if barstate.islast
+    // 1. Vymazat staré objekty
+    if drawnLines.size() > 0
+        for i = 0 to drawnLines.size() - 1
+            line.delete(drawnLines.get(i))
+        drawnLines.clear()
+    if drawnLabels.size() > 0
+        for i = 0 to drawnLabels.size() - 1
+            label.delete(drawnLabels.get(i))
+        drawnLabels.clear()
+    if drawnBoxes.size() > 0
+        for i = 0 to drawnBoxes.size() - 1
+            box.delete(drawnBoxes.get(i))
+        drawnBoxes.clear()
+        
+    // 2. Naplnění seznamu hladin
+    activeLevels.clear()
+    
+    // PDH / PDL
+    if showPD and not na(pdHigh)
+        activeLevels.push(LevelInfo.new("PDH", pdHigh, pdColor, currentDayStartBar, pdWidth, pdStyle, true, showLabels, pdhSwept, showZones and not pdhSwept))
+    if showPD and not na(pdLow)
+        activeLevels.push(LevelInfo.new("PDL", pdLow, pdColor, currentDayStartBar, pdWidth, pdStyle, true, showLabels, pdlSwept, showZones and not pdlSwept))
+        
+    // PWH / PWL
+    if showPW and not na(pwHigh)
+        activeLevels.push(LevelInfo.new("PWH", pwHigh, pwColor, currentWeekStartBar, pwWidth, pwStyle, true, showLabels, pwhSwept, showZones and not pwhSwept))
+    if showPW and not na(pwLow)
+        activeLevels.push(LevelInfo.new("PWL", pwLow, pwColor, currentWeekStartBar, pwWidth, pwStyle, true, showLabels, pwlSwept, showZones and not pwlSwept))
+        
+    // DO / WO
+    if showOpen and not na(dayOpen)
+        activeLevels.push(LevelInfo.new("DO", dayOpen, dayOpenColor, currentDayStartBar, openWidth, openStyle, true, showLabels, false, false))
+    if showOpen and not na(weekOpen)
+        activeLevels.push(LevelInfo.new("WO", weekOpen, weekOpenColor, currentWeekStartBar, openWidth, openStyle, true, showLabels, false, false))
+        
+    // Current Day H/L (bez počítání testů, jde o extrémy dne)
+    if showCD and not na(currentDayHigh)
+        activeLevels.push(LevelInfo.new("dHigh", currentDayHigh, cdColor, -1, cdWidth, cdStyle, true, showLabels, false, false))
+    if showCD and not na(currentDayLow)
+        activeLevels.push(LevelInfo.new("dLow", currentDayLow, cdColor, -1, cdWidth, cdStyle, true, showLabels, false, false))
+        
+    // ASIA H/L
+    if showAsia and showAsiaLines
+        float dispAsiaH = asiaActive ? asiaHigh : asiaHighFrozen
+        bool showAsiaH = not asiaHighSwept or asiaActive
+        if not na(dispAsiaH)
+            activeLevels.push(LevelInfo.new("ASIA H", dispAsiaH, asiaColor, asiaActive ? -1 : asiaFrozenBar, sessionLineWidth, sessionLineStyle, showAsiaH, showLabels, asiaHighSwept, false))
+            
+        float dispAsiaL = asiaActive ? asiaLow : asiaLowFrozen
+        bool showAsiaL = not asiaLowSwept or asiaActive
+        if not na(dispAsiaL)
+            activeLevels.push(LevelInfo.new("ASIA L", dispAsiaL, asiaColor, asiaActive ? -1 : asiaFrozenBar, sessionLineWidth, sessionLineStyle, showAsiaL, showLabels, asiaLowSwept, false))
+
+    // LONDON H/L
+    if showLondon and showLondonLines
+        float dispLondonH = londonActive ? londonHigh : londonHighFrozen
+        bool showLondonH = not londonHighSwept or londonActive
+        if not na(dispLondonH)
+            activeLevels.push(LevelInfo.new("LON H", dispLondonH, londonColor, londonActive ? -1 : londonFrozenBar, sessionLineWidth, sessionLineStyle, showLondonH, showLabels, londonHighSwept, false))
+            
+        float dispLondonL = londonActive ? londonLow : londonLowFrozen
+        bool showLondonL = not londonLowSwept or londonActive
+        if not na(dispLondonL)
+            activeLevels.push(LevelInfo.new("LON L", dispLondonL, londonColor, londonActive ? -1 : londonFrozenBar, sessionLineWidth, sessionLineStyle, showLondonL, showLabels, londonLowSwept, false))
+
+    // NEW YORK H/L
+    if showNY and showNYLines
+        float dispNYH = nyActive ? nyHigh : nyHighFrozen
+        bool showNYH = not nyHighSwept or nyActive
+        if not na(dispNYH)
+            activeLevels.push(LevelInfo.new("NY H", dispNYH, nyColor, nyActive ? -1 : nyFrozenBar, sessionLineWidth, sessionLineStyle, showNYH, showLabels, nyHighSwept, false))
+            
+        float dispNYL = nyActive ? nyLow : nyLowFrozen
+        bool showNYL = not nyLowSwept or nyActive
+        if not na(dispNYL)
+            activeLevels.push(LevelInfo.new("NY L", dispNYL, nyColor, nyActive ? -1 : nyFrozenBar, sessionLineWidth, sessionLineStyle, showNYL, showLabels, nyLowSwept, false))
+
+    // Prev VWAP
+    if showPrevVWAP and not na(prevVWAP)
+        activeLevels.push(LevelInfo.new("pdVWAP", prevVWAP, vwapColor, currentDayStartBar, vpWidth, vpStyle, true, showLabels, false, false))
+
+    // Volume Profile
+    if showPrevVP and not na(prevPOC)
+        activeLevels.push(LevelInfo.new("pdPOC", prevPOC, pocColor, currentDayStartBar, vpWidth, vpStyle, true, showLabels, pocTested, false))
+    if showPrevVP and not na(prevVAH)
+        activeLevels.push(LevelInfo.new("pdVAH", prevVAH, vaColor, currentDayStartBar, vpWidth, vpStyle, true, showLabels, vahTested, false))
+    if showPrevVP and not na(prevVAL)
+        activeLevels.push(LevelInfo.new("pdVAL", prevVAL, vaColor, currentDayStartBar, vpWidth, vpStyle, true, showLabels, valTested, false))
+
+    if showCurrentVP and not na(currentPOC)
+        activeLevels.push(LevelInfo.new("POC", currentPOC, pocColor, -1, vpWidth, vpStyle, true, showLabels, false, false))
+    if showCurrentVP and not na(currentVAH)
+        activeLevels.push(LevelInfo.new("VAH", currentVAH, vaColor, -1, vpWidth, vpStyle, true, showLabels, false, false))
+    if showCurrentVP and not na(currentVAL)
+        activeLevels.push(LevelInfo.new("VAL", currentVAL, vaColor, -1, vpWidth, vpStyle, true, showLabels, false, false))
+
+    // 3. Bubble Sort - Seřazení hladin podle ceny (od nejnižší po nejvyšší)
+    int countLevels = activeLevels.size()
+    if countLevels > 1
+        for i = 0 to countLevels - 2
+            for j = 0 to countLevels - i - 2
+                LevelInfo itemA = activeLevels.get(j)
+                LevelInfo itemB = activeLevels.get(j + 1)
+                if itemA.price > itemB.price
+                    activeLevels.set(j, itemB)
+                    activeLevels.set(j + 1, itemA)
+
+    // 4. Vykreslení hladin a ošetření překrývání (Staggering) popisků
+    float threshold = atrVal * 0.4
+    int currentXOffset = extendLines
+    float prevPlacedPrice = -1e10
+
+    for i = 0 to countLevels - 1
+        LevelInfo lvl = activeLevels.get(i)
+        
+        // Vykreslení čáry
+        if lvl.showLine
+            lineStyle = getLineStyle(lvl.styleStr)
+            lineColor = lvl.isSwept ? color.new(lvl.col, 75) : lvl.col
+            lineWidth = lvl.isSwept ? 1 : lvl.width
+            
+            int safeStartBar = math.max(lvl.startBar != -1 ? lvl.startBar : currentDayStartBar, bar_index - 299)
+            if na(safeStartBar)
+                safeStartBar := bar_index - 50
+                
+            line myLine = line.new(safeStartBar, lvl.price, bar_index + extendLines, lvl.price, color=lineColor, width=lineWidth, style=lineStyle, extend=extend.right)
+            drawnLines.push(myLine)
+            
+        // Vykreslení zóny (boxu)
+        if lvl.drawZone
+            float top = str.contains(lvl.name, "H") ? lvl.price + zoneSize : lvl.price
+            float bottom = str.contains(lvl.name, "H") ? lvl.price : lvl.price - zoneSize
+            box myBox = box.new(bar_index - 50, top, bar_index + extendLines, bottom, bgcolor=color.new(lvl.col, 92), border_color=color.new(color.white, 100))
+            drawnBoxes.push(myBox)
+
+        // Vykreslení popisků se staggeringem
+        if lvl.showLabel
+            lineColor = lvl.isSwept ? color.new(lvl.col, 60) : lvl.col
+            int hits = 0
+            string hitText = ""
+            
+            if lvl.startBar != -1
+                hits := countHits(lvl.price, lvl.startBar)
+                hitText := hits == 0 ? " [Untested]" : " [" + str.tostring(hits) + "x]"
+                
+            string labelText = lvl.name + hitText
+            
+            // Logika horizontálního posunu popisků
+            if lvl.price - prevPlacedPrice < threshold
+                currentXOffset += 8
+            else
+                currentXOffset := extendLines
+                
+            prevPlacedPrice := lvl.price
+            
+            label myLabel = label.new(bar_index + currentXOffset, lvl.price, labelText, color=chart.bg_color, textcolor=lineColor, style=label.style_label_center, size=getLabelSize(labelSize))
+            drawnLabels.push(myLabel)
+
+// ════════════════════════════════════════════════════════════════════════════
+//                            MARKET STRUCTURE (BoS / ChoCh)
+// ════════════════════════════════════════════════════════════════════════════
+
+var float last_ph = na
+var int last_ph_bar = na
+var float last_pl = na
+var int last_pl_bar = na
+
+var float prev_ph = na
+var float prev_pl = na
+
+// Trend: "Bullish", "Bearish", "None"
+var string trend = "None"
+
+if show_bos_choch
+    ph = ta.pivothigh(high, pivot_lb, pivot_rb)
+    pl = ta.pivotlow(low, pivot_lb, pivot_rb)
+
+    // Handle Pivot Highs
+    if not na(ph)
+        int p_bar = bar_index - pivot_rb
+        string lbl_text = ""
+        
+        if not na(prev_ph)
+            if ph > prev_ph
+                if show_hh_ll
+                    lbl_text := "HH"
+            else
+                if show_hl_lh
+                    lbl_text := "LH"
+        else
+            if show_hh_ll
+                lbl_text := "H"
+                
+        if lbl_text != ""
+            label.new(p_bar, ph, lbl_text, 
+                      style=label.style_label_down, 
+                      color=color.new(color_bull, 100), 
+                      textcolor=color_bull, 
+                      size=size.small)
+            
+        prev_ph := ph
+        last_ph := ph
+        last_ph_bar := p_bar
+
+    // Handle Pivot Lows
+    if not na(pl)
+        int p_bar = bar_index - pivot_rb
+        string lbl_text = ""
+        
+        if not na(prev_pl)
+            if pl < prev_pl
+                if show_hh_ll
+                    lbl_text := "LL"
+            else
+                if show_hl_lh
+                    lbl_text := "HL"
+        else
+            if show_hh_ll
+                lbl_text := "L"
+                
+        if lbl_text != ""
+            label.new(p_bar, pl, lbl_text, 
+                      style=label.style_label_up, 
+                      color=color.new(color_bear, 100), 
+                      textcolor=color_bear, 
+                      size=size.small)
+            
+        prev_pl := pl
+        last_pl := pl
+        last_pl_bar := p_bar
+
+    // Breakout Detection
+    float check_val_up = breakout_type == "Close" ? close : high
+    float check_val_down = breakout_type == "Close" ? close : low
+
+    bool break_up = not na(last_ph) and check_val_up > last_ph
+    bool break_down = not na(last_pl) and check_val_down < last_pl
+
+    if break_up
+        // Trend reversal = CHoCH, continuation = BOS
+        is_bos = trend == "Bullish"
+        is_show = is_bos ? show_bos : show_choch
+        
+        if is_show
+            draw_structure_line(last_ph_bar, last_ph, bar_index, is_bos, true)
+            
+        trend := "Bullish"
+        last_ph := na
+        last_ph_bar := na
+
+    if break_down
+        is_bos = trend == "Bearish"
+        is_show = is_bos ? show_bos : show_choch
+        
+        if is_show
+            draw_structure_line(last_pl_bar, last_pl, bar_index, is_bos, false)
+            
+        trend := "Bearish"
+        last_pl := na
+        last_pl_bar := na

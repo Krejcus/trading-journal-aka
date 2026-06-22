@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Liquid Glass UI Shader</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100%;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #icons {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform-origin: center center;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+
+        .app-icon {
+            width: 48px;
+            height: 48px;
+        }
+
+    </style>
+</head>
+<body>
+<a href="https://github.com/bergice/liquidglass" target="_blank"
+   style="
+       position: absolute;
+       top: 16px;
+       right: 20px;
+       background: rgba(255, 255, 255, 0.08);
+       backdrop-filter: blur(10px);
+       -webkit-backdrop-filter: blur(10px);
+       color: white;
+       font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+       font-weight: 500;
+       font-size: 13px;
+       letter-spacing: 0.3px;
+       padding: 6px 12px;
+       border-radius: 10px;
+       box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+       text-decoration: none;
+       transition: background 0.3s ease;
+       z-index: 1000;
+   "
+   onmouseover="this.style.background='rgba(255,255,255,0.15)'"
+   onmouseout="this.style.background='rgba(255,255,255,0.08)'">
+    View on GitHub
+</a>
+
+<canvas id="canvas"></canvas>
+<div id="icons" style="position: absolute; top: 0; left: 0; pointer-events: none;">
+    <img src="icons/icon1.png" class="app-icon" />
+    <img src="icons/icon2.png" class="app-icon" />
+    <img src="icons/icon3.png" class="app-icon" />
+</div>
+<script id="fragmentShader" type="x-shader/x-fragment">
+    precision mediump float;
+    uniform float u_dpr;
+    uniform sampler2D u_background;
+    uniform vec2 u_resolution;
+    uniform vec2 u_mouse;
+    uniform vec2 u_size;
+    varying vec2 v_uv;
+
+    float cssPxUV() {
+        return u_dpr / min(u_resolution.x, u_resolution.y);
+    }
+
+    float roundedBox(vec2 uv, vec2 center, vec2 size, float radius) {
+        vec2 q = abs(uv - center) - size + radius;
+        return length(max(q, 0.0)) - radius;
+    }
+
+    vec3 blurBackground(vec2 uv, vec2 resolution) {
+        vec3 result = vec3(0.0);
+        float total = 0.0;
+        float radius = 3.0;
+        for (int x = -3; x <= 3; x++) {
+            for (int y = -3; y <= 3; y++) {
+                vec2 offset = vec2(float(x), float(y)) * 2.0 / resolution;
+                float weight = exp(-(float(x * x + y * y)) / (2.0 * radius));
+                result += texture2D(u_background, uv + offset).rgb * weight;
+                total += weight;
+            }
+        }
+        return result / total;
+    }
+
+    float roundedBoxSDF(vec2 p, vec2 b, float r) {
+        vec2 d = abs(p) - b + vec2(r);
+        return length(max(d, 0.0)) - r;
+    }
+
+    vec2 getNormal(vec2 uv, vec2 center, vec2 size, float radius) {
+        vec2 eps = vec2(1.0) / u_resolution * 2.0;
+        vec2 p = uv - center;
+
+        float sdfCenter = roundedBoxSDF(p, size, radius);
+        float dx = (roundedBoxSDF(p + vec2(eps.x, 0.0), size, radius) - roundedBoxSDF(p - vec2(eps.x, 0.0), size, radius)) * 0.5;
+        float dy = (roundedBoxSDF(p + vec2(0.0, eps.y), size, radius) - roundedBoxSDF(p - vec2(0.0, eps.y), size, radius)) * 0.5;
+
+        vec2 gradient = vec2(dx, dy);
+
+        // Optional: smooth corners by blending with diagonal gradients
+        float dxy1 = roundedBoxSDF(p + eps, size, radius);
+        float dxy2 = roundedBoxSDF(p - eps, size, radius);
+        vec2 diag = vec2(dxy1 - dxy2);
+
+        gradient = mix(gradient, diag, 0.25); // adjust 0.25 to smooth more/less
+
+        if (length(gradient) < 0.001) {
+            return vec2(0.0);
+        }
+        return normalize(gradient);
+    }
+
+    void main() {
+        vec2 pixelUV = (v_uv * u_resolution) / u_dpr;
+        vec2 center = u_mouse;
+        vec2 size = u_size * 0.5;
+
+        vec2 local = (pixelUV - center) / size;
+        local.y *= u_resolution.x / u_resolution.y;
+
+        float radius = 20.0;
+        float dist = roundedBox(pixelUV, center, size, radius);
+
+        if (dist > 1.0) {
+            gl_FragColor = texture2D(u_background, v_uv);
+            return;
+        }
+
+        // Radial curvature refraction (center-based)
+        float r = clamp(length(local * 1.0), 0.0, 1.0);
+        float curvature = pow(r, 1.0);
+//        float curvature = sin(r * 1.5708); // lens dome
+//        float curvature = r * (2.0 - r); // parabolic curve, max slope at 0.5
+        vec2 domeNormal = normalize(local) * curvature;
+        float eta = 1.0 / 1.5;
+        vec2 incident = -domeNormal;
+        vec2 refractVec = refract(incident, domeNormal, eta);
+        vec2 curvedRefractUV = v_uv + refractVec * 0.03;
+
+        // Edge contour refraction
+        float contourFalloff = exp(-abs(dist) * 0.4); // slightly stronger edge refraction
+        vec2 normal = getNormal(pixelUV, center, size, radius);
+        vec2 domeNormalContour = normal * pow(contourFalloff, 1.5);
+        vec2 refractVecContour = refract(vec2(0.0), domeNormalContour, eta);
+        vec2 uvContour = v_uv + refractVecContour * 0.35 * contourFalloff;
+
+        // Blend based on distance from edge and radial distance
+//        float edgeWeight = smoothstep(0.0, 0.2, abs(dist));
+        float edgeWeight = smoothstep(0.0, 1.0, abs(dist));
+//        float edgeWeight = pow(smoothstep(0.0, 0.5, abs(dist)), 1.2);
+        float radialWeight = smoothstep(0.5, 1.0, r);
+        float combinedWeight = clamp((edgeWeight * 1.0) + (-radialWeight * 0.5), 0.0, 1.0);
+        vec2 refractUV = mix(curvedRefractUV, uvContour, combinedWeight);
+
+        vec3 refracted = texture2D(u_background, refractUV).rgb;
+        vec3 blurred = blurBackground(refractUV, u_resolution);
+        vec3 base = mix(refracted, blurred, 0.5);
+
+        // Shadow
+        float edgeFalloff = smoothstep(0.01, 0.0, dist);
+        float verticalBand = 1.0 - smoothstep(-1.5, -0.2, local.y);
+        float topShadow = edgeFalloff * verticalBand;
+        vec3 shadowColor = vec3(0.0);
+        base = mix(base, shadowColor, topShadow * 0.1);
+
+        // Edge glow
+        float edge = 1.0 - smoothstep(0.0, 0.03, dist * -2.0);
+        vec3 glow = vec3(0.7);
+        vec3 color = mix(base, glow, edge * 0.5);
+
+        float alpha = 0.75;
+        gl_FragColor = vec4(color, alpha);
+    }
+
+
+</script>
+<script id="vertexShader" type="x-shader/x-vertex">
+    attribute vec2 a_position;
+    varying vec2 v_uv;
+    void main() {
+        v_uv = vec2(a_position.x, -a_position.y) * 0.5 + 0.5;
+        gl_Position = vec4(a_position, 0.0, 1.0);
+    }
+</script>
+<script>
+    const canvas = document.getElementById("canvas");
+    const gl = canvas.getContext("webgl", { antialias: true }) || canvas.getContext("experimental-webgl", { antialias: true });
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = window.innerWidth * dpr;
+        canvas.height = window.innerHeight * dpr;
+        canvas.style.width = window.innerWidth + 'px';
+        canvas.style.height = window.innerHeight + 'px';
+        gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    const vertexShaderSrc = document.getElementById("vertexShader").textContent;
+    const fragmentShaderSrc = document.getElementById("fragmentShader").textContent;
+
+    function compileShader(type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            console.error("Shader compile error:", gl.getShaderInfoLog(shader));
+            return null;
+        }
+        return shader;
+    }
+
+    const vertexShader = compileShader(gl.VERTEX_SHADER, vertexShaderSrc);
+    const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fragmentShaderSrc);
+
+    if (!vertexShader || !fragmentShader) {
+        throw new Error("Shader compilation failed. Check the console for errors.");
+    }
+
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.error("Program link error:", gl.getProgramInfoLog(program));
+    }
+    gl.useProgram(program);
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1,
+        1, -1,
+        -1, 1,
+        -1, 1,
+        1, -1,
+        1, 1
+    ]), gl.STATIC_DRAW);
+
+    const positionLocation = gl.getAttribLocation(program, "a_position");
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+    const u_resolution = gl.getUniformLocation(program, "u_resolution");
+    const u_mouse = gl.getUniformLocation(program, "u_mouse");
+    const u_size = gl.getUniformLocation(program, "u_size");
+
+    const background = gl.createTexture();
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.src = "background.jpeg";
+    image.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, background);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.uniform1i(gl.getUniformLocation(program, "u_background"), 0);
+        const u_dpr = gl.getUniformLocation(program, "u_dpr");
+        gl.uniform1f(u_dpr, window.devicePixelRatio || 1);
+        requestAnimationFrame(draw);
+    };
+
+    let targetMouse = [window.innerWidth  / 2, window.innerHeight / 2];
+    let currentMouse = [...targetMouse];
+
+    const iconWrapper = document.getElementById("icons");
+    const numIcons = iconWrapper.children.length;
+    const iconSize = 48;
+    const iconGap = 12;
+
+    const totalWidth = numIcons * iconSize + (numIcons - 1) * iconGap;
+    const totalHeight = iconSize; // assuming 1 row
+
+    const defaultWidth = totalWidth + 40;  // Add padding
+    const defaultHeight = totalHeight + 20;
+    let enlargedSize = [defaultWidth, defaultHeight];
+    const defaultSize = [enlargedSize[0] * .5, enlargedSize[1] * .5];
+    let targetSize = [...defaultSize];
+    let currentSize = [...targetSize];
+
+    canvas.addEventListener("mousemove", e => {
+        targetMouse = [e.clientX, e.clientY];
+    });
+
+    let lastTime = performance.now();
+
+    function draw(now) {
+        const delta = (now - lastTime) / 1000;
+        lastTime = now;
+
+        const speed = 5.0; // animation speed in units per second
+
+        // Tween position
+        currentMouse[0] += (targetMouse[0] - currentMouse[0]) * speed * delta;
+        currentMouse[1] += (targetMouse[1] - currentMouse[1]) * speed * delta;
+
+        // Optional: animate size for hover effect
+        targetSize[0] = enlargedSize[0];
+        targetSize[1] = enlargedSize[1];
+
+        // Tween size with delta time
+        currentSize[0] += (targetSize[0] - currentSize[0]) * speed * delta;
+        currentSize[1] += (targetSize[1] - currentSize[1]) * speed * delta;
+
+        resize();
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.uniform2f(u_resolution, canvas.width, canvas.height);
+        gl.uniform2f(u_mouse, currentMouse[0], currentMouse[1]);
+        gl.uniform2f(u_size, currentSize[0], currentSize[1]);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, background);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+        // Position the icon wrapper at the button center
+        iconWrapper.style.transform = `
+            translate(${currentMouse[0]}px, ${currentMouse[1]}px)
+            translate(-50%, -50%)
+            scale(${currentSize[0] / 200}, ${currentSize[1] / 70})
+        `;
+
+        requestAnimationFrame(draw);
+    }
+</script>
+</body>
+</html>

@@ -59,6 +59,7 @@ const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade, ownerName, own
                         avatarUrl={ownerAvatar}
                         shareUrl={window.location.href}
                         showQR={false}
+                        showNotes={true}
                     />
                 </div>
             </div>

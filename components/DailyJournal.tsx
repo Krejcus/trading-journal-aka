@@ -1169,7 +1169,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 <div 
                   className={`p-6 rounded-3xl border text-center flex flex-col items-center justify-center gap-3 transition-all ${
                     theme !== 'light' 
-                      ? 'bg-slate-900/30 border-slate-800/60' 
+                      ? 'bg-slate-900/30 border-[var(--border-subtle)]'
                       : 'bg-slate-50 border-slate-200'
                   }`}
                 >
@@ -1546,7 +1546,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
               {/* Left Column: Tactical Hub */}
               <div className="lg:col-span-8 space-y-6 lg:space-y-8 order-2 lg:order-1">
-                <section className={`p-6 md:p-10 rounded-[40px] border relative overflow-hidden transition-all duration-700 ${theme !== 'light' ? 'bg-slate-900/40 border-slate-800 backdrop-blur-xl' : 'bg-white/80 border-slate-200 backdrop-blur-md shadow-2xl shadow-slate-200/50'}`}>
+                <section className={`p-6 md:p-10 rounded-[40px] border relative overflow-hidden transition-all duration-700 ${theme !== 'light' ? 'bg-slate-900/40 border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-white/80 border-slate-200 backdrop-blur-md shadow-2xl shadow-slate-200/50'}`}>
                   {/* Background Glow */}
                   <div className={`absolute -top-40 -right-40 w-80 h-80 rounded-full blur-[120px] pointer-events-none opacity-20 bg-blue-500`} />
 
@@ -1577,7 +1577,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                       </div>
 
                       {/* Tactical Tabs Switcher */}
-                      <div className={`flex items-center p-1.5 rounded-[20px] border transition-all duration-500 ${theme !== 'light' ? 'bg-black/40 border-slate-800' : 'bg-slate-100 border-slate-200'}`}>
+                      <div className={`flex items-center p-1.5 rounded-[20px] border transition-all duration-500 ${theme !== 'light' ? 'bg-black/40 border-[var(--border-subtle)]' : 'bg-slate-100 border-slate-200'}`}>
                         {prepForm.scenarios.sessions?.map((session) => {
                           const isActive = activeSessionTab === session.id;
                           const sessionColor = session.color || '#3b82f6'; // Default to blue
@@ -1611,7 +1611,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                       const accentColor = isEU ? 'blue' : isUS ? 'amber' : 'slate';
 
                       return (
-                        <div key={session.id || idx} className={`group p-6 md:p-8 rounded-[36px] border transition-all duration-500 flex flex-col xl:flex-row gap-8 ${theme !== 'light' ? `bg-slate-900/60 border-slate-800` : `bg-white border-slate-100 shadow-xl shadow-slate-200/20`}`}>
+                        <div key={session.id || idx} className={`group p-6 md:p-8 rounded-[36px] border transition-all duration-500 flex flex-col xl:flex-row gap-8 ${theme !== 'light' ? `bg-slate-900/60 border-[var(--border-subtle)]` : `bg-white border-slate-100 shadow-xl shadow-slate-200/20`}`}>
 
                           {/* Left Side: Screenshot */}
                           <div className="w-full xl:w-[55%] space-y-4">
@@ -1641,7 +1641,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                               className={`relative aspect-video rounded-3xl border-2 border-dashed overflow-hidden transition-all duration-500 flex flex-col items-center justify-center cursor-pointer ${activeImageField === `session_${session.id}`
                                 ? 'border-blue-500 bg-blue-500/5 ring-8 ring-blue-500/5'
                                 : theme !== 'light'
-                                  ? 'border-slate-800/50 bg-theme-card-40 group-hover:bg-slate-900/40'
+                                  ? 'border-[var(--border-subtle)] bg-theme-card-40 group-hover:bg-slate-900/40'
                                   : 'border-slate-200 bg-slate-50 group-hover:bg-slate-100/50 shadow-inner'
                                 }`}
                             >
@@ -1685,7 +1685,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                                 }
                               }))}
                               placeholder="Tvůj plán pro tuto seanci..."
-                              className={`w-full flex-1 min-h-[220px] rounded-3xl p-6 border focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/30 text-sm leading-relaxed transition-all placeholder:text-slate-500 ${theme !== 'light' ? 'bg-theme-card-40 border-slate-800/50 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700 shadow-inner'}`}
+                              className={`w-full flex-1 min-h-[220px] rounded-3xl p-6 border focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/30 text-sm leading-relaxed transition-all placeholder:text-slate-500 ${theme !== 'light' ? 'bg-theme-card-40 border-[var(--border-subtle)] text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700 shadow-inner'}`}
                             />
                           </div>
                         </div>
@@ -1695,7 +1695,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
                   {/* Legacy Data Footnote */}
                   {(prepForm.scenarios.bullish || prepForm.scenarios.bearish) && (
-                    <div className="mt-8 p-5 rounded-[28px] bg-slate-800/30 border border-slate-800/50 backdrop-blur-sm relative z-10">
+                    <div className="mt-8 p-5 rounded-[28px] bg-white/[0.03] border border-[var(--border-subtle)] backdrop-blur-sm relative z-10">
                       <div className="flex items-center gap-3 mb-3">
                         <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500"><AlertTriangle size={14} /></div>
                         <p className="text-[10px] font-black uppercase text-amber-500/80 tracking-widest">Legacy Analysis Records</p>
@@ -1732,7 +1732,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               <div className="lg:col-span-4 space-y-6 order-1 lg:order-2">
 
                 {/* Market Bias selector */}
-                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
                   <div className="flex items-center gap-3 mb-5">
                     <div className={`p-3 rounded-2xl ${prepForm.bias === 'Bullish' ? 'bg-emerald-500/10 text-emerald-500' : prepForm.bias === 'Bearish' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-400'}`}>
                       <TrendingUp size={20} />
@@ -1765,7 +1765,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   </div>
                 </section>
 
-                <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-slate-900/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-4">
                       <div className="p-3 rounded-2xl bg-blue-500/10 text-blue-500"><Zap size={20} /></div>
@@ -1794,7 +1794,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 </section>
 
                 {/* Confidence slider */}
-                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
                   <div className="flex items-center gap-4 mb-5">
                     <div className="p-3 rounded-2xl bg-violet-500/10 text-violet-500"><Brain size={20} /></div>
                     <div>
@@ -1843,7 +1843,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               {/* Psycho-Cybernetics (Mindset & Emoční Audit) odstraněno — nepoužíváme. */}
               <div className="space-y-6">
                 {/* EXECUTION AUDIT - Compact Grid */}
-                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}>
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-3">
                       <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-500"><ShieldAlert size={18} /></div>

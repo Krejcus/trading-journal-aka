@@ -14,7 +14,10 @@ const AccountsManager = React.lazy(() => import('./components/AccountsManager'))
 const Graveyard = React.lazy(() => import('./components/Graveyard'));
 const DailyStartModal = React.lazy(() => import('./components/DailyStartModal'));
 const LossDayDebriefModal = React.lazy(() => import('./components/LossDayDebriefModal'));
+import WorldShiftOverlay, { WORLD_SHIFT_TIMING } from './components/WorldShiftOverlay';
 const DailyJournal = React.lazy(() => import('./components/DailyJournal'));
+const BacktestSessionsView = React.lazy(() => import('./components/BacktestSessionsView'));
+const BacktestSessionsManager = React.lazy(() => import('./components/BacktestSessionsManager'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
@@ -147,6 +150,10 @@ const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: num
   daily_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   calendar: { minW: 4, minH: 5, maxW: 12, maxH: 10 },
   daily_insight: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  bt_avg_r: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  bt_confluence_wr: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  bt_sample_size: { minW: 2, minH: 2, maxW: 12, maxH: 6 },
+  bt_monte_carlo: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
 };
 
 // Widget constraints for xxl breakpoint (24 cols) — doubled widths
@@ -170,6 +177,10 @@ const WIDGET_CONSTRAINTS_XXL: Record<string, { minW: number; minH: number; maxW:
   daily_edge: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
   calendar: { minW: 6, minH: 5, maxW: 24, maxH: 10 },
   daily_insight: { minW: 3, minH: 2, maxW: 8, maxH: 4 },
+  bt_avg_r: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  bt_confluence_wr: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
+  bt_sample_size: { minW: 3, minH: 2, maxW: 24, maxH: 6 },
+  bt_monte_carlo: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
 };
 
 /** Generate a 24-column xxl layout from a 12-column lg layout by scaling positions & widths ×2 */
@@ -222,6 +233,7 @@ const DEFAULT_WIDGETS_LG: DashboardWidgetConfig[] = [
   { id: 'discipline', label: 'Disciplína', visible: true, x: 0, y: 2, w: 12, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
   { id: 'equity', label: 'Equity Curve', visible: true, x: 0, y: 6, w: 6, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
   { id: 'calendar', label: 'Kalendář', visible: true, x: 6, y: 6, w: 6, h: 6, minW: 4, minH: 5, maxW: 12, maxH: 10 },
+  { id: 'bt_monte_carlo', label: 'Monte Carlo', visible: true, x: 0, y: 10, w: 6, h: 5, minW: 4, minH: 4, maxW: 12, maxH: 8 },
 ];
 
 // Default layout for xxl (24 cols, ultrawide) — more widgets side-by-side
@@ -230,6 +242,25 @@ const DEFAULT_WIDGETS_XXL: DashboardWidgetConfig[] = generateXxlFromLg(DEFAULT_W
 const DEFAULT_LAYOUTS: DashboardLayouts = {
   lg: DEFAULT_WIDGETS_LG,
   xxl: DEFAULT_WIDGETS_XXL,
+};
+
+// Výchozí layout pro backtest svět — vlastní sada widgetů (subset live + backtest specifické).
+const DEFAULT_BACKTEST_WIDGETS_LG: DashboardWidgetConfig[] = [
+  { id: 'kpi_pnl', label: 'Net P&L', visible: true, x: 0, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  { id: 'kpi_winrate', label: 'Win Rate', visible: true, x: 2, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  { id: 'kpi_profit_factor', label: 'Profit Factor', visible: true, x: 4, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  { id: 'bt_avg_r', label: 'Avg R', visible: true, x: 6, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  { id: 'equity', label: 'Equity Curve', visible: true, x: 0, y: 2, w: 6, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  { id: 'bt_monte_carlo', label: 'Monte Carlo', visible: true, x: 6, y: 2, w: 6, h: 5, minW: 4, minH: 4, maxW: 12, maxH: 8 },
+  { id: 'bt_confluence_wr', label: 'WR dle confluencí', visible: true, x: 0, y: 6, w: 6, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  { id: 'session_performance', label: 'Výkon Sessions', visible: true, x: 6, y: 6, w: 6, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
+  { id: 'bt_sample_size', label: 'Sample-size', visible: true, x: 0, y: 10, w: 6, h: 3, minW: 2, minH: 2, maxW: 12, maxH: 6 },
+  { id: 'calendar', label: 'Kalendář', visible: true, x: 6, y: 10, w: 6, h: 6, minW: 4, minH: 5, maxW: 12, maxH: 10 },
+];
+
+const DEFAULT_BACKTEST_LAYOUTS: DashboardLayouts = {
+  lg: DEFAULT_BACKTEST_WIDGETS_LG,
+  xxl: generateXxlFromLg(DEFAULT_BACKTEST_WIDGETS_LG),
 };
 
 const DEFAULT_SESSIONS: SessionConfig[] = [
@@ -250,6 +281,27 @@ const DEFAULT_ROADMAP: CareerCheckpoint[] = [
   { id: 'cp_60', label: 'Checkpoint 60 Dní', dayTarget: 60, description: 'Stabilizace disciplíny', status: 'locked', criteria: [{ label: 'Risk Adherence 100%', metric: 'risk_adherence', condition: '==', targetValue: 100 }], rules: DEFAULT_CONSTITUTION },
   { id: 'cp_150', label: 'Finální Verdikt', dayTarget: 150, description: 'Rozhodnutí o budoucnosti tradingu', status: 'locked', criteria: [{ label: 'Max DD < 10%', metric: 'dd', condition: '<', targetValue: 10 }], rules: DEFAULT_CONSTITUTION }
 ];
+
+// Jediná definice hranice mezi live a backtest světem. Když přibude další
+// backtest-like typ účtu (např. 'Replay'), upraví se jen tady.
+const isBacktestAccount = (a?: { type?: string } | null): boolean => a?.type === 'Backtest';
+
+// Sanitizuje uložený per-breakpoint layout (new format): zahodí neznámé widgety,
+// dosadí aktuální constraints a doplní chybějící lg/xxl breakpoint z defaultu.
+// Sdílené live i backtest layoutem — jediný zdroj pravdy pro sanitizaci.
+const sanitizeLayouts = (raw: Record<string, DashboardWidgetConfig[]>, defaultLg: DashboardWidgetConfig[]): DashboardLayouts => {
+  const result: DashboardLayouts = {};
+  for (const [bp, bpLayout] of Object.entries(raw)) {
+    if (!Array.isArray(bpLayout) || bpLayout.length === 0) continue;
+    const constraints = bp === 'xxl' ? WIDGET_CONSTRAINTS_XXL : WIDGET_CONSTRAINTS;
+    result[bp] = bpLayout
+      .filter(w => w.id in WIDGET_CONSTRAINTS) // lg constraints = kanonický seznam widgetů
+      .map(w => ({ ...w, ...(constraints[w.id] || (bp === 'xxl' ? { minW: 4, minH: 2, maxW: 24, maxH: 8 } : { minW: 2, minH: 2, maxW: 12, maxH: 8 })) }));
+  }
+  if (!result.lg || result.lg.length === 0) result.lg = defaultLg;
+  if (!result.xxl || result.xxl.length === 0) result.xxl = generateXxlFromLg(result.lg);
+  return result;
+};
 
 const aggregateTrades = (trades: Trade[], accounts: Account[]): Trade[] => {
   const groups = new Map<string, Trade[]>();
@@ -527,6 +579,7 @@ const App: React.FC = () => {
   // Init `{}` ne DEFAULT_LAYOUTS — zabraní flashe defaultních widgetů před DB loadem.
   // applyPreferences pak nastaví buď DB layout nebo DEFAULT_LAYOUTS (pro nového usera).
   const [dashboardLayouts, setDashboardLayouts] = useState<DashboardLayouts>({});
+  const [backtestDashboardLayouts, setBacktestDashboardLayouts] = useState<DashboardLayouts>(DEFAULT_BACKTEST_LAYOUTS);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => {
     // Try to load from local storage first for immediate persistence
     const saved = localStorage.getItem('alphatrade_dash_mode');
@@ -536,6 +589,36 @@ const App: React.FC = () => {
   useEffect(() => {
     safeSetItem('alphatrade_dash_mode', dashboardMode);
   }, [dashboardMode]);
+
+  // Backtest „svět" — vstup/výstup přes sidebar. Pamatuje si poslední live mód pro návrat.
+  const prevLiveModeRef = useRef<DashboardMode>('combined');
+  // Cinematic přechod mezi live/backtest světem.
+  const [worldShift, setWorldShift] = useState<{ active: boolean; to: 'live' | 'backtest' }>({ active: false, to: 'live' });
+  const worldShiftTimers = useRef<number[]>([]);
+  const toggleBacktestMode = useCallback(() => {
+    setDashFocusAccount(null);
+    const goingToBacktest = dashboardMode !== 'backtesting';
+    const nextMode: DashboardMode = goingToBacktest ? 'backtesting' : (prevLiveModeRef.current || 'combined');
+    if (goingToBacktest) prevLiveModeRef.current = dashboardMode;
+
+    const applySwap = () => { setDashboardMode(nextMode); markPreferencesDirty(); };
+
+    // Respektuj prefers-reduced-motion — přepni okamžitě bez animace.
+    const reduced = typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) { applySwap(); return; }
+
+    worldShiftTimers.current.forEach(clearTimeout);
+    worldShiftTimers.current = [];
+    setWorldShift({ active: true, to: goingToBacktest ? 'backtest' : 'live' });
+    // Swap obsahu přesně když clona plně zakrývá → výměna je neviditelná.
+    worldShiftTimers.current.push(window.setTimeout(applySwap, WORLD_SHIFT_TIMING.swapAt));
+    worldShiftTimers.current.push(window.setTimeout(
+      () => setWorldShift(prev => ({ ...prev, active: false })),
+      WORLD_SHIFT_TIMING.end,
+    ));
+  }, [dashboardMode]);
+  useEffect(() => () => { worldShiftTimers.current.forEach(clearTimeout); }, []);
   const [sessions, setSessions] = useState<SessionConfig[]>(DEFAULT_SESSIONS);
   const [ironRules, setIronRules] = useState<IronRule[]>([
     { id: 'r_meditation', label: 'Ranní meditace / klid', type: 'ritual' },
@@ -705,6 +788,7 @@ const App: React.FC = () => {
     standardGoals,
     standardMistakes: userMistakes,
     dashboardLayouts,
+    backtestDashboardLayouts,
     sessions,
     htfOptions,
     ltfOptions,
@@ -983,20 +1067,7 @@ const App: React.FC = () => {
     // Priority: 1) new dashboardLayouts object  2) legacy flat dashboardLayout  3) defaults
     if (prefs.dashboardLayouts && typeof prefs.dashboardLayouts === 'object' && !Array.isArray(prefs.dashboardLayouts)) {
       // New format: per-breakpoint layouts
-      const result: DashboardLayouts = {};
-      for (const [bp, bpLayout] of Object.entries(prefs.dashboardLayouts)) {
-        if (!Array.isArray(bpLayout) || bpLayout.length === 0) continue;
-        const constraints = bp === 'xxl' ? WIDGET_CONSTRAINTS_XXL : WIDGET_CONSTRAINTS;
-        const validBp = bpLayout.filter(w => w.id in WIDGET_CONSTRAINTS); // lg constraints as canonical widget list
-        result[bp] = validBp.map(w => {
-          const c = constraints[w.id] || (bp === 'xxl' ? { minW: 4, minH: 2, maxW: 24, maxH: 8 } : { minW: 2, minH: 2, maxW: 12, maxH: 8 });
-          return { ...w, ...c };
-        });
-      }
-      // Ensure both lg and xxl exist
-      if (!result.lg || result.lg.length === 0) result.lg = DEFAULT_WIDGETS_LG;
-      if (!result.xxl || result.xxl.length === 0) result.xxl = generateXxlFromLg(result.lg);
-      setDashboardLayouts(result);
+      setDashboardLayouts(sanitizeLayouts(prefs.dashboardLayouts as any, DEFAULT_WIDGETS_LG));
     } else if (Array.isArray(prefs.dashboardLayout) && prefs.dashboardLayout.length > 0) {
       // Legacy format: flat array (12-col) — migrate to per-breakpoint
       const dl = prefs.dashboardLayout!;
@@ -1026,6 +1097,15 @@ const App: React.FC = () => {
       // DB nemá uložený dashboard layout → nový user nebo prázdný blob → set defaulty
       setDashboardLayouts(DEFAULT_LAYOUTS);
     }
+
+    // --- Backtest Dashboard Layout (separátní svět) ---
+    const btRaw = (prefs as any).backtestDashboardLayouts;
+    if (btRaw && typeof btRaw === 'object' && !Array.isArray(btRaw)) {
+      setBacktestDashboardLayouts(sanitizeLayouts(btRaw, DEFAULT_BACKTEST_WIDGETS_LG));
+    } else {
+      setBacktestDashboardLayouts(DEFAULT_BACKTEST_LAYOUTS);
+    }
+
     if (Array.isArray(prefs.sessions)) {
       const migratedSessions = (prefs.sessions as any[]).map(s => ({
         ...s,
@@ -1450,6 +1530,9 @@ const App: React.FC = () => {
   const dailyStartCheckedRef = useRef(false);
   useEffect(() => {
     if (!isInitialLoadDone || dailyStartCheckedRef.current) return;
+    // V backtest světě ranní přípravu nespouštíme (je to live trading rituál).
+    // Ref nenastavujeme → když user přepne zpět na live, check proběhne normálně.
+    if (dashboardMode === 'backtesting') return;
     const now = new Date();
     const hourPrg = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Prague', hour: 'numeric', hour12: false }).format(now));
     const wkdayShort = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Prague', weekday: 'short' }).format(now);
@@ -1464,7 +1547,7 @@ const App: React.FC = () => {
     }
     // Stále označ že jsme check udělali, ať se to neopakuje napříč rerendery
     dailyStartCheckedRef.current = true;
-  }, [isInitialLoadDone, dailyPreps]);
+  }, [isInitialLoadDone, dailyPreps, dashboardMode]);
 
   // --- AUTO-TRIGGER: Loss Day Debrief ---
   // Po každém setTrades (import / save) zkontroluj dnešní P&L. Pokud < -dailyLimit
@@ -1820,7 +1903,7 @@ const App: React.FC = () => {
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [userEmotions, userMistakes, standardGoals, dashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
+  }, [userEmotions, userMistakes, standardGoals, dashboardLayouts, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
 
   // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
   // Backup save every 30s if user is still editing
@@ -1867,7 +1950,7 @@ const App: React.FC = () => {
     return () => {
       clearInterval(interval);
     };
-  }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
+  }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayouts, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
 
   // Flush dirty data to DB when user leaves tab (visibilitychange) or closes browser (beforeunload)
   useEffect(() => {
@@ -1913,7 +1996,7 @@ const App: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', flushDirtyData);
     };
-  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
+  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayouts, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
 
   // Handle Dashboard Mode Switching
   // Sleduj POUZE skutečnou změnu módu — bez tohoto se efekt spouští při každé změně
@@ -1943,10 +2026,11 @@ const App: React.FC = () => {
       if (dashboardMode === 'combined') {
         if (archivedAccounts.length > 0) combinedArchivedMergedRef.current = true;
         // "Vše" — chceme OPRAVDU vše, včetně obchodů ze spálených/archivovaných účtů.
+        // Backtest účty ale do live "Vše" NIKDY nepatří (mají vlastní svět).
         const seen = new Set<string>();
         const allIds: string[] = [];
-        accounts.forEach(a => { if (!seen.has(a.id)) { seen.add(a.id); allIds.push(a.id); } });
-        archivedAccounts.forEach(a => { if (!seen.has(a.id)) { seen.add(a.id); allIds.push(a.id); } });
+        accounts.forEach(a => { if (!isBacktestAccount(a) && !seen.has(a.id)) { seen.add(a.id); allIds.push(a.id); } });
+        archivedAccounts.forEach(a => { if (!isBacktestAccount(a) && !seen.has(a.id)) { seen.add(a.id); allIds.push(a.id); } });
         setFilters(prev => ({ ...prev, accounts: allIds }));
       } else if (dashboardMode === 'funded') {
         // Select Live accounts and Prop accounts that are in Funded phase
@@ -1968,7 +2052,7 @@ const App: React.FC = () => {
         setFilters(prev => ({ ...prev, accounts: challengeIds }));
       } else if (dashboardMode === 'backtesting') {
         const backtestIds = accounts
-          .filter(a => a.status === 'Active' && a.type === 'Backtest')
+          .filter(a => a.status === 'Active' && isBacktestAccount(a))
           .map(a => a.id);
         setFilters(prev => ({ ...prev, accounts: backtestIds }));
       } else if (dashboardMode === 'archive') {
@@ -1991,27 +2075,30 @@ const App: React.FC = () => {
   }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone, dashFocusAccount]);
 
   const contextAccounts = useMemo(() => {
+    // Backtest svět: jen Backtest účty. Live svět: Backtest účty NIKDY (oddělené světy).
+    const isBacktestWorld = dashboardMode === 'backtesting';
+    const liveFilter = (a: Account) => isBacktestWorld ? isBacktestAccount(a) : !isBacktestAccount(a);
     // Mimo dashboard (History / Deník / AI) zahrň i archivované (spálené) účty,
     // aby filter chips a tooltipy ukazovaly jejich název místo "Neznámý účet".
     if (activePage !== 'dashboard') {
       const seen = new Set(accounts.map(a => a.id));
-      return [...accounts, ...archivedAccounts.filter(a => !seen.has(a.id))];
+      return [...accounts, ...archivedAccounts.filter(a => !seen.has(a.id))].filter(liveFilter);
     }
     if (dashboardMode === 'combined') {
       // "Vše" — vrať active i archivované, aby na dashboardu byly všechny obchody
-      // (včetně spálených) započítané do stats/widgetů.
+      // (včetně spálených) započítané do stats/widgetů. Backtest účty vyloučeny.
       const seen = new Set(accounts.map(a => a.id));
-      return [...accounts, ...archivedAccounts.filter(a => !seen.has(a.id))];
+      return [...accounts, ...archivedAccounts.filter(a => !seen.has(a.id))].filter(a => !isBacktestAccount(a));
     }
     if (dashboardMode === 'funded') return accounts.filter(a => a.status === 'Active' && ((a.type === 'Funded' && a.phase === 'Funded') || a.type === 'Live'));
     if (dashboardMode === 'challenge') return accounts.filter(a => a.status === 'Active' && a.type === 'Funded' && a.phase === 'Challenge');
-    if (dashboardMode === 'backtesting') return accounts.filter(a => a.status === 'Active' && a.type === 'Backtest');
+    if (dashboardMode === 'backtesting') return accounts.filter(a => a.status === 'Active' && isBacktestAccount(a));
     // Archiv: deaktivované účty z hlavního pole (mají obchody). 'isArchived' slupky (Passed/Failed,
     // prázdné) řešíme jinde — Hřbitov. archivedAccounts (lazy) ponecháno jako doplněk pro jistotu.
     if (dashboardMode === 'archive') {
-      const inactive = accounts.filter(a => a.status === 'Inactive');
+      const inactive = accounts.filter(a => a.status === 'Inactive' && !isBacktestAccount(a));
       const seen = new Set(inactive.map(a => a.id));
-      return [...inactive, ...archivedAccounts.filter(a => !seen.has(a.id))];
+      return [...inactive, ...archivedAccounts.filter(a => !isBacktestAccount(a) && !seen.has(a.id))];
     }
     return accounts;
   }, [accounts, archivedAccounts, activePage, dashboardMode]);
@@ -2184,18 +2271,24 @@ const App: React.FC = () => {
       // DEBUG: Log Alpha Bridge trades to see why they're filtered
       const isAlphaBridge = t.signal === 'Alpha Bridge v2';
 
+      // TVRDÁ PŘEPÁŽKA: Backtest obchody patří jen do backtest světa.
+      // Mimo 'backtesting' je NIKDY nezobrazuj (Deník/Dashboard/History), i v "Vše".
+      {
+        const acc = accountsLookup.find(a => a.id === t.accountId);
+        const isBacktestTrade = isBacktestAccount(acc);
+        if (dashboardMode === 'backtesting') {
+          if (!isBacktestTrade) return false;
+        } else if (isBacktestTrade) {
+          return false;
+        }
+      }
+
       // Filter by phase based on dashboardMode
       // ALWAYS use account phase as source of truth, not trade phase
       if (dashboardMode === 'challenge') {
         const acc = accountsLookup.find(a => a.id === t.accountId);
         const isChallenge = acc?.type === 'Funded' && acc?.phase === 'Challenge';
         if (!isChallenge) {
-          return false;
-        }
-      } else if (dashboardMode === 'backtesting') {
-        const acc = accountsLookup.find(a => a.id === t.accountId);
-        const isBacktest = acc?.type === 'Backtest';
-        if (!isBacktest) {
           return false;
         }
       } else if (dashboardMode === 'funded') {
@@ -2750,6 +2843,7 @@ const App: React.FC = () => {
       onTouchEnd={onTouchEnd}
     >
 
+      {worldShift.active && <WorldShiftOverlay to={worldShift.to} />}
 
       {/* Sidebar — pouze desktop */}
       <div className="hidden lg:block">
@@ -2776,6 +2870,8 @@ const App: React.FC = () => {
           }}
           onLockedFeature={(featureId) => setLockedFeatureModal(featureId)}
           enrichCount={enrichCount}
+          dashboardMode={dashboardMode}
+          onToggleBacktest={toggleBacktestMode}
         />
       </div>
 
@@ -2788,6 +2884,8 @@ const App: React.FC = () => {
         userRole={currentUser.role}
         enrichCount={enrichCount}
         onLockedFeature={(featureId) => setLockedFeatureModal(featureId)}
+        dashboardMode={dashboardMode}
+        onToggleBacktest={toggleBacktestMode}
       />
 
       {/* Locked feature info modal — friend role klikne na uzamčenou položku */}
@@ -3041,6 +3139,7 @@ const App: React.FC = () => {
                 dailyReviews={dailyReviews}
                 sessions={sessions}
                 theme={theme}
+                dashboardMode={dashboardMode}
                 initialConversationId={aiActiveConvId}
                 initialPrompt={aiInitialPrompt}
                 onInitialPromptConsumed={() => setAiInitialPrompt(undefined)}
@@ -3155,7 +3254,7 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <React.Suspense fallback={<div className="flex-1" />}>
-                  {activePage === 'dashboard' && loadedUserId && (
+                  {activePage === 'dashboard' && dashboardMode !== 'backtesting' && loadedUserId && (
                     <MorningBriefBanner
                       userId={loadedUserId}
                       theme={theme}
@@ -3171,7 +3270,7 @@ const App: React.FC = () => {
                       theme={theme}
                       preps={dailyPreps}
                       reviews={dailyReviews}
-                      layouts={dashboardLayouts}
+                      layouts={dashboardMode === 'backtesting' ? backtestDashboardLayouts : dashboardLayouts}
                       sessions={sessions}
                       ironRules={ironRules}
                       onUpdateLayouts={(v: DashboardLayouts) => {
@@ -3180,13 +3279,15 @@ const App: React.FC = () => {
                               console.log('[Setter] setDashboardLayouts BLOCKED (applying prefs lock or not synced)');
                               return;
                           }
+                          const isBt = dashboardMode === 'backtesting';
+                          const prev = isBt ? backtestDashboardLayouts : dashboardLayouts;
                           // Identity check pro post-load auto-fires (resize, theme change atd.)
                           try {
-                              if (JSON.stringify(v) === JSON.stringify(dashboardLayouts)) return;
+                              if (JSON.stringify(v) === JSON.stringify(prev)) return;
                           } catch { /* fallthrough */ }
-                          setDashboardLayouts(v);
+                          (isBt ? setBacktestDashboardLayouts : setDashboardLayouts)(v);
                           markPreferencesDirty();
-                          console.log('[Setter] setDashboardLayouts (breakpoints:', Object.keys(v), ') → dirty=true');
+                          console.log(`[Setter] set${isBt ? 'Backtest' : ''}DashboardLayouts (breakpoints:`, Object.keys(v), ') → dirty=true');
                       }}
                       isEditing={isDashboardEditing}
                       onCloseEdit={() => setIsDashboardEditing(false)}
@@ -3286,7 +3387,11 @@ const App: React.FC = () => {
                     </div>
                   )}
 
-                  {activePage === 'journal' && (
+                  {activePage === 'journal' && dashboardMode === 'backtesting' && (
+                    <BacktestSessionsView theme={theme} accounts={accounts} trades={trades} />
+                  )}
+
+                  {activePage === 'journal' && dashboardMode !== 'backtesting' && (
                     <DailyJournal
                       theme={theme}
                       trades={filteredDisplayTrades}
@@ -3309,13 +3414,25 @@ const App: React.FC = () => {
                     />
                   )}
 
-                  {activePage === 'accounts' && (
+                  {activePage === 'accounts' && dashboardMode === 'backtesting' && (
+                    <BacktestSessionsManager
+                      theme={theme}
+                      accounts={accounts.filter(isBacktestAccount)}
+                      trades={trades}
+                      // Merge zpět live účty, ať je BacktestSessionsManager nesmaže.
+                      onUpdate={(next) => setAccounts([...accounts.filter(a => !isBacktestAccount(a)), ...next])}
+                      onDelete={handleDeleteAccount}
+                    />
+                  )}
+
+                  {activePage === 'accounts' && dashboardMode !== 'backtesting' && (
                     <>
                       <AccountsManager
-                        accounts={accounts}
+                        accounts={accounts.filter(a => !isBacktestAccount(a))}
                         activeAccountId={activeAccountId}
                         setActiveAccountId={setActiveAccountId}
-                        onUpdate={setAccounts}
+                        // Merge zpět Backtest účty, ať je AccountsManager nesmaže.
+                        onUpdate={(next) => setAccounts([...next, ...accounts.filter(isBacktestAccount)])}
                         onDelete={handleDeleteAccount}
                         theme={theme}
                         trades={trades}

@@ -18,6 +18,9 @@ import {
     Bot,
     Activity,
     Lock,
+    FlaskConical,
+    Radio,
+    Layers,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User } from '../types';
@@ -40,6 +43,10 @@ interface SidebarProps {
     onLockedFeature?: (featureId: string) => void;
     /** Počet importovaných obchodů k doplnění — malý glass badge u Historie. */
     enrichCount?: number;
+    /** Aktuální dashboard mód — Sidebar řeší backtest vstup/výstup a skrytí nav. */
+    dashboardMode?: string;
+    /** Přepnout mezi backtest a live světem. */
+    onToggleBacktest?: () => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -56,11 +63,16 @@ const Sidebar: React.FC<SidebarProps> = ({
     onOpenProfile,
     onNavigate,
     onLockedFeature,
-    enrichCount = 0
+    enrichCount = 0,
+    dashboardMode,
+    onToggleBacktest,
 }) => {
+    const isBacktest = dashboardMode === 'backtesting';
     const lang = user.language || 'cs';
     const [isHovered, setIsHovered] = useState(false);
     const [isClicked, setIsClicked] = useState(false);
+    // Hover na world-togglu: ukazuje aktuální svět, po najetí morphne na cílový.
+    const [worldHover, setWorldHover] = useState(false);
 
     // Core logic: Sidebar is expanded if either pinned (!isCollapsed) OR hovered (but NOT if we just clicked an item)
     // Professional behavior: Click -> Collapse immediately -> Re-expand on fresh hover
@@ -77,9 +89,14 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     const secondaryItems = [
         { id: 'network', label: t('network', lang), icon: Globe },
-        { id: 'accounts', label: t('accounts', lang), icon: Wallet },
+        // V backtestu nemáš účty — místo nich "Session" (název + velikost).
+        { id: 'accounts', label: isBacktest ? 'Session' : t('accounts', lang), icon: isBacktest ? Layers : Wallet },
         { id: 'settings', label: t('settings', lang), icon: Settings },
     ];
+
+    // V backtest módu skryjeme nav, co k backtestu nepatří (Business hub, Síť).
+    const visibleMain = isBacktest ? mainItems.filter(i => i.id !== 'business') : mainItems;
+    const visibleSecondary = isBacktest ? secondaryItems.filter(i => i.id !== 'network') : secondaryItems;
 
     const isDark = theme !== 'light';
 
@@ -182,12 +199,12 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                 {/* Navigation - Scrollable Area */}
                 <nav className="flex-1 px-2 space-y-0.5 overflow-y-auto custom-scrollbar no-scrollbar py-1 relative z-10">
-                    {[...mainItems, ...secondaryItems].map((item, idx) => {
+                    {[...visibleMain, ...visibleSecondary].map((item, idx) => {
                         const Icon = item.icon;
                         const isActive = activePage === item.id;
                         const locked = isLocked(item.id, user.role);
                         // Visual separator between main and secondary groups
-                        const isFirstSecondary = idx === mainItems.length;
+                        const isFirstSecondary = idx === visibleMain.length;
                         return (
                             <React.Fragment key={item.id}>
                                 {isFirstSecondary && <div className="h-2" />}
@@ -225,6 +242,60 @@ const Sidebar: React.FC<SidebarProps> = ({
                             </React.Fragment>
                         );
                     })}
+
+                    {/* Backtest / Live přepínač světa — single-line jako ostatní položky */}
+                    {onToggleBacktest && (
+                        <>
+                            <div className={`h-px mx-3 my-1.5 ${isDark ? 'bg-white/10' : 'bg-slate-200/70'}`} />
+                            {(() => {
+                                // Aktuální svět vs. cíl přepnutí. Tlačítko klidově ukazuje
+                                // aktuální stav, po najetí morphne na cílový (barva+ikona+text).
+                                const showBacktest = worldHover ? !isBacktest : isBacktest;
+                                return (
+                                    <button
+                                        onClick={onToggleBacktest}
+                                        onMouseEnter={() => setWorldHover(true)}
+                                        onMouseLeave={() => setWorldHover(false)}
+                                        className={`w-full flex items-center gap-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 h-10 border ${!isExpanded ? 'justify-center w-10 mx-auto' : 'px-6 mx-2'} ${
+                                            showBacktest
+                                                ? 'bg-violet-500/10 border-violet-500/40 text-violet-500 hover:bg-violet-500/20'
+                                                : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/20'
+                                        }`}
+                                        title={!isExpanded ? (isBacktest ? 'Přepnout na Live' : 'Přepnout na Backtest') : ''}
+                                    >
+                                        {/* Ikona — crossfade mezi stavy (box 16px, stack absolute) */}
+                                        <span className="shrink-0 relative w-4 h-4 flex items-center justify-center">
+                                            <FlaskConical size={16} className={`absolute transition-opacity duration-300 ${showBacktest ? 'opacity-100' : 'opacity-0'}`} />
+                                            <Radio size={16} className={`absolute transition-opacity duration-300 ${showBacktest ? 'opacity-0' : 'opacity-100'}`} />
+                                        </span>
+                                        <AnimatePresence>
+                                            {isExpanded && (
+                                                <motion.span
+                                                    initial={{ opacity: 0, x: -10 }}
+                                                    animate={{ opacity: 1, x: 0 }}
+                                                    exit={{ opacity: 0, x: -10 }}
+                                                    className="whitespace-nowrap relative overflow-hidden"
+                                                >
+                                                    <AnimatePresence mode="wait" initial={false}>
+                                                        <motion.span
+                                                            key={showBacktest ? 'bt' : 'live'}
+                                                            initial={{ clipPath: 'inset(0 100% 0 0)' }}
+                                                            animate={{ clipPath: 'inset(0 0% 0 0)' }}
+                                                            exit={{ clipPath: 'inset(0 0 0 100%)' }}
+                                                            transition={{ duration: 0.22, ease: 'easeInOut' }}
+                                                            className="block"
+                                                        >
+                                                            {showBacktest ? 'Backtest' : 'Live'}
+                                                        </motion.span>
+                                                    </AnimatePresence>
+                                                </motion.span>
+                                            )}
+                                        </AnimatePresence>
+                                    </button>
+                                );
+                            })()}
+                        </>
+                    )}
                 </nav>
 
                 {/* User Profile - Fixed at the Bottom - CLICKABLE */}

@@ -307,7 +307,7 @@ interface SearchHistoryArgs {
   account?: string;
 }
 
-async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], trades: Trade[] = []): Promise<{
+async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], trades: Trade[] = [], scope: 'live' | 'backtest' = 'live'): Promise<{
   results: Array<{
     source_type: string;
     source_id: string;
@@ -339,14 +339,26 @@ async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], 
     return { results: [], count: 0 };
   }
   let results = data || [];
-  // Account post-filter: jen trade záznamy se zkontrolují proti accountId; prep/review
-  // nejsou per-account, takže je necháme projít beze změny.
+  // SCOPE PŘEPÁŽKA: RAG hledá přes embeddings VŠECH obchodů v DB (i backtest).
+  // `trades` je ale už scoped (live/backtest) podle aktuálního režimu mentora,
+  // takže trade výsledek pustíme jen pokud jeho source_id patří mezi známé scoped
+  // obchody. Tím backtest obchody nikdy neprolezou do live mentora přes RAG.
+  // (prep/review nejsou per-account → procházejí; backtest session poznámky budou
+  //  v samostatné entitě, ne v preps/reviews, takže neleakují.)
+  const knownTradeIds = new Set(trades.map(t => String(t.id)));
+  results = results.filter((r: any) => r.source_type !== 'trade' || knownTradeIds.has(String(r.source_id)));
+  // V backtest scope zahoď live deník (prep/review) — backtest poznámky nejsou v embeddings.
+  if (scope === 'backtest') {
+    results = results.filter((r: any) => r.source_type !== 'prep' && r.source_type !== 'review');
+  }
+  // Volitelný account filtr (uživatel požádal o konkrétní účet).
   if (accId) {
     const tradeAcct = new Map(trades.map(t => [String(t.id), String(t.accountId)]));
     results = results.filter((r: any) =>
       r.source_type !== 'trade' || tradeAcct.get(String(r.source_id)) === accId
-    ).slice(0, limit);
+    );
   }
+  results = results.slice(0, limit);
   return { results, count: results.length };
 }
 
@@ -672,6 +684,8 @@ export interface ToolContext {
   preps: DailyPrep[];
   reviews: DailyReview[];
   accounts?: Account[];
+  /** 'backtest' → RAG zahodí prep/review (live deník), backtest má vlastní backtest_sessions. */
+  scope?: 'live' | 'backtest';
 }
 
 interface RememberArgs {
@@ -843,7 +857,7 @@ export async function executeTool(
   try {
     switch (name) {
       case 'search_history':
-        return await searchHistory(args, ctx.accounts || [], ctx.trades);
+        return await searchHistory(args, ctx.accounts || [], ctx.trades, ctx.scope || 'live');
       case 'get_stats':
         return getStats(args, ctx);
       case 'list_accounts':

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useTheme } from './ThemeContext';
 
 export type ColorScheme = 'htf' | 'ltf' | 'emotions' | 'mistakes' | 'default';
@@ -11,6 +11,13 @@ const SCHEME_SELECTED: Record<ColorScheme, string> = {
     mistakes: 'bg-rose-500/20 border-rose-500/40 text-rose-300 shadow-lg shadow-rose-500/10',
     default:  'bg-cyan-600 border-cyan-500 text-white shadow-lg shadow-cyan-600/20',
 };
+
+// Execution tagy mají vlastní barvu vybraného chipu: SL = lehce červená, TP = lehce zelená.
+const SL_TAG_STYLE = 'bg-red-500/20 border-red-500/40 text-red-300 shadow-lg shadow-red-500/10';
+const TP_TAG_STYLE = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 shadow-lg shadow-emerald-500/10';
+// Entry tagy (odraz / struktura / FVG) — indigo, ať jdou odlišit od SL (červená) a TP (zelená).
+const ENTRY_TAG_STYLE = 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300 shadow-lg shadow-indigo-500/10';
+const isEntryTagName = (t: string) => /^(Entry FVG|CHoCH|BoS|Odraz)\b/.test(t);
 
 export function Input({ label, value, onChange, placeholder, type = "text", className = "", inputClassName = "" }: { label: string, value: string | number, onChange: (val: string) => void, placeholder?: string, type?: string, className?: string, inputClassName?: string }) {
     const { theme } = useTheme();
@@ -96,31 +103,73 @@ export function MultiSelect({
     className?: string
 }) {
     const { theme } = useTheme();
+    const [open, setOpen] = useState(false);
     const selectedStyle = SCHEME_SELECTED[colorScheme];
+    const chipStyle = (opt: string) => /^SL\s/.test(opt) ? SL_TAG_STYLE : /^TP\s/.test(opt) ? TP_TAG_STYLE : isEntryTagName(opt) ? ENTRY_TAG_STYLE : selectedStyle;
 
     return (
         <div className={`flex flex-col mb-4 ${className}`}>
-            <label className={`block text-[10px] font-bold uppercase tracking-wider mb-2 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>{label}</label>
-            <div className="flex flex-wrap gap-1.5">
-                {options.map(opt => {
-                    const isSelected = selected.includes(opt);
-                    return (
-                        <button
+            {/* Název + malý rozbalovací čtvereček */}
+            <div className="flex items-center gap-1.5 mb-1.5">
+                <label className={`text-[10px] font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>{label}</label>
+                <button
+                    type="button"
+                    onClick={() => setOpen(o => !o)}
+                    title={open ? 'Sbalit' : 'Rozbalit'}
+                    className={`w-4 h-4 flex items-center justify-center rounded border text-[9px] leading-none transition-all ${theme === 'dark' ? 'border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'border-slate-300 text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+                >
+                    <span className={`transition-transform ${open ? 'rotate-180' : ''}`}>▾</span>
+                </button>
+            </div>
+            {/* Prázdná sekce: jemný náznak, ať sloupce nepůsobí rozbitě. */}
+            {selected.length === 0 && !open && (
+                <button
+                    type="button"
+                    onClick={() => setOpen(true)}
+                    className={`self-start text-[10px] italic opacity-40 hover:opacity-70 transition-opacity ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}
+                >
+                    zatím nic — klikni ▾
+                </button>
+            )}
+            {/* Zvolené chipy (ručně i auto) — kompaktně, bez velkého boxu. ✕ odebere. */}
+            {selected.length > 0 && (
+                <div className="flex flex-wrap gap-1 mb-1">
+                    {selected.map(opt => (
+                        <span
                             key={opt}
-                            type="button"
                             onClick={() => onToggle(opt)}
-                            className={`px-2 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all duration-200 border ${isSelected
-                                    ? selectedStyle
-                                    : theme === 'dark'
-                                        ? 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:border-slate-600 hover:text-slate-300'
-                                        : 'bg-slate-100 border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700'
-                                }`}
+                            className={`group inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold border cursor-pointer ${chipStyle(opt)}`}
+                            title="Odebrat"
                         >
                             {opt}
-                        </button>
-                    );
-                })}
-            </div>
+                            <span className="opacity-0 group-hover:opacity-100 transition-opacity">✕</span>
+                        </span>
+                    ))}
+                </div>
+            )}
+            {/* Rozbalená nabídka všech možností */}
+            {open && (
+                <div className={`mt-1.5 flex flex-wrap gap-1.5 p-2 rounded-xl border ${theme === 'dark' ? 'bg-slate-900/60 border-slate-700/50' : 'bg-slate-50 border-slate-200'}`}>
+                    {options.map(opt => {
+                        const isSelected = selected.includes(opt);
+                        return (
+                            <button
+                                key={opt}
+                                type="button"
+                                onClick={() => onToggle(opt)}
+                                className={`px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all duration-200 border ${isSelected
+                                        ? chipStyle(opt)
+                                        : theme === 'dark'
+                                            ? 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:border-slate-600 hover:text-slate-300'
+                                            : 'bg-slate-100 border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700'
+                                    }`}
+                            >
+                                {opt}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
         </div>
     );
 }
