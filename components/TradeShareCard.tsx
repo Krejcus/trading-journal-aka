@@ -25,6 +25,8 @@ interface Props {
     showQR?: boolean;
     /** Pokud true a trade má poznámku, vyrenderuje ji jako kartu. Default false (soukromí). */
     showNotes?: boolean;
+    /** Klik na chart screenshot (např. otevři zoom). Když není, chart není klikací (PNG/export beze změny). */
+    onScreenshotClick?: () => void;
 }
 
 /** Formátuje datum trade do "DD. MM. YYYY · HH:MM" */
@@ -55,7 +57,7 @@ function calcR(trade: Trade): number | null {
     return trade.pnl / trade.riskAmount;
 }
 
-const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUrl, shareUrl, showQR = true, showNotes = false }) => {
+const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUrl, shareUrl, showQR = true, showNotes = false, onScreenshotClick }) => {
     const notes = (showNotes && trade.notes) ? String(trade.notes).trim() : '';
     const pnl = Number(trade.pnl || 0);
     const isWin = pnl > 0;
@@ -281,7 +283,8 @@ const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUr
                             <img
                                 src={screenshot}
                                 crossOrigin="anonymous"
-                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                onClick={onScreenshotClick}
+                                style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: onScreenshotClick ? 'zoom-in' : 'default' }}
                                 alt="Trade chart"
                             />
                         ) : (

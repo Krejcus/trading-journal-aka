@@ -1,21 +1,21 @@
 /**
  * SharedTradeView — public landing page pro shared trade.
  *
- * Karta (TradeShareCard) scaled to fit + pod ní PLNÁ poznámka, POKUD ji autor
- * sdílel (server ji odstřihne v get_public_trade, když share_notes není true).
- * Na kartě samotné poznámka skrytá (showNotes=false) — full text je čitelně pod ní,
- * link není limitovaný 1600×900 jako PNG.
+ * Interaktivní (jen na webu, NE v PNG): karta se naklápí za myší (3D tilt) +
+ * sweeping light beams kolem okraje (stejný efekt jako login karta). Klik na
+ * chart screenshot → ImageZoomModal (zoom + pan). Pod kartou plná poznámka,
+ * pokud ji autor sdílel (server ji jinak odstřihne v get_public_trade).
  */
 import React, { useState, useLayoutEffect } from 'react';
+import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { Trade } from '../types';
 import TradeShareCard from './TradeShareCard';
+import ImageZoomModal from './ImageZoomModal';
 
 interface SharedTradeViewProps {
     trade: Trade;
     theme: 'dark' | 'light' | 'oled';
-    /** Jméno autora trade — z profiles tabulky. */
     ownerName?: string;
-    /** Avatar URL autora. */
     ownerAvatar?: string;
 }
 
@@ -24,9 +24,27 @@ const CARD_H = 900;
 
 const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade, ownerName, ownerAvatar }) => {
     const [scale, setScale] = useState(0.6);
+    const [zoom, setZoom] = useState(false);
     const notes = (trade.notes && String(trade.notes).trim()) ? String(trade.notes).trim() : '';
+    const screenshots = (trade.screenshots && trade.screenshots.length)
+        ? trade.screenshots
+        : (trade.screenshot ? [trade.screenshot] : []);
 
-    // Když je poznámka, nech karte jen ~72 % výšky → zbytek na panel pod ní (bez nutného scrollu).
+    // 3D tilt za myší — jemně odpružené (GPU transform, žádný výpočet).
+    const mouseX = useMotionValue(0);
+    const mouseY = useMotionValue(0);
+    const sx = useSpring(mouseX, { stiffness: 150, damping: 20 });
+    const sy = useSpring(mouseY, { stiffness: 150, damping: 20 });
+    const rotateX = useTransform(sy, [-300, 300], [7, -7]);
+    const rotateY = useTransform(sx, [-300, 300], [-7, 7]);
+    const handleMouseMove = (e: React.MouseEvent) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        mouseX.set(e.clientX - rect.left - rect.width / 2);
+        mouseY.set(e.clientY - rect.top - rect.height / 2);
+    };
+    const handleMouseLeave = () => { mouseX.set(0); mouseY.set(0); };
+
+    // Když je poznámka, nech kartě ~72 % výšky → zbytek na panel pod ní.
     useLayoutEffect(() => {
         const computeScale = () => {
             const padH = 40;
@@ -42,30 +60,53 @@ const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade, ownerName, own
     }, [notes]);
 
     const visW = CARD_W * scale;
+    const visH = CARD_H * scale;
+    const beam = "absolute bg-gradient-to-r from-transparent via-cyan-300/80 to-transparent";
 
     return (
-        <div className="min-h-screen w-full bg-[#050810] flex flex-col items-center gap-6 py-6 px-4 overflow-y-auto">
-            {/* Karta */}
-            <div style={{ width: visW, height: CARD_H * scale, position: 'relative', flexShrink: 0 }}>
-                <div style={{
-                    transform: `scale(${scale})`,
-                    transformOrigin: 'top left',
-                    width: CARD_W,
-                    height: CARD_H,
-                    borderRadius: 24,
-                    overflow: 'hidden',
-                    boxShadow: '0 30px 80px -20px rgba(0,0,0,0.6), 0 0 60px rgba(34,211,238,0.08)',
-                }}>
-                    <TradeShareCard
-                        trade={trade}
-                        username={ownerName ? `@${ownerName.toLowerCase().replace(/\s+/g, '')}` : '@trader'}
-                        avatarUrl={ownerAvatar}
-                        shareUrl={window.location.href}
-                        showQR={false}
-                        showNotes={false}
-                    />
-                </div>
-            </div>
+        <div className="min-h-screen w-full bg-[#050810] flex flex-col items-center gap-7 py-6 px-4 overflow-y-auto">
+            {/* Karta — interaktivní wrapper (perspective + tilt + beams) */}
+            <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+                style={{ width: visW, height: visH, perspective: 1500, flexShrink: 0 }}
+            >
+                <motion.div
+                    style={{ rotateX, rotateY, width: visW, height: visH, position: 'relative' }}
+                    onMouseMove={handleMouseMove}
+                    onMouseLeave={handleMouseLeave}
+                >
+                    {/* Traveling light beams kolem okraje */}
+                    <div style={{ position: 'absolute', inset: -1, borderRadius: 24 * scale, overflow: 'hidden', pointerEvents: 'none', zIndex: 3 }}>
+                        <motion.div className={`${beam} top-0 left-0 h-[2px] w-[60%]`} animate={{ left: ["-60%", "100%"] }} transition={{ duration: 3, ease: "linear", repeat: Infinity, repeatDelay: 0.5 }} />
+                        <motion.div className={`${beam} bottom-0 right-0 h-[2px] w-[60%]`} animate={{ right: ["-60%", "100%"] }} transition={{ duration: 3, ease: "linear", repeat: Infinity, repeatDelay: 0.5 }} />
+                        <motion.div className="absolute top-0 right-0 w-[2px] h-[60%] bg-gradient-to-b from-transparent via-cyan-300/80 to-transparent" animate={{ top: ["-60%", "100%"] }} transition={{ duration: 3, ease: "linear", repeat: Infinity, repeatDelay: 0.5, delay: 1.5 }} />
+                        <motion.div className="absolute bottom-0 left-0 w-[2px] h-[60%] bg-gradient-to-b from-transparent via-cyan-300/80 to-transparent" animate={{ bottom: ["-60%", "100%"] }} transition={{ duration: 3, ease: "linear", repeat: Infinity, repeatDelay: 0.5, delay: 1.5 }} />
+                    </div>
+
+                    {/* Scaled karta */}
+                    <div style={{
+                        transform: `scale(${scale})`,
+                        transformOrigin: 'top left',
+                        width: CARD_W,
+                        height: CARD_H,
+                        borderRadius: 24,
+                        overflow: 'hidden',
+                        boxShadow: '0 30px 80px -20px rgba(0,0,0,0.6), 0 0 60px rgba(34,211,238,0.08)',
+                    }}>
+                        <TradeShareCard
+                            trade={trade}
+                            username={ownerName ? `@${ownerName.toLowerCase().replace(/\s+/g, '')}` : '@trader'}
+                            avatarUrl={ownerAvatar}
+                            shareUrl={window.location.href}
+                            showQR={false}
+                            showNotes={false}
+                            onScreenshotClick={screenshots.length ? () => setZoom(true) : undefined}
+                        />
+                    </div>
+                </motion.div>
+            </motion.div>
 
             {/* Plná poznámka — jen když ji autor sdílel (server-gated) */}
             {notes && (
@@ -88,6 +129,11 @@ const SharedTradeView: React.FC<SharedTradeViewProps> = ({ trade, ownerName, own
                         }}>{notes}</div>
                     </div>
                 </div>
+            )}
+
+            {/* Zoom screenshotu */}
+            {zoom && screenshots.length > 0 && (
+                <ImageZoomModal images={screenshots} onClose={() => setZoom(false)} />
             )}
         </div>
     );
