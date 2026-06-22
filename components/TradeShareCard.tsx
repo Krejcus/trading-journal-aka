@@ -195,24 +195,27 @@ const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUr
                         </div>
                     </div>
 
-                    {/* Notes — jen když showNotes && trade.notes (default skryto, soukromí) */}
+                    {/* Notes — jen když showNotes && trade.notes (default skryto, soukromí).
+                        overflow:hidden + clamp → nikdy nepřeteče do patičky, i u dlouhé poznámky. */}
                     {notes && (
                         <div style={{
                             flex: 1, minHeight: 0,
-                            padding: 28, borderRadius: 24,
+                            padding: 22, borderRadius: 24,
                             background: 'rgba(255,255,255,0.025)',
                             backdropFilter: 'blur(20px)',
                             border: '1px solid rgba(34,211,238,0.12)',
                             display: 'flex', flexDirection: 'column',
+                            overflow: 'hidden',
                         }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 12 }}>Poznámka</div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 8, flexShrink: 0 }}>Poznámka</div>
                             <div style={{
-                                fontSize: 19, fontWeight: 400, lineHeight: 1.5,
+                                fontSize: 15, fontWeight: 400, lineHeight: 1.45,
                                 color: 'rgba(255,255,255,0.82)',
                                 overflow: 'hidden',
                                 display: '-webkit-box',
-                                WebkitLineClamp: 6,
+                                WebkitLineClamp: 4,
                                 WebkitBoxOrient: 'vertical',
+                                minHeight: 0,
                             }}>{notes}</div>
                         </div>
                     )}
