@@ -621,7 +621,8 @@ export interface UserPreferences {
   standardGoals: string[];
   standardMistakes?: string[];
   dashboardLayout?: DashboardWidgetConfig[]; // Legacy — flat array (pre-migration)
-  dashboardLayouts?: DashboardLayouts; // New — per-breakpoint layouts
+  dashboardLayouts?: DashboardLayouts; // Legacy/sdílený — per-breakpoint layout (pre per-mód)
+  liveLayoutsByMode?: Record<string, DashboardLayouts>; // New — layout zvlášť per dashboard mód (funded/challenge/combined)
   backtestDashboardLayouts?: DashboardLayouts; // Separátní layout pro backtest svět
   defaultRisk?: number; // % of account
   defaultStopLoss?: number; // ticks

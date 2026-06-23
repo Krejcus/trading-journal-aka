@@ -135,6 +135,9 @@ export const storageService = {
         masterTradeId: d.masterTradeId || undefined,
         entryTime: d.entryTime ? Number(d.entryTime) : undefined,
         entryDate: d.entryDate || undefined,
+        // Provenance pro import dedup (Tradesyncer) — musí přežít load, jinak by re-import duplikoval.
+        source: d.source || undefined,
+        tsOrderIds: d.tsOrderIds || undefined,
         isBE: d.isBE === true || d.isBE === 'true',
         data: {}
       };
@@ -433,6 +436,9 @@ export const storageService = {
       isMaster: t.isMaster === 'true' || t.isMaster === true,
       masterTradeId: t.masterTradeId || undefined,
       entryTime: t.entryTime ? Number(t.entryTime) : undefined,
+      // Provenance pro import dedup (Tradesyncer) — musí přežít load, jinak by re-import duplikoval.
+      source: t.source || undefined,
+      tsOrderIds: t.tsOrderIds || undefined,
 
       // We don't carry the full blob anymore to save memory
       data: {}
@@ -601,10 +607,11 @@ export const storageService = {
           }
         });
 
-        // Any ID we asked about but didn't get back is suspicious — skip it to be safe
-        existingIdsWithoutScreenshots.forEach(id => {
-          if (!returnedIds.has(id)) screenshotFetchFailed.add(id);
-        });
+        // ID, které dotaz (userId+id) nevrátil, v DB prostě NEEXISTUJE → je to NOVÝ obchod
+        // (např. import s předgenerovaným UUID). Není co zachovat → ulož normálně, NEpřeskakuj.
+        // (Dřív se takové ID označilo jako „suspicious" a přeskočilo → nové obchody s UUID
+        //  a bez screenshotu se ztrácely. Síťovou chybu pořád řeší catch níže.)
+        void returnedIds;
       } catch (err) {
         // Network error or DB error — mark ALL existing trades as unsafe to upsert
         // (new trades with no ID are fine, they can't have screenshots yet)

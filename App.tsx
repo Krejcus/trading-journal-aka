@@ -25,6 +25,7 @@ const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
 const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
 const TradovateImportModal = React.lazy(() => import('./components/TradovateImportModal'));
+const TradesyncerImportModal = React.lazy(() => import('./components/TradesyncerImportModal'));
 
 
 import Sidebar from './components/Sidebar';
@@ -303,6 +304,34 @@ const sanitizeLayouts = (raw: Record<string, DashboardWidgetConfig[]>, defaultLg
   return result;
 };
 
+// --- Per-mód layouty (funded/challenge/combined zvlášť; archive sdílí combined) ---
+const EMPTY_LAYOUTS: DashboardLayouts = {};
+const liveLayoutKey = (m: DashboardMode): string =>
+  (m === 'funded' || m === 'challenge' || m === 'combined') ? m : 'combined';
+
+// Vertikální komprese jednoho breakpointu — po odebrání widgetu vyplní mezeru (posune nahoru).
+const compactLayoutItems = (items: DashboardWidgetConfig[]): DashboardWidgetConfig[] => {
+  const sorted = [...items].sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  const placed: DashboardWidgetConfig[] = [];
+  for (const it of sorted) {
+    const collides = (yy: number) => placed.some(p =>
+      it.x < (p.x + p.w) && (it.x + it.w) > p.x && yy < (p.y + p.h) && (yy + it.h) > p.y);
+    let y = 0;
+    while (collides(y)) y++;
+    placed.push({ ...it, y });
+  }
+  return placed;
+};
+
+// Odebere widget ze všech breakpointů a zavře mezeru (kompresí).
+const stripWidgetAndCompact = (layouts: DashboardLayouts, id: string): DashboardLayouts => {
+  const out: DashboardLayouts = {};
+  for (const [bp, arr] of Object.entries(layouts)) {
+    out[bp] = compactLayoutItems((arr || []).filter(w => w.id !== id));
+  }
+  return out;
+};
+
 const aggregateTrades = (trades: Trade[], accounts: Account[]): Trade[] => {
   const groups = new Map<string, Trade[]>();
   const independent: Trade[] = [];
@@ -529,6 +558,7 @@ const App: React.FC = () => {
   const [activeAccountId, setActiveAccountId] = useState<string>('');
   // Tradovate import modal
   const [tradovateImportOpen, setTradovateImportOpen] = useState(false);
+  const [tradesyncerImportOpen, setTradesyncerImportOpen] = useState(false);
   const [tradovateImportAccount, setTradovateImportAccount] = useState<string | undefined>(undefined);
   // Průvodce doplněním importovaných obchodů — inkrement spustí wizard v TradeHistory.
   const [enrichSignal, setEnrichSignal] = useState(0);
@@ -578,7 +608,8 @@ const App: React.FC = () => {
   const [standardGoals, setStandardGoals] = useState<string[]>(['Dodržet max risk 1%', 'Žádný obchod po 11:00', 'Počkat na setup A+']);
   // Init `{}` ne DEFAULT_LAYOUTS — zabraní flashe defaultních widgetů před DB loadem.
   // applyPreferences pak nastaví buď DB layout nebo DEFAULT_LAYOUTS (pro nového usera).
-  const [dashboardLayouts, setDashboardLayouts] = useState<DashboardLayouts>({});
+  // Layout zvlášť pro každý live mód (funded/challenge/combined). Init `{}` ne default — viz pozn. níže.
+  const [liveLayoutsByMode, setLiveLayoutsByMode] = useState<Record<string, DashboardLayouts>>({});
   const [backtestDashboardLayouts, setBacktestDashboardLayouts] = useState<DashboardLayouts>(DEFAULT_BACKTEST_LAYOUTS);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => {
     // Try to load from local storage first for immediate persistence
@@ -589,6 +620,10 @@ const App: React.FC = () => {
   useEffect(() => {
     safeSetItem('alphatrade_dash_mode', dashboardMode);
   }, [dashboardMode]);
+
+  // Aktivní live layout dle módu (funded/challenge/combined zvlášť). Prázdný `{}` dokud
+  // applyPreferences nenastaví — brání flashe defaultních widgetů před DB loadem.
+  const dashboardLayouts: DashboardLayouts = liveLayoutsByMode[liveLayoutKey(dashboardMode)] || liveLayoutsByMode['combined'] || EMPTY_LAYOUTS;
 
   // Backtest „svět" — vstup/výstup přes sidebar. Pamatuje si poslední live mód pro návrat.
   const prevLiveModeRef = useRef<DashboardMode>('combined');
@@ -787,7 +822,8 @@ const App: React.FC = () => {
     emotions: userEmotions,
     standardGoals,
     standardMistakes: userMistakes,
-    dashboardLayouts,
+    dashboardLayouts, // ponecháno (aktivní mód) kvůli zpětné kompatibilitě / rollbacku
+    liveLayoutsByMode,
     backtestDashboardLayouts,
     sessions,
     htfOptions,
@@ -1063,39 +1099,46 @@ const App: React.FC = () => {
     if (Array.isArray(prefs.emotions)) setUserEmotions(prefs.emotions);
     if (Array.isArray(prefs.standardMistakes)) setUserMistakes(prefs.standardMistakes);
     if (Array.isArray(prefs.standardGoals)) setStandardGoals(prefs.standardGoals);
-    // --- Dashboard Layouts (per-breakpoint) ---
-    // Priority: 1) new dashboardLayouts object  2) legacy flat dashboardLayout  3) defaults
-    if (prefs.dashboardLayouts && typeof prefs.dashboardLayouts === 'object' && !Array.isArray(prefs.dashboardLayouts)) {
-      // New format: per-breakpoint layouts
-      setDashboardLayouts(sanitizeLayouts(prefs.dashboardLayouts as any, DEFAULT_WIDGETS_LG));
-    } else if (Array.isArray(prefs.dashboardLayout) && prefs.dashboardLayout.length > 0) {
-      // Legacy format: flat array (12-col) — migrate to per-breakpoint
-      const dl = prefs.dashboardLayout!;
-      const validDl = dl.filter(w => w.id in WIDGET_CONSTRAINTS);
-      const isOld = validDl.length > 0 && (validDl[0] as any).x === undefined && (validDl[0] as any).size !== undefined;
-      let lgLayout: DashboardWidgetConfig[];
-      if (isOld) {
-        lgLayout = migrateOldLayout(validDl);
-      } else {
-        const needsHeightMigration = validDl.length > 0 && validDl.every(w => (w.h || 0) <= 4);
-        if (needsHeightMigration) {
-          lgLayout = validDl.map(w => {
-            const c = WIDGET_CONSTRAINTS[w.id] || { minW: 2, minH: 2, maxW: 12, maxH: 8 };
-            return { ...w, h: (w.h || 2) * 2, ...c };
-          });
+    // --- Dashboard Layouts: per-mód (funded/challenge/combined zvlášť) ---
+    const lbm = (prefs as any).liveLayoutsByMode;
+    if (lbm && typeof lbm === 'object' && !Array.isArray(lbm) && Object.keys(lbm).length > 0) {
+      // New format: layout zvlášť per mód
+      const byMode: Record<string, DashboardLayouts> = {};
+      for (const [mode, lays] of Object.entries(lbm)) {
+        if (lays && typeof lays === 'object') byMode[mode] = sanitizeLayouts(lays as any, DEFAULT_WIDGETS_LG);
+      }
+      setLiveLayoutsByMode(byMode);
+    } else {
+      // Migrace ze sdíleného layoutu → seed všech módů. Funded bez „Challenge Cíle" (+ komprese mezery).
+      let migrated: DashboardLayouts;
+      if (prefs.dashboardLayouts && typeof prefs.dashboardLayouts === 'object' && !Array.isArray(prefs.dashboardLayouts)) {
+        migrated = sanitizeLayouts(prefs.dashboardLayouts as any, DEFAULT_WIDGETS_LG);
+      } else if (Array.isArray(prefs.dashboardLayout) && prefs.dashboardLayout.length > 0) {
+        // Legacy format: flat array (12-col) — migrate to per-breakpoint
+        const dl = prefs.dashboardLayout!;
+        const validDl = dl.filter(w => w.id in WIDGET_CONSTRAINTS);
+        const isOld = validDl.length > 0 && (validDl[0] as any).x === undefined && (validDl[0] as any).size !== undefined;
+        let lgLayout: DashboardWidgetConfig[];
+        if (isOld) {
+          lgLayout = migrateOldLayout(validDl);
         } else {
+          const needsHeightMigration = validDl.length > 0 && validDl.every(w => (w.h || 0) <= 4);
           lgLayout = validDl.map(w => {
             const c = WIDGET_CONSTRAINTS[w.id] || { minW: 2, minH: 2, maxW: 12, maxH: 8 };
-            return { ...w, ...c };
+            return needsHeightMigration ? { ...w, h: (w.h || 2) * 2, ...c } : { ...w, ...c };
           });
         }
+        migrated = { lg: lgLayout, xxl: generateXxlFromLg(lgLayout) };
+      } else if (prefs.dashboardLayout) {
+        migrated = { lg: [], xxl: [] };
+      } else {
+        migrated = DEFAULT_LAYOUTS;
       }
-      setDashboardLayouts({ lg: lgLayout, xxl: generateXxlFromLg(lgLayout) });
-    } else if (prefs.dashboardLayout) {
-      setDashboardLayouts({ lg: [], xxl: [] });
-    } else {
-      // DB nemá uložený dashboard layout → nový user nebo prázdný blob → set defaulty
-      setDashboardLayouts(DEFAULT_LAYOUTS);
+      setLiveLayoutsByMode({
+        funded: stripWidgetAndCompact(migrated, 'challenge_target'),
+        challenge: migrated,
+        combined: migrated,
+      });
     }
 
     // --- Backtest Dashboard Layout (separátní svět) ---
@@ -1903,7 +1946,7 @@ const App: React.FC = () => {
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [userEmotions, userMistakes, standardGoals, dashboardLayouts, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
+  }, [userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
 
   // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
   // Backup save every 30s if user is still editing
@@ -1950,7 +1993,7 @@ const App: React.FC = () => {
     return () => {
       clearInterval(interval);
     };
-  }, [canSave, userEmotions, userMistakes, standardGoals, dashboardLayouts, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
+  }, [canSave, userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
 
   // Flush dirty data to DB when user leaves tab (visibilitychange) or closes browser (beforeunload)
   useEffect(() => {
@@ -1996,7 +2039,7 @@ const App: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', flushDirtyData);
     };
-  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, dashboardLayouts, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
+  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
 
   // Handle Dashboard Mode Switching
   // Sleduj POUZE skutečnou změnu módu — bez tohoto se efekt spouští při každé změně
@@ -2420,6 +2463,69 @@ const App: React.FC = () => {
 
   // Tradovate import: modal už spáruje fills→obchody a vyřeší dedup,
   // takže sem chodí jen NOVÉ obchody (s accountId zapečeným) k uložení.
+  // Tradesyncer import: nejdřív vytvoř nové účty (temp id → real DB id), pak ulož obchody.
+  const handleTradesyncerImport = async (newTrades: Trade[], newAccounts: Account[]) => {
+    if (!newTrades || newTrades.length === 0) return;
+    let tradesToSave = newTrades;
+
+    // 1) Vytvoř nové účty a získej mapování temp id → real id (matchuje se přes jméno).
+    if (newAccounts.length > 0) {
+      try {
+        const saved = await storageService.saveAccounts(newAccounts);
+        const nameToReal = new Map(saved.map(a => [a.name, a.id]));
+        const tempToReal = new Map<string, string>();
+        for (const na of newAccounts) {
+          const real = nameToReal.get(na.name);
+          if (real) tempToReal.set(na.id, real);
+        }
+        // Přidej nové účty do stavu (s reálnými id) — ať jsou hned vidět.
+        setAccounts(prev => {
+          const have = new Set(prev.map(a => a.id));
+          return [...prev, ...saved.filter(a => !have.has(a.id))];
+        });
+        // Přemapuj accountId na obchodech z temp na real.
+        tradesToSave = newTrades.map(t =>
+          tempToReal.has(String(t.accountId)) ? { ...t, accountId: tempToReal.get(String(t.accountId))! } : t
+        );
+        // Zapamatuj i nově vytvořené účty (accountName je zapečené v temp id) pro příští importy.
+        try {
+          const PREFIX = 'tradesyncer-new-';
+          const saved = JSON.parse(localStorage.getItem('tradesyncer-account-map') || '{}') || {};
+          for (const [temp, real] of tempToReal) {
+            if (temp.startsWith(PREFIX)) saved[temp.slice(PREFIX.length)] = real;
+          }
+          localStorage.setItem('tradesyncer-account-map', JSON.stringify(saved));
+        } catch { /* localStorage nedostupné */ }
+      } catch (err) {
+        console.error('[TradesyncerImport] Vytvoření účtů selhalo:', err);
+        setSyncError('Nepodařilo se vytvořit nové účty pro import.');
+        return;
+      }
+    }
+
+    // 2) Ulož obchody (stejný flow jako Tradovate import).
+    const importedIds = new Set(tradesToSave.map(t => String(t.id)));
+    setTrades(prev => [...prev, ...tradesToSave]);
+    const rollback = () => setTrades(prev => prev.filter(t => !importedIds.has(String(t.id))));
+    try {
+      const savedTrades = await storageService.saveTrades(tradesToSave);
+      if (savedTrades && savedTrades.length > 0) {
+        setTrades(prev => {
+          const savedIds = new Set(savedTrades.map(s => String(s.id)));
+          const withoutImported = prev.filter(t => !importedIds.has(String(t.id)) && !savedIds.has(String(t.id)));
+          return [...withoutImported, ...savedTrades];
+        });
+      } else {
+        rollback();
+        setSyncError('Nepodařilo se uložit importované obchody do cloudu.');
+      }
+    } catch (err) {
+      console.error('[TradesyncerImport] Uložení obchodů selhalo:', err);
+      rollback();
+      setSyncError('Nepodařilo se uložit importované obchody do cloudu.');
+    }
+  };
+
   const handleTradovateImport = (newTrades: Trade[]) => {
     if (!newTrades || newTrades.length === 0) return;
     const importedIds = new Set(newTrades.map(t => String(t.id)));
@@ -3285,9 +3391,15 @@ const App: React.FC = () => {
                           try {
                               if (JSON.stringify(v) === JSON.stringify(prev)) return;
                           } catch { /* fallthrough */ }
-                          (isBt ? setBacktestDashboardLayouts : setDashboardLayouts)(v);
+                          if (isBt) {
+                              setBacktestDashboardLayouts(v);
+                          } else {
+                              // Zapiš jen do layoutu aktuálního módu (funded/challenge/combined zvlášť).
+                              const key = liveLayoutKey(dashboardMode);
+                              setLiveLayoutsByMode(p => ({ ...p, [key]: v }));
+                          }
                           markPreferencesDirty();
-                          console.log(`[Setter] set${isBt ? 'Backtest' : ''}DashboardLayouts (breakpoints:`, Object.keys(v), ') → dirty=true');
+                          console.log(`[Setter] set${isBt ? 'Backtest' : ''}DashboardLayouts (mód:`, dashboardMode, ', breakpoints:', Object.keys(v), ') → dirty=true');
                       }}
                       isEditing={isDashboardEditing}
                       onCloseEdit={() => setIsDashboardEditing(false)}
@@ -3351,6 +3463,7 @@ const App: React.FC = () => {
                           setTradovateImportAccount(viewMode === 'individual' ? activeAccountId : undefined);
                           setTradovateImportOpen(true);
                         }}
+                        onImportTradesyncer={() => setTradesyncerImportOpen(true)}
                       />
                     )
                   )}
@@ -3621,6 +3734,19 @@ const App: React.FC = () => {
             isDark={theme !== 'light'}
             onConfirm={handleTradovateImport}
             onStartEnrich={startEnrichWizard}
+          />
+        </React.Suspense>
+      )}
+
+      {tradesyncerImportOpen && (
+        <React.Suspense fallback={null}>
+          <TradesyncerImportModal
+            isOpen={tradesyncerImportOpen}
+            onClose={() => setTradesyncerImportOpen(false)}
+            accounts={accounts}
+            existingTrades={trades}
+            isDark={theme !== 'light'}
+            onConfirm={handleTradesyncerImport}
           />
         </React.Suspense>
       )}
