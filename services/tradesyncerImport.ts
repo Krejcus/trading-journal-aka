@@ -176,11 +176,25 @@ export interface AccountMap {
 /** Klíč Tradesyncer účtu (stabilní napříč exporty). */
 export const tsAccountKey = (a: TsAccount) => a.accountName || a.account;
 
+/** Náhled AlphaBridge leadera, na kterého se import napáruje (pro preview v modalu). */
+export interface TsMatchedLeader {
+  id: string;
+  screenshot?: string;
+  entry?: number;
+  direction?: string;
+  rr?: number;
+  setup?: string;
+  session?: string;
+  count: number;           // kolik exekucí (účtů × obchodů) se na něj naváže
+}
+
 export interface TsBuildResult {
   trades: Trade[];
   linked: number;          // kolik se napárovalo na AlphaBridge leadera
   executionOnly: number;   // kolik bez leadera (jen exekuce)
   duplicates: number;      // kolik přeskočeno (už importované)
+  mergedLeader: number;    // kolik splynulo s leaderem (účet leadera → nevytváří se duplicit)
+  matchedLeaders: TsMatchedLeader[]; // unikátní leadeři + náhled (na co se to napáruje)
 }
 
 /**
@@ -208,7 +222,8 @@ export function buildTradesyncerTrades(tsAccounts: TsAccount[], map: AccountMap,
   const trades: Trade[] = [];
   // Záznamy pro seskupení kopií napříč účty (stejný logický obchod → 1 řádek v combined).
   const recs: { t: any; cat: string; leaderId?: string; entryTime: number; instrument: string; dir: string }[] = [];
-  let linked = 0, executionOnly = 0, duplicates = 0;
+  const leaderMap = new Map<string, TsMatchedLeader>(); // náhled leaderů pro preview
+  let linked = 0, executionOnly = 0, duplicates = 0, mergedLeader = 0;
 
   for (const acc of tsAccounts) {
     const target = map[tsAccountKey(acc)];
@@ -219,7 +234,26 @@ export function buildTradesyncerTrades(tsAccounts: TsAccount[], map: AccountMap,
       if (tr.orderIds.some(id => importedOrderIds.has(String(id))) || importedKeys.has(dupKey)) { duplicates++; continue; }
 
       const leader = findLeaderTrade(tr, existing);
-      if (leader) linked++; else executionOnly++;
+      // Účet, kde leader (AlphaBridge) UŽ je → exekuci nevytvářej, leader ten obchod zastupuje
+      // (jinak by na účtu leadera vznikl duplikát: AlphaBridge obchod + Tradesyncer exekuce).
+      if (leader && String(leader.accountId) === String(target.accountId)) { mergedLeader++; continue; }
+      if (leader) {
+        linked++;
+        // Posbírej unikátní leadery pro preview (náhled na co se to napáruje).
+        const lid = String(leader.id);
+        const ex = leaderMap.get(lid);
+        if (ex) { ex.count++; }
+        else leaderMap.set(lid, {
+          id: lid,
+          screenshot: (leader as any).screenshots?.[0] || leader.screenshot || undefined,
+          entry: leader.entryPrice != null ? Number(leader.entryPrice) : undefined,
+          direction: leader.direction,
+          rr: (leader as any).rr != null ? Number((leader as any).rr) : undefined,
+          setup: (leader as any).signal || (leader as any).setup || undefined,
+          session: leader.session || undefined,
+          count: 1,
+        });
+      } else executionOnly++;
 
       const sl = leader && leader.stopLoss != null ? Number(leader.stopLoss) : tr.stopLoss;
       const tp = leader && leader.takeProfit != null ? Number(leader.takeProfit) : tr.takeProfit;
@@ -252,8 +286,10 @@ export function buildTradesyncerTrades(tsAccounts: TsAccount[], map: AccountMap,
         positionSize: tr.size,
         stopLoss: sl,
         takeProfit: tp,
-        isValid: true,
-        executionStatus: leader ? (leader.executionStatus || 'Valid') : 'Valid',
+        // Bez AlphaBridge leadera = neplánovaný obchod → Invalid (vypadne z edge statistik,
+        // PnL pořád počítá pro balance). Půjde přepnout zpět v detailu obchodu.
+        isValid: !!leader,
+        executionStatus: leader ? (leader.executionStatus || 'Valid') : 'Invalid',
         // Dedup + provenance (uloží se do data blobu).
         tsOrderIds: tr.orderIds,
         tsAccountName: acc.accountName,
@@ -310,5 +346,5 @@ export function buildTradesyncerTrades(tsAccounts: TsAccount[], map: AccountMap,
     flush();
   }
 
-  return { trades, linked, executionOnly, duplicates };
+  return { trades, linked, executionOnly, duplicates, mergedLeader, matchedLeaders: Array.from(leaderMap.values()) };
 }

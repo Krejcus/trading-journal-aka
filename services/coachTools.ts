@@ -502,15 +502,48 @@ function groupKeysFor(
   }
 }
 
+/**
+ * Sjednotí copier-kopie (stejný obchod na N účtů) do 1 logického obchodu.
+ * Stejná logika jako combined dashboard: group dle masterTradeId/isMaster/groupId,
+ * sečte pnl I riskAmount (→ R se nenásobí). Bez toho coach hlásí „11 výher" místo 1.
+ * POZOR: NEpoužívat pro per-account dotazy (list_accounts, group_by='account') —
+ * tam se attribuce na účty ztratí.
+ */
+export function collapseCopies(trades: Trade[]): Trade[] {
+  const groups = new Map<string, Trade[]>();
+  const independent: Trade[] = [];
+  for (const t of trades) {
+    const key = (t as any).masterTradeId || ((t as any).isMaster ? String(t.id) : (t as any).groupId);
+    if (key) {
+      const k = String(key);
+      let arr = groups.get(k);
+      if (!arr) { arr = []; groups.set(k, arr); }
+      arr.push(t);
+    } else independent.push(t);
+  }
+  const agg: Trade[] = [];
+  for (const g of groups.values()) {
+    const master = g.find((t) => (t as any).isMaster) || g[0];
+    agg.push({
+      ...master,
+      pnl: g.reduce((s, t) => s + (t.pnl || 0), 0),
+      riskAmount: g.reduce((s, t) => s + ((t as any).riskAmount || 0), 0),
+    } as Trade);
+  }
+  return [...independent, ...agg];
+}
+
 /** get_stats handler — applies filters, optional group_by breakdown. */
 function getStats(args: GetStatsArgs, ctx: ToolContext) {
   const accounts = ctx.accounts || [];
-  if (!args.group_by) return computeStats(ctx.trades, args, accounts);
+  // Sjednoť kopie → počty/winrate logicky (1 obchod, ne 11). U group_by='account' NE (chceme per účet).
+  if (!args.group_by) return computeStats(collapseCopies(ctx.trades), args, accounts);
 
   // Group: bucket the (filtered) trades, then run computeStats per bucket.
   const accNameById = new Map(accounts.map((a) => [String(a.id), String(a.name || a.id)]));
-  // Pre-filter once (without group dimension) by reusing computeStats's filter via a no-op:
-  const base = computeStatsFilter(ctx.trades, args, accounts);
+  // Pre-filter once (without group dimension); pro ne-účtové grupování sjednoť kopie.
+  let base = computeStatsFilter(ctx.trades, args, accounts);
+  if (args.group_by !== 'account') base = collapseCopies(base);
   const buckets = new Map<string, Trade[]>();
   for (const t of base) {
     for (const key of groupKeysFor(t, args.group_by, accNameById)) {

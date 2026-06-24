@@ -99,6 +99,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
   const [zoomImage, setZoomImage] = useState<{ images: string[]; index: number } | null>(null);
+  // Rozbalené dny v sekci „Neplatné / mimo plán" (klíč = ISO datum).
+  const [openInvalidDays, setOpenInvalidDays] = useState<Set<string>>(new Set());
 
   // --- ENRICHMENT (doplnění importovaných obchodů) ---
   const [enrichFilter, setEnrichFilter] = useState(false); // filtr „K doplnění"
@@ -287,6 +289,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     [sortedTrades, visibleCount]
   );
   const hasMore = visibleCount < sortedTrades.length;
+
+  // Status helper + vyčlenění neplatných obchodů (tilt/mimo plán) do vlastní sekce.
+  const tradeStatusOf = (t: Trade) => (t as any).executionStatus || ((t as any).isValid === false ? 'Invalid' : 'Valid');
+  const isInvalidTrade = (t: Trade) => tradeStatusOf(t) === 'Invalid';
+  // Plné karty renderují jen NEneplatné obchody (paginováno přes visibleTrades).
+  const validTrades = useMemo(() => visibleTrades.filter(t => !isInvalidTrade(t)), [visibleTrades]);
 
 
   // --- MULTI-SELECT HANDLERS ---
@@ -527,6 +535,32 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const getAccountName = (id: string) => accounts.find(a => a.id === id)?.name || 'Neznámý účet';
   const getEmotionDetails = (emoId: string) => emotions.find(e => e.id === emoId) || { label: emoId };
 
+  // Neplatné obchody agregované po dni (1 karta = 1 session píčovin). Počítáme z VŠECH
+  // (ne jen z viditelné stránky), ať mezisoučet PnL za den sedí. Řazeno nejnovější nahoře.
+  const invalidDays = useMemo(() => {
+    const groups = new Map<string, Trade[]>();
+    for (const t of sortedTrades) {
+      if (!isInvalidTrade(t)) continue;
+      const key = String(t.date || '').slice(0, 10) || 'unknown';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(t);
+    }
+    return Array.from(groups.entries())
+      .map(([key, items]) => ({
+        key,
+        items: [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)),
+        pnl: items.reduce((s, t) => s + (t.pnl || 0), 0),
+        label: items[0] ? formatTradeDate(items[0].date).date : key,
+      }))
+      .sort((a, b) => b.key.localeCompare(a.key));
+  }, [sortedTrades]);
+
+  const toggleInvalidDay = (key: string) => setOpenInvalidDays(prev => {
+    const n = new Set(prev);
+    if (n.has(key)) n.delete(key); else n.add(key);
+    return n;
+  });
+
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20 pt-4">
 
@@ -705,7 +739,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
       {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-          {visibleTrades.map((trade) => {
+          {validTrades.map((trade) => {
             const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
             const isMissed = status === 'Missed';
             const isBE = (trade as any).isBE === true || Math.abs(trade.pnl) <= 0.01;
@@ -987,7 +1021,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {visibleTrades.map((trade) => {
+                {validTrades.map((trade) => {
                   const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
                   const isMissed = status === 'Missed';
                   const isBE = (trade as any).isBE === true || Math.abs(trade.pnl) <= 0.01;
@@ -1138,6 +1172,72 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Neplatné / mimo plán — 1 karta = 1 session píčovin (agregát po dni, jen PnL) */}
+      {invalidDays.length > 0 && (
+        <div className="mt-6 space-y-3">
+          {invalidDays.map(day => {
+            const open = openInvalidDays.has(day.key);
+            const dayWin = day.pnl > 0.01;
+            const dayBE = Math.abs(day.pnl) <= 0.01;
+            const pnlColor = dayBE ? 'text-amber-500' : (dayWin ? 'text-emerald-500' : 'text-rose-500');
+            return (
+              <div key={day.key} className={`rounded-2xl border overflow-hidden ${theme !== 'light' ? 'bg-amber-500/[0.04] border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
+                {/* Hlavička dne — klik = rozbalit */}
+                <button
+                  onClick={() => toggleInvalidDay(day.key)}
+                  className="w-full flex items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-amber-500/[0.06]"
+                >
+                  <ChevronRight size={16} className={`text-amber-500 transition-transform duration-200 shrink-0 ${open ? 'rotate-90' : ''}`} />
+                  <AlertTriangle size={15} className="text-amber-500 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-black ${theme !== 'light' ? 'text-slate-100' : 'text-slate-800'}`}>
+                      Neplatné / mimo plán
+                    </div>
+                    <div className="text-[11px] font-bold text-amber-600/80 uppercase tracking-wider">
+                      {day.label} · {day.items.length} {day.items.length === 1 ? 'obchod' : day.items.length < 5 ? 'obchody' : 'obchodů'}
+                    </div>
+                  </div>
+                  <div className={`text-lg font-black font-mono ${pnlColor} shrink-0`}>
+                    {day.pnl >= 0 ? '+' : '−'}${Math.abs(Math.round(day.pnl)).toLocaleString('en-US')}
+                  </div>
+                </button>
+
+                {/* Slim řádky — rozbalené */}
+                {open && (
+                  <div className={`border-t ${theme !== 'light' ? 'border-amber-500/15 divide-y divide-white/5' : 'border-amber-200 divide-y divide-slate-100'}`}>
+                    {day.items.map(t => {
+                      const win = t.pnl > 0.01;
+                      const be = Math.abs(t.pnl) <= 0.01;
+                      const c = be ? 'text-amber-500' : (win ? 'text-emerald-500' : 'text-rose-500');
+                      const isLong = String(t.direction || '').toLowerCase() === 'long';
+                      const dt = new Date(t.timestamp || Date.parse(t.date));
+                      const hhmm = isNaN(dt.getTime()) ? '' : dt.toTimeString().slice(0, 5);
+                      return (
+                        <div
+                          key={t.id}
+                          onClick={() => !isMultiSelectMode && setSelectedTrade(t)}
+                          className="flex items-center gap-3 px-5 py-2.5 text-[13px] cursor-pointer hover:bg-white/[0.03] transition-colors"
+                        >
+                          <span className="font-mono text-slate-500 w-[42px] shrink-0">{hhmm}</span>
+                          <span className={`font-bold ${theme !== 'light' ? 'text-slate-200' : 'text-slate-700'}`}>{t.instrument}</span>
+                          <span className={`text-[10px] font-black uppercase ${isLong ? 'text-emerald-500' : 'text-rose-500'} shrink-0`}>
+                            {isLong ? '▲' : '▼'} {t.direction}
+                          </span>
+                          <span className="flex-1 min-w-0 truncate text-slate-500">{getAccountName(t.accountId)}</span>
+                          <span className={`font-mono font-bold ${c} shrink-0`}>
+                            {t.pnl >= 0 ? '+' : '−'}${Math.abs(Math.round(t.pnl)).toLocaleString('en-US')}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

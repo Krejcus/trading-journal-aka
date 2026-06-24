@@ -1,5 +1,5 @@
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview } from '../types';
-import { COACH_TOOLS, executeTool, describeToolCall } from './coachTools';
+import { COACH_TOOLS, executeTool, describeToolCall, collapseCopies } from './coachTools';
 import { getProfile, recallMemory, renderProfileForPrompt, getActiveCommitments, getRecentConversationSummaries } from './coachMemoryService';
 import { getPersonaBlock, DEFAULT_PERSONA, type CoachPersonaId } from './coachPersonas';
 import { supabase } from './supabase';
@@ -79,7 +79,10 @@ function stars(n?: number) { return n ? '★'.repeat(n) + '☆'.repeat(5 - n) : 
 // ─── Context builder ─────────────────────────────────────────────────────────
 
 export function buildTraderContext(ctx: TraderContext): string {
-  const { trades, accounts, ironRules, playbookItems, dailyPreps, dailyReviews } = ctx;
+  const { accounts, ironRules, playbookItems, dailyPreps, dailyReviews } = ctx;
+  // Copier-kopie sjednoť na 1 logický obchod → winrate/počty nesedí na počet účtů
+  // (jinak coach hlásí „11 výher" když to byl 1 obchod na 11 účtech).
+  const trades = collapseCopies(ctx.trades);
 
   // ── Výkon (90 dní) ──────────────────────────────────────────────────────
   const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
@@ -689,7 +692,8 @@ export async function streamAIResponse(
   // Cílem je aby coach zodpověděl většinu dotazů (nedávno + dlouhodobé trendy) BEZ nástrojů
   // = jeden round-trip = rychle. Nástroje zůstávají fallback pro konkrétní starší záznamy.
   const useTools = !options.disableTools;
-  const tradeWindow = buildTradeWindow(allTrades, { allTime: options.scope === 'backtest' });
+  // Copier-kopie sjednoť → narativ počítá 1 obchod místo N účtů (tool ctx zůstává raw kvůli per-account).
+  const tradeWindow = buildTradeWindow(collapseCopies(allTrades), { allTime: options.scope === 'backtest' });
 
   // ── Dnešní datum + týdenní kontext ────────────────────────────────────────
   const now = new Date();

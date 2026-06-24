@@ -269,11 +269,45 @@ const TradesyncerImportModal: React.FC<Props> = ({ isOpen, onClose, accounts, ex
                   })}
                 </div>
 
+                {/* Napáruje se na — náhled AlphaBridge leaderů (na co se to naváže) */}
+                {build && build.matchedLeaders.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Link2 size={13} color={C.accent} /> Napáruje se na
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {build.matchedLeaders.map(l => {
+                        const isLong = String(l.direction || '').toLowerCase() === 'long';
+                        return (
+                          <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 12, background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: 10 }}>
+                            {l.screenshot ? (
+                              <img src={l.screenshot} alt="" style={{ width: 72, height: 48, objectFit: 'cover', borderRadius: 8, flexShrink: 0, border: `1px solid ${C.border}` }} />
+                            ) : (
+                              <div style={{ width: 72, height: 48, borderRadius: 8, flexShrink: 0, background: C.bg, border: `1px dashed ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: C.sub }}>bez screenu</div>
+                            )}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 11, fontWeight: 800, color: isLong ? '#10b981' : '#ef4444' }}>{isLong ? '▲' : '▼'} {l.direction || '—'}</span>
+                                {l.entry != null && <span style={{ fontSize: 12, fontFamily: 'monospace', color: C.text }}>@ {l.entry}</span>}
+                                {l.rr != null && <span style={{ fontSize: 11, color: C.accent, fontWeight: 700 }}>{l.rr}R</span>}
+                              </div>
+                              <div style={{ fontSize: 11, color: C.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {[l.setup, l.session].filter(Boolean).join(' · ') || 'AlphaBridge obchod'}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: C.accent, flexShrink: 0 }}>×{l.count}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {/* Link / dedup info */}
                 {build && (
                   <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: 'rgba(34,211,238,0.06)', border: `1px solid ${C.border}`, fontSize: 12, color: C.sub, lineHeight: 1.6 }}>
                     <div><Link2 size={12} style={{ display: 'inline', verticalAlign: -1 }} /> <b style={{ color: C.text }}>{build.linked}</b> obchodů napárováno na AlphaBridge leadera (zdědí SL/TP/R:R/screen/tagy)</div>
-                    <div><b style={{ color: C.text }}>{build.executionOnly}</b> jen exekuce (bez leadera) · <b style={{ color: C.text }}>{build.duplicates}</b> duplicit přeskočeno</div>
+                    <div><b style={{ color: C.text }}>{build.executionOnly}</b> jen exekuce (bez leadera) → <b style={{ color: '#f59e0b' }}>Invalid</b> · <b style={{ color: C.text }}>{build.duplicates}</b> duplicit přeskočeno{build.mergedLeader > 0 && <> · <b style={{ color: C.text }}>{build.mergedLeader}</b> splynulo s leaderem</>}</div>
                   </div>
                 )}
               </>
