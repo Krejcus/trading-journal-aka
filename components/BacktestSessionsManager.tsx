@@ -1,6 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import { Layers, Plus, Trash2, FlaskConical, Download } from 'lucide-react';
 import { Account, Trade } from '../types';
+import { storageService } from '../services/storageService';
+import { pointValueFor } from '../services/tradovateImport';
+
+// positionSize (počet kontraktů): z uloženého pole, jinak dopočet z risku: riskAmount / (SL vzdálenost × $/bod).
+const derivePositionSize = (t: any): number | null => {
+  if (t.positionSize != null) return Number(t.positionSize);
+  if (t.quantity != null) return Number(t.quantity);
+  const risk = Number(t.riskAmount), e = Number(t.entryPrice), s = Number(t.stopLoss);
+  const pv = pointValueFor(t.instrument || t.symbol || '');
+  const slDist = Math.abs(e - s);
+  if (risk > 0 && slDist > 0 && pv > 0) return Math.round(risk / (slDist * pv));
+  return null;
+};
 
 interface Props {
   theme: 'dark' | 'light' | 'oled';
@@ -25,7 +38,9 @@ const EXPORT_LEGEND = {
     mfeR: "Max Favorable Excursion v R (kam až cena došla ve prospěch)",
     maeR: "Max Adverse Excursion v R (kam až proti)",
     counterfactual: "CO KDYBY. swing/ote/fvg = 3 varianty SL: každá má fixní-TP výsledek (outcome/rr/realizedR) i 'trail' (strukturní trailing: reason tp/trail+/trail/open, realizedR). tpTargets = co kdyby cílil na různé likviditní úrovně (label/price/outcome/realizedR), risk base = swing SL. realizedR = výsledek v R-násobcích.",
-    htfConfluence_ltfConfluence: "ručně zvolené konfluence (tagy)",
+    excursion: "KAM BY TO DOŠLO DO KONCE DNE (Filip nesmí držet přes noc, vystupuje limitem na levelech). mfePotentialR=max favorable (může >TP), tpR, leftOnTableR=co zbylo na stole, levels[]=likvidní levely ve směru (reached/r/bars), trail=strukturní trailing.",
+    entryMap: "VSTUPNÍ MODEL: structureType (CHoCH=reverzal / BoS=pokračování) + structureOrder, odrazLevels=od jakého levelu se cena odrazila, entryFvg=entry na hraně FVG.",
+    htfConfluence_ltfConfluence: "ručně zvolené konfluence (tagy); SL/TP/entry jsou i tady jako tagy (SL Swing, TP VWAP, Odraz …, Entry FVG)",
     notes: "poznámky k obchodu · sessionPreNotes/PostNotes = poznámky k celé session",
   },
 };
@@ -33,17 +48,21 @@ const EXPORT_LEGEND = {
 const buildTradeRecord = (t: any) => ({
   date: t.date, entryDate: t.entryDate, entryTime: t.entryTime,
   instrument: t.instrument || t.symbol, direction: t.direction, session: t.session,
-  outcome: t.outcome, pnl: t.pnl, riskAmount: t.riskAmount,
+  outcome: t.outcome, pnl: t.pnl, riskAmount: t.riskAmount, positionSize: derivePositionSize(t),
   entryPrice: t.entryPrice, stopLoss: t.stopLoss, takeProfit: t.takeProfit, exitPrice: t.exitPrice,
   durationMinutes: t.durationMinutes, executionStatus: t.executionStatus,
-  slPlacement: t.slPlacement ?? null, targetType: t.targetType ?? null, management: t.management ?? null,
+  slPlacement: t.slPlacement ?? null, targetType: t.targetType ?? null, targetLevel: t.targetLevel ?? null, management: t.management ?? null,
   sessionBias: t.sessionBias ?? null, biasAligned: t.biasAligned ?? null,
   htfConfluence: t.htfConfluence ?? [], ltfConfluence: t.ltfConfluence ?? [],
   emotions: t.emotions ?? [], mistakes: t.mistakes ?? [],
   notes: t.notes ?? null, sessionPreNotes: t.sessionPreNotes ?? null, sessionPostNotes: t.sessionPostNotes ?? null,
-  mfeR: t.mfeR ?? null, maeR: t.maeR ?? null, runUp: t.runUp ?? null, drawdown: t.drawdown ?? null,
+  mfeR: t.mfeR ?? null, maeR: t.maeR ?? null, mfePoints: t.mfePoints ?? null, maePoints: t.maePoints ?? null,
+  runUp: t.runUp ?? null, drawdown: t.drawdown ?? null,
   excursionAvailable: t.excursionAvailable ?? null,
+  excursion: t.excursion ?? null,
+  entryMap: t.entryMap ?? null,
   counterfactual: t.counterfactual ?? null,
+  schemaVersion: t.schemaVersion ?? null, source: t.source ?? null,
 });
 
 const downloadJSON = (filename: string, data: any) => {
@@ -75,20 +94,27 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
   const inputCls = `w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`;
   const cardCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm';
 
-  const exportSessions = (sess: Account[], single?: boolean) => {
-    const ids = new Set(sess.map(s => String(s.id)));
-    const ts = trades.filter(t => ids.has(String(t.accountId)));
-    if (ts.length === 0) return;
-    const out = {
-      _legenda: EXPORT_LEGEND,
-      exportovano: new Date().toISOString(),
-      sessions: sess.map(s => ({ id: s.id, name: s.name, initialBalance: s.initialBalance })),
-      pocetObchodu: ts.length,
-      obchody: ts.map(buildTradeRecord),
-    };
-    const stamp = new Date().toISOString().slice(0, 10);
-    const namePart = single && sess[0] ? sess[0].name.replace(/[^\w-]+/g, '_') : 'vse';
-    downloadJSON(`backtest-${namePart}-${stamp}.json`, out);
+  const [exporting, setExporting] = useState(false);
+  const exportSessions = async (sess: Account[], single?: boolean) => {
+    const ids = sess.map(s => String(s.id));
+    setExporting(true);
+    try {
+      // Dotáhni PLNÝ blob z DB (in-memory trades mají blob stržený → counterfactual/excursion null).
+      const full = await storageService.getTradesWithDataByAccounts(ids);
+      if (full.length === 0) return;
+      const out = {
+        _legenda: EXPORT_LEGEND,
+        exportovano: new Date().toISOString(),
+        sessions: sess.map(s => ({ id: s.id, name: s.name, initialBalance: s.initialBalance })),
+        pocetObchodu: full.length,
+        obchody: full.map(buildTradeRecord),
+      };
+      const stamp = new Date().toISOString().slice(0, 10);
+      const namePart = single && sess[0] ? sess[0].name.replace(/[^\w-]+/g, '_') : 'vse';
+      downloadJSON(`backtest-${namePart}-${stamp}.json`, out);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const totalTrades = useMemo(() => {

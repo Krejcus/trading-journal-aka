@@ -339,8 +339,8 @@ const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 
         </div>
 
         <div className="flex justify-between items-center text-xs font-black">
-          <span className={COLORS.textProfit}>{formatVal(avgWin, pnlDisplayMode, initialBalance, stats.avgWinPct / (stats.avgRisk || 1))}</span>
-          <span className={COLORS.textLoss}>{formatVal(-avgLoss, pnlDisplayMode, initialBalance, -stats.avgLossPct / (stats.avgRisk || 1))}</span>
+          <span className={COLORS.textProfit}>{formatVal(avgWin, pnlDisplayMode, initialBalance, avgWin / (stats.avgRisk || 1))}</span>
+          <span className={COLORS.textLoss}>{formatVal(-avgLoss, pnlDisplayMode, initialBalance, -avgLoss / (stats.avgRisk || 1))}</span>
         </div>
       </div>
     </div>
@@ -1243,8 +1243,8 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
         <div className={`p-4 rounded-2xl border ${isDark ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
           <h4 className={`text-[10px] font-black uppercase tracking-widest ${COLORS.textProfit} mb-4 flex items-center gap-2`}><ArrowUp size={12} /> Ziskové Obchody</h4>
           <div className="space-y-1">
-            <Row label="Nejlepší zisk" value={formatVal(stats.maxWin, pnlDisplayMode, initialBalance, stats.bestWinPct / (stats.avgRisk || 1))} color={COLORS.textProfit} />
-            <Row label="Průměrný zisk" value={formatVal(stats.avgWin, pnlDisplayMode, initialBalance, stats.avgWinPct / (stats.avgRisk || 1))} color={COLORS.textProfit} />
+            <Row label="Nejlepší zisk" value={formatVal(stats.maxWin, pnlDisplayMode, initialBalance, stats.maxWin / (stats.avgRisk || 1))} color={COLORS.textProfit} />
+            <Row label="Průměrný zisk" value={formatVal(stats.avgWin, pnlDisplayMode, initialBalance, stats.avgWin / (stats.avgRisk || 1))} color={COLORS.textProfit} />
             <Row label="Průměrná doba" value={formatDur(stats.avgDurationWin)} />
             <Row label="Max v řadě" value={stats.maxConsecutiveWins} />
           </div>
@@ -1252,8 +1252,8 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
         <div className={`p-4 rounded-2xl border ${isDark ? 'bg-rose-500/5 border-rose-500/10' : 'bg-rose-50 border-rose-100'}`}>
           <h4 className={`text-[10px] font-black uppercase tracking-widest ${COLORS.textLoss} mb-4 flex items-center gap-2`}><ArrowDown size={12} /> Ztrátové Obchody</h4>
           <div className="space-y-1">
-            <Row label="Nejhorší ztráta" value={formatVal(stats.maxLoss, pnlDisplayMode, initialBalance, stats.worstLossPct / (stats.avgRisk || 1))} color={COLORS.textLoss} />
-            <Row label="Průměrná ztráta" value={formatVal(-stats.avgLoss, pnlDisplayMode, initialBalance, stats.avgLossPct / (stats.avgRisk || 1))} color={COLORS.textLoss} />
+            <Row label="Nejhorší ztráta" value={formatVal(stats.maxLoss, pnlDisplayMode, initialBalance, stats.maxLoss / (stats.avgRisk || 1))} color={COLORS.textLoss} />
+            <Row label="Průměrná ztráta" value={formatVal(-stats.avgLoss, pnlDisplayMode, initialBalance, -stats.avgLoss / (stats.avgRisk || 1))} color={COLORS.textLoss} />
             <Row label="Průměrná doba" value={formatDur(stats.avgDurationLoss)} />
             <Row label="Max v řadě" value={stats.maxConsecutiveLosses} />
           </div>

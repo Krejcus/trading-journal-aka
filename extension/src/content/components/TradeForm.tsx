@@ -4,7 +4,7 @@ import { AccountList } from './AccountList';
 import { readActivePosition, captureChartSnapshot, captureMultiTF, getChartLayout, computeCounterfactual, CounterfactualRead, readBoxLevels } from '../../lib/positionReader';
 import { supabase, SUPABASE_URL, SUPABASE_KEY } from '../../lib/supabase';
 import { cropImage } from '../../lib/screenshot';
-import { RefreshCw, CheckCircle2, XCircle, Eye, Send, RotateCcw, Clock, Layers, TrendingUp, TrendingDown } from 'lucide-react';
+import { RefreshCw, CheckCircle2, XCircle, Eye, Send, RotateCcw, Clock, Layers, TrendingUp, TrendingDown, ChevronDown, Plus } from 'lucide-react';
 import { useTheme } from './ThemeContext';
 import VoiceMemoButton from './VoiceMemoButton';
 
@@ -340,6 +340,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         setPnlManual(false);
         setShowReset(false);
         setSubmitStatus(null);
+        setJustSaved(null);
         // Auto-sync: odemkni sledovaný box, ať se další obchod chytí na nový box.
         trackedBoxRef.current = null;
         lastBoxRef.current = '';
@@ -405,9 +406,26 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     const [perContractRisk, setPerContractRisk] = useState(0);
     // MFE/MAE z posledního načtení pozice (snapshot pro qty v době čtení) — uloží se do obchodu.
     const [posMetrics, setPosMetrics] = useState<{ mfeUsd: number | null; maeUsd: number | null; mfeR: number | null; maeR: number | null; mfePoints: number | null; maePoints: number | null }>({ mfeUsd: null, maeUsd: null, mfeR: null, maeR: null, mfePoints: null, maePoints: null });
+    // Výsledek byl nejednoznačný (SL i TP v jednom baru → konzervativně LOSS). Data-quality flag pro analýzu.
+    const [outcomeAmbiguous, setOutcomeAmbiguous] = useState(false);
+    // Rozbalovací sekce (defaultně sbalené — „menu" styl; v hlavičce mini souhrn).
+    const [cfOpen, setCfOpen] = useState(false);
+    const [tpOpen, setTpOpen] = useState(false);
+    // Po úspěšném zápisu: animovaná success karta + CTA „načíst další".
+    const [justSaved, setJustSaved] = useState<{ count: number; pnl: number; outcome: string } | null>(null);
+    // Po zápisu odscrolluj na success kartu (je dole pod tlačítkem) — ať ji uživatel hned vidí.
+    const successCardRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!justSaved) return;
+        const t = setTimeout(() => successCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+        return () => clearTimeout(t);
+    }, [justSaved]);
     // Counterfactual "co kdyby" pro 3 SL placementy — dočasná tabulka u zápisu.
     const [cf, setCf] = useState<CounterfactualRead | null>(null);
     const [cfLoading, setCfLoading] = useState(false);
+    // Když counterfactual selže (entry mimo graf), rozbal „Co kdyby" — ať warning neunikne.
+    // (MUSÍ být až ZA deklarací `cf` — jinak TDZ „Cannot access before initialization" → crash.)
+    useEffect(() => { if (cf && !cf.ok) setCfOpen(true); }, [cf]);
     // Override editor — uživatel doladí OTE/FVG úrovně (znají se z grafu) a přepočítá.
     const [cfEdit, setCfEdit] = useState<{ fvg: string; ote: string; swing: string }>({ fvg: '', ote: '', swing: '' });
     useEffect(() => {
@@ -512,6 +530,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             mfeR: r.mfeR ?? null, maeR: r.maeR ?? null,
             mfePoints: r.mfePoints ?? null, maePoints: r.maePoints ?? null,
         });
+        setOutcomeAmbiguous(!!r.autoAmbiguous);
 
         setTrade(prev => ({
             ...prev,
@@ -786,10 +805,10 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             if (sessionErr) throw new Error("Session chyba: " + sessionErr.message);
             if (!session) throw new Error("Nejste přihlášeni — otevřete popup extensiony a přihlaste se.");
 
-            // 1. Hide UI + close TV dialogs
-            setSubmitStatus({ text: "📸 Schovávám UI, fotím graf...", type: 'info' });
+            // 1. Zavři TV dialogy. Panel NEschováváme — clientSnapshot snímá chart canvas přímo
+            //    (náš panel v něm není). Schování řešíme jen u fallbacku captureVisibleTab → žádný problik.
+            setSubmitStatus({ text: "📸 Snímám graf...", type: 'info' });
             host = document.getElementById('alpha-bridge-v2-host');
-            if (host) host.style.display = 'none';
 
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27 }));
 
@@ -821,11 +840,11 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             const snap = await captureChartSnapshot();
 
             if (snap.ok && snap.dataUrl) {
-                if (host) host.style.display = 'block';
-                croppedImageUrl = snap.dataUrl; // čistý graf vč. RR boxu, bez ořezu
+                croppedImageUrl = snap.dataUrl; // čistý graf vč. RR boxu, bez ořezu (panel nebyl schovaný → žádný problik)
             } else {
-                // Fallback: starý způsob (captureVisibleTab + crop chart area).
+                // Fallback: captureVisibleTab snímá CELOU záložku → tady panel SCHOVAT (a pak vrátit).
                 console.warn('[AlphaBridge] clientSnapshot selhal, fallback na captureVisibleTab:', snap.reason);
+                if (host) host.style.display = 'none';
                 await new Promise(resolve => setTimeout(resolve, 800));
                 const response: any = await new Promise((resolve, reject) => {
                     const timeoutId = setTimeout(() => {
@@ -858,27 +877,20 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             const sl    = parseFloat(trade.sl)    || null;
             const tp    = parseFloat(trade.tp)    || null;
             const risk  = parseFloat(trade.risk)  || 0;
-            let pnl = 0;
-
-            if (trade.pnl) {
-                pnl = parseFloat(trade.pnl) || 0;
-            } else if (entry && sl) {
-                const slDist = Math.abs(entry - sl);
-                const tpDist = tp ? Math.abs(tp - entry) : 0;
-                if (slDist > 0 && tpDist > 0) {
-                    const rRatio = tpDist / slDist;
-                    if (trade.outcome === 'WIN')       pnl =  risk * rRatio;
-                    else if (trade.outcome === 'LOSS') pnl = -risk;
-                }
-            }
-
-            // Calculate exit price based on pnl if manually entered, otherwise default to tp/sl/entry
+            // JEDEN zdroj pravdy = REÁLNÝ fill (TP pro WIN, SL pro LOSS, entry pro BE).
+            // exitPrice i pnl se odvodí z téhož fillu → konzistentní realized R všude (žádné 2,25 vs 2,26).
+            // pnl se NEzaokrouhluje (zobrazení si zaokrouhlí samo); exitPrice = skutečná úroveň, ne dopočet z pnl.
+            const slDist = (entry != null && sl != null) ? Math.abs(entry - sl) : 0;
+            const dirSign = trade.direction === 'SHORT' ? -1 : 1;
             let calculatedExitPrice = trade.outcome === 'WIN' ? tp : trade.outcome === 'LOSS' ? sl : entry;
-            if (entry && sl && trade.pnl && risk && !isNaN(pnl)) {
-                const directionSign = trade.direction === 'SHORT' ? -1 : 1;
-                const riskMove = Math.abs(entry - sl);
-                if (riskMove > 0) {
-                    calculatedExitPrice = entry + directionSign * (pnl / risk) * riskMove;
+            let pnl = 0;
+            if (calculatedExitPrice != null && entry != null && slDist > 0 && risk) {
+                pnl = ((calculatedExitPrice - entry) * dirSign / slDist) * risk;
+            } else if (trade.pnl) {
+                // Ruční zápis bez TP/SL: ber zadané pnl a exitPrice z něj dopočítej (fallback).
+                pnl = parseFloat(trade.pnl) || 0;
+                if (calculatedExitPrice == null && entry != null && slDist > 0 && risk) {
+                    calculatedExitPrice = entry + dirSign * (pnl / risk) * slDist;
                 }
             }
 
@@ -985,6 +997,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     stopLoss: sl,
                     takeProfit: tp,
                     riskAmount: risk,
+                    positionSize: parseFloat(trade.contracts) || null,  // počet kontraktů (qty)
                     screenshot: publicUrl,
                     screenshots: allScreenshots,  // entry + HTF kontext (1H/4H)
                     duration: durationString,
@@ -1015,6 +1028,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     mfePoints: posMetrics.mfePoints,
                     maePoints: posMetrics.maePoints,
                     excursionAvailable: posMetrics.mfeUsd != null,  // false = MFE/MAE se nepodařilo načíst (ne 0)
+                    outcomeAmbiguous: outcomeAmbiguous,  // true = SL i TP v jednom baru (výsledek nejistý, default LOSS)
                     // Execution varianty — SL i Target odvozeny z reálně označených LTF tagů (source of truth).
                     slPlacement: slKeyFromTags(trade.ltfConfluence),
                     targetType: tpInfoFromTag(trade.ltfConfluence).targetType,
@@ -1084,11 +1098,9 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 throw new Error("Databáze odmítla uložení (RLS) — zkuste se odhlásit a přihlásit znovu.");
             }
 
-            setSubmitStatus({
-                text: `✅ Zapsáno! (${savedTrades.length} ${savedTrades.length === 1 ? 'účet' : 'účty'})`,
-                type: 'success',
-            });
-            setShowReset(true);
+            setSubmitStatus(null); // místo textu ukážeme animovanou success kartu
+            setJustSaved({ count: savedTrades.length, pnl: pnl, outcome: trade.outcome });
+            setShowReset(false);
 
             // 8. Fire-and-forget AI enrichment — jen pokud má trade notes nebo screenshot
             // (filtr "skutečný obchod" vs. testovací záznam)
@@ -1616,12 +1628,20 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 ];
                 const tagToKey: Record<string, string> = { fvg: 'fvg', ote: 'ote', swing: 'swing' };
                 const usedKey = tagToKey[trade.slPlacement] || '';
+                const usedRow = rows.find(r => r.key === usedKey);
+                const cfSummary = (cf && cf.ok && usedRow && usedRow.r && usedRow.r.ok && usedRow.r.realizedR != null)
+                    ? `★ ${usedRow.label} ${usedRow.r.realizedR > 0 ? '+' : ''}${usedRow.r.realizedR}R`
+                    : (cf && cf.ok ? '3 varianty SL' : (cf && !cf.ok ? '⚠ nešlo' : ''));
                 return (
                     <div className={`mb-4 rounded-xl border overflow-hidden ${theme === 'dark' ? 'border-slate-700/50 bg-slate-800/50' : 'border-slate-200 bg-slate-50'}`}>
-                        <div className={`px-3 py-2 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 border-b ${theme === 'dark' ? 'text-amber-400 border-slate-700/50' : 'text-amber-600 border-slate-200'}`}>
-                            🔮 Co kdyby · SL placement {cfLoading && <RefreshCw size={11} className="animate-spin" />}
-                        </div>
-                        {cfLoading && !cf ? (
+                        <button type="button" onClick={() => setCfOpen(o => !o)} className={`w-full px-3 py-2 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 ${cfOpen ? 'border-b' : ''} ${theme === 'dark' ? 'text-amber-400 border-slate-700/50 hover:bg-slate-700/30' : 'text-amber-600 border-slate-200 hover:bg-slate-100'} transition-colors focus:outline-none`}>
+                            <span className="flex items-center gap-2">🔮 Co kdyby · SL placement {cfLoading && <RefreshCw size={11} className="animate-spin" />}</span>
+                            <span className="ml-auto flex items-center gap-2">
+                                {!cfOpen && cfSummary && <span className={`normal-case tracking-normal text-[10px] font-bold ${theme === 'dark' ? 'text-slate-300' : 'text-slate-500'}`}>{cfSummary}</span>}
+                                <ChevronDown size={13} className={`transition-transform duration-200 ${cfOpen ? 'rotate-180' : ''}`} />
+                            </span>
+                        </button>
+                        {cfOpen && (cfLoading && !cf ? (
                             <div className="px-3 py-3 text-[11px] text-slate-400">Počítám 3 varianty z barů…</div>
                         ) : (cf && !cf.ok) ? (
                             <div className="px-3 py-3 text-[11px] text-slate-400">
@@ -1681,7 +1701,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                                     })}
                                 </tbody>
                             </table>
-                        )}
+                        ))}
                     </div>
                 );
             })()}
@@ -1690,11 +1710,18 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             {cf && cf.ok && cf.tpTargets && cf.tpTargets.length > 0 && (() => {
                 const riskNum = Number(trade.risk) || 0;
                 const unit = riskNum ? '' : 'R';
+                const tpReached = cf.tpTargets!.filter(t => t.outcome === 'WIN').length;
+                const tpSummary = `${cf.tpTargets!.length} levelů${tpReached ? ` · ${tpReached} ✓` : ''}`;
                 return (
                     <div className={`mb-4 rounded-xl border overflow-hidden ${theme === 'dark' ? 'border-slate-700/50 bg-slate-800/50' : 'border-slate-200 bg-slate-50'}`}>
-                        <div className={`px-3 py-2 text-[10px] font-black uppercase tracking-widest border-b ${theme === 'dark' ? 'text-sky-400 border-slate-700/50' : 'text-sky-600 border-slate-200'}`}>
-                            🎯 TP targety {!isWide && <span className="text-slate-400">· risk = swing</span>}
-                        </div>
+                        <button type="button" onClick={() => setTpOpen(o => !o)} className={`w-full px-3 py-2 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 ${tpOpen ? 'border-b' : ''} ${theme === 'dark' ? 'text-sky-400 border-slate-700/50 hover:bg-slate-700/30' : 'text-sky-600 border-slate-200 hover:bg-slate-100'} transition-colors focus:outline-none`}>
+                            <span className="flex items-center gap-2">🎯 TP targety {!isWide && tpOpen && <span className="text-slate-400 normal-case tracking-normal">· risk = swing</span>}</span>
+                            <span className="ml-auto flex items-center gap-2">
+                                {!tpOpen && <span className={`normal-case tracking-normal text-[10px] font-bold ${theme === 'dark' ? 'text-slate-300' : 'text-slate-500'}`}>{tpSummary}</span>}
+                                <ChevronDown size={13} className={`transition-transform duration-200 ${tpOpen ? 'rotate-180' : ''}`} />
+                            </span>
+                        </button>
+                        {tpOpen && (
                         <table className="w-full text-[11px]">
                             <thead>
                                 <tr className={`${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'} text-[9px] uppercase tracking-wider`}>
@@ -1727,6 +1754,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                                 })}
                             </tbody>
                         </table>
+                        )}
                     </div>
                 );
             })()}
@@ -1814,25 +1842,47 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 >
                     {isPreviewing ? <RefreshCw size={14} className="animate-spin" /> : <Eye size={16} />}
                 </Button>
-                <Button onClick={handleSubmit} disabled={isSubmitting || isPreviewing} className="flex-1 text-xs">
+                <Button onClick={handleSubmit} disabled={isSubmitting || isPreviewing || cfLoading} className="flex-1 text-xs">
                     {isSubmitting ? (
                         <><RefreshCw size={14} className="animate-spin" /> Zpracovávám...</>
+                    ) : cfLoading ? (
+                        <><RefreshCw size={14} className="animate-spin" /> Počítám co kdyby…</>
                     ) : (
                         <><Send size={16} /> Zapsat do deníku</>
                     )}
                 </Button>
             </div>
 
-            {/* Reset button shown after successful submit */}
-            {showReset && (
-                <button
-                    onClick={handleReset}
-                    className={`w-full mt-2 p-2.5 rounded-xl border font-bold text-xs flex items-center justify-center gap-2 transition-all focus:outline-none ${theme === 'dark' ? 'border-slate-700/50 bg-slate-800/50 text-slate-400 hover:bg-slate-700/50 hover:text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
-                >
-                    <RotateCcw size={13} />
-                    Nový obchod (vymazat pole)
-                </button>
-            )}
+            {/* Success karta po zápisu — animovaný pop-in + PnL + CTA „načíst další" */}
+            {justSaved && (() => {
+                const win = justSaved.outcome === 'WIN' || justSaved.pnl > 0.01;
+                const be = justSaved.outcome === 'BE' || Math.abs(justSaved.pnl) <= 0.01;
+                const col = be ? '#f59e0b' : win ? '#10b981' : '#ef4444';
+                const pnlTxt = `${justSaved.pnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(justSaved.pnl)).toLocaleString('en-US')}`;
+                const accWord = justSaved.count === 1 ? 'účet' : justSaved.count < 5 ? 'účty' : 'účtů';
+                return (
+                    <div ref={successCardRef} className="mt-3" style={{ animation: 'atPop .4s cubic-bezier(.16,1,.3,1) both' }}>
+                        <style>{`@keyframes atPop{0%{transform:translateY(10px) scale(.97);opacity:0}100%{transform:none;opacity:1}}@keyframes atRing{0%{transform:scale(.55);opacity:.6}100%{transform:scale(2.4);opacity:0}}@keyframes atCheck{0%{transform:scale(0);opacity:0}55%{transform:scale(1.18)}100%{transform:scale(1);opacity:1}}`}</style>
+                        <div className="rounded-2xl border p-4 flex flex-col items-center text-center gap-1" style={{ background: col + '14', borderColor: col + '59' }}>
+                            <div className="relative flex items-center justify-center mb-1" style={{ width: 52, height: 52 }}>
+                                <span className="absolute inset-0 rounded-full" style={{ border: `2px solid ${col}`, animation: 'atRing 1s ease-out .15s' }} />
+                                <span style={{ animation: 'atCheck .45s cubic-bezier(.16,1,.3,1) both', lineHeight: 0 }}><CheckCircle2 size={48} color={col} strokeWidth={2} /></span>
+                            </div>
+                            <div className="text-[13px] font-black" style={{ color: col }}>Zapsáno do deníku</div>
+                            <div className="text-2xl font-black tabular-nums" style={{ color: col }}>{pnlTxt}</div>
+                            <div className={`text-[11px] font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                                {justSaved.count} {accWord}{!win && !be && outcomeAmbiguous ? ' · ⚠️ nejednoznačný výsledek' : ''}
+                            </div>
+                            <button
+                                onClick={handleReset}
+                                className={`mt-2.5 w-full p-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all focus:outline-none ${theme === 'dark' ? 'bg-slate-100 text-slate-900 hover:bg-white' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
+                            >
+                                <Plus size={15} /> Načíst další obchod
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
 
             <div className={`text-xs mt-4 text-center font-medium flex items-center justify-center gap-2 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
                 {submitStatus ? (

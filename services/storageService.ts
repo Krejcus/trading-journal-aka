@@ -574,68 +574,53 @@ export const storageService = {
       dbAccounts = [newAcc];
     }
 
-    // CRITICAL SAFEGUARD: Preserve existing screenshots for trades loaded without them.
-    // getTrades() strips screenshot/screenshots for performance (they're huge base64 blobs).
-    // Without this safeguard, re-saving would overwrite the data JSONB and destroy screenshots.
-    const existingIdsWithoutScreenshots = trades
-      .filter(t => isUUID(t.id as string) && t.screenshot === undefined)
-      .map(t => String(t.id));
+    // CRITICAL SAFEGUARD: u EXISTUJÍCÍCH obchodů (UUID už v DB) zachovej CELÝ data blob.
+    // getTrades() blob strhne (`data:{}` + whitelist polí), takže in-memory obchod nenese
+    // counterfactual/excursion/entryMap/mfeR/screenshoty/drawings… Bez tohohle by re-save
+    // přes saveTrades ta pole v DB SMAZAL. Dotáhneme aktuální blob a zmergujeme pod nový objekt
+    // (nový obchod přepíše svá pole, zbytek se zachová). Edity stejně chodí přes updateTrade (merge),
+    // tohle je pojistka pro jakýkoli save path.
+    const existingUuidIds = trades.filter(t => isUUID(t.id as string)).map(t => String(t.id));
+    const existingDataMap = new Map<string, any>();
+    const fetchFailedIds = new Set<string>();
 
-    const screenshotMap = new Map<string, { screenshot?: string; screenshots?: string[] }>();
-    // Track which IDs we failed to verify — these will be excluded from upsert to prevent data loss
-    const screenshotFetchFailed = new Set<string>();
-
-    if (existingIdsWithoutScreenshots.length > 0) {
+    if (existingUuidIds.length > 0) {
       try {
-        const { data: screenshotRows, error: ssErr } = await supabase
+        const { data: existingRows, error: exErr } = await supabase
           .from('trades')
-          .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
-          .in('id', existingIdsWithoutScreenshots)
+          .select('id, data')
+          .in('id', existingUuidIds)
           .eq('user_id', userId);
-
-        if (ssErr) throw ssErr;
-
-        // Build a set of IDs that were returned by the DB (even with no screenshot)
-        const returnedIds = new Set((screenshotRows || []).map((r: any) => String(r.id)));
-
-        screenshotRows?.forEach((row: any) => {
-          if (row.screenshot || (row.screenshots && row.screenshots.length > 0)) {
-            screenshotMap.set(row.id, {
-              screenshot: row.screenshot || undefined,
-              screenshots: row.screenshots || undefined
-            });
-          }
-        });
-
-        // ID, které dotaz (userId+id) nevrátil, v DB prostě NEEXISTUJE → je to NOVÝ obchod
-        // (např. import s předgenerovaným UUID). Není co zachovat → ulož normálně, NEpřeskakuj.
-        // (Dřív se takové ID označilo jako „suspicious" a přeskočilo → nové obchody s UUID
-        //  a bez screenshotu se ztrácely. Síťovou chybu pořád řeší catch níže.)
-        void returnedIds;
+        if (exErr) throw exErr;
+        // ID, které dotaz nevrátil, v DB NEEXISTUJE → nový obchod (UUID předgenerované, AlphaBridge/import)
+        // → mapa ho nemá → uloží se bez merge (žádné rich data k zachování).
+        existingRows?.forEach((row: any) => existingDataMap.set(String(row.id), row.data || {}));
       } catch (err) {
-        // Network error or DB error — mark ALL existing trades as unsafe to upsert
-        // (new trades with no ID are fine, they can't have screenshots yet)
-        console.error('[saveTrades] Screenshot fetch failed — skipping existing trades to prevent data loss:', err);
-        existingIdsWithoutScreenshots.forEach(id => screenshotFetchFailed.add(id));
+        // Síťová/DB chyba — neumíme ověřit existující blob → existující obchody RADŠI přeskoč
+        // (lepší neuložit než přepsat rich data prázdnem).
+        console.error('[saveTrades] Nepodařilo se ověřit existující blob — přeskakuji existující obchody (ochrana dat):', err);
+        existingUuidIds.forEach(id => fetchFailedIds.add(id));
       }
     }
 
     const tradesToUpsert = trades.map(t => {
-      // Skip trades where screenshot fetch failed — safer to skip than risk wiping screenshots
-      if (screenshotFetchFailed.has(String(t.id))) {
-        console.warn(`[saveTrades] Skipping trade ${t.id} — could not verify screenshots`);
+      // Nelze ověřit existující blob → radši přeskoč než riskovat přepsání rich dat.
+      if (fetchFailedIds.has(String(t.id))) {
+        console.warn(`[saveTrades] Skipping trade ${t.id} — nelze ověřit existující data`);
         return null;
       }
 
       const realAccId = isUUID(t.accountId) ? t.accountId : (dbAccounts?.[0]?.id);
       if (!realAccId) return null;
 
-      const dataBlob: any = { ...t, accountId: realAccId, drawings: t.drawings || [] };
+      const existingData = existingDataMap.get(String(t.id));
+      // Drawings: prázdné z načteného obchodu NESMÍ přepsat reálné kresby v DB.
+      const mergedDrawings = (t.drawings && t.drawings.length) ? t.drawings : ((existingData && existingData.drawings) || []);
 
-      // Merge preserved screenshots back into the data blob
-      const preserved = screenshotMap.get(String(t.id));
-      if (preserved?.screenshot && !dataBlob.screenshot) dataBlob.screenshot = preserved.screenshot;
-      if (preserved?.screenshots && (!dataBlob.screenshots || dataBlob.screenshots.length === 0)) dataBlob.screenshots = preserved.screenshots;
+      // Merge: existující blob jako základ, nový obchod přepíše svá pole; co in-memory nenese, zůstane.
+      const dataBlob: any = existingData
+        ? { ...existingData, ...t, accountId: realAccId, drawings: mergedDrawings }
+        : { ...t, accountId: realAccId, drawings: mergedDrawings };
 
       const obj: any = {
         user_id: userId,
@@ -646,7 +631,7 @@ export const storageService = {
         direction: t.direction || 'Long',
         date: t.date || new Date().toISOString(),
         timestamp: t.timestamp || Date.now(),
-        drawings: t.drawings || [],
+        drawings: mergedDrawings,
         data: dataBlob
       };
 
@@ -1292,6 +1277,29 @@ export const storageService = {
 
   // Backtest session pre/post poznámky (samostatná tabulka, mimo RAG/embeddings).
   // Volitelně omezené na konkrétní backtest účty.
+  /**
+   * Plný trade záznam VČETNĚ celého `data` blobu (counterfactual/excursion/entryMap/
+   * mfeR/slPlacement…) pro export do AI. getTrades blob strhne (`data:{}`), takže pro
+   * export se musí dotáhnout napřímo z DB. Vrací zploštělé objekty (blob + klíčové sloupce).
+   */
+  async getTradesWithDataByAccounts(accountIds: string[], targetUserId?: string): Promise<any[]> {
+    const userId = targetUserId || await getUserId();
+    if (!userId || !accountIds || accountIds.length === 0) return [];
+    const { data, error } = await supabase
+      .from('trades')
+      .select('*')
+      .eq('user_id', userId)
+      .in('account_id', accountIds);
+    if (error || !data) { if (error) console.error('getTradesWithDataByAccounts error:', error); return []; }
+    return data.map((r: any) => ({
+      ...(r.data || {}),
+      id: r.id, accountId: r.account_id, instrument: r.instrument, pnl: r.pnl,
+      direction: r.direction, date: r.date, timestamp: r.timestamp,
+      screenshot: r.screenshot_url || (r.data || {}).screenshot,
+      screenshots: r.screenshots_urls || (r.data || {}).screenshots,
+    }));
+  },
+
   async getBacktestSessions(accountIds?: string[], targetUserId?: string): Promise<Array<{ id: string; accountId: string; date: string; block: string; bias?: string; preNotes?: string; postNotes?: string }>> {
     const userId = targetUserId || await getUserId();
     if (!userId) return [];

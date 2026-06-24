@@ -148,6 +148,7 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
   let maxDrawdown = 0;
   let maxWin = 0, maxLoss = 0;
   let totalWinDuration = 0, totalLossDuration = 0;
+  let totalRisk = 0, riskCount = 0; // pro avgRisk ($) → R-mód zobrazení (avgWin/maxWin/drawdown v R)
   let currentWinStreak = 0, currentLossStreak = 0;
   let maxConsecWins = 0, maxConsecLosses = 0;
   const winStreaks: number[] = [], lossStreaks: number[] = [];
@@ -188,6 +189,7 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
       currentEquity += trade.pnl;
       totalPnL += trade.pnl;
       pnlList.push(trade.pnl);
+      if (trade.riskAmount && trade.riskAmount > 0) { totalRisk += trade.riskAmount; riskCount++; }
     }
 
     // Disciplinované Equity (Validní + Zmeškané, vynechává chyby/Invalid)
@@ -350,7 +352,7 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
     avgRR: (grossLoss / losingTrades) > 0 ? (grossProfit / winningTrades) / (grossLoss / losingTrades) : 0,
     maxDrawdown: Math.abs(maxDrawdown),
     currentDrawdownPct: maxEquity > 0 ? Math.abs((currentEquity - maxEquity) / maxEquity) * 100 : 0,
-    avgRisk: 0, totalTrades: trades.filter(t => t.executionStatus !== 'Missed').length,
+    avgRisk: riskCount > 0 ? totalRisk / riskCount : 0, totalTrades: trades.filter(t => t.executionStatus !== 'Missed').length,
     winningTrades, losingTrades, breakEvenTrades, missedTrades,
     winningDays: Array.from(calendarMap.values()).filter(v => v.pnl > 0.01).length,
     losingDays: Array.from(calendarMap.values()).filter(v => v.pnl < -0.01).length,

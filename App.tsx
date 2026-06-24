@@ -559,6 +559,13 @@ const App: React.FC = () => {
   // Tradovate import modal
   const [tradovateImportOpen, setTradovateImportOpen] = useState(false);
   const [tradesyncerImportOpen, setTradesyncerImportOpen] = useState(false);
+  // Toast „nový obchod přidán" — spustí se z Realtime INSERTu (obchod z AlphaBridge dorazil do appky).
+  const [tradeToast, setTradeToast] = useState<{ id: number; instrument: string; pnl: number; accountId: string } | null>(null);
+  useEffect(() => {
+    if (!tradeToast) return;
+    const t = setTimeout(() => setTradeToast(cur => (cur && cur.id === tradeToast.id ? null : cur)), 4500);
+    return () => clearTimeout(t);
+  }, [tradeToast]);
   const [tradovateImportAccount, setTradovateImportAccount] = useState<string | undefined>(undefined);
   // Průvodce doplněním importovaných obchodů — inkrement spustí wizard v TradeHistory.
   const [enrichSignal, setEnrichSignal] = useState(0);
@@ -1473,10 +1480,14 @@ const App: React.FC = () => {
 
             if (payload.eventType === 'INSERT') {
               const fullTrade = parseRealtimeTrade(payload.new);
+              let isNew = false;
               setTrades(prev => {
                 if (prev.some(t => t.id === fullTrade.id)) return prev;
+                isNew = true;
                 return [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
               });
+              // Toast jen pro fakt NOVÝ obchod (ne pro to, co appka vložila sama optimisticky).
+              if (isNew) setTradeToast({ id: Date.now(), instrument: fullTrade.instrument || '?', pnl: Number(fullTrade.pnl) || 0, accountId: String(fullTrade.accountId || '') });
 
               // Refresh accounts so balance/stats stay current after new trade
               storageService.getAccounts().then(freshAccounts => {
@@ -1771,6 +1782,10 @@ const App: React.FC = () => {
 
         const freshAccounts = await storageService.getAccounts();
         if (freshAccounts?.length) setAccounts(freshAccounts);
+
+        // Trades taky — záloha, kdyby Realtime websocket spadl/se nepřipojil; po návratu na tab dožene.
+        const freshTrades = await storageService.getTrades();
+        if (freshTrades?.length) setTrades(freshTrades);
 
         if (isBusinessDataLoaded) {
           const [expenses, goals, resources] = await Promise.all([
@@ -3909,6 +3924,38 @@ const App: React.FC = () => {
           allTrades={trades}
         />
       )}
+
+      {/* Toast: nový obchod dorazil přes Realtime (typicky z AlphaBridge) — neblokuje, sám zmizí, klik → Historie */}
+      <AnimatePresence>
+        {tradeToast && (() => {
+          const win = tradeToast.pnl > 0.01, be = Math.abs(tradeToast.pnl) <= 0.01;
+          const col = be ? '#f59e0b' : win ? '#10b981' : '#ef4444';
+          const accName = accounts.find(a => String(a.id) === tradeToast.accountId)?.name || '';
+          const pnlTxt = `${tradeToast.pnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(tradeToast.pnl)).toLocaleString('en-US')}`;
+          return (
+            <motion.button
+              key={tradeToast.id}
+              initial={{ opacity: 0, y: 24, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+              onClick={() => { setActivePage('history'); setTradeToast(null); }}
+              style={{ position: 'fixed', right: 20, bottom: 20, zIndex: 9999, borderLeft: `3px solid ${col}` }}
+              className={`flex items-center gap-3 pl-3 pr-4 py-3 rounded-xl shadow-2xl text-left ${theme === 'light' ? 'bg-white border border-slate-200' : 'bg-slate-900 border border-white/10'}`}
+            >
+              <span style={{ color: col, fontSize: 20, fontWeight: 900, lineHeight: 1 }}>✓</span>
+              <div>
+                <div className={`text-[10px] font-black uppercase tracking-wider ${theme === 'light' ? 'text-slate-500' : 'text-slate-400'}`}>Nový obchod přidán</div>
+                <div className="text-sm font-bold flex items-center gap-2 mt-0.5">
+                  <span className={theme === 'light' ? 'text-slate-900' : 'text-white'}>{tradeToast.instrument}</span>
+                  <span style={{ color: col }}>{pnlTxt}</span>
+                  {accName && <span className={`text-[11px] font-medium ${theme === 'light' ? 'text-slate-400' : 'text-slate-500'}`}>· {accName}</span>}
+                </div>
+              </div>
+            </motion.button>
+          );
+        })()}
+      </AnimatePresence>
     </div >
   );
 };

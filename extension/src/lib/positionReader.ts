@@ -113,8 +113,10 @@ export function pageReadActivePosition(boxId?: any) {
                 // $ převod odvozený z boxu: $/cenová_jednotka/kontrakt = perContractRisk / (vzdálenost_SL_v_ceně)
                 const slDistPrice = stopLevel * minTick;
                 const usdPerPriceUnit = slDistPrice > 0 ? (perContractRisk / slDistPrice) : 0;
-                mfeUsd = Math.round(mfeP * usdPerPriceUnit * qty);
-                maeUsd = Math.round(maeP * usdPerPriceUnit * qty);
+                // Centová přesnost (NE integer round) → maeUsd == maePoints×usdPerPoint a maeR z téhož.
+                // (Dřív integer round: 34,5 → 35 → maeR z 35 ≠ z bodů. MFE to neukázalo, bylo celé.)
+                mfeUsd = Math.round(mfeP * usdPerPriceUnit * qty * 100) / 100;
+                maeUsd = Math.round(maeP * usdPerPriceUnit * qty * 100) / 100;
                 if (riskActual > 0) {
                     mfeR = Math.round((mfeUsd / riskActual) * 100) / 100;
                     maeR = Math.round((maeUsd / riskActual) * 100) / 100;
@@ -388,9 +390,52 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             return lv;
         };
 
+        // VWAP+σ k času ENTRY (snapshot): bary (anchor→entry) když je session načtená, jinak z LABELŮ
+        // indikátoru (v replay dobové a přesné). Stejná logika jako excursion (ověřeno naživo 1:1).
+        // → tpTargets může nabídnout i VWAP/deviace SPRÁVNĚ (ne zamrzlý label = ten starý rozpor).
+        const entryVwapSnapshot = (): { source: 'bars' | 'indicator' | 'none'; w: number | null; sd: number } => {
+            const eU = ts.indexToTimePoint(si0), lU = ts.indexToTimePoint(lastI);
+            const lDay = (u: number | null) => { if (u == null) return ''; const d = new Date(u * 1000); return d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); };
+            let contemp = true;
+            if (eU != null && lU != null) contemp = lDay(eU) === lDay(lU);
+            const eDay = lDay(eU);
+            let anc = first; for (let i = si0; i > first; i--) { if (lDay(ts.indexToTimePoint(i - 1)) !== eDay) { anc = i; break; } }
+            const ancU = ts.indexToTimePoint(anc);
+            const ancMin = ancU != null ? (new Date(ancU * 1000).getHours() * 60 + new Date(ancU * 1000).getMinutes()) : 0;
+            const approx = ancMin > 30; // start session nenačten → bar-výpočet nespolehlivý
+            // labely (fallback)
+            let lw: number | null = null, lsd = 0;
+            if (contemp) {
+                const fam = readLiquidityLevels().filter((L: any) => /^\s*VWAP(\s*[+-]\s*[12]\s*σ)?\s*$/i.test(String(L.text)));
+                const nz = (t: string) => String(t).replace(/\[.*?\]/g, '').replace(/\s+/g, '').toLowerCase();
+                const fp = (re: RegExp) => { const m = fam.find((L: any) => re.test(nz(L.text))); return m ? m.price : null; };
+                const w0 = fp(/^vwap$/);
+                if (w0 != null) { lw = w0; const c: number[] = []; const p1 = fp(/^vwap\+1/), m1 = fp(/^vwap-1/), p2 = fp(/^vwap\+2/), m2 = fp(/^vwap-2/); if (p1 != null) c.push(Math.abs(p1 - w0)); if (m1 != null) c.push(Math.abs(w0 - m1)); if (p2 != null) c.push(Math.abs(p2 - w0) / 2); if (m2 != null) c.push(Math.abs(w0 - m2) / 2); if (c.length) lsd = c.reduce((a, b) => a + b, 0) / c.length; }
+            }
+            if (!approx) {
+                let v = 0, pv = 0, pv2 = 0;
+                for (let i = anc; i <= si0; i++) { const b = bars.valueAt(i); if (!b) continue; const tp = (b[2] + b[3] + b[4]) / 3; const vol = b[5] || 0; v += vol; pv += vol * tp; pv2 += vol * tp * tp; }
+                if (v > 0) { const w = pv / v; const va = (pv2 / v) - w * w; return { source: 'bars', w, sd: va > 0 ? Math.sqrt(va) : 0 }; }
+            }
+            if (lw != null) return { source: 'indicator', w: lw, sd: lsd };
+            return { source: 'none', w: null, sd: 0 };
+        };
+
         const tpTargets = (() => {
             if (swingLvl == null) return [];
-            const levels = readLiquidityLevels().filter((L: any) => isLong ? L.price > entry : L.price < entry);
+            // Live VWAP rodina z LABELŮ se VYNECHÁVÁ (zamrzlá cena) — místo ní přidáme SPRÁVNÝ
+            // entry-snapshot VWAP/deviace (bary/label), takže rr sedí a neodporuje si s ladderem.
+            const isLiveVwapTp = (t: string) => /^\s*VWAP(\s*[+-]\s*[12]\s*σ)?\s*$/i.test(t);
+            const staticLv = readLiquidityLevels().filter((L: any) => (isLong ? L.price > entry : L.price < entry) && !isLiveVwapTp(String(L.text)));
+            // Přidej VWAP/deviace ve směru (správný zdroj) jako TP kandidáty.
+            const snap = entryVwapSnapshot();
+            const vwapLv: any[] = [];
+            if (snap.source !== 'none' && snap.w != null) {
+                const specs = isLong ? [{ l: 'VWAP', k: 0 }, { l: 'VWAP +1σ', k: 1 }, { l: 'VWAP +2σ', k: 2 }]
+                    : [{ l: 'VWAP', k: 0 }, { l: 'VWAP -1σ', k: -1 }, { l: 'VWAP -2σ', k: -2 }];
+                for (const s of specs) { const price = snap.w + s.k * snap.sd; if (isLong ? price > entry : price < entry) vwapLv.push({ text: s.l, price }); }
+            }
+            const levels = [...staticLv, ...vwapLv];
             // dedupe na tick a seřaď dle vzdálenosti od entry
             const seen: any = {}; const uniq: any[] = [];
             levels.sort((a: any, b: any) => Math.abs(a.price - entry) - Math.abs(b.price - entry));
@@ -409,7 +454,8 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                 const rrT = risk > 0 ? (isLong ? (L.price - entry) / risk : (entry - L.price) / risk) : null;
                 const realizedR = outcome === 'WIN' ? rrT : (outcome === 'LOSS' ? -1 : null);
                 return {
-                    label: L.text, price: roundTick2(L.price), outcome: outcome, bars: held,
+                    label: L.text, price: roundTick2(L.price), outcome: outcome,
+                    bars: outcome === 'OPEN' ? null : held,  // null = nedosaženo (ne bars:0 = „bar 0")
                     rr: rrT != null ? Math.round(rrT * 100) / 100 : null,
                     realizedR: realizedR != null ? Math.round(realizedR * 100) / 100 : null,
                 };
@@ -437,14 +483,20 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             if (odrazPrice != null) {
                 const cand: { label: string; price: number }[] = [];
                 for (const L of readLiquidityLevels()) { if (!/^\s*VWAP(\s*[+-]\s*[12]\s*σ)?\s*$/i.test(String(L.text))) cand.push({ label: String(L.text), price: L.price }); }
-                // Dynamický VWAP v baru odrazu (stejná replika jako excursion: hlc3, vol-vážené, anchor=lok. půlnoc).
-                if (odrazIdx != null) {
+                // VWAP/deviace u odrazu — STEJNÝ zdroj jako jinde (TP tagy): bary (přesně v baru odrazu,
+                // když je session načtená) → jinak z LABELŮ indikátoru (replay) → jinak vůbec (ať není
+                // špatná deviace v „Odraz deviace ±N" tagu).
+                const pushVwapSpecs = (w: number, sd: number) => { const specs: [string, number][] = [['VWAP', 0], ['VWAP +1σ', 1], ['VWAP -1σ', -1], ['VWAP +2σ', 2], ['VWAP -2σ', -2]]; for (const s of specs) cand.push({ label: s[0], price: w + s[1] * sd }); };
+                const oSnap = entryVwapSnapshot();
+                if (odrazIdx != null && oSnap.source === 'bars') {
                     const lDay = (u: number | null) => { if (u == null) return ''; const d = new Date(u * 1000); return d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); };
                     const oDay = lDay(ts.indexToTimePoint(odrazIdx));
                     let an = first; for (let i = odrazIdx; i > first; i--) { if (lDay(ts.indexToTimePoint(i - 1)) !== oDay) { an = i; break; } }
                     let v = 0, pv = 0, pv2 = 0, pd = oDay;
                     for (let i = an; i <= odrazIdx; i++) { const b = bars.valueAt(i); if (!b) continue; const cd = lDay(ts.indexToTimePoint(i)); if (cd !== pd) { v = 0; pv = 0; pv2 = 0; } pd = cd; const tp = (b[2] + b[3] + b[4]) / 3, vol = b[5] || 0; v += vol; pv += vol * tp; pv2 += vol * tp * tp; }
-                    if (v > 0) { const w = pv / v; const va = (pv2 / v) - w * w; const sd = va > 0 ? Math.sqrt(va) : 0; const specs: [string, number][] = [['VWAP', 0], ['VWAP +1σ', 1], ['VWAP -1σ', -1], ['VWAP +2σ', 2], ['VWAP -2σ', -2]]; for (const s of specs) cand.push({ label: s[0], price: w + s[1] * sd }); }
+                    if (v > 0) { const w = pv / v; const va = (pv2 / v) - w * w; pushVwapSpecs(w, va > 0 ? Math.sqrt(va) : 0); }
+                } else if (oSnap.source === 'indicator' && oSnap.w != null) {
+                    pushVwapSpecs(oSnap.w, oSnap.sd); // bary nespolehlivé → VWAP/σ z labelů (entry-snapshot ≈ odraz)
                 }
                 // Nejbližší level ke swing extrému (rejekce). BEZ filtru strany — cena wickne skrz
                 // rezistenci/support, takže level leží těsně NA/POD (short) resp. NA/NAD (long) extrémem.
@@ -518,7 +570,32 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             // není načtený (díry v datech) → VWAP je jen přibližný, neoznačuj ho jako přesný.
             const aU = ts.indexToTimePoint(anchor);
             const aMin = aU != null ? (new Date(aU * 1000).getHours() * 60 + new Date(aU * 1000).getMinutes()) : 0;
-            const vwapApprox = aMin > 30;
+            const barApprox = aMin > 30; // start session nenačten → bar-výpočet VWAP nespolehlivý
+
+            // FALLBACK (replay): když bary nestačí, vezmi VWAP+σ z LABELŮ indikátoru — v replay
+            // zaparkovaném na dni jsou DOBOVÉ a přesné, bez nutnosti načítat začátek session.
+            // σ odvodíme z rozestupu pásem (|VWAP±1σ − VWAP|, ±2σ /2, průměr dostupných).
+            let labelVwap: number | null = null, labelSd = 0;
+            if (levelsContemporary) {
+                const fam = readLiquidityLevels().filter((L: any) => isLiveVwap(String(L.text)));
+                const nrm = (t: string) => String(t).replace(/\[.*?\]/g, '').replace(/\s+/g, '').toLowerCase();
+                const findP = (re: RegExp) => { const m = fam.find((L: any) => re.test(nrm(L.text))); return m ? m.price : null; };
+                const w0 = findP(/^vwap$/);
+                if (w0 != null) {
+                    labelVwap = w0;
+                    const cand: number[] = [];
+                    const p1 = findP(/^vwap\+1/), m1 = findP(/^vwap-1/), p2 = findP(/^vwap\+2/), m2 = findP(/^vwap-2/);
+                    if (p1 != null) cand.push(Math.abs(p1 - w0));
+                    if (m1 != null) cand.push(Math.abs(w0 - m1));
+                    if (p2 != null) cand.push(Math.abs(p2 - w0) / 2);
+                    if (m2 != null) cand.push(Math.abs(w0 - m2) / 2);
+                    if (cand.length) labelSd = cand.reduce((a, b) => a + b, 0) / cand.length;
+                }
+            }
+            // Zdroj VWAP: 'bars' (načteno → per-bar, ověřená cesta) → 'indicator' (labely, fixní snapshot)
+            // → 'none' (ani jedno → deviace neukazuj, ať není špatné číslo).
+            const vwapSource: 'bars' | 'indicator' | 'none' = !barApprox ? 'bars' : (labelVwap != null ? 'indicator' : 'none');
+            const vwapApprox = vwapSource === 'none'; // varování jen když fakt nemáme spolehlivý zdroj
             let cV = 0, cPV = 0, cPV2 = 0;
             const accBar = (b: any) => { const tp = (b[2] + b[3] + b[4]) / 3; const v = b[5] || 0; cV += v; cPV += v * tp; cPV2 += v * tp * tp; };
             for (let i = anchor; i <= si0; i++) { const b = bars.valueAt(i); if (b) accBar(b); }
@@ -544,12 +621,15 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                 prevDay = curDay;
                 accBar(bar);
                 if (cV > 0) { const w = cPV / cV; const va = (cPV2 / cV) - w * w; lastVwap = w; lastSd = va > 0 ? Math.sqrt(va) : 0; }
-                // V baru prvního zásahu reálné TP najdi level(y) u TP: dynamický VWAP + statické (konfluence).
-                if (tpLevels === null && lastVwap != null) {
+                // Efektivní VWAP/σ pro pásma: 'indicator' = fixní snapshot z labelů, 'bars' = per-bar výpočet.
+                const effW = vwapSource === 'indicator' ? labelVwap : lastVwap;
+                const effSd = vwapSource === 'indicator' ? labelSd : lastSd;
+                // V baru prvního zásahu reálné TP najdi level(y) u TP: VWAP/deviace + statické (konfluence).
+                if (tpLevels === null && vwapSource !== 'none' && effW != null) {
                     const hitTP = isLong ? bar[2] >= tp : bar[3] <= tp;
                     if (hitTP) {
                         const cands: { label: string; price: number }[] = [];
-                        for (const cc of tpVwapSpecs) cands.push({ label: cc.l, price: lastVwap + cc.k * lastSd });
+                        for (const cc of tpVwapSpecs) cands.push({ label: cc.l, price: effW + cc.k * effSd });
                         for (const L of staticLevels) cands.push({ label: L.label, price: L.price });
                         let best: any = null, bd = Infinity;
                         for (const c of cands) { const d = Math.abs(tp - c.price); if (d < bd) { bd = d; best = c; } }
@@ -572,10 +652,10 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                     if (!Lv.reached) { const hit = isLong ? bar[2] >= Lv.price : bar[3] <= Lv.price; if (hit) { Lv.reached = true; Lv.bars = i - si0; } }
                 }
                 // Dynamické pásmo: hodnota AŽ V TOMTO BARU. Reached = cena se ho dotkla z favorable strany.
-                if (lastVwap != null) {
+                if (vwapSource !== 'none' && effW != null) {
                     for (const Lv of dynLv) {
                         if (Lv.reached) continue;
-                        const band = lastVwap + Lv.k * lastSd;
+                        const band = effW + Lv.k * effSd;
                         const fav2 = isLong ? band > entry : band < entry; // jen favorable cíl (za entry)
                         const hit = isLong ? bar[2] >= band : bar[3] <= band;
                         if (fav2 && hit) { Lv.reached = true; Lv.bars = i - si0; Lv.price = roundTick2(band); Lv.r = Math.round((isLong ? (band - entry) : (entry - band)) / risk * 100) / 100; }
@@ -587,8 +667,10 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             const mfePotentialR = (favOk && favDist >= 0) ? Math.round((favDist / risk) * 100) / 100 : null;
             for (const Lv of staticLevels) { const d = isLong ? Lv.price - entry : entry - Lv.price; Lv.r = Math.round((d / risk) * 100) / 100; }
             // Nedosažená dynamická pásma: R z poslední hodnoty pásma (orientačně, kam doputovalo).
+            const finalW = vwapSource === 'indicator' ? labelVwap : lastVwap;
+            const finalSd = vwapSource === 'indicator' ? labelSd : lastSd;
             for (const Lv of dynLv) {
-                if (!Lv.reached && lastVwap != null) { const band = lastVwap + Lv.k * lastSd; Lv.price = roundTick2(band); const fav2 = isLong ? band > entry : band < entry; Lv.r = fav2 ? Math.round((isLong ? (band - entry) : (entry - band)) / risk * 100) / 100 : null; }
+                if (!Lv.reached && vwapSource !== 'none' && finalW != null) { const band = finalW + Lv.k * finalSd; Lv.price = roundTick2(band); const fav2 = isLong ? band > entry : band < entry; Lv.r = fav2 ? Math.round((isLong ? (band - entry) : (entry - band)) / risk * 100) / 100 : null; }
             }
             // Spoj statické + dynamické (jen ta s platným favorable R), seřaď dle vzdálenosti, ořež na 8.
             const limited = [...staticLevels, ...dynLv.filter(d => d.r != null && d.r > 0)]
