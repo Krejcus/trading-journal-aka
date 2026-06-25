@@ -2077,10 +2077,7 @@ const App: React.FC = () => {
         !modeChanged &&
         !combinedArchivedMergedRef.current &&
         archivedAccounts.length > 0;
-      // SELF-HEAL: když filters.accounts spadne na prázdno (a NEjsme v 'combined', kde prázdno=vše),
-      // dashboard by ukázal 0/prázdno dokud reload. Dopočítej účty pro aktuální mód i bez změny módu.
-      const accountsEmptyStuck = filters.accounts.length === 0 && dashboardMode !== 'combined';
-      if (!modeChanged && !combinedFirstArchivedLoad && !accountsEmptyStuck) {
+      if (!modeChanged && !combinedFirstArchivedLoad) {
         return; // User klikl v dropdownu — neresetujeme jeho výběr.
       }
       lastAppliedModeRef.current = dashboardMode;
@@ -2135,7 +2132,7 @@ const App: React.FC = () => {
       safeSetItem('alphatrade_dash_mode', dashboardMode);
 
     }
-  }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone, dashFocusAccount, filters.accounts.length]);
+  }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone, dashFocusAccount]);
 
   const contextAccounts = useMemo(() => {
     // Backtest svět: jen Backtest účty. Live svět: Backtest účty NIKDY (oddělené světy).
@@ -2381,10 +2378,13 @@ const App: React.FC = () => {
       const matchHour = filters.hours.includes(h);
 
       let matchAcc = false;
-      // Prázdný account-filtr: "ukaž vše" platí JEN v módu 'combined' (Vše).
-      // U konkrétního módu (funded/challenge/backtesting) prázdný filtr znamená,
-      // že v něm není žádný aktivní účet → nic nezobrazuj (obchody se ale nemažou).
-      const emptyMeansAll = dashboardMode === 'combined';
+      // Prázdný account-filtr = "ukaž vše v rámci módu" pro combined + funded/challenge.
+      // U funded/challenge to scopuje hard phase filtr výše (ř. 2361-2373), takže account filtr je
+      // jen volitelné zúžení — prázdný neznamená 0R, ale celý mód. Dřív bylo jen 'combined' → prázdný/
+      // rozsynchovaný filtr ve funded/challenge dělal prázdný dashboard (0R) a pral se s odznačováním.
+      // POZOR: archive ani backtesting tu NEsmí být — nemají hard phase filtr, spoléhají na explicitní
+      // seznam účtů; prázdný = nic (jinak by archive ukázal i aktivní obchody).
+      const emptyMeansAll = dashboardMode === 'combined' || dashboardMode === 'funded' || dashboardMode === 'challenge';
       if (viewMode === 'combined') {
         // In combined mode, if filtering by accounts, include trades from both master and its children
         if (filters.accounts.length === 0) {
