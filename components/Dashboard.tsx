@@ -1024,6 +1024,7 @@ const ProKpiCard: React.FC<{
                   paddingAngle={3}
                   dataKey="value"
                   stroke="none"
+                  isAnimationActive={false}
                   {...({ activeIndex, activeShape: renderActiveShape, onMouseEnter: onPieEnter, onMouseLeave: onPieLeave } as any)}
                 >
                   {chartData.map((entry, index) => {
@@ -1092,6 +1093,7 @@ const ProKpiCard: React.FC<{
                   paddingAngle={0}
                   dataKey="value"
                   stroke="none"
+                  isAnimationActive={false}
                   {...({ activeIndex, activeShape: renderActiveShape, onMouseEnter: onPieEnter, onMouseLeave: onPieLeave } as any)}
                 >
                   {chartData.map((entry, index) => {

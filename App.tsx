@@ -2234,9 +2234,19 @@ const App: React.FC = () => {
     const grouped = new Map<string, Trade[]>();
     const independent: Trade[] = [];
 
+    // Kategorie účtu (Funded/Challenge/…) — součást klíče, ať se kopie téhož obchodu napříč
+    // KATEGORIEMI NEslučují do jednoho řádku. Jinak: AlphaBridge obchod zalogovaný na funded
+    // i challenge účty → 1 řádek s masterem na (např.) challenge účtu → ve funded combined se
+    // vyfiltruje a „zmizí". S kategorií v klíči má funded i challenge svůj vlastní agregát.
+    const acctCat = (accId: string): string => {
+      const a = accounts.find(x => String(x.id) === accId) || archivedAccounts.find(x => String(x.id) === accId);
+      return String(a?.phase || a?.type || 'x');
+    };
+
     trades.forEach(t => {
       // Logic: If it's a copy, group by masterTradeId. If it's a master, group by its own ID.
-      const key = t.masterTradeId || (t.isMaster ? t.id : t.groupId);
+      const baseKey = t.masterTradeId || (t.isMaster ? t.id : t.groupId);
+      const key = baseKey ? `${acctCat(String(t.accountId))}::${baseKey}` : null;
       if (key) {
         if (!grouped.has(key as string)) grouped.set(key as string, []);
         grouped.get(key as string)!.push(t);
@@ -2257,7 +2267,7 @@ const App: React.FC = () => {
     });
 
     return [...independent, ...aggregated].sort((a, b) => b.timestamp - a.timestamp);
-  }, [trades, viewMode, effectiveActiveAccount, accounts, contextAccounts]);
+  }, [trades, viewMode, effectiveActiveAccount, accounts, contextAccounts, archivedAccounts]);
 
   const stats = useMemo(() => {
     try {

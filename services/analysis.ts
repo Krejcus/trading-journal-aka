@@ -220,33 +220,41 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
 
     if (!isMissed) {
       const d = new Date(trade.date);
-      const dateKey = d.toISOString().split('T')[0];
-      const cal = calendarMap.get(dateKey) || { pnl: 0, count: 0 };
-      calendarMap.set(dateKey, { pnl: cal.pnl + trade.pnl, count: cal.count + 1 });
+      // ROBUST: vadné/chybějící datum NESMÍ shodit celý výpočet (d.toISOString() hodí RangeError,
+      // hourMap.get('NaN') → undefined.pnl TypeError) → catch v App vrátí prázdné staty = prázdný
+      // dashboard. Datum-závislé buckety přeskoč, ale pnl/win-loss/equity se počítá dál.
+      const dOk = !isNaN(d.getTime());
+      if (dOk) {
+        const dateKey = d.toISOString().split('T')[0];
+        const cal = calendarMap.get(dateKey) || { pnl: 0, count: 0 };
+        calendarMap.set(dateKey, { pnl: cal.pnl + trade.pnl, count: cal.count + 1 });
 
-      const y = d.getFullYear(), m = d.getMonth();
-      if (!monthlyMap.has(y)) monthlyMap.set(y, new Map());
-      const yearData = monthlyMap.get(y)!;
-      yearData.set(m, (yearData.get(m) || 0) + trade.pnl);
+        const y = d.getFullYear(), m = d.getMonth();
+        if (!monthlyMap.has(y)) monthlyMap.set(y, new Map());
+        const yearData = monthlyMap.get(y)!;
+        yearData.set(m, (yearData.get(m) || 0) + trade.pnl);
 
-      const dayName = days[d.getDay()];
-      const dm = dayMap.get(dayName);
-      dm.pnl += trade.pnl; dm.count++;
-      if (beOverride) { dm.be = (dm.be || 0) + 1; }
-      else if (trade.pnl > 0.01) { dm.profit += trade.pnl; dm.wins++; }
-      else if (trade.pnl < -0.01) { dm.loss += trade.pnl; }
-      else { dm.be = (dm.be || 0) + 1; }
+        const dayName = days[d.getDay()];
+        const dm = dayMap.get(dayName);
+        dm.pnl += trade.pnl; dm.count++;
+        if (beOverride) { dm.be = (dm.be || 0) + 1; }
+        else if (trade.pnl > 0.01) { dm.profit += trade.pnl; dm.wins++; }
+        else if (trade.pnl < -0.01) { dm.loss += trade.pnl; }
+        else { dm.be = (dm.be || 0) + 1; }
+      }
 
       // Hourly bucket podle ENTRY času — odpoví na otázku "v kolik hodin obchoduješ",
       // ne "v kolik se ti zavírají pozice". Dayname zůstává podle exit (daily P&L bucket).
       const entryD = getTradeEntryDate(trade);
-      const hr = entryD.getHours().toString();
-      const hm = hourMap.get(hr);
+      const hr = (entryD instanceof Date && !isNaN(entryD.getTime())) ? entryD.getHours().toString() : null;
+      const hm = hr != null ? hourMap.get(hr) : undefined;
+      if (hm) {
       hm.pnl += trade.pnl; hm.count++;
       if (beOverride) { hm.be = (hm.be || 0) + 1; }
       else if (trade.pnl > 0.01) { hm.profit += trade.pnl; hm.wins++; }
       else if (trade.pnl < -0.01) { hm.loss += trade.pnl; }
       else { hm.be = (hm.be || 0) + 1; }
+      }
 
       if (beOverride) {
         // BE override — pnl jde do equity, ale do win/loss buckets ne
