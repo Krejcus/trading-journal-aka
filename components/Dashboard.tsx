@@ -1064,7 +1064,7 @@ const ProKpiCard: React.FC<{
               </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
-                const cx = 64, cy = 64, rOut = 62, rIn = 37; // jako dřív (recharts 60% inner, pás 25) + plná velikost
+                const cx = 64, cy = 64, rOut = 62, rIn = 31; // tlustší pás (~50% inner) dle vzoru
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
                 const nodes: React.ReactNode[] = [
                   <path key="track" d={annularPath(cx, cy, rIn, rOut, -Math.PI / 2, Math.PI / 2)} fill={trackColor} />,
