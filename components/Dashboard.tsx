@@ -1046,8 +1046,17 @@ const ProKpiCard: React.FC<{
           <span className="text-2xl font-black tracking-tighter leading-none mb-1">
             {displayValue}
           </span>
-          <div className="h-16 w-full max-w-[140px] flex items-end justify-center">
-            {/* Lehké SVG (synchronní, okamžité) — semicircle gauge: dráha + gradient segmenty. */}
+          <div className="h-16 w-full max-w-[140px] flex items-end justify-center relative">
+            {activeIndex >= 0 && chartData[activeIndex] && (() => {
+              const seg: any = chartData[activeIndex];
+              const val = seg.unit === '$' ? `$${Math.round(seg.value).toLocaleString()}` : `${seg.value}`;
+              return (
+                <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-2 z-20 px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap pointer-events-none shadow-xl" style={{ background: isDark ? '#1e293b' : '#fff', color: isDark ? '#fff' : '#0f172a', border: `1px solid ${seg.fill}55` }}>
+                  <span style={{ color: seg.fill }}>●</span> {seg.name}: {val}
+                </div>
+              );
+            })()}
+            {/* Lehké SVG (synchronní, okamžité) — semicircle gauge: dráha + gradient segmenty + hover. */}
             <svg viewBox="0 0 140 72" width="100%" height="100%" style={{ maxWidth: 140, overflow: 'visible' }}>
               <defs>
                 <linearGradient id={`${gradId}p`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
@@ -1068,7 +1077,9 @@ const ProKpiCard: React.FC<{
                   const a0 = a + (i > 0 ? ins : 0);
                   const a1 = a + span - (i < chartData.length - 1 ? ins : 0);
                   a += span;
-                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rOut, a0, a1)} fill={fillOf(d.fill)} className="transition-all duration-300" />);
+                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rOut, a0, a1)} fill={fillOf(d.fill)}
+                    onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)}
+                    style={{ cursor: 'pointer', transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px`, transform: activeIndex === i ? 'scale(1.07)' : 'scale(1)', transition: 'transform 0.18s ease' } as React.CSSProperties} />);
                 });
                 return nodes;
               })()}
@@ -1114,8 +1125,17 @@ const ProKpiCard: React.FC<{
       return (
         <div className="flex flex-col items-center">
           <div className="h-16 w-16 lg:h-20 lg:w-20 cursor-pointer relative">
-            {/* Lehké SVG (synchronní, okamžité) — donut: dráha + gradient prstenec. */}
-            <svg viewBox="0 0 100 100" width="100%" height="100%">
+            {activeIndex >= 0 && chartData[activeIndex] && (() => {
+              const seg: any = chartData[activeIndex];
+              const val = seg.unit === '$' ? `$${Math.round(seg.value).toLocaleString()}` : `${seg.value}`;
+              return (
+                <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-2 z-20 px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap pointer-events-none shadow-xl" style={{ background: isDark ? '#1e293b' : '#fff', color: isDark ? '#fff' : '#0f172a', border: `1px solid ${seg.fill}55` }}>
+                  <span style={{ color: seg.fill }}>●</span> {seg.name}: {val}
+                </div>
+              );
+            })()}
+            {/* Lehké SVG (synchronní, okamžité) — donut: dráha + gradient prstenec + hover. */}
+            <svg viewBox="0 0 100 100" width="100%" height="100%" style={{ overflow: 'visible' }}>
               <defs>
                 <linearGradient id={`${gradId}p`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
                 <linearGradient id={`${gradId}l`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
@@ -1125,11 +1145,12 @@ const ProKpiCard: React.FC<{
                 const cx = 50, cy = 50, rOut = 49, rIn = 34;
                 const rMid = (rIn + rOut) / 2, bw = rOut - rIn;
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
+                const hov = (i: number): React.CSSProperties => ({ cursor: 'pointer', transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px`, transform: activeIndex === i ? 'scale(1.07)' : 'scale(1)', transition: 'transform 0.18s ease' });
                 const nodes: React.ReactNode[] = [
                   <circle key="track" cx={cx} cy={cy} r={rMid} fill="none" stroke={trackColor} strokeWidth={bw} />,
                 ];
                 if (chartData.length === 1) {
-                  nodes.push(<circle key="0" cx={cx} cy={cy} r={rMid} fill="none" stroke={fillOf(chartData[0].fill)} strokeWidth={bw} />);
+                  nodes.push(<circle key="0" cx={cx} cy={cy} r={rMid} fill="none" stroke={fillOf(chartData[0].fill)} strokeWidth={bw} onMouseEnter={() => setActiveIndex(0)} onMouseLeave={() => setActiveIndex(-1)} style={hov(0)} />);
                   return nodes;
                 }
                 const gapR = 0.06;
@@ -1137,7 +1158,7 @@ const ProKpiCard: React.FC<{
                 chartData.forEach((d, i) => {
                   const span = (d.value / total) * Math.PI * 2;
                   const ins = Math.min(gapR / 2, span / 3);
-                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rOut, a + ins, a + span - ins)} fill={fillOf(d.fill)} className="transition-all duration-300" />);
+                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rOut, a + ins, a + span - ins)} fill={fillOf(d.fill)} onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)} style={hov(i)} />);
                   a += span;
                 });
                 return nodes;
