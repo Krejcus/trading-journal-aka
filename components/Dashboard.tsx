@@ -1046,7 +1046,7 @@ const ProKpiCard: React.FC<{
           <span className="text-2xl font-black tracking-tighter leading-none mb-1">
             {displayValue}
           </span>
-          <div className="h-14 w-full max-w-[112px] flex items-end justify-center relative">
+          <div className="h-7 w-full max-w-[48px] flex items-end justify-center relative">
             {activeIndex >= 0 && chartData[activeIndex] && (() => {
               const seg: any = chartData[activeIndex];
               const val = seg.unit === '$' ? `$${Math.round(seg.value).toLocaleString()}` : `${seg.value}`;
@@ -1057,7 +1057,7 @@ const ProKpiCard: React.FC<{
               );
             })()}
             {/* Lehké SVG (synchronní, okamžité) — semicircle gauge: dráha + gradient segmenty + hover. */}
-            <svg viewBox="0 0 128 64" width="100%" height="100%" style={{ maxWidth: 112, overflow: 'visible' }}>
+            <svg viewBox="0 0 128 64" width="100%" height="100%" style={{ maxWidth: 48, overflow: 'visible' }}>
               <defs>
                 <linearGradient id={`${gradId}p`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
                 <linearGradient id={`${gradId}l`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
