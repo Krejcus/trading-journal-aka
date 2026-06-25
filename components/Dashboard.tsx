@@ -1994,10 +1994,10 @@ const Dashboard: React.FC<DashboardProps> = ({
                 const second = items[pairInfo];
                 rows.push(
                   <div key={`kpi-pair-${item.widget.id}-${second.widget.id}`} className="grid grid-cols-2 gap-3">
-                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                    <motion.div style={{ height: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
                       {item.content}
                     </motion.div>
-                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                    <motion.div style={{ height: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
                       {second.content}
                     </motion.div>
                   </div>
@@ -2007,7 +2007,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 // ne natažený přes celé pole (vypadalo by to směšně velké)
                 rows.push(
                   <div key={`kpi-solo-${item.widget.id}`} className="grid grid-cols-2 gap-3">
-                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                    <motion.div style={{ height: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
                       {item.content}
                     </motion.div>
                   </div>

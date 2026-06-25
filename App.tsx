@@ -2075,7 +2075,10 @@ const App: React.FC = () => {
         !modeChanged &&
         !combinedArchivedMergedRef.current &&
         archivedAccounts.length > 0;
-      if (!modeChanged && !combinedFirstArchivedLoad) {
+      // SELF-HEAL: když filters.accounts spadne na prázdno (a NEjsme v 'combined', kde prázdno=vše),
+      // dashboard by ukázal 0/prázdno dokud reload. Dopočítej účty pro aktuální mód i bez změny módu.
+      const accountsEmptyStuck = filters.accounts.length === 0 && dashboardMode !== 'combined';
+      if (!modeChanged && !combinedFirstArchivedLoad && !accountsEmptyStuck) {
         return; // User klikl v dropdownu — neresetujeme jeho výběr.
       }
       lastAppliedModeRef.current = dashboardMode;
@@ -2130,7 +2133,7 @@ const App: React.FC = () => {
       safeSetItem('alphatrade_dash_mode', dashboardMode);
 
     }
-  }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone, dashFocusAccount]);
+  }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone, dashFocusAccount, filters.accounts.length]);
 
   const contextAccounts = useMemo(() => {
     // Backtest svět: jen Backtest účty. Live svět: Backtest účty NIKDY (oddělené světy).
