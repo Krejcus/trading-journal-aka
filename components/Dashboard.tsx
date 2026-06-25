@@ -1057,14 +1057,14 @@ const ProKpiCard: React.FC<{
               );
             })()}
             {/* Lehké SVG (synchronní, okamžité) — semicircle gauge: dráha + gradient segmenty + hover. */}
-            <svg viewBox="0 0 140 72" width="100%" height="100%" style={{ maxWidth: 140, overflow: 'visible' }}>
+            <svg viewBox="0 0 128 64" width="100%" height="100%" style={{ maxWidth: 140, overflow: 'visible' }}>
               <defs>
                 <linearGradient id={`${gradId}p`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
                 <linearGradient id={`${gradId}l`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
               </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
-                const cx = 70, cy = 66, rOut = 62, rIn = 45; // pás 17 (mezi původním 25 a tenkým 12)
+                const cx = 64, cy = 64, rOut = 62, rIn = 37; // jako dřív (recharts 60% inner, pás 25) + plná velikost
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
                 const nodes: React.ReactNode[] = [
                   <path key="track" d={annularPath(cx, cy, rIn, rOut, -Math.PI / 2, Math.PI / 2)} fill={trackColor} />,
@@ -1123,7 +1123,7 @@ const ProKpiCard: React.FC<{
       if (chartData.length === 0) chartData.push({ name: 'Žádná data', value: 1, fill: isDark ? '#334155' : '#e2e8f0', unit: '' });
       return (
         <div className="flex flex-col items-center">
-          <div className="h-16 w-16 lg:h-20 lg:w-20 cursor-pointer relative">
+          <div className="h-20 w-20 lg:h-24 lg:w-24 cursor-pointer relative">
             {activeIndex >= 0 && chartData[activeIndex] && (() => {
               const seg: any = chartData[activeIndex];
               const val = seg.unit === '$' ? `$${Math.round(seg.value).toLocaleString()}` : `${seg.value}`;
@@ -1141,7 +1141,7 @@ const ProKpiCard: React.FC<{
               </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
-                const cx = 50, cy = 50, rOut = 49, rIn = 38; // pás 11 (mezi původním 15 a tenkým 8)
+                const cx = 50, cy = 50, rOut = 49, rIn = 33; // jako dřív (recharts ~70% inner, pás 16)
                 const rMid = (rIn + rOut) / 2, bw = rOut - rIn;
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
                 const nodes: React.ReactNode[] = [
@@ -1164,7 +1164,7 @@ const ProKpiCard: React.FC<{
               })()}
             </svg>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className={`text-xs font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayValue}</span>
+              <span className={`text-sm lg:text-base font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayValue}</span>
             </div>
           </div>
           <div className="flex gap-1 mt-2">
