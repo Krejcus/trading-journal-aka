@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback, useDeferredValue, useId } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, DashboardLayouts, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
@@ -1566,10 +1566,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   onAnalyzeWithAI,
   onNavigateToSettings,
 }) => {
-  // PERF: těžké překreslení ~20 grafů odlož na nízkou prioritu (concurrent). Při změně filtru/
-  // viewMode/módu React commitne UI (filtry, nav) HNED a grafy překreslí v pozadí přerušitelně
-  // → konec „brutálně pomalých" filtrů a zamrzání. Widgety čtou `stats` (= deferred).
-  const stats = useDeferredValue(rawStats);
+  // POZN: dřív tu byl useDeferredValue(rawStats) jako „concurrent" pokus, ale na takhle těžkém
+  // stromu jen ZDVOJIL render na každou změnu filtru (a při tažení slideru thrashoval → lag + horký
+  // CPU). Mobilní perf vyřešily SVG KPI + lazy-mount, takže deferred je teď čistá zátěž. Pryč.
+  const stats = rawStats;
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
   const isMobileEditing = isMobileEditingProp;
   const setIsMobileEditing = setIsMobileEditingProp ?? (() => {});
