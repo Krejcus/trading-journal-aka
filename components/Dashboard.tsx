@@ -110,6 +110,30 @@ const annularPath = (cx: number, cy: number, rIn: number, rOut: number, a0: numb
   return `M ${ox0} ${oy0} A ${rOut} ${rOut} 0 ${large} 1 ${ox1} ${oy1} L ${ix1} ${iy1} A ${rIn} ${rIn} 0 ${large} 0 ${ix0} ${iy0} Z`;
 };
 
+// ── Lazy-mount pro těžké mobilní widgety ───────────────────────────────────────
+// Mobilní seznam jinak renderuje VŠECHNY widgety naráz (i grafy/kalendář mimo obraz)
+// → freeze při navigaci + lag při filtru. Tohle vyrenderuje obsah až 400px před
+// viewportem (IntersectionObserver). Placeholder drží výšku → žádný layout shift.
+// Po prvním zobrazení zůstává mountnutý. Dokud není vidět, parent re-render (filtr)
+// stojí skoro nic (renderuje se null).
+const LazyMobileWidget: React.FC<{ minHeight: number; children: () => React.ReactNode }> = ({ minHeight, children }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    if (show) return;
+    const el = ref.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === 'undefined') { setShow(true); return; }
+    const io = new IntersectionObserver(
+      (entries) => { if (entries.some(e => e.isIntersecting)) { setShow(true); io.disconnect(); } },
+      { rootMargin: '400px 0px' }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [show]);
+  return <div ref={ref} style={{ minHeight }} className="h-full">{show ? children() : null}</div>;
+};
+
 // react-grid-layout configuration
 const GRID_BREAKPOINTS = { xxl: 1920, lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 };
 const GRID_COLS = { xxl: 24, lg: 12, md: 12, sm: 6, xs: 4, xxs: 2 };
@@ -1952,24 +1976,26 @@ const Dashboard: React.FC<DashboardProps> = ({
               'kpi_max_drawdown', 'kpi_execution_rate', 'discipline_streak',
             ]);
 
-            // Pre-compute visible items with their metadata
-            const items = currentLayout.flatMap(widget => {
-              const content = renderWidget(widget.id, widget);
-              if (content == null) return [];
+            // Wrapper: během editace motion.div (wiggle), jinak plain div (žádný framer-motion
+            // overhead na ~19 widgetech při každém renderu).
+            const Wrap: any = isMobileEditing ? motion.div : 'div';
+            const wrapAnim: any = isMobileEditing ? { animate: wiggleAnimate, transition: wiggleTransition } : {};
+
+            // POUZE metadata — renderWidget voláme až LÍNĚ (níže), ne tady. Dřív se tu volal pro
+            // VŠECHNY widgety → mountly se i grafy/kalendář mimo obraz = freeze. currentLayout je
+            // už pre-filtrovaný (visible + ne-backtest mimo backtest svět), takže content nebude null.
+            const items = currentLayout.map(widget => {
               const master = MASTER_WIDGET_LIST.find(m => m.id === widget.id);
               const rowSpan = master?.defaultRowSpan ?? 2;
-              // isKpi = can be paired: only simple ProKpiCard widgets, not complex ones
               const isKpi = rowSpan === 1 && PAIRABLE_KPI_IDS.has(widget.id);
-              return [{ widget, content, isKpi }];
+              return { widget, isKpi };
             });
 
             // Global KPI pairing: collect all pairable KPI indices first, pair them up globally.
-            // This ensures KPIs get paired even when separated by full-width widgets.
             const kpiIndices = items.reduce<number[]>((acc, item, idx) => {
               if (item.isKpi) acc.push(idx);
               return acc;
             }, []);
-            // Build pairs: (first-kpi-index, second-kpi-index | null)
             const kpiPairMap = new Map<number, number | null>();
             for (let k = 0; k < kpiIndices.length; k += 2) {
               kpiPairMap.set(kpiIndices[k], kpiIndices[k + 1] ?? null);
@@ -1983,40 +2009,45 @@ const Dashboard: React.FC<DashboardProps> = ({
               if (pairInfo === -1) return; // second of a pair — already rendered
 
               if (item.isKpi && pairInfo != null) {
-                // First of a pair → render grid-cols-2
+                // KPI pár — levné SVG karty, render eager (jsou nahoře, vždy vidět).
                 const second = items[pairInfo];
                 rows.push(
                   <div key={`kpi-pair-${item.widget.id}-${second.widget.id}`} className="grid grid-cols-2 gap-3">
-                    <motion.div style={{ height: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
-                      {item.content}
-                    </motion.div>
-                    <motion.div style={{ height: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
-                      {second.content}
-                    </motion.div>
+                    <Wrap style={{ height: 160 }} {...wrapAnim} className={editClass}>{renderWidget(item.widget.id, item.widget)}</Wrap>
+                    <Wrap style={{ height: 160 }} {...wrapAnim} className={editClass}>{renderWidget(second.widget.id, second.widget)}</Wrap>
                   </div>
                 );
               } else if (item.isKpi) {
-                // Unpaired KPI (lichý počet) — na mobilu poloviční šířka,
-                // ne natažený přes celé pole (vypadalo by to směšně velké)
+                // Unpaired KPI (lichý počet) — poloviční šířka.
                 rows.push(
                   <div key={`kpi-solo-${item.widget.id}`} className="grid grid-cols-2 gap-3">
-                    <motion.div style={{ height: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
-                      {item.content}
-                    </motion.div>
+                    <Wrap style={{ height: 160 }} {...wrapAnim} className={editClass}>{renderWidget(item.widget.id, item.widget)}</Wrap>
                   </div>
                 );
               } else {
-                // Full-width widget (komplexní karty)
+                // Full-width widget (komplexní karty / grafy / kalendář).
                 const fixedHeight = chartHeights[item.widget.id];
                 const isSelfSizing = item.widget.id === 'daily_insight' || item.widget.id === 'pending_ai_review';
-                const style = isSelfSizing
-                  ? {}
-                  : fixedHeight ? { height: fixedHeight } : { minHeight: 260 };
-                rows.push(
-                  <motion.div key={item.widget.id} style={style} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
-                    {item.content}
-                  </motion.div>
-                );
+                // Lazy-mount jen mimo editaci a jen u widgetů se známou výškou (placeholder nepřeskočí
+                // scroll + recharts „height:100%" potřebuje DEFINITE výšku, jinak zkolabuje na 0).
+                // Self-sizing / proměnná výška / editace → render eager (zachová původní chování).
+                const canLazy = !isMobileEditing && !isSelfSizing && fixedHeight != null;
+                if (canLazy) {
+                  // Graf/těžký widget se známou výškou → definite height (recharts 100% se vyřeší)
+                  // + lazy mount; placeholder drží přesnou výšku → žádný layout shift.
+                  rows.push(
+                    <Wrap key={item.widget.id} style={{ height: fixedHeight }} {...wrapAnim} className={editClass}>
+                      <LazyMobileWidget minHeight={fixedHeight}>{() => renderWidget(item.widget.id, item.widget)}</LazyMobileWidget>
+                    </Wrap>
+                  );
+                } else {
+                  const style = isSelfSizing ? {} : (fixedHeight ? { height: fixedHeight } : { minHeight: 260 });
+                  rows.push(
+                    <Wrap key={item.widget.id} style={style} {...wrapAnim} className={editClass}>
+                      {renderWidget(item.widget.id, item.widget)}
+                    </Wrap>
+                  );
+                }
               }
             });
             return <div className="flex flex-col gap-4 px-2">{rows}</div>;
