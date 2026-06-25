@@ -1070,17 +1070,20 @@ const ProKpiCard: React.FC<{
                   <path key="track" d={annularPath(cx, cy, rIn, rOut, -Math.PI / 2, Math.PI / 2)} fill={trackColor} />,
                 ];
                 let a = -Math.PI / 2;
+                const visuals: React.ReactNode[] = [];
+                const hits: React.ReactNode[] = [];
                 chartData.forEach((d, i) => {
                   const span = (d.value / total) * Math.PI;
                   const a0 = a, a1 = a + span; // bez mezery — segmenty se dotýkají
                   a += span;
-                  // Hover: segment roste JEN ven (vnitřní okraj fixní) → kurzor nikdy nespadne do díry = žádné blikání.
-                  const rO = activeIndex === i ? rOut + 4 : rOut;
-                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rO, a0, a1)} fill={fillOf(d.fill)}
-                    onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)}
-                    style={{ cursor: 'pointer' }} />);
+                  // Viditelná vrstva: plynulé CSS scale ze středu; pointer-events vypnuté (ať neovlivní hit).
+                  visuals.push(<path key={`v${i}`} d={annularPath(cx, cy, rIn, rOut, a0, a1)} fill={fillOf(d.fill)}
+                    style={{ pointerEvents: 'none', transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px`, transform: activeIndex === i ? 'scale(1.07)' : 'scale(1)', transition: 'transform 0.18s ease' } as React.CSSProperties} />);
+                  // Statická „hit" vrstva (větší, průhledná) — chytá hover a NEhýbe se → žádné blikání.
+                  hits.push(<path key={`h${i}`} d={annularPath(cx, cy, rIn, rOut + 6, a0, a1)} fill="transparent"
+                    onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)} style={{ cursor: 'pointer' }} />);
                 });
-                return nodes;
+                return [...nodes, ...visuals, ...hits];
               })()}
             </svg>
           </div>
@@ -1123,7 +1126,7 @@ const ProKpiCard: React.FC<{
       if (chartData.length === 0) chartData.push({ name: 'Žádná data', value: 1, fill: isDark ? '#334155' : '#e2e8f0', unit: '' });
       return (
         <div className="flex flex-col items-center">
-          <div className="h-20 w-20 lg:h-24 lg:w-24 cursor-pointer relative">
+          <div className="h-14 w-14 cursor-pointer relative">
             {activeIndex >= 0 && chartData[activeIndex] && (() => {
               const seg: any = chartData[activeIndex];
               const val = seg.unit === '$' ? `$${Math.round(seg.value).toLocaleString()}` : `${seg.value}`;
@@ -1141,30 +1144,37 @@ const ProKpiCard: React.FC<{
               </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
-                const cx = 50, cy = 50, rOut = 49, rIn = 33; // jako dřív (recharts ~70% inner, pás 16)
+                const cx = 50, cy = 50, rOut = 49, rIn = 32; // tenčí prstenec (band 17)
                 const rMid = (rIn + rOut) / 2, bw = rOut - rIn;
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
                 const nodes: React.ReactNode[] = [
                   <circle key="track" cx={cx} cy={cy} r={rMid} fill="none" stroke={trackColor} strokeWidth={bw} />,
                 ];
                 if (chartData.length === 1) {
-                  nodes.push(<circle key="0" cx={cx} cy={cy} r={rMid} fill="none" stroke={fillOf(chartData[0].fill)} strokeWidth={bw} onMouseEnter={() => setActiveIndex(0)} onMouseLeave={() => setActiveIndex(-1)} style={{ cursor: 'pointer' }} />);
+                  nodes.push(<circle key="v0" cx={cx} cy={cy} r={rMid} fill="none" stroke={fillOf(chartData[0].fill)} strokeWidth={bw}
+                    style={{ pointerEvents: 'none', transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px`, transform: activeIndex === 0 ? 'scale(1.07)' : 'scale(1)', transition: 'transform 0.18s ease' } as React.CSSProperties} />);
+                  nodes.push(<circle key="h0" cx={cx} cy={cy} r={rMid} fill="none" stroke="transparent" strokeWidth={bw + 8} onMouseEnter={() => setActiveIndex(0)} onMouseLeave={() => setActiveIndex(-1)} style={{ pointerEvents: 'stroke', cursor: 'pointer' }} />);
                   return nodes;
                 }
                 let a = 0;
+                const visuals: React.ReactNode[] = [];
+                const hits: React.ReactNode[] = [];
                 chartData.forEach((d, i) => {
                   const span = (d.value / total) * Math.PI * 2;
                   const a0 = a, a1 = a + span; // bez mezery — segmenty se dotýkají
                   a += span;
-                  // Hover: roste JEN ven (vnitřek fixní) → kurzor nespadne do díry = žádné blikání.
-                  const rO = activeIndex === i ? rOut + 4 : rOut;
-                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rO, a0, a1)} fill={fillOf(d.fill)} onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)} style={{ cursor: 'pointer' }} />);
+                  // Viditelná vrstva: plynulé CSS scale; pointer-events vypnuté.
+                  visuals.push(<path key={`v${i}`} d={annularPath(cx, cy, rIn, rOut, a0, a1)} fill={fillOf(d.fill)}
+                    style={{ pointerEvents: 'none', transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px`, transform: activeIndex === i ? 'scale(1.07)' : 'scale(1)', transition: 'transform 0.18s ease' } as React.CSSProperties} />);
+                  // Statická „hit" vrstva (větší, průhledná) — chytá hover a NEhýbe se → žádné blikání.
+                  hits.push(<path key={`h${i}`} d={annularPath(cx, cy, rIn, rOut + 6, a0, a1)} fill="transparent"
+                    onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)} style={{ cursor: 'pointer' }} />);
                 });
-                return nodes;
+                return [...nodes, ...visuals, ...hits];
               })()}
             </svg>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className={`text-sm lg:text-base font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayValue}</span>
+              <span className={`text-[11px] font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayValue}</span>
             </div>
           </div>
           <div className="flex gap-1 mt-2">
