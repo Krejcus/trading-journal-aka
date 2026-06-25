@@ -96,6 +96,20 @@ import MonteCarloLab from './MonteCarloLab';
 import { Responsive as ResponsiveGridLayout, useContainerWidth } from 'react-grid-layout';
 import type { Layout, LayoutItem } from 'react-grid-layout';
 
+// ── Lehké SVG donut/gauge (náhrada za recharts Pie u KPI) ──────────────────────
+// Recharts ResponsiveContainer měří rozměr async → prodleva, než se graf objeví,
+// a Pie reconciliace je drahá při každém filtru. Čisté SVG = synchronní, okamžité, levné.
+// Úhel: 0 = nahoře (12h), roste PO SMĚRU hodin. annular = mezikruhový výsek.
+const _pt = (cx: number, cy: number, r: number, a: number): [number, number] => [cx + r * Math.sin(a), cy - r * Math.cos(a)];
+const annularPath = (cx: number, cy: number, rIn: number, rOut: number, a0: number, a1: number): string => {
+  const [ox0, oy0] = _pt(cx, cy, rOut, a0);
+  const [ox1, oy1] = _pt(cx, cy, rOut, a1);
+  const [ix1, iy1] = _pt(cx, cy, rIn, a1);
+  const [ix0, iy0] = _pt(cx, cy, rIn, a0);
+  const large = (a1 - a0) > Math.PI ? 1 : 0;
+  return `M ${ox0} ${oy0} A ${rOut} ${rOut} 0 ${large} 1 ${ox1} ${oy1} L ${ix1} ${iy1} A ${rIn} ${rIn} 0 ${large} 0 ${ix0} ${iy0} Z`;
+};
+
 // react-grid-layout configuration
 const GRID_BREAKPOINTS = { xxl: 1920, lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 };
 const GRID_COLS = { xxl: 24, lg: 12, md: 12, sm: 6, xs: 4, xxs: 2 };
@@ -1005,37 +1019,23 @@ const ProKpiCard: React.FC<{
           <span className="text-2xl font-black tracking-tighter leading-none mb-1">
             {displayValue}
           </span>
-          <div className="h-16 w-full max-w-[140px] min-w-[1px] min-h-[1px] relative">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-              <PieChart {...({ overflow: 'visible' } as any)}>
-                <defs>
-                  <linearGradient id="kpiProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
-                  <linearGradient id="kpiLossGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
-                </defs>
-                <RechartsTooltip content={<CustomKpiTooltip theme={theme} />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="100%"
-                  startAngle={180}
-                  endAngle={0}
-                  innerRadius="60%"
-                  outerRadius="100%"
-                  paddingAngle={3}
-                  dataKey="value"
-                  stroke="none"
-                  isAnimationActive={false}
-                  {...({ activeIndex, activeShape: renderActiveShape, onMouseEnter: onPieEnter, onMouseLeave: onPieLeave } as any)}
-                >
-                  {chartData.map((entry, index) => {
-                    let fill = entry.fill;
-                    if (fill === COLORS.profit) fill = "url(#kpiProfitGrad)";
-                    if (fill === COLORS.loss) fill = "url(#kpiLossGrad)";
-                    return <Cell key={`cell-${index}`} fill={fill} className="transition-all duration-300" />;
-                  })}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
+          <div className="h-16 w-full max-w-[140px] flex items-end justify-center">
+            {/* Lehké SVG (synchronní, okamžité) — semicircle gauge přes annularPath. */}
+            <svg viewBox="0 0 140 72" width="100%" height="100%" style={{ maxWidth: 140, overflow: 'visible' }}>
+              {(() => {
+                const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
+                const cx = 70, cy = 66, rOut = 62, rIn = 37;
+                const gapR = chartData.length > 1 ? 0.05 : 0;
+                let a = -Math.PI / 2;
+                return chartData.map((d, i) => {
+                  const span = (d.value / total) * Math.PI;
+                  const a0 = a + (i > 0 ? gapR / 2 : 0);
+                  const a1 = a + span - (i < chartData.length - 1 ? gapR / 2 : 0);
+                  a += span;
+                  return <path key={i} d={annularPath(cx, cy, rIn, rOut, a0, a1)} fill={d.fill} className="transition-all duration-300" />;
+                });
+              })()}
+            </svg>
           </div>
           <div className="flex gap-1 mt-1">
             {data.wins !== undefined && (
@@ -1076,35 +1076,24 @@ const ProKpiCard: React.FC<{
       if (chartData.length === 0) chartData.push({ name: 'Žádná data', value: 1, fill: isDark ? '#334155' : '#e2e8f0', unit: '' });
       return (
         <div className="flex flex-col items-center">
-          <div className="h-16 w-16 lg:h-20 lg:w-20 min-w-[1px] min-h-[1px] cursor-pointer relative">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-              <PieChart {...({ overflow: 'visible' } as any)}>
-                <defs>
-                  <linearGradient id="donutProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
-                  <linearGradient id="donutLossGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
-                </defs>
-                <RechartsTooltip content={<CustomKpiTooltip theme={theme} />} wrapperStyle={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} />
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius="70%"
-                  outerRadius="100%"
-                  paddingAngle={0}
-                  dataKey="value"
-                  stroke="none"
-                  isAnimationActive={false}
-                  {...({ activeIndex, activeShape: renderActiveShape, onMouseEnter: onPieEnter, onMouseLeave: onPieLeave } as any)}
-                >
-                  {chartData.map((entry, index) => {
-                    let fill = entry.fill;
-                    if (fill === COLORS.profit) fill = "url(#donutProfitGrad)";
-                    if (fill === COLORS.loss) fill = "url(#donutLossGrad)";
-                    return <Cell key={`cell-${index}`} fill={fill} className="transition-all duration-300" />;
-                  })}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
+          <div className="h-16 w-16 lg:h-20 lg:w-20 cursor-pointer relative">
+            {/* Lehké SVG (synchronní, okamžité) — donut ring přes annularPath. */}
+            <svg viewBox="0 0 100 100" width="100%" height="100%">
+              {(() => {
+                const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
+                const cx = 50, cy = 50, rOut = 49, rIn = 34;
+                if (chartData.length === 1) {
+                  return <circle cx={cx} cy={cy} r={(rIn + rOut) / 2} fill="none" stroke={chartData[0].fill} strokeWidth={rOut - rIn} />;
+                }
+                let a = 0;
+                return chartData.map((d, i) => {
+                  const span = (d.value / total) * Math.PI * 2;
+                  const p = annularPath(cx, cy, rIn, rOut, a, a + span);
+                  a += span;
+                  return <path key={i} d={p} fill={d.fill} className="transition-all duration-300" />;
+                });
+              })()}
+            </svg>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <span className={`text-xs font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayValue}</span>
             </div>
