@@ -1064,22 +1064,21 @@ const ProKpiCard: React.FC<{
               </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
-                const cx = 70, cy = 66, rOut = 62, rIn = 37;
+                const cx = 70, cy = 66, rOut = 62, rIn = 50; // tenčí pás (dřív rIn 37)
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
                 const nodes: React.ReactNode[] = [
                   <path key="track" d={annularPath(cx, cy, rIn, rOut, -Math.PI / 2, Math.PI / 2)} fill={trackColor} />,
                 ];
-                const gapR = chartData.length > 1 ? 0.06 : 0;
                 let a = -Math.PI / 2;
                 chartData.forEach((d, i) => {
                   const span = (d.value / total) * Math.PI;
-                  const ins = Math.min(gapR / 2, span / 3); // cap → tenké segmenty neotočí oblouk
-                  const a0 = a + (i > 0 ? ins : 0);
-                  const a1 = a + span - (i < chartData.length - 1 ? ins : 0);
+                  const a0 = a, a1 = a + span; // bez mezery — segmenty se dotýkají
                   a += span;
-                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rOut, a0, a1)} fill={fillOf(d.fill)}
+                  // Hover: segment roste JEN ven (vnitřní okraj fixní) → kurzor nikdy nespadne do díry = žádné blikání.
+                  const rO = activeIndex === i ? rOut + 4 : rOut;
+                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rO, a0, a1)} fill={fillOf(d.fill)}
                     onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)}
-                    style={{ cursor: 'pointer', transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px`, transform: activeIndex === i ? 'scale(1.07)' : 'scale(1)', transition: 'transform 0.18s ease' } as React.CSSProperties} />);
+                    style={{ cursor: 'pointer' }} />);
                 });
                 return nodes;
               })()}
@@ -1142,24 +1141,24 @@ const ProKpiCard: React.FC<{
               </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
-                const cx = 50, cy = 50, rOut = 49, rIn = 34;
+                const cx = 50, cy = 50, rOut = 49, rIn = 41; // tenčí prstenec (dřív rIn 34)
                 const rMid = (rIn + rOut) / 2, bw = rOut - rIn;
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
-                const hov = (i: number): React.CSSProperties => ({ cursor: 'pointer', transformBox: 'view-box', transformOrigin: `${cx}px ${cy}px`, transform: activeIndex === i ? 'scale(1.07)' : 'scale(1)', transition: 'transform 0.18s ease' });
                 const nodes: React.ReactNode[] = [
                   <circle key="track" cx={cx} cy={cy} r={rMid} fill="none" stroke={trackColor} strokeWidth={bw} />,
                 ];
                 if (chartData.length === 1) {
-                  nodes.push(<circle key="0" cx={cx} cy={cy} r={rMid} fill="none" stroke={fillOf(chartData[0].fill)} strokeWidth={bw} onMouseEnter={() => setActiveIndex(0)} onMouseLeave={() => setActiveIndex(-1)} style={hov(0)} />);
+                  nodes.push(<circle key="0" cx={cx} cy={cy} r={rMid} fill="none" stroke={fillOf(chartData[0].fill)} strokeWidth={bw} onMouseEnter={() => setActiveIndex(0)} onMouseLeave={() => setActiveIndex(-1)} style={{ cursor: 'pointer' }} />);
                   return nodes;
                 }
-                const gapR = 0.06;
                 let a = 0;
                 chartData.forEach((d, i) => {
                   const span = (d.value / total) * Math.PI * 2;
-                  const ins = Math.min(gapR / 2, span / 3);
-                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rOut, a + ins, a + span - ins)} fill={fillOf(d.fill)} onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)} style={hov(i)} />);
+                  const a0 = a, a1 = a + span; // bez mezery — segmenty se dotýkají
                   a += span;
+                  // Hover: roste JEN ven (vnitřek fixní) → kurzor nespadne do díry = žádné blikání.
+                  const rO = activeIndex === i ? rOut + 4 : rOut;
+                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rO, a0, a1)} fill={fillOf(d.fill)} onMouseEnter={() => setActiveIndex(i)} onMouseLeave={() => setActiveIndex(-1)} style={{ cursor: 'pointer' }} />);
                 });
                 return nodes;
               })()}
