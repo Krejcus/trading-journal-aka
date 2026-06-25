@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback, useDeferredValue } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback, useDeferredValue, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, DashboardLayouts, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
@@ -1000,6 +1000,9 @@ const ProKpiCard: React.FC<{
   const [activeIndex, setActiveIndex] = useState(-1);
   const onPieEnter = (_: any, index: number) => setActiveIndex(index);
   const onPieLeave = () => setActiveIndex(-1);
+  // Unikátní id pro SVG gradienty (per instance) — sanitizováno (useId má dvojtečky → neplatné v url()).
+  const gradId = 'kpi' + useId().replace(/[^a-zA-Z0-9]/g, '');
+  const trackColor = isDark ? '#1e293b' : '#eef2f7';
 
   // Helper to remove unnecessary .00 decimals.
   // Zachová sufixy (R, %, Kč, €) a prefixy (+/-) — bug-fix: dřív zahodil 'R'
@@ -1044,20 +1047,30 @@ const ProKpiCard: React.FC<{
             {displayValue}
           </span>
           <div className="h-16 w-full max-w-[140px] flex items-end justify-center">
-            {/* Lehké SVG (synchronní, okamžité) — semicircle gauge přes annularPath. */}
+            {/* Lehké SVG (synchronní, okamžité) — semicircle gauge: dráha + gradient segmenty. */}
             <svg viewBox="0 0 140 72" width="100%" height="100%" style={{ maxWidth: 140, overflow: 'visible' }}>
+              <defs>
+                <linearGradient id={`${gradId}p`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
+                <linearGradient id={`${gradId}l`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
+              </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
                 const cx = 70, cy = 66, rOut = 62, rIn = 37;
-                const gapR = chartData.length > 1 ? 0.05 : 0;
+                const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
+                const nodes: React.ReactNode[] = [
+                  <path key="track" d={annularPath(cx, cy, rIn, rOut, -Math.PI / 2, Math.PI / 2)} fill={trackColor} />,
+                ];
+                const gapR = chartData.length > 1 ? 0.06 : 0;
                 let a = -Math.PI / 2;
-                return chartData.map((d, i) => {
+                chartData.forEach((d, i) => {
                   const span = (d.value / total) * Math.PI;
-                  const a0 = a + (i > 0 ? gapR / 2 : 0);
-                  const a1 = a + span - (i < chartData.length - 1 ? gapR / 2 : 0);
+                  const ins = Math.min(gapR / 2, span / 3); // cap → tenké segmenty neotočí oblouk
+                  const a0 = a + (i > 0 ? ins : 0);
+                  const a1 = a + span - (i < chartData.length - 1 ? ins : 0);
                   a += span;
-                  return <path key={i} d={annularPath(cx, cy, rIn, rOut, a0, a1)} fill={d.fill} className="transition-all duration-300" />;
+                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rOut, a0, a1)} fill={fillOf(d.fill)} className="transition-all duration-300" />);
                 });
+                return nodes;
               })()}
             </svg>
           </div>
@@ -1101,21 +1114,33 @@ const ProKpiCard: React.FC<{
       return (
         <div className="flex flex-col items-center">
           <div className="h-16 w-16 lg:h-20 lg:w-20 cursor-pointer relative">
-            {/* Lehké SVG (synchronní, okamžité) — donut ring přes annularPath. */}
+            {/* Lehké SVG (synchronní, okamžité) — donut: dráha + gradient prstenec. */}
             <svg viewBox="0 0 100 100" width="100%" height="100%">
+              <defs>
+                <linearGradient id={`${gradId}p`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
+                <linearGradient id={`${gradId}l`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.loss} /><stop offset="100%" stopColor={COLORS.lossBottom} /></linearGradient>
+              </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
                 const cx = 50, cy = 50, rOut = 49, rIn = 34;
+                const rMid = (rIn + rOut) / 2, bw = rOut - rIn;
+                const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
+                const nodes: React.ReactNode[] = [
+                  <circle key="track" cx={cx} cy={cy} r={rMid} fill="none" stroke={trackColor} strokeWidth={bw} />,
+                ];
                 if (chartData.length === 1) {
-                  return <circle cx={cx} cy={cy} r={(rIn + rOut) / 2} fill="none" stroke={chartData[0].fill} strokeWidth={rOut - rIn} />;
+                  nodes.push(<circle key="0" cx={cx} cy={cy} r={rMid} fill="none" stroke={fillOf(chartData[0].fill)} strokeWidth={bw} />);
+                  return nodes;
                 }
+                const gapR = 0.06;
                 let a = 0;
-                return chartData.map((d, i) => {
+                chartData.forEach((d, i) => {
                   const span = (d.value / total) * Math.PI * 2;
-                  const p = annularPath(cx, cy, rIn, rOut, a, a + span);
+                  const ins = Math.min(gapR / 2, span / 3);
+                  nodes.push(<path key={i} d={annularPath(cx, cy, rIn, rOut, a + ins, a + span - ins)} fill={fillOf(d.fill)} className="transition-all duration-300" />);
                   a += span;
-                  return <path key={i} d={p} fill={d.fill} className="transition-all duration-300" />;
                 });
+                return nodes;
               })()}
             </svg>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
