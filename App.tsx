@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback, startTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { normalizeTrades, calculateStats } from './services/analysis';
 import { tradeNeedsEnrichment } from './services/tradovateImport';
@@ -858,7 +858,9 @@ const App: React.FC = () => {
       setPendingNav(() => () => setActivePage(page));
       return;
     }
-    setActivePage(page);
+    // PERF: přechod na těžkou stránku (Dashboard = ~20 grafů) jako concurrent transition →
+    // React drží UI/nav svižné a novou stránku vyrenderuje v pozadí (žádné „hluché" zamrznutí).
+    startTransition(() => setActivePage(page));
   }, [isAIStreaming, activePage]);
 
   // Defense-in-depth: kdyby se non-owner role pokusila dostat na uzamčenou page

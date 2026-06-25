@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, DashboardLayouts, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
@@ -1490,7 +1490,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
 };
 
 const Dashboard: React.FC<DashboardProps> = ({
-  stats, theme, preps, reviews, layouts, sessions, ironRules, onUpdateLayouts,
+  stats: rawStats, theme, preps, reviews, layouts, sessions, ironRules, onUpdateLayouts,
   isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
   allTrades = [], payouts = [],
@@ -1498,6 +1498,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   onAnalyzeWithAI,
   onNavigateToSettings,
 }) => {
+  // PERF: těžké překreslení ~20 grafů odlož na nízkou prioritu (concurrent). Při změně filtru/
+  // viewMode/módu React commitne UI (filtry, nav) HNED a grafy překreslí v pozadí přerušitelně
+  // → konec „brutálně pomalých" filtrů a zamrzání. Widgety čtou `stats` (= deferred).
+  const stats = useDeferredValue(rawStats);
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
   const isMobileEditing = isMobileEditingProp;
   const setIsMobileEditing = setIsMobileEditingProp ?? (() => {});
