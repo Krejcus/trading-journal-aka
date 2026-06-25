@@ -1064,7 +1064,7 @@ const ProKpiCard: React.FC<{
               </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
-                const cx = 70, cy = 66, rOut = 62, rIn = 50; // tenčí pás (dřív rIn 37)
+                const cx = 70, cy = 66, rOut = 62, rIn = 45; // pás 17 (mezi původním 25 a tenkým 12)
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
                 const nodes: React.ReactNode[] = [
                   <path key="track" d={annularPath(cx, cy, rIn, rOut, -Math.PI / 2, Math.PI / 2)} fill={trackColor} />,
@@ -1141,7 +1141,7 @@ const ProKpiCard: React.FC<{
               </defs>
               {(() => {
                 const total = chartData.reduce((s, d) => s + d.value, 0) || 1;
-                const cx = 50, cy = 50, rOut = 49, rIn = 41; // tenčí prstenec (dřív rIn 34)
+                const cx = 50, cy = 50, rOut = 49, rIn = 38; // pás 11 (mezi původním 15 a tenkým 8)
                 const rMid = (rIn + rOut) / 2, bw = rOut - rIn;
                 const fillOf = (c: string) => c === COLORS.profit ? `url(#${gradId}p)` : c === COLORS.loss ? `url(#${gradId}l)` : c;
                 const nodes: React.ReactNode[] = [
