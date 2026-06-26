@@ -30,6 +30,7 @@ const TradesyncerImportModal = React.lazy(() => import('./components/Tradesyncer
 
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
+import { LiquidGlassHeader } from './components/LiquidGlassHeader';
 import LockedFeatureModal from './components/LockedFeatureModal';
 import { canAccess } from './utils/featureGating';
 import FilterDropdown from './components/FilterDropdown';
@@ -3028,6 +3029,8 @@ const App: React.FC = () => {
           </filter>
         </svg>
         <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-2xl floating-glass-header ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
+          {/* WebGL liquid glass podklad (z-0, animovaný shader); obsah headeru sedí nad ním (z-10). */}
+          <LiquidGlassHeader theme={theme} />
           <div className="flex items-center gap-3 relative z-10">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <div className="flex items-center gap-2.5 pr-1">
