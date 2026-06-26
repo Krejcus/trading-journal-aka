@@ -35,7 +35,7 @@
   --border-active: rgba(59, 130, 246, 0.3);
 
   --shadow-card: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
-  --glass-bg: rgba(10, 15, 29, 0.7);
+  --glass-bg: rgba(10, 15, 29, 0.92);
   --glass-border: rgba(255, 255, 255, 0.05);
 }
 
@@ -54,7 +54,7 @@
   --border-active: rgba(59, 130, 246, 0.5);
 
   --shadow-card: 0 4px 20px -5px rgba(0, 0, 0, 0.05), 0 10px 10px -5px rgba(0, 0, 0, 0.02);
-  --glass-bg: rgba(255, 255, 255, 0.8);
+  --glass-bg: rgba(255, 255, 255, 0.95);
   --glass-border: rgba(255, 255, 255, 0.9);
 }
 
@@ -97,8 +97,10 @@ body {
 
 /* Custom Glass Panels */
 .glass-panel {
+  /* PERF: backdrop-filter:blur byl extrémně drahý na repaint (14× na dashboardu →
+     horký GPU/CPU, pomalé přepínání tématu, sekání filtrů). --glass-bg je 90%+
+     neprůhledné, takže bez blur vypadá panel skoro stejně, ale paint je ~zdarma. */
   background: var(--glass-bg);
-  backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-card);
 }
