@@ -769,6 +769,19 @@ export const MessageBubble: React.FC<{
    *  Předává AICoachPage z props. */
   existingActionLabels?: Set<string>;
 }> = ({ msg, trades, dailyPreps, dailyReviews, isStreaming = false, toolStatus = null, onOpenTrade, onOpenJournal, onFollowup, onApplyAction, messageIndex, existingActionLabels }) => {
+  const isUser = msg.role === 'user';
+  // Strip [CONTEXT]...[/CONTEXT] block from user messages — it's the hidden analytical context
+  // sent from "Analyze with AI" buttons. AI receives it, user shouldn't see the noise.
+  const stripContextBlock = (text: string): string =>
+    text.replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]\s*/g, '').trim();
+  const rawContent = msg.role === 'assistant'
+    ? stripAllRefs(msg.content || '')
+    : stripContextBlock(msg.content || '');
+  // POZOR: hook MUSÍ být volaný před jakýmkoli early returnem (rules-of-hooks). Dřív byl AŽ
+  // za `if (msg.isSystemEvent) return`, takže se volal podmíněně → při přepnutí typu zprávy
+  // se měnilo pořadí hooků a React mohl rozhodit stav.
+  const { done, displayText } = useTypewriter(rawContent, isStreaming);
+
   if (msg.isSystemEvent) {
     return (
       <div className="w-full flex justify-center my-2 px-4">
@@ -778,16 +791,6 @@ export const MessageBubble: React.FC<{
       </div>
     );
   }
-
-  const isUser = msg.role === 'user';
-  // Strip [CONTEXT]...[/CONTEXT] block from user messages — it's the hidden analytical context
-  // sent from "Analyze with AI" buttons. AI receives it, user shouldn't see the noise.
-  const stripContextBlock = (text: string): string =>
-    text.replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]\s*/g, '').trim();
-  const rawContent = msg.role === 'assistant'
-    ? stripAllRefs(msg.content)
-    : stripContextBlock(msg.content);
-  const { done, displayText } = useTypewriter(rawContent, isStreaming);
 
   return (
     <div className={`flex gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
