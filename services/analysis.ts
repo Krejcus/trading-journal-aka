@@ -388,4 +388,11 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
   };
 };
 
-export const findBadExits = (trades: Trade[]): Trade[] => trades.filter(t => t.runUp > 50 && t.pnl < t.runUp * 0.2).sort((a, b) => b.runUp - a.runUp).slice(0, 5);
+// „Špatný exit" = výrazný favorable excursion, ale zlomek z něj realizován.
+// Práh významnosti je risk-normalizovaný (runUp i riskAmount škálují stejně copyMultiplikátorem),
+// takže 2× kopie i 1× master se hodnotí IDENTICKY. Bez riskAmount fallback na absolutní $50.
+export const findBadExits = (trades: Trade[]): Trade[] => trades.filter(t => {
+  const risk = t.riskAmount || 0;
+  const significant = risk > 0 ? t.runUp > risk * 0.5 : t.runUp > 50;
+  return significant && t.pnl < t.runUp * 0.2;
+}).sort((a, b) => b.runUp - a.runUp).slice(0, 5);

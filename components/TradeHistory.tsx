@@ -22,12 +22,14 @@ import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 
 // Levný podpis tradu pro detekci změny — vynechá base64 screenshoty (ty by JSON.stringify
-// nafoukl na stovky KB). Screenshoty porovnáme zvlášť přes délku + krátký prefix.
+// nafoukl na stovky KB). Screenshoty porovnáme zvlášť přes délku + KONEC URL.
 const tradeSig = (t: any): string => {
   if (!t) return '';
   const { screenshot, screenshots, ...rest } = t;
-  const shotKey = (typeof screenshot === 'string' ? `${screenshot.length}:${screenshot.slice(0, 32)}` : '')
-    + '|' + (Array.isArray(screenshots) ? `${screenshots.length}:${screenshots.map((s: any) => typeof s === 'string' ? s.slice(0, 16) : '').join(',')}` : '');
+  // Konec URL (unikátní filename ext_<ts>_<rand>.jpg), ne začátek — Supabase storage URL sdílí
+  // ~70 znaků prefixu, takže slice(0,32) by nikdy nerozlišil dva různé screenshoty stejné délky.
+  const shotKey = (typeof screenshot === 'string' ? `${screenshot.length}:${screenshot.slice(-40)}` : '')
+    + '|' + (Array.isArray(screenshots) ? `${screenshots.length}:${screenshots.map((s: any) => typeof s === 'string' ? s.slice(-24) : '').join(',')}` : '');
   return JSON.stringify(rest) + '#' + shotKey;
 };
 

@@ -630,6 +630,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
 
         let rrText   = "- : -";
         let estPnLVal = "";
+        let estPnLRaw = 0; // nezaokrouhlený odhad PnL — pro preview, ať sedí s uloženým fill-based pnl
 
         if (entry && sl) {
             const slDist = Math.abs(entry - sl);
@@ -643,11 +644,12 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     if (trade.outcome === 'WIN')  calcPnl =  riskDollars * rRatio;
                     else if (trade.outcome === 'LOSS') calcPnl = -riskDollars;
                     else calcPnl = 0;
+                    estPnLRaw = calcPnl;
                     estPnLVal = Math.round(calcPnl).toString();
                 }
             }
         }
-        return { rrText, estPnLVal };
+        return { rrText, estPnLVal, estPnLRaw };
     }, [trade.entry, trade.sl, trade.tp, trade.risk, trade.outcome]);
 
     useEffect(() => {
@@ -660,7 +662,10 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     // needsConfirm = víc účtů NEBO aspoň jeden ≠1× → před uložením ukážeme potvrzovací okno.
     const fanout = useMemo(() => {
         const baseRisk = parseFloat(trade.risk) || 0;
-        const basePnl = parseFloat(trade.pnl) || parseFloat(String(calculations.estPnLVal)) || 0;
+        // Ruční pnl respektuj i když je „0" (break-even); jinak fallback na NEzaokrouhlený odhad,
+        // ať preview sedí s fill-based pnl uloženým v handleSubmit (žádné 234 vs 233.7).
+        const manualPnl = trade.pnl !== '' && !isNaN(parseFloat(trade.pnl)) ? parseFloat(trade.pnl) : null;
+        const basePnl = manualPnl != null ? manualPnl : (calculations.estPnLRaw || 0);
         const baseQty = parseFloat(trade.contracts) || 0;
         const rows = selectedAccounts.map(id => {
             const a = loadedAccounts.find(x => x.id === id);
@@ -673,7 +678,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             totalRisk: rows.reduce((s, r) => s + r.risk, 0),
             totalPnl: rows.reduce((s, r) => s + r.pnl, 0),
         };
-    }, [trade.risk, trade.pnl, trade.contracts, calculations.estPnLVal, selectedAccounts, loadedAccounts]);
+    }, [trade.risk, trade.pnl, trade.contracts, calculations.estPnLRaw, selectedAccounts, loadedAccounts]);
 
     // ── Preview screenshot ───────────────────────────────────────────────────
     const handlePreview = async () => {
@@ -814,6 +819,12 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
 
         if (isWeekend(trade.entryDate) || isWeekend(trade.exitDate)) {
             setSubmitStatus({ text: "Obchod nelze zadat o víkendu!", type: 'error' }); return;
+        }
+
+        // Guard: prázdný exit čas → obchod by se uložil s nulovým trváním a exit==entry.
+        // (Pole se defaultně plní na „teď"; tohle chytí jen případ, kdy ho uživatel smazal.)
+        if (trade.entryTime && !trade.exitTime) {
+            setSubmitStatus({ text: "Vyplňte Exit čas (jinak by obchod měl nulové trvání).", type: 'error' }); return;
         }
 
         setIsSubmitting(true);
@@ -991,7 +1002,6 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             const allScreenshots = [publicUrl, ...htfUrls].filter((u): u is string => !!u);
 
             // 6. Build rows (masterTradeId pre-generated)
-            const masterAccountId = selectedAccounts[0];
             const masterTradeId   = crypto.randomUUID();
             const commonGroupId   = crypto.randomUUID();
 
@@ -1004,11 +1014,30 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             const accountPhaseMap = new Map<string, string>();
             // Risk multiplikátor per účet (celé číslo, default 1). Challenge s 2× riskem → 2.
             const accountMultMap = new Map<string, number>();
+            const accountParentMap = new Map<string, string | undefined>();
             accountsData?.forEach(acc => {
                 accountPhaseMap.set(acc.id, acc.meta?.phase || 'Challenge');
                 const m = Math.max(1, Math.round(Number(acc.meta?.copyMultiplier) || 1));
                 accountMultMap.set(acc.id, m);
+                accountParentMap.set(acc.id, acc.meta?.parentAccountId || acc.meta?.parent_account_id);
             });
+
+            // Master = první vybraný účet BEZ parenta (skutečný master), ne jen selectedAccounts[0].
+            // Bez tohohle by při odznačeném masteru + ponechané kopii dostala kopie isMaster:true.
+            const masterAccountId = selectedAccounts.find(id => !accountParentMap.get(id)) || selectedAccounts[0];
+
+            // Per-účet backtest session (bias/pre/post) — každý obchod nese session SVÉHO účtu.
+            // Bez tohohle fan-out otiskl session účtu[0] do všech řádků (biasAligned pak vůči cizímu biasu).
+            const btSessionMap = new Map<string, { bias?: string; preNotes?: string; postNotes?: string }>();
+            if (mode === 'backtest' && trade.entryDate && trade.session) {
+                const { data: btRows } = await supabase
+                    .from('backtest_sessions')
+                    .select('account_id, data')
+                    .in('account_id', selectedAccounts)
+                    .eq('date', trade.entryDate)
+                    .eq('block', trade.session);
+                btRows?.forEach((r: any) => btSessionMap.set(r.account_id, r.data || {}));
+            }
 
             const baseContracts = parseFloat(trade.contracts) || 0;
 
@@ -1016,6 +1045,8 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 const isMaster = accId === masterAccountId;
                 const tradeId  = isMaster ? masterTradeId : crypto.randomUUID();
                 const phase    = accountPhaseMap.get(accId) || 'Challenge';
+                // Session tohoto účtu (ne účtu[0]); fallback na editovaný btSession u master účtu.
+                const acctSession = btSessionMap.get(accId) || (accId === masterAccountId ? btSession : {});
 
                 // Per-účet škálování. pnl je úměrné risku (R×risk), takže škáluje stejně;
                 // mfeUsd/maeUsd ($) taky; mfeR/maeR a body NE (jsou risk-normalizované/cenové).
@@ -1079,13 +1110,13 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     excursion: cf && cf.ok && cf.excursion ? cf.excursion : { available: false },
                     // Entry model — odraz level + struktura (kolikátý zlom) + entry na hraně FVG.
                     entryMap: cf && cf.ok && cf.entryMap ? cf.entryMap : { available: false },
-                    // Session kontext (backtest) — otisknuto do obchodu, ať je samostatný pro analýzu.
-                    sessionBias: mode === 'backtest' ? (btSession.bias || null) : null,
-                    sessionPreNotes: mode === 'backtest' ? (btSession.preNotes || null) : null,
-                    sessionPostNotes: mode === 'backtest' ? (btSession.postNotes || null) : null,
+                    // Session kontext (backtest) — otisknuto do obchodu PER ÚČET, ať je samostatný pro analýzu.
+                    sessionBias: mode === 'backtest' ? (acctSession.bias || null) : null,
+                    sessionPreNotes: mode === 'backtest' ? (acctSession.preNotes || null) : null,
+                    sessionPostNotes: mode === 'backtest' ? (acctSession.postNotes || null) : null,
                     // Držel ses biasu? null = bias nezadán / Neutral (nelze posoudit).
-                    biasAligned: (mode === 'backtest' && (btSession.bias === 'Long' || btSession.bias === 'Short'))
-                        ? ((btSession.bias === 'Long' && trade.direction === 'LONG') || (btSession.bias === 'Short' && trade.direction === 'SHORT'))
+                    biasAligned: (mode === 'backtest' && (acctSession.bias === 'Long' || acctSession.bias === 'Short'))
+                        ? ((acctSession.bias === 'Long' && trade.direction === 'LONG') || (acctSession.bias === 'Short' && trade.direction === 'SHORT'))
                         : null,
                     // Meta — verze schématu a zdroj, ať AI ví, co kde čekat.
                     schemaVersion: 2,
@@ -1137,7 +1168,10 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             }
 
             setSubmitStatus(null); // místo textu ukážeme animovanou success kartu
-            setJustSaved({ count: savedTrades.length, pnl: pnl, outcome: trade.outcome });
+            // PnL na kartě = SKUTEČNÝ součet uložených řádků (acctPnl × N účtů), ne neškálovaný základ.
+            // Jinak by „+$500 · 3 účty" klamalo, když se reálně zapsalo 3× nebo s multiplikátorem víc.
+            const savedPnlTotal = rows.reduce((s, r) => s + (r.pnl || 0), 0);
+            setJustSaved({ count: savedTrades.length, pnl: savedPnlTotal, outcome: trade.outcome });
             setShowReset(false);
 
             // 8. Fire-and-forget AI enrichment — jen pokud má trade notes nebo screenshot

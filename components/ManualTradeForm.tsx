@@ -373,6 +373,11 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       const isThisMaster = accId === masterAccount?.id;
       const isChildOfMaster = acc?.parentAccountId && acc.parentAccountId === masterAccount?.id;
 
+      // Risk multiplikátor per účet — stejná sémantika jako AlphaBridge extension (TradeForm).
+      // Bez tohohle by manuálně zapsaný obchod na 2× kopii uložil 1× a divergoval od extension.
+      const mult = Math.max(1, Math.round(Number(acc?.copyMultiplier) || 1));
+      const baseSize = parseFloat(formData.positionSize) || 1;
+
       return {
         id: (isThisMaster && masterTradeId ? masterTradeId : generateUUID()),
         accountId: accId,
@@ -384,9 +389,9 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
         timestamp: new Date(formData.exitDate).getTime(),
         signal: 'Manuální obchod',
         direction: calculations.direction,
-        pnl: pnlNum,
-        riskAmount: calculations.risk,
-        targetAmount: Math.abs(pnlNum),
+        pnl: pnlNum * mult,
+        riskAmount: calculations.risk * mult,
+        targetAmount: Math.abs(pnlNum) * mult,
         riskPercent: 0,
         runUp: 0,
         drawdown: 0,
@@ -409,7 +414,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
         exitPrice: parseFloat(formData.exitPrice) || 0,
         stopLoss: parseFloat(formData.stopLoss) || 0,
         takeProfit: parseFloat(formData.takeProfit) || 0,
-        positionSize: parseFloat(formData.positionSize) || 1,
+        positionSize: baseSize * mult,
         phase: acc?.phase || 'Challenge'
       };
     });

@@ -622,11 +622,17 @@ export const storageService = {
       const existingData = existingDataMap.get(String(t.id));
       // Drawings: prázdné z načteného obchodu NESMÍ přepsat reálné kresby v DB.
       const mergedDrawings = (t.drawings && t.drawings.length) ? t.drawings : ((existingData && existingData.drawings) || []);
-      // Screenshoty: stejná ochrana. getTrades() strhne base64 (data:) z read-pathu → in-memory
-      // obchod může nést screenshot: undefined, i když v DB blobu base64 je. Bez tohohle by merge
-      // `...t` legacy base64 screenshot v blobu přepsal undefinem = ztráta obrázku.
-      const mergedScreenshot = (t.screenshot != null) ? t.screenshot : (existingData && existingData.screenshot);
-      const mergedScreenshots = (t.screenshots && t.screenshots.length) ? t.screenshots : (existingData && existingData.screenshots);
+      // Screenshoty: getTrades() strhne POUZE base64 (data:) z read-pathu → in-memory obchod může nést
+      // screenshot: undefined, i když v DB blobu base64 je. URL se NESTRHÁVÁ → přežije čtení.
+      // Proto: obnov z DB jen když je tam base64 (nerozlišitelné od mazání); je-li v DB URL a in-memory
+      // undefined, uživatel screenshot SMAZAL → respektuj to (jinak nešel legacy/URL screenshot smazat).
+      const isStripped = (v: any) => typeof v === 'string' && v.startsWith('data:');
+      const mergedScreenshot = (t.screenshot != null)
+        ? t.screenshot
+        : (isStripped(existingData?.screenshot) ? existingData.screenshot : t.screenshot);
+      const mergedScreenshots = (t.screenshots && t.screenshots.length)
+        ? t.screenshots
+        : ((existingData?.screenshots || []).some(isStripped) ? existingData.screenshots : t.screenshots);
 
       // Merge: existující blob jako základ, nový obchod přepíše svá pole; co in-memory nenese, zůstane.
       const dataBlob: any = existingData
