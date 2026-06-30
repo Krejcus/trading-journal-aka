@@ -48,18 +48,26 @@ export function formatCurrency(
     const absUsd = Math.abs(usdAmount);
 
     let converted = absUsd;
-    if (rates && rates[to]) {
-        converted = absUsd * rates[to];
+    let effectiveTo: 'USD' | 'CZK' | 'EUR' = to;
+    if (to !== 'USD') {
+        if (rates && rates[to]) {
+            converted = absUsd * rates[to];
+        } else {
+            // Kurzy ještě nenačtené nebo chybí pro cílovou měnu → NEukazuj surovou USD částku
+            // s cizím symbolem (např. "1234 Kč" kde 1234 jsou dolary). Spadni zpět na USD,
+            // dokud kurzy nedorazí — radši správné dolary než zfalšovaná koruna.
+            effectiveTo = 'USD';
+        }
     }
 
     const symbols = { USD: '$', CZK: 'Kč', EUR: '€' };
 
-    if (to === 'CZK') {
+    if (effectiveTo === 'CZK') {
         return `${sign}${Math.round(converted).toLocaleString()} Kč`;
     }
 
     const rounded = Math.round(converted);
-    return `${sign}${symbols[to]}${rounded.toLocaleString()}`;
+    return `${sign}${symbols[effectiveTo]}${rounded.toLocaleString()}`;
 }
 
 export function getPnLUnit(mode: PnLDisplayMode, currency: 'USD' | 'CZK' | 'EUR' = 'USD'): string {

@@ -1744,6 +1744,35 @@ const Dashboard: React.FC<DashboardProps> = ({
     setCurrentBreakpoint(newBreakpoint);
   }, []);
 
+  // Jeden průchod přes obchody pro všechny KPI widgety. Dřív renderWidget dělal pro každý
+  // widget vlastní sadu .filter()/.reduce() přes stats.trades přímo v render path (kpi_winrate
+  // 4×, profit_factor 2×, day_winrate build mapy, …) → desítky O(n) průchodů na každý render.
+  const kpiData = useMemo(() => {
+    const list = stats.trades || [];
+    let winCount = 0, beCount = 0, lossCount = 0, nonMissed = 0, missed = 0;
+    let grossProfit = 0, grossLoss = 0;
+    const dayPnL: Record<string, number> = {};
+    for (const tr of list) {
+      if (tr.executionStatus === 'Missed') { missed++; continue; }
+      nonMissed++;
+      if (tr.pnl > 0) { winCount++; grossProfit += tr.pnl; }
+      else if (tr.pnl < 0) { lossCount++; grossLoss += tr.pnl; }
+      else beCount++;
+      const dayKey = (tr.date || '').slice(0, 10);
+      if (dayKey) dayPnL[dayKey] = (dayPnL[dayKey] || 0) + tr.pnl;
+    }
+    const dayVals = Object.values(dayPnL);
+    return {
+      winCount, beCount, lossCount, totalCount: nonMissed, missed,
+      allSignals: list.length,
+      grossProfit, grossLoss: Math.abs(grossLoss),
+      tradingDays: dayVals.length,
+      profitableDays: dayVals.filter(p => p > 0).length,
+      lossDays: dayVals.filter(p => p < 0).length,
+      beDays: dayVals.filter(p => p === 0).length,
+    };
+  }, [stats.trades]);
+
   const renderWidget = (id: string, config?: DashboardWidgetConfig) => {
     // Pojistka: backtest-only widgety se nikdy nevykreslí mimo backtest svět
     // (Monte Carlo je povolené i v live, proto BACKTEST_ONLY_IDS, ne prefix bt_).
@@ -1777,10 +1806,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         );
       }
       case 'kpi_winrate': {
-        const winCount = stats.trades.filter(t => t.pnl > 0 && t.executionStatus !== 'Missed').length;
-        const beCount = stats.trades.filter(t => t.pnl === 0 && t.executionStatus !== 'Missed').length;
-        const lossCount = stats.trades.filter(t => t.pnl < 0 && t.executionStatus !== 'Missed').length;
-        const totalCount = stats.trades.filter(t => t.executionStatus !== 'Missed').length;
+        const { winCount, beCount, lossCount, totalCount } = kpiData;
         const winRate = totalCount > 0 ? ((winCount / totalCount) * 100).toFixed(1) : '0.0';
         return (
           <ProKpiCard
@@ -1796,8 +1822,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         );
       }
       case 'kpi_profit_factor': {
-        const grossProfit = stats.trades.filter(t => t.pnl > 0 && t.executionStatus !== 'Missed').reduce((sum, t) => sum + t.pnl, 0);
-        const grossLoss = Math.abs(stats.trades.filter(t => t.pnl < 0 && t.executionStatus !== 'Missed').reduce((sum, t) => sum + t.pnl, 0));
+        const { grossProfit, grossLoss } = kpiData;
         const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : (grossProfit > 0 ? '∞' : '0.00');
         return (
           <ProKpiCard
@@ -1816,16 +1841,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         // Group trades by date (YYYY-MM-DD only — NE full ISO timestamp!) and calculate profitable days.
         // BUG FIX: dříve t.date je plný ISO ("2026-05-22T15:51:00.000Z"), každý trade dostal vlastní
         // klíč v `dayPnL` → 1 den s 5 trady se počítal jako 5 různých dnů.
-        const dayPnL: Record<string, number> = {};
-        stats.trades.filter(t => t.executionStatus !== 'Missed').forEach(t => {
-          const dayKey = (t.date || '').slice(0, 10); // YYYY-MM-DD
-          if (!dayKey) return;
-          dayPnL[dayKey] = (dayPnL[dayKey] || 0) + t.pnl;
-        });
-        const tradingDays = Object.keys(dayPnL).length;
-        const profitableDays = Object.values(dayPnL).filter(pnl => pnl > 0).length;
-        const lossDays = Object.values(dayPnL).filter(pnl => pnl < 0).length;
-        const beDays = Object.values(dayPnL).filter(pnl => pnl === 0).length;
+        const { tradingDays, profitableDays, lossDays, beDays } = kpiData;
         const dayWinRate = tradingDays > 0 ? ((profitableDays / tradingDays) * 100).toFixed(1) : '0.0';
         return (
           <ProKpiCard
@@ -1843,9 +1859,9 @@ const Dashboard: React.FC<DashboardProps> = ({
       }
       case 'kpi_execution_rate': {
         // Calculate how many signals were taken vs missed
-        const allSignals = stats.trades.length;
-        const executedSignals = stats.trades.filter(t => t.executionStatus !== 'Missed').length;
-        const missedSignals = stats.trades.filter(t => t.executionStatus === 'Missed').length;
+        const allSignals = kpiData.allSignals;
+        const executedSignals = kpiData.totalCount;
+        const missedSignals = kpiData.missed;
         const executionRate = allSignals > 0 ? ((executedSignals / allSignals) * 100).toFixed(1) : '100.0';
         return (
           <ProKpiCard

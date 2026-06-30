@@ -15,6 +15,14 @@ if (
   document.documentElement.classList.add('pwa-standalone');
 }
 
+// Liquid-glass LUPA (backdrop-filter: url(#svg displacement)) funguje JEN v Chromiu —
+// Safari i Firefox to nerenderují (WebKit bug #245510), navíc @supports test obelstí
+// (přes -webkit- projde, ale nevykreslí → placatý header). navigator.userAgentData
+// existuje pouze v Chromiu → spolehlivý proxy. Bez něj zůstane blur frosted fallback.
+if ((navigator as any).userAgentData?.brands?.some((b: any) => /Chromium/i.test(b.brand))) {
+  document.documentElement.classList.add('backdrop-svg-ok');
+}
+
 // State for update banner
 let showUpdateBanner = false;
 let updateSWCallback: ((reloadPage?: boolean) => Promise<void>) | null = null;

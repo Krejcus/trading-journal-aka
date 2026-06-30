@@ -48,7 +48,11 @@ function getDimensionKey(
     case 'instrument': return trade.instrument ? String(trade.instrument).trim() : null;
     case 'weekday': {
       if (!trade.date) return null;
-      return WEEKDAY_NAMES[new Date(trade.date).getDay()] ?? null;
+      // Den v týdnu počítáme z YYYY-MM-DD části v lokální poledne, ať se shoduje se
+      // zbytkem appky (slice(0,10)). `new Date(trade.date).getDay()` u půlnočních
+      // UTC timestampů spadne do jiného dne podle TZ → nekonzistentní statistiky.
+      const dayKey = trade.date.slice(0, 10);
+      return WEEKDAY_NAMES[new Date(dayKey + 'T12:00:00').getDay()] ?? null;
     }
     case 'violations':
       return (trade.mistakes?.length ?? 0) > 0 ? 'S chybami' : 'Čistě';

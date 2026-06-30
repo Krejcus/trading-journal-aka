@@ -54,8 +54,9 @@ export async function stripAndUploadBase64Images(
   };
   visit(obj, '$');
 
-  // Upload každý nalezený base64
-  for (const { parent, key } of stack) {
+  // Upload všech nalezených base64 PARALELNĚ. Dřív běžela sekvenční await smyčka →
+  // wall-clock = součet všech uploadů (u prep/review s 8 obrázky UI zamrzlo na sekundy).
+  await Promise.all(stack.map(async ({ parent, key }) => {
     const base64 = parent[key];
     const sizeKB = dataUrlSizeKB(base64);
     try {
@@ -69,7 +70,7 @@ export async function stripAndUploadBase64Images(
     } catch (e) {
       console.warn(`[stripBase64] upload failed (ponechávám base64):`, e);
     }
-  }
+  }));
 
   return count;
 }
@@ -79,7 +80,18 @@ export async function stripAndUploadBase64Images(
  * Pro brzké rozhodování zda stojí za to volat stripAndUploadBase64Images.
  */
 export function hasBase64Images(obj: any): boolean {
-  if (!obj || typeof obj !== 'object') return false;
-  const json = JSON.stringify(obj);
-  return json.includes(BASE64_IMAGE_PREFIX);
+  // Rekurzivní scan s early-returnem na PRVNÍM base64 — dřív se dělal JSON.stringify
+  // celého objektu (stovky KB i s inline base64) jen kvůli substring testu, synchronně
+  // na main threadu při každém autosave.
+  const scan = (node: any): boolean => {
+    if (typeof node === 'string') return node.startsWith(BASE64_IMAGE_PREFIX);
+    if (!node || typeof node !== 'object') return false;
+    if (Array.isArray(node)) {
+      for (const v of node) if (scan(v)) return true;
+    } else {
+      for (const k of Object.keys(node)) if (scan(node[k])) return true;
+    }
+    return false;
+  };
+  return scan(obj);
 }

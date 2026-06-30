@@ -30,7 +30,6 @@ const TradesyncerImportModal = React.lazy(() => import('./components/Tradesyncer
 
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
-import { LiquidGlassHeader } from './components/LiquidGlassHeader';
 import LockedFeatureModal from './components/LockedFeatureModal';
 import { canAccess } from './utils/featureGating';
 import FilterDropdown from './components/FilterDropdown';
@@ -87,9 +86,8 @@ const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
 // R kanál = horizontální offset, G = vertikální. Střed = 128/128 (neutrální, žádné zkreslení),
 // hladký lineární ramp jen na okrajích → ROVNÝ lom u hrany, žádné zvlnění.
 // Dvě crossed gradient vrstvy blendnuté přes mix-blend-mode:screen (R z horizontální, G z vertikální).
-// ASYMETRICKÝ: silný "fold" na horní hraně (obsah zespoda se přehne přes okraj = iluze
-// reflexe), jemná lupa dole, mírné boky. G kanál (vertikál): nahoře 255 (max → vzorkuje
-// zespoda = přehyb), rychle zpět na 128 (fold jen v úzkém horním pásu), střed flat, dole 190 (jemné).
+// SYMETRICKÝ (čistá lupa): stejný jemný ramp na všech 4 hranách (H i V: 64→128→128→192),
+// takže obsah za headerem se u hran ohne jako přes čočku — žádný asymetrický fold/zrcadlení.
 const GLASS_DISPLACEMENT_MAP = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   `<svg xmlns='http://www.w3.org/2000/svg' width='600' height='120'>` +
   `<defs>` +
@@ -100,11 +98,10 @@ const GLASS_DISPLACEMENT_MAP = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   `<stop offset='1' stop-color='rgb(192,0,0)'/>` +
   `</linearGradient>` +
   `<linearGradient id='v' x1='0' y1='0' x2='0' y2='1'>` +
-  `<stop offset='0' stop-color='rgb(0,190,0)'/>` +     /* horní fold (rim reflex) — vzorkuje zespoda */
-  `<stop offset='0.10' stop-color='rgb(0,128,0)'/>` +  /* fold jen v horních 10%, pak neutrál */
-  `<stop offset='0.92' stop-color='rgb(0,128,0)'/>` +  /* neutrál až dolů */
-  `<stop offset='1' stop-color='rgb(0,122,0)'/>` +     /* dolní hrana téměř neutrální = čistá, žádná lupa
-                                                          (backdrop-filter dole nemá co zrcadlit — viz výše) */
+  `<stop offset='0' stop-color='rgb(0,64,0)'/>` +
+  `<stop offset='0.16' stop-color='rgb(0,128,0)'/>` +
+  `<stop offset='0.84' stop-color='rgb(0,128,0)'/>` +
+  `<stop offset='1' stop-color='rgb(0,192,0)'/>` +
   `</linearGradient>` +
   `</defs>` +
   `<rect width='600' height='120' fill='url(#h)'/>` +
@@ -663,6 +660,14 @@ const App: React.FC = () => {
   }, [dashboardMode]);
   useEffect(() => () => { worldShiftTimers.current.forEach(clearTimeout); }, []);
   const [sessions, setSessions] = useState<SessionConfig[]>(DEFAULT_SESSIONS);
+  // Samostatná sada sessionů pro backtest svět. Prázdné = použij živé `sessions` (fallback).
+  const [backtestSessions, setBacktestSessions] = useState<SessionConfig[]>([]);
+  // Sady se přepínají automaticky podle světa (live vs backtest). Backtest s prázdnou sadou
+  // spadne zpět na live sessiony → žádná migrace, nic se nerozbije.
+  const activeSessions = useMemo(
+    () => (dashboardMode === 'backtesting' && backtestSessions.length > 0) ? backtestSessions : sessions,
+    [dashboardMode, backtestSessions, sessions]
+  );
   const [ironRules, setIronRules] = useState<IronRule[]>([
     { id: 'r_meditation', label: 'Ranní meditace / klid', type: 'ritual' },
     { id: 'r_news', label: 'Kontrola High Impact News', type: 'ritual' },
@@ -834,6 +839,7 @@ const App: React.FC = () => {
     liveLayoutsByMode,
     backtestDashboardLayouts,
     sessions,
+    backtestSessions,
     htfOptions,
     ltfOptions,
     ironRules,
@@ -963,7 +969,10 @@ const App: React.FC = () => {
   };
 
   const onTouchEnd = () => {
-    if (!touchStart.current || !touchEnd.current) return;
+    // POZOR: clientX === 0 (dotek na úplném levém okraji = přesně tam, kde začíná
+    // gesto pro otevření sidebaru) je falsy → původní `!touchStart.current` takový
+    // swipe zahodil. Kontrolujeme proto explicitně na null.
+    if (touchStart.current === null || touchEnd.current === null) return;
     const distance = touchStart.current - touchEnd.current;
     const isLeftSwipe = distance > minSwipeDistance;
     const isRightSwipe = distance < -minSwipeDistance;
@@ -1080,7 +1089,7 @@ const App: React.FC = () => {
       });
   }, [saveWithRetry]);
 
-  const applyPreferences = useCallback((prefs: UserPreferences) => {
+  const applyPreferences = useCallback((prefs: Partial<UserPreferences>) => {
     isApplyingPrefsRef.current = true;
     
     // DIAGNOSTIC: track what fields are present in incoming prefs
@@ -1157,15 +1166,14 @@ const App: React.FC = () => {
       setBacktestDashboardLayouts(DEFAULT_BACKTEST_LAYOUTS);
     }
 
-    if (Array.isArray(prefs.sessions)) {
-      const migratedSessions = (prefs.sessions as any[]).map(s => ({
-        ...s,
-        startTime: s.startTime || `${String(s.startHour ?? 9).padStart(2, '0')}:00`,
-        endTime: s.endTime || `${String(s.endHour ?? 17).padStart(2, '0')}:00`,
-        color: s.color || '#3b82f6'
-      }));
-      setSessions(migratedSessions);
-    }
+    const migrateSessions = (arr: any[]) => arr.map(s => ({
+      ...s,
+      startTime: s.startTime || `${String(s.startHour ?? 9).padStart(2, '0')}:00`,
+      endTime: s.endTime || `${String(s.endHour ?? 17).padStart(2, '0')}:00`,
+      color: s.color || '#3b82f6'
+    }));
+    if (Array.isArray(prefs.sessions)) setSessions(migrateSessions(prefs.sessions as any[]));
+    if (Array.isArray(prefs.backtestSessions)) setBacktestSessions(migrateSessions(prefs.backtestSessions as any[]));
     if (Array.isArray(prefs.htfOptions)) setHtfOptions(prefs.htfOptions);
     if (Array.isArray(prefs.ltfOptions)) setLtfOptions(prefs.ltfOptions);
     if (Array.isArray(prefs.ironRules)) setIronRules(prefs.ironRules);
@@ -1967,10 +1975,18 @@ const App: React.FC = () => {
   // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
   // Backup save every 30s if user is still editing
   // This protects against browser crashes or quick tab closures
+  //
+  // Aktuální data v refu, aby interval NEMUSEL být v deps na ~21 stavech. Dřív se při každé
+  // změně (i každém keystroke v deníku → dailyPreps/Reviews) interval clearnul a založil nový,
+  // takže se 30s tik během aktivního psaní prakticky nikdy nestihl. Ref se aktualizuje každý
+  // render, takže interval vždy přečte čerstvé hodnoty když po 30s fírne.
+  const periodicSaveRef = useRef<any>(null);
+  periodicSaveRef.current = { currentUserPreferences, dailyPreps, dailyReviews, weeklyFocusList };
   useEffect(() => {
     if (!canSave) return;
 
     const interval = setInterval(() => {
+      const { currentUserPreferences, dailyPreps, dailyReviews, weeklyFocusList } = periodicSaveRef.current;
       // Only save if there are pending changes AND prefs už byly aplikovány z cache/DB
       if (isPreferencesDirty.current && prefsAppliedRef.current) {
         isPreferencesDirty.current = false;
@@ -1995,7 +2011,7 @@ const App: React.FC = () => {
           wasPreps ? storageService.saveDailyPreps(dailyPreps) : Promise.resolve(),
           wasReviews ? storageService.saveDailyReviews(dailyReviews) : Promise.resolve(),
           wasWeekly && weeklyFocusList.length > 0
-            ? Promise.all(weeklyFocusList.map(wf => storageService.saveWeeklyFocus(wf)))
+            ? Promise.all(weeklyFocusList.map((wf: any) => storageService.saveWeeklyFocus(wf)))
             : Promise.resolve()
         ]).catch(err => {
           console.error("[Auto-Save] Periodic journal save failed:", err);
@@ -2009,7 +2025,7 @@ const App: React.FC = () => {
     return () => {
       clearInterval(interval);
     };
-  }, [canSave, userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, dailyPreps, dailyReviews, weeklyFocusList]);
+  }, [canSave]);
 
   // Flush dirty data to DB when user leaves tab (visibilitychange) or closes browser (beforeunload)
   useEffect(() => {
@@ -2235,12 +2251,26 @@ const App: React.FC = () => {
     const grouped = new Map<string, Trade[]>();
     const independent: Trade[] = [];
 
+    // Fáze účtu pro grupování — funded a challenge kopie téhož fan-outu NESMÍ splynout do
+    // jedné karty, jinak by combined karta (klíčovaná masterem) ve funded/challenge filtru
+    // míchala cizí peníze. Klíč proto zahrnuje "phase bucket".
+    const aggLookup = [...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))];
+    const phaseBucketOf = (accId?: string): string => {
+      const acc = aggLookup.find(a => a.id === accId);
+      if (!acc) return 'other';
+      if (acc.type === 'Funded' && acc.phase === 'Challenge') return 'challenge';
+      if (acc.type === 'Live' || (acc.type === 'Funded' && acc.phase === 'Funded')) return 'funded';
+      if (acc.type === 'Backtest') return 'backtest';
+      return 'other';
+    };
+
     trades.forEach(t => {
       // Logic: If it's a copy, group by masterTradeId. If it's a master, group by its own ID.
-      const key = t.masterTradeId || (t.isMaster ? t.id : t.groupId);
-      if (key) {
-        if (!grouped.has(key as string)) grouped.set(key as string, []);
-        grouped.get(key as string)!.push(t);
+      const baseKey = t.masterTradeId || (t.isMaster ? t.id : t.groupId);
+      if (baseKey) {
+        const key = `${baseKey}__${phaseBucketOf(t.accountId)}`;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key)!.push(t);
       } else {
         independent.push(t);
       }
@@ -2258,16 +2288,11 @@ const App: React.FC = () => {
     });
 
     return [...independent, ...aggregated].sort((a, b) => b.timestamp - a.timestamp);
-  }, [trades, viewMode, effectiveActiveAccount, accounts, contextAccounts]);
+  }, [trades, viewMode, effectiveActiveAccount, accounts, archivedAccounts, contextAccounts]);
 
-  const stats = useMemo(() => {
-    try {
-      return calculateStats(displayTrades, displayBalance);
-    } catch (e) {
-      console.error("Stats calculation error:", e);
-      return calculateStats([], 0);
-    }
-  }, [displayTrades, displayBalance]);
+  // (Pozn.: dřív tu byl `const stats = useMemo(calculateStats(displayTrades…))`, který se ale
+  // nikde nepoužíval — Dashboard bere `filteredStats`. Odstraněno: byl to plný průchod všemi
+  // obchody (equity křivka, kalendář, hodinové/denní mapy) na každou změnu trades zbytečně.)
 
   // Global refresh handler for Pull-to-Refresh
   const handleRefreshData = useCallback(async () => {
@@ -2454,22 +2479,27 @@ const App: React.FC = () => {
 
   const handleFileUpload = (data: any[]) => {
     const activeAccount = accounts.find(a => a.id === activeAccountId);
-    const newTrades = normalizeTrades(data, activeAccountId).map(t => ({
+    const normalized = normalizeTrades(data, activeAccountId).map(t => ({
       ...t,
       phase: activeAccount?.phase || 'Challenge'
     }));
-    const uniqueTrades = [...trades];
-    newTrades.forEach(nt => {
-      if (!uniqueTrades.some(t => t.id === nt.id && t.accountId === activeAccountId)) {
-        uniqueTrades.push(nt);
-      }
-    });
-    setTrades(uniqueTrades);
+    // Jen skutečně NOVÉ obchody (dedup proti tomu, co už máme v paměti).
+    const newTrades = normalized.filter(nt =>
+      !trades.some(t => t.id === nt.id && t.accountId === activeAccountId)
+    );
+    if (newTrades.length === 0) return;
 
-    // CRITICAL FIX: Save imported trades to Supabase (without this, they only exist in memory)
-    storageService.saveTrades(uniqueTrades).then(saved => {
+    // Optimistic UI — přidej nové k existujícím.
+    setTrades(prev => [...prev, ...newTrades]);
+
+    // CRITICAL: ulož JEN nové obchody, ne celé pole. Dřív se posílal [...trades, ...new] →
+    // saveTrades re-fetchnul a re-upsertnul VŠECHNY existující řádky (write amplification).
+    // saveTrades existující v DB nechá být; tady jen zreconcilujeme optimistické nové
+    // (temp ID) za uložené verze (reálná UUID z DB), zbytek stavu se nedotkneme.
+    const optimisticIds = new Set(newTrades.map(t => t.id));
+    storageService.saveTrades(newTrades).then(saved => {
       if (saved && saved.length > 0) {
-        setTrades(saved);
+        setTrades(prev => [...prev.filter(t => !optimisticIds.has(t.id)), ...saved]);
       }
     }).catch(err => {
       console.error("[FileUpload] Failed to save imported trades:", err);
@@ -3028,9 +3058,8 @@ const App: React.FC = () => {
             <feDisplacementMap in="SourceGraphic" in2="map" scale={20} xChannelSelector="R" yChannelSelector="G" />
           </filter>
         </svg>
-        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-2xl floating-glass-header ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
-          {/* WebGL liquid glass podklad (z-0, animovaný shader); obsah headeru sedí nad ním (z-10). */}
-          <LiquidGlassHeader theme={theme} />
+        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-2xl floating-glass-header header-clear ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
+          {/* Vizuál headeru dělá CSS: gradient tint + border + stín + lupa přes backdrop-filter:url(#liquid-glass). */}
           <div className="flex items-center gap-3 relative z-10">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
             <div className="flex items-center gap-2.5 pr-1">
@@ -3261,7 +3290,7 @@ const App: React.FC = () => {
                 playbookItems={playbookItems}
                 dailyPreps={dailyPreps}
                 dailyReviews={dailyReviews}
-                sessions={sessions}
+                sessions={activeSessions}
                 theme={theme}
                 dashboardMode={dashboardMode}
                 initialConversationId={aiActiveConvId}
@@ -3395,7 +3424,7 @@ const App: React.FC = () => {
                       preps={dailyPreps}
                       reviews={dailyReviews}
                       layouts={dashboardMode === 'backtesting' ? backtestDashboardLayouts : dashboardLayouts}
-                      sessions={sessions}
+                      sessions={activeSessions}
                       ironRules={ironRules}
                       onUpdateLayouts={(v: DashboardLayouts) => {
                           // GATE: Blokujeme automatické mount-time změny z react-grid-layout nebo během aplikace preferencí
@@ -3539,7 +3568,7 @@ const App: React.FC = () => {
                       weeklyFocusList={weeklyFocusList}
                       activeTab={journalActiveTab}
                       onTabChange={setJournalActiveTab}
-                      sessions={sessions}
+                      sessions={activeSessions}
                       initialDate={journalTargetDate}
                       userMistakes={userMistakes}
                     />
@@ -3628,7 +3657,9 @@ const App: React.FC = () => {
                       userMistakes={userMistakes} setUserMistakes={(v) => { setUserMistakes(v); markPreferencesDirty(); }}
                       htfOptions={htfOptions} setHtfOptions={(v) => { setHtfOptions(v); markPreferencesDirty(); }}
                       ltfOptions={ltfOptions} setLtfOptions={(v) => { setLtfOptions(v); markPreferencesDirty(); }}
-                      sessions={sessions} setSessions={(v) => { setSessions(v); markPreferencesDirty(); console.log('[Setter] setSessions → dirty=true'); }}
+                      sessions={sessions} setSessions={(v) => { setSessions(v); markPreferencesDirty(); }}
+                      backtestSessions={backtestSessions} setBacktestSessions={(v) => { setBacktestSessions(v); markPreferencesDirty(); }}
+                      isBacktestWorld={dashboardMode === 'backtesting'}
                       ironRules={ironRules}
                       setIronRules={(v) => { setIronRules(v); markPreferencesDirty(); }}
                       psychoMetrics={psychoMetrics}

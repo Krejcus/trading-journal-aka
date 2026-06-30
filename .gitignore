@@ -40,3 +40,8 @@ migrate-screenshots.mjs
 
 # Local Claude Code config (per-user, may contain secrets)
 .claude/settings.local.json
+
+# Archivy a pracovní bordel (odstraněno z indexu, ponecháno lokálně)
+.archive/
+scratch/
+analyzy/

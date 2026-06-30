@@ -21,6 +21,16 @@ import TradeDetailModal from './TradeDetailModal';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 
+// Levný podpis tradu pro detekci změny — vynechá base64 screenshoty (ty by JSON.stringify
+// nafoukl na stovky KB). Screenshoty porovnáme zvlášť přes délku + krátký prefix.
+const tradeSig = (t: any): string => {
+  if (!t) return '';
+  const { screenshot, screenshots, ...rest } = t;
+  const shotKey = (typeof screenshot === 'string' ? `${screenshot.length}:${screenshot.slice(0, 32)}` : '')
+    + '|' + (Array.isArray(screenshots) ? `${screenshots.length}:${screenshots.map((s: any) => typeof s === 'string' ? s.slice(0, 16) : '').join(',')}` : '');
+  return JSON.stringify(rest) + '#' + shotKey;
+};
+
 // Jednotný badge „k doplnění" pro importované obchody bez screenshotu/konfluence.
 // `card` = plovoucí pilulka v rohu karty, `inline` = malý štítek vedle instrumentu v tabulce.
 const EnrichBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
@@ -210,7 +220,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     if (selectedTrade) {
       const source = allTrades.length > 0 ? allTrades : trades;
       const updated = source.find(t => t.id === selectedTrade.id);
-      if (updated && JSON.stringify(updated) !== JSON.stringify(selectedTrade)) {
+      // Levný podpis místo JSON.stringify celého tradu — ten dřív serializoval i inline base64
+      // screenshot (stovky KB) synchronně při KAŽDÉ změně trades/allTrades → zásek UI.
+      if (updated && updated !== selectedTrade && tradeSig(updated) !== tradeSig(selectedTrade)) {
         setSelectedTrade(updated);
       }
     }
@@ -295,6 +307,33 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const isInvalidTrade = (t: Trade) => tradeStatusOf(t) === 'Invalid';
   // Plné karty renderují jen NEneplatné obchody (paginováno přes visibleTrades).
   const validTrades = useMemo(() => visibleTrades.filter(t => !isInvalidTrade(t)), [visibleTrades]);
+
+  // Předpočítané indexy pro detekci skupinových/copy obchodů. Dřív se pro KAŽDOU
+  // vykreslenou kartu 2× lineárně skenoval celý allTrades (O(karty × N)) přímo v render
+  // mapě → záseky při scrollu/načtení screenshotu. Teď O(1) lookup v Map.
+  const { groupMap, fuzzyMap } = useMemo(() => {
+    const src = allTrades.length > 0 ? allTrades : trades;
+    const g = new Map<string, Trade[]>();
+    const f = new Map<string, Trade[]>();
+    for (const t of src) {
+      if (t.groupId) {
+        const arr = g.get(t.groupId);
+        if (arr) arr.push(t); else g.set(t.groupId, [t]);
+      }
+      const fk = `${t.instrument}|${t.timestamp}|${t.direction}`;
+      const fa = f.get(fk);
+      if (fa) fa.push(t); else f.set(fk, [t]);
+    }
+    return { groupMap: g, fuzzyMap: f };
+  }, [allTrades, trades]);
+  const getGroupTrades = useCallback((trade: Trade): Trade[] => {
+    let group: Trade[] = trade.groupId ? (groupMap.get(trade.groupId) || []) : [];
+    if (group.length <= 1) {
+      const fuzzy = fuzzyMap.get(`${trade.instrument}|${trade.timestamp}|${trade.direction}`) || [];
+      if (fuzzy.length > 1) group = fuzzy;
+    }
+    return group;
+  }, [groupMap, fuzzyMap]);
 
 
   // --- MULTI-SELECT HANDLERS ---
@@ -769,16 +808,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             const needsEnrich = enrichIds.has(String(trade.id));
 
             const tradeAccount = accounts.find(a => a.id === trade.accountId);
-            // Find group trades using same logic as TradeDetailModal (groupId + fuzzy)
-            const allTradesList = allTrades.length > 0 ? allTrades : trades;
-            let groupTrades: Trade[] = [];
-            if (trade.groupId) {
-              groupTrades = allTradesList.filter(t => t.groupId === trade.groupId);
-            }
-            if (groupTrades.length <= 1) {
-              const fuzzy = allTradesList.filter(t => t.instrument === trade.instrument && t.timestamp === trade.timestamp && t.direction === trade.direction);
-              if (fuzzy.length > 1) groupTrades = fuzzy;
-            }
+            // Find group trades using same logic as TradeDetailModal (groupId + fuzzy) — O(1) přes index
+            const groupTrades = getGroupTrades(trade);
             const isGroupTrade = groupTrades.length > 1;
             const isCombinedCard = String(trade.id).startsWith('combined_');
             const masterTrade = groupTrades.find(t => t.isMaster) || groupTrades[0];
@@ -1032,15 +1063,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       ? 'text-amber-500'
                       : (isWin ? 'text-emerald-500' : 'text-rose-500');
                   const tableScreenshot = getScreenshot(trade);
-                  const tblAllTrades = allTrades.length > 0 ? allTrades : trades;
-                  let tblGroup: Trade[] = [];
-                  if (trade.groupId) {
-                    tblGroup = tblAllTrades.filter(t => t.groupId === trade.groupId);
-                  }
-                  if (tblGroup.length <= 1) {
-                    const fuzzy = tblAllTrades.filter(t => t.instrument === trade.instrument && t.timestamp === trade.timestamp && t.direction === trade.direction);
-                    if (fuzzy.length > 1) tblGroup = fuzzy;
-                  }
+                  const tblGroup = getGroupTrades(trade);
                   const tblIsGroup = tblGroup.length > 1;
                   const tblIsCombined = String(trade.id).startsWith('combined_');
                   const tblMaster = tblGroup.find(t => t.isMaster) || tblGroup[0];

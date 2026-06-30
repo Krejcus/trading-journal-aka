@@ -156,12 +156,36 @@ function pick(row: Record<string, any>, aliases: readonly string[]): any {
   return undefined;
 }
 
+/**
+ * Sjednotí desetinný oddělovač napříč locales BEZ rozbití US formátu.
+ * - "1,234.56" (US) → "1234.56"   - "1.234,56" (EU) → "1234.56"
+ * - "1234,56"  (EU) → "1234.56"   - "1,234" (US tis.) → "1234"
+ * Pravidlo: jsou-li oba oddělovače, poslední je desetinný; je-li jen čárka,
+ * bere se jako desetinná jen když ji následuje 1–2 cifry na konci (jinak tisícová).
+ */
+export function normalizeDecimalSeparators(s: string): string {
+  const hasDot = s.includes('.');
+  const hasComma = s.includes(',');
+  if (hasDot && hasComma) {
+    return s.lastIndexOf(',') > s.lastIndexOf('.')
+      ? s.replace(/\./g, '').replace(',', '.')  // čárka je desetinná
+      : s.replace(/,/g, '');                    // tečka je desetinná
+  }
+  if (hasComma) {
+    return /^-?\d+,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '');
+  }
+  return s;
+}
+
 function num(v: any): number {
   if (v === undefined || v === null) return NaN;
   if (typeof v === 'number') return v;
-  let s = String(v).trim().replace(/[$,\s]/g, '');
-  if (s.startsWith('(') && s.endsWith(')')) s = '-' + s.replace(/[()]/g, ''); // (123) → -123
-  return parseFloat(s);
+  let s = String(v).trim().replace(/[$\s]/g, '');
+  let neg = false;
+  if (s.startsWith('(') && s.endsWith(')')) { neg = true; s = s.replace(/[()]/g, ''); } // (123) → -123
+  s = normalizeDecimalSeparators(s);
+  const n = parseFloat(s);
+  return neg ? -n : n;
 }
 
 /** Rozpozná, jestli řádky vypadají jako Tradovate fills/orders export. */
@@ -647,6 +671,15 @@ export function applyCashHistory(
   // Akumulace pro odvození sazby za stranu (per root): suma poplatků / suma stran.
   const rateAccum = new Map<string, { fees: number; sides: number }>();
 
+  // Předindexuj cash po kontraktu — dřív se pro KAŽDÝ obchod lineárně filtroval celý cash
+  // (O(obchody × cashRows), u velkého účtu miliony porovnání). Teď filtrujeme jen řádky
+  // daného kontraktu.
+  const cashByContract = new Map<string, typeof cash>();
+  for (const c of cash) {
+    const arr = cashByContract.get(c.contract);
+    if (arr) arr.push(c); else cashByContract.set(c.contract, [c]);
+  }
+
   const trades = result.trades.map(t => {
     const contract = t.symbol || t.instrument || '';
     const entryT = t.entryTime ?? t.timestamp;
@@ -654,8 +687,8 @@ export function applyCashHistory(
     const lo = Math.min(entryT, exitT) - SLACK;
     const hi = Math.max(entryT, exitT) + SLACK;
 
-    const inWindow = cash.filter(c =>
-      c.contract === contract && c.time >= lo && c.time <= hi
+    const inWindow = (cashByContract.get(contract) || []).filter(c =>
+      c.time >= lo && c.time <= hi
     );
     const fees = inWindow.filter(c => c.kind === 'fee').reduce((s, c) => s + Math.abs(c.delta), 0);
     const pairedRows = inWindow.filter(c => c.kind === 'paired');

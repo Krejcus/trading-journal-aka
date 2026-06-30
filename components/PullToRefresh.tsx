@@ -24,6 +24,11 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
     const [holdTimer, setHoldTimer] = useState<NodeJS.Timeout | null>(null);
     const [isHoldValid, setIsHoldValid] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    // Ref drží aktuální holdTimer, aby ho šlo zrušit při UNMOUNTu (ne v hlavním efektu —
+    // ten běží při každé změně pullDistance během tahu a zrušil by rozdělaný hold).
+    const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
+    holdTimerRef.current = holdTimer;
+    useEffect(() => () => { if (holdTimerRef.current) clearTimeout(holdTimerRef.current); }, []);
 
     const maxPullDistance = 100; // Maximum pull distance
     const triggerDistance = 70; // Distance to trigger refresh

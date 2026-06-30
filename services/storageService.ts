@@ -371,10 +371,16 @@ export const storageService = {
         screenshot:data->>screenshot,
         screenshots:data->screenshots,
         aiSuggestions:data->aiSuggestions,
-        visionAnalysis:data->visionAnalysis
+        visionAnalysis:data->visionAnalysis,
+        source:data->>source,
+        tsOrderIds:data->tsOrderIds
       `)
       .eq('user_id', userId)
-      .order('timestamp', { ascending: false });
+      .order('timestamp', { ascending: false })
+      // Supabase/PostgREST má default "Max rows" = 1000. Bez explicitního rozsahu
+      // by se u traderů s >1000 obchody tiše uřízly NEJSTARŠÍ řádky (DESC řazení)
+      // → zmizí z dashboardu/statistik. Explicitní vysoký strop to obchází.
+      .range(0, 99999);
 
     if (error) {
       console.error("Supabase getTrades error:", error);
@@ -616,10 +622,15 @@ export const storageService = {
       const existingData = existingDataMap.get(String(t.id));
       // Drawings: prázdné z načteného obchodu NESMÍ přepsat reálné kresby v DB.
       const mergedDrawings = (t.drawings && t.drawings.length) ? t.drawings : ((existingData && existingData.drawings) || []);
+      // Screenshoty: stejná ochrana. getTrades() strhne base64 (data:) z read-pathu → in-memory
+      // obchod může nést screenshot: undefined, i když v DB blobu base64 je. Bez tohohle by merge
+      // `...t` legacy base64 screenshot v blobu přepsal undefinem = ztráta obrázku.
+      const mergedScreenshot = (t.screenshot != null) ? t.screenshot : (existingData && existingData.screenshot);
+      const mergedScreenshots = (t.screenshots && t.screenshots.length) ? t.screenshots : (existingData && existingData.screenshots);
 
       // Merge: existující blob jako základ, nový obchod přepíše svá pole; co in-memory nenese, zůstane.
       const dataBlob: any = existingData
-        ? { ...existingData, ...t, accountId: realAccId, drawings: mergedDrawings }
+        ? { ...existingData, ...t, accountId: realAccId, drawings: mergedDrawings, screenshot: mergedScreenshot, screenshots: mergedScreenshots }
         : { ...t, accountId: realAccId, drawings: mergedDrawings };
 
       const obj: any = {
@@ -2279,15 +2290,21 @@ export const storageService = {
   async getLeaderboardStats(userIds: string[]): Promise<any[]> {
     if (userIds.length === 0) return [];
 
-    // Fetch last 50 trades per user for Win Rate
-    // Note: In a real app with generic supabase, we might need a stored procedure for efficiency.
-    // For now, we fetch recent trades and aggregate client-side to avoid complex SQL via JS.
-    const { data: trades } = await supabase
-      .from('trades')
-      .select('user_id, pnl')
-      .in('user_id', userIds)
-      .order('date', { ascending: false })
-      .limit(500); // Global limit, might need adjustment
+    // Posledních 100 obchodů PER USER (paralelně). Dřív byl globální .limit(500) přes
+    // všechny usery najednou → aktivní uživatel s ~480 obchody vyžral skoro celý limit
+    // a ostatním zbylo pár řádků → nesmyslný win rate. Per-user limit to napravuje.
+    const perUserTrades = await Promise.all(
+      userIds.map(async (uid) => {
+        const { data } = await supabase
+          .from('trades')
+          .select('user_id, pnl')
+          .eq('user_id', uid)
+          .order('date', { ascending: false })
+          .limit(100);
+        return data || [];
+      })
+    );
+    const trades = perUserTrades.flat();
 
     // Fetch last 20 reviews for Discipline
     const { data: reviews } = await supabase
@@ -2297,15 +2314,17 @@ export const storageService = {
       .order('date', { ascending: false })
       .limit(200);
 
-    const statsMap: Record<string, { wins: number, totalTrades: number, totalRating: number, reviewCount: number }> = {};
+    const statsMap: Record<string, { wins: number, losses: number, totalTrades: number, totalRating: number, reviewCount: number }> = {};
 
-    userIds.forEach(id => { statsMap[id] = { wins: 0, totalTrades: 0, totalRating: 0, reviewCount: 0 }; });
+    userIds.forEach(id => { statsMap[id] = { wins: 0, losses: 0, totalTrades: 0, totalRating: 0, reviewCount: 0 }; });
 
     trades?.forEach(t => {
-      if (statsMap[t.user_id]) {
-        statsMap[t.user_id].totalTrades++;
-        if (t.pnl > 0) statsMap[t.user_id].wins++;
-      }
+      const s = statsMap[t.user_id];
+      if (!s) return;
+      s.totalTrades++;
+      // Win rate jen z rozhodnutých obchodů — break-even (pnl ~ 0) se nepočítá jako prohra.
+      if (t.pnl > 0.01) s.wins++;
+      else if (t.pnl < -0.01) s.losses++;
     });
 
     reviews?.forEach(r => {
@@ -2327,7 +2346,7 @@ export const storageService = {
         id: p.id,
         name: p.full_name,
         avatar: p.avatar_url,
-        winRate: s.totalTrades > 0 ? (s.wins / s.totalTrades) * 100 : 0,
+        winRate: (s.wins + s.losses) > 0 ? (s.wins / (s.wins + s.losses)) * 100 : 0,
         discipline: s.reviewCount > 0 ? (s.totalRating / s.reviewCount) : 0,
         tradeCount: s.totalTrades
       };

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Trade, DailyPrep, DailyReview, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
@@ -174,13 +174,23 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
       if (currentMonthIndex > 0) setCurrentMonthIndex(prev => prev - 1);
    };
 
+   // Když se monthsData zkrátí (změna filtru/účtu), stale currentMonthIndex by ukazoval mimo
+   // pole → monthsData[idx] undefined → crash na .year. Srovnáme stav zpět do rozsahu.
+   useEffect(() => {
+      if (currentMonthIndex > monthsData.length - 1) {
+         setCurrentMonthIndex(Math.max(0, monthsData.length - 1));
+      }
+   }, [monthsData.length, currentMonthIndex]);
+
    if (monthsData.length === 0) return (
       <div className={`p-8 text-center rounded-xl border border-dashed ${theme !== 'light' ? 'border-slate-700 text-slate-500' : 'border-slate-300 text-slate-400'}`}>
          Žádná data pro kalendář.
       </div>
    );
 
-   const currentData = monthsData[currentMonthIndex];
+   // Bezpečný index i pro render PŘED tím, než effect výše stihne srovnat stav (jinak crash).
+   const safeMonthIndex = Math.min(Math.max(0, currentMonthIndex), monthsData.length - 1);
+   const currentData = monthsData[safeMonthIndex];
 
    return (
       <div className="relative h-full flex flex-col">

@@ -36,7 +36,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const isManualDebug = req.query.debug === 'true';
     const mockType = req.query.type as string;
 
-    if (!isManualDebug && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+    // BEZPEČNOST: dřív `?debug=true` ÚPLNĚ obešel kontrolu CRON_SECRET → kdokoli mohl přes
+    // ?debug=true&type=... rozeslat push notifikace všem uživatelům a tahat profily. Teď i
+    // debug vyžaduje secret (přes ?secret=, protože browser nepošle Bearer header).
+    const bearerOk = req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`;
+    const debugSecretOk = isManualDebug && !!process.env.CRON_SECRET && req.query.secret === process.env.CRON_SECRET;
+    if (!bearerOk && !debugSecretOk) {
         console.log(`[Cron] AUTH FAILED. Has CRON_SECRET: ${!!process.env.CRON_SECRET}, Header: ${req.headers.authorization?.slice(0, 20)}...`);
         return res.status(401).end('Unauthorized');
     }

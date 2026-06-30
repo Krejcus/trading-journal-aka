@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 interface Account {
@@ -8,16 +9,24 @@ interface Account {
     phase?: string;
     parentAccountId?: string;
     parent_account_id?: string; // Fallback for DB casing
+    copyMultiplier?: number;
 }
 import { useTheme } from './ThemeContext';
 
 const isBacktestAcc = (a: any) => a?.type === 'Backtest' || a?.meta?.type === 'Backtest';
 
-export function AccountList({ onSelectionChange, mode = 'normal' }: { onSelectionChange: (selectedIds: string[]) => void; mode?: 'normal' | 'backtest' }) {
+export function AccountList({ onSelectionChange, onAccountsLoaded, mode = 'normal' }: { onSelectionChange: (selectedIds: string[]) => void; onAccountsLoaded?: (accs: Account[]) => void; mode?: 'normal' | 'backtest' }) {
     const { theme } = useTheme();
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    // Které master-skupiny jsou rozbalené (default vše sbalené → kompaktní seznam).
+    const [expandedMasters, setExpandedMasters] = useState<Set<string>>(new Set());
+    const toggleExpand = (id: string) => setExpandedMasters(prev => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+    });
 
     useEffect(() => {
         async function loadAccounts() {
@@ -56,6 +65,7 @@ export function AccountList({ onSelectionChange, mode = 'normal' }: { onSelectio
                 }));
 
                 setAccounts(formattedAccounts as Account[]);
+                onAccountsLoaded?.(formattedAccounts as Account[]);
 
             } catch (err) {
                 console.error("Failed to load accounts:", err);
@@ -66,13 +76,23 @@ export function AccountList({ onSelectionChange, mode = 'normal' }: { onSelectio
         loadAccounts();
     }, []);
 
-    // Default výběr reaguje na mód: backtest → všechny backtest účty; normal → master (ne-backtest) účty.
+    // Default výběr: backtest → všechny backtest účty; normal → celé master skupiny
+    // (master + jeho kopie), ať je fan-out armovaný kompletní. Orphan kopie (bez masteru
+    // ve výběru) zůstávají nezaškrtnuté.
     useEffect(() => {
         if (isLoading) return;
         const visible = accounts.filter(a => mode === 'backtest' ? isBacktestAcc(a) : !isBacktestAcc(a));
-        const defaults = mode === 'backtest'
-            ? visible.map(a => a.id)
-            : visible.filter(a => !a.parentAccountId).map(a => a.id);
+        let defaults: string[];
+        if (mode === 'backtest') {
+            defaults = visible.map(a => a.id);
+        } else {
+            const masterAccs = visible.filter(a => !a.parentAccountId);
+            const masterIds = new Set(masterAccs.map(a => a.id));
+            defaults = [
+                ...masterAccs.map(a => a.id),
+                ...visible.filter(c => c.parentAccountId && masterIds.has(c.parentAccountId)).map(c => c.id),
+            ];
+        }
         setSelectedIds(defaults);
         onSelectionChange(defaults);
     }, [mode, accounts, isLoading]);
@@ -114,6 +134,17 @@ export function AccountList({ onSelectionChange, mode = 'normal' }: { onSelectio
     const masters = visibleAccounts.filter(a => !a.parentAccountId);
     const copies = visibleAccounts.filter(a => !!a.parentAccountId);
 
+    // Odznak risk multiplikátoru — jen u účtů s ≠1× (1× = vizuální šum, vynecháváme).
+    const multBadge = (a: Account) => {
+        const m = Math.round(Number(a.copyMultiplier) || 1);
+        if (m <= 1) return null;
+        return (
+            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded leading-none ${theme === 'dark' ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30' : 'bg-indigo-100 text-indigo-700 border border-indigo-200'}`}>
+                {m}×
+            </span>
+        );
+    };
+
     return (
         <div className="flex flex-col mb-4">
             <label className={`block text-xs uppercase font-bold tracking-wider mb-1.5 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Účty k propsání</label>
@@ -122,26 +153,43 @@ export function AccountList({ onSelectionChange, mode = 'normal' }: { onSelectio
                 {masters.map(master => {
                     const myCopies = copies.filter(c => c.parentAccountId === master.id);
                     const isTrueMaster = myCopies.length > 0;
+                    const isExpanded = expandedMasters.has(master.id);
+                    const groupIds = [master.id, ...myCopies.map(c => c.id)];
+                    const groupSize = groupIds.length;
+                    const selectedInGroup = groupIds.filter(id => selectedIds.includes(id)).length;
+                    const allSelected = selectedInGroup === groupSize;
                     return (
                         <div key={master.id} className={`mb-1 ${isTrueMaster ? (theme === 'dark' ? 'bg-slate-900/40 border border-slate-700/30 rounded-lg overflow-hidden' : 'bg-slate-100/50 border border-slate-200 rounded-lg overflow-hidden') : ''}`}>
 
-                            <div
-                                className={`flex items-center gap-2.5 p-2 bg-transparent justify-between cursor-pointer transition-colors ${theme === 'dark' ? 'hover:bg-cyan-500/10' : 'hover:bg-cyan-500/10'}`}
-                                onClick={() => handleToggle(master.id, isTrueMaster)}
-                            >
-                                <div className="flex items-center gap-2.5 relative">
+                            <div className={`flex items-center gap-2.5 p-2 bg-transparent justify-between transition-colors ${theme === 'dark' ? 'hover:bg-cyan-500/10' : 'hover:bg-cyan-500/10'}`}>
+                                {/* Levá zóna = výběr (celé skupiny u masteru) */}
+                                <div className="flex items-center gap-2.5 relative cursor-pointer flex-1 min-w-0" onClick={() => handleToggle(master.id, isTrueMaster)}>
                                     <input
                                         type="checkbox"
                                         checked={selectedIds.includes(master.id)}
                                         onChange={() => { }}
-                                        className={`w-3.5 h-3.5 cursor-pointer accent-cyan-500`}
+                                        className={`w-3.5 h-3.5 cursor-pointer accent-cyan-500 shrink-0`}
                                     />
-                                    <span className={`text-sm font-bold ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{master.name}</span>
+                                    <span className={`text-sm font-bold truncate ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{master.name}</span>
+                                    {multBadge(master)}
                                 </div>
-                                {isTrueMaster && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase ${theme === 'dark' ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' : 'bg-cyan-100 text-cyan-700 border-cyan-200'}`}>Master</span>}
+                                {/* Pravá zóna = počet + rozbalení (jen u skupin s kopiemi) */}
+                                {isTrueMaster && (
+                                    <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); toggleExpand(master.id); }}
+                                        className="flex items-center gap-1.5 shrink-0 pl-2 group/exp"
+                                        title={isExpanded ? 'Sbalit' : 'Rozbalit účty'}
+                                    >
+                                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded leading-none tabular-nums ${allSelected ? (theme === 'dark' ? 'bg-cyan-500/15 text-cyan-400' : 'bg-cyan-100 text-cyan-700') : (theme === 'dark' ? 'bg-slate-600/30 text-slate-400' : 'bg-slate-200 text-slate-600')}`}>
+                                            {selectedInGroup}/{groupSize}
+                                        </span>
+                                        <ChevronRight size={14} className={`transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''} ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`} />
+                                    </button>
+                                )}
                             </div>
 
-                            {myCopies.map(copy => (
+                            {isTrueMaster && isExpanded && myCopies.map(copy => (
                                 <div
                                     key={copy.id}
                                     className={`flex items-center gap-2.5 p-2 pl-9 bg-transparent justify-between cursor-pointer transition-colors border-t relative ${theme === 'dark' ? 'hover:bg-purple-500/10 border-slate-700/30' : 'hover:bg-purple-500/10 border-slate-200'}`}
@@ -156,6 +204,7 @@ export function AccountList({ onSelectionChange, mode = 'normal' }: { onSelectio
                                             className="w-3 h-3 cursor-pointer accent-cyan-500 relative z-10"
                                         />
                                         <span className={`text-xs font-semibold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>{copy.name}</span>
+                                        {multBadge(copy)}
                                     </div>
                                     <span className={`text-[9px] font-bold px-1 py-0.5 rounded border uppercase ${theme === 'dark' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-purple-100 text-purple-700 border-purple-200'}`}>Copy</span>
                                 </div>
@@ -180,6 +229,7 @@ export function AccountList({ onSelectionChange, mode = 'normal' }: { onSelectio
                                 className="w-3.5 h-3.5 cursor-pointer accent-cyan-500"
                             />
                             <span className={`text-sm font-semibold ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>{orphan.name}</span>
+                            {multBadge(orphan)}
                         </div>
                         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase ${theme === 'dark' ? 'bg-slate-500/10 text-slate-400 border-slate-500/20' : 'bg-slate-200 text-slate-600 border-slate-300'}`}>Orphan</span>
                     </div>

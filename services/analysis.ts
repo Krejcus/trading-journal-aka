@@ -1,16 +1,20 @@
 
 import { Trade, TradeStats, SignalStat, TimeStat, CalendarDay, MonthlyData, EquityPoint } from '../types';
-import { isTradovateFills, parseTradovateFills } from './tradovateImport';
+import { isTradovateFills, parseTradovateFills, normalizeDecimalSeparators } from './tradovateImport';
 import { getTradeEntryDate } from './tradeTime';
 
 export const parseCurrency = (val: string | number): number => {
   if (typeof val === 'number') return val;
   if (!val) return 0;
-  let clean = val.toString().replace(/[$,\s]/g, '');
+  let clean = val.toString().replace(/[$\s]/g, '');
+  let neg = false;
   if (clean.startsWith('(') && clean.endsWith(')')) {
-    clean = '-' + clean.replace(/[()]/g, '');
+    neg = true;
+    clean = clean.replace(/[()]/g, '');
   }
-  return parseFloat(clean) || 0;
+  clean = normalizeDecimalSeparators(clean); // EU "1234,56" → "1234.56" bez rozbití US formátu
+  const n = parseFloat(clean) || 0;
+  return neg ? -n : n;
 };
 
 const safeParseDate = (dateStr: any): Date | null => {
@@ -294,7 +298,7 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
       monthObj[i] = { pnl, gainPct, accumGainPct: 0 };
       runningBalance += pnl;
     }
-    return { year, months: monthObj, yearlyPnl, yearlyGainPct: (yearlyPnl / initialBalance) * 100 };
+    return { year, months: monthObj, yearlyPnl, yearlyGainPct: initialBalance > 0 ? (yearlyPnl / initialBalance) * 100 : 0 };
   }).sort((a, b) => b.year - a.year);
 
   const avgConsecWins = winStreaks.length ? winStreaks.reduce((a, b) => a + b, 0) / winStreaks.length : 0;
@@ -349,7 +353,7 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
     worstLossPct: lossPcts.length ? Math.min(...lossPcts) : 0,
     avgWinPct: winPcts.length ? winPcts.reduce((a, b) => a + b, 0) / winPcts.length : 0,
     avgLossPct: lossPcts.length ? lossPcts.reduce((a, b) => a + b, 0) / lossPcts.length : 0,
-    avgRR: (grossLoss / losingTrades) > 0 ? (grossProfit / winningTrades) / (grossLoss / losingTrades) : 0,
+    avgRR: (winningTrades > 0 && losingTrades > 0) ? (grossProfit / winningTrades) / (grossLoss / losingTrades) : 0,
     maxDrawdown: Math.abs(maxDrawdown),
     currentDrawdownPct: maxEquity > 0 ? Math.abs((currentEquity - maxEquity) / maxEquity) * 100 : 0,
     avgRisk: riskCount > 0 ? totalRisk / riskCount : 0, totalTrades: trades.filter(t => t.executionStatus !== 'Missed').length,

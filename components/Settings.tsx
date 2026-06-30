@@ -14,7 +14,7 @@ import {
   Trash2, Plus, Brain, X, Target,
   Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck,
   ShieldAlert, Activity, Check, ChevronLeft,
-  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText
+  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText, Lock
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus, SystemSettings } from '../types';
@@ -32,6 +32,9 @@ interface SettingsProps {
   setLtfOptions: React.Dispatch<React.SetStateAction<string[]>>;
   sessions: SessionConfig[];
   setSessions: React.Dispatch<React.SetStateAction<SessionConfig[]>>;
+  backtestSessions: SessionConfig[];
+  setBacktestSessions: React.Dispatch<React.SetStateAction<SessionConfig[]>>;
+  isBacktestWorld?: boolean;
   ironRules: IronRule[];
   setIronRules: React.Dispatch<React.SetStateAction<IronRule[]>>;
   psychoMetrics: PsychoMetricConfig[];
@@ -177,6 +180,7 @@ const Settings: React.FC<SettingsProps> = ({
   userMistakes, setUserMistakes,
   htfOptions, setHtfOptions, ltfOptions, setLtfOptions,
   sessions, setSessions,
+  backtestSessions, setBacktestSessions, isBacktestWorld,
   ironRules, setIronRules,
   psychoMetrics, setPsychoMetrics,
   weeklyFocusList, setWeeklyFocusList,
@@ -193,6 +197,12 @@ const Settings: React.FC<SettingsProps> = ({
   // Local State for adding items
   const [newHtf, setNewHtf] = useState('');
   const [newLtf, setNewLtf] = useState('');
+  // Editovat lze JEN sadu světa, ve kterém právě jsi (live vs backtest). Scope je proto
+  // zamčený na aktuální svět — druhá sada je vidět jen jako zamčená (přepni svět pro editaci).
+  const sessionScope: 'live' | 'backtest' = isBacktestWorld ? 'backtest' : 'live';
+  const curSessions = sessionScope === 'backtest' ? backtestSessions : sessions;
+  const setCurSessions = sessionScope === 'backtest' ? setBacktestSessions : setSessions;
+  const otherScope: 'live' | 'backtest' = sessionScope === 'backtest' ? 'live' : 'backtest';
   const [newMistake, setNewMistake] = useState('');
   const [newEmoLabel, setNewEmoLabel] = useState('');
   const [newRuleLabel, setNewRuleLabel] = useState('');
@@ -309,8 +319,9 @@ const Settings: React.FC<SettingsProps> = ({
   const addHtf = () => { if (newHtf && !htfOptions.includes(newHtf)) { setHtfOptions([...htfOptions, newHtf]); setNewHtf(''); showToast('HTF přidána'); } };
   const addLtf = () => { if (newLtf && !ltfOptions.includes(newLtf)) { setLtfOptions([...ltfOptions, newLtf]); setNewLtf(''); showToast('LTF přidána'); } };
   const addStandardGoal = () => { if (newStandardGoal && !standardGoals.includes(newStandardGoal)) { setStandardGoals([...standardGoals, newStandardGoal]); setNewStandardGoal(''); showToast('Cíl přidán'); } };
-  const addSession = () => { setSessions([...sessions, { id: `session_${Date.now()}`, name: 'Nová Seance', startTime: '09:00', endTime: '17:00', color: '#6366f1' }]); showToast('Seance vytvořena'); };
-  const updateSession = (id: string, up: Partial<SessionConfig>) => { setSessions(sessions.map(s => s.id === id ? { ...s, ...up } : s)); showToast('Seance aktualizována'); };
+  const addSession = () => { setCurSessions([...curSessions, { id: `session_${Date.now()}`, name: 'Nová Seance', startTime: '09:00', endTime: '17:00', color: '#6366f1' }]); showToast('Seance vytvořena'); };
+  const updateSession = (id: string, up: Partial<SessionConfig>) => { setCurSessions(curSessions.map(s => s.id === id ? { ...s, ...up } : s)); showToast('Seance aktualizována'); };
+  const copyLiveToBacktest = () => { setBacktestSessions(sessions.map(s => ({ ...s, id: `session_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }))); showToast('Zkopírováno z Live sessionů'); };
 
   const updateSystem = (key: keyof SystemSettings, val: any) => {
     setSystemSettings({ ...systemSettings, [key]: val });
@@ -613,6 +624,33 @@ const Settings: React.FC<SettingsProps> = ({
                   <button onClick={addSession} className="px-6 py-3 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-indigo-600/30 hover:bg-indigo-500 active:scale-95 transition-all flex items-center gap-2"><Plus size={16} /> Přidat seanci</button>
                 </div>
 
+                {/* Editovat lze JEN sadu světa, ve kterém právě jsi. Aktuální svět = editovatelný,
+                    druhý = zamčený (přepni svět pro jeho úpravu). */}
+                <div className="mb-6 flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className={`inline-flex p-1 rounded-2xl ${isDark ? 'bg-black/40' : 'bg-slate-100'}`}>
+                    {(['live', 'backtest'] as const).map(scope => {
+                      const isCurrent = scope === sessionScope;
+                      return (
+                        <div
+                          key={scope}
+                          title={isCurrent ? undefined : `Pro editaci se přepni do ${scope === 'backtest' ? 'backtest' : 'live'} světa`}
+                          className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isCurrent ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'text-slate-500 opacity-50 cursor-not-allowed'}`}
+                        >
+                          {!isCurrent && <Lock size={11} />}
+                          {scope === 'live' ? 'Live sessiony' : 'Backtest sessiony'}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-semibold">
+                    Edituješ sadu pro <span className="text-indigo-400">{sessionScope === 'backtest' ? 'BACKTEST' : 'LIVE'}</span>. Pro úpravu {otherScope === 'backtest' ? 'backtest' : 'live'} sady se přepni do {otherScope === 'backtest' ? 'backtest' : 'live'} světa.
+                    {sessionScope === 'backtest' && backtestSessions.length === 0 && ' (Sada je prázdná → backtest teď jede na Live.)'}
+                  </p>
+                  {sessionScope === 'backtest' && (
+                    <button onClick={copyLiveToBacktest} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isDark ? 'bg-white/5 text-slate-300 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Zkopírovat z Live</button>
+                  )}
+                </div>
+
                 <div className={`mb-10 p-8 rounded-[40px] border ${isDark ? 'bg-black/30 border-white/5' : 'bg-slate-50 border-slate-100'} overflow-hidden relative group`}>
                   <div className="flex justify-between text-[8px] font-black text-slate-500 uppercase mb-5 px-3">
                     {[0, 3, 6, 9, 12, 15, 18, 21].map(h => <span key={h}>{h}h</span>)}
@@ -620,7 +658,7 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                   <div className={`h-4 w-full rounded-full relative shadow-inner flex items-center ${isDark ? 'bg-black/50' : 'bg-slate-200'}`}>
                     <div className={`absolute inset-x-0 h-[1px] top-1/2 ${isDark ? 'bg-white/5' : 'bg-white/60'}`} />
-                    {sessions.map(s => {
+                    {curSessions.map(s => {
                       const [sh, sm] = (s.startTime || '09:00').split(':').map(Number);
                       const [eh, em] = (s.endTime || '17:00').split(':').map(Number);
                       const start = ((sh * 60 + sm) / 1440) * 100;
@@ -634,7 +672,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {sessions.map(s => (
+                  {curSessions.map(s => (
                     <div key={s.id} className={`p-4 rounded-3xl border relative group transition-all duration-300 hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:border-indigo-500/40' : 'bg-white border-slate-100 hover:shadow-xl'}`}>
                       <div className="space-y-3.5">
                         <div className="flex items-center gap-2.5">
@@ -655,7 +693,7 @@ const Settings: React.FC<SettingsProps> = ({
                           </div>
                         </div>
                       </div>
-                      <button onClick={() => { setSessions(prev => prev.filter(x => x.id !== s.id)); showToast('Odstraněno'); }} className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-rose-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg active:scale-90"><Trash2 size={14} /></button>
+                      <button onClick={() => { setCurSessions(prev => prev.filter(x => x.id !== s.id)); showToast('Odstraněno'); }} className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-rose-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg active:scale-90"><Trash2 size={14} /></button>
                     </div>
                   ))}
                 </div>
@@ -929,7 +967,11 @@ const Settings: React.FC<SettingsProps> = ({
           if (itemToDelete.type === 'rule') setIronRules(prev => prev.filter(x => x.id !== itemToDelete.id));
           if (itemToDelete.type === 'emotion') setUserEmotions(prev => prev.filter(x => x.id !== itemToDelete.id));
           if (itemToDelete.type === 'mistake') setUserMistakes(prev => prev.filter(x => x !== itemToDelete.id));
-          if (itemToDelete.type === 'session') setSessions(prev => prev.filter(x => x.id !== itemToDelete.id));
+          if (itemToDelete.type === 'session') {
+            // Odeber z té sady, kde ID je (live i backtest se edituje stejným UI).
+            setSessions(prev => prev.filter(x => x.id !== itemToDelete.id));
+            setBacktestSessions(prev => prev.filter(x => x.id !== itemToDelete.id));
+          }
           if (itemToDelete.type === 'goal') setStandardGoals(standardGoals.filter(x => x !== itemToDelete.id));
           showToast('Odstraněno');
         }}

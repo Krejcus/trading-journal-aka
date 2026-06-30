@@ -261,9 +261,16 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     };
   }, []);
 
+  // Aktuální hodnoty v refech → listenery registrujeme JEN JEDNOU. Dřív byly onSavePrep/
+  // onSaveReview/hasUnsavedChanges v deps, takže se beforeunload listener odregistruje a
+  // zaregistruje při každém psaní (hasUnsavedChanges se přepíná) — zbytečný churn.
+  const flushDepsRef = useRef({ onSavePrep, onSaveReview, hasUnsavedChanges });
+  flushDepsRef.current = { onSavePrep, onSaveReview, hasUnsavedChanges };
+
   // Flush pending journal data when browser tab is closed/refreshed or hidden
   useEffect(() => {
     const flushOnClose = (e?: BeforeUnloadEvent) => {
+      const { onSavePrep, onSaveReview, hasUnsavedChanges } = flushDepsRef.current;
       const p = lastPrepForm.current;
       const r = lastReviewForm.current;
       const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
@@ -288,7 +295,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       window.removeEventListener('beforeunload', flushOnClose);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [onSavePrep, onSaveReview, hasUnsavedChanges]);
+  }, []);
 
   // Current Week Focus Helper - Harmonized with Settings.tsx
   const getSelectedWeekISO = (dateStr: string) => {
@@ -568,9 +575,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      link.href = url;
       link.download = `alphatrade_export_${exportRange}d.csv`;
       link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0); // jinak blob drží v paměti do reloadu
     } else if (exportFormat === 'ai') {
       let mdContent = `# ALPHATRADE EXPORT - ${exportRange === 'all' ? 'ALL TIME' : `LAST ${exportRange} DAYS`}\n\n`;
       filteredReviews.forEach(r => {
@@ -622,9 +631,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       });
       const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8;' });
       const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      link.href = url;
       link.download = `alphatrade_ai_export_${exportRange}d.md`;
       link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0); // jinak blob drží v paměti do reloadu
     } else if (exportFormat === 'pdf') {
       const printWindow = window.open('', '_blank');
       if (printWindow) {

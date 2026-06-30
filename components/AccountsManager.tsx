@@ -585,6 +585,16 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 <label className="text-[10px] font-black uppercase text-slate-500">Master Účet (Link)</label>
                 <select value={editFormData.parentAccountId || ''} onChange={e => setEditFormData({ ...editFormData, parentAccountId: e.target.value || undefined })} className={inputClass}><option value="">-- Žádný --</option>{accounts.filter(a => a.id !== editingAccount.id && !a.parentAccountId).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
               </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-slate-500">Risk Multiplikátor (AlphaBridge)</label>
+                <input
+                  type="number" min={1} step={1}
+                  value={editFormData.copyMultiplier ?? 1}
+                  onChange={e => { const n = Math.max(1, Math.round(parseInt(e.target.value, 10) || 1)); setEditFormData({ ...editFormData, copyMultiplier: n }); }}
+                  className={inputClass}
+                />
+                <p className="text-[9px] text-slate-500 font-semibold">Násobek risku/kontraktů při fan-outu. Základ = 1×, dvojnásobný risk = 2×. Jen celá čísla.</p>
+              </div>
             </div>
             <div className="flex gap-4"><button onClick={() => setEditingAccount(null)} className="flex-1 py-4 font-black uppercase text-[10px] text-slate-500 bg-white/5 rounded-2xl">Zrušit</button><button onClick={saveEdit} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase text-[10px] shadow-lg shadow-blue-600/20 active:scale-95 transition-all">Uložit Změny</button></div>
           </div>

@@ -32,6 +32,15 @@ const uuid = (): string =>
       });
 const t2ms = (s: string | undefined): number => s ? Date.parse(String(s).trim().replace(' ', 'T') + 'Z') : NaN;
 const norm = (s: string) => String(s).trim().toLowerCase();
+// Směr fillu jako znaménko (+1 long / -1 short / 0 neznámé). Robustní vůči různým
+// labelům exportu: long/buy/b/bot → +1, short/sell/s/sld → -1. Dřív se brala JEN
+// doslovná 'long' jako +1, takže 'Buy'/'Sell'/'B'/'S' tiše spadly na short → rozbitý netting.
+const sideSign = (s: any): number => {
+  const v = norm(s);
+  if (v === 'long' || v === 'buy' || v === 'b' || v === 'bot' || v === 'bought') return 1;
+  if (v === 'short' || v === 'sell' || v === 's' || v === 'sld' || v === 'sold') return -1;
+  return 0;
+};
 
 /** Rozpozná Tradesyncer orders export podle charakteristických sloupců. */
 export function isTradesyncerOrders(rows: any[]): boolean {
@@ -84,15 +93,15 @@ export function parseTradesyncerOrders(csvText: string): TsAccount[] {
   for (const [acc, list] of byAcc) {
     const filled = list
       .filter(r => norm(r.status) === 'filled' && +r.fillSize > 0 && String(r.fillPrice).trim() !== '')
-      .map(r => ({ t: t2ms(r.fillTime), side: norm(r.side), qty: +r.fillSize, price: +r.fillPrice, id: String(r.id ?? ''), sym: String(r.symbol || r.contract || 'MNQ').trim() }))
-      .filter(f => !isNaN(f.t) && f.qty > 0 && !isNaN(f.price))
+      .map(r => ({ t: t2ms(r.fillTime), sign: sideSign(r.side), qty: +r.fillSize, price: +r.fillPrice, id: String(r.id ?? ''), sym: String(r.symbol || r.contract || 'MNQ').trim() }))
+      .filter(f => !isNaN(f.t) && f.qty > 0 && !isNaN(f.price) && f.sign !== 0)
       .sort((a, b) => a.t - b.t);
 
     const trades: TsTrade[] = [];
     let pos = 0, dir = 0, eSum = 0, eQty = 0, xSum = 0, xQty = 0, start = 0, sym = 'MNQ', ids: string[] = [];
 
     for (const f of filled) {
-      const s = f.side === 'long' ? 1 : -1;
+      const s = f.sign;
       if (pos === 0) { dir = s; start = f.t; eSum = 0; eQty = 0; xSum = 0; xQty = 0; sym = f.sym; ids = []; }
       if (f.id) ids.push(f.id);
       if (s === dir) { eSum += f.price * f.qty; eQty += f.qty; pos += s * f.qty; }
@@ -106,17 +115,17 @@ export function parseTradesyncerOrders(csvText: string): TsAccount[] {
 
         // SL/TP z bracket orderů účtu v časovém okně tradu (i canceled — plánovaná cena tam zůstává).
         const lo = start - 3000, hi = f.t + 3000;
-        const opp = dir === 1 ? 'short' : 'long';
+        const oppSign = -dir; // protistrana k entry (bracket SL/TP je opačný směr)
         const win = list.filter(r => {
           const tt = t2ms(r.fillTime) || t2ms(r.closingTime) || t2ms(r.openTime);
           return !isNaN(tt) && tt >= lo && tt <= hi;
         });
         const stops = win
-          .filter(r => norm(r.type).includes('stop') && norm(r.side) === opp && +r.stopPrice > 0)
+          .filter(r => norm(r.type).includes('stop') && sideSign(r.side) === oppSign && +r.stopPrice > 0)
           .map(r => +r.stopPrice)
           .filter(p => dir === 1 ? p < entry : p > entry);
         const tps = win
-          .filter(r => norm(r.type).includes('limit') && norm(r.side) === opp && +r.price > 0)
+          .filter(r => norm(r.type).includes('limit') && sideSign(r.side) === oppSign && +r.price > 0)
           .map(r => +r.price)
           .filter(p => dir === 1 ? p > entry : p < entry);
         const stopLoss = stops.length ? (dir === 1 ? Math.min(...stops) : Math.max(...stops)) : undefined;

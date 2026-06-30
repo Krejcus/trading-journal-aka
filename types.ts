@@ -109,6 +109,7 @@ export interface IronRule {
   label: string;
   type: 'ritual' | 'trading';
   description?: string;
+  isActive?: boolean;
 }
 
 export interface RuleCompletion {
@@ -135,6 +136,9 @@ export interface Account {
   profitTarget?: number;
   propThreshold?: number; // Minimum PnL to count as "profitable day"
   parentAccountId?: string; // ID of the account this account copies
+  /** Násobek risku/velikosti při AlphaBridge fan-outu (celé číslo, default 1).
+   *  Např. challenge účet s 2× riskem = 2. Master/základ = 1. */
+  copyMultiplier?: number;
   isArchived?: boolean;
   archivedAt?: number;
   result?: 'Passed' | 'Failed';
@@ -378,6 +382,8 @@ export interface DailyPrep {
   /** Confidence level (0-100) */
   confidence: number;
   completed?: boolean;
+  /** Hlavní fokus dne (volně psaný) — používá DailyJournal/DailyFocusWidget. */
+  dailyFocus?: string;
 }
 
 export interface GoalResult {
@@ -632,6 +638,9 @@ export interface UserPreferences {
   dashboardMode?: 'combined' | 'funded' | 'challenge' | 'archive';
 
   sessions?: SessionConfig[];
+  /** Samostatná sada obchodních sessionů pro BACKTEST svět (např. testuju Londýn,
+   *  ale live obchoduju hlavně NY). Když je prázdné/nenastavené, backtest použije `sessions`. */
+  backtestSessions?: SessionConfig[];
   htfOptions?: string[];
   ltfOptions?: string[];
   ironRules?: IronRule[];

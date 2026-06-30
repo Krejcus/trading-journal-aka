@@ -32,6 +32,25 @@ interface NetworkHubProps {
    onSpectatingChange?: (isSpectating: boolean) => void;
 }
 
+// Modal portál — MIMO render body NetworkHubu. Dřív byl definovaný uvnitř komponenty, takže
+// při každém re-renderu rodiče vznikla nová identita typu → React celý otevřený modal
+// unmountoval + remountoval (přenačtené obrázky, ztráta scrollu, přehrané animace).
+const DetailModal = ({ title, icon: Icon, onClose, children, isDark }: { title: string, icon: any, onClose: () => void, children: React.ReactNode, isDark: boolean }) => createPortal(
+   <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 animate-in fade-in duration-300">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={onClose} />
+      <div className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'} animate-in zoom-in-95 duration-300`}>
+         <div className={`flex justify-between items-center mb-8 border-b pb-6 ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
+            <div className="flex items-center gap-4">
+               <div className="p-3 rounded-2xl bg-blue-600/10 text-blue-500"><Icon size={24} /></div>
+               <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
+            </div>
+            <button onClick={onClose} className={`p-2 rounded-xl text-slate-500 hover:text-[var(--text-primary)] transition-all ${isDark ? 'hover:bg-[var(--text-primary)]/5' : 'hover:bg-slate-50'}`}><X size={24} /></button>
+         </div>
+         {children}
+      </div>
+   </div>
+, document.body);
+
 const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user, exchangeRates, activeTab, onTabChange: setActiveTab, onNetworkNotificationsChange, onSpectatingChange }) => {
    const isDark = theme !== 'light';
    const [isAirlockOpen, setIsAirlockOpen] = useState(false);
@@ -85,6 +104,9 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
       setToastMsg({ text, type });
       toastTimerRef.current = setTimeout(() => setToastMsg(null), 3000);
    }, []);
+   // Cleanup toast timeru při unmountu — jinak by callback po odchodu z NetworkHubu
+   // střelil setToastMsg na odmontované komponentě.
+   useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
    const [editingPermissions, setEditingPermissions] = useState<{ connectionId: string, permissions: { canSeePnl: boolean; pnlFormat?: 'usd' | 'rr' | 'hidden'; canSeePrep?: boolean; canSeePrepRituals?: boolean; canSeeReviewStats?: boolean; canSeeReviewNotes?: boolean; canSeeNotes: boolean; canSeeScreenshots: boolean; allowedAccountIds?: string[] }, name: string, isAccepting?: boolean } | null>(null);
    const [modalPnlFormat, setModalPnlFormat] = useState<'usd' | 'rr' | 'hidden' | undefined>(undefined);
 
@@ -376,22 +398,6 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    };
 
    // Detail Modal Component
-   const DetailModal = ({ title, icon: Icon, onClose, children }: { title: string, icon: any, onClose: () => void, children: React.ReactNode }) => createPortal(
-      <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 animate-in fade-in duration-300">
-         <div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={onClose} />
-         <div className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'} animate-in zoom-in-95 duration-300`}>
-            <div className={`flex justify-between items-center mb-8 border-b pb-6 ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-               <div className="flex items-center gap-4">
-                  <div className="p-3 rounded-2xl bg-blue-600/10 text-blue-500"><Icon size={24} /></div>
-                  <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
-               </div>
-               <button onClick={onClose} className={`p-2 rounded-xl text-slate-500 hover:text-[var(--text-primary)] transition-all ${isDark ? 'hover:bg-[var(--text-primary)]/5' : 'hover:bg-slate-50'}`}><X size={24} /></button>
-            </div>
-            {children}
-         </div>
-      </div>
-   , document.body);
-
    return (
       <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20">
 
@@ -436,7 +442,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
             const format = modalPnlFormat || 'usd'; // Default to USD if not set
 
             return (
-               <DetailModal title="SNAPSHOT OBCHODU" icon={ShieldCheck} onClose={() => setSelectedTrade(null)}>
+               <DetailModal title="SNAPSHOT OBCHODU" icon={ShieldCheck} onClose={() => setSelectedTrade(null)} isDark={isDark}>
                   <div className="space-y-6">
                      {/* Premium Header like Shared View */}
                      <div className={`flex items-center justify-between p-6 rounded-3xl border ${isDark ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
@@ -528,7 +534,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          })()}
 
          {selectedPrep && (
-            <DetailModal title="RANNÍ ANALÝZA" icon={Sun} onClose={() => setSelectedPrep(null)}>
+            <DetailModal title="RANNÍ ANALÝZA" icon={Sun} onClose={() => setSelectedPrep(null)} isDark={isDark}>
                <div className="space-y-6">
                   {/* Session-based Analysis Cards */}
                   {selectedPrep.scenarios?.sessions && selectedPrep.scenarios.sessions.length > 0 ? (
@@ -623,7 +629,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          )}
 
          {selectedReview && (
-            <DetailModal title="VEČERNÍ REVIEW" icon={Moon} onClose={() => setSelectedReview(null)}>
+            <DetailModal title="VEČERNÍ REVIEW" icon={Moon} onClose={() => setSelectedReview(null)} isDark={isDark}>
                <div className="space-y-6">
                   {/* Discipline Rating Header */}
                   <div className={`p-8 rounded-[32px] border text-center ${isDark ? 'bg-blue-600/10 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
@@ -1046,7 +1052,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                            </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-white/5">
-                           {leaderboardStats.sort((a, b) => b.winRate - a.winRate).map((user, idx) => (
+                           {[...leaderboardStats].sort((a, b) => b.winRate - a.winRate).map((user, idx) => (
                               <tr key={user.id} className={`group cursor-pointer hover:bg-blue-500/5 transition-colors`}>
                                  <td className="px-6 py-4">
                                     <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs border-2 ${idx === 0 ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500' :

@@ -225,6 +225,8 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     });
 
     const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
+    const [loadedAccounts, setLoadedAccounts] = useState<Array<{ id: string; name: string; copyMultiplier?: number }>>([]);
+    const [showConfirm, setShowConfirm] = useState(false);
     // Režim (Live/Backtest) je teď řízen z headeru (Sidebar) a přichází propsem `mode`.
 
     // ── Backtest session (pre/post) — ukládá se do samostatné backtest_sessions tabulky ──
@@ -654,6 +656,25 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         }
     }, [calculations.estPnLVal, pnlManual]);
 
+    // Rozpad fan-outu s risk multiplikátorem — per účet risk/PnL/kontrakty + součty.
+    // needsConfirm = víc účtů NEBO aspoň jeden ≠1× → před uložením ukážeme potvrzovací okno.
+    const fanout = useMemo(() => {
+        const baseRisk = parseFloat(trade.risk) || 0;
+        const basePnl = parseFloat(trade.pnl) || parseFloat(String(calculations.estPnLVal)) || 0;
+        const baseQty = parseFloat(trade.contracts) || 0;
+        const rows = selectedAccounts.map(id => {
+            const a = loadedAccounts.find(x => x.id === id);
+            const mult = Math.max(1, Math.round(Number(a?.copyMultiplier) || 1));
+            return { id, name: a?.name || id.slice(0, 6), mult, risk: baseRisk * mult, pnl: basePnl * mult, qty: baseQty * mult };
+        });
+        return {
+            rows,
+            needsConfirm: rows.length > 1 || rows.some(r => r.mult !== 1),
+            totalRisk: rows.reduce((s, r) => s + r.risk, 0),
+            totalPnl: rows.reduce((s, r) => s + r.pnl, 0),
+        };
+    }, [trade.risk, trade.pnl, trade.contracts, calculations.estPnLVal, selectedAccounts, loadedAccounts]);
+
     // ── Preview screenshot ───────────────────────────────────────────────────
     const handlePreview = async () => {
         setIsPreviewing(true);
@@ -981,12 +1002,29 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 .in('id', selectedAccounts);
 
             const accountPhaseMap = new Map<string, string>();
-            accountsData?.forEach(acc => accountPhaseMap.set(acc.id, acc.meta?.phase || 'Challenge'));
+            // Risk multiplikátor per účet (celé číslo, default 1). Challenge s 2× riskem → 2.
+            const accountMultMap = new Map<string, number>();
+            accountsData?.forEach(acc => {
+                accountPhaseMap.set(acc.id, acc.meta?.phase || 'Challenge');
+                const m = Math.max(1, Math.round(Number(acc.meta?.copyMultiplier) || 1));
+                accountMultMap.set(acc.id, m);
+            });
+
+            const baseContracts = parseFloat(trade.contracts) || 0;
 
             const rows = selectedAccounts.map(accId => {
                 const isMaster = accId === masterAccountId;
                 const tradeId  = isMaster ? masterTradeId : crypto.randomUUID();
                 const phase    = accountPhaseMap.get(accId) || 'Challenge';
+
+                // Per-účet škálování. pnl je úměrné risku (R×risk), takže škáluje stejně;
+                // mfeUsd/maeUsd ($) taky; mfeR/maeR a body NE (jsou risk-normalizované/cenové).
+                const mult       = accountMultMap.get(accId) || 1;
+                const acctRisk   = risk * mult;
+                const acctQty    = baseContracts > 0 ? baseContracts * mult : null;
+                const acctPnl    = pnl * mult;
+                const acctRunUp  = posMetrics.mfeUsd != null ? posMetrics.mfeUsd * mult : 0;
+                const acctDD     = posMetrics.maeUsd != null ? posMetrics.maeUsd * mult : 0;
 
                 const tradeData = {
                     id: tradeId,
@@ -996,8 +1034,8 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     exitPrice: calculatedExitPrice,
                     stopLoss: sl,
                     takeProfit: tp,
-                    riskAmount: risk,
-                    positionSize: parseFloat(trade.contracts) || null,  // počet kontraktů (qty)
+                    riskAmount: acctRisk,
+                    positionSize: acctQty,  // počet kontraktů (qty) × multiplikátor
                     screenshot: publicUrl,
                     screenshots: allScreenshots,  // entry + HTF kontext (1H/4H)
                     duration: durationString,
@@ -1021,8 +1059,8 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     mistakes: trade.mistakes,
                     notes: trade.notes,
                     // MFE/MAE z grafu (max favorable/adverse excursion). runUp/drawdown = $ pro analytiku exekuce.
-                    runUp: posMetrics.mfeUsd != null ? posMetrics.mfeUsd : 0,
-                    drawdown: posMetrics.maeUsd != null ? posMetrics.maeUsd : 0,
+                    runUp: acctRunUp,
+                    drawdown: acctDD,
                     mfeR: posMetrics.mfeR,
                     maeR: posMetrics.maeR,
                     mfePoints: posMetrics.mfePoints,
@@ -1060,7 +1098,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     account_id: accId,
                     instrument: finalInstrument,
                     direction: trade.direction,
-                    pnl,
+                    pnl: acctPnl,
                     date: finalDateIso,
                     timestamp: finalTimestamp,
                     signal: finalSignal,
@@ -1177,7 +1215,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
 
                 <div className="flex-1">
                     <div className="flex flex-col">
-                        <AccountList onSelectionChange={setSelectedAccounts} mode={mode} />
+                        <AccountList onSelectionChange={setSelectedAccounts} onAccountsLoaded={setLoadedAccounts} mode={mode} />
 
                         {/* Pozice se čte automaticky (auto-sync hlídá box) — manuální tlačítko odebráno. */}
                         {posReadStatus && (
@@ -1842,7 +1880,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 >
                     {isPreviewing ? <RefreshCw size={14} className="animate-spin" /> : <Eye size={16} />}
                 </Button>
-                <Button onClick={handleSubmit} disabled={isSubmitting || isPreviewing || cfLoading} className="flex-1 text-xs">
+                <Button onClick={() => { if (fanout.needsConfirm) setShowConfirm(true); else handleSubmit(); }} disabled={isSubmitting || isPreviewing || cfLoading} className="flex-1 text-xs">
                     {isSubmitting ? (
                         <><RefreshCw size={14} className="animate-spin" /> Zpracovávám...</>
                     ) : cfLoading ? (
@@ -1852,6 +1890,47 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     )}
                 </Button>
             </div>
+
+            {/* Potvrzovací okno fan-outu — ukáže se jen u víc účtů / multiplikátoru ≠1×.
+                Rozpis risk + PnL per účet + součty, ať vidíš co se uloží, než vznikne N obchodů. */}
+            {showConfirm && (
+                <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4 animate-in fade-in duration-200" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }} onClick={() => setShowConfirm(false)}>
+                    <div onClick={e => e.stopPropagation()} className={`w-full max-w-sm rounded-2xl border shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 ${theme === 'dark' ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+                        <div className={`px-5 py-4 border-b ${theme === 'dark' ? 'border-slate-700' : 'border-slate-200'}`}>
+                            <div className="flex items-center gap-2">
+                                <Layers size={16} className="text-indigo-500" />
+                                <h3 className={`text-sm font-black ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Zapsat na {fanout.rows.length} {fanout.rows.length === 1 ? 'účet' : fanout.rows.length < 5 ? 'účty' : 'účtů'}</h3>
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-0.5">Zkontroluj risk a PnL per účet.</p>
+                        </div>
+                        <div className="max-h-[280px] overflow-y-auto px-3 py-2 space-y-1 custom-scroll">
+                            {fanout.rows.map(r => (
+                                <div key={r.id} className={`flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg ${theme === 'dark' ? 'bg-white/5' : 'bg-slate-50'}`}>
+                                    <span className={`text-xs font-bold truncate flex items-center gap-1.5 min-w-0 ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}>
+                                        <span className="truncate">{r.name}</span>
+                                        {r.mult !== 1 && <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 leading-none shrink-0">{r.mult}×</span>}
+                                    </span>
+                                    <span className="flex items-center gap-2.5 shrink-0 tabular-nums">
+                                        <span className="text-[10px] text-slate-500">${Math.round(r.risk)}</span>
+                                        <span className={`text-xs font-black ${r.pnl > 0 ? 'text-emerald-500' : r.pnl < 0 ? 'text-rose-500' : 'text-slate-400'}`}>{r.pnl > 0 ? '+' : ''}${Math.round(r.pnl)}</span>
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className={`px-5 py-3 border-t flex items-center justify-between ${theme === 'dark' ? 'border-slate-700 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Celkem</span>
+                            <span className="flex items-center gap-3 tabular-nums">
+                                <span className="text-[11px] text-slate-500">risk ${Math.round(fanout.totalRisk)}</span>
+                                <span className={`text-sm font-black ${fanout.totalPnl > 0 ? 'text-emerald-500' : fanout.totalPnl < 0 ? 'text-rose-500' : 'text-slate-400'}`}>{fanout.totalPnl > 0 ? '+' : ''}${Math.round(fanout.totalPnl)}</span>
+                            </span>
+                        </div>
+                        <div className="flex gap-2 p-3">
+                            <button onClick={() => setShowConfirm(false)} className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${theme === 'dark' ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Zpět</button>
+                            <button onClick={() => { setShowConfirm(false); handleSubmit(); }} className="flex-[1.4] py-2.5 rounded-xl text-xs font-black uppercase tracking-widest bg-indigo-600 text-white hover:bg-indigo-500 active:scale-95 transition-all flex items-center justify-center gap-1.5"><Send size={14} /> Potvrdit a uložit</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Success karta po zápisu — animovaný pop-in + PnL + CTA „načíst další" */}
             {justSaved && (() => {

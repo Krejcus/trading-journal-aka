@@ -94,6 +94,10 @@ async function speakViaGoogle(text: string): Promise<boolean> {
     const data = await res.json();
     if (!data.audioContent) return false;
 
+    // Mezitím mohl přijít cancelSpeech() (uživatel klepl na stop během await fetch/json).
+    // Bez téhle kontroly bychom zrušenou větu stejně přehráli a přepsali currentAudio.
+    if (cancelled) return false;
+
     await new Promise<void>((resolve) => {
       const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`);
       currentAudio = audio;

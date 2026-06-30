@@ -51,10 +51,10 @@ export default defineConfig(({ mode }) => {
         }
       })
     ],
-    define: {
-      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-    },
+    // BEZPEČNOST: Gemini API klíč se ZÁMĚRNĚ nezapéká do klientského bundlu. Dřív tu byl
+    // `define` na process.env.API_KEY/GEMINI_API_KEY → klíč čitelný v devtools u každého
+    // návštěvníka. Žádný klientský kód ho nečte (AI jde přes edge funkci gemini-chat), takže
+    // define byl i mrtvý. Klíč drž jen v Supabase secrets / serverově.
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

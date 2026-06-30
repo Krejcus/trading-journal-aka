@@ -1184,22 +1184,58 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
     inset 0 1px 0 rgba(255,255,255,0.08) !important;
 }
 
-/* Stage 2 — edge refrakce přes SVG displacement filter (#liquid-glass).
-   Jen tam kde prohlížeč umí url() v backdrop-filter (Chrome/Safari).
-   Firefox @supports vyhodnotí false → zůstane čistý blur ze Stage 1. */
-@supports (backdrop-filter: url('#liquid-glass')) or (-webkit-backdrop-filter: url('#liquid-glass')) {
-  .floating-glass-header {
-    backdrop-filter: url(#liquid-glass) saturate(130%) !important;
-    -webkit-backdrop-filter: url(#liquid-glass) saturate(130%) !important;
-  }
-  .light-theme .floating-glass-header {
-    backdrop-filter: url(#liquid-glass) saturate(120%) !important;
-    -webkit-backdrop-filter: url(#liquid-glass) saturate(120%) !important;
-  }
-  .oled-theme .floating-glass-header {
-    backdrop-filter: url(#liquid-glass) saturate(140%) !important;
-    -webkit-backdrop-filter: url(#liquid-glass) saturate(140%) !important;
-  }
+/* Stage 2 — edge refrakce (#liquid-glass) řídí JEN horní header přes .backdrop-svg-ok
+   (Chromium-only, viz index.tsx). Dřív tu byl @supports blok cílící na holý
+   .floating-glass-header s url(#liquid-glass) !important — ten ale:
+   (a) Safari @supports testem PROJDE (přes -webkit-), ale SVG filtr v backdrop NEVYKRESLÍ
+       (WebKit bug #245510); a protože byl !important, přebil nový .header-clear blur
+       fallback → header se na Safari renderoval PLACATĚ;
+   (b) aplikoval lupu i na Sidebar (holý .floating-glass-header), ač má zůstat na blur+sheen.
+   Header teď lupu dostane výhradně přes .backdrop-svg-ok pravidla výš; Sidebar/BottomNav
+   zůstávají na blur (Stage 1). Proto je @supports blok odstraněn. */
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Horní header — varianta "ČISTÁ LUPA" (.header-clear). Izolováno JEN na header,
+   aby Sidebar a BottomNav (taky .floating-glass-header) zůstaly s blur+sheen.
+   Přepisuje tint + ztenčuje blur fallback + skrývá sheen pruhy; lupa (#liquid-glass)
+   zůstává přes @supports níže. Specificita .floating-glass-header.header-clear (0,2,0)
+   přebíjí plošná pravidla výš. */
+/* FALLBACK (Safari, Firefox, iOS) — frosted blur sklo. SVG displacement lupa tu
+   nefunguje (WebKit bug #245510), takže držíme slušné blur sklo. Na Chromiu tohle
+   přebije lupa níže (.backdrop-svg-ok). */
+.floating-glass-header.header-clear {
+  background: linear-gradient(180deg, rgba(30,34,44,0.16) 0%, rgba(18,20,28,0.10) 100%) !important;
+  backdrop-filter: blur(8px) saturate(135%);
+  -webkit-backdrop-filter: blur(8px) saturate(135%);
+}
+.light-theme .floating-glass-header.header-clear {
+  background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(248,250,252,0.06) 100%) !important;
+  backdrop-filter: blur(7px) saturate(125%);
+  -webkit-backdrop-filter: blur(7px) saturate(125%);
+}
+.oled-theme .floating-glass-header.header-clear {
+  background: linear-gradient(180deg, rgba(12,12,16,0.20) 0%, rgba(0,0,0,0.12) 100%) !important;
+  backdrop-filter: blur(8px) saturate(140%);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+}
+/* Bez sheen pruhů — záměrně (volba "čistá lupa"). */
+.floating-glass-header.header-clear::before,
+.floating-glass-header.header-clear::after {
+  display: none !important;
+}
+/* Lupa JEN na Chromiu (.backdrop-svg-ok přidá JS v index.tsx — viz WebKit bug #245510).
+   Nespolehlivý @supports tu nepoužíváme: Safari ho přes -webkit- projde, ale nevykreslí. */
+.backdrop-svg-ok .floating-glass-header.header-clear {
+  backdrop-filter: url(#liquid-glass) saturate(130%) !important;
+  -webkit-backdrop-filter: url(#liquid-glass) saturate(130%) !important;
+}
+.backdrop-svg-ok.light-theme .floating-glass-header.header-clear {
+  backdrop-filter: url(#liquid-glass) saturate(120%) !important;
+  -webkit-backdrop-filter: url(#liquid-glass) saturate(120%) !important;
+}
+.backdrop-svg-ok.oled-theme .floating-glass-header.header-clear {
+  backdrop-filter: url(#liquid-glass) saturate(140%) !important;
+  -webkit-backdrop-filter: url(#liquid-glass) saturate(140%) !important;
 }
 
 /* Varianta pro NÍZKÉ lišty (mobilní bottom nav): plný 42px sheen nahoře+dole
@@ -1261,5 +1297,8 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 .pwa-standalone .floating-glass-header::after {
   display: none !important;
 }
+/* Ověřeno na zařízení: iOS PWA (standalone WKWebView) backdrop blur NEZVLÁDNE —
+   dělá matný flek. Proto zde záměrně ZŮSTÁVÁ plné poloprůhledné pozadí (definováno výš),
+   žádný blur ani lupa. Nepřidávat sem backdrop-filter. */
 
 
