@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.89.0",
@@ -48,6 +50,7 @@
     "typescript-eslint": "^8.62.1",
     "vite": "^6.2.0",
     "vite-plugin-pwa": "^1.2.0",
+    "vitest": "^4.1.9",
     "workbox-precaching": "^7.4.0",
     "workbox-routing": "^7.4.0",
     "workbox-strategies": "^7.4.0"
