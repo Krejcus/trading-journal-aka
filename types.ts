@@ -247,6 +247,49 @@ export interface Trade {
     confidence: 'high' | 'medium' | 'low';
     generatedAt: string;
   };
+
+  // ── AlphaBridge rich intel — počítá extension z grafu, ukládá do data blobu. ──
+  // Historicky se tato pole ukládala do DB, ale read-path (getTrades/getDashboardData)
+  // je zahazoval → v UI neviditelná. Teď se načítají, ať je vidí TradeDetailModal i analytika.
+  /** Max Favorable Excursion v R (kam až cena došla ve prospěch). */
+  mfeR?: number;
+  /** Max Adverse Excursion v R (kam až proti pozici). */
+  maeR?: number;
+  mfePoints?: number;
+  maePoints?: number;
+  /** false = MFE/MAE se nepodařilo z grafu načíst (ne že jsou 0). */
+  excursionAvailable?: boolean;
+  /** true = SL i TP v jednom baru (auto-výsledek nejistý, default LOSS). */
+  outcomeAmbiguous?: boolean;
+  /** Kam reálně dal SL: fvg | swing | ote | other. */
+  slPlacement?: string;
+  /** Kam cílil TP: deviation | daily | fixed_rr | liquidity | other. */
+  targetType?: string;
+  /** Konkrétní detekovaný TP level (např. "PDH", "VWAP +1σ"). */
+  targetLevel?: string;
+  /** Řízení pozice: trail_bos | fixed | partial_runner | be_runner. */
+  management?: string;
+  /** "Co kdyby" pro 3 SL placementy (swing/ote/fvg) + tpTargets. */
+  counterfactual?: any;
+  /** Kam by to došlo do konce dne (mfePotentialR, leftOnTableR, levels[], trail). */
+  excursion?: any;
+  /** false = excursion sken narazil na konec barů (den nedojel) → „pending", dopočítá se později.
+   *  true = úplné (dojelo k flat-by nebo SL). null/undefined = žádná excursion (manuál/špatný SL). */
+  excursionComplete?: boolean | null;
+  /** Entry model — structureType/order, odrazLevels, entryFvg. */
+  entryMap?: any;
+  /** Backtest session kontext otisknutý do obchodu (per účet). */
+  sessionBias?: 'Long' | 'Short' | 'Neutral' | null;
+  sessionPreNotes?: string | null;
+  sessionPostNotes?: string | null;
+  /** true = obchod ve směru session biasu, false = proti, null = Neutral/nezadáno. */
+  biasAligned?: boolean | null;
+  /** Verze schématu data blobu (AlphaBridge zápis). */
+  schemaVersion?: number;
+  /** Zdroj obchodu: 'alphabridge' | 'tradesyncer' | 'tradovate' | manuál. */
+  source?: string;
+  /** Provenance pro import dedup (Tradesyncer). */
+  tsOrderIds?: string[];
 }
 
 export interface SignalStat {

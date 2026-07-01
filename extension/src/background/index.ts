@@ -100,7 +100,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             target: { tabId },
             world: 'MAIN',
             func: pageComputeCounterfactual,
-            args: [request.overrideLevels || null, request.boxId ?? null, request.flatByMin ?? null],
+            args: [request.overrideLevels || null, request.boxId ?? null, request.flatByMin ?? null, request.entryOverride ?? null],
         }).then((results) => {
             const r = results && results[0] ? results[0].result : null;
             sendResponse(r || { ok: false, reason: 'no-result' });

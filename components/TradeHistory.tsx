@@ -62,6 +62,27 @@ const EnrichBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
   )
 );
 
+// Badge „čeká se" — AlphaBridge obchod zapsaný před koncem dne; excursion se dopočítá,
+// až graf pokryje celé okno (auto při otevření AlphaBridge, nebo ručně přes 🔄).
+const PENDING_TITLE = 'Excursion se dopočítá, až graf pokryje celý den — otevři AlphaBridge na tomto instrumentu';
+const PendingBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
+  variant === 'card' ? (
+    <div
+      className="absolute top-3 left-3 z-20 flex items-center gap-1 px-2 py-1 rounded-full bg-violet-500 text-white text-[9px] font-black uppercase tracking-wider shadow-lg shadow-violet-500/30"
+      title={PENDING_TITLE}
+    >
+      <Clock size={10} /> Čeká se
+    </div>
+  ) : (
+    <span
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 text-[8px] font-black uppercase tracking-wider"
+      title={PENDING_TITLE}
+    >
+      <Clock size={8} /> Čeká
+    </span>
+  )
+);
+
 interface TradeHistoryProps {
   trades: Trade[];
   accounts: Account[];
@@ -839,6 +860,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               >
                 {/* Badge „k doplnění" pro importované obchody bez kontextu */}
                 {needsEnrich && !isMultiSelectMode && <EnrichBadge variant="card" />}
+                {/* Badge „čeká se" — excursion se teprve dopočítá (den nedojel do konce) */}
+                {(trade as any).excursionComplete === false && !isMultiSelectMode && <PendingBadge variant="card" />}
 
                 {/* Multi-Select Checkbox */}
                 {isMultiSelectMode && (
@@ -1139,6 +1162,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                           <span className={`flex items-center gap-1.5 text-sm font-black uppercase tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
                             {trade.instrument}
                             {enrichIds.has(String(trade.id)) && <EnrichBadge variant="inline" />}
+                            {(trade as any).excursionComplete === false && <PendingBadge variant="inline" />}
                           </span>
                           <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{getTradePhase(trade) || 'Standard'}</span>
                         </div>

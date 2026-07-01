@@ -139,6 +139,26 @@ export const storageService = {
         source: d.source || undefined,
         tsOrderIds: d.tsOrderIds || undefined,
         isBE: d.isBE === true || d.isBE === 'true',
+        // ── AlphaBridge rich intel — RPC vrací plný data blob, jen ho tu vystavíme na Trade ──
+        mfeR: d.mfeR != null ? Number(d.mfeR) : undefined,
+        maeR: d.maeR != null ? Number(d.maeR) : undefined,
+        mfePoints: d.mfePoints != null ? Number(d.mfePoints) : undefined,
+        maePoints: d.maePoints != null ? Number(d.maePoints) : undefined,
+        excursionAvailable: d.excursionAvailable === true || d.excursionAvailable === 'true',
+        excursionComplete: d.excursionComplete == null ? undefined : (d.excursionComplete === true || d.excursionComplete === 'true'),
+        outcomeAmbiguous: d.outcomeAmbiguous === true || d.outcomeAmbiguous === 'true',
+        slPlacement: d.slPlacement || undefined,
+        targetType: d.targetType || undefined,
+        targetLevel: d.targetLevel || undefined,
+        management: d.management || undefined,
+        sessionBias: d.sessionBias || undefined,
+        sessionPreNotes: d.sessionPreNotes || undefined,
+        sessionPostNotes: d.sessionPostNotes || undefined,
+        biasAligned: d.biasAligned == null ? undefined : (d.biasAligned === true || d.biasAligned === 'true'),
+        schemaVersion: d.schemaVersion != null ? Number(d.schemaVersion) : undefined,
+        counterfactual: d.counterfactual || undefined,
+        excursion: d.excursion || undefined,
+        entryMap: d.entryMap || undefined,
         data: {}
       };
     }) as Trade[];
@@ -373,7 +393,26 @@ export const storageService = {
         aiSuggestions:data->aiSuggestions,
         visionAnalysis:data->visionAnalysis,
         source:data->>source,
-        tsOrderIds:data->tsOrderIds
+        tsOrderIds:data->tsOrderIds,
+        mfeR:data->>mfeR,
+        maeR:data->>maeR,
+        mfePoints:data->>mfePoints,
+        maePoints:data->>maePoints,
+        excursionAvailable:data->>excursionAvailable,
+        excursionComplete:data->>excursionComplete,
+        outcomeAmbiguous:data->>outcomeAmbiguous,
+        slPlacement:data->>slPlacement,
+        targetType:data->>targetType,
+        targetLevel:data->>targetLevel,
+        management:data->>management,
+        sessionBias:data->>sessionBias,
+        sessionPreNotes:data->>sessionPreNotes,
+        sessionPostNotes:data->>sessionPostNotes,
+        biasAligned:data->>biasAligned,
+        schemaVersion:data->>schemaVersion,
+        counterfactual:data->counterfactual,
+        excursion:data->excursion,
+        entryMap:data->entryMap
       `)
       .eq('user_id', userId)
       .order('timestamp', { ascending: false })
@@ -445,6 +484,27 @@ export const storageService = {
       // Provenance pro import dedup (Tradesyncer) — musí přežít load, jinak by re-import duplikoval.
       source: t.source || undefined,
       tsOrderIds: t.tsOrderIds || undefined,
+
+      // ── AlphaBridge rich intel — číselná pole přes `!= null` (0R je validní hodnota, ne "chybí") ──
+      mfeR: t.mfeR != null ? Number(t.mfeR) : undefined,
+      maeR: t.maeR != null ? Number(t.maeR) : undefined,
+      mfePoints: t.mfePoints != null ? Number(t.mfePoints) : undefined,
+      maePoints: t.maePoints != null ? Number(t.maePoints) : undefined,
+      excursionAvailable: t.excursionAvailable === 'true' || t.excursionAvailable === true,
+      excursionComplete: t.excursionComplete == null ? undefined : (t.excursionComplete === 'true' || t.excursionComplete === true),
+      outcomeAmbiguous: t.outcomeAmbiguous === 'true' || t.outcomeAmbiguous === true,
+      slPlacement: t.slPlacement || undefined,
+      targetType: t.targetType || undefined,
+      targetLevel: t.targetLevel || undefined,
+      management: t.management || undefined,
+      sessionBias: t.sessionBias || undefined,
+      sessionPreNotes: t.sessionPreNotes || undefined,
+      sessionPostNotes: t.sessionPostNotes || undefined,
+      biasAligned: t.biasAligned == null ? undefined : (t.biasAligned === 'true' || t.biasAligned === true),
+      schemaVersion: t.schemaVersion != null ? Number(t.schemaVersion) : undefined,
+      counterfactual: t.counterfactual || undefined,
+      excursion: t.excursion || undefined,
+      entryMap: t.entryMap || undefined,
 
       // We don't carry the full blob anymore to save memory
       data: {}

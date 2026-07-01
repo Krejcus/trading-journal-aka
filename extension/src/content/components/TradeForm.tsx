@@ -126,6 +126,18 @@ const ALL_SL_TAGS = ['SL FVG', 'SL OTE', 'SL Swing'];
 const SL_TAG_TO_KEY: Record<string, string> = { 'SL FVG': 'fvg', 'SL OTE': 'ote', 'SL Swing': 'swing' };
 // Čistá kategorie slPlacement odvozená z reálně označeného LTF tagu (source of truth).
 const slKeyFromTags = (ltf: string[]): string | null => { for (const t of ltf) { if (SL_TAG_TO_KEY[t]) return SL_TAG_TO_KEY[t]; } return null; };
+// Řízení pozice odvozené z ručně označených konfluence tagů (opt-in, source of truth).
+// null = neoznačeno → NEtvoříme fikci (jinak by AI analytika dostala smyšlené kategorie).
+const mgmtFromTags = (tags: string[]): string | null => {
+    for (const t of (tags || [])) {
+        const s = String(t).toLowerCase();
+        if (/be.?runner|breakeven.?runner|be\s*runner/.test(s)) return 'be_runner';
+        if (/partial.*runner|runner.*partial|částeč.*runner/.test(s)) return 'partial_runner';
+        if (/trail|trailing|za\s*struktur|bos\s*trail/.test(s)) return 'trail_bos';
+        if (/fixed|set.?&.?forget|set\s*and\s*forget|pevn[ýáé]/.test(s)) return 'fixed';
+    }
+    return null;
+};
 
 // TP tagy do LTF Trigger (stejný princip jako SL). Detekovaný level → tag, a zpět.
 const ALL_TP_TAGS = ['TP dHigh', 'TP dLow', 'TP PDH', 'TP PDL', 'TP PWH', 'TP PWL', 'TP VWAP', 'TP deviace +1', 'TP deviace -1', 'TP deviace +2', 'TP deviace -2'];
@@ -409,6 +421,9 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     const trackedBoxRef = useRef<any>(null);
     // Status „Načteno" sám zmizí po chvíli (úspěch) — ať pruh nehlučí.
     const statusTimerRef = useRef<any>(null);
+    // Token posledního counterfactual requestu — při rychlém re-readu (dvojklik / auto-sync)
+    // zahodí výsledek staršího výpočtu, ať nepřepíše čerstvější (race).
+    const cfReqRef = useRef<number>(0);
     // Risk na 1 kontrakt z posledního načtení boxu — umožňuje přepočítat risk při ruční změně kontraktů.
     const [perContractRisk, setPerContractRisk] = useState(0);
     // MFE/MAE z posledního načtení pozice (snapshot pro qty v době čtení) — uloží se do obchodu.
@@ -564,9 +579,11 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         statusTimerRef.current = setTimeout(() => setPosReadStatus(null), r.autoAmbiguous ? 6000 : 2500);
 
         // Counterfactual "co kdyby" + auto-detekce execution tagů (SL placement / Target) z grafu.
+        const myCfReq = ++cfReqRef.current; // token tohoto requestu (race guard)
         setCf(null);
         setCfLoading(true);
         computeCounterfactual(undefined, trackedBoxRef.current, FLAT_BY_MIN).then((c) => {
+            if (myCfReq !== cfReqRef.current) return; // mezitím přišel novější read → zahoď starý výsledek
             setCf(c || null);
             if (c && c.ok && r.entry != null && r.sl != null && r.tp != null) {
                 const det = detectExecTags(r.entry, r.sl, r.tp, c);
@@ -583,7 +600,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     return { ...prev, slPlacement: det.slPlacement, targetType: det.targetType, targetLevel: det.targetLevel, ltfConfluence: ltf };
                 });
             }
-        }).finally(() => setCfLoading(false));
+        }).finally(() => { if (myCfReq === cfReqRef.current) setCfLoading(false); });
     };
 
     // Načti existující session pro daný účet+datum+blok (ať vidíš dřív napsané pre/post).
@@ -708,26 +725,33 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27 }));
             await new Promise(resolve => setTimeout(resolve, 800));
 
-            chrome.runtime.sendMessage({ action: "captureVisibleTab" }, async (response: any) => {
-                if (host) host.style.display = 'block';
-
-                if (!response?.success) {
-                    setIsPreviewing(false);
-                    setSubmitStatus({ text: "Chyba při focení: " + (response?.error ?? "unknown"), type: 'error' });
-                    return;
-                }
-
-                const chartArea = resolveChartArea();
-                const rect = chartArea
-                    ? chartArea.getBoundingClientRect()
-                    : new DOMRect(0, 0, window.innerWidth, window.innerHeight);
-
-                const croppedUrl = await cropImage(response.dataUrl, rect);
-                setPreviewUrl(croppedUrl);
-                setSubmitStatus(null);
-                setIsPreviewing(false);
+            // Timeout guard — když background neodpoví (SW padl / Chrome rate-limit),
+            // callback by se nikdy nezavolal a UI zůstane na „Generuji náhled…" napořád.
+            const response: any = await new Promise((resolve, reject) => {
+                const to = setTimeout(() => reject(new Error("Náhled se nepodařilo vyfotit (timeout) — zkus to za pár vteřin znovu.")), 12000);
+                chrome.runtime.sendMessage({ action: "captureVisibleTab" }, (res: any) => { clearTimeout(to); resolve(res); });
             });
+            if (host) host.style.display = 'block';
+
+            if (!response?.success) {
+                setIsPreviewing(false);
+                setSubmitStatus({ text: "Chyba při focení: " + (response?.error ?? "unknown"), type: 'error' });
+                return;
+            }
+
+            const chartArea = resolveChartArea();
+            const rect = chartArea
+                ? chartArea.getBoundingClientRect()
+                : new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+
+            const croppedUrl = await cropImage(response.dataUrl, rect);
+            setPreviewUrl(croppedUrl);
+            setSubmitStatus(null);
+            setIsPreviewing(false);
         } catch (err: any) {
+            // Vždy vrať sidebar zpět (fallback ho skrývá kvůli focení) + odblokuj UI.
+            const host = document.getElementById('alpha-bridge-v2-host');
+            if (host) host.style.display = 'block';
             setIsPreviewing(false);
             setSubmitStatus({ text: err.message, type: 'error' });
         }
@@ -997,12 +1021,20 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 setSubmitStatus({ text: "☁️ Nahrávám screenshot...", type: 'info' });
                 publicUrl = await uploadDataUrl(croppedImageUrl);
             }
-            // HTF kontext snímky (1H, 4H) — nahraj a přidej do galerie obchodu.
+            // HTF kontext snímky (1H, 4H) — paralelně (Promise.allSettled); selhání JEDNOHO
+            // neshodí uložení obchodu a uživatel dostane viditelné varování (dřív se buď tiše
+            // ztratil, nebo throw zabil celý submit).
             if (htfShots.length) {
                 setSubmitStatus({ text: `☁️ Nahrávám HTF kontext (${htfShots.length})...`, type: 'info' });
-                for (const s of htfShots) {
-                    const u = await uploadDataUrl(s.dataUrl);
-                    if (u) htfUrls.push(u);
+                const results = await Promise.allSettled(htfShots.map(s => uploadDataUrl(s.dataUrl)));
+                let htfFailed = 0;
+                for (const r of results) {
+                    if (r.status === 'fulfilled' && r.value) htfUrls.push(r.value);
+                    else htfFailed++;
+                }
+                if (htfFailed > 0) {
+                    setSubmitStatus({ text: `⚠️ ${htfFailed}/${htfShots.length} HTF snímků se nenahrálo — obchod uložím i tak.`, type: 'info' });
+                    await new Promise(res => setTimeout(res, 900)); // ať si uživatel varování stihne přečíst
                 }
             }
             const allScreenshots = [publicUrl, ...htfUrls].filter((u): u is string => !!u);
@@ -1051,8 +1083,11 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 const isMaster = accId === masterAccountId;
                 const tradeId  = isMaster ? masterTradeId : crypto.randomUUID();
                 const phase    = accountPhaseMap.get(accId) || 'Challenge';
-                // Session tohoto účtu (ne účtu[0]); fallback na editovaný btSession u master účtu.
-                const acctSession = btSessionMap.get(accId) || (accId === masterAccountId ? btSession : {});
+                // Session tohoto účtu; fallback na session MASTER účtu. Fan-out kopie = stejný
+                // obchod ve stejném session kontextu → jinak by kopie dostala prázdný bias/notes,
+                // zatímco master je má (asymetrie master vs kopie v backtest analýze).
+                const masterSession = btSessionMap.get(masterAccountId) || btSession || {};
+                const acctSession = btSessionMap.get(accId) || masterSession;
 
                 // Per-účet škálování. pnl je úměrné risku (R×risk), takže škáluje stejně;
                 // mfeUsd/maeUsd ($) taky; mfeR/maeR a body NE (jsou risk-normalizované/cenové).
@@ -1108,12 +1143,20 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     slPlacement: slKeyFromTags(trade.ltfConfluence),
                     targetType: tpInfoFromTag(trade.ltfConfluence).targetType,
                     targetLevel: tpInfoFromTag(trade.ltfConfluence).targetLevel,
+                    // Řízení pozice z označených tagů (trail/fixed/runner). null = neoznačeno.
+                    management: mgmtFromTags([...(trade.ltfConfluence || []), ...(trade.htfConfluence || [])]),
                     // Counterfactual "co kdyby" pro 3 SL placementy (FVG/OTE/swing) — pro porovnávací analytiku.
                     counterfactual: cf && cf.ok
                         ? { available: true, isLong: cf.isLong, entry: cf.entry, tp: cf.tp, swing: cf.swing, ote: cf.ote, fvg: cf.fvg, tpTargets: cf.tpTargets }
                         : { available: false, reason: (cf && cf.reason) || 'no-data' },
                     // Excursion "kam by to došlo do konce dne" — level ceiling + level ladder + klasický trailing.
                     excursion: cf && cf.ok && cf.excursion ? cf.excursion : { available: false },
+                    // Úplnost excursion: false = sken narazil na konec načtených barů (den ještě nedojel,
+                    // typicky live/replay zápis před 22:00) → „pending", dopočítá se, až budou bary.
+                    // null = žádná excursion (manuál/špatný SL). Klíč pro auto-backfill + badge.
+                    excursionComplete: (cf && cf.ok && cf.excursion && cf.excursion.available)
+                        ? (cf.excursion.stopReason !== 'end')
+                        : null,
                     // Entry model — odraz level + struktura (kolikátý zlom) + entry na hraně FVG.
                     entryMap: cf && cf.ok && cf.entryMap ? cf.entryMap : { available: false },
                     // Session kontext (backtest) — otisknuto do obchodu PER ÚČET, ať je samostatný pro analýzu.

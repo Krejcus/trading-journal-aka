@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Trade, DailyPrep, DailyReview, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
@@ -181,6 +181,18 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
          setCurrentMonthIndex(Math.max(0, monthsData.length - 1));
       }
    }, [monthsData.length, currentMonthIndex]);
+
+   // Default na NEJNOVĚJŠÍ měsíc S OBCHODEM (ne aktuální kalendářní měsíc). V backtestu (obchody i 2 roky
+   // zpět) by jinak kalendář ukazoval prázdný aktuální měsíc. Přepočítá se jen při změně datové sady
+   // (účet/filtr/mód), ne při ruční navigaci uživatele — sig hlídá identitu obchodů.
+   const positionedSig = useRef<string>('');
+   useEffect(() => {
+      const sig = `${trades.length}|${trades[0]?.date ?? ''}|${trades[trades.length - 1]?.date ?? ''}`;
+      if (positionedSig.current === sig) return;
+      positionedSig.current = sig;
+      const idx = monthsData.findIndex(m => m.trades.length > 0);
+      setCurrentMonthIndex(idx > 0 ? idx : 0);
+   }, [trades, monthsData]);
 
    if (monthsData.length === 0) return (
       <div className={`p-8 text-center rounded-xl border border-dashed ${theme !== 'light' ? 'border-slate-700 text-slate-500' : 'border-slate-300 text-slate-400'}`}>

@@ -63,8 +63,12 @@ export function pageReadActivePosition(boxId?: any) {
         // Box má risk pro zlomkové qty. Po zaokrouhlení na celé kontrakty se
         // skutečný risk dopočítá: risk_na_kontrakt × počet_kontraktů.
         const boxRisk = rd('risk');
-        const perContractRisk = qtyRaw ? boxRisk / qtyRaw : 0;
-        const riskActual = Math.round(perContractRisk * qty);
+        // Guard: když box nemá vyplněný `risk` (undefined/NaN), nedopusť NaN do výpočtu —
+        // NaN by prosáklo do formuláře jako "NaN" i do všech R-výpočtů (mfeR/maeR).
+        const perContractRisk = (qtyRaw && Number.isFinite(Number(boxRisk))) ? Number(boxRisk) / qtyRaw : 0;
+        // Centová přesnost (NE integer) — SL na půl ticku dává risk 88,5 $; zaokrouhlení na 89
+        // dřív prosáklo do pnl (R×89 místo body×size×pv) i do mfeR (děleno 89 místo 88,5).
+        const riskActual = Math.round(perContractRisk * qty * 100) / 100;
 
         // points()[0] = entry (levý okraj), points()[1] = pravý okraj boxu (~exit, když ho táhneš k exit candle)
         const entryTime = ts.indexToTimePoint(pts[0].index);
@@ -167,7 +171,7 @@ export function pageReadActivePosition(boxId?: any) {
 // MAIN world, samostatná, bez ?./?? a bez async/await.
 //   overrideLevels = { fvg?:number, ote?:number, swing?:number }
 // ─────────────────────────────────────────────────────────────────────────────
-export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any, flatByMin?: any) {
+export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any, flatByMin?: any, entryOverride?: any) {
     try {
         const wc = (window as any)._exposed_chartWidgetCollection;
         if (!wc) return { ok: false, reason: 'no-widget-collection' };
@@ -178,32 +182,46 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
         const ts = model.timeScale();
         let bars = series.bars();
 
-        const isPos = (d: any) => d && (d.toolname === 'LineToolRiskRewardLong' || d.toolname === 'LineToolRiskRewardShort');
-        const getId = (d: any) => { try { return typeof d.id === 'function' ? d.id() : d.id; } catch (e) { return null; } };
-        const allPos = model.dataSources().filter(isPos);
-        if (!allPos.length) return { ok: false, reason: 'no-position' };
-        let target: any = null;
-        if (boxId != null) {
-            for (const d of allPos) { if (getId(d) === boxId) { target = d; break; } }
-            if (!target) return { ok: false, reason: 'box-gone' };
+        // Entry/SL/TP zdroj: buď z aktivního RR boxu (běžný capture), nebo z explicitního
+        // entryOverride (recompute uloženého obchodu — nepotřebuje box, jen bary v okně kolem entry).
+        let entry = 0, isLong = false, stopLevel = 0, profitLevel = 0, tp = 0;
+        let entryUnixPre: number | null = null, boxEntryIndex = -1;
+        const useOverride = !!(entryOverride && typeof entryOverride.entry === 'number' && typeof entryOverride.entryUnix === 'number');
+        if (useOverride) {
+            isLong = !!entryOverride.isLong;
+            entry = entryOverride.entry;
+            stopLevel = (minTick > 0) ? Math.round(Math.abs(entry - entryOverride.sl) / minTick) : 0;
+            profitLevel = (minTick > 0) ? Math.round(Math.abs(entryOverride.tp - entry) / minTick) : 0;
+            tp = entryOverride.tp;
+            entryUnixPre = entryOverride.entryUnix;
         } else {
-            try { const sp = (model.selection().allSources() || []).filter(isPos); if (sp.length) target = sp[sp.length - 1]; } catch (e) { /* ignore */ }
-            if (!target) target = allPos[allPos.length - 1];
+            const isPos = (d: any) => d && (d.toolname === 'LineToolRiskRewardLong' || d.toolname === 'LineToolRiskRewardShort');
+            const getId = (d: any) => { try { return typeof d.id === 'function' ? d.id() : d.id; } catch (e) { return null; } };
+            const allPos = model.dataSources().filter(isPos);
+            if (!allPos.length) return { ok: false, reason: 'no-position' };
+            let target: any = null;
+            if (boxId != null) {
+                for (const d of allPos) { if (getId(d) === boxId) { target = d; break; } }
+                if (!target) return { ok: false, reason: 'box-gone' };
+            } else {
+                try { const sp = (model.selection().allSources() || []).filter(isPos); if (sp.length) target = sp[sp.length - 1]; } catch (e) { /* ignore */ }
+                if (!target) target = allPos[allPos.length - 1];
+            }
+            const props = target.properties();
+            const rd = (k: string) => { const v = props[k]; return v && typeof v.value === 'function' ? v.value() : v; };
+            const pts = target.points();
+            entry = pts[0].price;
+            isLong = target.toolname === 'LineToolRiskRewardLong';
+            stopLevel = rd('stopLevel'); profitLevel = rd('profitLevel');
+            tp = isLong ? entry + profitLevel * minTick : entry - profitLevel * minTick;
+            boxEntryIndex = Math.round(pts[0].index);
+            entryUnixPre = ts.indexToTimePoint(boxEntryIndex);
         }
-
-        const props = target.properties();
-        const rd = (k: string) => { const v = props[k]; return v && typeof v.value === 'function' ? v.value() : v; };
-        const pts = target.points();
-        const entry = pts[0].price;
-        const isLong = target.toolname === 'LineToolRiskRewardLong';
-        const stopLevel = rd('stopLevel'), profitLevel = rd('profitLevel');
-        const tp = isLong ? entry + profitLevel * minTick : entry - profitLevel * minTick;
 
         // ── Auto-load: dožádej bary od ZAČÁTKU SESSION dne vstupu (jinak VWAP/deviace/odraz nesedí —
         // TradingView lazy-loaduje podle viditelného okna). requestMoreData + await dataEvents.completed.
-        // Cíl: firstBar ≤ den vstupu 00:00 − 2h (pokrýt session open ~prev 23:00). Ověřeno naživo. ──
-        const si0pre = Math.round(pts[0].index);
-        const entryUnixPre = ts.indexToTimePoint(si0pre);
+        // Cíl: firstBar ≤ den vstupu 00:00 − 2h (pokrýt session open ~prev 23:00). Ověřeno naživo.
+        // Pro override (recompute) to zároveň dotáhne HISTORII zpět k entry, i když je graf „dopředu". ──
         if (entryUnixPre != null) {
             const ed = new Date(entryUnixPre * 1000);
             const targetT = new Date(ed.getFullYear(), ed.getMonth(), ed.getDate(), 0, 0, 0, 0).getTime() / 1000 - 2 * 3600;
@@ -224,7 +242,20 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
         }
 
         const first = bars.firstIndex(), lastI = bars.lastIndex();
-        const si0 = Math.round(pts[0].index);
+        // si0 = bar index vstupu. Box: přímý index. Override: dohledej podle času (entryUnix).
+        let si0 = -1;
+        if (useOverride && entryUnixPre != null) {
+            let bestD = Infinity;
+            for (let i = lastI; i >= first; i--) {
+                const t = ts.indexToTimePoint(i);
+                if (t == null) continue;
+                const d = Math.abs(t - entryUnixPre);
+                if (d < bestD) { bestD = d; si0 = i; }
+                if (t < entryUnixPre - 86400) break; // víc než den pod entry → dost, dál nescanuj
+            }
+        } else {
+            si0 = boxEntryIndex;
+        }
         // Entry musí být v načteném rozsahu barů — jinak nelze počítat strukturu/scan.
         if (si0 < first + 3 || si0 > lastI || ts.indexToTimePoint(si0) == null) {
             return { ok: false, reason: 'entry-mimo-graf' };
@@ -458,12 +489,18 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             const seen: any = {}; const uniq: any[] = [];
             levels.sort((a: any, b: any) => Math.abs(a.price - entry) - Math.abs(b.price - entry));
             for (const L of levels) { const k = String(roundTick2(L.price)); if (!seen[k]) { seen[k] = true; uniq.push(L); } }
-            const risk = isLong ? entry - swingLvl : swingLvl - entry;
+            // Baseline = swing SL. Když je swing neplatný (SL na/za entry → risk ≤ 0, např. swing==entry),
+            // spadni na REÁLNÝ SL boxu — jinak stop == entry → okamžitý stop-out a VŠECHNY targety zkolabují
+            // na LOSS/-1, i když cena reálně došla výš (otrávený tpTargets).
+            const boxSL = isLong ? entry - stopLevel * minTick : entry + stopLevel * minTick;
+            const swingRisk = isLong ? entry - swingLvl : swingLvl - entry;
+            const baseSL = swingRisk > 0 ? swingLvl : boxSL;
+            const risk = isLong ? entry - baseSL : baseSL - entry;
             return uniq.slice(0, 8).map((L: any) => {
                 let outcome = 'OPEN', held = 0;
                 for (let i = si0 + 1; i <= lastI; i++) {
                     const bar = bars.valueAt(i); if (!bar) continue;
-                    const hitSL = isLong ? bar[3] <= swingLvl : bar[2] >= swingLvl;
+                    const hitSL = isLong ? bar[3] <= baseSL : bar[2] >= baseSL;
                     const hitTP = isLong ? bar[2] >= L.price : bar[3] <= L.price;
                     if (hitSL && hitTP) { outcome = 'LOSS'; held = i - si0; break; }
                     if (hitTP) { outcome = 'WIN'; held = i - si0; break; }
@@ -706,7 +743,9 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             }
             const favOk = maxFav !== Infinity && maxFav !== -Infinity;
             const favDist = isLong ? (maxFav - entry) : (entry - maxFav);
-            const mfePotentialR = (favOk && favDist >= 0) ? Math.round((favDist / risk) * 100) / 100 : null;
+            // favDist < 0 = cena nešla vůbec ve prospěch → 0R (ne null), ať je null-handling konzistentní
+            // napříč lossy (dřív #7 null vs #6 nula pro stejnou situaci). null jen když scan neproběhl.
+            const mfePotentialR = favOk ? Math.max(0, Math.round((favDist / risk) * 100) / 100) : null;
             for (const Lv of staticLevels) { const d = isLong ? Lv.price - entry : entry - Lv.price; Lv.r = Math.round((d / risk) * 100) / 100; }
             // Nedosažená dynamická pásma: R z poslední hodnoty pásma (orientačně, kam doputovalo).
             const finalW = vwapSource === 'indicator' ? labelVwap : lastVwap;
@@ -955,10 +994,13 @@ export interface CfEntryMap {
 }
 export interface CounterfactualRead { ok: boolean; isLong?: boolean; entry?: number; tp?: number; swing?: CfSlResult; ote?: CfSlResult; fvg?: CfSlResult; tpTargets?: CfTpTarget[]; excursion?: CfExcursion; entryMap?: CfEntryMap; reason?: string; }
 
-export function computeCounterfactual(overrideLevels?: { fvg?: number; ote?: number; swing?: number }, boxId?: any, flatByMin?: number): Promise<CounterfactualRead> {
+// entryOverride = recompute uloženého obchodu bez RR boxu na grafu:
+//   { isLong, entry, sl, tp, entryUnix } (entryUnix = unix SEKUNDY vstupu).
+export interface CfEntryOverride { isLong: boolean; entry: number; sl: number; tp: number; entryUnix: number; }
+export function computeCounterfactual(overrideLevels?: { fvg?: number; ote?: number; swing?: number }, boxId?: any, flatByMin?: number, entryOverride?: CfEntryOverride | null): Promise<CounterfactualRead> {
     return new Promise((resolve) => {
         try {
-            chrome.runtime.sendMessage({ action: 'computeCounterfactual', overrideLevels: overrideLevels || null, boxId: boxId ?? null, flatByMin: flatByMin ?? null }, (res) => {
+            chrome.runtime.sendMessage({ action: 'computeCounterfactual', overrideLevels: overrideLevels || null, boxId: boxId ?? null, flatByMin: flatByMin ?? null, entryOverride: entryOverride || null }, (res) => {
                 if (chrome.runtime.lastError) { resolve({ ok: false, reason: chrome.runtime.lastError.message }); return; }
                 resolve(res || { ok: false, reason: 'no-response' });
             });

@@ -16,6 +16,7 @@ import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 import TradeAISection from './TradeAISection';
 import TradeVisionSection from './TradeVisionSection';
+import TradeExecutionIntel from './TradeExecutionIntel';
 import ManualTradeForm from './ManualTradeForm';
 import TradeShareModal from './TradeShareModal';
 
@@ -599,6 +600,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                         </div>
                                     </div>
                                 )}
+
+                                {/* AlphaBridge Intel — MFE/MAE v R, execution tagy, entry model,
+                                    excursion (co zbylo na stole) a counterfactual. Vykreslí se jen
+                                    když obchod nese data z extension (jinak vrací null). */}
+                                <TradeExecutionIntel trade={activeTrade} isDark={isDark} />
 
                                 {/* Notes + AI (MOBILE ONLY) — na desktop jsou v right pane bottom.
                                     Pořadí: nejdřív Poznámky (user content), pak AI návrhy. */}

@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TradeForm } from './components/TradeForm';
 import { Input, Button } from './components/UI';
 import { supabase } from '../lib/supabase';
 import { useTheme } from './components/ThemeContext';
-import { Sun, Moon, Maximize2, Minimize2 } from 'lucide-react';
-import { readActivePosition } from '../lib/positionReader';
+import { Sun, Moon, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import { readActivePosition, getChartLayout } from '../lib/positionReader';
+import { backfillPendingExcursions } from '../lib/recompute';
 
 export function Sidebar() {
     const [isOpen, setIsOpen] = useState(false);
@@ -65,6 +66,43 @@ export function Sidebar() {
     const handleLogout = async () => {
         await supabase.auth.signOut();
     };
+
+    // ── Auto-backfill pending excursion ──────────────────────────────────────────
+    // Obchod zapsaný před koncem dne (např. v 17:00) má „useknutou" excursion. Když
+    // otevřeš graf na tom instrumentu později (den dojel), dopočítá se sám — bez boxu.
+    const [backfilling, setBackfilling] = useState(false);
+    const [backfillToast, setBackfillToast] = useState<{ text: string; tone: 'ok' | 'info' | 'warn' } | null>(null);
+    const backfillRanRef = useRef<string>(''); // poslední symbol, na kterém auto-backfill proběhl
+
+    const runBackfill = async (manual: boolean) => {
+        if (backfilling) return;
+        let sym = '';
+        try { const lay: any = await getChartLayout(); sym = (lay && lay.panes && lay.panes[0] && lay.panes[0].sym) || ''; } catch { /* ignore */ }
+        if (!sym) { if (manual) setBackfillToast({ text: 'Nepodařilo se přečíst symbol grafu.', tone: 'warn' }); return; }
+        if (!manual && backfillRanRef.current === sym) return; // auto: jen jednou na daný symbol
+        backfillRanRef.current = sym;
+        setBackfilling(true);
+        try {
+            const res = await backfillPendingExcursions(sym, { max: manual ? 20 : 8 });
+            if (res.completed > 0) setBackfillToast({ text: `✅ Dopočítáno ${res.completed} obchodů`, tone: 'ok' });
+            else if (manual) setBackfillToast({ text: res.checked ? `Zatím nic — ${res.stillPending} čeká na bary` : 'Žádné pending obchody pro tento graf', tone: 'info' });
+        } catch { if (manual) setBackfillToast({ text: 'Přepočet selhal', tone: 'warn' }); }
+        finally { setBackfilling(false); }
+    };
+
+    // Auto po otevření (nech graf chvíli usadit) — jednou na symbol, potichu.
+    useEffect(() => {
+        if (!isOpen || !session) return;
+        const t = setTimeout(() => runBackfill(false), 1800);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen, session]);
+
+    useEffect(() => {
+        if (!backfillToast) return;
+        const t = setTimeout(() => setBackfillToast(null), 4200);
+        return () => clearTimeout(t);
+    }, [backfillToast]);
 
     // Smart klik na logo: když je na grafu pozice (box) → otevři + auto-vyplň + screen.
     // Když pozice není → hláška „nakresli pozici" + možnost otevřít přesto (prázdný panel).
@@ -146,6 +184,16 @@ export function Sidebar() {
                     <div className="flex items-center gap-2.5 shrink-0">
                         {session && (
                             <button
+                                onClick={() => runBackfill(true)}
+                                disabled={backfilling}
+                                title="Přepočítat pending excursion pro tento graf – obchody zapsané před koncem dne"
+                                className={`bg-transparent border-none cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none disabled:opacity-40 ${theme === 'dark' ? 'text-slate-400 hover:text-violet-400' : 'text-slate-500 hover:text-violet-600'}`}
+                            >
+                                <RefreshCw size={15} className={backfilling ? 'animate-spin' : ''} />
+                            </button>
+                        )}
+                        {session && (
+                            <button
                                 onClick={handleLogout}
                                 title="Odhlásit se"
                                 className={`bg-transparent border-none text-[11px] font-bold cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none ${theme === 'dark' ? 'text-red-400 hover:text-red-300' : 'text-red-500 hover:text-red-600'}`}
@@ -206,6 +254,21 @@ export function Sidebar() {
                     </div>
                 </div>
             </div>
+
+            {backfillToast && (
+                <div
+                    className={`fixed right-[60px] bottom-[24px] z-[2000003] px-4 py-2.5 rounded-xl text-xs font-black border shadow-lg transition-all ${
+                        backfillToast.tone === 'ok'
+                            ? (theme === 'dark' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300' : 'bg-emerald-50 border-emerald-200 text-emerald-700')
+                            : backfillToast.tone === 'warn'
+                                ? (theme === 'dark' ? 'bg-amber-500/15 border-amber-500/30 text-amber-300' : 'bg-amber-50 border-amber-200 text-amber-700')
+                                : (theme === 'dark' ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-white border-slate-200 text-slate-600')
+                    }`}
+                    style={{ backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
+                >
+                    {backfillToast.text}
+                </div>
+            )}
 
             {noBoxAlert && (
                 <div className="fixed inset-0 z-[2000002] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.45)' }} onClick={() => setNoBoxAlert(false)}>
