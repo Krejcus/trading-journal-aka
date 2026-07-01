@@ -344,6 +344,11 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
         const scanSL = (lvl: number | null) => {
             if (lvl == null) return { ok: false };
             const valid = isLong ? lvl < entry : lvl > entry;
+            // Neplatná varianta (SL na špatné straně entry = záporný risk) → nesimuluj a NEvykazuj -1.
+            // Dřív scan přiřadil outcome LOSS / realizedR -1 → kazilo průměry cf variant (FVG/OTE/swing).
+            if (!valid) {
+                return { ok: true, valid: false, sl: Math.round(lvl * 100) / 100, rr: null, outcome: null, bars: null, realizedR: null, trail: null };
+            }
             const riskDist = isLong ? entry - lvl : lvl - entry;
             const rr = riskDist > 0 ? (isLong ? (tp - entry) / riskDist : (entry - tp) / riskDist) : null;
             let outcome = 'OPEN', held = 0;
@@ -369,6 +374,9 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
         // a pro každý ve směru obchodu zjisti, jestli tam cena došla dřív než SL (swing). ──
         const readLiquidityLevels = () => {
             const lv: any[] = [];
+            // Dedup: víc instancí „Liquidity" indikátoru na grafu (nebo překrývající se levely) by
+            // jinak načetlo každou úroveň víckrát → nafouklé tpTargets/excursion.levels. Klíč = text|cena.
+            const seen = new Set<string>();
             try {
                 const srcs = model.dataSources();
                 for (let i = 0; i < srcs.length; i++) {
@@ -381,7 +389,17 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                     const pull = (m: any) => {
                         if (m && typeof m.values === 'function') {
                             const it = m.values(); let v;
-                            while (!(v = it.next()).done) { const val = v.value; if (val && typeof val.values === 'function') pull(val); else if (val && typeof val.y === 'number' && val.text && !isStructure(String(val.text))) lv.push({ text: String(val.text), price: val.y }); }
+                            while (!(v = it.next()).done) {
+                                const val = v.value;
+                                if (val && typeof val.values === 'function') pull(val);
+                                else if (val && typeof val.y === 'number' && val.text && !isStructure(String(val.text))) {
+                                    const text = String(val.text);
+                                    const key = `${text.trim()}|${Math.round(val.y * 100)}`;
+                                    if (seen.has(key)) continue;
+                                    seen.add(key);
+                                    lv.push({ text, price: val.y });
+                                }
+                            }
                         }
                     };
                     pull(coll);
@@ -511,6 +529,28 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                     odrazLevelPrice = roundTick2(best.price);
                 }
             }
+            // ── ENTRY LEVEL: úroveň NEJBLIŽŠÍ skutečnému ENTRY (ne originu odrazu). Uživatel vstupuje
+            // např. na -2σ, i když se pohyb OTOČIL na VWAP → odraz=VWAP (origin), entryLevel=-2σ (vstup). ──
+            const entryLevels: string[] = []; let entryLevelPrice: number | null = null;
+            {
+                const ecand: { label: string; price: number }[] = [];
+                for (const L of readLiquidityLevels()) { if (!/^\s*VWAP(\s*[+-]\s*[12]\s*σ)?\s*$/i.test(String(L.text))) ecand.push({ label: String(L.text), price: L.price }); }
+                // VWAP/deviace AT ENTRY (stejný snapshot jako TP tagy) — bary → jinak labely → jinak nic.
+                const eSnap = entryVwapSnapshot();
+                if (eSnap.source !== 'none' && eSnap.w != null) {
+                    const specs: [string, number][] = [['VWAP', 0], ['VWAP +1σ', 1], ['VWAP -1σ', -1], ['VWAP +2σ', 2], ['VWAP -2σ', -2]];
+                    for (const s of specs) ecand.push({ label: s[0], price: eSnap.w + s[1] * eSnap.sd });
+                }
+                let eBest: any = null, ebd = Infinity;
+                for (const c of ecand) { const d = Math.abs(c.price - entry); if (d < ebd) { ebd = d; eBest = c; } }
+                const etol = Math.max(minTick * 8, stopLevel * minTick);
+                if (eBest && ebd <= etol) {
+                    const eConfBand = Math.max(minTick * 16, stopLevel * minTick * 0.6);
+                    const seenE: any = {};
+                    for (const c of ecand) { if (Math.abs(c.price - eBest.price) <= eConfBand) { const lbl = String(c.label).replace(/\s*\[.*?\]\s*$/, '').trim(); if (!seenE[lbl]) { seenE[lbl] = true; entryLevels.push(lbl); } } }
+                    entryLevelPrice = roundTick2(eBest.price);
+                }
+            }
             return {
                 available: structEvents.length > 0,
                 structureType: structureType,                     // 'CHoCH' | 'BoS' | null
@@ -518,6 +558,8 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                 odrazLevels: odrazLevels,                         // levely odrazu (konfluence) — může být víc
                 odrazPrice: odrazPrice != null ? roundTick2(odrazPrice) : null,
                 odrazLevelPrice: odrazLevelPrice,
+                entryLevels: entryLevels,                         // levely u SKUTEČNÉHO entry (např. VWAP -2σ)
+                entryLevelPrice: entryLevelPrice,
                 entryFvg: fvgLvl != null,                         // entry sedí na hraně FVG? (tvoje pravidlo)
             };
         })();
@@ -692,7 +734,13 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                 mfePotential: favOk ? roundTick2(maxFav) : null,
                 mfePotentialR: mfePotentialR,
                 tpR: tpR,
-                leftOnTableR: (mfePotentialR != null) ? Math.round((mfePotentialR - tpR) * 100) / 100 : null,
+                // „Co zbylo na stole" = kolik R navíc bylo reálně dosažitelné ZA tvým TP.
+                // Base = nejvyšší DOSAŽENÝ level (realistický limit exit), fallback na MFE peak (wick).
+                // Clamp ≥0: na ztrátě / když TP nebyl překonán se nic nenechalo (dřív vycházelo záporně = nesmysl).
+                leftOnTableR: (() => {
+                    const achievableR = topReached ? topReached.r : mfePotentialR;
+                    return achievableR != null ? Math.max(0, Math.round((achievableR - tpR) * 100) / 100) : null;
+                })(),
                 topReached: topReached ? { label: topReached.label, r: topReached.r } : null,
                 levels: limited,
                 trail: trail ? { exit: trail.exit, exitR: trail.realizedR, reason: trail.reason, bars: trail.bars } : null,
@@ -883,7 +931,7 @@ export function captureMultiTF(frames: string[][]): Promise<{ ok: boolean; shots
 }
 
 export interface CfManagement { exit: number; reason: string; bars: number | null; realizedR: number | null; trailSteps: number; trailFinal: number; trailStart: number; }
-export interface CfSlResult { ok: boolean; valid?: boolean; sl?: number; rr?: number | null; outcome?: string; bars?: number; realizedR?: number | null; trail?: CfManagement | null; }
+export interface CfSlResult { ok: boolean; valid?: boolean; sl?: number; rr?: number | null; outcome?: string | null; bars?: number | null; realizedR?: number | null; trail?: CfManagement | null; }
 export interface CfTpTarget { label: string; price: number; outcome: string; bars: number; rr: number | null; realizedR: number | null; }
 export interface CfExcLevel { label: string; price: number; reached: boolean; bars: number | null; r: number; dynamic?: boolean; }
 export interface CfExcursion {
@@ -901,6 +949,8 @@ export interface CfEntryMap {
     odrazLevels?: string[];
     odrazPrice?: number | null;
     odrazLevelPrice?: number | null;
+    entryLevels?: string[];
+    entryLevelPrice?: number | null;
     entryFvg?: boolean;
 }
 export interface CounterfactualRead { ok: boolean; isLong?: boolean; entry?: number; tp?: number; swing?: CfSlResult; ote?: CfSlResult; fvg?: CfSlResult; tpTargets?: CfTpTarget[]; excursion?: CfExcursion; entryMap?: CfEntryMap; reason?: string; }

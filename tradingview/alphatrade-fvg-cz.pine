@@ -1,0 +1,384 @@
+// @version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  AlphaTrade FVG (CZ) — samostatný LEHKÝ indikátor jen na Fair Value Gap
+//  Vyseknuto z "Liquidity Levels CZ - Advanced" kvůli realtime výkonu.
+//  Protože dělá JEN FVG, vejde se do rozpočtu na každý tick → plynulé live
+//  vykreslování i zmenšování zóny (jako dedikované FVG indikátory).
+//
+//  Vlastnosti:
+//   • Schodovité částečné vyplnění zóny jako JEDEN polyline (bez dělících spár)
+//   • Šedý podklad = vyplněná část, barevně = nevyplněná část
+//   • Živé (intrabar) zmenšování zóny každý tick (mutovatelný box)
+//   • Živý náhled 3. svíčky ještě před uzavřením (ATAS styl, čárkovaný okraj)
+//   • Lokální i HTF (vyšší timeframe) FVG
+// ════════════════════════════════════════════════════════════════════════════
+indicator("AlphaTrade FVG (CZ)", overlay=true, max_boxes_count=500, max_polylines_count=100, max_labels_count=200)
+
+// ════════════════════════════════════════════════════════════════════════════
+//                            📊 FAIR VALUE GAP (FVG)
+// ════════════════════════════════════════════════════════════════════════════
+
+showFVG = input.bool(true, title="Zobrazit FVG", inline="fvg", group="📊 FVG")
+fvgBullColor = input.color(color.new(#2196F3, 70), title="Bull", inline="fvg", group="📊 FVG")
+fvgBearColor = input.color(color.new(#FF9800, 70), title="Bear", inline="fvg", group="📊 FVG")
+fvgMitigatedTransp = input.int(93, title="Mitig %", minval=80, maxval=98, inline="fvg2", group="📊 FVG", tooltip="Průhlednost vyplněné (šedé) části")
+fvgMaxCount = input.int(10, title="Max", minval=1, maxval=30, inline="fvg2", group="📊 FVG", tooltip="Max počet aktivních FVG na grafu")
+showFvgPreview = input.bool(true, title="Živý náhled 3. svíčky", group="📊 FVG", tooltip="Vykreslí provizorní zónu (čárkovaný okraj) ještě než se 3. svíčka uzavře")
+fvgLabelText = input.string("", title="Text", inline="fvg4", group="📊 FVG", tooltip="Vlastní text zobrazený v FVG")
+fvgLabelSize = input.string("Malé", title="Velikost", options=["Mikro", "Malé", "Střední"], inline="fvg4", group="📊 FVG")
+fvgLabelColor = input.color(color.white, title="Barva", inline="fvg4", group="📊 FVG")
+
+// ════════════════════════════════════════════════════════════════════════════
+//                          📊 HTF FAIR VALUE GAP (HTF FVG)
+// ════════════════════════════════════════════════════════════════════════════
+
+showHTFFVG = input.bool(false, title="Zobrazit HTF FVG", inline="htffvg", group="📊 HTF FVG")
+htfFvgTimeframe = input.timeframe("60", title="TF", inline="htffvg", group="📊 HTF FVG", tooltip="Timeframe pro HTF FVG (např. 60 = 1H)")
+htfFvgBullColor = input.color(color.new(#9C27B0, 60), title="Bull", inline="htffvg", group="📊 HTF FVG")
+htfFvgBearColor = input.color(color.new(#FF5722, 60), title="Bear", inline="htffvg", group="📊 HTF FVG")
+htfFvgMitigatedTransp = input.int(90, title="Mitig %", minval=80, maxval=98, inline="htffvg2", group="📊 HTF FVG")
+htfFvgMaxCount = input.int(5, title="Max", minval=1, maxval=20, inline="htffvg2", group="📊 HTF FVG")
+htfFvgLabelText = input.string("HTF", title="Text", inline="htffvg3", group="📊 HTF FVG", tooltip="Vlastní text pro HTF FVG")
+htfFvgLabelSize = input.string("Malé", title="Velikost", options=["Mikro", "Malé", "Střední"], inline="htffvg3", group="📊 HTF FVG")
+htfFvgLabelColor = input.color(color.white, title="Barva", inline="htffvg3", group="📊 HTF FVG")
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔧 STRUKTURY A HELPER FUNKCE
+// ════════════════════════════════════════════════════════════════════════════
+
+type FVGData
+    polyline poly       // Jeden vyplněný polyline = celá schodovitá UNFILLED zóna (bez vnitřních spár)
+    box grayBox         // Jeden box s FILLED (šedou) podkladovou plochou celé původní zóny
+    box liveBox         // Mutovatelný box pro ŽIVOU (intrabar) projekci špičky zóny – překresluje se každý tick
+    label lbl
+    float top
+    float bottom
+    bool isBull
+    bool mitigated
+    bool touched
+    int touchBar
+    int createBar
+    int invalidBar
+    int leftX           // Levý okraj zóny (x)
+    int[] stepBars      // Schodišťový profil: x-pozice jednotlivých schodů
+    float[] stepMoving  // Schodišťový profil: hodnota pohyblivé hrany (bull=top, bear=bottom) na každém schodu
+
+getFvgLabelSize(sizeStr) =>
+    switch sizeStr
+        "Mikro" => size.tiny
+        "Malé" => size.small
+        "Střední" => size.normal
+        => size.small
+
+// Sestaví celou schodovitou UNFILLED zónu FVG jako JEDEN vyplněný polyline (potvrzené schody).
+// Díky jednomu souvislému tvaru nevznikají žádné dělící spáry mezi schody.
+//   rightX = pravý okraj (projekce do budoucna nebo invalidBar)
+//   col    = barva výplně zóny
+buildFvgPoly(FVGData fvg, int rightX, color col) =>
+    if not na(fvg.poly)
+        polyline.delete(fvg.poly)
+    float fixedE = fvg.isBull ? fvg.bottom : fvg.top
+    int n = array.size(fvg.stepBars)
+    pts = array.new<chart.point>()
+    // Levá strana zóny: od pevné hrany k pohyblivé
+    array.push(pts, chart.point.from_index(fvg.leftX, fixedE))
+    array.push(pts, chart.point.from_index(fvg.leftX, array.get(fvg.stepMoving, 0)))
+    // Schodiště podél pohyblivé hrany (potvrzené schody)
+    if n >= 2
+        for k = 1 to n - 1
+            array.push(pts, chart.point.from_index(array.get(fvg.stepBars, k), array.get(fvg.stepMoving, k - 1)))
+            array.push(pts, chart.point.from_index(array.get(fvg.stepBars, k), array.get(fvg.stepMoving, k)))
+    float lastMoving = array.get(fvg.stepMoving, n - 1)
+    // Pravá strana zóny: od pohyblivé hrany zpět k pevné
+    array.push(pts, chart.point.from_index(rightX, lastMoving))
+    array.push(pts, chart.point.from_index(rightX, fixedE))
+    fvg.poly := polyline.new(pts, closed = true, xloc = xloc.bar_index, line_color = color.new(col, 100), fill_color = col, line_width = 1)
+
+// Živá (intrabar) projekce špičky UNFILLED zóny mutovatelným boxem.
+// Box se na rozdíl od polyline spolehlivě překresluje KAŽDÝ tick → zóna se zmenšuje plynule.
+showFvgLiveTip(FVGData fvg, float curMoving, color zoneCol) =>
+    box.set_left(fvg.liveBox, bar_index)
+    box.set_right(fvg.liveBox, bar_index + 20)
+    if fvg.isBull
+        box.set_top(fvg.liveBox, curMoving)
+        box.set_bottom(fvg.liveBox, fvg.bottom)
+    else
+        box.set_top(fvg.liveBox, fvg.top)
+        box.set_bottom(fvg.liveBox, curMoving)
+    box.set_bgcolor(fvg.liveBox, zoneCol)
+
+// Schová živý box (mimo aktivní intrabar plnění)
+hideFvgLiveTip(FVGData fvg) =>
+    box.set_bgcolor(fvg.liveBox, color.new(color.gray, 100))
+
+// ════════════════════════════════════════════════════════════════════════════
+// 📊 DETEKCE A AKTUALIZACE FVG
+// ════════════════════════════════════════════════════════════════════════════
+
+var FVGData[] fvgArray = array.new<FVGData>()
+var FVGData[] htfFvgArray = array.new<FVGData>()
+
+// === KLASICKÉ FVG (Lokální Timeframe) ===
+bullishFVG = low > high[2]
+bearishFVG = high < low[2]
+
+color fvgBullTouched = color.new(fvgBullColor, 85)
+color fvgBearTouched = color.new(fvgBearColor, 85)
+fvgSize = getFvgLabelSize(fvgLabelSize)
+
+color fvgGrayCol = color.new(color.gray, fvgMitigatedTransp)
+
+if showFVG and barstate.isconfirmed
+    if bullishFVG
+        fvgTop = low
+        fvgBottom = high[2]
+        int leftX = bar_index - 1
+        grayBox = box.new(leftX, fvgTop, bar_index + 20, fvgBottom, bgcolor=fvgGrayCol, border_color=na)
+        liveBox = box.new(leftX, fvgTop, leftX, fvgBottom, bgcolor=color.new(color.gray, 100), border_color=na)
+        label newLbl = na
+        if fvgLabelText != ""
+            newLbl := label.new(bar_index + 15, (fvgTop + fvgBottom) / 2, fvgLabelText,
+                 style=label.style_label_left, textcolor=fvgLabelColor, size=fvgSize, color=na)
+
+        newFVG = FVGData.new(na, grayBox, liveBox, newLbl, fvgTop, fvgBottom, true, false, false, 0, bar_index, 0, leftX, array.from(leftX), array.from(fvgTop))
+        buildFvgPoly(newFVG, bar_index + 20, fvgBullColor)
+        array.push(fvgArray, newFVG)
+
+    if bearishFVG
+        fvgTop = low[2]
+        fvgBottom = high
+        int leftX = bar_index - 1
+        grayBox = box.new(leftX, fvgTop, bar_index + 20, fvgBottom, bgcolor=fvgGrayCol, border_color=na)
+        liveBox = box.new(leftX, fvgTop, leftX, fvgBottom, bgcolor=color.new(color.gray, 100), border_color=na)
+        label newLbl = na
+        if fvgLabelText != ""
+            newLbl := label.new(bar_index + 15, (fvgTop + fvgBottom) / 2, fvgLabelText,
+                 style=label.style_label_left, textcolor=fvgLabelColor, size=fvgSize, color=na)
+
+        newFVG = FVGData.new(na, grayBox, liveBox, newLbl, fvgTop, fvgBottom, false, false, false, 0, bar_index, 0, leftX, array.from(leftX), array.from(fvgBottom))
+        buildFvgPoly(newFVG, bar_index + 20, fvgBearColor)
+        array.push(fvgArray, newFVG)
+
+    while array.size(fvgArray) > fvgMaxCount * 2
+        oldFVG = array.shift(fvgArray)
+        if not na(oldFVG.poly)
+            polyline.delete(oldFVG.poly)
+        box.delete(oldFVG.grayBox)
+        box.delete(oldFVG.liveBox)
+        label.delete(oldFVG.lbl)
+
+// Aktualizace lokálních FVG (schodovité částečné vyplnění zóny)
+if showFVG and array.size(fvgArray) > 0
+    for i = array.size(fvgArray) - 1 to 0
+        fvg = array.get(fvgArray, i)
+        bool changed = false
+
+        // Mitigované FVG jsou už finalizované – přeskakujeme
+        if fvg.mitigated
+            continue
+
+        // Aktuální pohyblivá hrana zóny vč. intrabar knotu (bull = top klesá, bear = bottom roste)
+        float curMoving = fvg.isBull ? fvg.top : fvg.bottom
+        if bar_index > fvg.createBar
+            curMoving := fvg.isBull ? math.min(fvg.top, low) : math.max(fvg.bottom, high)
+
+        // První dotyk (reakce) → změna barvy zóny
+        if not fvg.touched and bar_index > fvg.createBar
+            if high >= fvg.bottom and low <= fvg.top
+                fvg.touched := true
+                changed := true
+
+        bool fullyFilled = fvg.isBull ? (curMoving <= fvg.bottom) : (curMoving >= fvg.top)
+        bool closeInvalidated = fvg.isBull ? (close < fvg.bottom) : (close > fvg.top)
+        color zoneCol = fvg.touched ? (fvg.isBull ? fvgBullTouched : fvgBearTouched) : (fvg.isBull ? fvgBullColor : fvgBearColor)
+
+        if bar_index > fvg.createBar and (fullyFilled or closeInvalidated)
+            if barstate.isconfirmed
+                // Zmrazíme zónu na poslední potvrzené výšce k aktuálnímu baru
+                fvg.mitigated := true
+                fvg.invalidBar := bar_index
+                box.set_right(fvg.grayBox, bar_index)
+                hideFvgLiveTip(fvg)
+                label.delete(fvg.lbl)
+                buildFvgPoly(fvg, bar_index, zoneCol)
+                changed := true
+            else
+                // Intrabar náhled mitigace na poslední (neuzavřené) svíčce
+                box.set_right(fvg.grayBox, bar_index)
+                hideFvgLiveTip(fvg)
+                buildFvgPoly(fvg, bar_index, zoneCol)
+        else
+            bool newFill = fvg.isBull ? curMoving < fvg.top : curMoving > fvg.bottom
+            if newFill and barstate.isconfirmed
+                // Potvrzený nový schod – zapíšeme do profilu, schováme živý box a sloučíme do polyline
+                if fvg.isBull
+                    fvg.top := curMoving
+                else
+                    fvg.bottom := curMoving
+                array.push(fvg.stepBars, bar_index)
+                array.push(fvg.stepMoving, curMoving)
+                box.set_right(fvg.grayBox, bar_index + 20)
+                hideFvgLiveTip(fvg)
+                buildFvgPoly(fvg, bar_index + 20, zoneCol)
+                changed := true
+            else if barstate.islast
+                // ŽIVÁ svíčka (hybrid): historie = bezešvý polyline, projekce/zmenšování = mutovatelný box
+                box.set_right(fvg.grayBox, bar_index + 20)
+                if newFill
+                    // Intrabar plnění → polyline jen do aktuálního baru, špičku kreslí živý box (každý tick)
+                    buildFvgPoly(fvg, bar_index, zoneCol)
+                    showFvgLiveTip(fvg, curMoving, zoneCol)
+                else
+                    // Bez plnění → klasická bezešvá projekce polyline, živý box schovat.
+                    // Polyline se na živé svíčce MUSÍ překreslovat každý tick (rollback ho jinak smaže → zóna zšedne).
+                    hideFvgLiveTip(fvg)
+                    buildFvgPoly(fvg, bar_index + 20, zoneCol)
+            else if changed
+                // Dotyk na potvrzené historické svíčce bez nového vyplnění → překreslit kvůli barvě
+                buildFvgPoly(fvg, bar_index + 20, zoneCol)
+
+            if barstate.islast and not na(fvg.lbl)
+                label.set_x(fvg.lbl, bar_index + 15)
+                label.set_y(fvg.lbl, (fvg.top + fvg.bottom) / 2)
+
+        if changed
+            array.set(fvgArray, i, fvg)
+
+// === ŽIVÝ NÁHLED FVG (interaktivní vykreslení ještě před uzavřením 3. svíčky, ATAS styl) ===
+var box fvgPreviewBox = na
+
+if showFVG and showFvgPreview and barstate.islast
+    box.delete(fvgPreviewBox)
+    fvgPreviewBox := na
+    if not barstate.isconfirmed
+        if low > high[2]
+            fvgPreviewBox := box.new(bar_index - 1, low, bar_index + 20, high[2],
+                 bgcolor=fvgBullColor, border_color=color.new(fvgBullColor, 20), border_width=1, border_style=line.style_dashed)
+        else if high < low[2]
+            fvgPreviewBox := box.new(bar_index - 1, low[2], bar_index + 20, high,
+                 bgcolor=fvgBearColor, border_color=color.new(fvgBearColor, 20), border_width=1, border_style=line.style_dashed)
+
+// === HTF FVG (Vyšší Timeframe) ===
+[htfHigh, htfLow, htfClose, htfHighPrev2, htfLowPrev2, htfBarIdx] = request.security(
+     syminfo.tickerid, htfFvgTimeframe, [high, low, close, high[2], low[2], bar_index], lookahead=barmerge.lookahead_off)
+
+htfBullishFVG = htfLow > htfHighPrev2
+htfBearishFVG = htfHigh < htfLowPrev2
+
+color htfFvgBullTouched = color.new(htfFvgBullColor, 85)
+color htfFvgBearTouched = color.new(htfFvgBearColor, 85)
+htfFvgSize = getFvgLabelSize(htfFvgLabelSize)
+
+var float lastHtfBullTop = na
+var float lastHtfBearBottom = na
+
+color htfFvgGrayCol = color.new(color.gray, htfFvgMitigatedTransp)
+
+if showHTFFVG and barstate.isconfirmed
+    if htfBullishFVG
+        htfFvgTop = htfLow
+        htfFvgBottom = htfHighPrev2
+        if na(lastHtfBullTop) or htfFvgTop != lastHtfBullTop
+            lastHtfBullTop := htfFvgTop
+            int leftX = bar_index - 1
+            grayBox = box.new(leftX, htfFvgTop, bar_index + 20, htfFvgBottom, bgcolor=htfFvgGrayCol, border_color=na)
+            liveBox = box.new(leftX, htfFvgTop, leftX, htfFvgBottom, bgcolor=color.new(color.gray, 100), border_color=na)
+            label newLbl = na
+            if htfFvgLabelText != ""
+                newLbl := label.new(bar_index + 15, (htfFvgTop + htfFvgBottom) / 2, htfFvgLabelText,
+                     style=label.style_label_left, textcolor=htfFvgLabelColor, size=htfFvgSize, color=na)
+
+            newFVG = FVGData.new(na, grayBox, liveBox, newLbl, htfFvgTop, htfFvgBottom, true, false, false, 0, bar_index, 0, leftX, array.from(leftX), array.from(htfFvgTop))
+            buildFvgPoly(newFVG, bar_index + 20, htfFvgBullColor)
+            array.push(htfFvgArray, newFVG)
+
+    if htfBearishFVG
+        htfFvgTop = htfLowPrev2
+        htfFvgBottom = htfHigh
+        if na(lastHtfBearBottom) or htfFvgBottom != lastHtfBearBottom
+            lastHtfBearBottom := htfFvgBottom
+            int leftX = bar_index - 1
+            grayBox = box.new(leftX, htfFvgTop, bar_index + 20, htfFvgBottom, bgcolor=htfFvgGrayCol, border_color=na)
+            liveBox = box.new(leftX, htfFvgTop, leftX, htfFvgBottom, bgcolor=color.new(color.gray, 100), border_color=na)
+            label newLbl = na
+            if htfFvgLabelText != ""
+                newLbl := label.new(bar_index + 15, (htfFvgTop + htfFvgBottom) / 2, htfFvgLabelText,
+                     style=label.style_label_left, textcolor=htfFvgLabelColor, size=htfFvgSize, color=na)
+
+            newFVG = FVGData.new(na, grayBox, liveBox, newLbl, htfFvgTop, htfFvgBottom, false, false, false, 0, bar_index, 0, leftX, array.from(leftX), array.from(htfFvgBottom))
+            buildFvgPoly(newFVG, bar_index + 20, htfFvgBearColor)
+            array.push(htfFvgArray, newFVG)
+
+    while array.size(htfFvgArray) > htfFvgMaxCount * 2
+        oldFVG = array.shift(htfFvgArray)
+        if not na(oldFVG.poly)
+            polyline.delete(oldFVG.poly)
+        box.delete(oldFVG.grayBox)
+        box.delete(oldFVG.liveBox)
+        label.delete(oldFVG.lbl)
+
+// Aktualizace HTF FVG
+if showHTFFVG and array.size(htfFvgArray) > 0
+    for i = array.size(htfFvgArray) - 1 to 0
+        fvg = array.get(htfFvgArray, i)
+        bool changed = false
+
+        if fvg.mitigated
+            continue
+
+        float curMoving = fvg.isBull ? fvg.top : fvg.bottom
+        if bar_index > fvg.createBar
+            curMoving := fvg.isBull ? math.min(fvg.top, low) : math.max(fvg.bottom, high)
+
+        if not fvg.touched and bar_index > fvg.createBar
+            if high >= fvg.bottom and low <= fvg.top
+                fvg.touched := true
+                changed := true
+
+        bool fullyFilled = fvg.isBull ? (curMoving <= fvg.bottom) : (curMoving >= fvg.top)
+        bool closeInvalidated = fvg.isBull ? (close < fvg.bottom) : (close > fvg.top)
+        color zoneCol = fvg.touched ? (fvg.isBull ? htfFvgBullTouched : htfFvgBearTouched) : (fvg.isBull ? htfFvgBullColor : htfFvgBearColor)
+
+        if bar_index > fvg.createBar and (fullyFilled or closeInvalidated)
+            if barstate.isconfirmed
+                fvg.mitigated := true
+                fvg.invalidBar := bar_index
+                box.set_right(fvg.grayBox, bar_index)
+                hideFvgLiveTip(fvg)
+                label.delete(fvg.lbl)
+                buildFvgPoly(fvg, bar_index, zoneCol)
+                changed := true
+            else
+                box.set_right(fvg.grayBox, bar_index)
+                hideFvgLiveTip(fvg)
+                buildFvgPoly(fvg, bar_index, zoneCol)
+        else
+            bool newFill = fvg.isBull ? curMoving < fvg.top : curMoving > fvg.bottom
+            if newFill and barstate.isconfirmed
+                if fvg.isBull
+                    fvg.top := curMoving
+                else
+                    fvg.bottom := curMoving
+                array.push(fvg.stepBars, bar_index)
+                array.push(fvg.stepMoving, curMoving)
+                box.set_right(fvg.grayBox, bar_index + 20)
+                hideFvgLiveTip(fvg)
+                buildFvgPoly(fvg, bar_index + 20, zoneCol)
+                changed := true
+            else if barstate.islast
+                box.set_right(fvg.grayBox, bar_index + 20)
+                if newFill
+                    buildFvgPoly(fvg, bar_index, zoneCol)
+                    showFvgLiveTip(fvg, curMoving, zoneCol)
+                else
+                    hideFvgLiveTip(fvg)
+                    buildFvgPoly(fvg, bar_index + 20, zoneCol)
+            else if changed
+                buildFvgPoly(fvg, bar_index + 20, zoneCol)
+
+            if barstate.islast and not na(fvg.lbl)
+                label.set_x(fvg.lbl, bar_index + 15)
+                label.set_y(fvg.lbl, (fvg.top + fvg.bottom) / 2)
+
+        if changed
+            array.set(htfFvgArray, i, fvg)

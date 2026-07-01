@@ -33,6 +33,15 @@ const tradeSig = (t: any): string => {
   return JSON.stringify(rest) + '#' + shotKey;
 };
 
+// Entry čas obchodu (epoch ms) s fallbackem — historie se řadí podle OTEVŘENÍ pozice, ne exitu.
+// entryTime (epoch) → entryDate (ISO) → timestamp (exit epoch) → date (exit ISO).
+const entryMs = (t: any): number => {
+  if (typeof t?.entryTime === 'number' && t.entryTime > 0) return t.entryTime;
+  if (t?.entryDate) { const p = Date.parse(t.entryDate); if (!isNaN(p)) return p; }
+  if (typeof t?.timestamp === 'number' && t.timestamp > 0) return t.timestamp;
+  const d = Date.parse(t?.date); return isNaN(d) ? 0 : d;
+};
+
 // Jednotný badge „k doplnění" pro importované obchody bez screenshotu/konfluence.
 // `card` = plovoucí pilulka v rohu karty, `inline` = malý štítek vedle instrumentu v tabulce.
 const EnrichBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
@@ -244,14 +253,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     trades
       .filter(tradeNeedsEnrichment)
       .filter(t => excludeId == null || String(t.id) !== String(excludeId))
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+      .sort((a, b) => entryMs(a) - entryMs(b)),
     [trades]
   );
 
-  // Ensure trades are always sorted by date (newest first) for consistent display and navigation
+  // Řazeno podle ENTRY času (otevření pozice), nejnovější nahoře — ne podle exitu.
   const sortedTrades = useMemo(() => {
     const base = enrichFilter ? trades.filter(tradeNeedsEnrichment) : trades;
-    return [...base].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return [...base].sort((a, b) => entryMs(b) - entryMs(a));
   }, [trades, enrichFilter]);
 
   // Pokud filtr „K doplnění" vyprázdní seznam (vše doplněno), vypni ho.
@@ -582,16 +591,16 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     const groups = new Map<string, Trade[]>();
     for (const t of sortedTrades) {
       if (!isInvalidTrade(t)) continue;
-      const key = String(t.date || '').slice(0, 10) || 'unknown';
+      const key = String(t.entryDate || t.date || '').slice(0, 10) || 'unknown';
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(t);
     }
     return Array.from(groups.entries())
       .map(([key, items]) => ({
         key,
-        items: [...items].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)),
+        items: [...items].sort((a, b) => entryMs(b) - entryMs(a)),
         pnl: items.reduce((s, t) => s + (t.pnl || 0), 0),
-        label: items[0] ? formatTradeDate(items[0].date).date : key,
+        label: items[0] ? formatTradeDate(items[0].entryDate || items[0].date).date : key,
       }))
       .sort((a, b) => b.key.localeCompare(a.key));
   }, [sortedTrades]);

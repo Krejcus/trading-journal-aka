@@ -1,0 +1,198 @@
+// @version=6
+// ════════════════════════════════════════════════════════════════════════════
+//  AlphaTrade BoS / ChoCh (CZ) — samostatný LEHKÝ indikátor jen na strukturu trhu
+//  Vyseknuto z "Liquidity Levels CZ - Advanced" kvůli realtime výkonu.
+//  Protože dělá JEN BoS/ChoCh, vejde se do rozpočtu na každý tick → průraz se
+//  vykreslí OKAMŽITĚ, jakmile cena dojede k hladině (žádné zpoždění).
+//
+//  Chování (živý náhled):
+//   • Jakmile cena protne pivot → čára BoS/ChoCh naskočí hned (intrabar)
+//   • Když svíčka uzavře nad/pod → potvrdí se a zůstane
+//   • Když cena zajede zpět → čára zase zmizí (než se potvrdí na close)
+// ════════════════════════════════════════════════════════════════════════════
+indicator("AlphaTrade BoS/ChoCh (CZ)", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ════════════════════════════════════════════════════════════════════════════
+//                            📊 BoS / ChoCh
+// ════════════════════════════════════════════════════════════════════════════
+
+show_bos_choch = input.bool(true, title="Zobrazit BoS/ChoCh", group="BoS/ChoCh")
+pivot_lb = input.int(1, title="Pivot Level vlevo (lb)", minval=1, group="BoS/ChoCh")
+pivot_rb = input.int(1, title="Pivot Level vpravo (rb)", minval=1, group="BoS/ChoCh")
+breakout_type = input.string("Close", title="Potvrzení průrazu", options=["Close", "Wick"], group="BoS/ChoCh", tooltip="Close = potvrdí se až na uzavření svíčky (živý náhled mezitím). Wick = stačí knot.")
+
+show_hh_ll = input.bool(false, title="Zobrazit HH/LL", group="BoS/ChoCh")
+show_hl_lh = input.bool(false, title="Zobrazit HL/LH", group="BoS/ChoCh")
+show_bos = input.bool(true, title="Zobrazit BOS", group="BoS/ChoCh")
+show_choch = input.bool(true, title="Zobrazit CHoCH", group="BoS/ChoCh")
+
+color_bull = input.color(color.new(#26A69A, 0), title="Bullish barva čar a textu", group="BoS/ChoCh")
+color_bear = input.color(color.new(#EF5350, 0), title="Bearish barva čar a textu", group="BoS/ChoCh")
+line_width_bc = input.int(1, title="Šířka čáry", minval=1, maxval=4, group="BoS/ChoCh")
+size_bc = input.string("Střední", title="Velikost textu", options=["Mikro", "Malé", "Střední", "Velké"], group="BoS/ChoCh")
+align_bc = input.string("Na čáře", title="Vertikální umístění textu", options=["Na čáře", "Středem", "Pod čárou"], group="BoS/ChoCh")
+align_bc_h = input.string("Střed", title="Horizontální umístění textu", options=["Střed", "Vpravo", "Vlevo"], group="BoS/ChoCh")
+show_bg_bc = input.bool(false, title="Zobrazit pozadí textu", group="BoS/ChoCh")
+bg_color_bc = input.color(color.white, title="Barva pozadí textu", group="BoS/ChoCh")
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🔧 HELPER FUNKCE
+// ════════════════════════════════════════════════════════════════════════════
+
+getLabelSize(sizeStr) =>
+    switch sizeStr
+        "Mikro" => size.tiny
+        "Malé" => size.small
+        "Střední" => size.normal
+        "Velké" => size.large
+        => size.small
+
+atrVal = ta.atr(14)
+
+draw_structure_line(x1, y, x2, is_bos, is_bull) =>
+    col = is_bull ? color_bull : color_bear
+    style = line.style_solid
+    line.new(x1, y, x2, y, color=col, width=line_width_bc, style=style)
+    txt = is_bos ? "BOS" : "CHoCH"
+
+    // Výpočet offsetu na základě ATR pro text bez pozadí (style_none)
+    float offset = (not na(atrVal) and atrVal > 0) ? atrVal * 0.08 : (high - low) * 0.1
+    if na(offset) or offset <= 0
+        offset := syminfo.mintick * 5
+
+    float label_y = y
+    label_style = label.style_none
+    label_color = color.new(color.white, 100)
+
+    if show_bg_bc
+        // Pokud je zapnuté pozadí, použijeme standardní tvary popisků s barvou pozadí
+        label_color := bg_color_bc
+        if align_bc == "Na čáře"
+            label_style := label.style_label_down
+        else if align_bc == "Pod čárou"
+            label_style := label.style_label_up
+        else
+            label_style := label.style_label_center
+    else
+        // Pokud je pozadí vypnuté (výchozí), vykreslíme čistý text (style_none) s ATR posunem
+        label_style := label.style_none
+        if align_bc == "Na čáře"
+            label_y := y + offset
+        else if align_bc == "Pod čárou"
+            label_y := y - offset
+
+    // Určení horizontální pozice popisku
+    int label_x = math.round((x1 + x2) / 2)
+    if align_bc_h == "Vpravo"
+        label_x := x2
+    else if align_bc_h == "Vlevo"
+        label_x := x1
+
+    label.new(label_x, label_y, txt,
+              color=label_color,
+              textcolor=col,
+              style=label_style,
+              size=getLabelSize(size_bc))
+
+// ════════════════════════════════════════════════════════════════════════════
+//                            MARKET STRUCTURE (BoS / ChoCh)
+// ════════════════════════════════════════════════════════════════════════════
+
+var float last_ph = na
+var int last_ph_bar = na
+var float last_pl = na
+var int last_pl_bar = na
+
+var float prev_ph = na
+var float prev_pl = na
+
+// Trend: "Bullish", "Bearish", "None"
+var string trend = "None"
+
+if show_bos_choch
+    ph = ta.pivothigh(high, pivot_lb, pivot_rb)
+    pl = ta.pivotlow(low, pivot_lb, pivot_rb)
+
+    // Handle Pivot Highs
+    if not na(ph)
+        int p_bar = bar_index - pivot_rb
+        string lbl_text = ""
+
+        if not na(prev_ph)
+            if ph > prev_ph
+                if show_hh_ll
+                    lbl_text := "HH"
+            else
+                if show_hl_lh
+                    lbl_text := "LH"
+        else
+            if show_hh_ll
+                lbl_text := "H"
+
+        if lbl_text != ""
+            label.new(p_bar, ph, lbl_text,
+                      style=label.style_label_down,
+                      color=color.new(color_bull, 100),
+                      textcolor=color_bull,
+                      size=size.small)
+
+        prev_ph := ph
+        last_ph := ph
+        last_ph_bar := p_bar
+
+    // Handle Pivot Lows
+    if not na(pl)
+        int p_bar = bar_index - pivot_rb
+        string lbl_text = ""
+
+        if not na(prev_pl)
+            if pl < prev_pl
+                if show_hh_ll
+                    lbl_text := "LL"
+            else
+                if show_hl_lh
+                    lbl_text := "HL"
+        else
+            if show_hh_ll
+                lbl_text := "L"
+
+        if lbl_text != ""
+            label.new(p_bar, pl, lbl_text,
+                      style=label.style_label_up,
+                      color=color.new(color_bear, 100),
+                      textcolor=color_bear,
+                      size=size.small)
+
+        prev_pl := pl
+        last_pl := pl
+        last_pl_bar := p_bar
+
+    // Breakout Detection (živě: Close = live cena intrabar, potvrdí se na close)
+    float check_val_up = breakout_type == "Close" ? close : high
+    float check_val_down = breakout_type == "Close" ? close : low
+
+    bool break_up = not na(last_ph) and check_val_up > last_ph
+    bool break_down = not na(last_pl) and check_val_down < last_pl
+
+    if break_up
+        // Trend reversal = CHoCH, continuation = BOS
+        is_bos = trend == "Bullish"
+        is_show = is_bos ? show_bos : show_choch
+
+        if is_show
+            draw_structure_line(last_ph_bar, last_ph, bar_index, is_bos, true)
+
+        trend := "Bullish"
+        last_ph := na
+        last_ph_bar := na
+
+    if break_down
+        is_bos = trend == "Bearish"
+        is_show = is_bos ? show_bos : show_choch
+
+        if is_show
+            draw_structure_line(last_pl_bar, last_pl, bar_index, is_bos, false)
+
+        trend := "Bearish"
+        last_pl := na
+        last_pl_bar := na

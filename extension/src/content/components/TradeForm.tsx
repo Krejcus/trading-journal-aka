@@ -131,8 +131,8 @@ const slKeyFromTags = (ltf: string[]): string | null => { for (const t of ltf) {
 const ALL_TP_TAGS = ['TP dHigh', 'TP dLow', 'TP PDH', 'TP PDL', 'TP PWH', 'TP PWL', 'TP VWAP', 'TP deviace +1', 'TP deviace -1', 'TP deviace +2', 'TP deviace -2'];
 
 // ENTRY tagy (vstupní model): odraz od levelu + struktura (kolikátý zlom) + entry na hraně FVG.
-const ALL_ENTRY_TAGS = ['Entry FVG', 'CHoCH 1.', 'BoS 2.', 'BoS 3.', 'BoS 4.', 'Odraz dHigh', 'Odraz dLow', 'Odraz PDH', 'Odraz PDL', 'Odraz PWH', 'Odraz PWL', 'Odraz VWAP', 'Odraz deviace +1', 'Odraz deviace -1', 'Odraz deviace +2', 'Odraz deviace -2'];
-const isEntryTag = (t: string) => /^(Entry FVG|CHoCH|BoS|Odraz)\b/.test(t);
+const ALL_ENTRY_TAGS = ['Entry FVG', 'CHoCH 1.', 'BoS 2.', 'BoS 3.', 'BoS 4.', 'Odraz dHigh', 'Odraz dLow', 'Odraz PDH', 'Odraz PDL', 'Odraz PWH', 'Odraz PWL', 'Odraz VWAP', 'Odraz deviace +1', 'Odraz deviace -1', 'Odraz deviace +2', 'Odraz deviace -2', 'Entry VWAP', 'Entry deviace +1', 'Entry deviace -1', 'Entry deviace +2', 'Entry deviace -2', 'Entry dHigh', 'Entry dLow', 'Entry PDH', 'Entry PDL', 'Entry PWH', 'Entry PWL'];
+const isEntryTag = (t: string) => /^(Entry|CHoCH|BoS|Odraz)\b/.test(t);
 // level (např. "VWAP +1σ", "dHigh") → krátký název pro odraz tag ("deviace +1", "VWAP", "dHigh")
 const levelShort = (level: string): string => {
     const dev = level.match(/VWAP\s*([+-])\s*(\d)\s*σ/i);
@@ -147,6 +147,9 @@ const entryTagsFromMap = (em: any): string[] => {
     if (em.structureType && em.structureOrder >= 1) out.push(`${em.structureType} ${em.structureOrder}.`);
     const odraz: string[] = Array.isArray(em.odrazLevels) ? em.odrazLevels : (em.odrazLevel ? [em.odrazLevel] : []);
     for (const lv of odraz) out.push(`Odraz ${levelShort(String(lv))}`);
+    // Entry level (úroveň u SKUTEČNÉHO entry, např. -2σ) — zvlášť od odrazu (origin otočení).
+    const entryLvls: string[] = Array.isArray(em.entryLevels) ? em.entryLevels : [];
+    for (const lv of entryLvls) out.push(`Entry ${levelShort(String(lv))}`);
     if (em.entryFvg) out.push('Entry FVG');
     return out;
 };
@@ -187,21 +190,23 @@ function detectExecTags(entry: number, sl: number, tp: number, c: any): { slPlac
         const dist = Math.abs(entry - sl) || 1;
         out.slPlacement = (best && bd <= Math.max(2, dist * 0.2)) ? best.k : 'other';
     }
-    // TP tagy: level(y) u TP z DYNAMICKÉHO pásma v baru zásahu (+ konfluence se statickými). Zamrzlé labely nesedí.
-    const isLiveVwapLbl = (s: string) => /^\s*VWAP(\s*[+-]\s*[12]\s*σ)?\s*$/i.test(s);
+    // TP tagy: primárně level(y) u TP z DYNAMICKÉHO pásma v baru zásahu (excursion.tpLevels — VWAP contemporary).
     if (c.excursion && c.excursion.available && Array.isArray(c.excursion.tpLevels) && c.excursion.tpLevels.length) {
         out.targetLevels = c.excursion.tpLevels.map((s: string) => String(s).trim());
         out.targetLevel = out.targetLevels[0];
         out.targetType = /σ|VWAP\s*[+-]/i.test(out.targetLevel) ? 'deviation' : /dHigh|dLow/i.test(out.targetLevel) ? 'daily' : 'liquidity';
     } else if (c.tpTargets && c.tpTargets.length && tp != null) {
-        // Fallback: statické levely (PDH/dLow…) — live VWAP rodinu vynech (tu řeší dynamika výše).
+        // Fallback když dynamická cesta nic nedala (loss / TP neprojektován): matchni TP na NEJBLIŽŠÍ tpTarget
+        // VČETNĚ VWAP/deviací. tpTargets VWAP se počítá živě (per-bar); tolerance níž ho ohlídá — frozen VWAP
+        // daleko od TP se prostě netagne (žádný false tag). Dřív se VWAP rodina vynechávala úplně → VWAP/deviace
+        // se NIKDY netaggly, když trade netrefil TP nebo excursion neměl tpLevels.
         let best: any = null, bd = Infinity;
-        for (const t of c.tpTargets) { if (isLiveVwapLbl(String(t.label))) continue; const d = Math.abs(tp - t.price); if (d < bd) { bd = d; best = t; } }
+        for (const t of c.tpTargets) { const d = Math.abs(tp - t.price); if (d < bd) { bd = d; best = t; } }
         const dist = Math.abs(entry - tp) || 1;
         if (best && bd <= Math.max(3, dist * 0.1)) {
-            // konfluence statických levelů u TP
+            // konfluence levelů u TP (statické i VWAP/deviace)
             const confBand = Math.max(3, dist * 0.08); const seenT: any = {};
-            for (const t of c.tpTargets) { if (isLiveVwapLbl(String(t.label))) continue; if (Math.abs(t.price - best.price) <= confBand) { const lbl = String(t.label).replace(/\s*\[.*?\]\s*$/, '').trim(); if (!seenT[lbl]) { seenT[lbl] = true; out.targetLevels.push(lbl); } } }
+            for (const t of c.tpTargets) { if (Math.abs(t.price - best.price) <= confBand) { const lbl = String(t.label).replace(/\s*\[.*?\]\s*$/, '').trim(); if (!seenT[lbl]) { seenT[lbl] = true; out.targetLevels.push(lbl); } } }
             out.targetLevel = out.targetLevels[0] || '';
             out.targetType = /σ|VWAP\s*[+-]/i.test(out.targetLevel) ? 'deviation' : /dHigh|dLow/i.test(out.targetLevel) ? 'daily' : 'liquidity';
         } else {
@@ -917,7 +922,8 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             let calculatedExitPrice = trade.outcome === 'WIN' ? tp : trade.outcome === 'LOSS' ? sl : entry;
             let pnl = 0;
             if (calculatedExitPrice != null && entry != null && slDist > 0 && risk) {
-                pnl = ((calculatedExitPrice - entry) * dirSign / slDist) * risk;
+                // Zaokrouhli na centy — jinak fill-based výpočet nese float artefakt (369.99999999999994).
+                pnl = Math.round(((calculatedExitPrice - entry) * dirSign / slDist) * risk * 100) / 100;
             } else if (trade.pnl) {
                 // Ruční zápis bez TP/SL: ber zadané pnl a exitPrice z něj dopočítej (fallback).
                 pnl = parseFloat(trade.pnl) || 0;
