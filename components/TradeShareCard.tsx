@@ -14,6 +14,7 @@ import React from 'react';
 import { ArrowUpRight, ArrowDownRight, Target, Timer, Calendar, Image as ImageIcon } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import type { Trade } from '../types';
+import { formatRMultiple } from '../utils/formatPnL';
 
 interface Props {
     trade: Trade;
@@ -193,7 +194,7 @@ const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUr
                             color: r != null && r >= 0 ? '#22c55e' : '#f87171',
                             fontFamily: 'monospace',
                         }}>
-                            {r != null ? `${r >= 0 ? '+' : ''}${r.toFixed(1)}R` : '—'}
+                            {r != null ? `${r >= 0 ? '+' : ''}${formatRMultiple(r, 1)}R` : '—'}
                         </div>
                     </div>
 

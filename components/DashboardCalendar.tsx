@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Trade, DailyPrep, DailyReview, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
-import { formatPnL, calculateTotalRR } from '../utils/formatPnL';
+import { formatPnL, calculateTotalRR, formatRMultiple } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
 import ImageZoomModal from './ImageZoomModal';
 import {
@@ -400,7 +400,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
 const formatPnLCompact = (val: number, mode: PnLDisplayMode, trades?: Trade[], initialBalance?: number): string => {
    if (mode === 'rr') {
       const rr = trades ? calculateTotalRR(trades) : 0;
-      return `${rr >= 0 ? '+' : ''}${rr.toFixed(1)}R`;
+      return `${rr >= 0 ? '+' : ''}${formatRMultiple(rr, 1)}R`;
    }
    if (mode === 'percent') {
       const pct = initialBalance && initialBalance > 0 ? (val / initialBalance) * 100 : 0;
