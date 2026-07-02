@@ -1289,9 +1289,9 @@ const App: React.FC = () => {
         isFetchingRef.current = false;
         clearTimeout(safetyTimer);
 
-        // PREFETCH SCREENSHOTŮ + AI CONVERSATIONS na pozadí — když user klikne
-        // na History / AI tab, cache je už hotová, žádný flash.
-        storageService.prefetchAllScreenshots().catch(() => { /* silent */ });
+        // AI CONVERSATIONS prefetch na pozadí — když user klikne na AI tab, cache je hotová.
+        // Screenshoty se NEprefetchují při STARTU appky (dřív: full-table query + stažení VŠECH
+        // obrázků ~desítky MB na každé otevření) — načte si je až TradeHistory při mountu.
         storageService.getConversations().catch(() => { /* silent */ });
 
         // Background refresh — silently sync with server, only update if data actually changed
