@@ -202,7 +202,10 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
     }
 
     const tradePct = prevEquity > 0 ? (trade.pnl / prevEquity) * 100 : 0;
-    if (!isMissed) trade.pnlPercentage = tradePct;
+    // Pozn.: dřív tu byl `trade.pnlPercentage = tradePct` — MUTACE vstupního objektu do property,
+    // kterou nikdo nečte. Na zmražených trades to házelo "Cannot assign to read only property"
+    // → filteredStats spadl na calculateStats([],0) a dashboard problikl na nuly. tradePct se
+    // dál používá (winPcts/lossPcts níž), zápis do trade byl mrtvý → odstraněn.
 
     if (currentEquity > maxEquity) maxEquity = currentEquity;
     const dd = currentEquity - maxEquity;
