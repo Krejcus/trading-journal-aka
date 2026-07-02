@@ -287,9 +287,15 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
   const yAxisTicks = React.useMemo(() => {
     if (equityData.length === 0) return [];
     const values = equityData.map(d => d.equity);
-    const minVal = Math.min(...values, initialCap);
-    const maxVal = Math.max(...values, initialCap);
+    // KRITICKÉ: kotva = baseline (v RR módu 0, v USD initialCap). Dřív se i v RR módu
+    // kotvilo na initialCap (USD!) → funded účet s balance $250k dal range ~250 000
+    // při kroku 5 → ~50 000 ticků → while smyčky + recharts zamrzly UI na minuty
+    // (přepnutí $/%/R ve funded vypadalo jako "nefunkční toggle").
+    const anchor = baseline;
+    const minVal = Math.min(...values, anchor);
+    const maxVal = Math.max(...values, anchor);
     const range = maxVal - minVal;
+    if (!Number.isFinite(range)) return [anchor];
 
     // Určení kroku (step) podle velikosti rozpětí
     let step = 1000;
@@ -307,22 +313,29 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
       else step = 10000;
     }
 
+    // Pojistka: extrémní range (špinavý riskAmount, outlier trade…) nesmí vygenerovat
+    // tisíce ticků — víc než ~24 jich osa stejně nezobrazí čitelně.
+    const MAX_TICKS = 24;
+    if (range / step > MAX_TICKS) {
+      step = Math.ceil(range / MAX_TICKS / step) * step;
+    }
+
     const ticksDown: number[] = [];
-    let currentTick = initialCap - step;
+    let currentTick = anchor - step;
     while (currentTick >= minVal - step * 0.5 || ticksDown.length < 1) {
       ticksDown.unshift(currentTick);
       currentTick -= step;
     }
 
     const ticksUp: number[] = [];
-    currentTick = initialCap + step;
+    currentTick = anchor + step;
     while (currentTick <= maxVal + step * 0.5 || ticksUp.length < 1) {
       ticksUp.push(currentTick);
       currentTick += step;
     }
 
-    return [...ticksDown, initialCap, ...ticksUp];
-  }, [equityData, initialCap, isRRMode]);
+    return [...ticksDown, anchor, ...ticksUp];
+  }, [equityData, baseline, isRRMode]);
 
   const getGradientOffset = () => {
     if (yAxisTicks.length < 2) return 0.5;
