@@ -813,7 +813,6 @@ ${getPersonaBlock(options.coachPersona || DEFAULT_PERSONA)}
 ${voiceBlock}
 === ČASOVÝ KONTEXT (KRITICKÉ) ===
 DNES: ${todayISO} (${weekday})
-AKTUÁLNÍ ČAS: ${currentTime}
 AKTUÁLNÍ TÝDEN: ${mondayISO} až ${fridayISO} (Po–Pá)
 MINULÝ TÝDEN: ${lastMondayISO} až ${lastFridayISO}
 
@@ -1054,7 +1053,7 @@ OBECNÁ PRAVIDLA TOOL USE (RYCHLOST — ČTI POZORNĚ):
 3. find_similar_trades volej JEN když user EXPLICITNĚ chce porovnání s podobnými obchody z minulosti — ne automaticky u každé analýzy. U analýzy obchodu z okna nejdřív odpověz z dat co máš.
 4. NIKDY si nevymýšlej čísla, datumy ani události. Když data nemáš ani v promptu ani z nástroje, řekni to upřímně.
 
-` : ''}${memoryBlock ? memoryBlock + '\n\n' : ''}${traderContext}
+` : ''}${traderContext}
 
 === OBCHODY: POSLEDNÍCH ${WINDOW_DAYS} DNÍ (kompletní detail, ${tradeWindow.windowCount} obchodů) ===
 Formát: ID | Datum | Směr Nástroj | PnL | Setup | Entry | Exit | SL | TP | Pozice | Doba | Plán | Emoce | Chyby | HTF | LTF | Session | Tagy | Poznámka
@@ -1065,6 +1064,14 @@ ${tradeWindow.windowText}
 Toto je agregovaný přehled pro dlouhodobé trendy. Pro KONKRÉTNÍ starší obchod (mimo posledních ${WINDOW_DAYS} dní) použij nástroj search_history nebo get_stats s date_from/date_to.
 
 ${tradeWindow.rollupText}`;
+
+  // Dynamický systémový blok (NEcachovaný): drží věci, co se mění po minutě (čas) a per-message
+  // (sémantický recall). Musí být AŽ ZA cache breakpointem, aby velký stabilní prefix
+  // (persona + pravidla + 90denní okno) zůstal cachnutý napříč zprávami konverzace.
+  // Dřív byl currentTime (na minutu) i memoryBlock uvnitř cachovaného promptu → cache se
+  // invalidovala každou zprávou a celý prefix (~20–35k tokenů) se posílal za plnou cenu.
+  const dynamicSystemBlock = `=== AKTUÁLNÍ ČAS ===
+${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''}`;
 
   // Rychlý i analytický režim jedou na CLAUDE (přes Supabase chat proxy):
   //   fast       → claude-haiku-4-5   (rychlá, levná, dobrá kvalita)
@@ -1100,7 +1107,10 @@ ${tradeWindow.rollupText}`;
         // system prompt + memory + trades je vždy mnohem víc, takže OK.
         // Druhá+ zpráva v <5min: ~80% sleva na cached tokeny + ~50% rychlejší TTFT.
         system: [
-          { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }
+          // Stabilní prefix s cache breakpointem → cachnutý napříč zprávami (~90% sleva na vstupní tokeny, nižší TTFT).
+          { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+          // Dynamický blok ZA breakpointem (čas + recall) — necachuje se, je malý.
+          { type: 'text', text: dynamicSystemBlock },
         ],
         messages: apiMessages,
         stream: true,
