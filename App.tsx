@@ -2180,6 +2180,33 @@ const App: React.FC = () => {
 
   const activeAccount = useMemo(() => accounts.find(a => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNT, [accounts, activeAccountId]);
 
+  // Indexy pro O(1) lookupy v hot memos (dřív O(účty×obchody) lineární skeny per přepočet).
+  const tradedAccountIds = useMemo(() => {
+    const s = new Set<any>();
+    for (const t of trades) s.add(t.accountId);
+    return s;
+  }, [trades]);
+  const childrenByParent = useMemo(() => {
+    const m = new Map<any, Account[]>();
+    for (const a of accounts) {
+      if (!a.parentAccountId) continue;
+      const arr = m.get(a.parentAccountId);
+      if (arr) arr.push(a); else m.set(a.parentAccountId, [a]);
+    }
+    return m;
+  }, [accounts]);
+  // Sloučené aktivní+archivované účty (dedup) + O(1) lookup — dřív se spread s O(A²)
+  // `.some()` filtrem stavěl inline ve 3 memos i v JSX props.
+  const allAccountsMerged = useMemo(() => {
+    const seen = new Set(accounts.map(a => a.id));
+    return [...accounts, ...archivedAccounts.filter(a => !seen.has(a.id))];
+  }, [accounts, archivedAccounts]);
+  const accountsById = useMemo(() => {
+    const m = new Map<any, Account>();
+    for (const a of allAccountsMerged) m.set(a.id, a);
+    return m;
+  }, [allAccountsMerged]);
+
   // Effective active account for the current dashboard context:
   // if the globally-selected activeAccount is NOT in contextAccounts (e.g. you switched to Challenge mode
   // but activeAccountId still points to a Live account), fall back to the first contextAccount.
@@ -2196,17 +2223,17 @@ const App: React.FC = () => {
       if (a && inScope(a)) return a;
     }
 
-    // 2. První účet ve scope, který má obchody (vlastní nebo na svých kopiích)
+    // 2. První účet ve scope, který má obchody (vlastní nebo na svých kopiích) — O(1) přes indexy
     const scopeAccounts = accounts.filter(inScope);
     const hasTrades = (a: Account) =>
-      trades.some(t => t.accountId === a.id) ||
-      accounts.some(c => c.parentAccountId === a.id && trades.some(t => t.accountId === c.id));
+      tradedAccountIds.has(a.id) ||
+      (childrenByParent.get(a.id) || []).some(c => tradedAccountIds.has(c.id));
     const withTrades = scopeAccounts.find(hasTrades);
     if (withTrades) return withTrades;
 
     // 3. Fallbacky
     return scopeAccounts[0] || contextAccounts[0] || activeAccount;
-  }, [contextAccounts, accounts, trades, filters.accounts, activeAccount, activeAccountId]);
+  }, [contextAccounts, accounts, tradedAccountIds, childrenByParent, filters.accounts, activeAccount, activeAccountId]);
 
   const displayBalance = useMemo(() => {
     // Balance přes účty které prošly dropdown filtrem. Active i Inactive — když user explicitně
@@ -2254,9 +2281,8 @@ const App: React.FC = () => {
     // Fáze účtu pro grupování — funded a challenge kopie téhož fan-outu NESMÍ splynout do
     // jedné karty, jinak by combined karta (klíčovaná masterem) ve funded/challenge filtru
     // míchala cizí peníze. Klíč proto zahrnuje "phase bucket".
-    const aggLookup = [...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))];
     const phaseBucketOf = (accId?: string): string => {
-      const acc = aggLookup.find(a => a.id === accId);
+      const acc = accountsById.get(accId);
       if (!acc) return 'other';
       if (acc.type === 'Funded' && acc.phase === 'Challenge') return 'challenge';
       if (acc.type === 'Live' || (acc.type === 'Funded' && acc.phase === 'Funded')) return 'funded';
@@ -2288,7 +2314,9 @@ const App: React.FC = () => {
     });
 
     return [...independent, ...aggregated].sort((a, b) => b.timestamp - a.timestamp);
-  }, [trades, viewMode, effectiveActiveAccount, accounts, archivedAccounts, contextAccounts]);
+    // Pozn.: dřív deps obsahovaly i effectiveActiveAccount a contextAccounts, které tělo
+    // vůbec nečte → zbytečné přepočty (full group+sort) při každé změně jejich identity.
+  }, [trades, viewMode, accountsById]);
 
   // (Pozn.: dřív tu byl `const stats = useMemo(calculateStats(displayTrades…))`, který se ale
   // nikde nepoužíval — Dashboard bere `filteredStats`. Odstraněno: byl to plný průchod všemi
@@ -2349,8 +2377,7 @@ const App: React.FC = () => {
     const now = new Date();
     // KRITICKÉ: account lookup musí brát i archivované účty, jinak obchody z archivovaných
     // (např. spálené Tradeify 50k) zmizí z Deníku/Dashboardu, i když jsou v Historii vidět.
-    // Bug: AlphaBridge trade na archived účtu → acc undefined → phase check fail → hidden.
-    const accountsLookup = [...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))];
+    // accountsById (sdílené memo) je pokrývá — a navíc O(1) místo O(A) find per trade.
     return displayTrades.filter(t => {
       // DEBUG: Log Alpha Bridge trades to see why they're filtered
       const isAlphaBridge = t.signal === 'Alpha Bridge v2';
@@ -2358,7 +2385,7 @@ const App: React.FC = () => {
       // TVRDÁ PŘEPÁŽKA: Backtest obchody patří jen do backtest světa.
       // Mimo 'backtesting' je NIKDY nezobrazuj (Deník/Dashboard/History), i v "Vše".
       {
-        const acc = accountsLookup.find(a => a.id === t.accountId);
+        const acc = accountsById.get(t.accountId);
         const isBacktestTrade = isBacktestAccount(acc);
         if (dashboardMode === 'backtesting') {
           if (!isBacktestTrade) return false;
@@ -2370,13 +2397,13 @@ const App: React.FC = () => {
       // Filter by phase based on dashboardMode
       // ALWAYS use account phase as source of truth, not trade phase
       if (dashboardMode === 'challenge') {
-        const acc = accountsLookup.find(a => a.id === t.accountId);
+        const acc = accountsById.get(t.accountId);
         const isChallenge = acc?.type === 'Funded' && acc?.phase === 'Challenge';
         if (!isChallenge) {
           return false;
         }
       } else if (dashboardMode === 'funded') {
-        const acc = accountsLookup.find(a => a.id === t.accountId);
+        const acc = accountsById.get(t.accountId);
         const isFunded = acc?.type === 'Live' || (acc?.type === 'Funded' && acc?.phase === 'Funded');
         if (!isFunded) {
           return false;
@@ -2405,7 +2432,7 @@ const App: React.FC = () => {
             const isTarget = t.accountId === filterId;
             const isChildOfTarget = t.masterTradeId && t.accountId !== filterId; // Simplified check
             // More robust: does this trade's account have a parent that is in filters?
-            const acc = accountsLookup.find(a => a.id === t.accountId);
+            const acc = accountsById.get(t.accountId);
             return isTarget || (acc?.parentAccountId && filters.accounts.includes(acc.parentAccountId));
           });
         }
@@ -2452,7 +2479,7 @@ const App: React.FC = () => {
 
       return passes;
     });
-  }, [displayTrades, filters, viewMode, accounts, dashboardMode]);
+  }, [displayTrades, filters, viewMode, accountsById, dashboardMode]);
 
   const filteredDisplayTrades = useMemo(() => {
     return viewMode === 'combined' ? aggregateTrades(baseFilteredTrades, accounts) : baseFilteredTrades;
