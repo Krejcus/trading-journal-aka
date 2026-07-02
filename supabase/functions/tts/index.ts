@@ -3,11 +3,19 @@
 // nikdy v klientu. Klient pošle { text, voice?, rate? } a dostane zpět { audioContent: base64 mp3 }.
 //
 // Nativní přirozený český hlas přes multilingual model. Výrazně lidštější než browser TTS.
-// verify_jwt=true → jen přihlášení uživatelé.
+// verify_jwt=true jen ověří podpis tokenu — anon key (v klientu) tím projde. Skutečné ověření
+// přihlášeného uživatele dělá supabase.auth.getUser() níže, jinak je to otevřený proxy na placené
+// ElevenLabs kredity (libovolně dlouhý text = libovolná spotřeba).
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
+import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const ELEVENLABS_API_KEY = Deno.env.get('ELEVENLABS_API_KEY');
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+
+// Strop délky textu — obrana i proti zneužití přihlášeným účtem (jedna promluva coache je krátká).
+const MAX_TTS_CHARS = 5000;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -45,9 +53,26 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  // Ověření reálného uživatele — anon key sem nesmí projít.
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader) {
+    return new Response(JSON.stringify({ error: 'missing-auth' }), {
+      status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData?.user) {
+    return new Response(JSON.stringify({ error: 'auth-failed' }), {
+      status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
   let body: { text?: string; voice?: string };
   try { body = await req.json(); } catch { body = {}; }
-  const text = (body.text || '').trim();
+  const text = (body.text || '').trim().slice(0, MAX_TTS_CHARS);
   if (!text) {
     return new Response(JSON.stringify({ error: 'empty-text' }), {
       status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

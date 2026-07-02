@@ -4,11 +4,18 @@
 // a dostane zpět SSE stream (alt=sse), který parsuje stejně jako kdyby volal Google přímo.
 //
 // Tool-use smyčka zůstává na klientovi (stejně jako u `chat` proxy pro Anthropic) — tahle funkce
-// je čistý stateless passthrough. verify_jwt=true → jen přihlášení uživatelé.
+// je čistý stateless passthrough.
+//
+// POZN.: klient tuto cestu už nevolá (Gemini režim byl odebrán) — funkce je fakticky mrtvá a měla by
+// se smazat (supabase functions delete gemini-chat). Do té doby ověřujeme uživatele přes getUser(),
+// protože verify_jwt sám propustí anon key a nechal by GEMINI_API_KEY otevřený komukoli.
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
+import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -27,6 +34,23 @@ Deno.serve(async (req: Request) => {
   if (!GEMINI_API_KEY) {
     return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), {
       status: 501, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Ověření reálného uživatele — anon key sem nesmí projít.
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader) {
+    return new Response(JSON.stringify({ error: 'missing-auth' }), {
+      status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    });
+  }
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr || !userData?.user) {
+    return new Response(JSON.stringify({ error: 'auth-failed' }), {
+      status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
   }
 
