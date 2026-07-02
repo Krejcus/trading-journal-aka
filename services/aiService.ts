@@ -1090,6 +1090,21 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
   };
   const apiMessages: ApiMessage[] = messages.map(m => ({ role: m.role, content: m.content }));
 
+  // Vrátí kopii zpráv s cache_control na posledním bloku poslední zprávy (breakpoint pro historii).
+  // String content převede na jeden text blok; pole naklonuje. Nemutuje apiMessages (roste mezi iteracemi).
+  const withHistoryCache = (msgs: ApiMessage[]): any[] => {
+    if (msgs.length === 0) return msgs;
+    return msgs.map((m, i) => {
+      if (i !== msgs.length - 1) return m;
+      const blocks: any[] = typeof m.content === 'string'
+        ? [{ type: 'text', text: m.content }]
+        : m.content.map(b => ({ ...b }));
+      if (blocks.length === 0) return m;
+      blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } };
+      return { ...m, content: blocks };
+    });
+  };
+
   let fullText = ''; // accumulated final-answer text across iterations (for ref parsing)
   const MAX_ITER = 10;
 
@@ -1112,7 +1127,10 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
           // Dynamický blok ZA breakpointem (čas + recall) — necachuje se, je malý.
           { type: 'text', text: dynamicSystemBlock },
         ],
-        messages: apiMessages,
+        // Cache breakpoint na POSLEDNÍ zprávě → cachuje rostoucí historii (tool-loop iterace i další
+        // kola), takže se předchozí zprávy a tool_results neposílají znovu za plnou cenu.
+        // (Celkem 3 breakpointy: tools + system + poslední zpráva — pod limitem 4.)
+        messages: withHistoryCache(apiMessages),
         stream: true,
       };
       if (useTools) {
