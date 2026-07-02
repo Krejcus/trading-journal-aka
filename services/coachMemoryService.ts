@@ -392,7 +392,7 @@ export async function maybeDetectEpisodes(opts: {
       const dir = r > 0 ? 'OUTLIER WIN' : 'OUTLIER LOSS';
       episodes.push({
         type: 'episode',
-        content: `[${t.date.slice(0, 10)}] ${dir} +${r.toFixed(1)}R na ${t.instrument || '?'} (${t.session || ''}). Trade ${t.id}.`,
+        content: `[${t.date.slice(0, 10)}] ${dir} ${r >= 0 ? '+' : ''}${r.toFixed(1)}R na ${t.instrument || '?'} (${t.session || ''}). Trade ${t.id}.`,
         metadata: { kind: 'outlier_trade', trade_id: t.id, r_multiple: r, instrument: t.instrument },
         importance: Math.min(10, Math.max(6, Math.floor(Math.abs(r)))),
         memory_date: t.date.slice(0, 10),
@@ -401,37 +401,40 @@ export async function maybeDetectEpisodes(opts: {
     }
   }
 
-  // 2. Weekly drawdown (sum of R over last 5 trading days <= -10R)
+  // 2. Weekly drawdown/breakthrough (sum of R over the week <= -10R / >= +10R)
+  // POZOR: musíme sčítat R (pnl/riskAmount), NE dolary. Dřív se sčítal t.pnl v USD, ale práh
+  // i uložený text jsou v R → skoro každý týden nad ±$10 vytvořil falešnou episodu "…-500R".
   // Group by ISO week.
-  const byWeek = new Map<string, { pnl: number; trades: number; firstDate: string }>();
+  const byWeek = new Map<string, { r: number; trades: number; firstDate: string }>();
   for (const t of opts.trades) {
+    if (!t.riskAmount || t.riskAmount === 0) continue; // bez riziku nelze spočítat R
     const d = new Date(t.date);
     const week = `${d.getUTCFullYear()}-W${getISOWeek(d)}`;
-    const rec = byWeek.get(week) || { pnl: 0, trades: 0, firstDate: t.date.slice(0, 10) };
-    rec.pnl += t.pnl;
+    const rec = byWeek.get(week) || { r: 0, trades: 0, firstDate: t.date.slice(0, 10) };
+    rec.r += t.pnl / t.riskAmount;
     rec.trades += 1;
     byWeek.set(week, rec);
   }
   for (const [week, rec] of byWeek) {
-    if (rec.pnl <= -10 && rec.trades >= 3) {
+    if (rec.r <= -10 && rec.trades >= 3) {
       const ref = `weekly_drawdown:${week}`;
       if (existingRefs.has(ref)) continue;
       episodes.push({
         type: 'episode',
-        content: `[${rec.firstDate}] WEEKLY DRAWDOWN ${rec.pnl.toFixed(1)}R za ${rec.trades} trades v týdnu ${week}.`,
-        metadata: { kind: 'weekly_drawdown', week, pnl: rec.pnl, trades: rec.trades },
+        content: `[${rec.firstDate}] WEEKLY DRAWDOWN ${rec.r.toFixed(1)}R za ${rec.trades} trades v týdnu ${week}.`,
+        metadata: { kind: 'weekly_drawdown', week, r: rec.r, trades: rec.trades },
         importance: 8,
         memory_date: rec.firstDate,
         source_ref: ref,
       });
     }
-    if (rec.pnl >= 10 && rec.trades >= 3) {
+    if (rec.r >= 10 && rec.trades >= 3) {
       const ref = `weekly_breakthrough:${week}`;
       if (existingRefs.has(ref)) continue;
       episodes.push({
         type: 'episode',
-        content: `[${rec.firstDate}] WEEKLY BREAKTHROUGH +${rec.pnl.toFixed(1)}R za ${rec.trades} trades v týdnu ${week}.`,
-        metadata: { kind: 'weekly_breakthrough', week, pnl: rec.pnl, trades: rec.trades },
+        content: `[${rec.firstDate}] WEEKLY BREAKTHROUGH +${rec.r.toFixed(1)}R za ${rec.trades} trades v týdnu ${week}.`,
+        metadata: { kind: 'weekly_breakthrough', week, r: rec.r, trades: rec.trades },
         importance: 8,
         memory_date: rec.firstDate,
         source_ref: ref,

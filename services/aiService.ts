@@ -1208,16 +1208,35 @@ ${tradeWindow.rollupText}`;
             }
           } else if (event.type === 'message_delta') {
             if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
+          } else if (event.type === 'error') {
+            // Anthropic může poslat chybu uprostřed streamu (overloaded_error, api_error…).
+            // Bez tohoto se chyba tiše ignorovala a odpověď skončila jako úspěšná, ale useknutá.
+            const msg = event.error?.message || event.error?.type || 'chyba streamu z API';
+            onError(`API chyba: ${msg}`);
+            return;
           }
         }
       }
 
       // Done streaming this iteration. Inspect stop reason.
       if (stopReason !== 'tool_use') {
-        // Normal end_turn (or max_tokens) — parse refs from the cumulative text and finish.
+        // Normal end_turn (nebo max_tokens) — parse refs from the cumulative text and finish.
         const refs = parseAllRefs(fullText);
-        if (refs.tradeIds.length || refs.prepDates.length || refs.reviewDates.length || refs.charts.length) {
+        // POZOR: podmínka musí zahrnovat i followups/actions, jinak odpověď obsahující jen
+        // [FOLLOWUP:]/[ACTION:] markery (bez trade/chart karet) nikdy nevykreslí tlačítka
+        // během session (objevila by se až po reloadu přes DB cestu).
+        if (refs.tradeIds.length || refs.prepDates.length || refs.reviewDates.length
+            || refs.charts.length || refs.followups.length || refs.actions.length) {
           onRefs(refs);
+        }
+        // max_tokens = odpověď byla uříznutá na stropu délky — dej uživateli vědět, ať to nebere jako celé.
+        if (stopReason === 'max_tokens') {
+          onChunk('\n\n_(odpověď byla zkrácena — dosažen limit délky)_');
+        }
+        // stop_reason == null + prázdný text = přerušený/chybný stream, ne validní konec.
+        if (stopReason === null && !fullText.trim()) {
+          onError('Odpověď nedorazila (přerušený stream). Zkus to prosím znovu.');
+          return;
         }
         onDone();
         return;
