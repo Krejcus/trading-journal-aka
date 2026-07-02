@@ -4,6 +4,15 @@ import { PnLDisplayMode, Trade, Account } from '../types';
 /**
  * Formats PnL value based on the selected display mode.
  */
+/**
+ * Formats an R-multiple, dropping the decimal when the rounded value is a whole number
+ * (12.00 -> "12" instead of "12.00"). Sign is NOT added here — callers prepend it.
+ */
+export function formatRMultiple(value: number, decimals: number = 2): string {
+    const rounded = Number(value.toFixed(decimals));
+    return Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(decimals);
+}
+
 export function formatPnL(
     value: number,
     mode: PnLDisplayMode,
@@ -27,7 +36,7 @@ export function formatPnL(
                 return formatCurrency(value, currency, rates, showSign);
             }
             // Použij skutečné znaménko RR — USD a RR se mohou rozcházet (např. malé risky na ztrátách vs. velké na výhrách)
-            return `${showSign ? (rr > 0 ? '+' : rr < 0 ? '-' : '') : ''}${Math.abs(rr).toFixed(2)}R`;
+            return `${showSign ? (rr > 0 ? '+' : rr < 0 ? '-' : '') : ''}${formatRMultiple(Math.abs(rr), 2)}R`;
 
         case 'usd':
         default:
