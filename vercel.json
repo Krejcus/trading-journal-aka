@@ -3,6 +3,10 @@
         {
             "path": "/api/cron/send-alerts",
             "schedule": "* * * * *"
+        },
+        {
+            "path": "/api/cron/weekly-report",
+            "schedule": "0 17 * * 0"
         }
     ],
     "rewrites": [
