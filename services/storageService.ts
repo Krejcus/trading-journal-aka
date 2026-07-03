@@ -747,6 +747,10 @@ export const storageService = {
         riskAmount: t.riskAmount,
         instrument: t.instrument,
         session: t.session,
+        // Fan-out dedup uvnitř maybeDetectEpisodes grupuje podle groupId/isMaster —
+        // bez těchto polí by byl no-op a 10 kopií by vyrobilo 10 epizod.
+        groupId: t.groupId,
+        isMaster: t.isMaster,
       })),
     }).catch(() => {});
 

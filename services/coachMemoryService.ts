@@ -365,11 +365,23 @@ export async function summarizeConversation(opts: {
  * by `source_ref` deduplication.
  */
 export async function maybeDetectEpisodes(opts: {
-  trades: Array<{ id: string | number; date: string; pnl: number; riskAmount?: number; instrument?: string; session?: string }>;
+  trades: Array<{ id: string | number; date: string; pnl: number; riskAmount?: number; instrument?: string; session?: string; groupId?: string; isMaster?: boolean }>;
 }): Promise<number> {
   if (!opts.trades || opts.trades.length === 0) return 0;
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return 0;
+
+  // Fan-out dedup: kopie (stejný groupId) = JEDEN obchod. Bez tohohle 10 kopií vyrobilo
+  // 10 outlier epizod a 10× R do weekly součtu → falešný "-30R týden" z jednoho -3R obchodu.
+  // Preferuj master, jinak první výskyt skupiny; obchody bez groupId projdou beze změny.
+  const soloTrades: typeof opts.trades = [];
+  const byGroup = new Map<string, (typeof opts.trades)[number]>();
+  for (const t of opts.trades) {
+    if (!t.groupId) { soloTrades.push(t); continue; }
+    const cur = byGroup.get(t.groupId);
+    if (!cur || (t.isMaster === true && cur.isMaster !== true)) byGroup.set(t.groupId, t);
+  }
+  opts = { ...opts, trades: [...soloTrades, ...byGroup.values()] };
 
   // Existing episode source_refs to avoid duplicates
   const { data: existing } = await supabase

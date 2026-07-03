@@ -429,9 +429,12 @@ function computeStats(allTrades: Trade[], args: GetStatsArgs, accounts: Account[
     };
   }
 
-  const wins = filtered.filter((t) => t.pnl > 0.01);
-  const losses = filtered.filter((t) => t.pnl < -0.01);
-  const bes = filtered.filter((t) => Math.abs(t.pnl) <= 0.01);
+  // BE = |pnl|≤0.01 NEBO manuální isBE override (dashboard ho respektuje — bez něj by
+  // get_stats vracel jiný win rate než dashboard u obchodů označených jako BE přes fees).
+  const isBE = (t: Trade) => t.isBE === true || Math.abs(t.pnl) <= 0.01;
+  const wins = filtered.filter((t) => !isBE(t) && t.pnl > 0.01);
+  const losses = filtered.filter((t) => !isBE(t) && t.pnl < -0.01);
+  const bes = filtered.filter(isBE);
   const totalPnL = filtered.reduce((s, t) => s + t.pnl, 0);
   const grossProfit = wins.reduce((s, t) => s + t.pnl, 0);
   const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));

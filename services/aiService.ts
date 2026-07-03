@@ -94,17 +94,22 @@ export function buildTraderContext(ctx: TraderContext): string {
   const executedTrades = trades.filter(t => t.executionStatus !== 'Missed');
   const allMissedTrades = trades.filter(t => t.executionStatus === 'Missed');
 
-  const allWins = executedTrades.filter(t => t.pnl > 0);
+  // Win rate STEJNÝM vzorcem jako dashboard (calculateStats) i get_stats tool:
+  // BE (|pnl|≤0.01 nebo manuální isBE override) je VEN z čitatele i jmenovatele.
+  // Dřív tu bylo wins/executed → coach hlásil jiné číslo než dashboard a user mu přestal věřit.
+  const isBEtrade = (t: Trade) => t.isBE === true || Math.abs(t.pnl) <= 0.01;
+  const allWins = executedTrades.filter(t => !isBEtrade(t) && t.pnl > 0);
+  const allLosses = executedTrades.filter(t => !isBEtrade(t) && t.pnl < 0);
   const allTotalPnl = executedTrades.reduce((s, t) => s + t.pnl, 0);
-  const allWinRate = executedTrades.length > 0 ? (allWins.length / executedTrades.length * 100).toFixed(1) : '0';
+  const allWinRate = (allWins.length + allLosses.length) > 0 ? (allWins.length / (allWins.length + allLosses.length) * 100).toFixed(1) : '0';
 
   const recentExecutedTrades = recentTrades.filter(t => t.executionStatus !== 'Missed');
   const recentMissedTrades = recentTrades.filter(t => t.executionStatus === 'Missed');
 
-  const wins = recentExecutedTrades.filter(t => t.pnl > 0);
-  const losses = recentExecutedTrades.filter(t => t.pnl < 0);
+  const wins = recentExecutedTrades.filter(t => !isBEtrade(t) && t.pnl > 0);
+  const losses = recentExecutedTrades.filter(t => !isBEtrade(t) && t.pnl < 0);
   const totalPnl = recentExecutedTrades.reduce((s, t) => s + t.pnl, 0);
-  const winRate = recentExecutedTrades.length > 0 ? (wins.length / recentExecutedTrades.length * 100).toFixed(1) : '0';
+  const winRate = (wins.length + losses.length) > 0 ? (wins.length / (wins.length + losses.length) * 100).toFixed(1) : '0';
   const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
   const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0;
 
@@ -301,6 +306,16 @@ export function formatTradesForAI(trades: Trade[], limit = 100): string {
         t.ltfConfluence?.length ? `LTF:${t.ltfConfluence.join(',')}` : '',
         t.session ? `Session:${t.session}` : '',
         t.tags?.length ? `Tagy:${t.tags.join(',')}` : '',
+        // ── AlphaBridge execution intel — bez tohohle coach radil naslepo (viděl jen PnL,
+        // ne JAK byl obchod řízen). MFE/MAE = kam cena došla, NaStole = kolik R zbylo za TP.
+        t.mfeR != null ? `MFE:${t.mfeR}R` : '',
+        t.maeR != null ? `MAE:${t.maeR}R` : '',
+        t.slPlacement ? `SLtyp:${t.slPlacement}` : '',
+        t.targetLevel ? `TPcil:${t.targetLevel}` : '',
+        t.management ? `Rizeni:${t.management}` : '',
+        (t.excursion?.available && t.excursion.leftOnTableR != null) ? `NaStole:${t.excursion.leftOnTableR}R` : '',
+        t.entryMap?.available ? `Vstup:${[t.entryMap.structureType ? `${t.entryMap.structureType}${t.entryMap.structureOrder ? ` ${t.entryMap.structureOrder}.` : ''}` : '', t.entryMap.entryFvg ? 'FVG-hrana' : '', (t.entryMap.odrazLevels || []).slice(0, 2).map((l: string) => `odraz ${l}`).join('+')].filter(Boolean).join('+')}` : '',
+        t.sessionBias ? `Bias:${t.sessionBias}${t.biasAligned === false ? '(PROTI!)' : t.biasAligned === true ? '(ve smeru)' : ''}` : '',
         t.notes ? `Note:${t.notes}` : '',
       ];
       return fields.filter(Boolean).join(' | ');
@@ -1056,7 +1071,8 @@ OBECNÁ PRAVIDLA TOOL USE (RYCHLOST — ČTI POZORNĚ):
 ` : ''}${traderContext}
 
 === OBCHODY: POSLEDNÍCH ${WINDOW_DAYS} DNÍ (kompletní detail, ${tradeWindow.windowCount} obchodů) ===
-Formát: ID | Datum | Směr Nástroj | PnL | Setup | Entry | Exit | SL | TP | Pozice | Doba | Plán | Emoce | Chyby | HTF | LTF | Session | Tagy | Poznámka
+Formát: ID | Datum | Směr Nástroj | PnL | Setup | Entry | Exit | SL | TP | Pozice | Doba | Plán | Emoce | Chyby | HTF | LTF | Session | Tagy | execution intel | Poznámka
+Execution intel (u obchodů z AlphaBridge): MFE/MAE = max pohyb ve prospěch/proti v R-násobcích · SLtyp = kam byl SL umístěn (fvg/swing/ote) · TPcil = na jaký level cílil TP · Rizeni = řízení pozice · NaStole = kolik R bylo REÁLNĚ dosažitelné ZA jeho TP do konce dne (>0.5R opakovaně = vybírá moc brzo) · Vstup = entry model (CHoCH=reverzal/BoS=pokračování, odraz od levelu, FVG hrana) · Bias(PROTI!) = obchod proti vlastnímu session biasu. TATO POLE POUŽÍVEJ — umožňují kvantifikovanou analýzu exekuce místo obecných rad.
 
 ${tradeWindow.windowText}
 
@@ -1075,7 +1091,7 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
 
   // Rychlý i analytický režim jedou na CLAUDE (přes Supabase chat proxy):
   //   fast       → claude-haiku-4-5   (rychlá, levná, dobrá kvalita)
-  //   analytical → claude-sonnet-4-6  (hloubková analýza)
+  //   analytical → claude-sonnet-5    (hloubková analýza — generace nad 4-6)
   // Gemini cesta byla odstraněna (dělala mizernou kvalitu + obcházela caching/streaming).
 
   // Conversation messages we send to the API. They grow with each agent iteration
@@ -1110,7 +1126,7 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
 
   try {
     for (let iter = 0; iter < MAX_ITER; iter++) {
-      const modelName = options.aiModel === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-4-6';
+      const modelName = options.aiModel === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-5';
       const body: any = {
         model: modelName,
         // Sníženo z 12k → 8k. Většinu dotazů teď coach zodpoví z front-loaded okna
