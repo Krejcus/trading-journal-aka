@@ -118,7 +118,9 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
           {/* Kontext vstupu — kotvy, sweepy, magnet mapa (chipy barevně podle souladu se směrem) */}
           {trade.entryContext?.available && (() => {
             const ec: any = trade.entryContext;
-            const isLongT = trade.direction === 'Long';
+            // direction je v datech nekonzistentní ('LONG' z AlphaBridge, 'Long' ze starších zápisů)
+            // → case-insensitive, jinak se chipy u 'LONG' barví obráceně (long nad DO = červená).
+            const isLongT = String(trade.direction || '').toUpperCase() === 'LONG';
             const anchorChip = (name: string, above: boolean | null | undefined) => {
               if (above == null) return null;
               const aligned = isLongT ? above : !above; // long nad kotvou = po proudu; short pod kotvou = po proudu
