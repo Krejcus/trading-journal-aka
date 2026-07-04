@@ -2351,7 +2351,17 @@ const App: React.FC = () => {
     // (např. spálené Tradeify 50k) zmizí z Deníku/Dashboardu, i když jsou v Historii vidět.
     // Bug: AlphaBridge trade na archived účtu → acc undefined → phase check fail → hidden.
     const accountsLookup = [...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))];
+    // TVRDÁ BRÁNA pro funded/challenge/backtesting: obchod musí patřit AKTIVNÍMU účtu.
+    // Spálené/deaktivované účty (status Inactive / isArchived) sem NIKDY nepatří — jejich
+    // obchody žijí jen ve "Vše" (záměr, viz contextAccounts) a v Archivu. Bez téhle brány
+    // prosakovaly dvěma skulinami: (1) phase check níže bere fázi z accountsLookup VČETNĚ
+    // archivovaných (spálený Funded účet projde jako 'funded'), (2) combined view pouští
+    // obchod spálené KOPIE, když její parentAccountId míří na aktivní master (ř. matchAcc).
+    // Projevovalo se to lednovými obchody v Hodinovém/Denním výkonu na 2 týdny starém účtu.
+    const strictActiveMode = dashboardMode === 'funded' || dashboardMode === 'challenge' || dashboardMode === 'backtesting';
+    const activeAccountIds = strictActiveMode ? new Set(accounts.filter(a => a.status === 'Active').map(a => String(a.id))) : null;
     return displayTrades.filter(t => {
+      if (activeAccountIds && !activeAccountIds.has(String(t.accountId))) return false;
       // DEBUG: Log Alpha Bridge trades to see why they're filtered
       const isAlphaBridge = t.signal === 'Alpha Bridge v2';
 

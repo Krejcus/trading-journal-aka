@@ -388,6 +388,7 @@ export const storageService = {
         isMaster:data->>isMaster,
         masterTradeId:data->>masterTradeId,
         entryTime:data->>entryTime,
+        entryDate:data->>entryDate,
         screenshot:data->>screenshot,
         screenshots:data->screenshots,
         aiSuggestions:data->aiSuggestions,
@@ -481,6 +482,8 @@ export const storageService = {
       isMaster: t.isMaster === 'true' || t.isMaster === true,
       masterTradeId: t.masterTradeId || undefined,
       entryTime: t.entryTime ? Number(t.entryTime) : undefined,
+      // entryDate chybělo v SELECTu → BacktestSessions export měl prázdné entryDate (fallback z date).
+      entryDate: t.entryDate || undefined,
       // Provenance pro import dedup (Tradesyncer) — musí přežít load, jinak by re-import duplikoval.
       source: t.source || undefined,
       tsOrderIds: t.tsOrderIds || undefined,

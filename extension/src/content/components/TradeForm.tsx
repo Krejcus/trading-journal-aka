@@ -1117,6 +1117,10 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     exitDate: finalDateIso,
                     status: 'CLOSED',
                     outcome: trade.outcome,
+                    // BE zvolené v UI → nastav i isBE flag; statistiky appky (winrate) poznávají
+                    // BE podle isBE/|pnl|≤0.01, NE podle outcome — BE s pnl −12 $ (fees) by jinak
+                    // v dashboardu spadlo do ztrát, i když ho trader označil jako breakeven.
+                    isBE: trade.outcome === 'BE' ? true : undefined,
                     groupId: commonGroupId,
                     isMaster,
                     masterTradeId: isMaster ? null : masterTradeId,

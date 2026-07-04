@@ -5,7 +5,7 @@ import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, Dashb
 import { formatPnL, calculateTotalRR, formatCurrency } from '../utils/formatPnL';
 import { currencyService, ExchangeRates } from '../services/currencyService';
 import { t } from '../services/translations';
-import { getTradeEntryMinuteOfDay } from '../services/tradeTime';
+import { getTradeEntryMinuteOfDay, getTradeEntryDate } from '../services/tradeTime';
 import Charts from './Charts';
 import DashboardCalendar from './DashboardCalendar';
 import DisciplineDashboard from './DisciplineDashboard';
@@ -1335,15 +1335,92 @@ const PerformanceByMonthWidget: React.FC<{ monthlyData: MonthlyData[], theme: 'd
   );
 };
 
-const HourlyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | 'oled' }> = ({ data, theme }) => {
+// Dny v týdnu — stejné pořadí jako getDay() (0=Ne), musí sedět s analysis.ts.
+const WEEKDAY_LABELS = ['Ne', 'Po', 'Út', 'St', 'Čt', 'Pá', 'So'];
+
+// Drill-down modal: seznam obchodů dané hodiny / dne. Klik na obchod → onOpenTrade (detail).
+const EdgeDrilldownModal: React.FC<{
+  title: string;
+  subtitle?: string;
+  trades: Trade[];
+  theme: 'dark' | 'light' | 'oled';
+  formatTradePnl: (t: Trade) => string;
+  onOpenTrade: (t: Trade) => void;
+  onClose: () => void;
+}> = ({ title, subtitle, trades, theme, formatTradePnl, onOpenTrade, onClose }) => {
+  const isDark = theme !== 'light';
+  const sorted = [...trades].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const totalPnl = trades.reduce((s, t) => s + (t.pnl || 0), 0);
+  return createPortal(
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <div
+        className={`relative w-full max-w-md max-h-[80vh] flex flex-col rounded-[24px] overflow-hidden shadow-2xl ${isDark ? 'bg-theme-card border border-white/10' : 'bg-white border border-slate-200'}`}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className={`flex items-center justify-between p-5 border-b ${isDark ? 'border-white/10' : 'border-slate-100'}`}>
+          <div className="flex flex-col">
+            <h3 className="text-sm font-black uppercase tracking-widest">{title}</h3>
+            <span className="text-[10px] font-bold text-slate-500 mt-0.5">
+              {subtitle ? subtitle + ' · ' : ''}{trades.length} {trades.length === 1 ? 'obchod' : (trades.length >= 2 && trades.length <= 4 ? 'obchody' : 'obchodů')}
+              {' · '}<span className={totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}>{totalPnl >= 0 ? '+' : ''}${Math.round(totalPnl).toLocaleString('en-US')}</span>
+            </span>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`}><X size={18} /></button>
+        </div>
+        <div className="overflow-y-auto p-3 flex flex-col gap-2">
+          {sorted.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 text-sm">Žádné obchody</div>
+          ) : sorted.map(t => {
+            const rr = t.riskAmount ? (t.pnl || 0) / t.riskAmount : null;
+            const isMissed = t.executionStatus === 'Missed';
+            return (
+              <div
+                key={t.id}
+                onClick={() => onOpenTrade(t)}
+                className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] ${isDark ? 'bg-white/5 border-white/5 hover:bg-white/10' : 'bg-white border-slate-100 hover:shadow-md'} ${isMissed ? 'opacity-60' : ''}`}
+              >
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-black truncate">{String(t.direction || '').toUpperCase()} {t.instrument || ''}</span>
+                  <span className="text-[10px] font-bold text-slate-500 truncate">{t.date?.slice(0, 10)}{t.signal ? ' · ' + t.signal : ''}{t.session ? ' · ' + t.session : ''}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 pl-2">
+                  {rr != null && <span className={`text-[10px] font-black font-mono ${rr >= 0 ? 'text-emerald-500/70' : 'text-rose-500/70'}`}>{rr >= 0 ? '+' : ''}{rr.toFixed(2)}R</span>}
+                  <span className={`text-sm font-black font-mono ${isMissed ? 'text-blue-400' : ((t.pnl || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>{isMissed ? '±' : formatTradePnl(t)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+const HourlyEdgeWidget: React.FC<{
+  data: TimeStat[], theme: 'dark' | 'light' | 'oled',
+  trades?: Trade[], onOpenTrade?: (t: Trade) => void, formatTradePnl?: (t: Trade) => string,
+}> = ({ data, theme, trades = [], onOpenTrade, formatTradePnl }) => {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [drillHour, setDrillHour] = useState<number | null>(null);
+
+  const drillTrades = drillHour == null ? [] : trades.filter(t =>
+    t.executionStatus !== 'Missed' && getTradeEntryDate(t).getHours() === drillHour
+  );
+
+  const handleBarClick = (e: any) => {
+    if (!onOpenTrade || !e || e.activeLabel == null) return;
+    const hr = parseInt(String(e.activeLabel), 10);
+    if (!Number.isNaN(hr)) { setDrillHour(hr); setActiveIndex(null); } // vynuluj hover tooltip, ať nezůstane viset nad modalem
+  };
 
   return (
     <div className="p-6 rounded-[32px] flex flex-col h-full overflow-visible glass-panel">
       <div className="flex justify-between items-center mb-8">
         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
           <Clock size={16} className="text-blue-500" /> Hodinový Výkon
-          <InfoIcon text="Statistický výkon podle hodin. Zjistěte, ve které hodiny dne generujete největší zisk." theme={theme} />
+          <InfoIcon text="Statistický výkon podle hodin. Zjistěte, ve které hodiny dne generujete největší zisk. Klikni na sloupec pro obchody dané hodiny." theme={theme} />
         </h3>
         <div className="flex gap-4 text-[9px] font-black uppercase text-slate-500">
           <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-500"></div> Profit</div>
@@ -1357,6 +1434,8 @@ const HourlyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | '
             stackOffset="sign"
             margin={{ top: 10, right: 10, left: -20, bottom: 5 }}
             onMouseLeave={() => setActiveIndex(null)}
+            onClick={handleBarClick}
+            style={{ cursor: onOpenTrade ? 'pointer' : 'default' }}
           >
             <defs>
               <linearGradient id="hourlyProfitGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
@@ -1372,13 +1451,37 @@ const HourlyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | '
           </BarChart>
         </ResponsiveContainer>
       </div>
+      {drillHour != null && onOpenTrade && formatTradePnl && (
+        <EdgeDrilldownModal
+          title={`${drillHour}:00 — ${drillHour + 1}:00`}
+          subtitle="hodina vstupu"
+          trades={drillTrades}
+          theme={theme}
+          formatTradePnl={formatTradePnl}
+          onOpenTrade={(t) => { setDrillHour(null); onOpenTrade(t); }}
+          onClose={() => setDrillHour(null)}
+        />
+      )}
     </div>
   );
 };
 
-const DailyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | 'oled' }> = ({ data, theme }) => {
+const DailyEdgeWidget: React.FC<{
+  data: TimeStat[], theme: 'dark' | 'light' | 'oled',
+  trades?: Trade[], onOpenTrade?: (t: Trade) => void, formatTradePnl?: (t: Trade) => string,
+}> = ({ data, theme, trades = [], onOpenTrade, formatTradePnl }) => {
   const tradingDays = data.filter(d => d.label !== 'So' && d.label !== 'Ne');
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [drillDay, setDrillDay] = useState<string | null>(null);
+
+  const drillTrades = drillDay == null ? [] : trades.filter(t =>
+    t.executionStatus !== 'Missed' && WEEKDAY_LABELS[new Date(t.date).getDay()] === drillDay
+  );
+
+  const handleBarClick = (e: any) => {
+    if (!onOpenTrade || !e || e.activeLabel == null) return;
+    setDrillDay(String(e.activeLabel)); setActiveIndex(null); // vynuluj hover tooltip, ať nezůstane viset nad modalem
+  };
 
   // Calculate dynamic domain to center 0 and scale bars to utilize full width
   const maxAbsPnL = Math.max(
@@ -1403,6 +1506,8 @@ const DailyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | 'o
             stackOffset="sign"
             margin={{ top: 5, right: 50, left: 10, bottom: 5 }}
             onMouseLeave={() => setActiveIndex(null)}
+            onClick={handleBarClick}
+            style={{ cursor: onOpenTrade ? 'pointer' : 'default' }}
           >
             <defs>
               <linearGradient id="dailyProfitGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
@@ -1431,6 +1536,17 @@ const DailyEdgeWidget: React.FC<{ data: TimeStat[], theme: 'dark' | 'light' | 'o
           </BarChart>
         </ResponsiveContainer>
       </div>
+      {drillDay != null && onOpenTrade && formatTradePnl && (
+        <EdgeDrilldownModal
+          title={drillDay}
+          subtitle="den v týdnu"
+          trades={drillTrades}
+          theme={theme}
+          formatTradePnl={formatTradePnl}
+          onOpenTrade={(t) => { setDrillDay(null); onOpenTrade(t); }}
+          onClose={() => setDrillDay(null)}
+        />
+      )}
     </div>
   );
 };
@@ -1518,6 +1634,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   const formatRawCurrency = (val: number, showSign: boolean = false) => {
     return formatCurrency(val, targetCurrency, exchangeRates, showSign);
   };
+
+  // Formátování PnL obchodu pro drill-down (respektuje $/%/R preferenci a měnu jako zbytek dashboardu).
+  const drillPnlFormatter = (t: Trade) =>
+    formatValue(t.pnl, pnlDisplayMode, stats.initialBalance, t.riskAmount ? (t.pnl || 0) / t.riskAmount : undefined);
 
   // Detect current breakpoint from container width
   const [currentBreakpoint, setCurrentBreakpoint] = useState<string>('lg');
@@ -1882,8 +2002,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       case 'discipline_streak': return <DisciplineStreakWidget trades={stats.trades} theme={theme} />;
       case 'winners_losers': return <WinnersLosersWidget stats={stats} theme={theme} pnlDisplayMode={pnlDisplayMode} initialBalance={stats.initialBalance} currency={targetCurrency} rates={exchangeRates} />;
       case 'monthly_performance': return <PerformanceByMonthWidget monthlyData={stats.monthlyBreakdown} theme={theme} />;
-      case 'hourly_edge': return <HourlyEdgeWidget data={stats.hourStats} theme={theme} />;
-      case 'daily_edge': return <DailyEdgeWidget data={stats.dayStats} theme={theme} />;
+      case 'hourly_edge': return <HourlyEdgeWidget data={stats.hourStats} theme={theme} trades={stats.trades} onOpenTrade={(t) => setSelectedTradeId(t.id)} formatTradePnl={drillPnlFormatter} />;
+      case 'daily_edge': return <DailyEdgeWidget data={stats.dayStats} theme={theme} trades={stats.trades} onOpenTrade={(t) => setSelectedTradeId(t.id)} formatTradePnl={drillPnlFormatter} />;
       case 'session_performance': return <SessionBreakdownWidget trades={stats.trades} theme={theme} configs={sessions} />;
       case 'equity': return (
         <Charts
