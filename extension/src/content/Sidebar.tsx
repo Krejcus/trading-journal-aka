@@ -83,7 +83,9 @@ export function Sidebar() {
         backfillRanRef.current = sym;
         setBackfilling(true);
         try {
-            const res = await backfillPendingExcursions(sym, { max: manual ? 20 : 8 });
+            // max = počet SKUPIN (reálných obchodů); díky grupování kopií zvládne jeden běh
+            // celý den fan-outu naráz. Auto 12 skupin pokryje běžný den, ruční 30 i backlog.
+            const res = await backfillPendingExcursions(sym, { max: manual ? 30 : 12 });
             if (res.completed > 0) setBackfillToast({ text: `✅ Dopočítáno ${res.completed} obchodů`, tone: 'ok' });
             else if (manual) setBackfillToast({ text: res.checked ? `Zatím nic — ${res.stillPending} čeká na bary` : 'Žádné pending obchody pro tento graf', tone: 'info' });
         } catch { if (manual) setBackfillToast({ text: 'Přepočet selhal', tone: 'warn' }); }

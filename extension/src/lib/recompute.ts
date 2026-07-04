@@ -38,41 +38,62 @@ export async function backfillPendingExcursions(chartSymbol: string, opts?: { ma
         .select('id, direction, data')
         .eq('user_id', session.user.id)
         .eq('data->>excursionComplete', 'false')
-        .limit(60);
+        .limit(200);
     if (error || !rows || !rows.length) return empty;
 
     // Jen obchody na aktuálním instrumentu (root match) — jinak by se počítaly z cizích barů.
-    const mine = rows.filter((r: any) => instrRoot((r.data || {}).instrument || '') === root).slice(0, opts?.max ?? 12);
-    if (!mine.length) return empty;
+    const minePending = rows.filter((r: any) => instrRoot((r.data || {}).instrument || '') === root);
+    if (!minePending.length) return empty;
 
-    let completed = 0, stillPending = 0;
-    for (const r of mine) {
+    // Fan-out kopie (1 reálný obchod = N zápisů na účty) sdílí STEJNÝ entry/SL/TP/čas → excursion
+    // (R hodnoty i ceny) je identický. Grupujeme podle signatury a počítáme JEDNOU na skupinu,
+    // výsledek aplikujeme na všechny kopie. Den s 10 kopiemi se tak dopočítá jedním skenem (ne deseti)
+    // a strop `max` (počet skupin = reálných obchodů) přestane omezovat počet kopií.
+    const groups = new Map<string, any[]>();
+    for (const r of minePending) {
         const d = r.data || {};
-        const entry = Number(d.entryPrice), sl = Number(d.stopLoss), tp = Number(d.takeProfit);
-        const entryMs = Number(d.entryTime);
-        if (![entry, sl, tp, entryMs].every(Number.isFinite)) continue;
-        const isLong = String(r.direction || d.direction || '').toUpperCase() === 'LONG';
+        const dir = String(r.direction || d.direction || '').toUpperCase();
+        const key = `${d.entryPrice}|${d.stopLoss}|${d.takeProfit}|${d.entryTime}|${dir}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(r);
+    }
+    const groupList = Array.from(groups.values()).slice(0, opts?.max ?? 12);
 
+    let checked = 0, completed = 0, stillPending = 0;
+    for (const groupRows of groupList) {
+        checked += groupRows.length;
+        const d0 = groupRows[0].data || {};
+        const entry = Number(d0.entryPrice), sl = Number(d0.stopLoss), tp = Number(d0.takeProfit);
+        const entryMs = Number(d0.entryTime);
+        if (![entry, sl, tp, entryMs].every(Number.isFinite)) { stillPending += groupRows.length; continue; }
+        const isLong = String(groupRows[0].direction || d0.direction || '').toUpperCase() === 'LONG';
+
+        // Jeden sken na celou skupinu.
         const res = await computeCounterfactual(undefined, null, FLAT_BY_MIN, {
             isLong, entry, sl, tp, entryUnix: Math.round(entryMs / 1000),
         });
-        if (!res.ok || !res.excursion || !res.excursion.available) { stillPending++; continue; }
-        if (res.excursion.stopReason === 'end') { stillPending++; continue; } // bary pořád nestačí → nech pending
+        if (!res.ok || !res.excursion || !res.excursion.available || res.excursion.stopReason === 'end') {
+            stillPending += groupRows.length; continue; // bary pořád nestačí → nech celou skupinu pending
+        }
 
-        // Kompletní → merge do data blobu. Přepisujeme JEN counterfactual/excursion/entryMap +
-        // příznak; execution tagy (slPlacement/targetLevel) ani uživatelský obsah NETKNEME.
-        const merged = {
-            ...d,
-            counterfactual: (res.swing || res.ote || res.fvg || res.tpTargets)
-                ? { available: true, isLong: res.isLong, entry: res.entry, tp: res.tp, swing: res.swing, ote: res.ote, fvg: res.fvg, tpTargets: res.tpTargets }
-                : d.counterfactual,
-            excursion: res.excursion,
-            entryMap: res.entryMap || d.entryMap,
-            excursionComplete: true,
-        };
-        const { error: upErr } = await supabase.from('trades').update({ data: merged }).eq('id', r.id).eq('user_id', session.user.id);
-        if (upErr) { stillPending++; continue; }
-        completed++;
+        const cf = (res.swing || res.ote || res.fvg || res.tpTargets)
+            ? { available: true, isLong: res.isLong, entry: res.entry, tp: res.tp, swing: res.swing, ote: res.ote, fvg: res.fvg, tpTargets: res.tpTargets }
+            : null;
+
+        // Aplikuj shodný výsledek na VŠECHNY kopie skupiny. Každá si drží svůj data blob
+        // (účet, pnl, riskAmount) — přepisujeme jen counterfactual/excursion/entryMap + příznak.
+        for (const r of groupRows) {
+            const d = r.data || {};
+            const merged = {
+                ...d,
+                counterfactual: cf || d.counterfactual,
+                excursion: res.excursion,
+                entryMap: res.entryMap || d.entryMap,
+                excursionComplete: true,
+            };
+            const { error: upErr } = await supabase.from('trades').update({ data: merged }).eq('id', r.id).eq('user_id', session.user.id);
+            if (upErr) stillPending++; else completed++;
+        }
     }
-    return { checked: mine.length, completed, stillPending };
+    return { checked, completed, stillPending };
 }
