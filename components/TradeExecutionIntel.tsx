@@ -115,6 +115,34 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
             </div>
           )}
 
+          {/* Kontext vstupu — kotvy, sweepy, magnet mapa (chipy barevně podle souladu se směrem) */}
+          {trade.entryContext?.available && (() => {
+            const ec: any = trade.entryContext;
+            const isLongT = trade.direction === 'Long';
+            const anchorChip = (name: string, above: boolean | null | undefined) => {
+              if (above == null) return null;
+              const aligned = isLongT ? above : !above; // long nad kotvou = po proudu; short pod kotvou = po proudu
+              return chip(`${above ? 'Nad' : 'Pod'} ${name}`, aligned ? 'emerald' : 'rose');
+            };
+            const mins = ec.entryMinutes;
+            const timeStr = mins != null ? `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}` : null;
+            return (
+              <div>
+                {label('Kontext vstupu')}
+                <div className="flex flex-wrap gap-1.5">
+                  {anchorChip('DO', ec.aboveDO)}
+                  {anchorChip('WO', ec.aboveWO)}
+                  {anchorChip('pdVWAP', ec.abovePdVWAP)}
+                  {ec.vwapDistSigma != null && chip(`VWAP ${ec.vwapDistSigma > 0 ? '+' : ''}${ec.vwapDistSigma}σ`, 'sky')}
+                  {(ec.sweptLevels || []).slice(0, 4).map((l: string, i: number) => <React.Fragment key={`sw${i}`}>{chip(`${l} vzat`, 'amber')}</React.Fragment>)}
+                  {(ec.untappedAbove > 0 || ec.untappedBelow > 0) && chip(`Netknuté ↑${ec.untappedAbove} ↓${ec.untappedBelow}`, 'violet')}
+                  {ec.londonVsAsia && chip(`LON ${ec.londonVsAsia === 'above' ? 'nad Asií ↑' : ec.londonVsAsia === 'below' ? 'pod Asií ↓' : 'v Asii'}`, 'slate')}
+                  {timeStr && chip(timeStr, 'slate')}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Excursion: kam by to došlo do konce dne — co zbylo na stole */}
           {hasExc && (
             <div>

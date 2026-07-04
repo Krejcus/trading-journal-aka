@@ -159,6 +159,7 @@ export const storageService = {
         counterfactual: d.counterfactual || undefined,
         excursion: d.excursion || undefined,
         entryMap: d.entryMap || undefined,
+        entryContext: d.entryContext || undefined,
         data: {}
       };
     }) as Trade[];
@@ -413,7 +414,8 @@ export const storageService = {
         schemaVersion:data->>schemaVersion,
         counterfactual:data->counterfactual,
         excursion:data->excursion,
-        entryMap:data->entryMap
+        entryMap:data->entryMap,
+        entryContext:data->entryContext
       `)
       .eq('user_id', userId)
       .order('timestamp', { ascending: false })
@@ -508,6 +510,7 @@ export const storageService = {
       counterfactual: t.counterfactual || undefined,
       excursion: t.excursion || undefined,
       entryMap: t.entryMap || undefined,
+      entryContext: t.entryContext || undefined,
 
       // We don't carry the full blob anymore to save memory
       data: {}

@@ -1163,6 +1163,9 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                         : null,
                     // Entry model — odraz level + struktura (kolikátý zlom) + entry na hraně FVG.
                     entryMap: cf && cf.ok && cf.entryMap ? cf.entryMap : { available: false },
+                    // Kontext vstupu (fotka momentu načtení: kotvy DO/WO/pdVWAP/VWAP, sweepy,
+                    // magnet mapa netknutých levelů, Londýn vs Asie). Bias analytika z reálných dat.
+                    entryContext: cf && cf.ok && (cf as any).entryContext ? (cf as any).entryContext : { available: false },
                     // Session kontext (backtest) — otisknuto do obchodu PER ÚČET, ať je samostatný pro analýzu.
                     sessionBias: mode === 'backtest' ? (acctSession.bias || null) : null,
                     sessionPreNotes: mode === 'backtest' ? (acctSession.preNotes || null) : null,

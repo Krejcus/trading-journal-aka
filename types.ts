@@ -278,6 +278,8 @@ export interface Trade {
   excursionComplete?: boolean | null;
   /** Entry model — structureType/order, odrazLevels, entryFvg. */
   entryMap?: any;
+  /** Kontext vstupu (snapshot z AlphaBridge): kotvy DO/WO/pdVWAP/VWAP, sweepy, magnet mapa, Londýn vs Asie. */
+  entryContext?: any;
   /** Backtest session kontext otisknutý do obchodu (per účet). */
   sessionBias?: 'Long' | 'Short' | 'Neutral' | null;
   sessionPreNotes?: string | null;

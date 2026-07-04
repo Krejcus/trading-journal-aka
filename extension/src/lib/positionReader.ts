@@ -786,10 +786,70 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             };
         })();
 
+        // ── KONTEXT VSTUPU (snapshot): poloha vs kotvy (DO/WO/pdVWAP/VWAP), stav sweepů
+        // z labelů indikátoru ([Nx] = testováno, [Untested] = netknuté = magnet), Londýn vs
+        // Asie, čas vstupu. Je to FOTKA momentu kliknutí — backfill/recompute ji nepřepisuje
+        // (labely by už ukazovaly jiný den). Bias pravidla pak vzniknou z těchto dat. ──
+        const entryContext = (() => {
+            try {
+                const lv = readLiquidityLevels();
+                if (!lv || !lv.length) return { available: false, reason: 'no-levels' };
+                const nrm = (t: string) => String(t).replace(/\[.*?\]/g, '').replace(/\s+/g, ' ').trim();
+                const findP = (re: RegExp) => { for (const L of lv) { if (re.test(nrm(String(L.text)))) return L.price; } return null; };
+                const doP = findP(/^DO$/i), woP = findP(/^WO$/i), pdV = findP(/^pdVWAP$/i), w0 = findP(/^VWAP$/i);
+                // σ z rozestupu pásem (±1σ přímo, ±2σ /2) — stejný postup jako VWAP fallback výše.
+                let sd = 0;
+                if (w0 != null) {
+                    const cand: number[] = [];
+                    const p1 = findP(/^VWAP \+1σ$/i), m1 = findP(/^VWAP -1σ$/i), p2 = findP(/^VWAP \+2σ$/i), m2 = findP(/^VWAP -2σ$/i);
+                    if (p1 != null) cand.push(Math.abs(p1 - w0));
+                    if (m1 != null) cand.push(Math.abs(w0 - m1));
+                    if (p2 != null) cand.push(Math.abs(p2 - w0) / 2);
+                    if (m2 != null) cand.push(Math.abs(w0 - m2) / 2);
+                    if (cand.length) sd = cand.reduce((a, b) => a + b, 0) / cand.length;
+                }
+                const isVwapFam = (t: string) => /^VWAP( [+-][12]σ)?$/i.test(t);
+                const swept: string[] = [];
+                let untAbove = 0, untBelow = 0;
+                let nearUpD = Infinity, nearUp: string | null = null, nearDnD = Infinity, nearDn: string | null = null;
+                for (const L of lv) {
+                    const raw = String(L.text); const base = nrm(raw);
+                    if (isVwapFam(base)) continue;
+                    if (/\[\s*\d+\s*[x×]\s*\]/i.test(raw) && swept.length < 10) swept.push(base);
+                    if (/untested/i.test(raw)) {
+                        if (L.price > entry) { untAbove++; const d = L.price - entry; if (d < nearUpD) { nearUpD = d; nearUp = base; } }
+                        else if (L.price < entry) { untBelow++; const d = entry - L.price; if (d < nearDnD) { nearDnD = d; nearDn = base; } }
+                    }
+                }
+                const aH = findP(/^ASIA H$/i), aL = findP(/^ASIA L$/i), lH = findP(/^LON H$/i), lL = findP(/^LON L$/i);
+                let londonVsAsia: string | null = null;
+                if (aH != null && aL != null && lH != null && lL != null) {
+                    const am = (aH + aL) / 2, lm = (lH + lL) / 2;
+                    londonVsAsia = lm > am ? 'above' : (lm < am ? 'below' : 'inside');
+                }
+                const eU = ts.indexToTimePoint(si0);
+                const ed = eU != null ? new Date(eU * 1000) : null;
+                return {
+                    available: true,
+                    aboveDO: doP != null ? entry > doP : null,
+                    aboveWO: woP != null ? entry > woP : null,
+                    abovePdVWAP: pdV != null ? entry > pdV : null,
+                    aboveVWAP: w0 != null ? entry > w0 : null,
+                    vwapDistSigma: (w0 != null && sd > 0) ? Math.round((entry - w0) / sd * 100) / 100 : null,
+                    sweptLevels: swept,
+                    untappedAbove: untAbove, untappedBelow: untBelow,
+                    nearestUntappedAbove: nearUp, nearestUntappedBelow: nearDn,
+                    londonVsAsia: londonVsAsia,
+                    entryMinutes: ed ? ed.getHours() * 60 + ed.getMinutes() : null,
+                };
+            } catch (e) { return { available: false, reason: String(e) }; }
+        })();
+
         return {
             ok: true, isLong: isLong, entry: entry, tp: roundTick2(tp),
             swing: scanSL(swingLvl), ote: scanSL(oteLvl), fvg: scanSL(fvgLvl),
             tpTargets: tpTargets, excursion: excursion, entryMap: entryMap,
+            entryContext: entryContext,
         };
     } catch (e) {
         return { ok: false, reason: String(e) };
@@ -992,7 +1052,15 @@ export interface CfEntryMap {
     entryLevelPrice?: number | null;
     entryFvg?: boolean;
 }
-export interface CounterfactualRead { ok: boolean; isLong?: boolean; entry?: number; tp?: number; swing?: CfSlResult; ote?: CfSlResult; fvg?: CfSlResult; tpTargets?: CfTpTarget[]; excursion?: CfExcursion; entryMap?: CfEntryMap; reason?: string; }
+export interface CfEntryContext {
+    available: boolean; reason?: string;
+    aboveDO?: boolean | null; aboveWO?: boolean | null; abovePdVWAP?: boolean | null; aboveVWAP?: boolean | null;
+    vwapDistSigma?: number | null;
+    sweptLevels?: string[]; untappedAbove?: number; untappedBelow?: number;
+    nearestUntappedAbove?: string | null; nearestUntappedBelow?: string | null;
+    londonVsAsia?: string | null; entryMinutes?: number | null;
+}
+export interface CounterfactualRead { ok: boolean; isLong?: boolean; entry?: number; tp?: number; swing?: CfSlResult; ote?: CfSlResult; fvg?: CfSlResult; tpTargets?: CfTpTarget[]; excursion?: CfExcursion; entryMap?: CfEntryMap; entryContext?: CfEntryContext; reason?: string; }
 
 // entryOverride = recompute uloženého obchodu bez RR boxu na grafu:
 //   { isLong, entry, sl, tp, entryUnix } (entryUnix = unix SEKUNDY vstupu).

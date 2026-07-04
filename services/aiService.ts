@@ -316,6 +316,14 @@ export function formatTradesForAI(trades: Trade[], limit = 100): string {
         (t.excursion?.available && t.excursion.leftOnTableR != null) ? `NaStole:${t.excursion.leftOnTableR}R` : '',
         t.entryMap?.available ? `Vstup:${[t.entryMap.structureType ? `${t.entryMap.structureType}${t.entryMap.structureOrder ? ` ${t.entryMap.structureOrder}.` : ''}` : '', t.entryMap.entryFvg ? 'FVG-hrana' : '', (t.entryMap.odrazLevels || []).slice(0, 2).map((l: string) => `odraz ${l}`).join('+')].filter(Boolean).join('+')}` : '',
         t.sessionBias ? `Bias:${t.sessionBias}${t.biasAligned === false ? '(PROTI!)' : t.biasAligned === true ? '(ve smeru)' : ''}` : '',
+        // Kontext vstupu (snapshot z grafu) — kompaktně: kotvy, magnet mapa, Londýn.
+        (t.entryContext && t.entryContext.available) ? `Ctx:${[
+          t.entryContext.aboveDO != null ? (t.entryContext.aboveDO ? 'nadDO' : 'podDO') : '',
+          t.entryContext.abovePdVWAP != null ? (t.entryContext.abovePdVWAP ? 'nad-pdVWAP' : 'pod-pdVWAP') : '',
+          t.entryContext.vwapDistSigma != null ? `VWAP${t.entryContext.vwapDistSigma > 0 ? '+' : ''}${t.entryContext.vwapDistSigma}σ` : '',
+          (t.entryContext.untappedAbove || t.entryContext.untappedBelow) ? `unt↑${t.entryContext.untappedAbove}↓${t.entryContext.untappedBelow}` : '',
+          t.entryContext.londonVsAsia ? `LON:${t.entryContext.londonVsAsia}` : '',
+        ].filter(Boolean).join(',')}` : '',
         t.notes ? `Note:${t.notes}` : '',
       ];
       return fields.filter(Boolean).join(' | ');
@@ -1072,7 +1080,7 @@ OBECNÁ PRAVIDLA TOOL USE (RYCHLOST — ČTI POZORNĚ):
 
 === OBCHODY: POSLEDNÍCH ${WINDOW_DAYS} DNÍ (kompletní detail, ${tradeWindow.windowCount} obchodů) ===
 Formát: ID | Datum | Směr Nástroj | PnL | Setup | Entry | Exit | SL | TP | Pozice | Doba | Plán | Emoce | Chyby | HTF | LTF | Session | Tagy | execution intel | Poznámka
-Execution intel (u obchodů z AlphaBridge): MFE/MAE = max pohyb ve prospěch/proti v R-násobcích · SLtyp = kam byl SL umístěn (fvg/swing/ote) · TPcil = na jaký level cílil TP · Rizeni = řízení pozice · NaStole = kolik R bylo REÁLNĚ dosažitelné ZA jeho TP do konce dne (>0.5R opakovaně = vybírá moc brzo) · Vstup = entry model (CHoCH=reverzal/BoS=pokračování, odraz od levelu, FVG hrana) · Bias(PROTI!) = obchod proti vlastnímu session biasu. TATO POLE POUŽÍVEJ — umožňují kvantifikovanou analýzu exekuce místo obecných rad.
+Execution intel (u obchodů z AlphaBridge): MFE/MAE = max pohyb ve prospěch/proti v R-násobcích · SLtyp = kam byl SL umístěn (fvg/swing/ote) · TPcil = na jaký level cílil TP · Rizeni = řízení pozice · NaStole = kolik R bylo REÁLNĚ dosažitelné ZA jeho TP do konce dne (>0.5R opakovaně = vybírá moc brzo) · Vstup = entry model (CHoCH=reverzal/BoS=pokračování, odraz od levelu, FVG hrana) · Bias(PROTI!) = obchod proti vlastnímu session biasu · Ctx = kontext při vstupu (nad/pod Day Open a předchozím VWAP; VWAP±Nσ = kde v denním rozdělení vstoupil; unt↑/↓ = počet NETKNUTÝCH likviditních levelů nad/pod cenou = magnety; LON:above/below = Londýn vs Asie). TATO POLE POUŽÍVEJ — umožňují kvantifikovanou analýzu exekuce místo obecných rad (např. WR longů pod pdVWAP vs nad ním).
 
 ${tradeWindow.windowText}
 
