@@ -91,6 +91,20 @@ extendLines = input.int(5, title="Prodloužení", minval=0, maxval=100, inline="
 showZones = input.bool(false, title="Zóny", inline="zone", group="Vzhled")
 zoneSize = input.float(2, title="Velikost", minval=0.5, maxval=10, step=0.5, inline="zone", group="Vzhled")
 
+// ── BIAS & KONTEXT ─────────────────────────────────────────────────────────
+// Vizuální hierarchie: ON H/L = VSTUPNÍ extrémy (plné, sweep+dotyky jako ostatní extrémy).
+// Kompas (PDC/PD MID/ON MID/RTH Open) = tenké tečkované, bez dotyků — orientace + TP, NE vstupy.
+// IB H/L se objeví až po uzavření první RTH hodiny (do té doby nešumí).
+showON        = input.bool(true, title="", inline="on1", group="Bias & Kontext")
+onColor       = input.color(color.new(#FF5252, 0), title="ON High/Low (overnight extrémy)", inline="on1", group="Bias & Kontext")
+showCompass   = input.bool(true, title="", inline="cmp", group="Bias & Kontext")
+compassColor  = input.color(color.new(#90A4AE, 30), title="Kompas: PDC · PD MID · ON MID · RTH Open", inline="cmp", group="Bias & Kontext")
+showIB        = input.bool(true, title="", inline="ib1", group="Bias & Kontext")
+ibColor       = input.color(color.new(#7C4DFF, 0), title="IB High/Low (první hodina RTH)", inline="ib1", group="Bias & Kontext")
+rthOpenHour   = input.int(15, title="RTH open", minval=0, maxval=23, inline="rth", group="Bias & Kontext")
+rthOpenMin    = input.int(30, title=":", minval=0, maxval=59, inline="rth", group="Bias & Kontext")
+showBiasTable = input.bool(true, title="Bias tabulka (vpravo nahoře)", inline="bt", group="Bias & Kontext")
+
 // ════════════════════════════════════════════════════════════════════════════
 // 🔧 HELPER FUNKCE A STRUKTURY (Pine Script v6 UDT)
 // ════════════════════════════════════════════════════════════════════════════
@@ -206,6 +220,94 @@ else
         currentDayHigh := high
     if low < nz(currentDayLow, low)
         currentDayLow := low
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🧭 BIAS & KONTEXT: PDC, PD MID, ON range, RTH Open, Initial Balance
+// Vše "jednou denně" výpočty — nulový per-tick dopad (žádné smyčky na živé svíčce).
+// ════════════════════════════════════════════════════════════════════════════
+
+// PDC = včerejší denní close (Globex settle). PD MID = "halfback" (střed včerejšího range).
+pdClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+float pdMid = not na(pdHigh) and not na(pdLow) ? (pdHigh + pdLow) / 2 : na
+// Denní ATR(14) pro klasifikaci gapu (drobný <0.3 · malý <0.7 · střední <1.2 · velký).
+dAtr = request.security(syminfo.tickerid, "D", ta.atr(14), lookahead=barmerge.lookahead_on)
+
+int minOfDay = hour(time, tz) * 60 + minute(time, tz)
+int rthOpenMOD = rthOpenHour * 60 + rthOpenMin
+
+// ON range = od začátku denní seance (Globex rollover) do RTH open. Zamrzne v RTH open —
+// dHigh/dLow jedou dál, ON H/L stojí (sweep target, který se nehýbe + původ likvidity).
+var float onHigh = na
+var float onLow = na
+var bool rthOpened = false
+var float rthOpenPrice = na
+var float onHighF = na
+var float onLowF = na
+var float onMid = na
+var int onFrozenBar = na
+var bool onHighSwept = false
+var bool onLowSwept = false
+// IB = první hodina RTH. Po zamrznutí sledujeme breaky (verdikt dne: trend vs rotace).
+var float ibHigh = na
+var float ibLow = na
+var bool ibFrozen = false
+var bool ibBrokeUp = false
+var bool ibBrokeDown = false
+var int ibFrozenBar = na
+
+if newDay
+    onHigh := high
+    onLow := low
+    rthOpened := false
+    rthOpenPrice := na
+    onHighF := na
+    onLowF := na
+    onMid := na
+    onFrozenBar := na
+    onHighSwept := false
+    onLowSwept := false
+    ibHigh := na
+    ibLow := na
+    ibFrozen := false
+    ibBrokeUp := false
+    ibBrokeDown := false
+    ibFrozenBar := na
+else if not rthOpened
+    onHigh := math.max(nz(onHigh, high), high)
+    onLow := math.min(nz(onLow, low), low)
+
+// RTH open detekce: první bar v okně [open, konec NY session). Okno vylučuje bary po
+// rollooveru (23:00+), takže reset newDay → akumulace ON → zmrznutí přesně v 15:30.
+bool inRTHWindow = minOfDay >= rthOpenMOD and minOfDay < nyEnd * 60
+if not rthOpened and inRTHWindow
+    rthOpened := true
+    rthOpenPrice := open
+    onHighF := onHigh
+    onLowF := onLow
+    onMid := (onHigh + onLow) / 2
+    onFrozenBar := bar_index
+    ibHigh := high
+    ibLow := low
+
+if rthOpened and not ibFrozen
+    if minOfDay < rthOpenMOD + 60 and inRTHWindow
+        ibHigh := math.max(nz(ibHigh, high), high)
+        ibLow := math.min(nz(ibLow, low), low)
+    else
+        ibFrozen := true
+        ibFrozenBar := bar_index
+
+if ibFrozen
+    if high > ibHigh
+        ibBrokeUp := true
+    if low < ibLow
+        ibBrokeDown := true
+
+if rthOpened
+    if not onHighSwept and high > onHighF
+        onHighSwept := true
+    if not onLowSwept and low < onLowF
+        onLowSwept := true
 
 // === VOLUME PROFILE ODSTRANĚN ===
 // Footprint (request.footprint) byl zdaleka nejdražší část skriptu. Protože se VP nepoužívá,
@@ -583,6 +685,26 @@ if barstate.islast and (barstate.isconfirmed or not levelsDrawnInit)
         activeLevels.push(LevelInfo.new("VWAP +2σ", upper2, bandColor, -1, 1, vpStyle, false, showLabels, false, false))
         activeLevels.push(LevelInfo.new("VWAP -2σ", lower2, bandColor, -1, 1, vpStyle, false, showLabels, false, false))
 
+    // ── BIAS & KONTEXT levely ──
+    // ON H/L: vstupní extrémy — plná čára, dotyky/sweep jako ostatní extrémy (magnet mapa).
+    if showON and rthOpened and not na(onHighF)
+        activeLevels.push(LevelInfo.new("ON H", onHighF, onColor, onFrozenBar, 2, "Plná", true, showLabels, onHighSwept, false))
+        activeLevels.push(LevelInfo.new("ON L", onLowF, onColor, onFrozenBar, 2, "Plná", true, showLabels, onLowSwept, false))
+    // Kompas: tenké tečkované, startBar -1 = BEZ počítání doteků (levné, čisté labely pro AlphaBridge).
+    if showCompass
+        if not na(pdClose)
+            activeLevels.push(LevelInfo.new("PDC", pdClose, compassColor, -1, 1, "Tečkovaná", true, showLabels, false, false))
+        if not na(pdMid)
+            activeLevels.push(LevelInfo.new("PD MID", pdMid, compassColor, -1, 1, "Tečkovaná", true, showLabels, false, false))
+        if rthOpened and not na(onMid)
+            activeLevels.push(LevelInfo.new("ON MID", onMid, compassColor, -1, 1, "Tečkovaná", true, showLabels, false, false))
+        if rthOpened and not na(rthOpenPrice)
+            activeLevels.push(LevelInfo.new("RTH Open", rthOpenPrice, compassColor, -1, 1, "Tečkovaná", true, showLabels, false, false))
+    // IB hrany: až po uzavření první hodiny (do té doby graf nešumí).
+    if showIB and ibFrozen
+        activeLevels.push(LevelInfo.new("IB H", ibHigh, ibColor, ibFrozenBar, 1, "Čárkovaná", true, showLabels, false, false))
+        activeLevels.push(LevelInfo.new("IB L", ibLow, ibColor, ibFrozenBar, 1, "Čárkovaná", true, showLabels, false, false))
+
     // 3. Bubble Sort - Seřazení hladin podle ceny (od nejnižší po nejvyšší)
     int countLevels = activeLevels.size()
     if countLevels > 1
@@ -650,4 +772,104 @@ if barstate.islast and (barstate.isconfirmed or not levelsDrawnInit)
 
             label myLabel = label.new(bar_index + currentXOffset, lvl.price, labelText, color=chart.bg_color, textcolor=lineColor, style=label.style_label_center, size=getLabelSize(labelSize))
             drawnLabels.push(myLabel)
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🧭 BIAS TABULKA — skóre kotev + gap (v ATR) + IB verdikt + kontejnment hint.
+// Jen na barstate.islast (levné). Anti-flip: kotvy se přes den skoro nemění,
+// IB verdikt = JEDNO přehodnocení v konci první RTH hodiny.
+// ════════════════════════════════════════════════════════════════════════════
+biasBullCol = color.new(#26A69A, 0)
+biasBearCol = color.new(#EF5350, 0)
+biasMutCol = color.new(#B0BEC5, 0)
+
+f_biasArrow(bool above) => above ? "▲ nad" : "▼ pod"
+f_biasCol(bool above) => above ? biasBullCol : biasBearCol
+
+var table biasTbl = na
+if showBiasTable
+    if na(biasTbl)
+        biasTbl := table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 25), border_width=1, border_color=color.new(color.white, 88))
+    if barstate.islast
+        table.clear(biasTbl, 0, 0, 1, 9)
+
+        // Gap: po openu fixní (RTH Open − PDC), před openem předběžný z aktuální ceny (~).
+        float gapAtr = na
+        if not na(pdClose) and not na(dAtr) and dAtr > 0
+            gapAtr := ((rthOpened and not na(rthOpenPrice) ? rthOpenPrice : close) - pdClose) / dAtr
+        bool gapValid = not na(gapAtr)
+        float gA = nz(gapAtr)
+        bool gapUp = gapValid and gA > 0
+        string gapCls = not gapValid ? "" : math.abs(gA) < 0.3 ? "drobný" : math.abs(gA) < 0.7 ? "malý" : math.abs(gA) < 1.2 ? "střední" : "VELKÝ"
+        table.cell(biasTbl, 0, 0, "Gap" + (rthOpened ? "" : " ~"), text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 0, not gapValid ? "—" : (gA > 0 ? "▲ +" : "▼ ") + str.tostring(gA, "#.##") + " ATR (" + gapCls + ")", text_color=not gapValid ? biasMutCol : f_biasCol(gapUp), text_size=size.tiny, text_halign=text.align_right)
+
+        // Kotvy: nad/pod. Součet zelených → skóre.
+        int bullN = 0
+        int validN = 0
+        // PDC
+        bool vPdc = not na(pdClose)
+        bool aPdc = vPdc and close > nz(pdClose)
+        if vPdc
+            validN += 1
+            bullN += aPdc ? 1 : 0
+        table.cell(biasTbl, 0, 1, "PDC", text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 1, vPdc ? f_biasArrow(aPdc) : "—", text_color=vPdc ? f_biasCol(aPdc) : biasMutCol, text_size=size.tiny, text_halign=text.align_right)
+        // ON MID
+        bool vOn = rthOpened and not na(onMid)
+        bool aOn = vOn and close > nz(onMid)
+        if vOn
+            validN += 1
+            bullN += aOn ? 1 : 0
+        table.cell(biasTbl, 0, 2, "ON MID", text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 2, vOn ? f_biasArrow(aOn) : "—", text_color=vOn ? f_biasCol(aOn) : biasMutCol, text_size=size.tiny, text_halign=text.align_right)
+        // PD MID
+        bool vPm = not na(pdMid)
+        bool aPm = vPm and close > nz(pdMid)
+        if vPm
+            validN += 1
+            bullN += aPm ? 1 : 0
+        table.cell(biasTbl, 0, 3, "PD MID", text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 3, vPm ? f_biasArrow(aPm) : "—", text_color=vPm ? f_biasCol(aPm) : biasMutCol, text_size=size.tiny, text_halign=text.align_right)
+        // RTH Open
+        bool vRo = rthOpened and not na(rthOpenPrice)
+        bool aRo = vRo and close > nz(rthOpenPrice)
+        if vRo
+            validN += 1
+            bullN += aRo ? 1 : 0
+        table.cell(biasTbl, 0, 4, "RTH Open", text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 4, vRo ? f_biasArrow(aRo) : "—", text_color=vRo ? f_biasCol(aRo) : biasMutCol, text_size=size.tiny, text_halign=text.align_right)
+        // pdVWAP
+        bool vPv = not na(prevVWAP)
+        bool aPv = vPv and close > nz(prevVWAP)
+        if vPv
+            validN += 1
+            bullN += aPv ? 1 : 0
+        table.cell(biasTbl, 0, 5, "pdVWAP", text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 5, vPv ? f_biasArrow(aPv) : "—", text_color=vPv ? f_biasCol(aPv) : biasMutCol, text_size=size.tiny, text_halign=text.align_right)
+        // VWAP
+        bool vVw = not na(dVWAP)
+        bool aVw = vVw and close > nz(dVWAP)
+        if vVw
+            validN += 1
+            bullN += aVw ? 1 : 0
+        table.cell(biasTbl, 0, 6, "VWAP", text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 6, vVw ? f_biasArrow(aVw) : "—", text_color=vVw ? f_biasCol(aVw) : biasMutCol, text_size=size.tiny, text_halign=text.align_right)
+
+        // SKÓRE + verdikt. NEUTRAL je legitimní stav (rotační den = bez biasu, žádný flip-flop).
+        float ratio = validN > 0 ? bullN * 1.0 / validN : 0.5
+        string verdict = validN == 0 ? "—" : ratio >= 0.7 ? "BULLISH" : ratio <= 0.3 ? "BEARISH" : "NEUTRAL"
+        color vCol = verdict == "BULLISH" ? biasBullCol : verdict == "BEARISH" ? biasBearCol : biasMutCol
+        table.cell(biasTbl, 0, 7, "SKÓRE " + str.tostring(bullN) + "/" + str.tostring(validN), text_color=color.white, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(vCol, 70))
+        table.cell(biasTbl, 1, 7, (verdict == "BULLISH" ? "▲ " : verdict == "BEARISH" ? "▼ " : "◆ ") + verdict, text_color=vCol, text_size=size.small, text_halign=text.align_right, bgcolor=color.new(vCol, 70))
+
+        // IB stav: tvoří se → verdikt (trend/rotace). Runner přepínač přímo na grafu.
+        string ibTxt = not rthOpened ? "před RTH" : not ibFrozen ? "tvoří se…" : ibBrokeUp and ibBrokeDown ? "ROTACE (obě strany)" : ibBrokeUp ? "↑ BREAK — trend?" : ibBrokeDown ? "↓ BREAK — trend?" : "uvnitř range"
+        color ibCol = not ibFrozen ? biasMutCol : ibBrokeUp and ibBrokeDown ? color.new(#FFB74D, 0) : ibBrokeUp ? biasBullCol : ibBrokeDown ? biasBearCol : biasMutCol
+        table.cell(biasTbl, 0, 8, "IB", text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 8, ibTxt, text_color=ibCol, text_size=size.tiny, text_halign=text.align_right)
+
+        // Kontejnment hint: gap-up → PDL prakticky mimo hru (86–93 %), zrcadlově PDH.
+        string contTxt = not gapValid ? "" : gA >= 0.15 ? "⛔ PDL dnes není target" : gA <= -0.15 ? "⛔ PDH dnes není target" : ""
+        table.cell(biasTbl, 0, 9, contTxt == "" ? "" : "⛔", text_color=biasMutCol, text_size=size.tiny, text_halign=text.align_left)
+        table.cell(biasTbl, 1, 9, contTxt == "" ? "" : str.replace(contTxt, "⛔ ", ""), text_color=color.new(#FFB74D, 0), text_size=size.tiny, text_halign=text.align_right)
 
