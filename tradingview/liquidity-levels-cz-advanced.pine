@@ -95,15 +95,15 @@ zoneSize = input.float(2, title="Velikost", minval=0.5, maxval=10, step=0.5, inl
 // Vizuální hierarchie: ON H/L = VSTUPNÍ extrémy (plné, sweep+dotyky jako ostatní extrémy).
 // Kompas (PDC/PD MID/ON MID/RTH Open) = tenké tečkované, bez dotyků — orientace + TP, NE vstupy.
 // IB H/L se objeví až po uzavření první RTH hodiny (do té doby nešumí).
-showON        = input.bool(true, title="", inline="on1", group="Bias & Kontext")
+showON        = input.bool(false, title="", inline="on1", group="Bias & Kontext")
 onColor       = input.color(color.new(#FF5252, 0), title="ON High/Low (overnight extrémy)", inline="on1", group="Bias & Kontext")
-showCompass   = input.bool(true, title="", inline="cmp", group="Bias & Kontext")
+showCompass   = input.bool(false, title="", inline="cmp", group="Bias & Kontext")
 compassColor  = input.color(color.new(#90A4AE, 30), title="Kompas: PDC · PD MID · ON MID · RTH Open", inline="cmp", group="Bias & Kontext")
-showIB        = input.bool(true, title="", inline="ib1", group="Bias & Kontext")
+showIB        = input.bool(false, title="", inline="ib1", group="Bias & Kontext")
 ibColor       = input.color(color.new(#7C4DFF, 0), title="IB High/Low (první hodina RTH)", inline="ib1", group="Bias & Kontext")
 rthOpenHour   = input.int(15, title="RTH open", minval=0, maxval=23, inline="rth", group="Bias & Kontext")
 rthOpenMin    = input.int(30, title=":", minval=0, maxval=59, inline="rth", group="Bias & Kontext")
-showBiasTable = input.bool(true, title="Bias tabulka (vpravo nahoře)", inline="bt", group="Bias & Kontext")
+showBiasTable = input.bool(false, title="Bias tabulka (vpravo nahoře)", inline="bt", group="Bias & Kontext")
 
 // ════════════════════════════════════════════════════════════════════════════
 // 🔧 HELPER FUNKCE A STRUKTURY (Pine Script v6 UDT)
