@@ -146,7 +146,7 @@ Deno.serve(async (req: Request) => {
     .sort((a: any, b: any) => (a._ageDays ?? 1e9) - (b._ageDays ?? 1e9));
 
   const byDay = new Map<string, number>();
-  for (const t of realTrades as any[]) {
+  for (const t of liveRows as any[]) {
     const d = String(t.date).slice(0, 10);
     byDay.set(d, (byDay.get(d) || 0) + (Number(t.pnl) || 0));
   }
@@ -185,11 +185,11 @@ Deno.serve(async (req: Request) => {
   // KRITICKÉ: nemíchej "tento týden" a "minulý týden". Coach často chyboval —
   // říkal "týden 2W/1L" když všechny obchody byly z minulého týdne a tento týden
   // user neměl žádný real trade.
-  p.push(`Tento týden (od pondělí ${mondayIso}): ${tw.n} trades${tw.n > 0 ? `, ${tw.w}W/${tw.l}L, PnL $${tw.pnl.toFixed(0)}` : ' — zatím nic'}`);
+  p.push(`Tento týden (od pondělí ${mondayIso}): ${tw.n} trades (unikátních)${tw.n > 0 ? `, ${tw.w}W/${tw.l}L, PnL $${tw.pnl.toFixed(0)} (součet přes účty)` : ' — zatím nic'}`);
   if (lw.n > 0) {
-    p.push(`Minulý týden: ${lw.n} trades, ${lw.w}W/${lw.l}L, PnL $${lw.pnl.toFixed(0)}`);
+    p.push(`Minulý týden: ${lw.n} trades (unikátních), ${lw.w}W/${lw.l}L, PnL $${lw.pnl.toFixed(0)} (součet přes účty)`);
   }
-  p.push(`Celkem 7 dní zpět: ${realTrades.length} trades, ${wins}W/${losses}L, PnL $${totalPnl.toFixed(0)} (referenční číslo)`);
+  p.push(`Celkem 7 dní zpět: ${realTrades.length} trades (unikátních), ${wins}W/${losses}L, PnL $${totalPnl.toFixed(0)} (součet přes účty, referenční číslo)`);
   if (!isWeekend) {
     p.push(`Dnes: ${todayHasTrades ? 'má obchody' : 'bez obchodů'}, ${todayHasPrep ? 'příprava VYPLNĚNÁ' : 'příprava CHYBÍ'}, ${todayHasReview ? 'review VYPLNĚNÁ' : 'review CHYBÍ'}`);
   }

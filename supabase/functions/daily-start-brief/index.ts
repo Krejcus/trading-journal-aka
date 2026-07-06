@@ -123,7 +123,7 @@ Deno.serve(async (req: Request) => {
   p.push('');
   p.push('=== KONTEXT ===');
   p.push(`Dnes: ${isoTZ(now)} (${weekdayCs(now)})`);
-  p.push(`Včera (${yesterdayIso}): ${yesterdayTrades.length} obchodů, ${yesterdayWins}W/${yesterdayLosses}L, PnL $${yesterdayPnl.toFixed(0)}`);
+  p.push(`Včera (${yesterdayIso}): ${yesterdayTrades.length} obchodů (unikátní), ${yesterdayWins}W/${yesterdayLosses}L, PnL $${yesterdayPnl.toFixed(0)} (součet přes účty)`);
   if (yesterdayReview?.data?.mainTakeaway) {
     p.push(`Včerejší review takeaway: "${String(yesterdayReview.data.mainTakeaway).slice(0, 200)}"`);
   }
