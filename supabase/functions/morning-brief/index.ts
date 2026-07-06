@@ -49,6 +49,26 @@ function weekdayCs(d: Date): string {
 }
 function subDays(d: Date, n: number): Date { const x = new Date(d); x.setDate(x.getDate() - n); return x; }
 
+// ── Normalizace obchodů: Missed ven, backtest účty ven, fan-out kopie (1 obchod
+// = N zápisů na účty) → 1 záznam (master). Bez tohoto brief počítal syrové kopie:
+// "0/20 trades, -$4873" místo reálných 13 obchodů 5W/8L +$3678. pnlAll = součet
+// VŠECH kopií (reálné dolary přes účty); počty/W/L se berou z dedup záznamů.
+function normalizeTrades(rows: any[], backtestAccIds: Set<string>) {
+  const live = (rows || []).filter((t: any) =>
+    t.data?.executionStatus !== 'Missed' && !backtestAccIds.has(String(t.account_id ?? '')));
+  const solo: any[] = []; const byGroup = new Map<string, any>();
+  for (const t of live) {
+    const g = t.data?.groupId;
+    if (!g) { solo.push(t); continue; }
+    const cur = byGroup.get(g);
+    if (!cur || (t.data?.isMaster === true && cur.data?.isMaster !== true)) byGroup.set(g, t);
+  }
+  const dedup = [...solo, ...byGroup.values()].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const pnlAll = live.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
+  return { dedup, pnlAll };
+}
+const isBEtrade = (t: any) => t.data?.isBE === true || Math.abs(Number(t.pnl) || 0) <= 0.01;
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
   if (req.method !== 'POST') return json({ error: 'method-not-allowed' }, 405);
@@ -78,27 +98,30 @@ Deno.serve(async (req: Request) => {
   const yesterdayIso = isoTZ(subDays(now, 1));
 
   const [tradesRes, reviewsRes, memoryRes, accountsRes] = await Promise.all([
-    supabase.from('trades').select('id, date, instrument, direction, pnl, data')
-      .eq('user_id', userId).gte('date', day7).order('date', { ascending: false }).limit(20),
+    // limit 500 řádků: fan-out = 1 obchod ~10 zápisů; dřívější limit 20 chytil jen
+    // kopie posledních ~2 obchodů (a jen ztráty, protože řadí od nejnovějších).
+    supabase.from('trades').select('id, date, instrument, direction, pnl, data, account_id')
+      .eq('user_id', userId).gte('date', day7).order('date', { ascending: false }).limit(500),
     supabase.from('daily_reviews').select('date, data').eq('user_id', userId).order('date', { ascending: false }).limit(3),
     supabase.from('ai_coach_memory').select('type, content, memory_date, importance, metadata')
       .eq('user_id', userId).order('importance', { ascending: false }).limit(6),
-    supabase.from('accounts').select('id, name, status, meta').eq('user_id', userId),
+    supabase.from('accounts').select('id, name, status, type, meta').eq('user_id', userId),
   ]);
 
-  const recentTrades = (tradesRes.data || []).filter((t: any) => t.data?.executionStatus !== 'Missed');
   const recentReviews = reviewsRes.data || [];
   const memory = memoryRes.data || [];
-  const accounts = (accountsRes.data || []).map((a: any) => ({ ...(a.meta || {}), id: a.id, name: a.name, status: a.status }));
+  const accounts = (accountsRes.data || []).map((a: any) => ({ ...(a.meta || {}), id: a.id, name: a.name, status: a.status, type: a.type }));
+
+  const backtestIds = new Set(accounts.filter((a: any) => a.type === 'Backtest').map((a: any) => String(a.id)));
+  const { dedup: recentTrades, pnlAll: last7Pnl } = normalizeTrades(tradesRes.data || [], backtestIds);
 
   // Skip if already traded today — banner is for PRE-market.
   const todayHasTrades = recentTrades.some((t: any) => String(t.date).slice(0, 10) === todayIso);
   if (todayHasTrades) return json({ ok: true, brief: null, skipped: 'already-traded' });
 
-  // Aggregate signals
-  const last7Pnl = recentTrades.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
-  const wins = recentTrades.filter((t: any) => Number(t.pnl) > 0.01).length;
-  const losses = recentTrades.filter((t: any) => Number(t.pnl) < -0.01).length;
+  // Aggregate signals — počty z dedup (reálné obchody), PnL součet přes všechny účty.
+  const wins = recentTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) > 0).length;
+  const losses = recentTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) < 0).length;
 
   // Tone heuristic — pre-prompt classification so model has a target.
   let tone: 'positive' | 'caution' | 'warning' = 'positive';
@@ -142,7 +165,7 @@ Deno.serve(async (req: Request) => {
   p.push('');
   p.push('=== KONTEXT ===');
   p.push(`Dnes: ${todayIso} (${weekdayCs(now)})`);
-  p.push(`Posledních 7 dní: ${recentTrades.length} trades, ${wins}W/${losses}L, PnL $${last7Pnl.toFixed(0)}`);
+  p.push(`Posledních 7 dní: ${recentTrades.length} trades (unikátní, bez kopií přes účty), ${wins}W/${losses}L, PnL $${last7Pnl.toFixed(0)} (součet přes všechny účty)`);
   p.push(`Pre-tone (heuristika): ${tone}`);
   p.push('');
 

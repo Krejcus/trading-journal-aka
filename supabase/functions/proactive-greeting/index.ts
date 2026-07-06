@@ -35,6 +35,26 @@ function weekdayCs(d: Date): string {
 function subDays(d: Date, n: number): Date { const x = new Date(d); x.setDate(x.getDate() - n); return x; }
 function daysBetween(a: Date, b: Date): number { return (a.getTime() - b.getTime()) / 86400000; }
 
+// ── Normalizace obchodů: Missed ven, backtest účty ven, fan-out kopie → 1 záznam
+// (master). Bez toho greeting hlásil "11 výher" u 1 obchodu na 11 účtech. pnlAll =
+// součet VŠECH kopií (reálné dolary); počty/W/L z dedup záznamů. (Kopie helperu
+// z morning-brief — edge funkce zatím nesdílejí modul.)
+function normalizeTrades(rows: any[], backtestAccIds: Set<string>) {
+  const live = (rows || []).filter((t: any) =>
+    t.data?.executionStatus !== 'Missed' && !backtestAccIds.has(String(t.account_id ?? '')));
+  const solo: any[] = []; const byGroup = new Map<string, any>();
+  for (const t of live) {
+    const g = t.data?.groupId;
+    if (!g) { solo.push(t); continue; }
+    const cur = byGroup.get(g);
+    if (!cur || (t.data?.isMaster === true && cur.data?.isMaster !== true)) byGroup.set(g, t);
+  }
+  const dedup = [...solo, ...byGroup.values()].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const pnlAll = live.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
+  return { dedup, pnlAll, live };
+}
+const isBEtrade = (t: any) => t.data?.isBE === true || Math.abs(Number(t.pnl) || 0) <= 0.01;
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
   if (req.method !== 'POST') return json({ error: 'method-not-allowed' }, 405);
@@ -54,27 +74,27 @@ Deno.serve(async (req: Request) => {
   const day7 = isoTZ(subDays(now, 7));
 
   const [tradesRes, prepsRes, reviewsRes, memoryRes, profileRes, accountsRes] = await Promise.all([
-    supabase.from('trades').select('id, date, instrument, direction, pnl, data')
-      .eq('user_id', userId).gte('date', day7).order('date', { ascending: false }).limit(40),
+    // limit 500: fan-out = 1 obchod ~10 řádků, dřívější limit 40 pokryl jen ~4 obchody.
+    supabase.from('trades').select('id, date, instrument, direction, pnl, data, account_id')
+      .eq('user_id', userId).gte('date', day7).order('date', { ascending: false }).limit(500),
     supabase.from('daily_preps').select('date, data').eq('user_id', userId).order('date', { ascending: false }).limit(5),
     supabase.from('daily_reviews').select('date, data').eq('user_id', userId).order('date', { ascending: false }).limit(5),
     supabase.from('ai_coach_memory').select('type, content, memory_date, importance')
       .eq('user_id', userId).order('importance', { ascending: false }).limit(8),
     supabase.from('ai_coach_profile').select('facts, preferences').eq('user_id', userId).maybeSingle(),
-    supabase.from('accounts').select('id, name, status, meta').eq('user_id', userId),
+    supabase.from('accounts').select('id, name, status, type, meta').eq('user_id', userId),
   ]);
 
-  const recentTrades = tradesRes.data || [];
   const recentPreps = prepsRes.data || [];
   const recentReviews = reviewsRes.data || [];
   const memory = memoryRes.data || [];
   const profile = profileRes.data;
-  const accounts = (accountsRes.data || []).map((a: any) => ({ ...(a.meta || {}), id: a.id, name: a.name, status: a.status }));
+  const accounts = (accountsRes.data || []).map((a: any) => ({ ...(a.meta || {}), id: a.id, name: a.name, status: a.status, type: a.type }));
 
-  const realTrades = recentTrades.filter((t: any) => t.data?.executionStatus !== 'Missed');
-  const totalPnl = realTrades.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
-  const wins = realTrades.filter((t: any) => Number(t.pnl) > 0.01).length;
-  const losses = realTrades.filter((t: any) => Number(t.pnl) < -0.01).length;
+  const backtestIds = new Set(accounts.filter((a: any) => a.type === 'Backtest').map((a: any) => String(a.id)));
+  const { dedup: realTrades, pnlAll: totalPnl, live: liveRows } = normalizeTrades(tradesRes.data || [], backtestIds);
+  const wins = realTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) > 0).length;
+  const losses = realTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) < 0).length;
 
   // Rozdělení trades na "tento týden" (od pondělí) vs. "minulý týden".
   // Bez tohoto coach říkal "máš za sebou týden 2W/1L" i když všechny obchody
@@ -85,17 +105,21 @@ Deno.serve(async (req: Request) => {
   const isOnOrAfter = (dateStr: string, isoBoundary: string) => String(dateStr).slice(0, 10) >= isoBoundary;
   const thisWeekTrades = realTrades.filter((t: any) => isOnOrAfter(t.date, mondayIso));
   const lastWeekTrades = realTrades.filter((t: any) => !isOnOrAfter(t.date, mondayIso));
+  // pnl týdne = součet přes všechny účty (liveRows vč. kopií), počty z dedup.
+  const weekPnl = (afterMonday: boolean) => liveRows
+    .filter((t: any) => isOnOrAfter(t.date, mondayIso) === afterMonday)
+    .reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
   const tw = {
     n: thisWeekTrades.length,
-    pnl: thisWeekTrades.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0),
-    w: thisWeekTrades.filter((t: any) => Number(t.pnl) > 0.01).length,
-    l: thisWeekTrades.filter((t: any) => Number(t.pnl) < -0.01).length,
+    pnl: weekPnl(true),
+    w: thisWeekTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) > 0).length,
+    l: thisWeekTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) < 0).length,
   };
   const lw = {
     n: lastWeekTrades.length,
-    pnl: lastWeekTrades.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0),
-    w: lastWeekTrades.filter((t: any) => Number(t.pnl) > 0.01).length,
-    l: lastWeekTrades.filter((t: any) => Number(t.pnl) < -0.01).length,
+    pnl: weekPnl(false),
+    w: lastWeekTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) > 0).length,
+    l: lastWeekTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) < 0).length,
   };
 
   const todayIso = isoTZ(now);

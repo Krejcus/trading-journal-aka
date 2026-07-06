@@ -32,6 +32,26 @@ function weekdayCs(d: Date): string { return new Intl.DateTimeFormat('cs-CZ', { 
 function subDays(d: Date, n: number): Date { const x = new Date(d); x.setDate(x.getDate() - n); return x; }
 function daysBetween(a: Date, b: Date): number { return (a.getTime() - b.getTime()) / 86400000; }
 
+// ── Normalizace obchodů: Missed ven, backtest účty ven, fan-out kopie → 1 záznam
+// (master). Bez toho brief počítal každý obchod N× (kopie přes účty). pnlAll =
+// součet VŠECH kopií (reálné dolary); počty/W/L z dedup záznamů. (Kopie helperu
+// z morning-brief — edge funkce zatím nesdílejí modul.)
+function normalizeTrades(rows: any[], backtestAccIds: Set<string>) {
+  const live = (rows || []).filter((t: any) =>
+    t.data?.executionStatus !== 'Missed' && !backtestAccIds.has(String(t.account_id ?? '')));
+  const solo: any[] = []; const byGroup = new Map<string, any>();
+  for (const t of live) {
+    const g = t.data?.groupId;
+    if (!g) { solo.push(t); continue; }
+    const cur = byGroup.get(g);
+    if (!cur || (t.data?.isMaster === true && cur.data?.isMaster !== true)) byGroup.set(g, t);
+  }
+  const dedup = [...solo, ...byGroup.values()].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const pnlAll = live.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
+  return { dedup, pnlAll, live };
+}
+const isBEtrade = (t: any) => t.data?.isBE === true || Math.abs(Number(t.pnl) || 0) <= 0.01;
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
   if (req.method !== 'POST') return json({ error: 'method-not-allowed' }, 405);
@@ -52,22 +72,26 @@ Deno.serve(async (req: Request) => {
   const day14 = isoTZ(subDays(now, 14));
 
   const [tradesRes, reviewsRes, memoryRes, accountsRes] = await Promise.all([
-    supabase.from('trades').select('date, pnl, data').eq('user_id', userId).gte('date', day14).order('date', { ascending: false }).limit(60),
+    // limit 500: fan-out = 1 obchod ~10 řádků, dřívější limit 60 pokryl jen ~6 obchodů.
+    supabase.from('trades').select('date, pnl, data, account_id').eq('user_id', userId).gte('date', day14).order('date', { ascending: false }).limit(500),
     supabase.from('daily_reviews').select('date, data').eq('user_id', userId).order('date', { ascending: false }).limit(3),
     supabase.from('ai_coach_memory').select('type, content, importance, memory_date').eq('user_id', userId).order('importance', { ascending: false }).limit(6),
-    supabase.from('accounts').select('id, name, status, meta').eq('user_id', userId),
+    supabase.from('accounts').select('id, name, status, type, meta').eq('user_id', userId),
   ]);
 
-  const trades = (tradesRes.data || []).filter((t: any) => t.data?.executionStatus !== 'Missed');
   const reviews = reviewsRes.data || [];
   const memory = memoryRes.data || [];
-  const accounts = (accountsRes.data || []).map((a: any) => ({ ...(a.meta || {}), id: a.id, name: a.name, status: a.status }));
+  const accounts = (accountsRes.data || []).map((a: any) => ({ ...(a.meta || {}), id: a.id, name: a.name, status: a.status, type: a.type }));
 
-  // Včerejší recap
+  const backtestIds = new Set(accounts.filter((a: any) => a.type === 'Backtest').map((a: any) => String(a.id)));
+  const { dedup: trades, live: liveRows } = normalizeTrades(tradesRes.data || [], backtestIds);
+
+  // Včerejší recap — počty z dedup (reálné obchody), PnL součet přes všechny účty.
   const yesterdayTrades = trades.filter((t: any) => String(t.date).slice(0, 10) === yesterdayIso);
-  const yesterdayPnl = yesterdayTrades.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
-  const yesterdayWins = yesterdayTrades.filter((t: any) => Number(t.pnl) > 0.01).length;
-  const yesterdayLosses = yesterdayTrades.filter((t: any) => Number(t.pnl) < -0.01).length;
+  const yesterdayPnl = liveRows.filter((t: any) => String(t.date).slice(0, 10) === yesterdayIso)
+    .reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
+  const yesterdayWins = yesterdayTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) > 0).length;
+  const yesterdayLosses = yesterdayTrades.filter((t: any) => !isBEtrade(t) && Number(t.pnl) < 0).length;
   const yesterdayReview = reviews.find((r: any) => r.date === yesterdayIso);
 
   // Nedávno spálené účty (max 14 dní)
