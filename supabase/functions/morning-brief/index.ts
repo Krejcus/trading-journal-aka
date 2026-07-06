@@ -65,7 +65,7 @@ function normalizeTrades(rows: any[], backtestAccIds: Set<string>) {
   }
   const dedup = [...solo, ...byGroup.values()].sort((a, b) => String(b.date).localeCompare(String(a.date)));
   const pnlAll = live.reduce((s: number, t: any) => s + (Number(t.pnl) || 0), 0);
-  return { dedup, pnlAll };
+  return { dedup, pnlAll, live };
 }
 const isBEtrade = (t: any) => t.data?.isBE === true || Math.abs(Number(t.pnl) || 0) <= 0.01;
 
@@ -113,7 +113,28 @@ Deno.serve(async (req: Request) => {
   const accounts = (accountsRes.data || []).map((a: any) => ({ ...(a.meta || {}), id: a.id, name: a.name, status: a.status, type: a.type }));
 
   const backtestIds = new Set(accounts.filter((a: any) => a.type === 'Backtest').map((a: any) => String(a.id)));
-  const { dedup: recentTrades, pnlAll: last7Pnl } = normalizeTrades(tradesRes.data || [], backtestIds);
+  const { dedup: recentTrades, pnlAll: last7Pnl, live: liveRows } = normalizeTrades(tradesRes.data || [], backtestIds);
+
+  // Rozpis PO DNECH (all-copies $ + W/L z dedup) — bez tohoto model bral "posledních 5 obchodů"
+  // a 4 ztrátové obchody vydával za "4 červené dny" (-$1001), přestože týden byl +$3678.
+  const dayAgg = new Map<string, { pnl: number; w: number; l: number }>();
+  for (const t of liveRows) {
+    const d = String(t.date).slice(0, 10);
+    const cur = dayAgg.get(d) || { pnl: 0, w: 0, l: 0 };
+    cur.pnl += Number(t.pnl) || 0;
+    dayAgg.set(d, cur);
+  }
+  for (const t of recentTrades) { // W/L počítej z unikátních obchodů (ne kopií)
+    const d = String(t.date).slice(0, 10);
+    const cur = dayAgg.get(d); if (!cur) continue;
+    if (t.data?.isBE === true || Math.abs(Number(t.pnl) || 0) <= 0.01) { /* BE */ }
+    else if (Number(t.pnl) > 0) cur.w++;
+    else if (Number(t.pnl) < 0) cur.l++;
+  }
+  const dayLines = [...dayAgg.entries()].sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([d, v]) => `  ${d} (${weekdayCs(new Date(d + 'T12:00:00'))}): ${v.w}W/${v.l}L, $${v.pnl.toFixed(0)}`);
+  const redDays = [...dayAgg.values()].filter(v => v.pnl < 0).length;
+  const greenDays = [...dayAgg.values()].filter(v => v.pnl > 0).length;
 
   // Skip if already traded today — banner is for PRE-market.
   const todayHasTrades = recentTrades.some((t: any) => String(t.date).slice(0, 10) === todayIso);
@@ -165,7 +186,17 @@ Deno.serve(async (req: Request) => {
   p.push('');
   p.push('=== KONTEXT ===');
   p.push(`Dnes: ${todayIso} (${weekdayCs(now)})`);
-  p.push(`Posledních 7 dní: ${recentTrades.length} trades (unikátní, bez kopií přes účty), ${wins}W/${losses}L, PnL $${last7Pnl.toFixed(0)} (součet přes všechny účty)`);
+  p.push(`PnL ZA 7 DNÍ (fakt, součet přes všechny účty): $${last7Pnl.toFixed(0)} — ${last7Pnl >= 0 ? 'ZISKOVÝ týden' : 'ztrátový týden'}.`);
+  p.push(`Obchody za 7 dní: ${recentTrades.length} unikátních, ${wins}W/${losses}L. Obchodních dní: ${dayAgg.size} (${greenDays} zelených, ${redDays} červených).`);
+  if (dayLines.length) {
+    p.push('ROZPIS PO DNECH (datum: W/L, $ přes všechny účty):');
+    for (const l of dayLines) p.push(l);
+  }
+  p.push('');
+  p.push('⚠️ TVRDÁ PRAVIDLA K ČÍSLŮM:');
+  p.push('- Použij VÝHRADNĚ čísla výše. NEPOČÍTEJ si vlastní součty z jednotlivých obchodů.');
+  p.push('- NEZAMĚŇUJ počet obchodů za počet dní ("4 ztráty" ≠ "4 dny").');
+  p.push(`- 7denní PnL je $${last7Pnl.toFixed(0)}. Pokud je kladné, NIKDY netvrď "červený/ztrátový týden" ani "dny čistě červené".`);
   p.push(`Pre-tone (heuristika): ${tone}`);
   p.push('');
 
@@ -182,12 +213,16 @@ Deno.serve(async (req: Request) => {
     p.push('');
   }
 
-  if (recentTrades.length > 0) {
-    p.push('=== POSLEDNÍCH 5 OBCHODŮ ===');
-    for (const t of recentTrades.slice(0, 5) as any[]) {
-      const mistakes = (t.data?.mistakes || []).join(',');
-      p.push(`[${String(t.date).slice(0, 10)}] ${t.direction} ${t.instrument} → $${Number(t.pnl || 0).toFixed(0)}${mistakes ? ` (chyby: ${mistakes})` : ''}`);
-    }
+  // Chyby z posledních obchodů — BEZ per-trade $ (model si z nich dělal falešné "denní" součty).
+  const mistakeFreq = new Map<string, number>();
+  for (const t of recentTrades.slice(0, 12) as any[]) {
+    for (const m of (t.data?.mistakes || [])) mistakeFreq.set(m, (mistakeFreq.get(m) || 0) + 1);
+  }
+  const topMistakes = [...mistakeFreq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+    .map(([m, c]) => `${m} (${c}×)`);
+  if (topMistakes.length) {
+    p.push(`=== NEJČASTĚJŠÍ CHYBY (posledních ${Math.min(12, recentTrades.length)} obchodů) ===`);
+    p.push(topMistakes.join(', '));
     p.push('');
   }
 
