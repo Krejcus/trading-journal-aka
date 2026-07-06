@@ -2682,6 +2682,36 @@ const App: React.FC = () => {
   }, [trades]);
 
   const handleUpdateTrade = useCallback((tradeId: string | number, updates: Partial<Trade>) => {
+    // ── COMBINED (agregovaný) obchod: id je syntetické `combined_<groupId>`, v DB neexistuje.
+    // Editaci propíšeme na VŠECHNY reálné kopie skupiny (fan-out sdílí entry/SL/TP/setup),
+    // ale per-account/aggregát čísla NIKDY nepřepisujeme (pnl/risk/target jsou součty).
+    if (typeof tradeId === 'string' && tradeId.startsWith('combined_')) {
+      const groupId = tradeId.slice('combined_'.length);
+      const { pnl: _p, riskAmount: _r, targetAmount: _t, id: _id, ...rest } = updates as any;
+      const safe: Partial<Trade> = { ...rest };
+      // notes v combined nesou suffix "(Kombinováno z N účtů)" — při zápisu ho odstraň.
+      if (typeof (safe as any).notes === 'string') {
+        (safe as any).notes = (safe as any).notes.replace(/\s*\(Kombinováno z \d+ účtů\)\s*$/, '').trim();
+      }
+      if (Object.keys(safe).length === 0) return; // jen per-account pole → nic k propsání
+
+      let memberIds: (string | number)[] = [];
+      let memberSnapshots: Trade[] = [];
+      setTrades(prev => {
+        const members = prev.filter(t => t.groupId === groupId);
+        memberIds = members.map(m => m.id);
+        memberSnapshots = members.map(m => ({ ...m }));
+        return prev.map(t => t.groupId === groupId ? { ...t, ...safe } : t);
+      });
+      const persistable = memberIds.filter(id => typeof id === 'string' && id.includes('-'));
+      Promise.all(persistable.map(id => storageService.updateTrade(String(id), safe))).catch(err => {
+        console.error("Failed to persist combined trade update:", err);
+        setSyncError("Nepodařilo se uložit změny obchodu. Změny byly vráceny zpět.");
+        setTrades(prev => prev.map(t => memberSnapshots.find(s => s.id === t.id) || t));
+      });
+      return;
+    }
+
     // Snapshot stavu před optimistickou aktualizací pro případ rollbacku
     let snapshot: Trade | undefined;
     setTrades(prev => {
