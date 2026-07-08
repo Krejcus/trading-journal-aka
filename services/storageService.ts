@@ -1387,46 +1387,6 @@ export const storageService = {
     }));
   },
 
-  // ── Lab experimenty — vlastní tabulka lab_experiments (zdroj pravdy).
-  //    Dřív žily v preferences blobu → last-write-wins ztráty mezi zařízeními.
-  //    PK (id, user_id): id je klientské `exp_<timestamp>`, obsah celý v jsonb `data`.
-  async getLabExperiments(): Promise<LabExperiment[]> {
-    const userId = await getUserId();
-    if (!userId) return [];
-    const { data, error } = await supabase
-      .from('lab_experiments')
-      .select('id, data')
-      .eq('user_id', userId);
-    if (error) {
-      console.error('Supabase getLabExperiments error:', error);
-      throw error; // App na chybu reaguje retry při příštím otevření Labu
-    }
-    return (data || []).map((r: any) => ({ ...(r.data || {}), id: r.id })) as LabExperiment[];
-  },
-
-  async upsertLabExperiment(exp: LabExperiment): Promise<void> {
-    const userId = await getUserId();
-    if (!userId) return;
-    const { error } = await supabase
-      .from('lab_experiments')
-      .upsert(
-        { id: exp.id, user_id: userId, data: exp, updated_at: new Date().toISOString() },
-        { onConflict: 'id,user_id' }
-      );
-    if (error) throw error;
-  },
-
-  async deleteLabExperiment(id: string): Promise<void> {
-    const userId = await getUserId();
-    if (!userId) return;
-    const { error } = await supabase
-      .from('lab_experiments')
-      .delete()
-      .eq('user_id', userId)
-      .eq('id', id);
-    if (error) throw error;
-  },
-
   async getBacktestSessions(accountIds?: string[], targetUserId?: string): Promise<Array<{ id: string; accountId: string; date: string; block: string; bias?: string; preNotes?: string; postNotes?: string }>> {
     const userId = targetUserId || await getUserId();
     if (!userId) return [];
@@ -1716,7 +1676,9 @@ export const storageService = {
       .order('created_at', { ascending: true });
     if (error) {
       console.error('[Storage] Error fetching lab experiments:', error);
-      return [];
+      // Throw, ne [] — App rozlišuje „prázdno" (spustí legacy migraci z prefs)
+      // vs. „chyba" (setIsLabExpLoaded(false) → retry při příštím otevření Labu).
+      throw error;
     }
     return (data || []).map((d: any) => ({ ...(d.data || {}), id: d.id }));
   },
