@@ -17,6 +17,7 @@ import {
   setProfileKey,
   type MemoryType,
 } from './coachMemoryService';
+import { buildLabDataset, buildLabReport, prepBiasFromPreps, prepDaysFromPreps, type PrepBiasDay } from './labAnalytics';
 
 // ─── Tool definitions for Anthropic API ──────────────────────────────────────
 
@@ -269,6 +270,30 @@ export const COACH_TOOLS = [
           type: 'array',
           items: { type: 'string', enum: ['expenses', 'payouts', 'breakdown_by_category'] },
           description: 'What to include. Default: all three.',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_lab_analytics',
+    description:
+      'Deterministická čísla ze záložky Lab (stejný kód jako UI). VŽDY použij pro counterfactual otázky ("co kdybych měl SL na FVG/swing/OTE — jaký winrate/výsledek?", "kolik nechávám na stole", "fixní TP vs trailing"), pro bias analýzu ("pomáhá mi bias?") a pro leak detektory (revenge, sizing po ztrátě, slabé hodiny/session, overtrading, bez prepu). Counterfactual varianty jsou PÁROVÉ srovnání (varianta vs. skutečnost na týchž obchodech, pole delta_R) — to je jiné číslo než skupina obchodů, kde trader SL na X reálně dal (na to použij get_stats). Výstup nese pole `svet` (live/backtest) — uveď ho, když se uživatel dívá na jinou záložku. Vrácená čísla NEPŘEPOČÍTÁVEJ ani neodhaduj — cituj je přesně.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        section: {
+          type: 'string',
+          enum: ['overview', 'counterfactual', 'bias', 'sessions', 'leaks', 'all'],
+          description: 'Která část Lab analytiky. Default "all".',
+        },
+        account: {
+          type: 'string',
+          description: 'Volitelný filtr na účet/backtest session (název nebo ID). Bez něj celý aktuální svět (live/backtest dle scope).',
+        },
+        world: {
+          type: 'string',
+          enum: ['live', 'backtest'],
+          description: 'Explicitní svět dat. Default = aktuální coach scope. Použij, když se uživatel ptá na druhý svět.',
         },
       },
     },
@@ -885,6 +910,28 @@ async function getBusinessSummary(args: BusinessSummaryArgs): Promise<unknown> {
   return result;
 }
 
+/** Lab analytika pro coache — stejné výpočty jako záložka Lab (labAnalytics).
+ *  Vstupy (prepBias/prepDays) se sestavují SDÍLENÝMI helpery z labAnalytics —
+ *  žádná ručně synchronizovaná kopie logiky LabPage. */
+function getLabAnalytics(args: { section?: string; account?: string; world?: string } | undefined, ctx: ToolContext) {
+  // Svět: explicitní arg > coach scope (/backtest přepínač). POZOR: coach scope se
+  // může lišit od záložky Lab (ta jede podle dashboardMode) — proto výstup vždy
+  // nese `svet` a model má uvést, ke kterému světu čísla patří.
+  const world = args?.world === 'backtest' ? 'backtest' as const
+    : args?.world === 'live' ? 'live' as const
+    : (ctx.scope === 'backtest' ? 'backtest' as const : 'live' as const);
+  let accountIds: string[] | undefined;
+  if (args?.account) {
+    const id = resolveAccountId(args.account, ctx.accounts || []);
+    if (!id) return { error: `Účet "${args.account}" nenalezen. Použij list_accounts pro seznam.` };
+    accountIds = [id];
+  }
+  const prepBias: PrepBiasDay[] | undefined = world === 'live' ? prepBiasFromPreps(ctx.preps || []) : undefined;
+  const ds = buildLabDataset(ctx.trades, ctx.accounts || [], { world, accountIds, prepBias });
+  const prepDays = world === 'live' ? prepDaysFromPreps(ctx.preps || []) : undefined;
+  return buildLabReport(ds, args?.section || 'all', prepDays);
+}
+
 export async function executeTool(
   name: string,
   args: any,
@@ -912,6 +959,8 @@ export async function executeTool(
         return { ok: true, status: 'deleted_in_background' };
       case 'get_business_summary':
         return await getBusinessSummary(args);
+      case 'get_lab_analytics':
+        return getLabAnalytics(args, ctx);
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -959,6 +1008,10 @@ export function describeToolCall(name: string, args: any): string {
       const period = args?.period || 'this_month';
       const label: Record<string, string> = { this_month: 'tento měsíc', last_month: 'minulý měsíc', this_year: 'letos', all_time: 'celkem', custom: 'vlastní období' };
       return `💰 Načítám finance (${label[period] || period})`;
+    }
+    case 'get_lab_analytics': {
+      const secLabel: Record<string, string> = { overview: 'přehled', counterfactual: 'counterfactual', bias: 'bias', sessions: 'sessions', leaks: 'leaky', all: 'vše' };
+      return `🧪 Lab analytika (${secLabel[args?.section] || 'vše'})${args?.account ? ` · ${args.account}` : ''}`;
     }
     default:
       return `⚙️ ${name}`;

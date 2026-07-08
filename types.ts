@@ -583,6 +583,31 @@ export interface BusinessGoal {
   logs?: Array<{ date: string; value?: number; amount?: number; note?: string }>;
 }
 
+/** Lab experiment — uzavřená smyčka „leak → změna pravidla → měření efektu".
+ *  Obchody PŘED startTs = baseline, PO startTs = běh experimentu; po targetTrades
+ *  obchodech Lab nabídne vyhodnocení. Čísla počítá labAnalytics (deterministicky). */
+export interface LabExperiment {
+    id: string;
+    createdAt: number;
+    world: 'live' | 'backtest';
+    /** Krátký název, např. „Neobchoduji London". */
+    title: string;
+    /** Co očekávám, že se stane. */
+    hypothesis: string;
+    /** Konkrétní pravidlo, které od startu dodržuji. */
+    rule: string;
+    /** ID leak detektoru, ze kterého experiment vznikl (volitelné). */
+    sourceLeakId?: string;
+    /** Po kolika obchodech vyhodnotit. */
+    targetTrades: number;
+    /** Obchody s ts >= startTs se počítají do běhu experimentu. */
+    startTs: number;
+    status: 'running' | 'evaluated' | 'cancelled';
+    /** Závěr po vyhodnocení (předvyplní deterministický verdikt, jde přepsat). */
+    conclusion?: string;
+    evaluatedAt?: number;
+}
+
 export interface ConstitutionRule {
   id: string;
   label: string;
@@ -698,6 +723,7 @@ export interface UserPreferences {
   businessSettings?: BusinessSettings;
   constitutionRules?: ConstitutionRule[];
   careerRoadmap?: CareerCheckpoint[];
+  labExperiments?: LabExperiment[];
   theme?: 'dark' | 'light' | 'oled';
   accentColor?: AccentColor;
   systemSettings?: SystemSettings;

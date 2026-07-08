@@ -17,6 +17,7 @@ import type { UserRole } from '../types';
 /** Pages locked pro friend roli (visible ale neklikatelné — show modal) */
 export const LOCKED_FOR_FRIEND: readonly string[] = [
     'insights',
+    'lab',
     'ai',
     'business',
     'network',
@@ -38,6 +39,10 @@ export const FEATURE_DESCRIPTIONS: Record<string, { name: string; description: s
     insights: {
         name: 'Insights',
         description: 'Hloubková analýza patternů — kdy obchoduješ nejlépe, které setupy ti vydělávají, kde děláš opakované chyby.',
+    },
+    lab: {
+        name: 'Lab',
+        description: 'Analytická laboratoř — counterfactual srovnání SL/TP variant, bias analýza, deterministické leak detektory a experimenty nad tvými obchody.',
     },
     ai: {
         name: 'AI Coach',

@@ -48,14 +48,19 @@ import {
   Terminal,
   Flag,
   Flame,
-  Sparkles
+  Sparkles,
+  Droplets
 } from 'lucide-react';
+import { fmtUsd as labFmtUsd, type LeakFinding } from '../services/labAnalytics';
 import DailyInsightWidget from './DailyInsightWidget';
 import PendingReviewWidget from './PendingReviewWidget';
 import DailyFocusWidget from './DailyFocusWidget';
 
 interface DashboardProps {
   stats: TradeStats;
+  /** Top leak z Lab detektorů — počítá App ze STEJNÝCH vstupů jako záložka Lab
+   *  (celý svět, merged účty, preps). Widget si ho nesmí počítat z scoped stats. */
+  labTopLeak?: LeakFinding | null;
   theme: 'dark' | 'light' | 'oled';
   preps: DailyPrep[];
   reviews: DailyReview[];
@@ -761,6 +766,33 @@ const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: (
   );
 };
 
+// ── Lab: největší leak — top nález deterministických detektorů z labAnalytics ──
+const LabTopLeakWidget: React.FC<{ top: LeakFinding | null; nTrades: number; theme: any }> = ({ top, nTrades, theme }) => {
+  const isDark = theme !== 'light';
+
+  return (
+    <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col">
+      <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400 mb-1">
+        <Droplets size={13} className="text-rose-400" /> Největší leak
+        <InfoIcon text="Top nález deterministických Lab detektorů (revenge, sizing po ztrátě, slabé hodiny/session, bias flip, overtrading…). Skóre = |$ dopad| × konfidence (z-test) × trend. Detail v záložce Lab → Leaky." theme={theme} />
+      </h3>
+      {top ? (
+        <div className="flex-1 flex flex-col justify-center min-h-0">
+          <p className={`text-sm font-black uppercase tracking-tight leading-snug ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{top.title}</p>
+          <p className={`text-xl font-black font-mono mt-1 ${top.usdImpact < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{labFmtUsd(top.usdImpact)}</p>
+          <p className="text-[10px] font-bold text-slate-500 truncate mt-0.5">{top.statLine}</p>
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col items-center justify-center gap-1 text-center">
+          <ShieldCheck size={24} className="text-emerald-400/70" />
+          <p className="text-xs font-bold text-slate-500">Žádný detektor nezabral</p>
+          <p className="text-[10px] text-slate-500">{nTrades < 8 ? 'Málo dat (min. ~8 obchodů).' : 'Na aktuálním vzorku čisto.'}</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MASTER_WIDGET_LIST = [
   { id: 'avg_win_loss', label: 'Avg Win/Loss', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Poměr průměrného zisku a ztráty.', preview: <div className="text-emerald-500 font-black text-xl">3.40</div>, defaultRowSpan: 1 },
   { id: 'streak', label: 'Current Streak', category: 'Psychologie', icon: <Zap size={18} />, description: 'Aktuální série výher/proher.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 1 },
@@ -783,6 +815,7 @@ const MASTER_WIDGET_LIST = [
   { id: 'daily_insight', label: 'Insight Dne (AI)', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Coach každý den vygeneruje jeden personalizovaný insight z tvé historie.', preview: <div className="text-purple-500 font-black text-xs">Sparkles ✨</div>, defaultRowSpan: 1 },
   { id: 'pending_ai_review', label: 'AI Návrhy k Review', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Obchody čekající na schválení/úpravu AI návrhů tagů.', preview: <div className="text-amber-500 font-black text-xs">3 čekají</div>, defaultRowSpan: 1 },
   { id: 'daily_focus', label: 'Dnes Hlídat', category: 'Chování', icon: <Target size={18} />, description: 'Aktivní Iron Rules a checklisty z AI Coache — připomínka co dnes hlídat.', preview: <div className="text-blue-500 font-black text-xs">📋 3 pravidla</div>, defaultRowSpan: 2 },
+  { id: 'lab_top_leak', label: 'Největší Leak (Lab)', category: 'Chování', icon: <Droplets size={18} />, description: 'Top nález deterministických Lab detektorů — co tě teď stojí nejvíc peněz.', preview: <div className="text-rose-500 font-black text-xs">Revenge −$420</div>, defaultRowSpan: 1 },
   { id: 'bt_avg_r', label: 'Avg R / Expectancy', category: 'Backtest', icon: <Target size={18} />, description: 'Průměrný R-multiple a expectancy na obchod.', preview: <div className="text-violet-500 font-black text-xl">+1.38R</div>, defaultRowSpan: 1 },
   { id: 'bt_confluence_wr', label: 'WR dle confluencí', category: 'Backtest', icon: <Layers size={18} />, description: 'Win rate podle počtu confluencí — testuje „víc confluencí = vyšší WR".', preview: <div className="text-violet-500 font-black text-xs">0→4+ conf.</div>, defaultRowSpan: 2 },
   { id: 'bt_sample_size', label: 'Sample-size', category: 'Backtest', icon: <BarChart3 size={18} />, description: 'Statistická důvěra tvého vzorku obchodů.', preview: <div className="text-violet-500 font-black text-xs">solidní vzorek</div>, defaultRowSpan: 1 },
@@ -795,6 +828,7 @@ const BACKTEST_WIDGET_IDS = new Set<string>([
   'kpi_pnl', 'kpi_winrate', 'kpi_profit_factor', 'avg_win_loss', 'kpi_day_winrate', 'kpi_max_drawdown',
   'streak', 'discipline_streak',
   'equity', 'winners_losers', 'monthly_performance', 'session_performance', 'hourly_edge', 'daily_edge', 'calendar',
+  'lab_top_leak',
   'bt_avg_r', 'bt_confluence_wr', 'bt_sample_size', 'bt_monte_carlo',
 ]);
 
@@ -1604,7 +1638,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
 };
 
 const Dashboard: React.FC<DashboardProps> = ({
-  stats, theme, preps, reviews, layouts, sessions, ironRules, onUpdateLayouts,
+  stats, labTopLeak, theme, preps, reviews, layouts, sessions, ironRules, onUpdateLayouts,
   isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
   allTrades = [], payouts = [],
@@ -1900,6 +1934,7 @@ const Dashboard: React.FC<DashboardProps> = ({
     switch (id) {
       case 'challenge_target': return <DistanceToTargetWidget stats={stats} accounts={accounts} theme={theme} currency={targetCurrency} rates={exchangeRates} payouts={payouts} />;
       case 'discipline': return <DisciplineDashboard theme={theme} preps={preps} reviews={reviews} trades={stats.trades} ironRules={ironRules} />;
+      case 'lab_top_leak': return <LabTopLeakWidget top={labTopLeak ?? null} nTrades={stats.trades.length} theme={theme} />;
       case 'kpi_pnl': {
         const totalRr = pnlDisplayMode === 'rr' ? calculateTotalRR(stats.trades) : undefined;
         return (

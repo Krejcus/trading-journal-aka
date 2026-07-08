@@ -2,10 +2,11 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { normalizeTrades, calculateStats } from './services/analysis';
+import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, type LeakFinding } from './services/labAnalytics';
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { safeSetItem } from './utils/safeStorage';
-import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings } from './types';
+import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
@@ -24,6 +25,7 @@ const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
 const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
+const LabPage = React.lazy(() => import('./components/LabPage'));
 const TradovateImportModal = React.lazy(() => import('./components/TradovateImportModal'));
 const TradesyncerImportModal = React.lazy(() => import('./components/TradesyncerImportModal'));
 
@@ -149,6 +151,7 @@ const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: num
   daily_edge: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   calendar: { minW: 4, minH: 5, maxW: 12, maxH: 10 },
   daily_insight: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  lab_top_leak: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   bt_avg_r: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   bt_confluence_wr: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   bt_sample_size: { minW: 2, minH: 2, maxW: 12, maxH: 6 },
@@ -176,6 +179,7 @@ const WIDGET_CONSTRAINTS_XXL: Record<string, { minW: number; minH: number; maxW:
   daily_edge: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
   calendar: { minW: 6, minH: 5, maxW: 24, maxH: 10 },
   daily_insight: { minW: 3, minH: 2, maxW: 8, maxH: 4 },
+  lab_top_leak: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   bt_avg_r: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   bt_confluence_wr: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
   bt_sample_size: { minW: 3, minH: 2, maxW: 24, maxH: 6 },
@@ -679,6 +683,7 @@ const App: React.FC = () => {
   const [businessExpenses, setBusinessExpenses] = useState<BusinessExpense[]>([]);
   const [businessPayouts, setBusinessPayouts] = useState<BusinessPayout[]>([]);
   const [playbookItems, setPlaybookItems] = useState<PlaybookItem[]>([]);
+  const [labExperiments, setLabExperiments] = useState<LabExperiment[]>([]);
   const [businessGoals, setBusinessGoals] = useState<BusinessGoal[]>([]);
   const [constitutionRules, setConstitutionRules] = useState<ConstitutionRule[]>(DEFAULT_CONSTITUTION);
   const [careerRoadmap, setCareerRoadmap] = useState<CareerCheckpoint[]>(DEFAULT_ROADMAP);
@@ -1180,6 +1185,9 @@ const App: React.FC = () => {
     // Business Hub data (expenses, payouts, goals, resources) now use dedicated Supabase tables
     // DO NOT apply from preferences - prevents stale data overwriting fresh table data
     if (Array.isArray(prefs.playbookItems)) setPlaybookItems(prefs.playbookItems);
+    // labExperiments: legacy čtení (migrace do tabulky lab_experiments při otevření Labu);
+    // do preferences se už NEzapisují — blob dělal last-write-wins ztráty mezi zařízeními.
+    if (Array.isArray(prefs.labExperiments)) setLabExperiments(prev => prev.length ? prev : prefs.labExperiments!);
     if (Array.isArray(prefs.constitutionRules)) setConstitutionRules(prefs.constitutionRules);
     if (Array.isArray(prefs.careerRoadmap)) setCareerRoadmap(prefs.careerRoadmap);
     if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
@@ -1669,7 +1677,7 @@ const App: React.FC = () => {
     // History/Deník/AI také potřebují, aby se v UI místo "Neznámý účet" objevil
     // název archivovaného (spáleného) účtu pro jeho staré obchody.
     // Combined ("Vše") na dashboardu chce zahrnout i archivované obchody → musíme načíst.
-    const needsArchived = (dashboardMode === 'archive' || dashboardMode === 'combined' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai');
+    const needsArchived = (dashboardMode === 'archive' || dashboardMode === 'combined' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai' || activePage === 'lab');
     if (needsArchived && session && !isArchivedLoaded) {
       storageService.getArchivedAccounts().then(archived => {
         setArchivedAccounts(archived || []);
@@ -1677,6 +1685,29 @@ const App: React.FC = () => {
       }).catch(err => console.error("[LazyLoad] Failed to load archived accounts:", err));
     }
   }, [dashboardMode, activePage, session, isArchivedLoaded]);
+
+  // --- LAZY LOADING: Lab experimenty (vlastní tabulka, zdroj pravdy) ---
+  const [isLabExpLoaded, setIsLabExpLoaded] = useState(false);
+  useEffect(() => {
+    if (activePage !== 'lab' || !session || isLabExpLoaded) return;
+    setIsLabExpLoaded(true);
+    storageService.getLabExperiments().then(rows => {
+      if (rows.length > 0) {
+        setLabExperiments(rows);
+      } else {
+        // Jednorázová migrace legacy dat z preferences blobu do tabulky.
+        setLabExperiments(prev => {
+          if (prev.length > 0) {
+            prev.forEach(e => storageService.upsertLabExperiment(e).catch(() => {}));
+          }
+          return prev;
+        });
+      }
+    }).catch(err => {
+      console.error('[Lab] load experiments failed:', err);
+      setIsLabExpLoaded(false); // retry při příštím otevření
+    });
+  }, [activePage, session, isLabExpLoaded]);
 
   // --- LAZY LOADING: Business Hub Data ---
   // Load expenses, goals, resources only when user enters BusinessHub section
@@ -2148,6 +2179,29 @@ const App: React.FC = () => {
 
     }
   }, [dashboardMode, accounts, archivedAccounts, activePage, isInitialLoadDone, dashFocusAccount]);
+
+  // Aktivní + archivované účty (merged, dedup dle id) — pro Lab a coache, které
+  // analyzují CELOU historii rozhodnutí: obchody spálených účtů nesmí tiše zmizet
+  // jen proto, že jejich účet už není ve state `accounts` (ten drží jen aktivní).
+  const allAccountsWithArchived = useMemo(() => {
+    if (!archivedAccounts.length) return accounts;
+    const seen = new Set(accounts.map(a => String(a.id)));
+    return [...accounts, ...archivedAccounts.filter(a => !seen.has(String(a.id)))];
+  }, [accounts, archivedAccounts]);
+
+  // Top leak pro dashboard widget — počítá se ze STEJNÝCH vstupů jako záložka Lab
+  // (celý svět dle dashboardMode, merged účty vč. archivovaných, prep bias/dny),
+  // ne z dashboardem scopnutých stats.trades — jinak si widget a Lab protiřečí.
+  const labTopLeak: LeakFinding | null = useMemo(() => {
+    if (activePage !== 'dashboard' || dashboardMode === 'archive') return null;
+    const world = dashboardMode === 'backtesting' ? 'backtest' as const : 'live' as const;
+    const ds = buildLabDataset(trades, allAccountsWithArchived, {
+      world,
+      prepBias: world === 'live' ? prepBiasFromPreps(dailyPreps) : undefined,
+    });
+    const leaks = detectLeaks(ds, world === 'live' ? prepDaysFromPreps(dailyPreps) : undefined);
+    return leaks.length ? leaks[0] : null;
+  }, [activePage, dashboardMode, trades, allAccountsWithArchived, dailyPreps]);
 
   const contextAccounts = useMemo(() => {
     // Backtest svět: jen Backtest účty. Live svět: Backtest účty NIKDY (oddělené světy).
@@ -3114,6 +3168,7 @@ const App: React.FC = () => {
               {activePage === 'dashboard' && 'Dashboard'}
               {activePage === 'history' && 'Historie obchodu'}
               {activePage === 'insights' && 'Insights'}
+              {activePage === 'lab' && 'Lab'}
               {activePage === 'journal' && 'Deník'}
               {activePage === 'accounts' && 'Portfolio'}
               {activePage === 'settings' && 'Nastavení'}
@@ -3324,7 +3379,7 @@ const App: React.FC = () => {
             <React.Suspense fallback={<div className="flex-1" />}>
               <AICoachPage
                 trades={trades}
-                accounts={accounts}
+                accounts={allAccountsWithArchived}
                 ironRules={ironRules}
                 standardGoals={standardGoals}
                 playbookItems={playbookItems}
@@ -3459,6 +3514,7 @@ const App: React.FC = () => {
                   )}
                   {activePage === 'dashboard' && (
                     <Dashboard
+                      labTopLeak={labTopLeak}
                       stats={filteredStats}
                       theme={theme}
                       preps={dailyPreps}
@@ -3583,6 +3639,52 @@ const App: React.FC = () => {
                           // Otevře trade detail modal (existující flow pro AI chat trade)
                           setAiChatTrade(trade);
                         }}
+                      />
+                    </div>
+                  )}
+
+                  {activePage === 'lab' && (
+                    <div className="p-4 md:p-8 max-w-7xl mx-auto w-full">
+                      <div className="mb-6">
+                        <h2 className={`text-3xl font-black tracking-tighter uppercase mb-1 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+                          Lab
+                        </h2>
+                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
+                          Analytická laboratoř · counterfactual · bias · leaky — čísla počítá kód, ne AI
+                        </p>
+                      </div>
+                      <LabPage
+                        trades={trades}
+                        accounts={allAccountsWithArchived}
+                        theme={theme}
+                        dashboardMode={dashboardMode}
+                        preps={dailyPreps}
+                        reviews={dailyReviews}
+                        experiments={labExperiments}
+                        onUpdateExperiments={(next) => {
+                          const prev = labExperiments;
+                          setLabExperiments(next);
+                          // Persist do vlastní tabulky (ne preferences blob — ten dělal
+                          // last-write-wins ztráty). Diff: změněné/nové upsert, chybějící delete.
+                          const nextIds = new Set(next.map(e => e.id));
+                          const prevById = new Map(prev.map(e => [e.id, e]));
+                          for (const e of next) {
+                            const old = prevById.get(e.id);
+                            if (!old || JSON.stringify(old) !== JSON.stringify(e)) {
+                              storageService.upsertLabExperiment(e).catch(err => console.error('[Lab] upsert experiment failed:', err));
+                            }
+                          }
+                          for (const e of prev) {
+                            if (!nextIds.has(e.id)) {
+                              storageService.deleteLabExperiment(e.id).catch(err => console.error('[Lab] delete experiment failed:', err));
+                            }
+                          }
+                        }}
+                        onAskAI={(prompt) => {
+                          setAiInitialPrompt(prompt);
+                          setActivePage('ai');
+                        }}
+                        onOpenTrade={(trade) => setAiChatTrade(trade)}
                       />
                     </div>
                   )}

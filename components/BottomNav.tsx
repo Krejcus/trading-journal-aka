@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock, FlaskConical, Radio, Layers } from 'lucide-react';
+import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock, FlaskConical, Radio, Layers, Microscope } from 'lucide-react';
 import type { UserRole } from '../types';
 import { isLocked } from '../utils/featureGating';
 
@@ -33,10 +33,12 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
 
   const moreItems = (isBacktest
     ? [
+        { id: 'lab', label: 'Lab', icon: Microscope },
         { id: 'accounts', label: 'Session', icon: Layers },
         { id: 'settings', label: 'Nastavení', icon: Settings },
       ]
     : [
+        { id: 'lab', label: 'Lab', icon: Microscope },
         { id: 'business', label: 'Byznys', icon: Briefcase },
         { id: 'network', label: 'Síť', icon: Globe },
         { id: 'accounts', label: 'Účty', icon: Wallet },
@@ -72,7 +74,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20 }}
               transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-              className={`fixed bottom-24 right-4 z-[80] lg:hidden rounded-2xl border shadow-2xl overflow-hidden ${isDark ? 'bg-black/80 border-white/10 backdrop-blur-2xl' : 'bg-white border-slate-200'}`}
+              className={`fixed bottom-24 right-4 z-[80] lg:hidden rounded-2xl border shadow-2xl overflow-y-auto max-h-[calc(100vh-8rem)] ${isDark ? 'bg-black/80 border-white/10 backdrop-blur-2xl' : 'bg-white border-slate-200'}`}
             >
               {/* Přepínač live ↔ backtest svět */}
               {onToggleBacktest && (
