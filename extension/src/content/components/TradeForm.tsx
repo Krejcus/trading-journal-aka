@@ -4,32 +4,16 @@ import { AccountList } from './AccountList';
 import { readActivePosition, captureChartSnapshot, captureMultiTF, getChartLayout, computeCounterfactual, CounterfactualRead, readBoxLevels } from '../../lib/positionReader';
 import { supabase, SUPABASE_URL, SUPABASE_KEY } from '../../lib/supabase';
 import { cropImage } from '../../lib/screenshot';
-import { RefreshCw, CheckCircle2, XCircle, Eye, Send, RotateCcw, Clock, Layers, TrendingUp, TrendingDown, ChevronDown, Plus } from 'lucide-react';
+import { FLAT_BY_MIN, instrRoot } from '../../lib/shared';
+import { RefreshCw, CheckCircle2, XCircle, Eye, Send, RotateCcw, Clock, Layers, TrendingUp, TrendingDown, ChevronDown, Plus, Radar, X } from 'lucide-react';
 import { useTheme } from './ThemeContext';
 import VoiceMemoButton from './VoiceMemoButton';
 
 // Chrome API global (extension context)
 declare const chrome: any;
 
-// ── Instrument mapping ─────────────────────────────────────────────────────────
-// Futures symbols from TradingView → micro-contract names used in the journal
-const INSTRUMENT_MAP: Record<string, string> = {
-    NQ: 'MNQ',
-    ES: 'MES',
-    CL: 'MCL',
-    GC: 'MGC',
-    RTY: 'M2K',
-    YM: 'MYM',
-    SI: 'SIL',
-    ZB: 'ZB',
-    ZN: 'ZN',
-};
-
-function mapInstrument(symbol: string): string {
-    // Strip trailing digits, exclamation marks and suffix
-    const clean = symbol.replace(/[0-9!:_-].*$/, '').toUpperCase();
-    return INSTRUMENT_MAP[clean] ?? clean;
-}
+// ── Instrument mapping — sdílený modul (stejný zdroj jako recompute backfill) ──
+const mapInstrument = instrRoot;
 
 // ── Session config type (mirrors main app's SessionConfig) ────────────────────
 interface SessionConfig {
@@ -41,6 +25,10 @@ interface SessionConfig {
 }
 
 // Simple fallback when no sessions from preferences
+// parseFloat s podporou desetinné ČÁRKY — parseFloat('19850,25') by tiše usekl na 19850
+// a do DB šla poškozená cena/R. Všechna uživatelská číselná pole jdou tudy.
+const numIn = (v: any): number => parseFloat(String(v == null ? '' : v).replace(',', '.'));
+
 function detectSession(): string {
     const h = new Date().getUTCHours();
     if (h >= 12 && h < 22) return 'NY';
@@ -166,8 +154,6 @@ const entryTagsFromMap = (em: any): string[] => {
     return out;
 };
 
-// Flat-by čas (no overnight) v minutách lokálního dne — strop pro "kam by to došlo". 22:00 = RTH close.
-const FLAT_BY_MIN = 22 * 60;
 const isTpTag = (t: string) => /^TP\s+/.test(t);
 // detekovaný level (např. "VWAP +1σ", "PDH") → TP tag ("TP deviace +1", "TP PDH")
 const tpTagFromLevel = (level: string): string | null => {
@@ -251,6 +237,12 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     const [sessionStatus, setSessionStatus] = useState<{ text: string; type: 'info' | 'success' | 'error' } | null>(null);
     const [pnlManual, setPnlManual] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    // Re-entry guard přes ref — isSubmitting (state) se commitne až po re-renderu,
+    // dvojklik/Enter+klik stihl spustit handleSubmit 2× → duplicitní zápis.
+    const submitBusyRef = useRef(false);
+    // Soubory nahrané v probíhajícím submitu — při selhání insertu se best-effort smažou
+    // (jinak po každém neúspěšném zápisu zůstávaly osiřelé bloby v trade-images).
+    const uploadedFilesRef = useRef<string[]>([]);
     const [submitStatus, setSubmitStatus] = useState<{ text: string, type: 'info' | 'success' | 'error' } | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [isPreviewing, setIsPreviewing] = useState(false);
@@ -344,11 +336,16 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         }));
     };
 
-    // ── Form reset (keeps symbol / accounts / date) ─────────────────────────
-    const handleReset = () => {
+    // ── Form reset ───────────────────────────────────────────────────────────
+    // Vyčistí formulář do „čekám na pozici" stavu: prázdný obchod (drží symbol/směr/risk).
+    // Účty + backtest session (bias/pre/post) zůstávají STICKY (jsou v jiných stavech, nesahá na ně).
+    // Per-obchod manuální pole (chyby/poznámka/emoce/validita) se tím vynulují na blank.
+    // keepBoxLock=true (po zápisu): NEodemyká sledovaný box — jinak by auto-sync poll hned
+    // znovu načetl právě uložený box (je pořád na grafu) a nahrál ten samý obchod. Lock se
+    // uvolní sám, jakmile box na grafu smažeš (poll → boxGone), a další box se chytí čistě.
+    const softReset = (opts?: { keepBoxLock?: boolean }) => {
         setTrade(prev => ({
             ...makeInitialTrade(),
-            // Persist symbol, direction and accounts context
             symbol: prev.symbol,
             direction: prev.direction,
             risk: prev.risk,
@@ -359,10 +356,16 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         setPnlManual(false);
         setShowReset(false);
         setSubmitStatus(null);
+        if (!opts?.keepBoxLock) {
+            trackedBoxRef.current = null;
+            lastBoxRef.current = '';
+        }
+    };
+
+    // Ruční „zavřít potvrzení / začít nanovo" — plný reset včetně odemčení boxu a schování chipu.
+    const handleReset = () => {
+        softReset();
         setJustSaved(null);
-        // Auto-sync: odemkni sledovaný box, ať se další obchod chytí na nový box.
-        trackedBoxRef.current = null;
-        lastBoxRef.current = '';
     };
 
     // ── Fetch preferences ────────────────────────────────────────────────────
@@ -433,13 +436,16 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     // Rozbalovací sekce (defaultně sbalené — „menu" styl; v hlavičce mini souhrn).
     const [cfOpen, setCfOpen] = useState(false);
     const [tpOpen, setTpOpen] = useState(false);
-    // Po úspěšném zápisu: animovaná success karta + CTA „načíst další".
-    const [justSaved, setJustSaved] = useState<{ count: number; pnl: number; outcome: string } | null>(null);
+    // Po úspěšném zápisu: perzistentní potvrzovací chip + „čekám na pozici" radar.
+    // symbol/direction → text chipu („✓ MNQ Short +$181 uloženo"); drží se dokud ho uživatel nezavře.
+    const [justSaved, setJustSaved] = useState<{ count: number; pnl: number; outcome: string; symbol: string; direction: string } | null>(null);
+    // Počet position boxů aktuálně na grafu (z auto-sync pollu) — „na grafu zbývá N boxů".
+    const [boxCount, setBoxCount] = useState<number | null>(null);
     // Po zápisu odscrolluj na success kartu (je dole pod tlačítkem) — ať ji uživatel hned vidí.
     const successCardRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
         if (!justSaved) return;
-        const t = setTimeout(() => successCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+        const t = setTimeout(() => successCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60);
         return () => clearTimeout(t);
     }, [justSaved]);
     // Counterfactual "co kdyby" pro 3 SL placementy — dočasná tabulka u zápisu.
@@ -458,7 +464,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         });
     }, [cf]);
     const recomputeCf = () => {
-        const num = (s: string) => { const n = parseFloat(s); return Number.isFinite(n) ? n : undefined; };
+        const num = (s: string) => { const n = numIn(s); return Number.isFinite(n) ? n : undefined; };
         setCfLoading(true);
         computeCounterfactual({ fvg: num(cfEdit.fvg), ote: num(cfEdit.ote), swing: num(cfEdit.swing) })
             .then((c) => { setCf(c || null); }).finally(() => setCfLoading(false));
@@ -512,7 +518,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     galleryUrlsRef.current = [...(previewUrl ? [previewUrl] : []), ...htfShots.map(s => s.dataUrl)];
     const handleContractsChange = (val: string) => {
         setTrade(prev => {
-            const n = parseFloat(val) || 0;
+            const n = numIn(val) || 0;
             const next = { ...prev, contracts: val };
             if (perContractRisk > 0 && n > 0) next.risk = String(Math.round(n * perContractRisk));
             return next;
@@ -645,10 +651,10 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
 
     // ── R:R / estimated P&L ──────────────────────────────────────────────────
     const calculations = useMemo(() => {
-        const entry       = parseFloat(trade.entry) || 0;
-        const sl          = parseFloat(trade.sl)    || 0;
-        const tp          = parseFloat(trade.tp)    || 0;
-        const riskDollars = parseFloat(trade.risk)  || 0;
+        const entry       = numIn(trade.entry) || 0;
+        const sl          = numIn(trade.sl)    || 0;
+        const tp          = numIn(trade.tp)    || 0;
+        const riskDollars = numIn(trade.risk)  || 0;
 
         let rrText   = "- : -";
         let estPnLVal = "";
@@ -683,12 +689,12 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     // Rozpad fan-outu s risk multiplikátorem — per účet risk/PnL/kontrakty + součty.
     // needsConfirm = víc účtů NEBO aspoň jeden ≠1× → před uložením ukážeme potvrzovací okno.
     const fanout = useMemo(() => {
-        const baseRisk = parseFloat(trade.risk) || 0;
+        const baseRisk = numIn(trade.risk) || 0;
         // Ruční pnl respektuj i když je „0" (break-even); jinak fallback na NEzaokrouhlený odhad,
         // ať preview sedí s fill-based pnl uloženým v handleSubmit (žádné 234 vs 233.7).
-        const manualPnl = trade.pnl !== '' && !isNaN(parseFloat(trade.pnl)) ? parseFloat(trade.pnl) : null;
+        const manualPnl = trade.pnl !== '' && !isNaN(numIn(trade.pnl)) ? numIn(trade.pnl) : null;
         const basePnl = manualPnl != null ? manualPnl : (calculations.estPnLRaw || 0);
-        const baseQty = parseFloat(trade.contracts) || 0;
+        const baseQty = numIn(trade.contracts) || 0;
         const rows = selectedAccounts.map(id => {
             const a = loadedAccounts.find(x => x.id === id);
             const mult = Math.max(1, Math.round(Number(a?.copyMultiplier) || 1));
@@ -769,14 +775,24 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [autoLoadSignal]);
 
+    // Vždy aktuální handleReadPosition pro poll (interval má deps jen [active] —
+    // bez ref by volal closure z doby aktivace, tj. se starými sessions/prefs).
+    const readPositionRef = useRef(handleReadPosition);
+    readPositionRef.current = handleReadPosition;
+
     // Auto-sync: když je panel aktivní, lehce hlídej box; po úpravě (debounce) sám přepíše pozici.
     useEffect(() => {
         if (!active) return;
         let cancelled = false;
         let debounce: any = null;
         const poll = async () => {
+            // Skrytý tab: nechej graf (i baterku) na pokoji — žádná MAIN world injekce.
+            if (document.hidden) return;
             const b = await readBoxLevels(trackedBoxRef.current);
-            if (cancelled || !b.ok) {
+            if (cancelled) return;
+            // Počítadlo boxů na grafu (i když je sledovaný smazaný / žádný není) — pro „čekám" UI.
+            if (typeof b.count === 'number') setBoxCount(b.count);
+            if (!b.ok) {
                 // Sledovaný box smazán → odemkni, aby se další poll mohl chytit na nový/vybraný box.
                 if (b.boxGone) { trackedBoxRef.current = null; lastBoxRef.current = ''; }
                 return;
@@ -785,10 +801,15 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             if (key !== lastBoxRef.current) {
                 lastBoxRef.current = key; // hned ulož, ať se neretriggeruje při dalším pollu
                 if (debounce) clearTimeout(debounce);
-                debounce = setTimeout(() => { if (!cancelled) handleReadPosition(); }, 450);
+                // Delší usazení (1200 ms): plný přepočet counterfactualu při KAŽDÉM ustálení
+                // tažení boxu sekal graf přesně ve chvíli jemného ladění SL/TP.
+                // readRef = vždy čerstvá closure (dřív stale: sessions z doby aktivace panelu).
+                debounce = setTimeout(() => { if (!cancelled) readPositionRef.current(); }, 1200);
             }
         };
-        const interval = setInterval(poll, 600);
+        // 1500 ms místo 600: každý tick = executeScript do MAIN worldu + průchod chart
+        // modelem → při 600 ms to byl trvalý mikro-stutter grafu po celou dobu otevření.
+        const interval = setInterval(poll, 1500);
         return () => { cancelled = true; clearInterval(interval); if (debounce) clearTimeout(debounce); };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [active]);
@@ -821,6 +842,9 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
 
     // ── Submit ───────────────────────────────────────────────────────────────
     const handleSubmit = async () => {
+        if (submitBusyRef.current) return; // dvojklik/Enter+klik — state guard je až po re-renderu
+        submitBusyRef.current = true;
+        try {
         // Validation
         if (selectedAccounts.length === 0) {
             setSubmitStatus({ text: "Vyberte alespoň jeden účet!", type: 'error' }); return;
@@ -934,10 +958,10 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             }
 
             // 4. Compute values
-            const entry = parseFloat(trade.entry) || null;
-            const sl    = parseFloat(trade.sl)    || null;
-            const tp    = parseFloat(trade.tp)    || null;
-            const risk  = parseFloat(trade.risk)  || 0;
+            const entry = numIn(trade.entry) || null;
+            const sl    = numIn(trade.sl)    || null;
+            const tp    = numIn(trade.tp)    || null;
+            const risk  = numIn(trade.risk)  || 0;
             // JEDEN zdroj pravdy = REÁLNÝ fill (TP pro WIN, SL pro LOSS, entry pro BE).
             // exitPrice i pnl se odvodí z téhož fillu → konzistentní realized R všude (žádné 2,25 vs 2,26).
             // pnl se NEzaokrouhluje (zobrazení si zaokrouhlí samo); exitPrice = skutečná úroveň, ne dopočet z pnl.
@@ -945,12 +969,21 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             const dirSign = trade.direction === 'SHORT' ? -1 : 1;
             let calculatedExitPrice = trade.outcome === 'WIN' ? tp : trade.outcome === 'LOSS' ? sl : entry;
             let pnl = 0;
-            if (calculatedExitPrice != null && entry != null && slDist > 0 && risk) {
+            const manualPnlVal = pnlManual && trade.pnl !== '' && !isNaN(numIn(trade.pnl)) ? numIn(trade.pnl) : null;
+            if (manualPnlVal != null) {
+                // RUČNĚ upravený Zisk má přednost — slippage/částečný fill/poplatky (typicky BE
+                // s −12 $ fees). Dřív ho fill-based větev bezpodmínečně přepsala teoretickou
+                // hodnotou a BE se ukládalo vždy jako 0 $.
+                pnl = manualPnlVal;
+                if (calculatedExitPrice == null && entry != null && slDist > 0 && risk) {
+                    calculatedExitPrice = entry + dirSign * (pnl / risk) * slDist;
+                }
+            } else if (calculatedExitPrice != null && entry != null && slDist > 0 && risk) {
                 // Zaokrouhli na centy — jinak fill-based výpočet nese float artefakt (369.99999999999994).
                 pnl = Math.round(((calculatedExitPrice - entry) * dirSign / slDist) * risk * 100) / 100;
             } else if (trade.pnl) {
                 // Ruční zápis bez TP/SL: ber zadané pnl a exitPrice z něj dopočítej (fallback).
-                pnl = parseFloat(trade.pnl) || 0;
+                pnl = numIn(trade.pnl) || 0;
                 if (calculatedExitPrice == null && entry != null && slDist > 0 && risk) {
                     calculatedExitPrice = entry + dirSign * (pnl / risk) * slDist;
                 }
@@ -1011,9 +1044,11 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     .from('trade-images')
                     .upload(fileName, buffer, { contentType: isJpeg ? 'image/jpeg' : 'image/png' });
                 if (upErr) throw new Error("Nepodařilo se nahrát screenshot: " + upErr.message);
+                uploadedFilesRef.current.push(fileName); // pro úklid, když pak insert selže
                 const { data: urlData } = supabase.storage.from('trade-images').getPublicUrl(fileName);
                 return urlData?.publicUrl ?? null;
             };
+            uploadedFilesRef.current = [];
 
             let publicUrl: string | null = null;
             const htfUrls: string[] = [];
@@ -1077,7 +1112,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 btRows?.forEach((r: any) => btSessionMap.set(r.account_id, r.data || {}));
             }
 
-            const baseContracts = parseFloat(trade.contracts) || 0;
+            const baseContracts = numIn(trade.contracts) || 0;
 
             const rows = selectedAccounts.map(accId => {
                 const isMaster = accId === masterAccountId;
@@ -1222,13 +1257,17 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             if (!savedTrades || savedTrades.length === 0) {
                 throw new Error("Databáze odmítla uložení (RLS) — zkuste se odhlásit a přihlásit znovu.");
             }
+            uploadedFilesRef.current = []; // insert OK → soubory jsou použité, už se nemažou
 
-            setSubmitStatus(null); // místo textu ukážeme animovanou success kartu
-            // PnL na kartě = SKUTEČNÝ součet uložených řádků (acctPnl × N účtů), ne neškálovaný základ.
+            setSubmitStatus(null); // místo textu ukážeme perzistentní potvrzovací chip
+            // PnL na chipu = SKUTEČNÝ součet uložených řádků (acctPnl × N účtů), ne neškálovaný základ.
             // Jinak by „+$500 · 3 účty" klamalo, když se reálně zapsalo 3× nebo s multiplikátorem víc.
             const savedPnlTotal = rows.reduce((s, r) => s + (r.pnl || 0), 0);
-            setJustSaved({ count: savedTrades.length, pnl: savedPnlTotal, outcome: trade.outcome });
-            setShowReset(false);
+            setJustSaved({ count: savedTrades.length, pnl: savedPnlTotal, outcome: trade.outcome, symbol: trade.symbol, direction: trade.direction });
+            // Auto-listening: formulář se HNED vyčistí do „čekám na pozici z grafu" (žádné ruční
+            // „Načíst další"). Lock zůstává na právě uloženém boxu, ať ho poll znovu nenačte —
+            // uvolní se, až box na grafu smažeš, a klik na další box se nahraje čistě.
+            softReset({ keepBoxLock: true });
 
             // 8. Fire-and-forget AI enrichment — jen pokud má trade notes nebo screenshot
             // (filtr "skutečný obchod" vs. testovací záznam)
@@ -1250,9 +1289,17 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         } catch (err: any) {
             console.error('[AlphaBridge]', err);
             setSubmitStatus({ text: err.message, type: 'error' });
+            // Insert nedopadl → ukliď screenshoty nahrané v tomto pokusu (jinak sirotci v bucketu).
+            if (uploadedFilesRef.current.length) {
+                supabase.storage.from('trade-images').remove([...uploadedFilesRef.current]).catch(() => {});
+                uploadedFilesRef.current = [];
+            }
         } finally {
             setIsSubmitting(false);
             if (host) host.style.display = 'block';
+        }
+        } finally {
+            submitBusyRef.current = false;
         }
     };
 
@@ -1266,6 +1313,53 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
 
     return (
         <div className="w-full">
+            {/* ── Waiting flow: po zápisu perzistentní potvrzovací chip + „čekám na pozici" radar ── */}
+            {justSaved && (() => {
+                const js = justSaved;
+                const listening = !trade.entry; // formulář prázdný → čekáme na další box z grafu
+                const win = js.outcome === 'WIN' || js.pnl > 0.01;
+                const be = js.outcome === 'BE' || Math.abs(js.pnl) <= 0.01;
+                const col = be ? '#f59e0b' : win ? '#10b981' : '#ef4444';
+                const pnlTxt = `${js.pnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(js.pnl)).toLocaleString('en-US')}`;
+                const dirTxt = js.direction === 'LONG' ? 'Long' : 'Short';
+                const sym = (js.symbol || '').replace(/1!$/, ''); // NQ1! → NQ
+                const boxWord = boxCount === 1 ? 'box' : (boxCount && boxCount < 5) ? 'boxy' : 'boxů';
+                return (
+                    <div ref={successCardRef} className="mb-3" style={{ animation: 'atPop .35s cubic-bezier(.16,1,.3,1) both' }}>
+                        <style>{`@keyframes atPop{0%{transform:translateY(-8px);opacity:0}100%{transform:none;opacity:1}}@keyframes atRadar{0%{transform:scale(.4);opacity:.5}100%{transform:scale(2.3);opacity:0}}@keyframes atSpin{to{transform:rotate(360deg)}}`}</style>
+                        {listening && (
+                            <div className={`rounded-2xl border p-4 flex flex-col items-center text-center gap-1.5 mb-2 ${theme === 'dark' ? 'border-slate-700/50 bg-slate-800/40' : 'border-slate-200 bg-slate-50'}`}>
+                                <div className="relative flex items-center justify-center mb-0.5" style={{ width: 46, height: 46 }}>
+                                    <span className="absolute rounded-full" style={{ inset: 0, border: '2px solid #3b82f6', animation: 'atRadar 1.8s ease-out infinite' }} />
+                                    <span className="absolute rounded-full" style={{ inset: 0, border: '2px solid #3b82f6', animation: 'atRadar 1.8s ease-out .9s infinite' }} />
+                                    <Radar size={22} className="text-blue-500" style={{ animation: 'atSpin 3.5s linear infinite' }} />
+                                </div>
+                                <div className={`text-[13px] font-black ${theme === 'dark' ? 'text-slate-200' : 'text-slate-700'}`}>Čekám na pozici z grafu…</div>
+                                {typeof boxCount === 'number' && boxCount > 0 && (
+                                    <div className={`text-[11px] font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                                        na grafu {boxCount === 1 ? 'zbývá' : 'zbývají'} {boxCount} {boxWord} — klikni na další
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {/* Perzistentní potvrzovací chip — drží se, dokud ho uživatel nezavře (×) */}
+                        <div className="rounded-xl border px-3 py-2 flex items-center gap-2" style={{ background: col + '14', borderColor: col + '4d' }}>
+                            <CheckCircle2 size={16} color={col} strokeWidth={2.5} className="shrink-0" />
+                            <div className="flex-1 text-[12px] font-bold leading-tight" style={{ color: col }}>
+                                {sym} {dirTxt} <span className="tabular-nums">{pnlTxt}</span> uloženo
+                                {js.count > 1 && <span className={`ml-1 font-semibold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>· {js.count} {js.count < 5 ? 'účty' : 'účtů'}</span>}
+                            </div>
+                            <button
+                                onClick={() => setJustSaved(null)}
+                                className={`shrink-0 rounded-lg p-1 transition-colors focus:outline-none ${theme === 'dark' ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-200 text-slate-500'}`}
+                                title="Zavřít potvrzení"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
             <div className={isWide ? "flex gap-6 items-start" : ""}>
                 {isWide && (
                     <div className="w-[280px] shrink-0 overflow-y-auto pr-3 custom-scrollbar border-r border-slate-700/20 max-h-[70vh]">
@@ -2023,36 +2117,6 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             )}
 
             {/* Success karta po zápisu — animovaný pop-in + PnL + CTA „načíst další" */}
-            {justSaved && (() => {
-                const win = justSaved.outcome === 'WIN' || justSaved.pnl > 0.01;
-                const be = justSaved.outcome === 'BE' || Math.abs(justSaved.pnl) <= 0.01;
-                const col = be ? '#f59e0b' : win ? '#10b981' : '#ef4444';
-                const pnlTxt = `${justSaved.pnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(justSaved.pnl)).toLocaleString('en-US')}`;
-                const accWord = justSaved.count === 1 ? 'účet' : justSaved.count < 5 ? 'účty' : 'účtů';
-                return (
-                    <div ref={successCardRef} className="mt-3" style={{ animation: 'atPop .4s cubic-bezier(.16,1,.3,1) both' }}>
-                        <style>{`@keyframes atPop{0%{transform:translateY(10px) scale(.97);opacity:0}100%{transform:none;opacity:1}}@keyframes atRing{0%{transform:scale(.55);opacity:.6}100%{transform:scale(2.4);opacity:0}}@keyframes atCheck{0%{transform:scale(0);opacity:0}55%{transform:scale(1.18)}100%{transform:scale(1);opacity:1}}`}</style>
-                        <div className="rounded-2xl border p-4 flex flex-col items-center text-center gap-1" style={{ background: col + '14', borderColor: col + '59' }}>
-                            <div className="relative flex items-center justify-center mb-1" style={{ width: 52, height: 52 }}>
-                                <span className="absolute inset-0 rounded-full" style={{ border: `2px solid ${col}`, animation: 'atRing 1s ease-out .15s' }} />
-                                <span style={{ animation: 'atCheck .45s cubic-bezier(.16,1,.3,1) both', lineHeight: 0 }}><CheckCircle2 size={48} color={col} strokeWidth={2} /></span>
-                            </div>
-                            <div className="text-[13px] font-black" style={{ color: col }}>Zapsáno do deníku</div>
-                            <div className="text-2xl font-black tabular-nums" style={{ color: col }}>{pnlTxt}</div>
-                            <div className={`text-[11px] font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                                {justSaved.count} {accWord}{!win && !be && outcomeAmbiguous ? ' · ⚠️ nejednoznačný výsledek' : ''}
-                            </div>
-                            <button
-                                onClick={handleReset}
-                                className={`mt-2.5 w-full p-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all focus:outline-none ${theme === 'dark' ? 'bg-slate-100 text-slate-900 hover:bg-white' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                            >
-                                <Plus size={15} /> Načíst další obchod
-                            </button>
-                        </div>
-                    </div>
-                );
-            })()}
-
             <div className={`text-xs mt-4 text-center font-medium flex items-center justify-center gap-2 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
                 {submitStatus ? (
                     <span className={submitStatus.type === 'error'

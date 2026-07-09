@@ -2737,28 +2737,57 @@ const App: React.FC = () => {
 
   const handleUpdateTrade = useCallback((tradeId: string | number, updates: Partial<Trade>) => {
     // ── COMBINED (agregovaný) obchod: id je syntetické `combined_<groupId>`, v DB neexistuje.
-    // Editaci propíšeme na VŠECHNY reálné kopie skupiny (fan-out sdílí entry/SL/TP/setup),
-    // ale per-account/aggregát čísla NIKDY nepřepisujeme (pnl/risk/target jsou součty).
+    // Editaci propíšeme na VŠECHNY reálné kopie skupiny (fan-out sdílí entry/SL/TP/setup).
+    // Ekonomická pole (pnl/risk/target/objem) NEJDOU 1:1 — kopie mají různé multipliery
+    // (2× vs 1× risk). Full edit je ale posílá přepočítané pro MASTERŮV objem (combined
+    // karta zobrazuje masterova pole), takže je per kopii ŠKÁLUJEME jejím podílem na
+    // masterovi. Dřív se stripovaly úplně → změna objemu se propsala, pnl zůstalo staré.
     if (typeof tradeId === 'string' && tradeId.startsWith('combined_')) {
       const groupId = tradeId.slice('combined_'.length);
-      const { pnl: _p, riskAmount: _r, targetAmount: _t, id: _id, ...rest } = updates as any;
+      const { pnl: newPnl, riskAmount: newRisk, targetAmount: newTarget, positionSize: newSize, id: _id, ...rest } = updates as any;
       const safe: Partial<Trade> = { ...rest };
       // notes v combined nesou suffix "(Kombinováno z N účtů)" — při zápisu ho odstraň.
       if (typeof (safe as any).notes === 'string') {
         (safe as any).notes = (safe as any).notes.replace(/\s*\(Kombinováno z \d+ účtů\)\s*$/, '').trim();
       }
-      if (Object.keys(safe).length === 0) return; // jen per-account pole → nic k propsání
+      const hasEconomics = newPnl != null || newRisk != null || newTarget != null || newSize != null;
+      if (Object.keys(safe).length === 0 && !hasEconomics) return; // nic k propsání
 
-      let memberIds: (string | number)[] = [];
+      const round2 = (v: number) => Math.round(v * 100) / 100;
       let memberSnapshots: Trade[] = [];
+      const memberPayloads = new Map<string, Partial<Trade>>();
       setTrades(prev => {
         const members = prev.filter(t => t.groupId === groupId);
-        memberIds = members.map(m => m.id);
         memberSnapshots = members.map(m => ({ ...m }));
-        return prev.map(t => t.groupId === groupId ? { ...t, ...safe } : t);
+        const master = members.find(m => m.isMaster) || members[0];
+        // Podíl kopie na masterovi — z pnl (nejspolehlivější), fallback risk → objem → 1.
+        const factorOf = (m: Trade): number => {
+          if (!master) return 1;
+          const safeRatio = (a?: number | null, b?: number | null) =>
+            a != null && b != null && Math.abs(b) > 0.009 && Number.isFinite(a / b) ? a / b : null;
+          return safeRatio(m.pnl, master.pnl)
+            ?? safeRatio(m.riskAmount, master.riskAmount)
+            ?? safeRatio(m.positionSize, master.positionSize)
+            ?? 1;
+        };
+        memberPayloads.clear();
+        for (const m of members) {
+          const f = factorOf(m);
+          const payload: Partial<Trade> = { ...safe };
+          if (newPnl != null) payload.pnl = round2(newPnl * f);
+          if (newRisk != null) payload.riskAmount = round2(newRisk * f);
+          if (newTarget != null) payload.targetAmount = round2(newTarget * f);
+          // Kontrakty jsou celé číslo — škáluj a zaokrouhli (pnl nese přesný podíl).
+          if (newSize != null) payload.positionSize = Math.max(1, Math.round(newSize * f));
+          memberPayloads.set(String(m.id), payload);
+        }
+        return prev.map(t => {
+          const p = memberPayloads.get(String(t.id));
+          return p ? { ...t, ...p } : t;
+        });
       });
-      const persistable = memberIds.filter(id => typeof id === 'string' && id.includes('-'));
-      Promise.all(persistable.map(id => storageService.updateTrade(String(id), safe))).catch(err => {
+      const persistable = Array.from(memberPayloads.keys()).filter(id => id.includes('-'));
+      Promise.all(persistable.map(id => storageService.updateTrade(id, memberPayloads.get(id)!))).catch(err => {
         console.error("Failed to persist combined trade update:", err);
         setSyncError("Nepodařilo se uložit změny obchodu. Změny byly vráceny zpět.");
         setTrades(prev => prev.map(t => memberSnapshots.find(s => s.id === t.id) || t));

@@ -139,6 +139,7 @@ export const storageService = {
         source: d.source || undefined,
         tsOrderIds: d.tsOrderIds || undefined,
         isBE: d.isBE === true || d.isBE === 'true',
+        exitDate: d.exitDate || undefined,
         // ── AlphaBridge rich intel — RPC vrací plný data blob, jen ho tu vystavíme na Trade ──
         mfeR: d.mfeR != null ? Number(d.mfeR) : undefined,
         maeR: d.maeR != null ? Number(d.maeR) : undefined,
@@ -390,6 +391,8 @@ export const storageService = {
         masterTradeId:data->>masterTradeId,
         entryTime:data->>entryTime,
         entryDate:data->>entryDate,
+        exitDate:data->>exitDate,
+        isBE:data->>isBE,
         screenshot:data->>screenshot,
         screenshots:data->screenshots,
         aiSuggestions:data->aiSuggestions,
@@ -486,6 +489,10 @@ export const storageService = {
       entryTime: t.entryTime ? Number(t.entryTime) : undefined,
       // entryDate chybělo v SELECTu → BacktestSessions export měl prázdné entryDate (fallback z date).
       entryDate: t.entryDate || undefined,
+      exitDate: t.exitDate || undefined,
+      // isBE chybělo v getTrades (getDashboardData ho mapoval) → BE s poplatky se v
+      // historii/Labu/coach tools počítalo jako Loss. Jednotné čtení s dashboardem.
+      isBE: t.isBE === true || t.isBE === 'true' || undefined,
       // Provenance pro import dedup (Tradesyncer) — musí přežít load, jinak by re-import duplikoval.
       source: t.source || undefined,
       tsOrderIds: t.tsOrderIds || undefined,

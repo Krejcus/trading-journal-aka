@@ -28,8 +28,8 @@
         "tabs"
     ],
     "host_permissions": [
-        "<all_urls>",
         "*://*.tradingview.com/*",
+        "*://app.fxreplay.com/*",
         "http://localhost:3000/*"
     ],
     "web_accessible_resources": [
@@ -38,7 +38,8 @@
                 "icons/*"
             ],
             "matches": [
-                "<all_urls>"
+                "*://*.tradingview.com/*",
+                "*://app.fxreplay.com/*"
             ]
         }
     ]

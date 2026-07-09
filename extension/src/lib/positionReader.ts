@@ -119,8 +119,11 @@ export function pageReadActivePosition(boxId?: any) {
                 const usdPerPriceUnit = slDistPrice > 0 ? (perContractRisk / slDistPrice) : 0;
                 // Centová přesnost (NE integer round) → maeUsd == maePoints×usdPerPoint a maeR z téhož.
                 // (Dřív integer round: 34,5 → 35 → maeR z 35 ≠ z bodů. MFE to neukázalo, bylo celé.)
-                mfeUsd = Math.round(mfeP * usdPerPriceUnit * qty * 100) / 100;
-                maeUsd = Math.round(maeP * usdPerPriceUnit * qty * 100) / 100;
+                // Bez risku ($/jednotka = 0) NEzapisuj zavádějící 0 $ — nech null (body zůstávají).
+                if (usdPerPriceUnit > 0) {
+                    mfeUsd = Math.round(mfeP * usdPerPriceUnit * qty * 100) / 100;
+                    maeUsd = Math.round(maeP * usdPerPriceUnit * qty * 100) / 100;
+                }
                 if (riskActual > 0) {
                     mfeR = Math.round((mfeUsd / riskActual) * 100) / 100;
                     maeR = Math.round((maeUsd / riskActual) * 100) / 100;
@@ -235,7 +238,9 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                     const finish = () => { if (done) return; done = true; try { dele && dele.unsubscribe(null, finish); } catch (e) { /* ignore */ } res(); };
                     try { dele = series.dataEvents().completed(); dele.subscribe(null, finish); } catch (e) { res(); return; }
                     try { series.requestMoreData(5000); } catch (e) { finish(); return; }
-                    setTimeout(finish, 5000);
+                    // Fallback 3 s (dřív 5 s): když completed event nechodí, 12 iterací × 5 s
+                    // umělo zamrazit recompute na minutu; 3 s stačí i pomalému feedu.
+                    setTimeout(finish, 3000);
                 });
             }
             bars = series.bars(); // po načtení re-fetch (firstIndex se posunul; si0 zůstává absolutní)
@@ -255,6 +260,20 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             }
         } else {
             si0 = boxEntryIndex;
+        }
+        // Override: nejbližší bar musí být ČASOVĚ blízko entry. Bez tolerance by se snap
+        // přichytil na krajní načtený bar klidně dny vedle (když historie nedojela) a celý
+        // counterfactual by se tiše spočítal kolem cizí svíčky.
+        if (useOverride && entryUnixPre != null && si0 >= 0) {
+            const tLast = ts.indexToTimePoint(lastI);
+            const tPrev = ts.indexToTimePoint(lastI - 1);
+            let step = (tLast != null && tPrev != null) ? Math.abs(tLast - tPrev) : 60;
+            if (!(step > 0)) step = 60;
+            const tSnap = ts.indexToTimePoint(si0);
+            const bestDNow = tSnap != null ? Math.abs(tSnap - entryUnixPre) : Infinity;
+            if (bestDNow > Math.max(3 * step, 180)) {
+                return { ok: false, reason: 'entry-cas-mimo-nactena-data' };
+            }
         }
         // Entry musí být v načteném rozsahu barů — jinak nelze počítat strukturu/scan.
         if (si0 < first + 3 || si0 > lastI || ts.indexToTimePoint(si0) == null) {
@@ -403,7 +422,11 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
 
         // ── TP targety: přečti likviditní levely (PDH/PDL/PWH/PWL/dHigh/dLow/VWAP…) z indikátoru
         // a pro každý ve směru obchodu zjisti, jestli tam cena došla dřív než SL (swing). ──
+        // Cache na jeden výpočet: labely se během jednoho compute nemění a plný průchod
+        // dataSources() se dřív opakoval ~7× (tpTargets, entryMap, excursion, entryContext…).
+        let __lvCache: any[] | null = null;
         const readLiquidityLevels = () => {
+            if (__lvCache) return __lvCache;
             const lv: any[] = [];
             // Dedup: víc instancí „Liquidity" indikátoru na grafu (nebo překrývající se levely) by
             // jinak načetlo každou úroveň víckrát → nafouklé tpTargets/excursion.levels. Klíč = text|cena.
@@ -436,6 +459,7 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                     pull(coll);
                 }
             } catch (e) { /* ignore */ }
+            __lvCache = lv;
             return lv;
         };
 
@@ -703,6 +727,11 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                 // Efektivní VWAP/σ pro pásma: 'indicator' = fixní snapshot z labelů, 'bars' = per-bar výpočet.
                 const effW = vwapSource === 'indicator' ? labelVwap : lastVwap;
                 const effSd = vwapSource === 'indicator' ? labelSd : lastSd;
+                // Bar zásahu SL: konzervativně z něj NEbereme nic — ani max favorable, ani TP
+                // konfluenci (intra-bar pořadí neznáme; dřív se TP v SL baru počítalo a MFE ne
+                // → vzájemně nekonzistentní výstup u whipsaw barů).
+                const hitSLNow = isLong ? bar[3] <= boxSL : bar[2] >= boxSL;
+                if (hitSLNow) { stopReason = 'sl'; break; }
                 // V baru prvního zásahu reálné TP najdi level(y) u TP: VWAP/deviace + statické (konfluence).
                 if (tpLevels === null && vwapSource !== 'none' && effW != null) {
                     const hitTP = isLong ? bar[2] >= tp : bar[3] <= tp;
@@ -723,8 +752,6 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                         }
                     }
                 }
-                const hitSL = isLong ? bar[3] <= boxSL : bar[2] >= boxSL;
-                if (hitSL) { stopReason = 'sl'; break; } // konzervativně: bar zásahu SL do max favorable nepočítáme
                 const fav = isLong ? bar[2] : bar[3];
                 if (isLong ? fav > maxFav : fav < maxFav) maxFav = fav;
                 for (const Lv of staticLevels) {
@@ -753,15 +780,18 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             for (const Lv of dynLv) {
                 if (!Lv.reached && vwapSource !== 'none' && finalW != null) { const band = finalW + Lv.k * finalSd; Lv.price = roundTick2(band); const fav2 = isLong ? band > entry : band < entry; Lv.r = fav2 ? Math.round((isLong ? (band - entry) : (entry - band)) / risk * 100) / 100 : null; }
             }
-            // Spoj statické + dynamické (jen ta s platným favorable R), seřaď dle vzdálenosti, ořež na 8.
-            const limited = [...staticLevels, ...dynLv.filter(d => d.r != null && d.r > 0)]
+            // Spoj statické + dynamické (jen ta s platným favorable R), seřaď dle vzdálenosti.
+            const allFav = [...staticLevels, ...dynLv.filter(d => d.r != null && d.r > 0)]
                 .filter(L => L.r != null && L.r > 0)
-                .sort((a, b) => a.r - b.r)
-                .slice(0, 10);
+                .sort((a, b) => a.r - b.r);
+            // Pro ULOŽENÍ ořež na 10 nejbližších (kompaktní blob), ale topReached/achievableR
+            // se MUSÍ počítat z PLNÉHO pole — jinak dojezd na vzdálenější 11.+ level zmizí
+            // a leftOnTableR vyjde podhodnocený.
+            const limited = allFav.slice(0, 10);
             const tpR = Math.round((isLong ? (tp - entry) : (entry - tp)) / risk * 100) / 100;
             const trail = trailFrom(boxSL); // klasický strukturní trailing z PŮVODNÍHO SL boxu
             let topReached: any = null;
-            for (const Lv of limited) { if (Lv.reached && (topReached == null || Lv.r > topReached.r)) topReached = Lv; }
+            for (const Lv of allFav) { if (Lv.reached && (topReached == null || Lv.r > topReached.r)) topReached = Lv; }
             return {
                 available: true,
                 flatByMin: fbMin,
@@ -1141,12 +1171,12 @@ export function pageReadBoxLevels(boxId?: any) {
         const isPos = (d: any) => d && (d.toolname === 'LineToolRiskRewardLong' || d.toolname === 'LineToolRiskRewardShort');
         const getId = (d: any) => { try { return typeof d.id === 'function' ? d.id() : d.id; } catch (e) { return null; } };
         const all = model.dataSources().filter(isPos);
-        if (!all.length) return { ok: false };
+        if (!all.length) return { ok: false, count: 0 };
         // Zamknuto na boxId → čti vždy ten samý box (i po kliknutí jinam zruší výběr).
         let target: any = null;
         if (boxId != null) {
             for (const d of all) { if (getId(d) === boxId) { target = d; break; } }
-            if (!target) return { ok: false, boxGone: true };
+            if (!target) return { ok: false, boxGone: true, count: all.length };
         } else {
             try { const sp = (model.selection().allSources() || []).filter(isPos); if (sp.length) target = sp[sp.length - 1]; } catch (e) { /* ignore */ }
             if (!target) target = all[all.length - 1];
@@ -1159,13 +1189,13 @@ export function pageReadBoxLevels(boxId?: any) {
         const stopLevel = rd('stopLevel'), profitLevel = rd('profitLevel');
         const sl = isLong ? entry - stopLevel * minTick : entry + stopLevel * minTick;
         const tp = isLong ? entry + profitLevel * minTick : entry - profitLevel * minTick;
-        return { ok: true, boxId: getId(target), entry: entry, sl: sl, tp: tp, isLong: isLong, idx: Math.round(pts[0].index) };
+        return { ok: true, count: all.length, boxId: getId(target), entry: entry, sl: sl, tp: tp, isLong: isLong, idx: Math.round(pts[0].index) };
     } catch (e) {
         return { ok: false };
     }
 }
 
-export function readBoxLevels(boxId?: any): Promise<{ ok: boolean; boxId?: any; boxGone?: boolean; entry?: number; sl?: number; tp?: number; isLong?: boolean; idx?: number }> {
+export function readBoxLevels(boxId?: any): Promise<{ ok: boolean; count?: number; boxId?: any; boxGone?: boolean; entry?: number; sl?: number; tp?: number; isLong?: boolean; idx?: number }> {
     return new Promise((resolve) => {
         try {
             chrome.runtime.sendMessage({ action: 'readBoxLevels', boxId: boxId ?? null }, (res) => {

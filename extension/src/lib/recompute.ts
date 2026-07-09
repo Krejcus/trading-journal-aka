@@ -5,25 +5,26 @@
 // (přes entryOverride) a uloží úplný výsledek. Volá se při otevření sidebaru + ručně.
 // ─────────────────────────────────────────────────────────────────────────────
 import { supabase } from './supabase';
-import { computeCounterfactual } from './positionReader';
-
-const FLAT_BY_MIN = 22 * 60; // musí sedět s TradeForm (no-overnight cutoff)
-
-// Root instrumentu pro párování s aktuálním grafem (kopie z TradeForm — extension nemá sdílený util).
-const INSTRUMENT_MAP: Record<string, string> = { NQ: 'MNQ', ES: 'MES', CL: 'MCL', GC: 'MGC', RTY: 'M2K', YM: 'MYM', SI: 'SIL', ZB: 'ZB', ZN: 'ZN' };
-function instrRoot(symbol: string): string {
-    const clean = String(symbol || '').replace(/[0-9!:_-].*$/, '').toUpperCase();
-    return INSTRUMENT_MAP[clean] || clean;
-}
+import { computeCounterfactual, getChartLayout } from './positionReader';
+import { FLAT_BY_MIN, instrRoot } from './shared';
 
 export interface BackfillResult { checked: number; completed: number; stillPending: number; }
+
+/** Root symbolu AKTUÁLNĚ zobrazeného grafu (nebo '' když nejde přečíst). */
+async function currentChartRoot(): Promise<string> {
+    try {
+        const lay: any = await getChartLayout();
+        const sym = (lay && lay.panes && lay.panes[0] && lay.panes[0].sym) || '';
+        return instrRoot(sym);
+    } catch { return ''; }
+}
 
 /**
  * Dopočítá pending excursion pro obchody odpovídající aktuálnímu grafu.
  * @param chartSymbol symbol z aktivního panelu (getChartLayout().panes[0].sym)
  * @param opts.max max počet obchodů na jeden běh (default 12 — ať to netrvá věčnost)
  */
-export async function backfillPendingExcursions(chartSymbol: string, opts?: { max?: number }): Promise<BackfillResult> {
+export async function backfillPendingExcursions(chartSymbol: string, opts?: { max?: number; shouldStop?: () => boolean }): Promise<BackfillResult> {
     const empty: BackfillResult = { checked: 0, completed: 0, stillPending: 0 };
     const root = instrRoot(chartSymbol);
     if (!root) return empty;
@@ -61,6 +62,14 @@ export async function backfillPendingExcursions(chartSymbol: string, opts?: { ma
 
     let checked = 0, completed = 0, stillPending = 0;
     for (const groupRows of groupList) {
+        // Abort (zavřený sidebar) + OCHRANA PROTI CIZÍMU GRAFU: uživatel může uprostřed
+        // běhu přepnout symbol — sken by pak počítal MNQ obchody z CL barů a trvale
+        // uložil křivá čísla. Před každou skupinou ověř, že graf pořád ukazuje náš root.
+        if (opts?.shouldStop?.()) { stillPending += groupRows.length; continue; }
+        if ((await currentChartRoot()) !== root) {
+            stillPending += groupRows.length;
+            continue; // graf už není na našem instrumentu → zbytek nech pending
+        }
         checked += groupRows.length;
         const d0 = groupRows[0].data || {};
         const entry = Number(d0.entryPrice), sl = Number(d0.stopLoss), tp = Number(d0.takeProfit);
@@ -82,7 +91,7 @@ export async function backfillPendingExcursions(chartSymbol: string, opts?: { ma
 
         // Aplikuj shodný výsledek na VŠECHNY kopie skupiny. Každá si drží svůj data blob
         // (účet, pnl, riskAmount) — přepisujeme jen counterfactual/excursion/entryMap + příznak.
-        for (const r of groupRows) {
+        const results = await Promise.all(groupRows.map(async (r: any) => {
             const d = r.data || {};
             const merged = {
                 ...d,
@@ -92,8 +101,9 @@ export async function backfillPendingExcursions(chartSymbol: string, opts?: { ma
                 excursionComplete: true,
             };
             const { error: upErr } = await supabase.from('trades').update({ data: merged }).eq('id', r.id).eq('user_id', session.user.id);
-            if (upErr) stillPending++; else completed++;
-        }
+            return !upErr;
+        }));
+        for (const okRes of results) { if (okRes) completed++; else stillPending++; }
     }
     return { checked, completed, stillPending };
 }

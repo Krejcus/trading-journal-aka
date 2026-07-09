@@ -46,6 +46,9 @@ export async function transcribeAudio(
  */
 export async function startRecording(): Promise<{
     stop: () => Promise<Blob>;
+    /** Okamžitě zahodí nahrávku a UVOLNÍ mikrofon — pro unmount/zavření sidebaru
+     *  uprostřed nahrávání (jinak zůstala ikona nahrávání svítit navždy). */
+    abort: () => void;
     stream: MediaStream;
 }> {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -64,13 +67,21 @@ export async function startRecording(): Promise<{
 
     return {
         stream,
-        stop: () => new Promise<Blob>((resolve) => {
+        stop: () => new Promise<Blob>((resolve, reject) => {
             recorder.onstop = () => {
                 const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
                 stream.getTracks().forEach(t => t.stop());
                 resolve(blob);
             };
-            recorder.stop();
+            recorder.onerror = (e: any) => {
+                stream.getTracks().forEach(t => t.stop());
+                reject(e && e.error ? e.error : new Error('Nahrávání selhalo'));
+            };
+            try { recorder.stop(); } catch (e) { stream.getTracks().forEach(t => t.stop()); reject(e); }
         }),
+        abort: () => {
+            try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* ignore */ }
+            stream.getTracks().forEach(t => t.stop());
+        },
     };
 }

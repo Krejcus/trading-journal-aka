@@ -1,6 +1,8 @@
 export async function cropImage(dataUrl: string, rect: DOMRect): Promise<string> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         const img = new Image();
+        // Bez onerror by nedekódovatelný dataUrl nechal await viset NAVŽDY (flow zamrzl).
+        img.onerror = () => reject(new Error('Screenshot se nepodařilo dekódovat'));
         img.onload = () => {
             const canvas = document.createElement('canvas');
             const dpr = window.devicePixelRatio || 1;
@@ -11,6 +13,7 @@ export async function cropImage(dataUrl: string, rect: DOMRect): Promise<string>
             const width = rect.width * dpr;
             const height = rect.height * dpr;
 
+            if (!(width > 0) || !(height > 0)) { resolve(dataUrl); return; } // prázdný rect → vrať celý snímek
             canvas.width = width;
             canvas.height = height;
             const ctx = canvas.getContext('2d');

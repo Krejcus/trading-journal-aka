@@ -4,6 +4,11 @@ import { Sidebar } from './Sidebar';
 import { ThemeProvider } from './components/ThemeContext';
 import styleText from './style.css?inline';
 
+// Guard proti dvojité injekci (re-enable/update extensionu na otevřeném tabu):
+// druhý běh by namountoval druhý sidebar + druhé auth subscriptiony a backfill.
+const existing = document.getElementById('alpha-bridge-v2-host');
+if (existing) existing.remove();
+
 const host = document.createElement('div');
 host.id = 'alpha-bridge-v2-host';
 

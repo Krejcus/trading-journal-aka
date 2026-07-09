@@ -73,30 +73,39 @@ export function Sidebar() {
     const [backfilling, setBackfilling] = useState(false);
     const [backfillToast, setBackfillToast] = useState<{ text: string; tone: 'ok' | 'info' | 'warn' } | null>(null);
     const backfillRanRef = useRef<string>(''); // poslední symbol, na kterém auto-backfill proběhl
+    // Mutex přes REF (state se commitne až po re-renderu → auto 1800ms + ruční klik uměly
+    // projít guardem obě) + abort flag: zavření sidebaru zastaví rozběhnutý backfill.
+    const backfillBusyRef = useRef(false);
+    const backfillAbortRef = useRef(false);
 
     const runBackfill = async (manual: boolean) => {
-        if (backfilling) return;
+        if (backfillBusyRef.current) return;
+        backfillBusyRef.current = true;
+        backfillAbortRef.current = false;
         let sym = '';
         try { const lay: any = await getChartLayout(); sym = (lay && lay.panes && lay.panes[0] && lay.panes[0].sym) || ''; } catch { /* ignore */ }
-        if (!sym) { if (manual) setBackfillToast({ text: 'Nepodařilo se přečíst symbol grafu.', tone: 'warn' }); return; }
-        if (!manual && backfillRanRef.current === sym) return; // auto: jen jednou na daný symbol
+        if (!sym) { if (manual) setBackfillToast({ text: 'Nepodařilo se přečíst symbol grafu.', tone: 'warn' }); backfillBusyRef.current = false; return; }
+        if (!manual && backfillRanRef.current === sym) { backfillBusyRef.current = false; return; } // auto: jen jednou na daný symbol
         backfillRanRef.current = sym;
         setBackfilling(true);
         try {
             // max = počet SKUPIN (reálných obchodů); díky grupování kopií zvládne jeden běh
             // celý den fan-outu naráz. Auto 12 skupin pokryje běžný den, ruční 30 i backlog.
-            const res = await backfillPendingExcursions(sym, { max: manual ? 30 : 12 });
+            const res = await backfillPendingExcursions(sym, {
+                max: manual ? 30 : 12,
+                shouldStop: () => backfillAbortRef.current,
+            });
             if (res.completed > 0) setBackfillToast({ text: `✅ Dopočítáno ${res.completed} obchodů`, tone: 'ok' });
             else if (manual) setBackfillToast({ text: res.checked ? `Zatím nic — ${res.stillPending} čeká na bary` : 'Žádné pending obchody pro tento graf', tone: 'info' });
         } catch { if (manual) setBackfillToast({ text: 'Přepočet selhal', tone: 'warn' }); }
-        finally { setBackfilling(false); }
+        finally { setBackfilling(false); backfillBusyRef.current = false; }
     };
 
     // Auto po otevření (nech graf chvíli usadit) — jednou na symbol, potichu.
     useEffect(() => {
-        if (!isOpen || !session) return;
+        if (!isOpen || !session) { backfillAbortRef.current = true; return; }
         const t = setTimeout(() => runBackfill(false), 1800);
-        return () => clearTimeout(t);
+        return () => { clearTimeout(t); backfillAbortRef.current = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, session]);
 
@@ -138,20 +147,21 @@ export function Sidebar() {
 
             <div
                 id="alpha-bridge-sidebar"
-                className={`fixed top-[15px] right-[48px] h-[calc(100vh-30px)] flex flex-col z-[2000000] overflow-x-hidden overflow-y-hidden transition-all duration-300 ease-out will-change-transform ${isOpen ? 'visible opacity-100 translate-x-0 scale-100 pointer-events-auto' : 'invisible opacity-0 translate-x-[120%] scale-95 pointer-events-none'} ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}
+                className={`fixed top-[15px] right-[48px] h-[calc(100vh-30px)] flex flex-col z-[2000000] overflow-x-hidden overflow-y-hidden transition-all duration-300 ease-out ${isOpen ? 'visible opacity-100 translate-x-0 scale-100 pointer-events-auto' : 'invisible opacity-0 translate-x-[120%] scale-95 pointer-events-none'} ${theme === 'dark' ? 'text-slate-200' : 'text-slate-800'}`}
                 style={Object.assign(
                     {
                         width: isWide ? '740px' : '380px',
                         borderRadius: '24px',
-                        backdropFilter: 'blur(24px) saturate(180%)',
-                        WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+                        // backdrop-filter blur(24px) ZÁMĚRNĚ pryč: GPU přeblurovávala celý region
+                        // grafu za panelem při každém ticku trhu = největší pocitový lag sidebaru.
+                        // Místo toho neprůhlednější pozadí níže.
                     },
                     theme === 'dark' ? {
-                        background: 'rgba(15, 23, 42, 0.85)',
+                        background: 'rgba(11, 17, 32, 0.97)',
                         border: '1px solid rgba(255, 255, 255, 0.08)',
                         boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), inset 0 1px 0 0 rgba(255, 255, 255, 0.1)'
                     } : {
-                        background: 'rgba(255, 255, 255, 0.85)',
+                        background: 'rgba(255, 255, 255, 0.98)',
                         border: '1px solid rgba(0, 0, 0, 0.08)',
                         boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.1), inset 0 1px 0 0 rgba(255, 255, 255, 0.5)'
                     }

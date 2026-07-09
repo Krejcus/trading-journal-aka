@@ -197,6 +197,8 @@ export interface Trade {
   durationMinutes: number;
   entryTime?: number;
   entryDate?: string;
+  /** Datum výstupu (YYYY-MM-DD) — u vícedenních obchodů se liší od entryDate. */
+  exitDate?: string;
   screenshot?: string;
   screenshots?: string[];
   notes?: string;

@@ -29,7 +29,10 @@ const VoiceMemoButton: React.FC<VoiceMemoButtonProps> = ({
     const [state, setState] = useState<'idle' | 'recording' | 'transcribing' | 'error'>('idle');
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [elapsedMs, setElapsedMs] = useState(0);
-    const recorderRef = useRef<{ stop: () => Promise<Blob>; stream: MediaStream } | null>(null);
+    const recorderRef = useRef<{ stop: () => Promise<Blob>; abort: () => void; stream: MediaStream } | null>(null);
+
+    // Unmount uprostřed nahrávání (zavření sidebaru) → uvolni mikrofon.
+    useEffect(() => () => { recorderRef.current?.abort(); recorderRef.current = null; }, []);
     const startTsRef = useRef<number>(0);
     const tickRef = useRef<number | null>(null);
 
@@ -38,9 +41,10 @@ const VoiceMemoButton: React.FC<VoiceMemoButtonProps> = ({
         if (state === 'recording') {
             startTsRef.current = Date.now();
             setElapsedMs(0);
+            // 500 ms stačí (zobrazují se vteřiny) — 100 ms = 10 re-renderů/s zbytečně.
             tickRef.current = window.setInterval(() => {
                 setElapsedMs(Date.now() - startTsRef.current);
-            }, 100);
+            }, 500);
         } else {
             if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
             setElapsedMs(0);

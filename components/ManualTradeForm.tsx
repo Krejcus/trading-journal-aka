@@ -359,6 +359,14 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
         updates.screenshots = formData.screenshots;
       }
 
+      // COMBINED karta: editTrade.pnl/riskAmount jsou SOUČTY přes kopie — fallback
+      // v safeNum by je propsal jako per-kopii hodnoty. Když ekonomiku nejde spočítat
+      // z cen (NaN), pole radši vynech — App pak škáluje jen to, co je spolehlivé.
+      if (typeof editTrade.id === 'string' && editTrade.id.startsWith('combined_')) {
+        if (!isFinite(pnlNum)) { delete updates.pnl; delete updates.targetAmount; }
+        if (!isFinite(calculations.risk)) delete updates.riskAmount;
+      }
+
       Promise.resolve(onUpdate(updates)).then(() => {
         onClose();
       }).catch((err) => {
