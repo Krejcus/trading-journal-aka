@@ -250,7 +250,7 @@ function buildJournalText(core: Core, days: number, includeNotes: boolean): stri
       L.push(`${p.date}: ${head}`);
       for (const s of (p.scenarios?.sessions || [])) {
         if (!s?.plan && !s?.bias) continue;
-        L.push(`   · ${s.label || 'session'}${s.bias ? ` [${s.bias}]` : ''}: ${trim(s.plan, includeNotes ? 170 : 60)}`);
+        L.push(`   · ${s.label || 'session'}${s.bias ? ` [${s.bias}]` : ''}: ${trim(s.plan, includeNotes ? 300 : 60)}`);
       }
     }
   }
@@ -264,16 +264,16 @@ function buildJournalText(core: Core, days: number, includeNotes: boolean): stri
       const bits = [
         r.rating ? `${r.rating}★` : null,
         r.scenarioResult ? `scénář: ${r.scenarioResult}` : null,
-        r.mainTakeaway ? `takeaway: ${trim(r.mainTakeaway, 150)}` : null,
+        r.mainTakeaway ? `takeaway: ${trim(r.mainTakeaway, 250)}` : null,
         r.mistakes?.length ? `chyby: ${r.mistakes.join(',')}` : null,
       ].filter(Boolean);
       L.push(`${r.date}: ${bits.join(' | ') || '(bez obsahu)'}`);
-      if (r.lessons) L.push(`   · lekce: ${trim(r.lessons, includeNotes ? 200 : 80)}`);
+      if (r.lessons) L.push(`   · lekce: ${trim(r.lessons, includeNotes ? 350 : 80)}`);
       for (const q of (r.quickNotes || []).slice(0, 5)) {
-        L.push(`   · pozn. ${q.timestamp ? timeTZ(new Date(q.timestamp)) : ''}: ${trim(q.text, 140)}`);
+        L.push(`   · pozn. ${q.timestamp ? timeTZ(new Date(q.timestamp)) : ''}: ${trim(q.text, 200)}`);
       }
       for (const sb of (r.sessionBreakdowns || [])) {
-        if (sb?.notes) L.push(`   · ${sb.sessionLabel || 'session'}: ${trim(sb.notes, 140)}`);
+        if (sb?.notes) L.push(`   · ${sb.sessionLabel || 'session'}: ${trim(sb.notes, includeNotes ? 400 : 100)}`);
       }
     }
   }
