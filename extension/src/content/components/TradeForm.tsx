@@ -234,6 +234,17 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
 
     // ── Backtest session (pre/post) — ukládá se do samostatné backtest_sessions tabulky ──
     const [btSession, setBtSession] = useState<{ bias: '' | 'Long' | 'Short' | 'Neutral'; preNotes: string; postNotes: string }>({ bias: '', preNotes: '', postNotes: '' });
+    // „Rozepsáno, neuloženo" — chrání obsah před přemazáním load efektem při změně data/bloku
+    // (např. rozepíšeš pre-notes → načteš box → entryDate skočí na backtest datum → dřív SMAZÁNO).
+    const btSessionDirtyRef = useRef(false);
+    // Ke kterému (účet|datum|blok) aktuální obsah patří. null = „plovoucí" (napsáno před načtením
+    // 1. boxu) → přichytí se k prvnímu načtenému klíči. Bez toho by rozepsaný bias z Dne 1 přežil
+    // přechod na Den 2 a otiskl se (i auto-upsertnul!) pod špatný den.
+    const btSessionKeyRef = useRef<string | null>(null);
+    const editBtSession = (patch: Partial<{ bias: '' | 'Long' | 'Short' | 'Neutral'; preNotes: string; postNotes: string }>) => {
+        btSessionDirtyRef.current = true;
+        setBtSession(s => ({ ...s, ...patch }));
+    };
     const [sessionStatus, setSessionStatus] = useState<{ text: string; type: 'info' | 'success' | 'error' } | null>(null);
     const [pnlManual, setPnlManual] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -251,7 +262,6 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     const openLightbox = (url: string) => { setLightboxUrl(url); setLightboxOpen(true); };
     // Aktuální seznam URL galerie (entry + kontext) pro navigaci šipkami v lightboxu.
     const galleryUrlsRef = useRef<string[]>([]);
-    const [showReset, setShowReset] = useState(false);
 
     // ── Fullscreen lightbox (s navigací ◀▶ napříč galerií) ────────────────────
     useEffect(() => {
@@ -354,18 +364,16 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         setHtfShots([]);
         setCf(null);
         setPnlManual(false);
-        setShowReset(false);
         setSubmitStatus(null);
+        // Metriky z posledního čtení boxu — bez resetu by ručně zapsaný obchod (bez načtení
+        // nového boxu) zdědil MFE/MAE, ambiguous flag a per-kontrakt risk CIZÍHO obchodu.
+        setPosMetrics({ mfeUsd: null, maeUsd: null, mfeR: null, maeR: null, mfePoints: null, maePoints: null });
+        setOutcomeAmbiguous(false);
+        setPerContractRisk(0);
         if (!opts?.keepBoxLock) {
             trackedBoxRef.current = null;
             lastBoxRef.current = '';
         }
-    };
-
-    // Ruční „zavřít potvrzení / začít nanovo" — plný reset včetně odemčení boxu a schování chipu.
-    const handleReset = () => {
-        softReset();
-        setJustSaved(null);
     };
 
     // ── Fetch preferences ────────────────────────────────────────────────────
@@ -610,10 +618,17 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
     };
 
     // Načti existující session pro daný účet+datum+blok (ať vidíš dřív napsané pre/post).
+    // hasPos jako boolean dep — hodnota entry se mění při každém keystroku, ale efekt zajímá
+    // jen prázdné↔načtené (jinak by každá úprava Entry ceny střílela dotaz do DB).
+    const hasPos = trade.entry !== '';
     useEffect(() => {
         if (mode !== 'backtest') return;
+        // Listening stav (po zápisu / před načtením boxu): entryDate=dnešek a session z aktuálního
+        // času NEJSOU skutečné souřadnice backtestu — nequeruj a hlavně nemaž rozepsanou session.
+        if (!hasPos) return;
         const accId = selectedAccounts[0];
-        if (!accId || !trade.entryDate || !trade.session) { setBtSession({ bias: '', preNotes: '', postNotes: '' }); return; }
+        if (!accId || !trade.entryDate || !trade.session) return;
+        const key = `${accId}|${trade.entryDate}|${trade.session}`;
         let cancelled = false;
         (async () => {
             const { data } = await supabase
@@ -624,11 +639,25 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 .eq('block', trade.session)
                 .maybeSingle();
             if (cancelled) return;
+            // Rozepsaný obsah TÉHLE session (stejný klíč) nebo plovoucí (napsán před 1. boxem)
+            // → lokální úpravy vyhrávají nad DB verzí; plovoucí se přichytí k tomuto klíči.
+            if (btSessionDirtyRef.current && (btSessionKeyRef.current === key || btSessionKeyRef.current === null)) {
+                btSessionKeyRef.current = key;
+                return;
+            }
             const d = (data as any)?.data;
-            setBtSession(d ? { bias: d.bias || '', preNotes: d.preNotes || '', postNotes: d.postNotes || '' } : { bias: '', preNotes: '', postNotes: '' });
+            if (d) {
+                setBtSession({ bias: d.bias || '', preNotes: d.preNotes || '', postNotes: d.postNotes || '' });
+            } else {
+                // Jiný den/blok bez uložené session → vyčisti (i rozepsané z JINÉHO klíče —
+                // jinak by se bias z Dne 1 otiskl do obchodů Dne 2, viz biasAligned).
+                setBtSession({ bias: '', preNotes: '', postNotes: '' });
+            }
+            btSessionDirtyRef.current = false;
+            btSessionKeyRef.current = key;
         })();
         return () => { cancelled = true; };
-    }, [mode, selectedAccounts, trade.entryDate, trade.session]);
+    }, [mode, selectedAccounts, hasPos, trade.entryDate, trade.session]);
 
     const saveSession = async () => {
         if (!selectedAccounts.length) { setSessionStatus({ text: 'Vyber backtest účet', type: 'error' }); return; }
@@ -646,6 +675,8 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         }));
         const { error } = await supabase.from('backtest_sessions').upsert(rows, { onConflict: 'account_id,date,block' });
         if (error) { setSessionStatus({ text: `Chyba: ${error.message}`, type: 'error' }); return; }
+        btSessionDirtyRef.current = false;
+        btSessionKeyRef.current = `${selectedAccounts[0]}|${trade.entryDate}|${trade.session}`;
         setSessionStatus({ text: `Session uložena · ${trade.session} ${trade.entryDate}`, type: 'success' });
     };
 
@@ -1099,6 +1130,27 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
             // Bez tohohle by při odznačeném masteru + ponechané kopii dostala kopie isMaster:true.
             const masterAccountId = selectedAccounts.find(id => !accountParentMap.get(id)) || selectedAccounts[0];
 
+            // Auto-ulož backtest session do backtest_sessions PŘED čtením mapy níž — dřív se
+            // ukládala JEN ručním tlačítkem, takže další obchod ve stejném bloku ji nenašel
+            // (load nic nenačetl) a do obchodů by se otiskla stará DB verze místo toho, co je v UI.
+            if (mode === 'backtest' && trade.entryDate && trade.session
+                && (btSession.bias || btSession.preNotes.trim() || btSession.postNotes.trim())) {
+                const sessRows = selectedAccounts.map(accId => ({
+                    user_id: session.user.id,
+                    account_id: accId,
+                    date: trade.entryDate,
+                    block: trade.session,
+                    data: { bias: btSession.bias, preNotes: btSession.preNotes, postNotes: btSession.postNotes },
+                    updated_at: new Date().toISOString(),
+                }));
+                const { error: sessErr } = await supabase.from('backtest_sessions').upsert(sessRows, { onConflict: 'account_id,date,block' });
+                if (sessErr) console.warn('[AlphaBridge] session auto-save failed:', sessErr.message);
+                else {
+                    btSessionDirtyRef.current = false;
+                    btSessionKeyRef.current = `${selectedAccounts[0]}|${trade.entryDate}|${trade.session}`;
+                }
+            }
+
             // Per-účet backtest session (bias/pre/post) — každý obchod nese session SVÉHO účtu.
             // Bez tohohle fan-out otiskl session účtu[0] do všech řádků (biasAligned pak vůči cizímu biasu).
             const btSessionMap = new Map<string, { bias?: string; preNotes?: string; postNotes?: string }>();
@@ -1121,8 +1173,10 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 // Session tohoto účtu; fallback na session MASTER účtu. Fan-out kopie = stejný
                 // obchod ve stejném session kontextu → jinak by kopie dostala prázdný bias/notes,
                 // zatímco master je má (asymetrie master vs kopie v backtest analýze).
-                const masterSession = btSessionMap.get(masterAccountId) || btSession || {};
-                const acctSession = btSessionMap.get(accId) || masterSession;
+                // Dirty (auto-upsert selhal / obsah nezapsán) → in-memory verze VYHRÁVÁ nad DB mapou,
+                // jinak by se do obchodu tiše otiskl starý bias z DB místo toho, co uživatel vidí v UI.
+                const masterSession = btSessionDirtyRef.current ? btSession : (btSessionMap.get(masterAccountId) || btSession || {});
+                const acctSession = btSessionDirtyRef.current ? masterSession : (btSessionMap.get(accId) || masterSession);
 
                 // Per-účet škálování. pnl je úměrné risku (R×risk), takže škáluje stejně;
                 // mfeUsd/maeUsd ($) taky; mfeR/maeR a body NE (jsou risk-normalizované/cenové).
@@ -1323,7 +1377,10 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                 const pnlTxt = `${js.pnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(js.pnl)).toLocaleString('en-US')}`;
                 const dirTxt = js.direction === 'LONG' ? 'Long' : 'Short';
                 const sym = (js.symbol || '').replace(/1!$/, ''); // NQ1! → NQ
-                const boxWord = boxCount === 1 ? 'box' : (boxCount && boxCount < 5) ? 'boxy' : 'boxů';
+                // Právě uložený box je pořád na grafu (zamčený, čeká na smazání) — nepočítej ho,
+                // jinak „zbývá 1 box" ukazuje na ten už zapsaný a klik na něj nic neudělá.
+                const remaining = typeof boxCount === 'number' ? Math.max(0, boxCount - (trackedBoxRef.current != null ? 1 : 0)) : null;
+                const boxWord = remaining === 1 ? 'box' : (remaining && remaining < 5) ? 'boxy' : 'boxů';
                 return (
                     <div ref={successCardRef} className="mb-3" style={{ animation: 'atPop .35s cubic-bezier(.16,1,.3,1) both' }}>
                         <style>{`@keyframes atPop{0%{transform:translateY(-8px);opacity:0}100%{transform:none;opacity:1}}@keyframes atRadar{0%{transform:scale(.4);opacity:.5}100%{transform:scale(2.3);opacity:0}}@keyframes atSpin{to{transform:rotate(360deg)}}`}</style>
@@ -1335,9 +1392,9 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                                     <Radar size={22} className="text-blue-500" style={{ animation: 'atSpin 3.5s linear infinite' }} />
                                 </div>
                                 <div className={`text-[13px] font-black ${theme === 'dark' ? 'text-slate-200' : 'text-slate-700'}`}>Čekám na pozici z grafu…</div>
-                                {typeof boxCount === 'number' && boxCount > 0 && (
+                                {remaining !== null && remaining > 0 && (
                                     <div className={`text-[11px] font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
-                                        na grafu {boxCount === 1 ? 'zbývá' : 'zbývají'} {boxCount} {boxWord} — klikni na další
+                                        na grafu {remaining === 1 ? 'zbývá' : 'zbývají'} {remaining} {boxWord} — klikni na další
                                     </div>
                                 )}
                             </div>
@@ -1547,7 +1604,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                                             ? (b === 'Long' ? 'bg-emerald-600 text-white' : b === 'Short' ? 'bg-rose-600 text-white' : 'bg-slate-500 text-white')
                                             : (theme === 'dark' ? 'bg-white/5 text-slate-400' : 'bg-white text-slate-500 border border-slate-200');
                                         return (
-                                            <button key={b} type="button" onClick={() => setBtSession(s => ({ ...s, bias: active ? '' : b }))}
+                                            <button key={b} type="button" onClick={() => editBtSession({ bias: active ? '' : b })}
                                                 className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${cls}`}>
                                                 {b === 'Long' ? 'Long ↑' : b === 'Short' ? 'Short ↓' : 'Neutral'}
                                             </button>
@@ -1555,8 +1612,8 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                                     })}
                                 </div>
 
-                                <TextArea label="Pre — na co koukám" value={btSession.preNotes} onChange={(v: string) => setBtSession(s => ({ ...s, preNotes: v }))} rows={2} placeholder="Bias + na co dnes čekám…" />
-                                <TextArea label="Post — čeho jsem si všiml / co doladit" value={btSession.postNotes} onChange={(v: string) => setBtSession(s => ({ ...s, postNotes: v }))} rows={2} placeholder="Co fungovalo, co příště jinak…" />
+                                <TextArea label="Pre — na co koukám" value={btSession.preNotes} onChange={(v: string) => editBtSession({ preNotes: v })} rows={2} placeholder="Bias + na co dnes čekám…" />
+                                <TextArea label="Post — čeho jsem si všiml / co doladit" value={btSession.postNotes} onChange={(v: string) => editBtSession({ postNotes: v })} rows={2} placeholder="Co fungovalo, co příště jinak…" />
 
                                 <button type="button" onClick={saveSession}
                                     className="w-full mt-1 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-black uppercase tracking-wider transition-all active:scale-95">

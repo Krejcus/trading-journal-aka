@@ -18,6 +18,15 @@ export function Sidebar() {
     const [mode, setMode] = useState<'normal' | 'backtest'>('normal');
     useEffect(() => {
         try { chrome.storage?.local?.get(['ab_mode'], (r: any) => { if (r?.ab_mode === 'backtest' || r?.ab_mode === 'normal') setMode(r.ab_mode); }); } catch { /* storage nedostupné */ }
+        // Sync mezi taby: přepnutí módu v jednom TradingView tabu se propíše i do ostatních
+        // (jinak by druhý tab zapisoval obchody pod starým módem, dokud se nerefreshne).
+        const onChanged = (changes: any, area: string) => {
+            if (area !== 'local' || !changes.ab_mode) return;
+            const v = changes.ab_mode.newValue;
+            if (v === 'backtest' || v === 'normal') setMode(v);
+        };
+        try { chrome.storage?.onChanged?.addListener(onChanged); } catch { /* ignore */ }
+        return () => { try { chrome.storage?.onChanged?.removeListener(onChanged); } catch { /* ignore */ } };
     }, []);
     const changeMode = (m: 'normal' | 'backtest') => {
         setMode(m);

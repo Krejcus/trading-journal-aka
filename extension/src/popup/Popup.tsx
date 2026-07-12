@@ -13,14 +13,12 @@ interface DayStats {
 }
 
 function getTodayUtcRange(): { start: string; end: string } {
+    // Skutečné UTC hranice LOKÁLNÍ půlnoci — dřív se na lokální Y/M/D lepilo literální „Z",
+    // což v CZ (UTC+1/+2) posunulo okno o 1–2 h: obchod z 00:30 lokálně vypadl z „Dneška".
     const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm   = String(now.getMonth() + 1).padStart(2, '0');
-    const dd   = String(now.getDate()).padStart(2, '0');
-    return {
-        start: `${yyyy}-${mm}-${dd}T00:00:00.000Z`,
-        end:   `${yyyy}-${mm}-${dd}T23:59:59.999Z`,
-    };
+    const startLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const endLocal   = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    return { start: startLocal.toISOString(), end: endLocal.toISOString() };
 }
 
 export function Popup() {
@@ -50,10 +48,13 @@ export function Popup() {
     const loadTodayStats = async () => {
         setStatsLoading(true);
         try {
+            const { data: { session: authSess } } = await supabase.auth.getSession();
+            if (!authSess) { setStatsLoading(false); return; }
             const { start, end } = getTodayUtcRange();
             const { data, error } = await supabase
                 .from('trades')
                 .select('pnl, instrument, data, date')
+                .eq('user_id', authSess.user.id) // defense-in-depth vedle RLS (konzistentní se zbytkem kódu)
                 .gte('date', start)
                 .lte('date', end)
                 .order('date', { ascending: false });

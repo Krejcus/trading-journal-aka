@@ -49,8 +49,11 @@ export function pageReadActivePosition(boxId?: any) {
 
         const entry = pts[0].price;
         const isLong = target.toolname === 'LineToolRiskRewardLong';
-        const stopLevel = rd('stopLevel');     // ticky
-        const profitLevel = rd('profitLevel'); // ticky
+        const stopLevel = Number(rd('stopLevel'));     // ticky
+        const profitLevel = Number(rd('profitLevel')); // ticky
+        // Guard: nedotažený/rozestavěný box může mít stopLevel/profitLevel undefined →
+        // NaN by prosáklo do formuláře jako text "NaN" (stejný princip jako guard u qty/risk níž).
+        if (!Number.isFinite(stopLevel) || !Number.isFinite(profitLevel)) return { ok: false, reason: 'box-incomplete' };
         const sl = isLong ? entry - stopLevel * minTick : entry + stopLevel * minTick;
         const tp = isLong ? entry + profitLevel * minTick : entry - profitLevel * minTick;
 
@@ -124,7 +127,9 @@ export function pageReadActivePosition(boxId?: any) {
                     mfeUsd = Math.round(mfeP * usdPerPriceUnit * qty * 100) / 100;
                     maeUsd = Math.round(maeP * usdPerPriceUnit * qty * 100) / 100;
                 }
-                if (riskActual > 0) {
+                // mfeUsd != null nutné: null/riskActual by v JS tiše dalo 0 — přesně to zavádějící
+                // číslo, kterému má „nech null" pravidlo výš zabránit (jen o úroveň níž, v R).
+                if (riskActual > 0 && mfeUsd != null && maeUsd != null) {
                     mfeR = Math.round((mfeUsd / riskActual) * 100) / 100;
                     maeR = Math.round((maeUsd / riskActual) * 100) / 100;
                 }
@@ -215,7 +220,9 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             const pts = target.points();
             entry = pts[0].price;
             isLong = target.toolname === 'LineToolRiskRewardLong';
-            stopLevel = rd('stopLevel'); profitLevel = rd('profitLevel');
+            stopLevel = Number(rd('stopLevel')); profitLevel = Number(rd('profitLevel'));
+            // Guard: rozestavěný box (undefined levely) → NaN by prosáklo do všech CF výpočtů.
+            if (!Number.isFinite(stopLevel) || !Number.isFinite(profitLevel)) return { ok: false, reason: 'box-incomplete' };
             tp = isLong ? entry + profitLevel * minTick : entry - profitLevel * minTick;
             boxEntryIndex = Math.round(pts[0].index);
             entryUnixPre = ts.indexToTimePoint(boxEntryIndex);
@@ -1186,7 +1193,9 @@ export function pageReadBoxLevels(boxId?: any) {
         const pts = target.points();
         const entry = pts[0].price;
         const isLong = target.toolname === 'LineToolRiskRewardLong';
-        const stopLevel = rd('stopLevel'), profitLevel = rd('profitLevel');
+        const stopLevel = Number(rd('stopLevel')), profitLevel = Number(rd('profitLevel'));
+        // Guard: rozestavěný box → NaN v sl/tp by auto-sync propsal do formuláře jako "NaN".
+        if (!Number.isFinite(stopLevel) || !Number.isFinite(profitLevel)) return { ok: false, count: all.length };
         const sl = isLong ? entry - stopLevel * minTick : entry + stopLevel * minTick;
         const tp = isLong ? entry + profitLevel * minTick : entry - profitLevel * minTick;
         return { ok: true, count: all.length, boxId: getId(target), entry: entry, sl: sl, tp: tp, isLong: isLong, idx: Math.round(pts[0].index) };
