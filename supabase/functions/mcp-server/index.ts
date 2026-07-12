@@ -133,6 +133,7 @@ function liveDecisions(core: Core): Trade[] {
 }
 
 const isBE = (t: Trade) => t.isBE === true || Math.abs(t.pnl || 0) <= 0.01;
+const trim = (s: any, n: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
 const fmtUsd = (v: number) => `${v >= 0 ? '+' : '-'}$${Math.abs(Math.round(v)).toLocaleString('en-US')}`;
 const rOf = (t: Trade): number | null =>
   t.riskAmount && t.riskAmount > 0 ? Math.round(((t.pnl || 0) / t.riskAmount) * 100) / 100 : null;
@@ -213,7 +214,7 @@ function buildJournalText(core: Core, days: number, includeNotes: boolean): stri
       t.biasAligned === false ? '⚠️PROTI-BIAS' : null,
     ].filter(Boolean);
     let line = parts.join(' | ');
-    if (includeNotes && t.notes) line += ` | pozn: ${String(t.notes).replace(/\s+/g, ' ').slice(0, 110)}`;
+    if (includeNotes && t.notes) line += ` | pozn: ${trim(t.notes, 180)}`;
     L.push(line);
   }
 
@@ -233,27 +234,47 @@ function buildJournalText(core: Core, days: number, includeNotes: boolean): stri
     }
   }
 
-  // Přípravy (14 dní)
+  // Přípravy (14 dní) — bias, fokus, cíle + PLÁN per session karta
   const preps14 = core.preps.filter(p => String(p.date) >= isoTZ(subDays(now, 14)));
   if (preps14.length) {
     L.push('');
-    L.push('[RANNÍ PŘÍPRAVY — posledních 14 dní]');
+    L.push('[RANNÍ PŘÍPRAVY — posledních 14 dní] (kompletní den bez zkracování: get_journal_day)');
     for (const p of [...preps14].sort((a, b) => String(a.date).localeCompare(String(b.date)))) {
-      L.push(`${p.date}: bias ${p.bias || '—'}${p.completed ? '' : ' (nedokončená)'}${includeNotes && p.notes ? ` | ${String(p.notes).replace(/\s+/g, ' ').slice(0, 90)}` : ''}`);
+      const head = [
+        `bias ${p.bias || '—'}`,
+        p.confidence != null ? `confidence ${p.confidence}` : null,
+        p.dailyFocus ? `fokus: ${trim(p.dailyFocus, 90)}` : null,
+        p.goals?.length ? `cíle: ${p.goals.slice(0, 3).map((g: any) => trim(g, 50)).join('; ')}` : null,
+        p.completed ? null : '(nedokončená)',
+      ].filter(Boolean).join(' | ');
+      L.push(`${p.date}: ${head}`);
+      for (const s of (p.scenarios?.sessions || [])) {
+        if (!s?.plan && !s?.bias) continue;
+        L.push(`   · ${s.label || 'session'}${s.bias ? ` [${s.bias}]` : ''}: ${trim(s.plan, includeNotes ? 170 : 60)}`);
+      }
     }
   }
 
-  // Večerní audity (7 dní)
+  // Večerní audity (10 dní) — takeaway, lekce, chyby, rychlé poznámky, session breakdowny
   const rev7 = core.reviews.filter(r => String(r.date) >= isoTZ(subDays(now, 10))).slice(0, 7);
   if (rev7.length) {
     L.push('');
-    L.push('[VEČERNÍ AUDITY — poslední dny]');
+    L.push('[VEČERNÍ AUDITY — poslední dny] (kompletní den bez zkracování: get_journal_day)');
     for (const r of [...rev7].sort((a, b) => String(a.date).localeCompare(String(b.date)))) {
       const bits = [
-        r.disciplineScore != null ? `disciplína ${r.disciplineScore}/10` : null,
-        r.takeaway ? `takeaway: ${String(r.takeaway).replace(/\s+/g, ' ').slice(0, 120)}` : null,
+        r.rating ? `${r.rating}★` : null,
+        r.scenarioResult ? `scénář: ${r.scenarioResult}` : null,
+        r.mainTakeaway ? `takeaway: ${trim(r.mainTakeaway, 150)}` : null,
+        r.mistakes?.length ? `chyby: ${r.mistakes.join(',')}` : null,
       ].filter(Boolean);
       L.push(`${r.date}: ${bits.join(' | ') || '(bez obsahu)'}`);
+      if (r.lessons) L.push(`   · lekce: ${trim(r.lessons, includeNotes ? 200 : 80)}`);
+      for (const q of (r.quickNotes || []).slice(0, 5)) {
+        L.push(`   · pozn. ${q.timestamp ? timeTZ(new Date(q.timestamp)) : ''}: ${trim(q.text, 140)}`);
+      }
+      for (const sb of (r.sessionBreakdowns || [])) {
+        if (sb?.notes) L.push(`   · ${sb.sessionLabel || 'session'}: ${trim(sb.notes, 140)}`);
+      }
     }
   }
 
@@ -312,8 +333,9 @@ mcp.tool('load_journal', {
   description:
     'VŽDY ZAVOLEJ NA ZAČÁTKU KONVERZACE. Vrátí kompletní trading deník: aktivní závazky, ' +
     'statistiky, všechny obchody za posledních N dní (1 řádek = 1 rozhodnutí, $ sečtené přes ' +
-    'prop účty), měsíční souhrn starší historie, ranní přípravy a večerní audity. ' +
-    'Po načtení odpovídej z těchto dat — další nástroje volej jen pro věci mimo snapshot.',
+    'prop účty), měsíční souhrn starší historie, ranní přípravy (vč. plánů per session) ' +
+    'a večerní audity (takeaway, lekce, poznámky). Delší texty jsou zkrácené — plný den ' +
+    'bez zkracování vrací get_journal_day. Po načtení odpovídej z těchto dat.',
   inputSchema: z.object({
     days: z.number().min(7).max(120).optional()
       .describe('Okno plného detailu ve dnech (default 90)'),
@@ -402,6 +424,68 @@ mcp.tool('get_trade', {
     delete detail.aiSuggestions; delete detail.visionAnalysis;
     detail._kopie = copies.map(c => ({ ucet: accName(c.accountId), pnl: c.pnl }));
     return text(JSON.stringify(detail, null, 1).slice(0, 30_000));
+  }),
+});
+
+mcp.tool('get_journal_day', {
+  description:
+    'KOMPLETNÍ detail jednoho dne BEZ zkracování: ranní příprava (plné plány per session, ' +
+    'fokus, cíle, checklist, mindset), večerní audit (takeaway, lekce, chyby, poznámky ' +
+    'během dne, session breakdowny, stresory/vděčnost) a všechny obchody dne s plnými ' +
+    'poznámkami. Použij pro debrief konkrétního dne nebo když load_journal nestačí.',
+  inputSchema: z.object({ date: z.string().describe('YYYY-MM-DD') }),
+  handler: guard(async (args: { date: string }) => {
+    const core = await loadCore();
+    const p: any = core.preps.find(x => String(x.date) === args.date) || null;
+    const r: any = core.reviews.find(x => String(x.date) === args.date) || null;
+    const trades = liveDecisions(core)
+      .filter(t => String(t.date).slice(0, 10) === args.date)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      .map(t => ({
+        id: t.id, cas: t.date, smer: t.direction, nastroj: t.instrument,
+        pnl_usd: Math.round(t.pnl || 0), r: rOf(t), be: isBE(t) || undefined,
+        session: t.session, setup: t.setup,
+        ltf_konfluence: t.ltfConfluence, htf_konfluence: t.htfConfluence,
+        chyby: t.mistakes, emoce: t.emotions,
+        mfeR: t.mfeR, maeR: t.maeR,
+        proti_biasu: t.biasAligned === false || undefined,
+        poznamka: t.notes || null,
+      }));
+    const priprava = p ? {
+      bias: p.bias ?? null,
+      fokus_dne: p.dailyFocus ?? null,
+      confidence: p.confidence ?? null,
+      mindset: p.mindsetState ?? null,
+      cile: p.goals ?? [],
+      checklist: p.checklist ?? null,
+      dokoncena: !!p.completed,
+      sessions: (p.scenarios?.sessions || []).map((s: any) => ({
+        session: s.label, bias: s.bias ?? null, plan: s.plan ?? null,
+      })),
+    } : null;
+    const audit = r ? {
+      rating: r.rating ?? null,
+      scenar_vysledek: r.scenarioResult ?? null,
+      hlavni_takeaway: r.mainTakeaway ?? null,
+      lekce: r.lessons ?? null,
+      chyby: r.mistakes ?? [],
+      poznamky_behem_dne: (r.quickNotes || []).map((q: any) => ({
+        cas: q.timestamp ? timeTZ(new Date(q.timestamp)) : null, text: q.text,
+      })),
+      sessions: (r.sessionBreakdowns || []).filter((s: any) => s?.notes).map((s: any) => ({
+        session: s.sessionLabel, poznamky: s.notes,
+      })),
+      psycho: r.psycho ? {
+        stresory: r.psycho.stressors ?? [], vdecnost: r.psycho.gratitude ?? [],
+      } : null,
+      dokonceny: !!r.completed,
+    } : null;
+    return text(JSON.stringify({
+      den: args.date,
+      priprava: priprava ?? '(žádná ranní příprava)',
+      audit: audit ?? '(žádný večerní audit)',
+      obchody: trades.length ? trades : '(žádné obchody)',
+    }, null, 1).slice(0, 60_000));
   }),
 });
 
