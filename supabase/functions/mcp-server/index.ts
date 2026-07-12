@@ -133,7 +133,13 @@ function liveDecisions(core: Core): Trade[] {
 }
 
 const isBE = (t: Trade) => t.isBE === true || Math.abs(t.pnl || 0) <= 0.01;
-const trim = (s: any, n: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+// Zkrácení s EXPLICITNÍM markerem — model jinak nepozná, že text nekončí,
+// a neví, že plné znění vrátí get_journal_day (viděli jsme: kouč se ptal
+// uživatele "dopiš mi konec" místo zavolání nástroje).
+const trim = (s: any, n: number) => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n)} …[ZKRÁCENO — plné znění vrátí get_journal_day(date)]` : t;
+};
 const fmtUsd = (v: number) => `${v >= 0 ? '+' : '-'}$${Math.abs(Math.round(v)).toLocaleString('en-US')}`;
 const rOf = (t: Trade): number | null =>
   t.riskAmount && t.riskAmount > 0 ? Math.round(((t.pnl || 0) / t.riskAmount) * 100) / 100 : null;
