@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, WeeklyFocus, PsychoMetricConfig, SessionConfig, SessionAnalysis, GoalResult } from '../types';
+import { DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, WeeklyFocus, SessionConfig, SessionAnalysis, GoalResult } from '../types';
 import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimelineV2 from './TacticalTimelineV2';
 import ImageZoomModal from './ImageZoomModal';
@@ -76,7 +76,6 @@ interface DailyJournalProps {
   onDeleteReview?: (date: string) => void;
   standardGoals: string[];
   ironRules: IronRule[];
-  psychoMetrics?: PsychoMetricConfig[];
   userMistakes?: string[];
   viewMode: 'individual' | 'combined';
   weeklyFocusList: WeeklyFocus[];
@@ -87,7 +86,7 @@ interface DailyJournalProps {
 }
 
 const DailyJournal: React.FC<DailyJournalProps> = ({
-  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, psychoMetrics, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = [], initialDate, userMistakes = []
+  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = [], initialDate, userMistakes = []
 }) => {
   const getToday = () => new Date().toLocaleDateString('en-CA');
   const [selectedDate, setSelectedDate] = useState(initialDate ?? getToday());
@@ -213,7 +212,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     scenarioResult: undefined,
     ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending', label: r.label })),
     weeklyGoalAdherence: [],
-    psycho: { metrics: (psychoMetrics || []).reduce((acc, m) => ({ ...acc, [m.id]: 5 }), {}), stressors: '', gratitude: '', notes: '' }
+    psycho: { stressors: '', gratitude: '', notes: '' }
   });
 
   // Track the most recent form state to save on switch/unmount
@@ -344,7 +343,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       stressors: r.psycho?.stressors || '',
       gratitude: r.psycho?.gratitude || '',
       notes: r.psycho?.notes || '',
-      metrics: r.psycho?.metrics || {},
     }
   });
 
@@ -1008,7 +1006,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         goalResults: initialResults,
         scenarioResult: undefined,
         ruleAdherence: tradeRules.map(r => ({ ruleId: r.id, status: 'Pending', label: r.label })),
-        psycho: { metrics: (psychoMetrics || []).reduce((acc, m) => ({ ...acc, [m.id]: 5 }), {}), stressors: '', gratitude: '', notes: '' }
+        psycho: { stressors: '', gratitude: '', notes: '' }
       });
     }
   }, [currentReview, selectedDate]); // Omezení závislostí
@@ -1432,7 +1430,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           preps={preps}
           reviews={reviews}
           ironRules={ironRules}
-          psychoMetrics={psychoMetrics}
           sessions={sessions}
           weeklyFocus={currentWeekFocus}
           theme={theme}
@@ -1486,25 +1483,6 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                         ${dayPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </div>
                     </div>
-
-                    {review.psycho && (
-                      <div className="grid grid-cols-2 gap-3 mb-6">
-                        {psychoMetrics?.map(metric => {
-                          const val = review.psycho?.metrics?.[metric.id] || 5;
-                          return (
-                            <div key={metric.id} className={`p-3 rounded-2xl ${theme !== 'light' ? 'bg-[var(--bg-page)]/50' : 'bg-slate-50'}`}>
-                              <p className="text-[8px] font-black text-slate-500 mb-1">{metric.label}</p>
-                              <div className="flex items-center gap-2">
-                                <div className={`h-1 flex-1 rounded-full overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-card)]' : 'bg-slate-100'}`}>
-                                  <div className="h-full" style={{ width: `${val * 10}% `, backgroundColor: metric.color }} />
-                                </div>
-                                <span className={`text-[10px] font-black ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{val}/10</span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
 
                     <div className="space-y-4 flex-1">
                       {review.psycho?.stressors && (

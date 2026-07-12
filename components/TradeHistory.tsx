@@ -808,6 +808,74 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         )}
       </div>
 
+      {/* Neplatné / mimo plán — 1 karta = 1 session píčovin (agregát po dni, jen PnL).
+          NAD gridem: dole byla s infinite scrollem nedosažitelná (nové karty ji odsouvaly)
+          a obchod označený jako nevalidní tak „beze stopy zmizel". */}
+      {invalidDays.length > 0 && (
+        <div className="mb-6 space-y-3">
+          {invalidDays.map(day => {
+            const open = openInvalidDays.has(day.key);
+            const dayWin = day.pnl > 0.01;
+            const dayBE = Math.abs(day.pnl) <= 0.01;
+            const pnlColor = dayBE ? 'text-amber-500' : (dayWin ? 'text-emerald-500' : 'text-rose-500');
+            return (
+              <div key={day.key} className={`rounded-2xl border overflow-hidden ${theme !== 'light' ? 'bg-amber-500/[0.04] border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
+                {/* Hlavička dne — klik = rozbalit */}
+                <button
+                  onClick={() => toggleInvalidDay(day.key)}
+                  className="w-full flex items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-amber-500/[0.06]"
+                >
+                  <ChevronRight size={16} className={`text-amber-500 transition-transform duration-200 shrink-0 ${open ? 'rotate-90' : ''}`} />
+                  <AlertTriangle size={15} className="text-amber-500 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-sm font-black ${theme !== 'light' ? 'text-slate-100' : 'text-slate-800'}`}>
+                      Neplatné / mimo plán
+                    </div>
+                    <div className="text-[11px] font-bold text-amber-600/80 uppercase tracking-wider">
+                      {day.label} · {day.items.length} {day.items.length === 1 ? 'obchod' : day.items.length < 5 ? 'obchody' : 'obchodů'}
+                    </div>
+                  </div>
+                  <div className={`text-lg font-black font-mono ${pnlColor} shrink-0`}>
+                    {day.pnl >= 0 ? '+' : '−'}${Math.abs(Math.round(day.pnl)).toLocaleString('en-US')}
+                  </div>
+                </button>
+
+                {/* Slim řádky — rozbalené */}
+                {open && (
+                  <div className={`border-t ${theme !== 'light' ? 'border-amber-500/15 divide-y divide-white/5' : 'border-amber-200 divide-y divide-slate-100'}`}>
+                    {day.items.map(t => {
+                      const win = t.pnl > 0.01;
+                      const be = Math.abs(t.pnl) <= 0.01;
+                      const c = be ? 'text-amber-500' : (win ? 'text-emerald-500' : 'text-rose-500');
+                      const isLong = String(t.direction || '').toLowerCase() === 'long';
+                      const dt = new Date(t.timestamp || Date.parse(t.date));
+                      const hhmm = isNaN(dt.getTime()) ? '' : dt.toTimeString().slice(0, 5);
+                      return (
+                        <div
+                          key={t.id}
+                          onClick={() => !isMultiSelectMode && setSelectedTrade(t)}
+                          className="flex items-center gap-3 px-5 py-2.5 text-[13px] cursor-pointer hover:bg-white/[0.03] transition-colors"
+                        >
+                          <span className="font-mono text-slate-500 w-[42px] shrink-0">{hhmm}</span>
+                          <span className={`font-bold ${theme !== 'light' ? 'text-slate-200' : 'text-slate-700'}`}>{t.instrument}</span>
+                          <span className={`text-[10px] font-black uppercase ${isLong ? 'text-emerald-500' : 'text-rose-500'} shrink-0`}>
+                            {isLong ? '▲' : '▼'} {t.direction}
+                          </span>
+                          <span className="flex-1 min-w-0 truncate text-slate-500">{getAccountName(t.accountId)}</span>
+                          <span className={`font-mono font-bold ${c} shrink-0`}>
+                            {t.pnl >= 0 ? '+' : '−'}${Math.abs(Math.round(t.pnl)).toLocaleString('en-US')}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
           {validTrades.map((trade) => {
@@ -1233,71 +1301,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         </div>
       )}
 
-      {/* Neplatné / mimo plán — 1 karta = 1 session píčovin (agregát po dni, jen PnL) */}
-      {invalidDays.length > 0 && (
-        <div className="mt-6 space-y-3">
-          {invalidDays.map(day => {
-            const open = openInvalidDays.has(day.key);
-            const dayWin = day.pnl > 0.01;
-            const dayBE = Math.abs(day.pnl) <= 0.01;
-            const pnlColor = dayBE ? 'text-amber-500' : (dayWin ? 'text-emerald-500' : 'text-rose-500');
-            return (
-              <div key={day.key} className={`rounded-2xl border overflow-hidden ${theme !== 'light' ? 'bg-amber-500/[0.04] border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
-                {/* Hlavička dne — klik = rozbalit */}
-                <button
-                  onClick={() => toggleInvalidDay(day.key)}
-                  className="w-full flex items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-amber-500/[0.06]"
-                >
-                  <ChevronRight size={16} className={`text-amber-500 transition-transform duration-200 shrink-0 ${open ? 'rotate-90' : ''}`} />
-                  <AlertTriangle size={15} className="text-amber-500 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-sm font-black ${theme !== 'light' ? 'text-slate-100' : 'text-slate-800'}`}>
-                      Neplatné / mimo plán
-                    </div>
-                    <div className="text-[11px] font-bold text-amber-600/80 uppercase tracking-wider">
-                      {day.label} · {day.items.length} {day.items.length === 1 ? 'obchod' : day.items.length < 5 ? 'obchody' : 'obchodů'}
-                    </div>
-                  </div>
-                  <div className={`text-lg font-black font-mono ${pnlColor} shrink-0`}>
-                    {day.pnl >= 0 ? '+' : '−'}${Math.abs(Math.round(day.pnl)).toLocaleString('en-US')}
-                  </div>
-                </button>
-
-                {/* Slim řádky — rozbalené */}
-                {open && (
-                  <div className={`border-t ${theme !== 'light' ? 'border-amber-500/15 divide-y divide-white/5' : 'border-amber-200 divide-y divide-slate-100'}`}>
-                    {day.items.map(t => {
-                      const win = t.pnl > 0.01;
-                      const be = Math.abs(t.pnl) <= 0.01;
-                      const c = be ? 'text-amber-500' : (win ? 'text-emerald-500' : 'text-rose-500');
-                      const isLong = String(t.direction || '').toLowerCase() === 'long';
-                      const dt = new Date(t.timestamp || Date.parse(t.date));
-                      const hhmm = isNaN(dt.getTime()) ? '' : dt.toTimeString().slice(0, 5);
-                      return (
-                        <div
-                          key={t.id}
-                          onClick={() => !isMultiSelectMode && setSelectedTrade(t)}
-                          className="flex items-center gap-3 px-5 py-2.5 text-[13px] cursor-pointer hover:bg-white/[0.03] transition-colors"
-                        >
-                          <span className="font-mono text-slate-500 w-[42px] shrink-0">{hhmm}</span>
-                          <span className={`font-bold ${theme !== 'light' ? 'text-slate-200' : 'text-slate-700'}`}>{t.instrument}</span>
-                          <span className={`text-[10px] font-black uppercase ${isLong ? 'text-emerald-500' : 'text-rose-500'} shrink-0`}>
-                            {isLong ? '▲' : '▼'} {t.direction}
-                          </span>
-                          <span className="flex-1 min-w-0 truncate text-slate-500">{getAccountName(t.accountId)}</span>
-                          <span className={`font-mono font-bold ${c} shrink-0`}>
-                            {t.pnl >= 0 ? '+' : '−'}${Math.abs(Math.round(t.pnl)).toLocaleString('en-US')}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* (Sekce „Neplatné / mimo plán" se renderuje NAD gridem — dole byla s infinite
+          scrollem nedosažitelná: nové karty ji pořád odsouvaly.) */}
 
       {/* Infinite Scroll Sentinel + Loading Spinner */}
       {hasMore && (

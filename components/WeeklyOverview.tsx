@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Trade, DailyPrep, DailyReview, IronRule, PsychoMetricConfig,
+  Trade, DailyPrep, DailyReview, IronRule,
   SessionConfig, WeeklyFocus
 } from '../types';
 import {
@@ -18,7 +18,6 @@ interface WeeklyOverviewProps {
   preps: DailyPrep[];
   reviews: DailyReview[];
   ironRules: IronRule[];
-  psychoMetrics: PsychoMetricConfig[];
   sessions: SessionConfig[];
   weeklyFocus?: WeeklyFocus;
   theme: string;
@@ -42,7 +41,7 @@ function getDayChapter(pnl: number, count: number): { emoji: string; mood: strin
 }
 
 const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
-  weekDays, weekNumber, trades, preps, reviews, ironRules, psychoMetrics,
+  weekDays, weekNumber, trades, preps, reviews, ironRules,
   sessions, weeklyFocus, theme, today, onEditPrep, onEditReview, onOpenTrade
 }) => {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -240,7 +239,6 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
                   wr={selectedDayData.dayWr}
                   isToday={selectedDayData.isToday}
                   ironRules={ironRules}
-                  psychoMetrics={psychoMetrics}
                   sessions={sessions}
                   isDark={isDark}
                   onClose={() => setSelectedDate(null)}
@@ -505,7 +503,6 @@ interface DayDetailPanelProps {
   wr: number;
   isToday: boolean;
   ironRules: IronRule[];
-  psychoMetrics: PsychoMetricConfig[];
   sessions: SessionConfig[];
   isDark: boolean;
   onClose: () => void;
@@ -516,7 +513,7 @@ interface DayDetailPanelProps {
 
 const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
   date, chapterNum, emoji, mood, trades, prep, review, pnl, wr,
-  isToday, ironRules, psychoMetrics, sessions, isDark,
+  isToday, ironRules, sessions, isDark,
   onClose, onEditPrep, onEditReview, onOpenTrade
 }) => {
   const d = new Date(date);
@@ -884,28 +881,6 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                         <p className={`text-[10px] whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{review.psycho.notes}</p>
                       </div>
                     )}
-                  </div>
-                </div>
-              )}
-              {review.psycho?.metrics && Object.keys(review.psycho.metrics).length > 0 && (
-                <div>
-                  <p className="text-[9px] font-black uppercase text-purple-500 tracking-widest mb-1.5">PSYCHO METRIKY</p>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {psychoMetrics.map(m => {
-                      const val = review.psycho?.metrics?.[m.id];
-                      if (val === undefined) return null;
-                      return (
-                        <div key={m.id} className={`p-2 rounded-lg ${isDark ? 'bg-white/5' : 'bg-slate-50'}`}>
-                          <p className="text-[8px] font-black text-slate-500 uppercase">{m.label}</p>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <div className={`h-1 flex-1 rounded-full overflow-hidden ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
-                              <div className="h-full" style={{ width: `${val * 10}%`, backgroundColor: m.color }} />
-                            </div>
-                            <span className={`text-[9px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{val}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
                   </div>
                 </div>
               )}

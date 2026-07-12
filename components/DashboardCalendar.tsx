@@ -101,7 +101,9 @@ interface WeekData {
 }
 
 interface GridCell {
-   type: 'empty' | 'day' | 'summary';
+   // 'ghost' = den ze sousedního měsíce (vizuální návaznost týdne). Nese DayData, ale
+   // NIKDY se nepočítá do týdenního ani měsíčního součtu — jen se tlumeně vykreslí.
+   type: 'empty' | 'day' | 'summary' | 'ghost';
    data?: DayData;
    summaryData?: WeekData;
 }
@@ -211,6 +213,7 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
                year={currentData.year}
                month={currentData.month}
                trades={currentData.trades}
+               allTrades={trades}
                preps={preps}
                reviews={reviews}
                theme={theme}
@@ -242,7 +245,7 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
    );
 };
 
-const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: any }> = ({ year, month, trades, preps, reviews, theme, onPrev, onNext, canPrev, canNext, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance, currency, rates }) => {
+const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: any }> = ({ year, month, trades, allTrades, preps, reviews, theme, onPrev, onNext, canPrev, canNext, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance, currency, rates }) => {
    const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
@@ -250,54 +253,74 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
       const rows: GridCell[][] = [];
       const daysInMonth = new Date(year, month, 0).getDate();
       const firstDayObj = new Date(year, month - 1, 1);
-      let currentRow: GridCell[] = [];
-      let weekDaysData: DayData[] = [];
-      let jsDay = firstDayObj.getDay();
-      let paddingCount = (jsDay === 0 ? 6 : jsDay - 1);
-      for (let i = 0; i < paddingCount; i++) if (currentRow.length < 5) currentRow.push({ type: 'empty' });
 
-      for (let day = 1; day <= daysInMonth; day++) {
-         const dateObj = new Date(year, month - 1, day);
+      // Sestaví DayData pro libovolné datum. `source` = odkud brát obchody:
+      //  - pro dny aktuálního měsíce `trades` (už profiltrované, rychlé)
+      //  - pro ghost dny sousedního měsíce `allTrades` (plné pole)
+      const makeDayData = (dateObj: Date, source: Trade[]): DayData => {
          const dateStr = dateObj.toLocaleDateString('en-CA');
          const dayOfWeek = dateObj.getDay();
          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-         // Filter trades for the day
-         const dayTrades = trades.filter(t => t.date.startsWith(dateStr));
-         // Filter out MISSED trades for financial stats
+         const dayTrades = source.filter(t => t.date.startsWith(dateStr));
          const realTrades = dayTrades.filter(t => t.executionStatus !== 'Missed');
-
          const pnl = realTrades.reduce((acc, t) => acc + t.pnl, 0);
          const prep = preps.find(p => p.date === dateStr);
          const review = reviews.find(r => r.date === dateStr);
-
-         // Emotion logic using only real trades
          const emotions = realTrades.flatMap(t => t.emotions || []);
          const emotionCounts: Record<string, number> = {};
          emotions.forEach(e => emotionCounts[e] = (emotionCounts[e] || 0) + 1);
          const dominantEmotion = Object.entries(emotionCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
-
-         const dayData: DayData = {
-            dateStr, dateObj, dayNum: day, pnl,
+         return {
+            dateStr, dateObj, dayNum: dateObj.getDate(), pnl,
             wins: realTrades.filter(t => t.pnl > 0).length,
             losses: realTrades.filter(t => t.pnl < 0).length,
-            trades: dayTrades, // Keep missed trades for the detail modal list
+            trades: dayTrades, // ponech i Missed pro detail modal
             isWeekend,
-            hasTrades: realTrades.length > 0, // Only color cell if real trades were taken
+            hasTrades: realTrades.length > 0, // barva jen když padly reálné obchody
             hasPrep: !!prep, hasReview: !!review, prep, review,
             dominantEmotion, rating: review?.rating
          };
+      };
 
-         if (!isWeekend) { currentRow.push({ type: 'day', data: dayData }); weekDaysData.push(dayData); }
+      let currentRow: GridCell[] = [];
+      let weekDaysData: DayData[] = [];
+
+      // Leading ghost dny = pracovní dny předchozího měsíce, které dopadnou do prvního
+      // řádku (Po/Út když měsíc začíná ve středu). Naváže týden, ale do součtů nejde.
+      const jsDay = firstDayObj.getDay();
+      const paddingCount = Math.min(jsDay === 0 ? 6 : jsDay - 1, 5);
+      for (let i = 0; i < paddingCount; i++) {
+         const ghostDate = new Date(year, month - 1, 1 - (paddingCount - i));
+         currentRow.push({ type: 'ghost', data: makeDayData(ghostDate, allTrades) });
+      }
+
+      for (let day = 1; day <= daysInMonth; day++) {
+         const dateObj = new Date(year, month - 1, day);
+         const dayOfWeek = dateObj.getDay();
+         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+         if (!isWeekend) {
+            const dayData = makeDayData(dateObj, trades);
+            currentRow.push({ type: 'day', data: dayData });
+            weekDaysData.push(dayData);
+         }
          const isSunday = dayOfWeek === 0;
          const isLastDay = day === daysInMonth;
          if (isSunday || isLastDay) {
-            while (currentRow.length < 5 && currentRow.length > 0) currentRow.push({ type: 'empty' });
-            if (currentRow.length > 0) {
+            // Řádek uzavíráme jen když má aspoň jeden reálný den — čistě ghost řádek
+            // (měsíc začíná o víkendu) zahodíme, ať nevznikne prázdný týden „T+0".
+            if (weekDaysData.length > 0) {
+               // Trailing ghost dny = pracovní dny dalšího měsíce doplňující řádek do pěti.
+               let k = 1;
+               while (currentRow.length < 5 && k <= 12) {
+                  const ghostDate = new Date(year, month - 1, daysInMonth + k);
+                  const gd = ghostDate.getDay();
+                  if (gd !== 0 && gd !== 6) currentRow.push({ type: 'ghost', data: makeDayData(ghostDate, allTrades) });
+                  k++;
+               }
                const weekPnl = weekDaysData.reduce((acc, d) => acc + d.pnl, 0);
                const weekTradesCount = weekDaysData.reduce((acc, d) => acc + d.trades.filter(t => t.executionStatus !== 'Missed').length, 0);
                const weekWins = weekDaysData.reduce((acc, d) => acc + d.wins, 0);
-               const weekRr = pnlFormat === 'rr' ? calculateTotalRR(weekDaysData.flatMap(d => d.trades)) : undefined;
                currentRow.push({ type: 'summary', summaryData: { weekIndex: rows.length + 1, pnl: weekPnl, days: [...weekDaysData], tradeCount: weekTradesCount, winRate: weekTradesCount > 0 ? (weekWins / weekTradesCount) * 100 : 0 } });
                rows.push(currentRow);
             }
@@ -305,7 +328,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
          }
       }
       return rows;
-   }, [year, month, trades, preps, reviews, pnlFormat]);
+   }, [year, month, trades, allTrades, preps, reviews, pnlFormat]);
 
    const monthName = new Date(year, month - 1, 1).toLocaleString('cs-CZ', { month: 'long', year: 'numeric' });
 
@@ -436,6 +459,32 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
                {formatPnLCompact(pnl, pnlFormat, weekTrades, initialBalance)}
             </span>
             <div className="absolute inset-0 bg-blue-500/0 group-hover:bg-blue-500/5 transition-colors duration-200" />
+         </div>
+      );
+   }
+   // Ghost den (sousední měsíc) — tlumený, přerušovaný okraj, P&L v poloviční sytosti.
+   // Klik funguje (otevře detail dne), ale vizuálně je jasně „vedlejší".
+   if (cell.type === 'ghost') {
+      const gday = cell.data!;
+      const gColorMetric = pnlFormat === 'rr' ? calculateTotalRR(gday.trades.filter(t => t.executionStatus !== 'Missed')) : gday.pnl;
+      const gIsPositive = gColorMetric >= 0;
+      const gPnlCompact = gday.hasTrades ? formatPnLCompact(gday.pnl, pnlFormat, gday.trades, initialBalance) : null;
+      return (
+         <div
+            onClick={() => onDayClick(gday)}
+            title={`${gday.dateObj.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'long' })} (jiný měsíc)`}
+            className={`rounded-xl md:rounded-2xl p-1 md:p-3 flex flex-col cursor-pointer border border-dashed relative overflow-hidden transition-all opacity-40 hover:opacity-70 ${theme === 'oled' ? 'border-white/10 bg-transparent' : theme === 'dark' ? 'border-white/10 bg-white/[0.015]' : 'border-slate-200 bg-slate-50/40'}`}
+         >
+            <div className="flex justify-end">
+               <span className={`font-mono text-[9px] md:text-xs font-black leading-none ${theme !== 'light' ? 'text-slate-600' : 'text-slate-400'}`}>{gday.dayNum}</span>
+            </div>
+            <div className="flex-1 flex items-center justify-center py-0.5">
+               {gPnlCompact && (
+                  <span className={`font-black text-[10px] md:text-[13px] tracking-tight leading-none text-center ${gIsPositive ? 'text-emerald-500/50' : 'text-rose-500/50'}`}>
+                     {gPnlCompact}
+                  </span>
+               )}
+            </div>
          </div>
       );
    }
@@ -933,6 +982,6 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
    );
 };
 
-interface SingleMonthViewProps { year: number; month: number; trades: Trade[]; preps: DailyPrep[]; reviews: DailyReview[]; theme: 'dark' | 'light' | 'oled'; onPrev: () => void; onNext: () => void; canPrev: boolean; canNext: boolean; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number; }
+interface SingleMonthViewProps { year: number; month: number; trades: Trade[]; allTrades: Trade[]; preps: DailyPrep[]; reviews: DailyReview[]; theme: 'dark' | 'light' | 'oled'; onPrev: () => void; onNext: () => void; canPrev: boolean; canNext: boolean; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number; }
 
 export default DashboardCalendar;

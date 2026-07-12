@@ -17,7 +17,7 @@ import {
   ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText, Lock
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
-import { CustomEmotion, SessionConfig, IronRule, PsychoMetricConfig, WeeklyFocus, SystemSettings } from '../types';
+import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 
 interface SettingsProps {
@@ -37,8 +37,6 @@ interface SettingsProps {
   isBacktestWorld?: boolean;
   ironRules: IronRule[];
   setIronRules: React.Dispatch<React.SetStateAction<IronRule[]>>;
-  psychoMetrics: PsychoMetricConfig[];
-  setPsychoMetrics: React.Dispatch<React.SetStateAction<PsychoMetricConfig[]>>;
   weeklyFocusList: WeeklyFocus[];
   setWeeklyFocusList: React.Dispatch<React.SetStateAction<WeeklyFocus[]>>;
   systemSettings: SystemSettings;
@@ -182,7 +180,6 @@ const Settings: React.FC<SettingsProps> = ({
   sessions, setSessions,
   backtestSessions, setBacktestSessions, isBacktestWorld,
   ironRules, setIronRules,
-  psychoMetrics, setPsychoMetrics,
   weeklyFocusList, setWeeklyFocusList,
   systemSettings, setSystemSettings,
   standardGoals, setStandardGoals,
@@ -213,7 +210,7 @@ const Settings: React.FC<SettingsProps> = ({
   const [newStandardGoal, setNewStandardGoal] = useState('');
   const [emojiPickerTarget, setEmojiPickerTarget] = useState<{ goalIdx: number } | null>(null);
 
-  const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'metric' | 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
   const [toast, setToast] = useState<{ message: string, id: number } | null>(null);
 
   // Screenshot migration state
@@ -963,7 +960,6 @@ const Settings: React.FC<SettingsProps> = ({
         onClose={() => setItemToDelete(null)}
         onConfirm={() => {
           if (!itemToDelete) return;
-          if (itemToDelete.type === 'metric') setPsychoMetrics(prev => prev.filter(x => x.id !== itemToDelete.id));
           if (itemToDelete.type === 'rule') setIronRules(prev => prev.filter(x => x.id !== itemToDelete.id));
           if (itemToDelete.type === 'emotion') setUserEmotions(prev => prev.filter(x => x.id !== itemToDelete.id));
           if (itemToDelete.type === 'mistake') setUserMistakes(prev => prev.filter(x => x !== itemToDelete.id));
@@ -976,7 +972,6 @@ const Settings: React.FC<SettingsProps> = ({
           showToast('Odstraněno');
         }}
         title={
-          itemToDelete?.type === 'metric' ? 'Smazat metriku' :
             itemToDelete?.type === 'rule' ? 'Smazat pravidlo' :
               itemToDelete?.type === 'emotion' ? 'Smazat emoci' :
                 itemToDelete?.type === 'session' ? 'Smazat seanci' : 'Smazat položku'

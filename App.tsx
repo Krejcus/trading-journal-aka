@@ -6,7 +6,7 @@ import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, typ
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { safeSetItem } from './utils/safeStorage';
-import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, PsychoMetricConfig, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
+import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
@@ -689,10 +689,6 @@ const App: React.FC = () => {
   const [careerRoadmap, setCareerRoadmap] = useState<CareerCheckpoint[]>(DEFAULT_ROADMAP);
   const [businessResources, setBusinessResources] = useState<BusinessResource[]>([]);
   const [businessSettings, setBusinessSettings] = useState<BusinessSettings>({ taxRatePct: 15, defaultPropThreshold: 150 });
-  const [psychoMetrics, setPsychoMetrics] = useState<PsychoMetricConfig[]>([
-    { id: 'mood', label: 'Nálada', color: '#6366f1' },
-    { id: 'energy', label: 'Energie', color: '#f59e0b' }
-  ]);
 
   const [weeklyFocusList, setWeeklyFocusList] = useState<WeeklyFocus[]>([]);
 
@@ -852,7 +848,6 @@ const App: React.FC = () => {
     constitutionRules,
     careerRoadmap,
     businessSettings,
-    psychoMetricsConfig: psychoMetrics,
     theme,
     dashboardMode,
     systemSettings,
@@ -1191,7 +1186,6 @@ const App: React.FC = () => {
     if (Array.isArray(prefs.constitutionRules)) setConstitutionRules(prefs.constitutionRules);
     if (Array.isArray(prefs.careerRoadmap)) setCareerRoadmap(prefs.careerRoadmap);
     if (prefs.businessSettings) setBusinessSettings(prefs.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 });
-    if (Array.isArray(prefs.psychoMetricsConfig)) setPsychoMetrics(prefs.psychoMetricsConfig);
     // Theme is NOT applied here — it has its own persistence via localStorage
     // to prevent cross-tab sync or focus sync from reverting user's theme choice.
     // Theme is applied only on initial load (useState initializer).
@@ -1216,7 +1210,9 @@ const App: React.FC = () => {
     outcomes: ['Win', 'Loss', 'BE'],
     period: 'all',
     signals: [],
-    executionStatuses: ['Valid'],
+    // Default Valid+Invalid — nevalidní obchody jsou pro review důležité a nemají
+    // po označení „zmizet". Missed zůstává skryté (ušlý zisk, ne reálný obchod).
+    executionStatuses: ['Valid', 'Invalid'],
     htfConfluences: [],
     ltfConfluences: [],
     mistakes: []
@@ -2001,7 +1997,7 @@ const App: React.FC = () => {
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
+  }, [userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
 
   // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
   // Backup save every 30s if user is still editing
@@ -2102,7 +2098,7 @@ const App: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', flushDirtyData);
     };
-  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, psychoMetrics, theme, dashboardMode, systemSettings, networkNotifications]);
+  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, theme, dashboardMode, systemSettings, networkNotifications]);
 
   // Handle Dashboard Mode Switching
   // Sleduj POUZE skutečnou změnu módu — bez tohoto se efekt spouští při každé změně
@@ -3734,7 +3730,6 @@ const App: React.FC = () => {
                       onDeleteReview={handleDeleteReview}
                       standardGoals={standardGoals}
                       ironRules={ironRules}
-                      psychoMetrics={psychoMetrics}
                       viewMode={viewMode}
                       weeklyFocusList={weeklyFocusList}
                       activeTab={journalActiveTab}
@@ -3833,8 +3828,6 @@ const App: React.FC = () => {
                       isBacktestWorld={dashboardMode === 'backtesting'}
                       ironRules={ironRules}
                       setIronRules={(v) => { setIronRules(v); markPreferencesDirty(); }}
-                      psychoMetrics={psychoMetrics}
-                      setPsychoMetrics={(v) => { setPsychoMetrics(v); markPreferencesDirty(); }}
                       weeklyFocusList={weeklyFocusList}
                       setWeeklyFocusList={(v) => { setWeeklyFocusList(v); isWeeklyFocusDirty.current = true; }}
                       systemSettings={systemSettings}

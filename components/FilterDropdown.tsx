@@ -120,6 +120,26 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
     return list.includes(item) ? list.filter(i => i !== item) : [...list, item];
   };
 
+  // Slicer klik (sdílený pro účty i exekuce/směr/výsledek):
+  //  • z BASELINE (výchozí/plný stav) → izoluj jen kliknutou položku
+  //  • ze SÓLO téže položky → zpět na baseline
+  //  • z částečného výběru → přidej/uber; odebrání poslední vrátí baseline
+  // `baseline` = stav, z něhož klik izoluje (default = všechny možnosti). U exekuce
+  // je baseline Valid+Invalid (bez Missed), takže z defaultu klik na „Validní"
+  // izoluje na validní, ne že ho odebere.
+  const eqSet = <T,>(a: T[], b: T[]): boolean => a.length === b.length && a.every(x => b.includes(x));
+  const slicerClick = <T,>(current: T[], allOptions: T[], item: T, baseline: T[] = allOptions): T[] => {
+    if (current.length === 1 && current[0] === item) return [...baseline]; // re-klik na sólo → baseline
+    const atBaseline = eqSet(current, baseline) || eqSet(current, allOptions);
+    // Izoluj jen když je položka SOUČÁSTÍ baseline — jinak (např. Missed mimo default
+    // Valid+Invalid) klik ROZŠIŘUJE výběr, ne izoluje na tu jednu.
+    if (atBaseline && baseline.includes(item)) return [item];
+    const next = current.includes(item) ? current.filter(i => i !== item) : [...current, item];
+    return next.length === 0 ? [...baseline] : next;
+  };
+  const EXEC_ALL = ['Valid', 'Invalid', 'Missed'] as const;
+  const EXEC_BASELINE = ['Valid', 'Invalid'] as const;
+
   const resetFilters = () => {
     setFilters({
       days: [...TRADING_DAYS],
@@ -129,7 +149,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
       outcomes: ['Win', 'Loss', 'BE'],
       period: 'all',
       signals: [],
-      executionStatuses: ['Valid'],
+      executionStatuses: ['Valid', 'Invalid'],
       htfConfluences: [],
       ltfConfluences: [],
       mistakes: []
@@ -139,7 +159,9 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   const activeFilterCount = (
     (TRADING_DAYS.length - filters.days.length) +
     (HOURS.length - filters.hours.length) +
-    (accounts.length - filters.accounts.length) +
+    // Počítej jen ODZNAČENÉ reálné účty — filters.accounts nese i ID smazaných
+    // účtů, takže rozdíl délek uměl jít do minusu („-6 aktivních").
+    accounts.filter(a => !filters.accounts.includes(a.id)).length +
     (2 - filters.directions.length) +
     (3 - filters.outcomes.length) +
     (filters.period !== 'all' ? 1 : 0) +
@@ -162,14 +184,15 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
       <motion.div variants={itemVariants}>
         <button
           onClick={() => toggleSection(id)}
-          className={`w-full flex items-center gap-1.5 px-2.5 py-2 rounded-lg border transition-all ${open
+          className={`w-full flex items-center gap-1 px-2 py-2 rounded-lg border transition-all ${open
             ? (isDark ? 'bg-white/10 border-white/20' : 'bg-white border-slate-300 shadow-sm')
             : (isDark ? 'bg-white/5 border-white/5 hover:border-white/10' : 'bg-slate-100 border-slate-200 hover:border-slate-300')}`}
         >
-          <Icon size={10} className={badge ? (isDark ? 'text-indigo-400' : 'text-indigo-500') : 'text-slate-500'} />
-          <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">{label}</span>
+          <Icon size={10} className={`shrink-0 ${badge ? (isDark ? 'text-slate-300' : 'text-slate-700') : 'text-slate-500'}`} />
+          {/* nowrap — „Dny & hodiny" se v úzkém sloupci lámalo na dva řádky */}
+          <span className="text-[8px] font-black uppercase tracking-wider text-slate-500 whitespace-nowrap">{label}</span>
           {badge ? (
-            <span className="min-w-[15px] h-[15px] px-1 rounded-full text-[7px] font-black text-white flex items-center justify-center bg-indigo-500">{badge}</span>
+            <span className={`min-w-[15px] h-[15px] px-1 rounded-full text-[7px] font-black flex items-center justify-center ${isDark ? 'bg-white/15 text-white' : 'bg-slate-800 text-white'}`}>{badge}</span>
           ) : null}
           <ChevronDown size={10} className={`ml-auto text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
@@ -207,11 +230,17 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
         : `${base} bg-rose-500 border-rose-500 text-white shadow-sm`;
       case 'status-valid': return `${base} bg-emerald-600 text-white border-emerald-500`;
       case 'status-invalid': return `${base} bg-rose-600 text-white border-rose-500`;
-      case 'status-missed': return `${base} bg-blue-600 text-white border-blue-500`;
+      // Missed drží neutrální (černobílý) styl — modrá tam nedávala smysl vedle
+      // zeleného Valid / červeného Invalid a byla mimo zbytek palety filtru.
+      case 'status-missed': return isDark
+        ? `${base} bg-white/15 border-white/20 text-white`
+        : `${base} bg-slate-800 text-white border-slate-700 shadow-sm`;
       default:
+        // Neutral aktivní = „bílý zdvižený pill" jako segmentové přepínače P&L / Seskupení
+        // (bez indigo). Používají účty, Období i mřížka dnů — sjednocený černobílý vzhled.
         return isDark
-          ? `${base} bg-indigo-500/10 border-indigo-500/30 text-indigo-300`
-          : `${base} bg-indigo-500 text-white border-indigo-500 shadow-sm`;
+          ? `${base} bg-white/15 border-white/20 text-white`
+          : `${base} bg-white border-slate-300 text-slate-900 shadow-sm`;
     }
   };
 
@@ -389,49 +418,49 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 {/* Zobrazení (Mřížka/Tabulka) přesunuto do kebab menu v TradeHistory toolbaru. */}
               </div>
 
-              <motion.div variants={itemVariants}>
-                <div className={sectionLabelClass}><Calendar size={10} /> Období</div>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {[
-                    { id: 'all', label: 'Vše' },
-                    { id: 'week', label: '7D' },
-                    { id: 'month', label: '30D' },
-                    { id: 'quarter', label: '90D' },
-                    { id: 'year', label: 'Rok' }
-                  ].map(p => (
-                    <button key={p.id} onClick={() => setFilters(f => ({ ...f, period: p.id as any }))} className={getGlassBtnClass(filters.period === p.id)}>{p.label}</button>
-                  ))}
-                </div>
-              </motion.div>
-
               <div className="grid grid-cols-3 gap-2 items-start">
-                {renderCollapsible('exekuce', ShieldCheck, 'Exekuce', filters.executionStatuses.length || null, (
+                {/* Badge jen když je výběr MIMO default — default stav nemá co hlásit. */}
+                {renderCollapsible('exekuce', ShieldCheck, 'Exekuce', eqSet(filters.executionStatuses as any, EXEC_BASELINE as any) ? null : filters.executionStatuses.length, (
                   <div className="grid grid-cols-1 gap-1.5">
                     {[
                       { id: 'Valid', label: 'Validní', type: 'status-valid' },
                       { id: 'Invalid', label: 'Nevalidní', type: 'status-invalid' },
                       { id: 'Missed', label: 'Zmešk.', type: 'status-missed' }
                     ].map(s => (
-                      <button key={s.id} onClick={() => setFilters(f => ({ ...f, executionStatuses: toggleItem(f.executionStatuses, s.id as any) }))} className={getGlassBtnClass(filters.executionStatuses.includes(s.id as any), s.type as any)}>{s.label}</button>
+                      <button key={s.id} onClick={() => setFilters(f => ({ ...f, executionStatuses: slicerClick(f.executionStatuses, EXEC_ALL as any, s.id as any, EXEC_BASELINE as any) }))} className={getGlassBtnClass(filters.executionStatuses.includes(s.id as any), s.type as any)}>{s.label}</button>
                     ))}
                   </div>
                 ))}
-                {renderCollapsible('smer', TrendingUp, 'Směr', filters.directions.length || null, (
+                {renderCollapsible('smer', TrendingUp, 'Směr', filters.directions.length === 2 ? null : filters.directions.length || null, (
                   <div className="grid grid-cols-1 gap-1.5">
-                    <button onClick={() => setFilters(f => ({ ...f, directions: toggleItem(f.directions, 'Long') }))} className={getGlassBtnClass(filters.directions.includes('Long'), 'win')}>Long</button>
-                    <button onClick={() => setFilters(f => ({ ...f, directions: toggleItem(f.directions, 'Short') }))} className={getGlassBtnClass(filters.directions.includes('Short'), 'loss')}>Short</button>
+                    <button onClick={() => setFilters(f => ({ ...f, directions: slicerClick(f.directions, ['Long', 'Short'], 'Long') }))} className={getGlassBtnClass(filters.directions.includes('Long'), 'win')}>Long</button>
+                    <button onClick={() => setFilters(f => ({ ...f, directions: slicerClick(f.directions, ['Long', 'Short'], 'Short') }))} className={getGlassBtnClass(filters.directions.includes('Short'), 'loss')}>Short</button>
                   </div>
                 ))}
-                {renderCollapsible('vysledek', Target, 'Výsledek', filters.outcomes.length || null, (
+                {renderCollapsible('vysledek', Target, 'Výsledek', filters.outcomes.length === 3 ? null : filters.outcomes.length || null, (
                   <div className="grid grid-cols-1 gap-1.5">
                     {[{ id: 'Win', label: 'Win', type: 'win' }, { id: 'Loss', label: 'Loss', type: 'loss' }, { id: 'BE', label: 'BE', type: 'neutral' }].map(o => (
-                      <button key={o.id} onClick={() => setFilters(f => ({ ...f, outcomes: toggleItem(f.outcomes, o.id as any) }))} className={getGlassBtnClass(filters.outcomes.includes(o.id as any), o.type as any)}>{o.label}</button>
+                      <button key={o.id} onClick={() => setFilters(f => ({ ...f, outcomes: slicerClick(f.outcomes, ['Win', 'Loss', 'BE'], o.id as any) }))} className={getGlassBtnClass(filters.outcomes.includes(o.id as any), o.type as any)}>{o.label}</button>
                     ))}
                   </div>
                 ))}
               </div>
 
-              <div className="grid grid-cols-2 gap-2 items-start">
+              <div className="grid grid-cols-3 gap-2 items-start">
+                {renderCollapsible('obdobi', Calendar, 'Období',
+                  filters.period !== 'all' ? (({ week: '7D', month: '30D', quarter: '90D', year: 'Rok' } as any)[filters.period] || null) : null, (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        { id: 'all', label: 'Vše' },
+                        { id: 'week', label: '7D' },
+                        { id: 'month', label: '30D' },
+                        { id: 'quarter', label: '90D' },
+                        { id: 'year', label: 'Rok' }
+                      ].map(p => (
+                        <button key={p.id} onClick={() => setFilters(f => ({ ...f, period: p.id as any }))} className={getGlassBtnClass(filters.period === p.id)}>{p.label}</button>
+                      ))}
+                    </div>
+                  ))}
                 {(() => {
                   const tagGroups = [
                     { id: 'htf', label: 'HTF', icon: Monitor, tags: availableTags.htf, selected: filters.htfConfluences, key: 'htfConfluences', iconColor: 'text-indigo-400', activeClass: 'bg-indigo-600 border-indigo-500 text-white' },
@@ -526,26 +555,72 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 })()}
               </div>
 
-              <motion.div variants={itemVariants}>
-                <div className={sectionLabelClass}><Wallet size={10} /> {dashboardMode === 'backtesting' ? 'Sessions' : 'Portfolia & Účty'}</div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {accounts.filter(a => {
-                    if (dashboardMode === 'backtesting') return a.type === 'Backtest' && a.status === 'Active';
-                    if (a.type === 'Backtest') return false;
-                    if (dashboardMode === 'archive') return a.status === 'Inactive';
-                    if (dashboardMode === 'combined') return true;
-                    return a.status === 'Active';
-                  }).map(acc => (
-                    <button key={acc.id} onClick={() => setFilters(f => ({ ...f, accounts: toggleItem(f.accounts, acc.id) }))} className={`w-full py-2.5 px-3 flex items-center justify-between rounded-xl ${getGlassBtnClass(filters.accounts.includes(acc.id))}`}>
-                      <span className={`truncate ${acc.status === 'Inactive' ? 'opacity-60' : ''}`}>
-                        {acc.name}
-                        {acc.status === 'Inactive' && <span className="ml-1.5 text-[8px] text-rose-400">·spálený</span>}
-                      </span>
-                      {filters.accounts.includes(acc.id) && <Check size={12} />}
-                    </button>
-                  ))}
-                </div>
-              </motion.div>
+              {(() => {
+                // Slicer pattern: z PLNÉHO výběru klik na řádek IZOLUJE jen tento účet;
+                // v ČÁSTEČNÉM výběru klik kamkoli na řádek přidává/ubírá; re-klik na
+                // sólo účet = zpět všechny. Odebrání posledního vrátí všechny.
+                const visibleAccounts = accounts.filter(a => {
+                  if (dashboardMode === 'backtesting') return a.type === 'Backtest' && a.status === 'Active';
+                  if (a.type === 'Backtest') return false;
+                  if (dashboardMode === 'archive') return a.status === 'Inactive';
+                  if (dashboardMode === 'combined') return true;
+                  return a.status === 'Active';
+                });
+                const visibleIds = new Set(visibleAccounts.map(a => a.id));
+                const selectedVisible = filters.accounts.filter(id => visibleIds.has(id));
+                const allVisibleSelected = selectedVisible.length === visibleAccounts.length;
+                // Solo/Vše sahá JEN na účty viditelné v aktuálním módu — výběr účtů
+                // z jiných světů (filtr je globální) zůstává nedotčený.
+                const hiddenSelected = (list: string[]) => list.filter(id => !visibleIds.has(id));
+                const rowClick = (accId: string) => setFilters(f => {
+                  const selVis = f.accounts.filter(id => visibleIds.has(id));
+                  // Baseline = všechny viditelné účty (default je plný výběr).
+                  const nextVisible = slicerClick(selVis, visibleAccounts.map(a => a.id), accId);
+                  return { ...f, accounts: [...hiddenSelected(f.accounts), ...nextVisible] };
+                });
+                const selectAllVisible = () => setFilters(f => ({
+                  ...f,
+                  accounts: [...hiddenSelected(f.accounts), ...visibleAccounts.map(a => a.id)],
+                }));
+                const label = dashboardMode === 'backtesting' ? 'Sessions' : 'Portfolia & Účty';
+                const badge = allVisibleSelected ? null : `${selectedVisible.length}/${visibleAccounts.length}`;
+                return renderCollapsible('ucty', Wallet, label, badge, (
+                  <div className="space-y-2">
+                    <div className="flex justify-end">
+                      <button
+                        onClick={selectAllVisible}
+                        disabled={allVisibleSelected}
+                        className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest transition-all ${
+                          allVisibleSelected
+                            ? 'opacity-30 cursor-default'
+                            : (isDark ? 'bg-white/10 text-slate-200 hover:bg-white/20' : 'bg-slate-200 text-slate-700 hover:bg-slate-300')
+                        }`}
+                      >
+                        Vše ({selectedVisible.length}/{visibleAccounts.length})
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {visibleAccounts.map(acc => {
+                        const selected = filters.accounts.includes(acc.id);
+                        return (
+                          <button
+                            key={acc.id}
+                            onClick={() => rowClick(acc.id)}
+                            title="Klik = jen tento účet · další kliky přidávají/ubírají · klik na sólo účet = zpět všechny"
+                            className={`w-full py-2.5 px-3 flex items-center justify-between gap-2 rounded-xl ${getGlassBtnClass(selected)}`}
+                          >
+                            <span className={`truncate ${acc.status === 'Inactive' ? 'opacity-60' : ''}`}>
+                              {acc.name}
+                              {acc.status === 'Inactive' && <span className="ml-1.5 text-[8px] text-rose-400">·spálený</span>}
+                            </span>
+                            {selected && <Check size={12} className="shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ));
+              })()}
 
 
             </div>

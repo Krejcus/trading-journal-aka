@@ -1201,53 +1201,58 @@ const KickoffEditor: React.FC<{
         ))}
       </div>
 
-      {/* Plán */}
-      <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Plán</p>
-      <div className="relative mb-4">
-        <textarea
-          value={plan}
-          onChange={e => setPlan(e.target.value)}
-          placeholder="Kde čekám entry, kde SL, kde TP..."
-          rows={4}
-          className={`w-full p-3 pr-12 rounded-xl border text-xs resize-none outline-none focus:ring-2 transition-all ${
-            isDark ? 'bg-[var(--bg-input)] border-white/10 text-slate-200 focus:ring-white/20' : 'bg-white border-slate-200 text-slate-700 focus:ring-slate-300'
-          }`}
-        />
-        <div className="absolute bottom-2 right-2">
-          <VoiceMemoButton
-            size="sm"
-            title="Diktuj plán"
-            onTranscribed={(t) => {
-              const sep = plan.trim().length > 0 ? '\n\n' : '';
-              setPlan(plan + sep + t);
-            }}
-          />
+      {/* Plán + Screenshot vedle sebe (na širší obrazovce) — dřív pod sebou a prázdná
+          dropzone byla aspect-video přes celou šířku (~425 px). Teď kompaktní. */}
+      <div className="grid lg:grid-cols-2 gap-3 mb-4">
+        <div>
+          <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Plán</p>
+          <div className="relative">
+            <textarea
+              value={plan}
+              onChange={e => setPlan(e.target.value)}
+              placeholder="Kde čekám entry, kde SL, kde TP..."
+              rows={5}
+              className={`w-full p-3 pr-12 rounded-xl border text-xs resize-none outline-none focus:ring-2 transition-all ${
+                isDark ? 'bg-[var(--bg-input)] border-white/10 text-slate-200 focus:ring-white/20' : 'bg-white border-slate-200 text-slate-700 focus:ring-slate-300'
+              }`}
+            />
+            <div className="absolute bottom-2 right-2">
+              <VoiceMemoButton
+                size="sm"
+                title="Diktuj plán"
+                onTranscribed={(t) => {
+                  const sep = plan.trim().length > 0 ? '\n\n' : '';
+                  setPlan(plan + sep + t);
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Screenshot analýzy</p>
+          {image ? (
+            <div className="relative">
+              <div className="aspect-video rounded-xl overflow-hidden border border-slate-200">
+                <img src={thumbLarge(image)} className="w-full h-full object-cover" alt="Analýza" />
+              </div>
+              <button
+                onClick={() => setImage(undefined)}
+                className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest"
+              >
+                Smazat
+              </button>
+            </div>
+          ) : (
+            // Prázdná: kompaktní box výšky textarey vedle (ne aspect-video přes celou šířku).
+            <label className={`flex flex-col items-center justify-center gap-1.5 h-[110px] rounded-xl border-2 border-dashed cursor-pointer text-slate-400 hover:bg-slate-100/50 transition-colors ${uploading ? 'opacity-50' : ''}`}>
+              <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} disabled={uploading} />
+              <ImageIcon size={20} />
+              <p className="text-[9px] font-black uppercase tracking-widest">{uploading ? 'Nahrávám...' : 'Klikni nebo Ctrl+V'}</p>
+            </label>
+          )}
         </div>
       </div>
-
-      {/* Screenshot */}
-      <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Screenshot analýzy</p>
-      {image ? (
-        <div className="relative mb-4">
-          <div className="aspect-video rounded-xl overflow-hidden border border-slate-200">
-            <img src={thumbLarge(image)} className="w-full h-full object-cover" alt="Analýza" />
-          </div>
-          <button
-            onClick={() => setImage(undefined)}
-            className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest"
-          >
-            Smazat
-          </button>
-        </div>
-      ) : (
-        <label className={`block aspect-video rounded-xl border-2 border-dashed cursor-pointer mb-4 grid place-items-center text-slate-400 hover:bg-slate-100/50 ${uploading ? 'opacity-50' : ''}`}>
-          <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} disabled={uploading} />
-          <div className="text-center">
-            <ImageIcon size={28} className="mx-auto mb-2" />
-            <p className="text-[10px] font-black uppercase tracking-widest">{uploading ? 'Nahrávám...' : 'Klikni nebo Ctrl+V'}</p>
-          </div>
-        </label>
-      )}
 
       {/* Akce */}
       <div className="flex gap-2">
@@ -1322,51 +1327,55 @@ const DebriefEditor: React.FC<{
 
   return (
     <div className={`p-4 rounded-2xl border ${isDark ? 'bg-violet-500/5 border-violet-500/20' : 'bg-violet-50 border-violet-200'}`}>
-      <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-violet-400' : 'text-violet-700'}`}>Plán vs realita</p>
-      <div className="relative mb-4">
-        <textarea
-          value={notes}
-          onChange={e => setNotes(e.target.value)}
-          placeholder={`Co se v ${session.name} stalo? Lessons, mistakes...`}
-          rows={5}
-          className={`w-full p-3 pr-12 rounded-xl border text-xs resize-none outline-none focus:ring-2 transition-all ${
-            isDark ? 'bg-[var(--bg-input)] border-white/10 text-slate-200 focus:ring-violet-400/30' : 'bg-white border-violet-200 text-slate-700 focus:ring-violet-300'
-          }`}
-        />
-        <div className="absolute bottom-2 right-2">
-          <VoiceMemoButton
-            size="sm"
-            title="Diktuj reflexi"
-            onTranscribed={(t) => {
-              const sep = notes.trim().length > 0 ? '\n\n' : '';
-              setNotes(notes + sep + t);
-            }}
-          />
+      <div className="grid lg:grid-cols-2 gap-3 mb-4">
+        <div>
+          <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-violet-400' : 'text-violet-700'}`}>Plán vs realita</p>
+          <div className="relative">
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder={`Co se v ${session.name} stalo? Lessons, mistakes...`}
+              rows={5}
+              className={`w-full p-3 pr-12 rounded-xl border text-xs resize-none outline-none focus:ring-2 transition-all ${
+                isDark ? 'bg-[var(--bg-input)] border-white/10 text-slate-200 focus:ring-violet-400/30' : 'bg-white border-violet-200 text-slate-700 focus:ring-violet-300'
+              }`}
+            />
+            <div className="absolute bottom-2 right-2">
+              <VoiceMemoButton
+                size="sm"
+                title="Diktuj reflexi"
+                onTranscribed={(t) => {
+                  const sep = notes.trim().length > 0 ? '\n\n' : '';
+                  setNotes(notes + sep + t);
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-violet-400' : 'text-violet-700'}`}>Screenshot výsledku (nepovinné)</p>
+          {screenshot ? (
+            <div className="relative">
+              <div className="aspect-video rounded-xl overflow-hidden border border-violet-200">
+                <img src={thumbLarge(screenshot)} className="w-full h-full object-cover" alt="Breakdown" />
+              </div>
+              <button
+                onClick={() => setScreenshot(undefined)}
+                className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest"
+              >
+                Smazat
+              </button>
+            </div>
+          ) : (
+            <label className={`flex flex-col items-center justify-center gap-1.5 h-[110px] rounded-xl border-2 border-dashed cursor-pointer text-slate-400 hover:bg-violet-50 transition-colors ${uploading ? 'opacity-50' : ''}`}>
+              <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} disabled={uploading} />
+              <ImageIcon size={20} />
+              <p className="text-[9px] font-black uppercase tracking-widest">{uploading ? 'Nahrávám...' : 'Klikni nebo Ctrl+V'}</p>
+            </label>
+          )}
         </div>
       </div>
-
-      <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-violet-400' : 'text-violet-700'}`}>Screenshot výsledku (nepovinné)</p>
-      {screenshot ? (
-        <div className="relative mb-4">
-          <div className="aspect-video rounded-xl overflow-hidden border border-violet-200">
-            <img src={thumbLarge(screenshot)} className="w-full h-full object-cover" alt="Breakdown" />
-          </div>
-          <button
-            onClick={() => setScreenshot(undefined)}
-            className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest"
-          >
-            Smazat
-          </button>
-        </div>
-      ) : (
-        <label className={`block aspect-video rounded-xl border-2 border-dashed cursor-pointer mb-4 grid place-items-center text-slate-400 hover:bg-violet-50 ${uploading ? 'opacity-50' : ''}`}>
-          <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} disabled={uploading} />
-          <div className="text-center">
-            <ImageIcon size={28} className="mx-auto mb-2" />
-            <p className="text-[10px] font-black uppercase tracking-widest">{uploading ? 'Nahrávám...' : 'Klikni nebo Ctrl+V'}</p>
-          </div>
-        </label>
-      )}
 
       <div className="flex gap-2">
         <button onClick={onCancel} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${

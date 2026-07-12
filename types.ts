@@ -438,14 +438,7 @@ export interface GoalResult {
   achieved: boolean;
 }
 
-export interface PsychoMetricConfig {
-  id: string;
-  label: string;
-  color: string;
-}
-
 export interface PsychoState {
-  metrics?: Record<string, number>;
   stressors: string;
   gratitude: string;
   notes: string;
@@ -706,7 +699,6 @@ export interface UserPreferences {
   defaultStopLoss?: number; // ticks
   soundEnabled?: boolean;
   sessionTimeframe?: 'London' | 'NY' | 'Asia';
-  psychoMetricsConfig?: PsychoMetricConfig[];
   dashboardMode?: 'combined' | 'funded' | 'challenge' | 'archive';
 
   sessions?: SessionConfig[];
