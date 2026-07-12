@@ -1148,6 +1148,18 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
         // Sníženo z 12k → 8k. Většinu dotazů teď coach zodpoví z front-loaded okna
         // na JEDEN round-trip bez nástrojů, takže nepotřebuje tak velký rozpočet.
         max_tokens: options.aiModel === 'fast' ? 4000 : 8000,
+        // POZOR na tiché default chování: na claude-sonnet-5 znamená VYNECHANÝ
+        // `thinking` parametr adaptivní thinking ZAPNUTÝ (změna oproti Sonnet 4.6,
+        // kde vynechání = vypnuto). Kód dřív thinking neposílal v domnění, že je
+        // vypnutý — analytický coach tak potichu přemýšlel a display default
+        // "omitted" streamoval prázdné thinking bloky (uživatel koukal na pauzu).
+        // Adaptive NECHÁVÁME (model si sám řekne, kdy přemýšlet → kvalita na
+        // těžkých dotazech, jednoduchým se vyhne) — ale explicitně a se
+        // "summarized" displayem, ať stream parser dostává skutečný průběh.
+        // Haiku 4.5 je starší generace (vynecháno = vypnuto), tam nic neposíláme.
+        ...(options.aiModel !== 'fast'
+          ? { thinking: { type: 'adaptive', display: 'summarized' } }
+          : {}),
         // Prompt caching: system prompt je statický napříč iteracemi i v rámci
         // 5min konverzačního okna → cache_control: ephemeral.
         // Anthropic vyžaduje min 1024 tokenů pro cache hit (Sonnet) — náš
@@ -1173,12 +1185,10 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
             ? { ...t, cache_control: { type: 'ephemeral' as const } }
             : t
         );
-        // Thinking VYPNUTO (dřív budget 8000 → 4000 → 0): byl to hlavní zdroj latence —
-        // model "přemýšlel" několik sekund PŘED prvním viditelným tokenem. S front-loaded
-        // 90denním oknem v promptu coach pro běžné dotazy hluboké uvažování nepotřebuje
-        // a odpověď začne streamovat téměř okamžitě. Tools fungují i bez thinkingu.
-        // (Stream parser thinking bloky stále umí — kdybychom ho někdy vrátili pro
-        // "deep analysis" mód, stačí sem přidat body.thinking zpět.)
+        // Thinking: viz explicitní `thinking` parametr výš u body — na sonnet-5
+        // jede adaptivní (model přemýšlí jen když to dotaz potřebuje), na Haiku
+        // (fast) je vypnutý. Historicky tu byl pevný budget 8000 → hlavní zdroj
+        // latence; adaptivní si latenci řídí sám podle složitosti dotazu.
       }
 
       // Stall watchdog: když ze streamu 90 s nepřijde ani bajt, ukonči ho
