@@ -14,8 +14,6 @@ import { storageService } from '../services/storageService';
 import { ErrorBoundary } from './ErrorBoundary';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
-import TradeAISection from './TradeAISection';
-import TradeVisionSection from './TradeVisionSection';
 import TradeExecutionIntel from './TradeExecutionIntel';
 import ManualTradeForm from './ManualTradeForm';
 import TradeShareModal from './TradeShareModal';
@@ -615,8 +613,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                             {activeTrade.notes || <span className="italic opacity-40">No log entry.</span>}
                                         </div>
                                     </div>
-                                    <TradeVisionSection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
-                                    <TradeAISection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
                                 </div>
                             </div>
                         </div>
@@ -727,10 +723,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             {/* BOTTOM: AI + Notes (DESKTOP ONLY) — na mobile přesunuto do sidebar dole */}
                             <div className={`hidden lg:block flex-[2_2_0] min-h-0 overflow-y-auto no-scrollbar border-t ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/30'}`}>
                                 <div className="px-5 lg:px-6 pt-3 pb-5 lg:pb-6 space-y-4">
-                                    {/* Vision rozbor grafu */}
-                                    <TradeVisionSection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
-                                    {/* AI */}
-                                    <TradeAISection trade={activeTrade} theme={theme} onUpdateTrade={onUpdateTrade} />
                                     {/* Notes */}
                                     <div>
                                         <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><FileText size={12} /> Poznámky</p>

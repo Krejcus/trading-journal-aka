@@ -53,7 +53,6 @@ import {
 } from 'lucide-react';
 import { fmtUsd as labFmtUsd, type LeakFinding } from '../services/labAnalytics';
 import DailyInsightWidget from './DailyInsightWidget';
-import PendingReviewWidget from './PendingReviewWidget';
 import DailyFocusWidget from './DailyFocusWidget';
 
 interface DashboardProps {
@@ -813,7 +812,6 @@ const MASTER_WIDGET_LIST = [
   { id: 'daily_edge', label: 'Denní Výkon', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Výkonnost podle dnů v týdnu.', preview: <div className="text-blue-500 font-black text-xs">Tue/Thu Focus</div>, defaultRowSpan: 2 },
   { id: 'calendar', label: 'Obchodní Kalendář', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Denní zisky v kalendáři.', preview: <div className={`${COLORS.textProfit} font-black text-xs`}>Green Month</div>, defaultRowSpan: 3 },
   { id: 'daily_insight', label: 'Insight Dne (AI)', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Coach každý den vygeneruje jeden personalizovaný insight z tvé historie.', preview: <div className="text-purple-500 font-black text-xs">Sparkles ✨</div>, defaultRowSpan: 1 },
-  { id: 'pending_ai_review', label: 'AI Návrhy k Review', category: 'KPIs', icon: <Sparkles size={18} />, description: 'Obchody čekající na schválení/úpravu AI návrhů tagů.', preview: <div className="text-amber-500 font-black text-xs">3 čekají</div>, defaultRowSpan: 1 },
   { id: 'daily_focus', label: 'Dnes Hlídat', category: 'Chování', icon: <Target size={18} />, description: 'Aktivní Iron Rules a checklisty z AI Coache — připomínka co dnes hlídat.', preview: <div className="text-blue-500 font-black text-xs">📋 3 pravidla</div>, defaultRowSpan: 2 },
   { id: 'lab_top_leak', label: 'Největší Leak (Lab)', category: 'Chování', icon: <Droplets size={18} />, description: 'Top nález deterministických Lab detektorů — co tě teď stojí nejvíc peněz.', preview: <div className="text-rose-500 font-black text-xs">Revenge −$420</div>, defaultRowSpan: 1 },
   { id: 'bt_avg_r', label: 'Avg R / Expectancy', category: 'Backtest', icon: <Target size={18} />, description: 'Průměrný R-multiple a expectancy na obchod.', preview: <div className="text-violet-500 font-black text-xl">+1.38R</div>, defaultRowSpan: 1 },
@@ -2054,7 +2052,6 @@ const Dashboard: React.FC<DashboardProps> = ({
       );
       case 'calendar': return <div className="h-full flex flex-col"><DashboardCalendar trades={stats.trades} preps={preps} reviews={reviews} theme={theme} accounts={accounts} emotions={emotions} pnlFormat={pnlDisplayMode} initialBalance={stats.initialBalance} user={user!} exchangeRates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} /></div>;
       case 'daily_insight': return <DailyInsightWidget theme={theme} trades={allTrades.length > 0 ? allTrades : stats.trades} onOpenTrade={(t) => setSelectedTradeId(String(t.id))} />;
-      case 'pending_ai_review': return <PendingReviewWidget theme={theme} trades={allTrades.length > 0 ? allTrades : stats.trades} onOpenTrade={(t) => setSelectedTradeId(String(t.id))} />;
       case 'daily_focus': return <DailyFocusWidget ironRules={ironRules} theme={theme} onManage={onNavigateToSettings} />;
       case 'bt_avg_r': {
         const valid = stats.trades.filter(t => t.executionStatus !== 'Missed');
@@ -2184,7 +2181,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               } else {
                 // Full-width widget (komplexní karty)
                 const fixedHeight = chartHeights[item.widget.id];
-                const isSelfSizing = item.widget.id === 'daily_insight' || item.widget.id === 'pending_ai_review';
+                const isSelfSizing = item.widget.id === 'daily_insight';
                 const style = isSelfSizing
                   ? {}
                   : fixedHeight ? { height: fixedHeight } : { minHeight: 260 };
