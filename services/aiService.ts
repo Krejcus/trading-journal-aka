@@ -679,20 +679,6 @@ export interface StreamOptions {
   backtestSessions?: string;
 }
 
-function findToolNameById(messages: any[], id: string): string {
-  for (const msg of messages) {
-    if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === 'tool_use' && block.id === id) {
-          return block.name;
-        }
-      }
-    }
-  }
-  return 'unknown_tool';
-}
-
-
 export async function streamAIResponse(
   messages: AIMessage[],
   traderContext: string,
@@ -1132,8 +1118,30 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
   let fullText = ''; // accumulated final-answer text across iterations (for ref parsing)
   const MAX_ITER = 10;
 
+  // ── Síťová odolnost ─────────────────────────────────────────────────────────
+  // Safari/WebKit hází na spadlý fetch/stream doslova "TypeError: Load failed"
+  // (Chrome "Failed to fetch") — typicky zamčený displej na iOS, přepnutí
+  // WiFi↔LTE nebo PWA na pozadí. Dřív se to ukázalo uživateli syrově
+  // ("⚠️ Chyba: Load failed") a bez retry.
+  const isNetErr = (e: any): boolean => {
+    if (e?.name === 'AbortError' || e?.retriable) return true;
+    const m = String(e?.message || e || '');
+    return e instanceof TypeError
+      || /load failed|failed to fetch|networkerror|network connection|abgebrochen|abort/i.test(m);
+  };
+  let netRetries = 0;
+  const MAX_NET_RETRIES = 2;
+  // Jakmile kolo vypsalo viditelný text, tichý retry by ho zduplikoval →
+  // v tom případě chybu poctivě ukážeme (UI k ní nabídne pokračování).
+  let emittedThisRound = false;
+
+  // Retry smyčka: síťový pád PŘED prvním viditelným textem kola zkusíme tiše
+  // znovu. apiMessages i fullText drží stav úspěšně dokončených kol, takže
+  // opakování jen znovu pošle tentýž request — bez duplicit a vedlejších efektů.
+  for (;;) {
   try {
     for (let iter = 0; iter < MAX_ITER; iter++) {
+      emittedThisRound = false;
       const modelName = options.aiModel === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-5';
       const body: any = {
         model: modelName,
@@ -1173,6 +1181,16 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
         // "deep analysis" mód, stačí sem přidat body.thinking zpět.)
       }
 
+      // Stall watchdog: když ze streamu 90 s nepřijde ani bajt, ukonči ho
+      // (abort → retriable). Jinak by zpráva visela navěky bez chyby a retry.
+      const ac = new AbortController();
+      let stallTimer: ReturnType<typeof setTimeout> | undefined;
+      const armStall = () => {
+        clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => ac.abort(), 90_000);
+      };
+      armStall();
+
       // Go through the Supabase Edge Function proxy so the Anthropic API key
       // never leaves the server. JWT-authenticated requests only.
       const response = await fetch(CHAT_ENDPOINT, {
@@ -1182,11 +1200,21 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
           'Authorization': `Bearer ${accessToken}`,
         },
         body: JSON.stringify(body),
+        signal: ac.signal,
       });
 
       if (!response.ok) {
+        clearTimeout(stallTimer);
         const err = await response.json().catch(() => ({}));
-        onError(`API chyba: ${(err as any).error?.message || response.statusText}`);
+        const msg = (err as any).error?.message || response.statusText || `HTTP ${response.status}`;
+        // Přetížení/výpadek na straně API → retriable (throw → retry smyčka).
+        if ([429, 500, 502, 503, 504, 529].includes(response.status)) {
+          const e: any = new Error(`API chyba: ${msg}`);
+          e.retriable = true;
+          e.friendly = `AI je přetížená (${response.status}). Zkus to prosím za chvíli znovu.`;
+          throw e;
+        }
+        onError(`API chyba: ${msg}`);
         return;
       }
 
@@ -1209,6 +1237,7 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        armStall(); // data tečou → resetuj watchdog
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -1248,6 +1277,7 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
               const chunk = event.delta.text || '';
               blk.text += chunk;
               fullText += chunk;
+              if (chunk) emittedThisRound = true; // od teď žádný tichý retry (duplicity)
               onChunk(chunk);
             } else if (event.delta?.type === 'input_json_delta' && blk.type === 'tool_use') {
               blk.jsonStr += event.delta.partial_json || '';
@@ -1262,13 +1292,18 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
             if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
           } else if (event.type === 'error') {
             // Anthropic může poslat chybu uprostřed streamu (overloaded_error, api_error…).
-            // Bez tohoto se chyba tiše ignorovala a odpověď skončila jako úspěšná, ale useknutá.
+            // Throw → retry smyčka: bez vypsaného textu se zkusí tiše znovu,
+            // jinak se chyba poctivě ukáže (dřív se tiše ignorovala → useknutá odpověď).
             const msg = event.error?.message || event.error?.type || 'chyba streamu z API';
-            onError(`API chyba: ${msg}`);
-            return;
+            const e: any = new Error(`API chyba: ${msg}`);
+            e.retriable = true;
+            e.friendly = `API chyba: ${msg}`;
+            throw e;
           }
         }
       }
+
+      clearTimeout(stallTimer); // stream doběhl — watchdog už není potřeba
 
       // Done streaming this iteration. Inspect stop reason.
       if (stopReason !== 'tool_use') {
@@ -1332,6 +1367,21 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
     onError('Agent dosáhl maxima iterací (možná zacyklení).');
     return;
   } catch (err: any) {
-    onError(err.message || 'Neznámá chyba při volání AI');
+    // Síťový pád / abort / přetížené API bez viditelného textu → tichý retry.
+    if (isNetErr(err) && !emittedThisRound && netRetries < MAX_NET_RETRIES) {
+      netRetries++;
+      console.warn(`[aiService] stream retry ${netRetries}/${MAX_NET_RETRIES}:`, err?.message || err);
+      await new Promise(r => setTimeout(r, 800 * netRetries));
+      continue;
+    }
+    // Konečná chyba — přelož syrové síťové hlášky (Safari "Load failed") na česky.
+    onError(
+      err?.friendly
+        || (isNetErr(err)
+          ? 'Spojení se přerušilo (síť/uspání prohlížeče). Zkontroluj připojení a zkus to znovu.'
+          : (err.message || 'Neznámá chyba při volání AI'))
+    );
+    return;
   }
+  } // for(;;) — retry smyčka
 }

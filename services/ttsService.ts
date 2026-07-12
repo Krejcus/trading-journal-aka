@@ -16,6 +16,29 @@ const TTS_ENDPOINT = `${EDGE_BASE}/functions/v1/tts`;
 let currentAudio: HTMLAudioElement | null = null;
 let googleDisabledUntil = 0; // když Google selže, dočasně ho přeskoč (rate-limit ochrana)
 
+// ── iOS/Safari autoplay unlock ────────────────────────────────────────────────
+// Safari blokuje audio.play() mimo user-gesture call stack. TTS ale hraje až po
+// async mezeře (fetch → json → fronta vět ze streamu) → play() by tiše selhal.
+// Řešení: JEDEN sdílený <audio> element, který se "odemkne" přehráním tiché
+// stopy PŘÍMO v click handleru (gesture). Odemčený element pak iOS nechá hrát
+// i později bez gesta — stačí měnit .src.
+let sharedAudio: HTMLAudioElement | null = null;
+// 1 sample ticha, WAV 8kHz mono — nejkratší validní audio pro unlock.
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+
+/**
+ * Odemkni audio přehrávání — MUSÍ se volat synchronně z user gesture
+ * (onClick), jinak nemá účinek. Bezpečné volat opakovaně.
+ */
+export function unlockAudio(): void {
+  try {
+    if (!sharedAudio) sharedAudio = new Audio();
+    sharedAudio.src = SILENT_WAV;
+    // play() v gestu → element je od teď "blessed" pro pozdější přehrávání.
+    sharedAudio.play().catch(() => { /* unlock je best-effort */ });
+  } catch { /* no-op */ }
+}
+
 export function isTTSSupported(): boolean {
   return typeof window !== 'undefined' && ('speechSynthesis' in window || true);
 }
@@ -98,14 +121,23 @@ async function speakViaGoogle(text: string): Promise<boolean> {
     // Bez téhle kontroly bychom zrušenou větu stejně přehráli a přepsali currentAudio.
     if (cancelled) return false;
 
-    await new Promise<void>((resolve) => {
-      const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`);
+    // Přehrávej přes SDÍLENÝ odemčený element (unlockAudio v gestu) — iOS jinak
+    // play() mimo gesto blokne. Fallback na new Audio() pro desktop bez unlocku.
+    const played = await new Promise<boolean>((resolve) => {
+      const audio = sharedAudio ?? new Audio();
+      audio.src = `data:audio/mp3;base64,${data.audioContent}`;
       currentAudio = audio;
-      audio.onended = () => { if (currentAudio === audio) currentAudio = null; resolve(); };
-      audio.onerror = () => { if (currentAudio === audio) currentAudio = null; resolve(); };
-      audio.play().catch(() => resolve());
+      audio.onended = () => { if (currentAudio === audio) currentAudio = null; resolve(true); };
+      audio.onerror = () => { if (currentAudio === audio) currentAudio = null; resolve(true); };
+      // KLÍČOVÉ: když play() selže (autoplay policy), vrať false → volající
+      // spadne na browser speechSynthesis. Dřív se selhání tiše spolklo a
+      // vrátilo se "úspěch" → coach na iOS mlčel bez jakéhokoli fallbacku.
+      audio.play().catch(() => {
+        if (currentAudio === audio) currentAudio = null;
+        resolve(false);
+      });
     });
-    return true;
+    return played;
   } catch {
     return false;
   }

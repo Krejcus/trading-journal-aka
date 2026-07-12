@@ -9,7 +9,7 @@ import ConfirmationModal from './ConfirmationModal';
 import TradeDetailModal from './TradeDetailModal';
 import VoiceMemoButton from './VoiceMemoButton';
 import VoiceModeOverlay from './VoiceModeOverlay';
-import { enqueueSpeak, cleanForSpeech, cancelSpeech } from '../services/ttsService';
+import { enqueueSpeak, cleanForSpeech, cancelSpeech, unlockAudio } from '../services/ttsService';
 import { COACH_SESSIONS, buildDynamicSessionPrompt } from '../services/coachPrompts';
 import { COACH_PERSONAS, resolvePersona, type CoachPersonaSetting, type CoachPersonaId } from '../services/coachPersonas';
 import { CoachSessionPreview } from './CoachSessionPreview';
@@ -1329,15 +1329,38 @@ const AICoachPage: React.FC<Props> = ({
         if (voiceMode) cancelSpeech(); // zastav rozečtené věty při chybě
         setIsStreaming(false);
         setToolStatus(null);
+        // Dolij zbývající 50ms buffer — ať částečná odpověď není o kus kratší.
+        if (chunkTimerRef.current) {
+          clearTimeout(chunkTimerRef.current);
+          chunkTimerRef.current = null;
+        }
+        const buffered = chunkBufferRef.current;
+        chunkBufferRef.current = '';
         // Ukaž chybu v bublině místo tichého smazání — user ví, co se stalo.
+        // DŘÍV: chyba se ukázala jen u PRÁZDNÉ bubliny → odpověď useknutá v půlce
+        // věty vypadala jako "seklá" (bez chyby, bez retry) a po reloadu zmizela.
         setMessages(prev => {
           const updated = [...prev];
           const last = updated[updated.length - 1];
-          if (last?.role === 'assistant' && !last.content) {
-            updated[updated.length - 1] = { ...last, content: `⚠️ Chyba: ${err}` };
+          if (last?.role === 'assistant') {
+            const partial = (last.content || '') + buffered;
+            updated[updated.length - 1] = partial
+              ? {
+                  ...last,
+                  content: `${partial}\n\n⚠️ _${err}_`,
+                  // Tlačítko pro pokračování — coach má částečnou odpověď v historii.
+                  followups: ['Pokračuj tam, kde ses zasekl'],
+                }
+              : { ...last, content: `⚠️ Chyba: ${err}` };
           }
           return updated;
         });
+        // Ulož částečnou odpověď do DB — jinak po reloadu úplně zmizí
+        // (onDone neproběhl, takže appendMessage se nikdy nezavolal).
+        if (finalContent) {
+          storageService.appendMessage(convId, 'assistant', `${finalContent}\n\n_(odpověď přerušena — neúplná)_`)
+            .catch(e => console.error('[AICoachPage] appendMessage (partial) failed:', e));
+        }
       },
       // options — tool-use mode
       {
@@ -1922,6 +1945,10 @@ const AICoachPage: React.FC<Props> = ({
               <button
                 onClick={() => {
                   setVoiceModeOpen(true);
+                  // Odemknout HTML5 Audio pro ElevenLabs TTS — iOS blokuje play()
+                  // mimo gesture stack; tenhle klik "požehná" sdílený element,
+                  // který pak TTS používá pro všechny věty (viz ttsService).
+                  unlockAudio();
                   // Aktivovat (odemknout) Web Speech API v prohlížeči přehráním prázdné promluvy.
                   // Chrome/Safari blokují asynchronní řeč spuštěnou po síťovém volání,
                   // pokud předtím v rámci stejného kliknutí neproběhl přímý synchronní speak().
