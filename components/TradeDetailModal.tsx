@@ -16,7 +16,7 @@ import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 import TradeExecutionIntel from './TradeExecutionIntel';
 import TradeConfluence from './TradeConfluence';
-import ManualTradeForm from './ManualTradeForm';
+const ManualTradeForm = React.lazy(() => import('./ManualTradeForm'));
 import TradeShareModal from './TradeShareModal';
 
 interface PropertyProps {
@@ -246,7 +246,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         }
 
         return [activeTrade];
-    }, [activeTrade.groupId, activeTrade.instrument, activeTrade.timestamp, activeTrade.direction, activeTrade.id, allTrades]);
+    }, [activeTrade, allTrades]);
 
     // Smarter MASTER identification
     const masterTradeIdInGroup = useMemo(() => {
@@ -794,8 +794,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                 <ImageZoomModal images={images} initialIndex={activeImageIndex} onClose={() => setIsZoomed(false)} />
             )}
 
-            {/* FULL EDIT MODE — ManualTradeForm overlay */}
+            {/* FULL EDIT MODE — ManualTradeForm overlay. Lazy chunk MUSÍ mít lokální
+                Suspense — App.tsx:4117 renderuje modal mimo jakoukoli boundary a bez
+                fallbacku by suspend při otevření editace shodil celou appku. */}
             {isFullEditOpen && onUpdateTrade && (
+                <React.Suspense fallback={null}>
                 <ManualTradeForm
                     key={String(activeTrade.id)}
                     editTrade={activeTrade}
@@ -821,6 +824,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     availableHtfOptions={editPrefs.htf}
                     availableLtfOptions={editPrefs.ltf}
                 />
+                </React.Suspense>
             )}
 
             {/* SHARE CARD MODAL — generuje shareable PNG s AlphaTrade brandingem */}

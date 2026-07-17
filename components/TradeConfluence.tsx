@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { Trade } from '../types';
-import { Zap, Monitor, Waves } from 'lucide-react';
+import { Zap, Monitor, Waves, ChevronDown } from 'lucide-react';
 
 interface Props {
   trade: Trade;
@@ -60,6 +60,7 @@ const buildEntryTags = (trade: Trade): string[] => {
  *  3. Levely — mapa likvidity kolem vstupu (co je za námi / co před námi + kotvy)
  */
 const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
+  const [untappedOpen, setUntappedOpen] = useState<null | 'above' | 'below'>(null);
   const ec: any = trade.entryContext;
   const c: any = ec?.ctx;
   const fvg: any = ec?.htfFvg;
@@ -189,18 +190,47 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
               <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-1.5">Před námi</p>
               <div className="space-y-1">
                 {([
-                  { dir: '↑', n: ec.untappedAbove || 0, near: ec.nearestUntappedAbove },
-                  { dir: '↓', n: ec.untappedBelow || 0, near: ec.nearestUntappedBelow },
-                ] as const).map(({ dir, n, near }) => {
+                  { key: 'above' as const, dir: '↑', n: ec.untappedAbove || 0, near: ec.nearestUntappedAbove, list: ec.untappedAboveList as { level: string; dist: number }[] | undefined },
+                  { key: 'below' as const, dir: '↓', n: ec.untappedBelow || 0, near: ec.nearestUntappedBelow, list: ec.untappedBelowList as { level: string; dist: number }[] | undefined },
+                ]).map(({ key, dir, n, near, list }) => {
                   const dist = near ? distOf(near) : null;
-                  return (
-                    <div key={dir} className="flex items-baseline justify-between gap-1.5">
-                      <span className="text-[10px] font-black text-slate-400 shrink-0">{dir} {n} netknutých</span>
+                  // Rozbalitelné jen když máme celý seznam (nové obchody) a je co ukázat.
+                  const canExpand = !!list && list.length > 1;
+                  const open = untappedOpen === key;
+                  const Row = (
+                    <>
+                      <span className="text-[10px] font-black text-slate-400 shrink-0 flex items-center gap-1">
+                        {dir} {n} netknutých
+                        {canExpand && <ChevronDown size={10} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />}
+                      </span>
                       {near && (
                         <span className="flex items-baseline gap-1.5 min-w-0">
                           <span className="text-[9px] font-black uppercase text-violet-400 truncate">{near}</span>
                           {dist && <span className="text-[9px] font-bold font-mono text-slate-400 shrink-0">{dist.replace(/^[↑↓]/, '')}</span>}
                         </span>
+                      )}
+                    </>
+                  );
+                  return (
+                    <div key={key}>
+                      {canExpand ? (
+                        <button
+                          onClick={() => setUntappedOpen(o => (o === key ? null : key))}
+                          aria-expanded={open}
+                          className="w-full flex items-baseline justify-between gap-1.5 hover:opacity-70 transition-opacity"
+                        >{Row}</button>
+                      ) : (
+                        <div className="flex items-baseline justify-between gap-1.5">{Row}</div>
+                      )}
+                      {open && list && (
+                        <div className="mt-1 pl-2 space-y-0.5 border-l border-violet-400/20">
+                          {list.map((u, i) => (
+                            <div key={`u${i}`} className="flex items-baseline justify-between gap-1.5">
+                              <span className="text-[9px] font-black uppercase text-violet-400/80 truncate">{u.level}</span>
+                              <span className="text-[9px] font-bold font-mono text-slate-400 shrink-0">{Math.round(u.dist)} b</span>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   );

@@ -920,19 +920,29 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                 // Indikátor ceny v labelech má, jen jsme je dosud zahazovali — deník tak umí říct
                 // nejen "co bylo vzato", ale i "jak daleko to bylo".
                 const levelDist: Record<string, number> = {};
-                let untAbove = 0, untBelow = 0;
-                let nearUpD = Infinity, nearUp: string | null = null, nearDnD = Infinity, nearDn: string | null = null;
+                // Celý seznam netknutých levelů nad/pod vstupem (jméno + vzdálenost v bodech).
+                // Dřív se ukládaly jen počty a jméno nejbližšího → sekce „Před námi" nešla rozbalit.
+                const untAboveList: { level: string; dist: number }[] = [];
+                const untBelowList: { level: string; dist: number }[] = [];
+                const untSeen = new Set<string>();
                 for (const L of lv) {
                     const raw = String(L.text); const base = nrm(raw);
                     if (isVwapFam(base)) continue;
                     // První výskyt vyhrává (labely chodí i ve stínové ghost kopii se stejnou cenou).
                     if (levelDist[base] === undefined && L.price != null) levelDist[base] = Math.round((L.price - entry) * 100) / 100;
                     if (/\[\s*\d+\s*[x×][^\]]*\]/i.test(raw) && swept.length < 10) swept.push(base);
-                    if (/untested/i.test(raw)) {
-                        if (L.price > entry) { untAbove++; const d = L.price - entry; if (d < nearUpD) { nearUpD = d; nearUp = base; } }
-                        else if (L.price < entry) { untBelow++; const d = entry - L.price; if (d < nearDnD) { nearDnD = d; nearDn = base; } }
+                    if (/untested/i.test(raw) && L.price != null && !untSeen.has(base)) {
+                        untSeen.add(base);
+                        const d = Math.round(Math.abs(L.price - entry) * 100) / 100;
+                        if (L.price > entry) untAboveList.push({ level: base, dist: d });
+                        else if (L.price < entry) untBelowList.push({ level: base, dist: d });
                     }
                 }
+                // Nejbližší = první po seřazení; počty z délky. UI si vezme nearest/count i celý seznam.
+                untAboveList.sort((a, b) => a.dist - b.dist);
+                untBelowList.sort((a, b) => a.dist - b.dist);
+                const untAbove = untAboveList.length, untBelow = untBelowList.length;
+                const nearUp = untAboveList[0]?.level ?? null, nearDn = untBelowList[0]?.level ?? null;
                 const aH = findP(/^ASIA H$/i), aL = findP(/^ASIA L$/i), lH = findP(/^LON H$/i), lL = findP(/^LON L$/i);
                 let londonVsAsia: string | null = null;
                 if (aH != null && aL != null && lH != null && lL != null) {
@@ -1062,6 +1072,8 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                     levelDist: levelDist,
                     untappedAbove: untAbove, untappedBelow: untBelow,
                     nearestUntappedAbove: nearUp, nearestUntappedBelow: nearDn,
+                    // Celé seznamy netknutých (nové od 16.7.) — pro rozbalení sekce „Před námi".
+                    untappedAboveList: untAboveList, untappedBelowList: untBelowList,
                     londonVsAsia: londonVsAsia,
                     entryMinutes: entryMin,
                     ctx: ctx,

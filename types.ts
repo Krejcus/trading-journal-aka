@@ -139,6 +139,9 @@ export interface Account {
   /** Násobek risku/velikosti při AlphaBridge fan-outu (celé číslo, default 1).
    *  Např. challenge účet s 2× riskem = 2. Master/základ = 1. */
   copyMultiplier?: number;
+  /** Ruční přiřazení k firmě (skupina ve správci účtů). Prázdné = firma se odvodí
+   *  automaticky z prvního slova názvu ("TOPSTEP 5" → TOPSTEP). */
+  firmOverride?: string;
   isArchived?: boolean;
   archivedAt?: number;
   result?: 'Passed' | 'Failed';

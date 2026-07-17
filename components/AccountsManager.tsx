@@ -20,12 +20,14 @@ import {
   Calendar,
   FlaskConical,
   LayoutDashboard,
-  UploadCloud
+  UploadCloud,
+  ChevronDown
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import PayoutModal from './PayoutModal';
 import AccountFuneralModal, { type FailureData } from './AccountFuneralModal';
 import Graveyard, { MemorialModal, computeStats } from './Graveyard';
+import { firmOf, firmInitials, firmColor, firmLabel, FIRM_LOGOS, KNOWN_FIRMS } from '../utils/accountFirm';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -89,6 +91,64 @@ const AccountSparkline = ({ trades, initialBalance, color, theme }: { trades: Tr
   );
 };
 
+// Vlastní výběr firmy: vyjede přesně pod pole a každá položka má malé logo + název.
+// (Nativní datalist si browser umísťoval mimo a logo u položek neuměl.) Kromě
+// známých firem umí i vlastní název (spodní pole) → monogram fallback.
+const FirmSelect: React.FC<{
+  value?: string;
+  onChange: (v: string | undefined) => void;
+  isDark: boolean;
+  placeholder?: string;
+}> = ({ value, onChange, isDark, placeholder }) => {
+  const [open, setOpen] = useState(false);
+  const triggerCls = `w-full px-4 py-2.5 rounded-xl border outline-none transition-all flex items-center gap-2 text-left ${isDark ? 'bg-slate-900 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`;
+  const key = value ? firmOf({ name: '', firmOverride: value }) : '';
+  const known = KNOWN_FIRMS.find(f => f.label.toUpperCase() === (value || '').toUpperCase() || f.key === key);
+  const customText = known ? '' : (value || '');
+
+  const badge = (k: string, logo: string | undefined, sz = 'w-6 h-6') => logo
+    ? <img src={logo} alt="" className={`${sz} rounded-md object-contain bg-white/90 p-0.5 border border-black/5 shrink-0`} />
+    : <div className={`${sz} rounded-md shrink-0 flex items-center justify-center text-[9px] font-black text-white`} style={{ background: firmColor(k).bg }}>{firmInitials(k)}</div>;
+
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => setOpen(o => !o)} className={triggerCls}>
+        {value ? badge(key, FIRM_LOGOS[key]) : null}
+        <span className={`flex-1 truncate text-sm font-bold ${value ? '' : (isDark ? 'text-slate-600' : 'text-slate-400')}`}>{value || placeholder || 'Vyber firmu'}</span>
+        <ChevronDown size={16} className={`text-slate-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setOpen(false); }} />
+          <div className={`absolute z-50 mt-1 left-0 min-w-full w-max max-w-[280px] rounded-xl border shadow-2xl overflow-hidden ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}>
+            {KNOWN_FIRMS.map(f => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => { onChange(f.label); setOpen(false); }}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-50'}`}
+              >
+                {badge(f.key, f.logo)}
+                <span className={`flex-1 text-sm font-bold whitespace-nowrap ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{f.label}</span>
+                {(known?.key === f.key) && <Check size={14} className="text-blue-500 shrink-0" />}
+              </button>
+            ))}
+            <div className={`border-t p-2 ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
+              <input
+                type="text"
+                value={customText}
+                placeholder="Jiná firma…"
+                onChange={e => onChange(e.target.value || undefined)}
+                className={`w-full px-3 py-1.5 rounded-lg text-sm outline-none border ${isDark ? 'bg-slate-800 border-white/10 text-white placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400'}`}
+              />
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 const AccountsManager: React.FC<AccountsManagerProps> = ({
   accounts,
   activeAccountId,
@@ -112,6 +172,9 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const [failConfirmTarget, setFailConfirmTarget] = useState<Account | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const [archivedDetail, setArchivedDetail] = useState<Account | null>(null);
+  // Firmy: sbalené sekce + cíl hromadného pohřbení celé firmy
+  const [collapsedFirms, setCollapsedFirms] = useState<Set<string>>(new Set());
+  const [firmFuneralTarget, setFirmFuneralTarget] = useState<string | null>(null);
 
   const [newAccount, setNewAccount] = useState<Partial<Account>>({
     name: '',
@@ -157,19 +220,93 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     [accounts]
   );
 
-  const groupedAccounts = useMemo(() => {
+  // P&L per účet předpočítaný jednou (firm agregace by jinak filtrovala trades v cyklu)
+  const pnlByAccount = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const t of trades) m[t.accountId] = (m[t.accountId] || 0) + t.pnl;
+    return m;
+  }, [trades]);
+
+  // ── Seskupení po FIRMÁCH (TopStep / Tradeify / Lucid…) ──────────────────────
+  // Kopírka jede z jednoho masteru → parentAccountId dávky nerozdělí. Firma se
+  // odvodí z názvu (firmOf), takže grouping funguje zpětně na všech účtech.
+  // Viditelné karty respektují záložku Aktivní/Archiv; BYZNYS čísla v hlavičce
+  // (koupeno/zaplaceno/payouty/čistý výnos) jsou lifetime přes VŠECHNY účty firmy
+  // včetně pohřbených — to je ta odpověď na „vydělala mi tahle firma?".
+  const firmGroups = useMemo(() => {
     const list = showInactive
       ? accounts.filter(a => a.status === 'Inactive' && a.result !== 'Failed')
       : accounts.filter(a => a.status === 'Active');
-    // Masters are accounts without parentAccountId, OR accounts whose parent is NOT in the current visible list
-    const masters = list.filter(a => !a.parentAccountId || !list.some(potentialParent => potentialParent.id === a.parentAccountId));
 
-    masters.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    return masters.map(master => {
-      const slaves = list.filter(a => a.parentAccountId === master.id);
-      return { master, slaves };
+    const byFirm = new Map<string, Account[]>();
+    for (const a of list) {
+      const f = firmOf(a);
+      if (!byFirm.has(f)) byFirm.set(f, []);
+      byFirm.get(f)!.push(a);
+    }
+
+    return [...byFirm.entries()].map(([firm, visible]) => {
+      const all = accounts.filter(a => firmOf(a) === firm);
+      const allIds = new Set(all.map(a => a.id));
+      const paid = all.reduce((s, a) => s + (a.challengeCost || 0), 0);
+      const received = payouts.filter(p => p.accountId && allIds.has(p.accountId) && p.status === 'Received').reduce((s, p) => s + p.amount, 0);
+      const pending = payouts.filter(p => p.accountId && allIds.has(p.accountId) && p.status === 'Pending').reduce((s, p) => s + p.amount, 0);
+      const activeCount = all.filter(a => a.status === 'Active').length;
+      const failedCount = all.filter(a => a.result === 'Failed').length;
+
+      // Trading Σ přes účty viditelné v aktuální záložce (stejný vzorec jako karta)
+      let sumBalance = 0, sumPnl = 0;
+      for (const a of visible) {
+        const pnl = pnlByAccount[a.id] || 0;
+        const gross = payouts.filter(p => p.accountId === a.id && p.status === 'Received').reduce((s, p) => s + (p.grossAmount || p.amount), 0);
+        sumBalance += a.initialBalance + pnl - (a.accumulatedChallengePnL || 0) - gross;
+        sumPnl += pnl - (a.accumulatedChallengePnL || 0);
+      }
+
+      const mults = [...new Set(visible.map(a => a.copyMultiplier || 1))];
+      const multiplierLabel = mults.length === 1 ? (mults[0] > 1 ? `${mults[0]}×` : null) : 'mix';
+
+      // Master (bez parentAccountId) první, zbytek přirozeně podle názvu (TOPSTEP 2 < TOPSTEP 10)
+      const sortedVisible = [...visible].sort((a, b) => {
+        const am = a.parentAccountId ? 1 : 0, bm = b.parentAccountId ? 1 : 0;
+        if (am !== bm) return am - bm;
+        return a.name.localeCompare(b.name, 'cs', { numeric: true });
+      });
+
+      return { firm, visible: sortedVisible, bought: all.length, paid, received, pending, net: received - paid, activeCount, failedCount, sumBalance, sumPnl, multiplierLabel };
+    }).sort((a, b) => (b.activeCount - a.activeCount) || a.firm.localeCompare(b.firm, 'cs'));
+  }, [accounts, showInactive, payouts, pnlByAccount]);
+
+  // Hromadné pohřbení celé firmy — lehká varianta bez Funeral obřadu: všem AKTIVNÍM
+  // účtům firmy nastaví Failed naráz (Backtest účty vynechá). Individuální obřad
+  // s reflexí zůstává na lebce jednotlivého účtu.
+  const executeFirmFuneral = useCallback(() => {
+    if (!firmFuneralTarget) return;
+    const today = new Date().toISOString().split('T')[0];
+    const updated = accounts.map(a =>
+      firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest'
+        ? {
+            ...a,
+            status: 'Inactive',
+            isArchived: true,
+            archivedAt: Date.now(),
+            result: 'Failed',
+            failureDate: a.failureDate || today,
+            failureReason: a.failureReason || 'Hromadné pohřbení firmy',
+          } as Account
+        : a
+    );
+    onUpdate(updated);
+    setFirmFuneralTarget(null);
+  }, [firmFuneralTarget, accounts, onUpdate]);
+
+  const toggleFirmCollapsed = (firm: string) => {
+    setCollapsedFirms(prev => {
+      const next = new Set(prev);
+      if (next.has(firm)) next.delete(firm); else next.add(firm);
+      return next;
     });
-  }, [accounts, showInactive]);
+  };
 
   const handleAddAccount = () => {
     if (!newAccount.name) return;
@@ -188,6 +325,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       status: 'Active',
       currency: 'USD',
       propThreshold: 150,
+      firmOverride: newAccount.firmOverride || undefined,
       instrumentFees: newAccount.instrumentFees || { 'NQ': 2.8, 'MNQ': 0.74 },
       createdAt: Date.now()
     };
@@ -545,6 +683,10 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Počáteční Balance ($)</label><input type="number" value={newAccount.initialBalance} onChange={e => setNewAccount({ ...newAccount, initialBalance: Number(e.target.value) })} className={inputClass} /></div>
             {newAccount.type !== 'Backtest' && (
               <>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] uppercase font-black text-blue-500 tracking-widest">Firma</label>
+                  <FirmSelect value={newAccount.firmOverride} onChange={v => setNewAccount({ ...newAccount, firmOverride: v })} isDark={theme !== 'light'} placeholder="Vyber firmu" />
+                </div>
                 <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Fáze</label><select value={newAccount.phase} onChange={e => setNewAccount({ ...newAccount, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select></div>
                 <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-rose-500 tracking-widest">Cena Pořízení ($)</label><input type="number" value={newAccount.challengeCost} onChange={e => setNewAccount({ ...newAccount, challengeCost: Number(e.target.value) })} className={`${inputClass} border-rose-500/20`} /></div>
                 <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-emerald-500 tracking-widest">Profit Split (%)</label><input type="number" value={newAccount.profitSplit} onChange={e => setNewAccount({ ...newAccount, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
@@ -560,13 +702,79 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         <Graveyard accounts={failedAccounts} trades={trades} theme={theme} />
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6 items-start">
-        {groupedAccounts.map((group) => (
-          <div key={group.master.id} className="flex flex-col gap-3">
-            {renderAccountCard(group.master)}
-            {group.slaves.map(slave => <div key={slave.id} className="pl-4 relative before:absolute before:left-0 before:top-[-12px] before:bottom-6 before:w-px before:bg-slate-700/30 before:border-l before:border-dashed before:border-slate-600/50 after:absolute after:left-0 after:top-6 after:w-4 after:h-px after:border-t after:border-dashed after:border-slate-600/50">{renderAccountCard(slave, true)}</div>)}
-          </div>
-        ))}
+      {/* Sekce po firmách: hlavička s agregáty + byznys řádkem, pod ní karty účtů */}
+      <div className="space-y-5">
+        {firmGroups.map(g => {
+          const collapsed = collapsedFirms.has(g.firm);
+          const canBuryFirm = !showInactive && g.visible.some(a => a.type !== 'Backtest');
+          return (
+            <section key={g.firm} className={`rounded-[28px] border overflow-hidden ${theme !== 'light' ? 'bg-slate-900/25 border-white/5' : 'bg-slate-50/60 border-slate-200'}`}>
+              <button
+                onClick={() => toggleFirmCollapsed(g.firm)}
+                aria-expanded={!collapsed}
+                className={`w-full text-left px-5 py-4 transition-colors ${theme !== 'light' ? 'hover:bg-white/[0.02]' : 'hover:bg-slate-100/60'}`}
+              >
+                <div className="flex items-center gap-3 flex-wrap">
+                  <ChevronDown size={16} className={`text-slate-500 shrink-0 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+                  {/* Miniatura firmy: pravé logo z registru, jinak auto-monogram s barvou z názvu */}
+                  {FIRM_LOGOS[g.firm] ? (
+                    <img src={FIRM_LOGOS[g.firm]} alt={g.firm} className="w-8 h-8 rounded-xl object-contain shrink-0 bg-white/90 p-1 border border-white/10" />
+                  ) : (
+                    <div
+                      className="w-8 h-8 rounded-xl shrink-0 flex items-center justify-center text-[11px] font-black tracking-tight shadow-inner"
+                      style={{ background: firmColor(g.firm).bg, color: firmColor(g.firm).fg }}
+                      aria-hidden="true"
+                    >{firmInitials(g.firm)}</div>
+                  )}
+                  <h3 className={`text-sm font-black uppercase tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{firmLabel(g.firm)}</h3>
+                  {g.multiplierLabel && <span className="px-1.5 py-0.5 rounded-md bg-violet-500/10 border border-violet-500/25 text-violet-400 text-[8px] font-black uppercase tracking-widest">{g.multiplierLabel} risk</span>}
+                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                    {g.activeCount} akt{g.failedCount > 0 && <span className="text-rose-500/80"> · {g.failedCount} ☠</span>}
+                  </span>
+                  <div className="ml-auto flex items-center gap-5">
+                    <div className="text-right">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Σ Balance</p>
+                      <p className={`text-sm font-black font-mono ${g.sumBalance >= 0 ? 'text-slate-200' : 'text-rose-500'} ${theme === 'light' ? '!text-slate-900' : ''}`}>${g.sumBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Σ P&L</p>
+                      <p className={`text-sm font-black font-mono ${g.sumPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{g.sumPnl >= 0 ? '+' : ''}${g.sumPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                    </div>
+                    {canBuryFirm && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => { e.stopPropagation(); setFirmFuneralTarget(g.firm); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setFirmFuneralTarget(g.firm); } }}
+                        className="p-2 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl transition-all border border-rose-500/20 cursor-pointer"
+                        title={`Pohřbít celou firmu ${g.firm} (všechny aktivní účty → Failed)`}
+                      >
+                        <Skull size={14} />
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {/* Byznys řádek — lifetime přes všechny účty firmy (i pohřbené) */}
+                <div className="mt-2 pl-8 flex items-center gap-x-4 gap-y-1 flex-wrap text-[9px] font-black uppercase tracking-widest text-slate-500">
+                  <span>Koupeno <span className="text-slate-300">{g.bought} účtů</span></span>
+                  <span className="opacity-30">·</span>
+                  <span>Zaplaceno <span className="text-rose-500 font-mono">−${g.paid.toLocaleString()}</span></span>
+                  <span className="opacity-30">·</span>
+                  <span>Payouty <span className="text-emerald-500 font-mono">+${g.received.toLocaleString()}</span>{g.pending > 0 && <span className="text-amber-500 font-mono"> (+${g.pending.toLocaleString()} čeká)</span>}</span>
+                  <span className="opacity-30">·</span>
+                  <span className={`px-2 py-0.5 rounded-md border font-mono ${g.net >= 0 ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' : 'bg-rose-500/10 border-rose-500/25 text-rose-400'}`}>
+                    Čistě {g.net >= 0 ? '+' : '−'}${Math.abs(g.net).toLocaleString()}
+                  </span>
+                </div>
+              </button>
+              {!collapsed && (
+                <div className="px-5 pb-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 items-start">
+                  {g.visible.map(acc => renderAccountCard(acc, !!acc.parentAccountId))}
+                </div>
+              )}
+            </section>
+          );
+        })}
       </div>
 
       <PayoutModal isOpen={!!payoutTargetAccountId} onClose={() => setPayoutTargetAccountId(null)} onSave={handleSavePayout} accounts={accounts} initialAccountId={payoutTargetAccountId || undefined} theme={theme} user={user} />
@@ -588,6 +796,16 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase text-slate-500">Master Účet (Link)</label>
                 <select value={editFormData.parentAccountId || ''} onChange={e => setEditFormData({ ...editFormData, parentAccountId: e.target.value || undefined })} className={inputClass}><option value="">-- Žádný --</option>{accounts.filter(a => a.id !== editingAccount.id && !a.parentAccountId).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-slate-500">Firma (skupina)</label>
+                <FirmSelect
+                  value={editFormData.firmOverride}
+                  onChange={v => setEditFormData({ ...editFormData, firmOverride: v })}
+                  isDark={theme !== 'light'}
+                  placeholder={editingAccount ? firmOf({ name: editFormData.name || editingAccount.name, firmOverride: undefined }) : 'Vyber firmu'}
+                />
+                <p className="text-[9px] text-slate-500 font-semibold">Prázdné = automaticky první slovo názvu. Vyber ze seznamu (spáruje logo) nebo napiš vlastní.</p>
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase text-slate-500">Risk Multiplikátor (AlphaBridge)</label>
@@ -627,7 +845,17 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         />
       )}
 
-      <ConfirmationModal isOpen={!!accountToDelete} onClose={() => setAccountToDelete(null)} onConfirm={executeDelete} title="Smazat Účet" message={`Opravdu chcete smazat účet "${accountToDelete?.name}"?`} theme={theme} />
+      <ConfirmationModal isOpen={!!accountToDelete} onClose={() => setAccountToDelete(null)} onConfirm={executeDelete} title="Smazat Účet" message={`Opravdu chcete smazat účet "${accountToDelete?.name}"? Smažou se i VŠECHNY jeho obchody — nevratně. Pro archivaci s historií použij lebku (Fail).`} theme={theme} />
+
+      <ConfirmationModal
+        isOpen={!!firmFuneralTarget}
+        onClose={() => setFirmFuneralTarget(null)}
+        onConfirm={executeFirmFuneral}
+        title={`Pohřbít firmu ${firmFuneralTarget || ''}`}
+        message={`Všech ${firmFuneralTarget ? accounts.filter(a => firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest').length : 0} aktivních účtů firmy ${firmFuneralTarget} se označí jako Failed a archivuje. Obchody a P&L zůstávají (nic se nemaže).`}
+        confirmText="Pohřbít"
+        theme={theme}
+      />
 
       {archivedDetail && (
         <MemorialModal
