@@ -426,15 +426,19 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 </div>
               </div>
             ) : !isChallenge && acc.status === 'Active' ? (
-              <div className="h-[28px]">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-[8px] font-black uppercase text-emerald-500">Profit Split</span>
-                  <span className="text-[8px] font-black text-slate-500">{acc.profitSplit || 90}%</span>
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[8px] font-black uppercase text-emerald-500">Profit Split</span>
+                    <span className="text-[8px] font-black text-slate-500">{acc.profitSplit || 90}%</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[8px] font-black uppercase text-slate-600">Výplata</span>
+                    <span className="text-[8px] font-black text-emerald-500 uppercase">Aktivní</span>
+                  </div>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[8px] font-black uppercase text-slate-600">Výplata</span>
-                  <span className="text-[8px] font-black text-emerald-500 uppercase">Aktivní</span>
-                </div>
+                {/* Funded účet se nepassuje — jen padne. Bez tohohle tlačítka nešlo spálený funded pohřbít. */}
+                <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFailConfirmTarget(acc); }} className="p-2 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl transition-all border border-rose-500/20 transform active:scale-90" title="Spálený účet (Fail)"><Skull size={14} /></button>
               </div>
             ) : <div className="h-[28px]" />}
           </div>
