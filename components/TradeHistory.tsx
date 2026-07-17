@@ -335,10 +335,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const hasMore = visibleCount < sortedTrades.length;
 
   // Status helper + vyčlenění neplatných obchodů (tilt/mimo plán) do vlastní sekce.
-  const tradeStatusOf = (t: Trade) => (t as any).executionStatus || ((t as any).isValid === false ? 'Invalid' : 'Valid');
-  const isInvalidTrade = (t: Trade) => tradeStatusOf(t) === 'Invalid';
+  const tradeStatusOf = useCallback((t: Trade) => (t as any).executionStatus || ((t as any).isValid === false ? 'Invalid' : 'Valid'), []);
+  const isInvalidTrade = useCallback((t: Trade) => tradeStatusOf(t) === 'Invalid', [tradeStatusOf]);
   // Plné karty renderují jen NEneplatné obchody (paginováno přes visibleTrades).
-  const validTrades = useMemo(() => visibleTrades.filter(t => !isInvalidTrade(t)), [visibleTrades]);
+  const validTrades = useMemo(() => visibleTrades.filter(t => !isInvalidTrade(t)), [visibleTrades, isInvalidTrade]);
 
   // Předpočítané indexy pro detekci skupinových/copy obchodů. Dřív se pro KAŽDOU
   // vykreslenou kartu 2× lineárně skenoval celý allTrades (O(karty × N)) přímo v render
@@ -486,7 +486,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // This breaks the stale-closure re-fetch loop: screenshotCache state changes
   // no longer cause loadScreenshots to be recreated and the effect to re-fire.
   const SCREENSHOT_BATCH = 5;
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const uuidRegex = useMemo(() => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, []);
 
   const loadScreenshots = useCallback(async (tradesToLoad: Trade[]) => {
     const missing = tradesToLoad.filter(t =>
@@ -534,7 +534,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         });
       }
     }
-  }, []); // Stable — no state deps, uses refs
+  }, [updateScreenshotCache, uuidRegex]);
 
   // Trigger screenshot loading when visibleTrades changes.
   // loadScreenshots is stable ([] deps) so this only fires on actual changes.
@@ -624,7 +624,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         label: items[0] ? formatTradeDate(items[0].entryDate || items[0].date).date : key,
       }))
       .sort((a, b) => b.key.localeCompare(a.key));
-  }, [sortedTrades]);
+  }, [sortedTrades, isInvalidTrade]);
 
   const toggleInvalidDay = (key: string) => setOpenInvalidDays(prev => {
     const n = new Set(prev);

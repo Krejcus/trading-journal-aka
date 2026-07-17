@@ -2,10 +2,14 @@
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate, AIConversation, LabExperiment } from '../types';
 import { supabase } from './supabase';
 import { get, set } from 'idb-keyval';
-import { embedTrade, embedPrep, embedReview } from './embeddingService';
 import { maybeDetectEpisodes } from './coachMemoryService';
 import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
 import { stripAndUploadBase64Images, hasBase64Images } from './stripBase64';
+import { clearAppStorage } from '../utils/appStorage';
+
+const embedTrade = (trade: Trade) => void import('./embeddingService').then(module => module.embedTrade(trade));
+const embedPrep = (prep: DailyPrep) => void import('./embeddingService').then(module => module.embedPrep(prep));
+const embedReview = (review: DailyReview) => void import('./embeddingService').then(module => module.embedReview(review));
 
 // Helper to validate UUID
 const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -2106,7 +2110,7 @@ export const storageService = {
   },
 
   async clearAll(): Promise<void> {
-    localStorage.clear();
+    clearAppStorage();
     await supabase.auth.signOut();
   },
 

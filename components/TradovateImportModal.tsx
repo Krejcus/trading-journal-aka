@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
 import { X, UploadCloud, Loader2, CheckCircle2, AlertTriangle, FileText, TrendingUp, TrendingDown, Sparkles, ChevronDown } from 'lucide-react';
 import { Account, Trade } from '../types';
 import { parseTradovateFills, isTradovateFills, applyCashHistory, applyEstimatedFees, isCashHistory, TradovateImportResult, FeeRates } from '../services/tradovateImport';
+import { isLegacyXlsFile, LEGACY_XLS_MESSAGE, MAX_IMPORT_FILE_BYTES, readExcelRows } from '../services/excelImport';
 
 // --- Uložené sazby poplatků per účet (poplatek/strana je pro účet konstantní) ---
 // Díky tomu stačí Cash History nahrát jednou; další importy spočítají net P&L samy.
@@ -127,18 +127,17 @@ const TradovateImportModal: React.FC<Props> = ({
 
   /** Přečte jeden soubor (CSV i XLSX) na pole řádků s hlavičkou. */
   const readFileRows = (file: File): Promise<any[]> => new Promise((resolve, reject) => {
-    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+    if (isLegacyXlsFile(file.name)) {
+      reject(new Error(LEGACY_XLS_MESSAGE));
+      return;
+    }
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      reject(new Error('Soubor je příliš velký. Maximum je 10 MB.'));
+      return;
+    }
+    const isExcel = file.name.toLowerCase().endsWith('.xlsx');
     if (isExcel) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const wb = XLSX.read(e.target?.result, { type: 'binary' });
-          const sheet = wb.Sheets[wb.SheetNames[0]];
-          resolve(XLSX.utils.sheet_to_json(sheet, { raw: false }));
-        } catch (err) { reject(err); }
-      };
-      reader.onerror = () => reject(new Error('read error'));
-      reader.readAsBinaryString(file);
+      readExcelRows(file).then(resolve).catch(reject);
     } else {
       Papa.parse(file, {
         header: true, skipEmptyLines: true,
@@ -162,7 +161,12 @@ const TradovateImportModal: React.FC<Props> = ({
       for (const file of files) {
         let rows: any[];
         try { rows = await readFileRows(file); }
-        catch { setParseError(`Chyba při čtení souboru ${file.name}.`); continue; }
+        catch (error) {
+          setParseError(error instanceof Error && error.message === LEGACY_XLS_MESSAGE
+            ? LEGACY_XLS_MESSAGE
+            : `Chyba při čtení souboru ${file.name}.`);
+          continue;
+        }
         if (!rows || rows.length === 0) continue;
         if (isCashHistory(rows)) {
           setCashRows(rows); setCashFileName(file.name); foundCash = true;
@@ -196,17 +200,13 @@ const TradovateImportModal: React.FC<Props> = ({
       setCashRows(rows);
     };
 
-    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
-    if (isExcel) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const wb = XLSX.read(e.target?.result, { type: 'binary' });
-          const sheet = wb.Sheets[wb.SheetNames[0]];
-          finish(XLSX.utils.sheet_to_json(sheet, { raw: false }));
-        } catch { setCashError('Chyba při čtení Excel souboru.'); }
-      };
-      reader.readAsBinaryString(file);
+    const isExcel = file.name.toLowerCase().endsWith('.xlsx');
+    if (isLegacyXlsFile(file.name)) {
+      setCashError(LEGACY_XLS_MESSAGE);
+    } else if (file.size > MAX_IMPORT_FILE_BYTES) {
+      setCashError('Soubor je příliš velký. Maximum je 10 MB.');
+    } else if (isExcel) {
+      readExcelRows(file).then(finish).catch(() => setCashError('Chyba při čtení Excel souboru.'));
     } else {
       Papa.parse(file, {
         header: true, skipEmptyLines: true,
@@ -339,7 +339,7 @@ const TradovateImportModal: React.FC<Props> = ({
                     <p className={`text-[10px] ${subText}`}>Orders + Cash History naráz · .csv / .xlsx · samo rozpozná který je který</p>
                   </div>
                 </div>
-                <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" multiple onChange={handleFile} disabled={isProcessing} className="hidden" />
+                <input ref={fileInputRef} type="file" accept=".csv,.xlsx" multiple onChange={handleFile} disabled={isProcessing} className="hidden" />
               </label>
             ) : (
               <div className={`flex items-center justify-between rounded-xl border px-3 py-2.5 ${inputBg}`}>
@@ -377,7 +377,7 @@ const TradovateImportModal: React.FC<Props> = ({
                     <UploadCloud size={13} className={subText} />
                     <span className={`text-[11px] font-bold ${subText}`}>+ Cash History <span className="opacity-70">{summary?.feesEstimated ? '(obnovit sazby účtu)' : '(volitelně — poplatky a přesný net P&L)'}</span></span>
                   </div>
-                  <input ref={cashInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleCashFile} className="hidden" />
+                  <input ref={cashInputRef} type="file" accept=".csv,.xlsx" onChange={handleCashFile} className="hidden" />
                 </label>
               )
             )}

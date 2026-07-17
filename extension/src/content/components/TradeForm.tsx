@@ -842,7 +842,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
         // modelem → při 600 ms to byl trvalý mikro-stutter grafu po celou dobu otevření.
         const interval = setInterval(poll, 1500);
         return () => { cancelled = true; clearInterval(interval); if (debounce) clearTimeout(debounce); };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+
     }, [active]);
 
     // Multi-TF kontext: přepne panely na vybrané TF, vyrámuje na obchod, snímne layout, vrátí zpět.

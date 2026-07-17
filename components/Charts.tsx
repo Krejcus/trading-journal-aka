@@ -377,7 +377,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
           </div>
 
           <div className="flex-1 min-h-0 w-full min-w-[1px]" style={{ outline: 'none' }}>
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <AreaChart
                 data={equityData}
                 margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
@@ -494,7 +494,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
             </div>
 
             <div className="h-[400px] w-full">
-              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                 <BarChart data={hourData} stackOffset="sign" margin={{ top: 20, right: 30, left: 20, bottom: 5 }} barGap={0}>
                   <defs>
                     <linearGradient id="profitGradientV" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>
@@ -522,7 +522,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
               </h3>
             </div>
             <div className="h-[400px] w-full">
-              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                 <BarChart layout="vertical" data={dayData} margin={{ top: 5, right: 50, left: 20, bottom: 5 }} stackOffset="sign">
                   <defs>
                     <linearGradient id="profitGradientH" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor={COLORS.profit} /><stop offset="100%" stopColor={COLORS.profitBottom} /></linearGradient>

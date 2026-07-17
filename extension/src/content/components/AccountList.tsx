@@ -74,7 +74,7 @@ export function AccountList({ onSelectionChange, onAccountsLoaded, mode = 'norma
             }
         }
         loadAccounts();
-    }, []);
+    }, [onAccountsLoaded]);
 
     // Default výběr: backtest → všechny backtest účty; normal → celé master skupiny
     // (master + jeho kopie), ať je fan-out armovaný kompletní. Orphan kopie (bez masteru
@@ -95,7 +95,7 @@ export function AccountList({ onSelectionChange, onAccountsLoaded, mode = 'norma
         }
         setSelectedIds(defaults);
         onSelectionChange(defaults);
-    }, [mode, accounts, isLoading]);
+    }, [mode, accounts, isLoading, onSelectionChange]);
 
     const handleToggle = (id: string, isMaster: boolean) => {
         setSelectedIds(prev => {

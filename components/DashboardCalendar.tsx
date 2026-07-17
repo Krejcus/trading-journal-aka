@@ -328,7 +328,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
          }
       }
       return rows;
-   }, [year, month, trades, allTrades, preps, reviews, pnlFormat]);
+   }, [year, month, trades, allTrades, preps, reviews]);
 
    const monthName = new Date(year, month - 1, 1).toLocaleString('cs-CZ', { month: 'long', year: 'numeric' });
 

@@ -283,7 +283,7 @@ export const DynamicChart: React.FC<Props> = ({
           {title}
         </div>
         <div style={{ height: 200 }}>
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
             <BarChart data={barData} margin={{ top: 4, right: 4, bottom: barData.length > 4 ? 30 : 20, left: 0 }}>
               <XAxis
                 dataKey="name"
@@ -400,7 +400,7 @@ export const DynamicChart: React.FC<Props> = ({
         {title}
       </div>
       <div style={{ height: 240 }}>
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
           <LineChart data={chartData} margin={{ top: 4, right: 4, bottom: 20, left: 0 }}>
             <XAxis
               dataKey="date"

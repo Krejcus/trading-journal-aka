@@ -237,7 +237,7 @@ const Settings: React.FC<SettingsProps> = ({
       setCoachMemories(prev => prev.filter(m => m.id !== id));
       showToast('Smazáno z paměti');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const handleClearAllMemory = useCallback(async () => {
@@ -245,7 +245,7 @@ const Settings: React.FC<SettingsProps> = ({
     setCoachMemories([]);
     setConfirmClearMemory(false);
     showToast('Veškerá paměť Coache smazána');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const filteredMemories = useMemo(() => {

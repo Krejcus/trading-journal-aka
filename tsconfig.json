@@ -3,6 +3,7 @@
     "backups",
     "node_modules",
     "dist",
+    "scripts",
     "supabase/functions"
   ],
   "compilerOptions": {

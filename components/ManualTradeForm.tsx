@@ -215,7 +215,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       direction,
       totalFees
     };
-  }, [formData, instrumentFees]);
+  }, [formData, instrumentFees, accounts]);
 
   // ... (Zbytek metod toggleConfluence, handleRemoveScreenshot atd. zůstává stejný) ...
   const toggleConfluence = (type: 'htf' | 'ltf' | 'mistake', item: string) => {

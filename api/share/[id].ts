@@ -52,10 +52,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return;
     }
 
-    // Public host (origin) — pokud nemůžeme detekovat, použij default
-    const host = req.headers?.host || 'alphatrade.app';
-    const proto = (req.headers?.['x-forwarded-proto'] as string) || 'https';
-    const origin = `${proto}://${host}`;
+    // Public metadata and redirects must never trust request Host headers.
+    const configuredOrigin = process.env.APP_URL || process.env.VITE_APP_URL || 'https://alphatrade.app';
+    const origin = configuredOrigin.replace(/\/$/, '');
     const appUrl = `${origin}/?shareId=${id}`;
     const shareUrl = `${origin}/share/${id}`;
 

@@ -835,8 +835,8 @@ const AICoachPage: React.FC<Props> = ({
   );
   // daily_preps/daily_reviews = LIVE deník (globální, ne per-account). V backtest
   // scope je coachovi NEdáváme — backtest má vlastní poznámky v backtest_sessions.
-  const scopedPreps = coachScope === 'backtest' ? [] : dailyPreps;
-  const scopedReviews = coachScope === 'backtest' ? [] : dailyReviews;
+  const scopedPreps = React.useMemo(() => coachScope === 'backtest' ? [] : dailyPreps, [coachScope, dailyPreps]);
+  const scopedReviews = React.useMemo(() => coachScope === 'backtest' ? [] : dailyReviews, [coachScope, dailyReviews]);
 
   const traderContext = React.useMemo(
     () => buildTraderContext({ trades: scopedTrades, accounts: scopedAccounts, ironRules, playbookItems, dailyPreps: scopedPreps, dailyReviews: scopedReviews }),
@@ -965,7 +965,7 @@ const AICoachPage: React.FC<Props> = ({
     };
     raf = requestAnimationFrame(pin);
     return () => cancelAnimationFrame(raf);
-  }, [isStreaming]);
+  }, [isStreaming, coachScope]);
 
   // Scroll to bottom when cards are added below the last message (respektuje stick)
   const lastMsg = messages[messages.length - 1];
@@ -1072,7 +1072,7 @@ const AICoachPage: React.FC<Props> = ({
     } catch (e: any) {
       setCreateError(e?.message ?? 'Nepodařilo se vytvořit konverzaci');
     }
-  }, [isStreaming]);
+  }, [isStreaming, coachScope]);
 
   // ─── Select conversation ───────────────────────────────────────────────────
 
@@ -1391,7 +1391,7 @@ const AICoachPage: React.FC<Props> = ({
 
     // Vrať finální text — voice mód ho přečte nahlas.
     return finalContent;
-  }, [messages, traderContext, trades, scopedTrades, scopedAccounts, coachScope, fetchBacktestSessionsText, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, coachPersona, activeSessionMode, ironRules, sessions]);
+  }, [messages, traderContext, trades, scopedTrades, scopedAccounts, scopedPreps, scopedReviews, coachScope, fetchBacktestSessionsText, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, coachPersona, activeSessionMode, ironRules, sessions]);
 
   // ─── Start with quick prompt (declared after sendMessage to avoid TDZ) ──────
 

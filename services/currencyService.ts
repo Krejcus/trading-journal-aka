@@ -4,6 +4,7 @@ export interface ExchangeRates {
     CZK: number;
     EUR: number;
     timestamp: number;
+    source?: 'live' | 'fallback' | 'stale-cache';
 }
 
 const CACHE_KEY = 'trader_exchange_rates';
@@ -20,27 +21,39 @@ export const currencyService = {
         }
 
         try {
-            // Using a free, no-key API (Frankfurter)
-            const response = await fetch('https://api.frankfurter.app/latest?from=USD&to=CZK,EUR');
+            const endpoint = import.meta.env.DEV
+                ? 'https://api.frankfurter.app/latest?from=USD&to=CZK,EUR'
+                : '/api/exchange-rates';
+            const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
+            if (!response.ok) throw new Error(`Exchange-rate API returned ${response.status}`);
             const result = await response.json();
+            const sourceRates = result.rates ?? result;
+            if (!Number.isFinite(sourceRates.CZK) || !Number.isFinite(sourceRates.EUR)) {
+                throw new Error('Exchange-rate API returned invalid data');
+            }
 
             const rates: ExchangeRates = {
                 USD: 1,
-                CZK: result.rates.CZK,
-                EUR: result.rates.EUR,
-                timestamp: Date.now()
+                CZK: sourceRates.CZK,
+                EUR: sourceRates.EUR,
+                timestamp: Date.now(),
+                source: result.source ?? 'live'
             };
 
             localStorage.setItem(CACHE_KEY, JSON.stringify(rates));
             return rates;
         } catch (err) {
-            console.error("Failed to fetch exchange rates, using fallbacks.", err);
-            // Dynamic fallbacks (roughly current)
+            console.error("Failed to fetch exchange rates.", err);
+            if (cached) {
+                const stale = JSON.parse(cached) as ExchangeRates;
+                return { ...stale, source: 'stale-cache' };
+            }
             return {
                 USD: 1,
                 CZK: 24.50,
                 EUR: 0.92,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                source: 'fallback'
             };
         }
     },

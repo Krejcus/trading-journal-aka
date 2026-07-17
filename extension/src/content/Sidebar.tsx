@@ -115,7 +115,7 @@ export function Sidebar() {
         if (!isOpen || !session) { backfillAbortRef.current = true; return; }
         const t = setTimeout(() => runBackfill(false), 1800);
         return () => { clearTimeout(t); backfillAbortRef.current = true; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+
     }, [isOpen, session]);
 
     useEffect(() => {

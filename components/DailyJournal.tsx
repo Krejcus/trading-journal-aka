@@ -246,6 +246,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
   useEffect(() => { lastPrepForm.current = prepForm; }, [prepForm]);
   useEffect(() => { lastReviewForm.current = reviewForm; }, [reviewForm]);
+  const unmountSaveRef = useRef({ onSavePrep, onSaveReview });
+  unmountSaveRef.current = { onSavePrep, onSaveReview };
 
   // Force save on unmount (only if not empty)
   useEffect(() => {
@@ -255,8 +257,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
       const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim()) && !r.goalResults?.some(g => g.achieved) && !r.weeklyGoalAdherence?.some(a => a.status !== 'Pending');
 
-      if (!isPrepEmpty) onSavePrep(p);
-      if (!isReviewEmpty) onSaveReview(r);
+      if (!isPrepEmpty) unmountSaveRef.current.onSavePrep(p);
+      if (!isReviewEmpty) unmountSaveRef.current.onSaveReview(r);
     };
   }, []);
 
@@ -858,7 +860,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         return { label: goal.text, emoji: goal.emoji, count: passCount };
       }) || []
     };
-  }, [trades, reviews, preps, currentWeekInfo, ironRules, weeklyFocusList, currentWeekFocus]);
+  }, [groupedTrades, reviews, preps, currentWeekInfo, ironRules, currentWeekFocus]);
 
   const navigateDate = (direction: 'prev' | 'next') => {
     const doNavigate = () => {
@@ -965,6 +967,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         setActiveSessionTab(initialSessions[0].id);
       }
     }
+    // Prep initialization is intentionally keyed by date/data; save handlers are accessed through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPrep, selectedDate, standardGoals, sessions]);
 
   const prevSelectedDateRef = useRef(selectedDate);
@@ -1009,7 +1013,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
         psycho: { stressors: '', gratitude: '', notes: '' }
       });
     }
-  }, [currentReview, selectedDate]); // Omezení závislostí
+    // Review initialization must not rerun while the user edits the current review.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentReview, selectedDate]);
 
   const handleToggleRitual = (ruleId: string) => {
     editPrepForm(prev => {

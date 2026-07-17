@@ -108,7 +108,7 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
       ritualCompliance, weeklyGoalStats, lessons, mistakes,
       totalMistakes: weekReviews.reduce((sum, r) => sum + (r.mistakes?.filter(m => m.trim() !== '').length || 0), 0),
     };
-  }, [trades, preps, reviews, weekDays, ironRules, sessions, weeklyFocus]);
+  }, [trades, preps, reviews, weekDays, ironRules, weeklyFocus]);
 
   const handleSelect = useCallback((date: string) => {
     setSelectedDate(prev => prev === date ? null : date);

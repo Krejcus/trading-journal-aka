@@ -191,7 +191,7 @@ const DailyInsightWidget: React.FC<Props> = ({ theme, trades, onOpenTrade }) => 
     }
     if (lastIndex < text.length) parts.push(<span key={key++}>{text.slice(lastIndex)}</span>);
     return parts;
-  }, [trades, onOpenTrade]);
+  }, [trades, onOpenTrade, pillCls]);
 
   // Shared wrapper that mimics other dashboard widgets (glass-panel + rounded card).
   const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (

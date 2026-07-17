@@ -111,7 +111,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
             peakProfit: Math.round(peakProfit),
             challengeTarget: Math.round(challengeTarget),
         };
-    }, [accountTrades, account.initialBalance, account]);
+    }, [accountTrades, account]);
 
     const today = new Date().toISOString().slice(0, 10);
     const [reason, setReason] = useState<string>(REASON_OPTIONS[0]);

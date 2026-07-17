@@ -1,8 +1,8 @@
 
 import React, { useState, useRef } from 'react';
 import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
 import { UploadCloud, Loader2, FileSpreadsheet, FileText } from 'lucide-react';
+import { isLegacyXlsFile, LEGACY_XLS_MESSAGE, MAX_IMPORT_FILE_BYTES, readExcelRows } from '../services/excelImport';
 
 interface FileUploadProps {
   onDataLoaded: (data: any[]) => void;
@@ -12,24 +12,28 @@ const FileUpload: React.FC<FileUploadProps> = ({ onDataLoaded }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (isLegacyXlsFile(file.name)) {
+      alert(LEGACY_XLS_MESSAGE);
+      event.target.value = '';
+      return;
+    }
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      alert('Soubor je příliš velký. Maximum je 10 MB.');
+      event.target.value = '';
+      return;
+    }
 
     setIsProcessing(true);
 
-    setTimeout(() => {
-      const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+    setTimeout(async () => {
+      const isExcel = file.name.toLowerCase().endsWith('.xlsx');
 
       if (isExcel) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const data = e.target?.result;
           try {
-            const workbook = XLSX.read(data, { type: 'binary' });
-            const sheetName = workbook.SheetNames[0];
-            const sheet = workbook.Sheets[sheetName];
-            const jsonData = XLSX.utils.sheet_to_json(sheet, { raw: false });
+            const jsonData = await readExcelRows(file);
             
             if (jsonData && jsonData.length > 0) {
               onDataLoaded(jsonData);
@@ -43,8 +47,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ onDataLoaded }) => {
             setIsProcessing(false);
             if (fileInputRef.current) fileInputRef.current.value = ''; 
           }
-        };
-        reader.readAsBinaryString(file);
       } else {
         // CSV Logic
         Papa.parse(file, {
@@ -113,7 +115,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onDataLoaded }) => {
           ref={fileInputRef}
           id="csv-upload" 
           type="file" 
-          accept=".csv, .xlsx, .xls" 
+          accept=".csv,.xlsx"
           onChange={handleFileUpload} 
           disabled={isProcessing}
           className="hidden" 

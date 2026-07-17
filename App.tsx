@@ -6,6 +6,7 @@ import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, typ
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { safeSetItem } from './utils/safeStorage';
+import { clearAppStorage } from './utils/appStorage';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
@@ -485,14 +486,15 @@ const App: React.FC = () => {
         isPreferencesDirty.current = false;
         isSyncedWithDbRef.current = false;
 
-        // Optional: clear entire localStorage on logout for ultimate safety
-        localStorage.clear();
+        clearAppStorage();
       }
     });
 
     return () => {
       subscription.unsubscribe();
     };
+    // Auth listener is intentionally registered once; state is updated via functional setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [sharedTrade, setSharedTrade] = useState<Trade | null>(null);
@@ -795,7 +797,7 @@ const App: React.FC = () => {
     const timer = setInterval(checkGuardian, 30000);
     checkGuardian();
     return () => clearInterval(timer);
-  }, [systemSettings, sessions, dailyPreps, dailyReviews]);
+  }, [systemSettings, sessions, dailyPreps, dailyReviews, isInitialLoadDone]);
 
   useEffect(() => {
     if (isInitialLoadDone && guardian.isDebtActive && systemSettings.morningWakeUpDebtAlert) {
@@ -1452,6 +1454,8 @@ const App: React.FC = () => {
       setIsInitialLoadDone(false);
       setLoading(false); // Ensure loading is off if no session
     }
+    // Full server load is keyed only by identity/share mode; adding loaded state would refetch-loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sharedTrade, session]);
 
   // Realtime channel ref for cleanup
@@ -1851,7 +1855,7 @@ const App: React.FC = () => {
     if (accounts.length > 0 && filters.accounts.length === 0) {
       setFilters(prev => ({ ...prev, accounts: accounts.map(a => a.id) }));
     }
-  }, [accounts]);
+  }, [accounts, filters.accounts.length]);
 
   // Removed dangerous auto-save effect that was overwriting data.
   // Trades should only be saved explicitly via handlers.
@@ -1896,7 +1900,7 @@ const App: React.FC = () => {
       }, 5000); // 5s debounce for accounts
       return () => clearTimeout(timer);
     }
-  }, [accounts, sharedTrade, session, isInitialLoadDone]);
+  }, [accounts, sharedTrade, session, isInitialLoadDone, activeAccountId]);
 
   // Security check: Ensure we don't save if there's a session mismatch or no session
   // loadedUserId mirrors lastLoadedSessionId.current as proper state so useMemo recalculates on change
@@ -1997,6 +2001,8 @@ const App: React.FC = () => {
       }, 2000);
       return () => clearTimeout(timer);
     }
+    // currentUserPreferences reads the listed state; depending on the function would reset the debounce every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
 
   // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
@@ -2098,6 +2104,8 @@ const App: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', flushDirtyData);
     };
+    // Save callbacks consume the explicitly listed state and weekly focus through refs/current render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, theme, dashboardMode, systemSettings, networkNotifications]);
 
   // Handle Dashboard Mode Switching
@@ -2338,7 +2346,7 @@ const App: React.FC = () => {
     });
 
     return [...independent, ...aggregated].sort((a, b) => b.timestamp - a.timestamp);
-  }, [trades, viewMode, effectiveActiveAccount, accounts, archivedAccounts, contextAccounts]);
+  }, [trades, viewMode, accounts, archivedAccounts]);
 
   // (Pozn.: dřív tu byl `const stats = useMemo(calculateStats(displayTrades…))`, který se ale
   // nikde nepoužíval — Dashboard bere `filteredStats`. Odstraněno: byl to plný průchod všemi
@@ -2393,7 +2401,7 @@ const App: React.FC = () => {
       console.error('[Refresh] Error:', error);
       throw error; // Re-throw to show error in Pull-to-Refresh
     }
-  }, [session, isPrepsDirty, isReviewsDirty, isWeeklyFocusDirty, isPreferencesDirty]);
+  }, [session, isPrepsDirty, isReviewsDirty, isPreferencesDirty, applyPreferences]);
 
   const baseFilteredTrades = useMemo(() => {
     const now = new Date();
@@ -2512,11 +2520,11 @@ const App: React.FC = () => {
 
       return passes;
     });
-  }, [displayTrades, filters, viewMode, accounts, dashboardMode]);
+  }, [displayTrades, filters, viewMode, accounts, archivedAccounts, dashboardMode]);
 
   const filteredDisplayTrades = useMemo(() => {
     return viewMode === 'combined' ? aggregateTrades(baseFilteredTrades, accounts) : baseFilteredTrades;
-  }, [baseFilteredTrades, viewMode]);
+  }, [baseFilteredTrades, viewMode, accounts]);
 
   const filteredStats = useMemo(() => {
     try {
@@ -2862,7 +2870,7 @@ const App: React.FC = () => {
       console.error("Failed to delete account(s)", err);
       setSyncError("Nepodařilo se smazat účet a jeho kopie.");
     }
-  }, [accounts, trades, activeAccountId]);
+  }, [accounts, activeAccountId]);
 
   const handleDeleteTrade = async (id: number | string) => {
     const idsToDelete: (string | number)[] = [];
@@ -3129,7 +3137,7 @@ const App: React.FC = () => {
           onAddTrade={handleTryAddTrade}
           user={currentUser}
           onLogout={async () => {
-            localStorage.clear();
+            clearAppStorage();
             await supabase.auth.signOut();
             setSession(null);
             window.location.reload();
