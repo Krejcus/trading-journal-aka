@@ -1264,7 +1264,9 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                         ? ((acctSession.bias === 'Long' && trade.direction === 'LONG') || (acctSession.bias === 'Short' && trade.direction === 'SHORT'))
                         : null,
                     // Meta — verze schématu a zdroj, ať AI ví, co kde čekat.
-                    schemaVersion: 2,
+                    // v3: entryContext.ctx (kontext dne z CTX labelu), htfFvg (15m/1H FVG zóny),
+                    // sweepAges (timing sweepů) + nové levely (ON/IB/DO/WO/kompas/PMH/PML/MO/wVWAP).
+                    schemaVersion: 3,
                     source: 'alphabridge',
                 };
 

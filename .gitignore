@@ -45,3 +45,7 @@ migrate-screenshots.mjs
 .archive/
 scratch/
 analyzy/
+
+# Lokální AI tooling konfigy (obsahují tokeny!) a Supabase CLI temp
+.codex/
+supabase/.temp/

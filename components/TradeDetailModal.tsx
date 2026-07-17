@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Play, X, Edit3, Trash2, Clock, Image as ImageIcon,
     Maximize2, ArrowRight, Timer, Terminal, ArrowUpRight, ArrowDownRight,
-    Share2, Check, ChevronLeft, ChevronRight, Zap, Brain, FileText, Monitor, Target,
+    Share2, Check, ChevronLeft, ChevronRight, ChevronDown, Zap, Brain, FileText, Target,
     ShieldCheck, Layers, Wallet, Save, CornerDownLeft, AlertOctagon
 } from 'lucide-react';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
@@ -15,6 +15,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 import TradeExecutionIntel from './TradeExecutionIntel';
+import TradeConfluence from './TradeConfluence';
 import ManualTradeForm from './ManualTradeForm';
 import TradeShareModal from './TradeShareModal';
 
@@ -27,16 +28,18 @@ interface PropertyProps {
     isDark?: boolean;
 }
 
+// Jednořádkový fakt: popisek vlevo, hodnota vpravo. Ve 2sloupcové mřížce dole
+// v modalu drží „tabulkový" vzhled — poslední řádek (2 buňky) je bez podtržení.
 const Property = React.memo(({ label, value, subValue, color, icon: Icon, isDark = true }: PropertyProps) => (
-    <div className={`py-1.5 px-1 lg:py-2.5 group/prop lg:border-b ${isDark ? 'lg:border-white/[0.03]' : 'lg:border-slate-100'} lg:last:border-0`}>
-        <div className="flex items-center gap-1 lg:gap-1.5 mb-0.5 lg:mb-1 opacity-40 group-hover/prop:opacity-60 transition-opacity">
+    <div className={`flex items-baseline justify-between gap-2 py-1 group/prop border-b [&:nth-last-child(-n+2)]:border-0 ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
+        <span className="flex items-center gap-1 shrink-0 opacity-40 group-hover/prop:opacity-60 transition-opacity">
             {Icon && <Icon size={9} className="text-slate-400" />}
-            <span className="text-[8px] font-black uppercase tracking-[0.15em] lg:tracking-[0.2em]">{label}</span>
-        </div>
-        <div>
-            <span className={`text-[11px] lg:text-[12px] font-black font-mono tracking-tighter ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
-            {subValue && <p className="text-[7px] lg:text-[8px] font-bold text-slate-500 mt-0.5 uppercase tracking-wide opacity-60">{subValue}</p>}
-        </div>
+            <span className="text-[8px] font-black uppercase tracking-[0.15em]">{label}</span>
+        </span>
+        <span className="flex items-baseline gap-1.5 min-w-0">
+            {subValue && <span className="text-[7px] font-bold text-slate-500 uppercase tracking-wide opacity-60 shrink-0">{subValue}</span>}
+            <span className={`text-[11px] lg:text-[12px] font-black font-mono tracking-tighter truncate ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
+        </span>
     </div>
 ));
 
@@ -69,44 +72,44 @@ const EditableNumberProperty: React.FC<{
   };
 
   return (
-    <div className={`py-1.5 px-1 lg:py-2.5 group/prop lg:border-b ${isDark ? 'lg:border-white/[0.03]' : 'lg:border-slate-100'} lg:last:border-0`}>
-      <div className="flex items-center gap-1 lg:gap-1.5 mb-0.5 lg:mb-1 opacity-40 group-hover/prop:opacity-60 transition-opacity">
-        {Icon && <Icon size={9} className="text-slate-400" />}
-        <span className="text-[8px] font-black uppercase tracking-[0.15em] lg:tracking-[0.2em]">{label}</span>
-        {value === undefined && (
-          <span className={`text-[7px] font-black uppercase tracking-widest px-1 py-0 rounded ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}`}>+ doplnit</span>
+    <div className={`flex items-baseline justify-between gap-2 py-1 group/prop border-b [&:nth-last-child(-n+2)]:border-0 ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
+      <span className="flex items-center gap-1 shrink-0">
+        <span className="flex items-center gap-1 opacity-40 group-hover/prop:opacity-60 transition-opacity">
+          {Icon && <Icon size={9} className="text-slate-400" />}
+          <span className="text-[8px] font-black uppercase tracking-[0.15em]">{label}</span>
+        </span>
+        {value === undefined && !editing && (
+          <span className={`text-[7px] font-black uppercase tracking-widest px-1 rounded ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}`}>+</span>
         )}
-      </div>
-      <div>
-        {editing ? (
-          <input
-            type="number"
-            step="0.25"
-            autoFocus
-            value={text}
-            onChange={e => setText(e.target.value)}
-            onBlur={commit}
-            onKeyDown={e => {
-              if (e.key === 'Enter') commit();
-              if (e.key === 'Escape') { setText(value !== undefined ? String(value) : ''); setEditing(false); }
-            }}
-            placeholder={placeholder}
-            className={`w-full text-[11px] lg:text-[12px] font-black font-mono tracking-tighter outline-none border rounded px-1.5 py-0.5 ${
-              isDark ? 'bg-white/5 border-white/20 text-white' : 'bg-white border-slate-300 text-slate-900'
-            }`}
-          />
-        ) : (
-          <button
-            onClick={() => setEditing(true)}
-            className={`text-[11px] lg:text-[12px] font-black font-mono tracking-tighter text-left w-full hover:bg-white/5 rounded transition-colors ${
-              color || (isDark ? 'text-slate-200' : 'text-slate-900')
-            } ${value === undefined ? 'opacity-50 italic' : ''}`}
-            title="Klikni pro úpravu"
-          >
-            {value !== undefined ? value : (placeholder || '—')}
-          </button>
-        )}
-      </div>
+      </span>
+      {editing ? (
+        <input
+          type="number"
+          step="0.25"
+          autoFocus
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => {
+            if (e.key === 'Enter') commit();
+            if (e.key === 'Escape') { setText(value !== undefined ? String(value) : ''); setEditing(false); }
+          }}
+          placeholder={placeholder}
+          className={`w-20 text-[11px] lg:text-[12px] font-black font-mono tracking-tighter text-right outline-none border rounded px-1 py-0 ${
+            isDark ? 'bg-white/5 border-white/20 text-white' : 'bg-white border-slate-300 text-slate-900'
+          }`}
+        />
+      ) : (
+        <button
+          onClick={() => setEditing(true)}
+          className={`text-[11px] lg:text-[12px] font-black font-mono tracking-tighter text-right hover:bg-white/5 rounded px-0.5 transition-colors ${
+            color || (isDark ? 'text-slate-200' : 'text-slate-900')
+          } ${value === undefined ? 'opacity-50 italic' : ''}`}
+          title="Klikni pro úpravu"
+        >
+          {value !== undefined ? value : (placeholder || '—')}
+        </button>
+      )}
     </div>
   );
 };
@@ -266,6 +269,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     }, [groupTrades, accounts, activeTrade.accountId, accountName]);
 
     const [isZoomed, setIsZoomed] = useState(false);
+    const [accountsExpanded, setAccountsExpanded] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [shareCopied, setShareCopied] = useState(false);
     const [isShareCardOpen, setIsShareCardOpen] = useState(false);
@@ -498,7 +502,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
                             {/* Metrics — 3-col na mobile (kompaktnější), 2-col na desktop */}
                             <div className="p-3 lg:p-5">
-                                <div className="grid grid-cols-3 gap-x-2 gap-y-3 lg:grid-cols-2 lg:gap-x-6 lg:gap-y-4">
+                                <div className="grid grid-cols-2 gap-x-4 lg:gap-x-6">
                                     <Property label="ENTRY" value={entryPrice || '—'} icon={Target} isDark={isDark} />
                                     <Property label="EXIT" value={exitPrice || '—'} color={isWin ? 'text-emerald-400' : 'text-rose-400'} icon={ArrowRight} isDark={isDark} />
                                     <EditableNumberProperty
@@ -545,28 +549,82 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     <Property label="POSITION" value={activeTrade.positionSize || 1} icon={Layers} isDark={isDark} />
                                     <Property label="HOLD" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} isDark={isDark} />
                                 </div>
-                                <div className="pt-4">
-                                    <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2 mb-2"><Wallet size={12} /> Účty</p>
-                                    <div className="space-y-1.5">
-                                        {groupTrades.map(gt => {
-                                            const acc = accounts.find(a => a.id === gt.accountId);
-                                            if (!acc && gt.accountId !== activeTrade.accountId) return null;
-                                            const pnlVal = safeValue(gt.pnl);
-                                            const isMasterTrade = masterTradeIdInGroup ? gt.id === masterTradeIdInGroup : (gt.isMaster || (!gt.masterTradeId && groupTrades.length > 1 && gt.id === groupTrades[0]?.id));
-                                            return (
-                                                <div key={gt.id} className={`px-3 py-2 rounded-xl border flex items-center justify-between transition-all ${isDark ? 'bg-white/[0.03] border-white/5 hover:bg-white/[0.06]' : 'bg-white border-slate-200'}`}>
-                                                    <div className="flex items-center gap-2.5 min-w-0">
-                                                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${acc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
-                                                        <span className="text-[11px] font-black uppercase tracking-tight truncate max-w-[120px]">{acc?.name || accountName}</span>
-                                                        {isMasterTrade && groupTrades.length > 1 && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
-                                                        {!isMasterTrade && groupTrades.length > 1 && <span className="text-[7px] font-black text-purple-500 uppercase tracking-widest shrink-0">COPY</span>}
-                                                    </div>
-                                                    <span className={`text-[11px] font-black font-mono shrink-0 ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(pnlVal)}</span>
+                                {(() => {
+                                    // Účty: master vždy nahoře, kopie schované za rozbalovací lištu.
+                                    // Souhrn (počet + Σ P/L) je hned v hlavičce, takže i sbalené vidíš celek.
+                                    const visibleAccountTrades = groupTrades.filter(gt =>
+                                        accounts.find(a => a.id === gt.accountId) || gt.accountId === activeTrade.accountId
+                                    );
+                                    if (visibleAccountTrades.length === 0) return null;
+
+                                    const isMasterTrade = (gt: Trade) => masterTradeIdInGroup
+                                        ? gt.id === masterTradeIdInGroup
+                                        : (gt.isMaster || (!gt.masterTradeId && groupTrades.length > 1 && gt.id === groupTrades[0]?.id));
+
+                                    // Master první, zbytek ponech v původním pořadí.
+                                    const masterTrade = visibleAccountTrades.find(isMasterTrade) || visibleAccountTrades[0];
+                                    const copyTrades = visibleAccountTrades.filter(gt => gt.id !== masterTrade.id);
+                                    const hasCopies = copyTrades.length > 0;
+                                    const totalPnl = visibleAccountTrades.reduce((s, gt) => s + safeValue(gt.pnl), 0);
+
+                                    // Řádek účtu bez vlastního rámečku — rámeček nese obalová „buňka".
+                                    const AccountRow = ({ gt, master }: { gt: Trade; master: boolean }) => {
+                                        const acc = accounts.find(a => a.id === gt.accountId);
+                                        const pnlVal = safeValue(gt.pnl);
+                                        return (
+                                            <div className={`px-3 py-2 flex items-center justify-between transition-all ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50'}`}>
+                                                <div className="flex items-center gap-2.5 min-w-0">
+                                                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${acc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
+                                                    <span className="text-[11px] font-black uppercase tracking-tight truncate max-w-[120px]">{acc?.name || accountName}</span>
+                                                    {master && groupTrades.length > 1 && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
+                                                    {!master && groupTrades.length > 1 && <span className="text-[7px] font-black text-purple-500 uppercase tracking-widest shrink-0">COPY</span>}
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
+                                                <span className={`text-[11px] font-black font-mono shrink-0 ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(pnlVal)}</span>
+                                            </div>
+                                        );
+                                    };
+
+                                    const divider = isDark ? 'border-white/5' : 'border-slate-200';
+                                    const masterAcc = accounts.find(a => a.id === masterTrade.accountId);
+                                    const masterPnl = safeValue(masterTrade.pnl);
+
+                                    return (
+                                        <div className="pt-4">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2"><Wallet size={12} /> Účty</p>
+                                                {hasCopies && (
+                                                    <span className="text-[10px] font-black tracking-tight text-slate-500">
+                                                        {visibleAccountTrades.length} účtů · <span className={`font-mono ${totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(totalPnl)}</span>
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {/* Master + přepínač kopií = jeden řádek v jedné buňce.
+                                                Po rozbalení se kopie odvinou pod ním uvnitř téhož rámečku. */}
+                                            <div className={`rounded-xl border overflow-hidden ${isDark ? 'bg-white/[0.03] border-white/5' : 'bg-white border-slate-200'}`}>
+                                                <button
+                                                    onClick={hasCopies ? () => setAccountsExpanded(v => !v) : undefined}
+                                                    aria-expanded={hasCopies ? accountsExpanded : undefined}
+                                                    disabled={!hasCopies}
+                                                    className={`w-full px-3 py-2 flex items-center gap-2.5 text-left transition-all ${hasCopies ? (isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50') : 'cursor-default'}`}
+                                                >
+                                                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${masterAcc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
+                                                    <span className="text-[11px] font-black uppercase tracking-tight truncate">{masterAcc?.name || accountName}</span>
+                                                    {groupTrades.length > 1 && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
+                                                    <span className={`ml-auto text-[11px] font-black font-mono shrink-0 ${masterPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(masterPnl)}</span>
+                                                    {hasCopies && (
+                                                        <span className={`flex items-center gap-1 pl-2.5 ml-0.5 border-l text-[10px] font-black shrink-0 ${divider} ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                                                            +{copyTrades.length}
+                                                            <ChevronDown size={12} className={`transition-transform ${accountsExpanded ? 'rotate-180' : ''}`} />
+                                                        </span>
+                                                    )}
+                                                </button>
+                                                {hasCopies && accountsExpanded && copyTrades.map(gt => (
+                                                    <div key={gt.id} className={`border-t ${divider}`}><AccountRow gt={gt} master={false} /></div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
 
                                 {/* Mindset */}
                                 {!!(activeTrade.emotions?.length || activeTrade.mistakes?.length) && (
@@ -579,25 +637,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* HTF Confluence */}
-                                {!!activeTrade.htfConfluence?.length && (
-                                    <div className={`pt-4 border-t ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
-                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-2.5 flex items-center gap-2"><Monitor size={11} /> HTF Confluence</p>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {activeTrade.htfConfluence.map(c => <span key={c} className="px-2 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[9px] font-black uppercase tracking-wide">{c}</span>)}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* LTF Confluence */}
-                                {!!activeTrade.ltfConfluence?.length && (
-                                    <div className={`pt-4 border-t ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
-                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-2.5 flex items-center gap-2"><Zap size={11} /> LTF Confluence</p>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {activeTrade.ltfConfluence.map(c => <span key={c} className="px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[9px] font-black uppercase tracking-wide">{c}</span>)}
-                                        </div>
-                                    </div>
-                                )}
+                                {/* Entry Confluence · HTF Confluence · Levely — vždy viditelné.
+                                    Nahradilo dřívější HTF/LTF Confluence: LTF se dublovalo s „Execution"
+                                    a „Entry model" v Intelu, HTF sekce byla ruční a většinou prázdná. */}
+                                <TradeConfluence trade={activeTrade} isDark={isDark} />
 
                                 {/* AlphaBridge Intel — MFE/MAE v R, execution tagy, entry model,
                                     excursion (co zbylo na stole) a counterfactual. Vykreslí se jen

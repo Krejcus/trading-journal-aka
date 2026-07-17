@@ -432,12 +432,21 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
         // Cache na jeden výpočet: labely se během jednoho compute nemění a plný průchod
         // dataSources() se dřív opakoval ~7× (tpTargets, entryMap, excursion, entryContext…).
         let __lvCache: any[] | null = null;
+        // Datový kanál indikátoru (ghost labely): CTX = kontext dne (k=v páry), FVG15/FVG60 = HTF zóny.
+        // Nejsou to cenové levely → NEsmí prosáknout do tpTargets/excursion/entryMap.
+        let __ctxCache: string | null = null;
+        let __fvgCache: any[] = [];
         const readLiquidityLevels = () => {
             if (__lvCache) return __lvCache;
             const lv: any[] = [];
             // Dedup: víc instancí „Liquidity" indikátoru na grafu (nebo překrývající se levely) by
-            // jinak načetlo každou úroveň víckrát → nafouklé tpTargets/excursion.levels. Klíč = text|cena.
+            // jinak načetlo každou úroveň víckrát → nafouklé tpTargets/excursion.levels.
+            // Klíč = základní jméno (bez [..] suffixu) | cena — indikátor od schemaVersion 3 kreslí
+            // ke každému viditelnému levelu i stínový ghost label s časem dotyku ("PDL [2x @15:42]");
+            // při duplicitě si necháme BOHATŠÍ text (s @časem), ať timing sweepů neztratíme.
             const seen = new Set<string>();
+            const baseOf = (t: string) => t.replace(/\[.*?\]/g, '').replace(/\s+/g, ' ').trim();
+            const keyIdx: any = {};
             try {
                 const srcs = model.dataSources();
                 for (let i = 0; i < srcs.length; i++) {
@@ -455,15 +464,71 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                                 if (val && typeof val.values === 'function') pull(val);
                                 else if (val && typeof val.y === 'number' && val.text && !isStructure(String(val.text))) {
                                     const text = String(val.text);
-                                    const key = `${text.trim()}|${Math.round(val.y * 100)}`;
-                                    if (seen.has(key)) continue;
-                                    seen.add(key);
+                                    if (/^\s*CTX\b/i.test(text)) { if (__ctxCache == null) __ctxCache = text; continue; }
+                                    const fm = /^\s*FVG(15|60)\s*([▲▼])\s*([\d.]+)-([\d.]+)\s*\[(Tested|Untested)(?:\s+(\d+)m(?:@(\d+)m)?)?\]/i.exec(text);
+                                    if (fm) {
+                                        const bot = parseFloat(fm[3]), top = parseFloat(fm[4]);
+                                        if (isFinite(bot) && isFinite(top) && top > bot) {
+                                            const fkey = `${fm[1]}|${Math.round(bot * 100)}|${Math.round(top * 100)}`;
+                                            const age = fm[6] != null ? parseInt(fm[6], 10) : null;        // stáří zóny v min (vůči poslednímu baru)
+                                            const testedAge = fm[7] != null ? parseInt(fm[7], 10) : null;  // stáří PRVNÍHO dotyku (vůči poslednímu baru)
+                                            if (!seen.has(fkey)) { seen.add(fkey); __fvgCache.push({ tf: fm[1], dir: fm[2] === '▲' ? 'bull' : 'bear', bot, top, tested: /^Tested$/i.test(fm[5]), age, testedAge }); }
+                                        }
+                                        continue;
+                                    }
+                                    const key = `${baseOf(text)}|${Math.round(val.y * 100)}`;
+                                    const prevIdx = keyIdx[key];
+                                    if (prevIdx != null) {
+                                        // Stejný level podruhé: nech si verzi s časem dotyku ("@15:42")
+                                        if (text.indexOf('@') >= 0 && String(lv[prevIdx].text).indexOf('@') < 0) lv[prevIdx] = { text, price: val.y };
+                                        continue;
+                                    }
+                                    keyIdx[key] = lv.length;
                                     lv.push({ text, price: val.y });
                                 }
                             }
                         }
                     };
                     pull(coll);
+                }
+            } catch (e) { /* ignore */ }
+            // ── Plovoucí extrémy → hodnota K ČASU VSTUPU ──────────────────────────────────
+            // dHigh/dLow v labelech jsou AKTUÁLNÍ extrémy dne a posouvají se každým barem, takže
+            // při ukládání ukazují něco jiného než při vstupu (short s TP na dLow: cena mezitím
+            // udělala nová minima → TP už s žádným labelem nesedí a nepropíše se).
+            // Dopočítáme je z barů od začátku denní seance; `dstart` posílá indikátor v CTX,
+            // protože jen on zná přesný Globex rollover (není to půlnoc).
+            // Přepis je schválně tady: readLiquidityLevels() krmí tpTargets, entryMap, excursion
+            // i entryContext, takže se oprava propíše do všech naráz.
+            try {
+                const dm = __ctxCache ? /(?:^|;)\s*dstart=(\d+)/.exec(__ctxCache) : null;
+                const dStartSec = dm ? parseInt(dm[1], 10) / 1000 : null;
+                if (dStartSec != null && si0 >= 0) {
+                    const fi = bars.firstIndex();
+                    let i0 = -1;
+                    // Jdi zpět od vstupu, dokud jsi v dnešní seanci. Bar PŘED začátkem dne = hranice.
+                    for (let i = si0; i >= fi; i--) {
+                        const t = ts.indexToTimePoint(i);
+                        if (t == null) continue;
+                        if (t < dStartSec) break;
+                        i0 = i;
+                    }
+                    // i0 > fi = našli jsme i bar před začátkem dne → historie pokrývá celý den.
+                    // Když ne, bary do začátku dne nesahají a částečný extrém by lhal → nesaháme na to.
+                    if (i0 > fi) {
+                        let H = -Infinity, L = Infinity;
+                        for (let i = i0; i <= si0; i++) {
+                            const b = bars.valueAt(i);
+                            if (!b) continue;
+                            if (b[2] > H) H = b[2];
+                            if (b[3] < L) L = b[3];
+                        }
+                        for (const it of lv) {
+                            const base = baseOf(String(it.text));
+                            if (/^dHigh$/i.test(base) && isFinite(H)) it.price = H;
+                            else if (/^dLow$/i.test(base) && isFinite(L)) it.price = L;
+                        }
+                    }
                 }
             } catch (e) { /* ignore */ }
             __lvCache = lv;
@@ -847,12 +912,22 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                 }
                 const isVwapFam = (t: string) => /^VWAP( [+-][12]σ)?$/i.test(t);
                 const swept: string[] = [];
+                // Pozn.: indikátor píše do labelu "[2x @15:42]" = čas POSLEDNÍHO dotyku vůbec.
+                // Pro timing ho NEPOUŽÍVÁME — když cena level prošla až po vstupu (short, co
+                // propadl skrz spodní levely), je ten čas po entry a je k ničemu. Poslední dotyk
+                // PŘED vstupem si spočítáme z barů níž (funguje i pro dHigh/dLow, co @čas nemají).
+                // Vzdálenost každého levelu od entry v bodech (kladná = nad vstupem, záporná = pod).
+                // Indikátor ceny v labelech má, jen jsme je dosud zahazovali — deník tak umí říct
+                // nejen "co bylo vzato", ale i "jak daleko to bylo".
+                const levelDist: Record<string, number> = {};
                 let untAbove = 0, untBelow = 0;
                 let nearUpD = Infinity, nearUp: string | null = null, nearDnD = Infinity, nearDn: string | null = null;
                 for (const L of lv) {
                     const raw = String(L.text); const base = nrm(raw);
                     if (isVwapFam(base)) continue;
-                    if (/\[\s*\d+\s*[x×]\s*\]/i.test(raw) && swept.length < 10) swept.push(base);
+                    // První výskyt vyhrává (labely chodí i ve stínové ghost kopii se stejnou cenou).
+                    if (levelDist[base] === undefined && L.price != null) levelDist[base] = Math.round((L.price - entry) * 100) / 100;
+                    if (/\[\s*\d+\s*[x×][^\]]*\]/i.test(raw) && swept.length < 10) swept.push(base);
                     if (/untested/i.test(raw)) {
                         if (L.price > entry) { untAbove++; const d = L.price - entry; if (d < nearUpD) { nearUpD = d; nearUp = base; } }
                         else if (L.price < entry) { untBelow++; const d = entry - L.price; if (d < nearDnD) { nearDnD = d; nearDn = base; } }
@@ -866,6 +941,113 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                 }
                 const eU = ts.indexToTimePoint(si0);
                 const ed = eU != null ? new Date(eU * 1000) : null;
+                const entryMin = ed ? ed.getHours() * 60 + ed.getMinutes() : null;
+                // ── STRÁŽ AKTUÁLNOSTI: ctx/htfFvg/sweepAges jsou FOTKA POSLEDNÍHO BARU, ne entry.
+                // Když se ukládá jindy než v den vstupu (graf odjel na jiný den), fotka popisuje
+                // úplně jiný den → radši NIC než špatná data. V rámci dne se stáří dorovnává
+                // přes lagMin (kolik minut po entry snapshot vznikl).
+                const lastU = ts.indexToTimePoint(lastI);
+                const sameDay = (a: number | null, b: number | null) => { if (a == null || b == null) return false; const da = new Date(a * 1000), db = new Date(b * 1000); return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate(); };
+                const ctxFresh = sameDay(eU, lastU);
+                const lagMin = (ctxFresh && eU != null && lastU != null) ? Math.max(0, Math.round((lastU - eU) / 60)) : null;
+                // ── Stáří sweepů: poslední dotyk PŘED VSTUPEM, dopočítaný z barů ──────────────
+                // Dřív se bral @čas z labelu = poslední dotyk VŮBEC. Jenže u levelů, kterými cena
+                // prošla až PO vstupu (short, co propadl skrz spodní levely), vyšel čas po entry
+                // a filtr je zahodil → visely v „Za námi" bez času (ověřeno 16.7. na shortu
+                // 29825.5: čas měly jen levely NAD vstupem). Bary to řeknou přesně a pro všechny
+                // levely — včetně dHigh/dLow, které @čas v labelu nikdy neměly.
+                const sweepAges = (() => {
+                    if (!ctxFresh || eU == null || si0 < 0) return null;
+                    // Cena každého vzatého levelu (dHigh/dLow už přepsané na hodnotu k entry).
+                    const want = new Map<string, number>();
+                    for (const L of lv) {
+                        const base = nrm(String(L.text));
+                        if (isVwapFam(base) || L.price == null) continue;
+                        if (swept.indexOf(base) >= 0 && !want.has(base)) want.set(base, L.price);
+                    }
+                    if (!want.size) return [];
+                    const out: { level: string; minAgo: number }[] = [];
+                    // Zpět od vstupu; strop 2000 barů = stejný dosah, jaký počítá indikátor.
+                    const lim = Math.max(bars.firstIndex(), si0 - 2000);
+                    for (let i = si0; i >= lim && want.size; i--) {
+                        const b = bars.valueAt(i);
+                        if (!b) continue;
+                        const t = ts.indexToTimePoint(i);
+                        if (t == null) continue;
+                        for (const [name, price] of [...want]) {
+                            if (b[3] <= price && b[2] >= price) {   // bar protnul level
+                                out.push({ level: name, minAgo: Math.max(0, Math.round((eU - t) / 60)) });
+                                want.delete(name);
+                            }
+                        }
+                    }
+                    return out.sort((a, b) => a.minAgo - b.minAgo).slice(0, 10);
+                })();
+                // CTX datový label: "CTX ib=up;gap=0.82;onw=1.05;ibw=0.61;atr=12.3;datr=310.5;s15=1,BoS,23,2;s60=..."
+                const ctx = (() => {
+                    if (!__ctxCache || !ctxFresh) return null;
+                    const o: any = {};
+                    const num = (v: string) => { const n = parseFloat(v); return isFinite(n) ? n : null; };
+                    // Historie zlomů "dir,typ,age,run|dir,typ,age,run|…" (nejnovější první).
+                    // Starý formát s jedinou událostí projde stejným parserem (žádné '|').
+                    const parseStructList = (v: string) => v.split('|').map(part => {
+                        const p = part.split(',');
+                        if (p.length < 4) return null;
+                        const dir = p[0] === '1' ? 'bull' : (p[0] === '-1' ? 'bear' : null);
+                        const age = parseInt(p[2], 10), run = parseInt(p[3], 10);
+                        return dir ? { dir, type: p[1], ageMin: isFinite(age) ? age : null, run: isFinite(run) ? run : null } : null;
+                    }).filter(Boolean) as any[];
+                    for (const kv of __ctxCache.replace(/^\s*CTX\s*/i, '').split(';')) {
+                        const eq = kv.indexOf('='); if (eq <= 0) continue;
+                        const k = kv.slice(0, eq).trim(), v = kv.slice(eq + 1).trim();
+                        if (k === 'ib') o.ib = v;
+                        else if (k === 'gap') o.gapAtr = num(v);
+                        else if (k === 'onw') o.onWidthAtr = num(v);
+                        else if (k === 'ibw') o.ibWidthAtr = num(v);
+                        else if (k === 'atr') o.atr = num(v);
+                        else if (k === 'datr') o.dAtr = num(v);
+                        else if (k === 's15') o.s15 = parseStructList(v);
+                        else if (k === 's60') o.s60 = parseStructList(v);
+                    }
+                    // Stav struktury K ČASU ENTRY: z historie zlomů vyber NEJNOVĚJŠÍ, který je
+                    // starší než lag (= stal se před entry) a dorovnej mu stáří. Zlomy mladší než
+                    // lag proběhly až po vstupu (často zásluhou samotného obchodu) → ignorovat.
+                    {
+                        const lag = lagMin || 0;
+                        const pick = (list: any) => {
+                            if (!Array.isArray(list) || !list.length) return list && !Array.isArray(list) ? list : null;
+                            const ev = list.find((e: any) => e.ageMin != null && e.ageMin >= lag);
+                            return ev ? { dir: ev.dir, type: ev.type, ageMin: ev.ageMin - lag, run: ev.run } : null;
+                        };
+                        o.s15 = pick(o.s15);
+                        o.s60 = pick(o.s60);
+                    }
+                    return o;
+                })();
+                // HTF FVG zóny (15m/1H): jen zóny existující UŽ V ČASE ENTRY (age >= lag);
+                // Tested se přepočítá k entry (dotyk až po vstupu = v čase entry Untested);
+                // je entry uvnitř? + nejbližší NEotestovaná zóna nad/pod entry.
+                const htfFvg = (() => {
+                    if (!__fvgCache.length || !ctxFresh) return null;
+                    const lag = lagMin || 0;
+                    const zs = __fvgCache
+                        .filter(z => z.age == null || z.age >= lag)
+                        .map(z => ({
+                            tf: z.tf, dir: z.dir, bot: z.bot, top: z.top,
+                            age: z.age != null ? z.age - lag : null,
+                            tested: z.tested && (z.testedAge == null || z.testedAge >= lag),
+                        }));
+                    if (!zs.length) return null;
+                    const inside = (tf: string) => { const z = zs.find(z => z.tf === tf && entry >= z.bot && entry <= z.top); return z ? { dir: z.dir, top: z.top, bot: z.bot, tested: z.tested } : null; };
+                    let nA: any = null, nAD = Infinity, nB: any = null, nBD = Infinity;
+                    for (const z of zs) {
+                        if (z.tested) continue;
+                        if (z.bot > entry) { const d = z.bot - entry; if (d < nAD) { nAD = d; nA = { tf: z.tf, dir: z.dir, top: z.top, bot: z.bot, dist: Math.round(d * 100) / 100 }; } }
+                        else if (z.top < entry) { const d = entry - z.top; if (d < nBD) { nBD = d; nB = { tf: z.tf, dir: z.dir, top: z.top, bot: z.bot, dist: Math.round(d * 100) / 100 }; } }
+                    }
+                    const zones = zs.slice().sort((a, b) => Math.abs((a.top + a.bot) / 2 - entry) - Math.abs((b.top + b.bot) / 2 - entry)).slice(0, 8);
+                    return { inside15: inside('15'), inside60: inside('60'), nearestUntestedAbove: nA, nearestUntestedBelow: nB, zones };
+                })();
                 return {
                     available: true,
                     aboveDO: doP != null ? entry > doP : null,
@@ -874,10 +1056,20 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
                     aboveVWAP: w0 != null ? entry > w0 : null,
                     vwapDistSigma: (w0 != null && sd > 0) ? Math.round((entry - w0) / sd * 100) / 100 : null,
                     sweptLevels: swept,
+                    sweepAges: sweepAges,
+                    // Vzdálenosti levelů od entry v bodech (kladná = nad, záporná = pod).
+                    // Nové od 15.7. — starší obchody pole nemají, UI je proto nepovinné.
+                    levelDist: levelDist,
                     untappedAbove: untAbove, untappedBelow: untBelow,
                     nearestUntappedAbove: nearUp, nearestUntappedBelow: nearDn,
                     londonVsAsia: londonVsAsia,
-                    entryMinutes: ed ? ed.getHours() * 60 + ed.getMinutes() : null,
+                    entryMinutes: entryMin,
+                    ctx: ctx,
+                    htfFvg: htfFvg,
+                    // Meta snapshotu: fresh = graf byl při uložení na dni entry; lag = zpoždění
+                    // snapshotu za entry v minutách. ctx/htfFvg/sweepAges jsou null, když !fresh.
+                    ctxFresh: ctxFresh,
+                    snapshotLagMin: lagMin,
                 };
             } catch (e) { return { available: false, reason: String(e) }; }
         })();

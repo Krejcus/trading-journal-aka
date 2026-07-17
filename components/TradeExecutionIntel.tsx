@@ -11,9 +11,8 @@ interface Props {
 const fmtR = (r?: number | null): string => (r == null || Number.isNaN(Number(r))) ? '—' : `${Number(r) > 0 ? '+' : ''}${Number(r)}R`;
 const rColor = (r?: number | null): string => (r == null) ? 'text-slate-400' : (Number(r) > 0 ? 'text-emerald-500' : Number(r) < 0 ? 'text-rose-500' : 'text-slate-400');
 
-const SL_LABEL: Record<string, string> = { fvg: 'SL na FVG', swing: 'SL na swingu', ote: 'SL na OTE', other: 'SL jinde' };
-const TGT_LABEL: Record<string, string> = { deviation: 'VWAP deviace', daily: 'Denní level', liquidity: 'Likvidita', fixed_rr: 'Fixní RR', other: 'Jiný cíl' };
-const MGMT_LABEL: Record<string, string> = { trail_bos: 'Trailing (BOS)', fixed: 'Fixní TP', partial_runner: 'Partial + Runner', be_runner: 'BE Runner' };
+// Execution tagy, entry model a kontext se přesunuly do TradeConfluence (sekce Entry/HTF/Levely).
+// Tady zůstává jen analytika: MFE/MAE, excursion a counterfactual.
 const OUTCOME_LABEL: Record<string, string> = { WIN: 'Win', LOSS: 'Loss', OPEN: 'Neuzavřeno' };
 
 /**
@@ -89,62 +88,6 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
 
       {open && (
         <div className="space-y-3 mt-2">
-          {/* Execution tagy: SL placement / target / management */}
-          {hasTags && (
-            <div>
-              {label('Execution')}
-              <div className="flex flex-wrap gap-1.5">
-                {trade.slPlacement && chip(SL_LABEL[trade.slPlacement] || `SL ${trade.slPlacement}`, 'rose')}
-                {trade.targetLevel && chip(`TP ${trade.targetLevel}`, 'emerald')}
-                {trade.targetType && !trade.targetLevel && chip(TGT_LABEL[trade.targetType] || trade.targetType, 'emerald')}
-                {trade.management && chip(MGMT_LABEL[trade.management] || trade.management, 'violet')}
-              </div>
-            </div>
-          )}
-
-          {/* Entry model: struktura + odraz + FVG */}
-          {hasEm && (
-            <div>
-              {label('Entry model')}
-              <div className="flex flex-wrap gap-1.5">
-                {em.structureType && chip(`${em.structureType}${em.structureOrder ? ` ${em.structureOrder}.` : ''}`, 'sky')}
-                {Array.isArray(em.odrazLevels) && em.odrazLevels.map((l: string, i: number) => <React.Fragment key={`o${i}`}>{chip(`Odraz ${l}`, 'amber')}</React.Fragment>)}
-                {em.entryFvg && chip('Entry na FVG', 'violet')}
-                {Array.isArray(em.entryLevels) && em.entryLevels.map((l: string, i: number) => <React.Fragment key={`e${i}`}>{chip(`Entry ${l}`, 'slate')}</React.Fragment>)}
-              </div>
-            </div>
-          )}
-
-          {/* Kontext vstupu — kotvy, sweepy, magnet mapa (chipy barevně podle souladu se směrem) */}
-          {trade.entryContext?.available && (() => {
-            const ec: any = trade.entryContext;
-            // direction je v datech nekonzistentní ('LONG' z AlphaBridge, 'Long' ze starších zápisů)
-            // → case-insensitive, jinak se chipy u 'LONG' barví obráceně (long nad DO = červená).
-            const isLongT = String(trade.direction || '').toUpperCase() === 'LONG';
-            const anchorChip = (name: string, above: boolean | null | undefined) => {
-              if (above == null) return null;
-              const aligned = isLongT ? above : !above; // long nad kotvou = po proudu; short pod kotvou = po proudu
-              return chip(`${above ? 'Nad' : 'Pod'} ${name}`, aligned ? 'emerald' : 'rose');
-            };
-            const mins = ec.entryMinutes;
-            const timeStr = mins != null ? `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}` : null;
-            return (
-              <div>
-                {label('Kontext vstupu')}
-                <div className="flex flex-wrap gap-1.5">
-                  {anchorChip('DO', ec.aboveDO)}
-                  {anchorChip('WO', ec.aboveWO)}
-                  {anchorChip('pdVWAP', ec.abovePdVWAP)}
-                  {ec.vwapDistSigma != null && chip(`VWAP ${ec.vwapDistSigma > 0 ? '+' : ''}${ec.vwapDistSigma}σ`, 'sky')}
-                  {(ec.sweptLevels || []).slice(0, 4).map((l: string, i: number) => <React.Fragment key={`sw${i}`}>{chip(`${l} vzat`, 'amber')}</React.Fragment>)}
-                  {(ec.untappedAbove > 0 || ec.untappedBelow > 0) && chip(`Netknuté ↑${ec.untappedAbove} ↓${ec.untappedBelow}`, 'violet')}
-                  {ec.londonVsAsia && chip(`LON ${ec.londonVsAsia === 'above' ? 'nad Asií ↑' : ec.londonVsAsia === 'below' ? 'pod Asií ↓' : 'v Asii'}`, 'slate')}
-                  {timeStr && chip(timeStr, 'slate')}
-                </div>
-              </div>
-            );
-          })()}
-
           {/* Excursion: kam by to došlo do konce dne — co zbylo na stole */}
           {hasExc && (
             <div>
