@@ -124,12 +124,26 @@ async function loadCore(): Promise<Core> {
   return data;
 }
 
-// ── Živé (ne-backtest, ne-Missed) rozhodnutí s kopiemi sečtenými do $ ────────
-function liveDecisions(core: Core): Trade[] {
+// ── Živé (ne-backtest, ne-Missed) řádky — RAW, 1 řádek = 1 kopie na účtu ─────
+function liveRaw(core: Core): Trade[] {
   const backtestIds = new Set(core.accounts.filter(a => a.type === 'Backtest').map(a => String(a.id)));
-  const live = core.trades.filter(t =>
+  return core.trades.filter(t =>
     t.executionStatus !== 'Missed' && !backtestIds.has(String(t.accountId ?? '')));
-  return dedupeDecisions(live); // pnl+risk sečtené přes fan-out kopie
+}
+
+// ── Živé rozhodnutí s kopiemi sečtenými do $ (1 řádek = 1 rozhodnutí) ────────
+// Pro per-account dotazy NEpoužívat — dedupe dá rozhodnutí accountId mastera
+// a kopie na ostatních účtech z account filtru zmizí. Filtruj liveRaw.
+function liveDecisions(core: Core): Trade[] {
+  return dedupeDecisions(liveRaw(core)); // pnl+risk sečtené přes fan-out kopie
+}
+
+/** Najde účet podle ID nebo substringu názvu (case-insensitive), jinak null. */
+function resolveAccount(input: string, core: Core): Account | null {
+  const q = String(input).toLowerCase().trim();
+  return core.accounts.find(a => String(a.id).toLowerCase() === q)
+    || core.accounts.find(a => String(a.name || '').toLowerCase().includes(q))
+    || null;
 }
 
 const isBE = (t: Trade) => t.isBE === true || Math.abs(t.pnl || 0) <= 0.01;
@@ -362,7 +376,8 @@ mcp.tool('get_stats', {
   description:
     'Deterministické statistiky (winrate, PnL, profit factor, avg R) s filtry a volitelným ' +
     'seskupením. Čísla počítá TS kód — cituj je přesně, nepřepočítávej. Použij pro období ' +
-    'mimo okno load_journal nebo pro breakdowny (po dnech v týdnu, hodinách, sessionech…).',
+    'mimo okno load_journal, pro breakdowny (po dnech v týdnu, hodinách, sessionech…) ' +
+    'nebo s account filtrem pro čísla jednoho konkrétního účtu.',
   inputSchema: z.object({
     date_from: z.string().optional().describe('YYYY-MM-DD včetně'),
     date_to: z.string().optional().describe('YYYY-MM-DD včetně'),
@@ -370,12 +385,34 @@ mcp.tool('get_stats', {
     direction: z.enum(['long', 'short']).optional(),
     session: z.string().optional().describe('např. NY, London'),
     setup: z.string().optional(),
-    group_by: z.enum(['none', 'day_of_week', 'hour', 'session', 'instrument', 'direction', 'setup', 'month'])
-      .optional().describe('Rozpad metrik podle dimenze'),
+    account: z.string().optional().describe(
+      'Filtr na jeden účet (název nebo ID, stačí substring — např. "Lucid"). ' +
+      'S filtrem se počítají jednotlivé řádky daného účtu (fan-out kopie na tomto ' +
+      'účtu, PnL jen za něj) — konzistentní s list_accounts. Bez filtru se kopie ' +
+      'slučují do 1 rozhodnutí ($ sečtené přes všechny účty), takže počty jsou nižší.'),
+    group_by: z.enum(['none', 'day_of_week', 'hour', 'session', 'instrument', 'direction', 'setup', 'month', 'account'])
+      .optional().describe('Rozpad metrik podle dimenze; "account" = per-účet čísla (kopie se neslučují)'),
   }),
   handler: guard(async (args: any) => {
     const core = await loadCore();
-    let ds = liveDecisions(core);
+    // Per-account pohled = RAW řádky (kopie se neslučují), jinak dedup na rozhodnutí.
+    let ds: Trade[];
+    let accNote: string;
+    if (args.account) {
+      const acc = resolveAccount(args.account, core);
+      if (!acc) {
+        const names = core.accounts.filter(a => a.type !== 'Backtest').map(a => a.name).join(', ');
+        return text(`Účet "${args.account}" nenalezen. Živé účty: ${names}`);
+      }
+      ds = liveRaw(core).filter(t => String(t.accountId) === String(acc.id));
+      accNote = `Čísla POUZE za účet "${acc.name}" — jednotlivé kopie na tomto účtu, PnL jen za něj (ne součet přes účty).`;
+    } else if (args.group_by === 'account') {
+      ds = liveRaw(core);
+      accNote = 'Rozpad per účet — kopie se počítají na každém účtu zvlášť, PnL per účet.';
+    } else {
+      ds = liveDecisions(core);
+      accNote = 'Kopie sečteny (1 řádek = 1 rozhodnutí, $ přes všechny účty).';
+    }
     if (args.date_from) ds = ds.filter(t => String(t.date) >= args.date_from);
     if (args.date_to) ds = ds.filter(t => String(t.date).slice(0, 10) <= args.date_to);
     if (args.instrument) ds = ds.filter(t => (t.instrument || '').toLowerCase().includes(args.instrument.toLowerCase()));
@@ -383,9 +420,10 @@ mcp.tool('get_stats', {
     if (args.session) ds = ds.filter(t => (t.session || '').toLowerCase().includes(args.session.toLowerCase()));
     if (args.setup) ds = ds.filter(t => (t.setup || '').toLowerCase().includes(args.setup.toLowerCase()));
 
-    const result: any = { _pozn: 'Deterministická čísla z TS kódu. Cituj přesně. Missed obchody a backtest účty vyloučeny, kopie sečteny.', filtry: args, celkem: statsOf(ds) };
+    const result: any = { _pozn: `Deterministická čísla z TS kódu. Cituj přesně. Missed obchody a backtest účty vyloučeny. ${accNote}`, filtry: args, celkem: statsOf(ds) };
     const gb = args.group_by && args.group_by !== 'none' ? args.group_by : null;
     if (gb) {
+      const accName = (id: any) => core.accounts.find(a => String(a.id) === String(id))?.name || String(id ?? '—');
       const keyFn = (t: Trade): string => {
         const d = new Date(t.date);
         switch (gb) {
@@ -396,6 +434,7 @@ mcp.tool('get_stats', {
           case 'direction': return (t.direction || '?').toUpperCase();
           case 'setup': return t.setup || '(bez setupu)';
           case 'month': return String(t.date).slice(0, 7);
+          case 'account': return accName(t.accountId);
           default: return 'vše';
         }
       };
@@ -410,6 +449,41 @@ mcp.tool('get_stats', {
         .map(([k, ts]) => [k, statsOf(ts)]));
     }
     return text(JSON.stringify(result, null, 1));
+  }),
+});
+
+mcp.tool('list_accounts', {
+  description:
+    'Přehled VŠECH obchodních účtů (i neaktivních/spálených): stav, typ, fáze, výsledek, ' +
+    'počet obchodů a PnL. Pro "kolik mám účtů", "který jsem spálil", nebo před per-účet ' +
+    'analýzou přes get_stats(account=...). POZOR: tradeCount/netPnl počítají řádky daného ' +
+    'účtu (fan-out kopie na každém účtu zvlášť) — konzistentní s get_stats(account=...), ' +
+    'ale záměrně VYŠŠÍ než počet rozhodnutí v load_journal/get_stats bez filtru.',
+  inputSchema: z.object({
+    status: z.enum(['Active', 'Inactive', 'Archived', 'all']).optional().describe('Filtr stavu, default all'),
+  }),
+  handler: guard(async (args: { status?: string }) => {
+    const core = await loadCore();
+    const raw = liveRaw(core);
+    const want = args.status && args.status !== 'all' ? args.status : null;
+    const out = core.accounts
+      .filter(a => !want || a.status === want)
+      .map(a => {
+        const accTrades = a.type === 'Backtest'
+          ? core.trades.filter(t => String(t.accountId) === String(a.id) && t.executionStatus !== 'Missed')
+          : raw.filter(t => String(t.accountId) === String(a.id));
+        return {
+          id: a.id, name: a.name, status: a.status, type: a.type,
+          phase: a.phase ?? null, result: a.result ?? null,
+          initialBalance: a.initialBalance ?? null,
+          tradeCount: accTrades.length,
+          netPnl: Math.round(accTrades.reduce((s, t) => s + (t.pnl || 0), 0) * 100) / 100,
+        };
+      });
+    return text(JSON.stringify({
+      _pozn: 'tradeCount/netPnl = řádky per účet (kopie na každém účtu zvlášť). Pro detail účtu volej get_stats(account=name).',
+      count: out.length, accounts: out,
+    }, null, 1));
   }),
 });
 

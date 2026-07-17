@@ -89,7 +89,7 @@ export const COACH_TOOLS = [
         },
         account: {
           type: 'string',
-          description: 'Filtr podle účtu — název (např. "Tradeify 50k") nebo ID. Pro "jak se mi daří na účtu X".',
+          description: 'Filtr podle účtu — název (např. "Tradeify 50k") nebo ID. Pro "jak se mi daří na účtu X". S tímto filtrem se počítají jednotlivé řádky daného účtu (fan-out kopie na tomto účtu), takže počty sedí s list_accounts. Bez filtru se kopie slučují do 1 rozhodnutí ($ sečtené přes účty) — proto je celkový počet obchodů NIŽŠÍ než součet přes účty.',
         },
         tag: {
           type: 'string',
@@ -123,7 +123,7 @@ export const COACH_TOOLS = [
   {
     name: 'list_accounts',
     description:
-      'Vrátí VŠECHNY obchodní účty (i neaktivní/spálené) se stavem, fází, P&L a počtem obchodů. Pro "kolik mám účtů", "který účet jsem spálil", nebo jako kontext před filtrováním podle účtu.',
+      'Vrátí VŠECHNY obchodní účty (i neaktivní/spálené) se stavem, fází, P&L a počtem obchodů. Pro "kolik mám účtů", "který účet jsem spálil", nebo jako kontext před filtrováním podle účtu. tradeCount/netPnl počítají řádky daného účtu (fan-out kopie na každém účtu zvlášť) — konzistentní s get_stats(account=...), ale záměrně vyšší než počet rozhodnutí v get_stats bez filtru.',
     input_schema: {
       type: 'object',
       properties: {
@@ -564,8 +564,14 @@ export function collapseCopies(trades: Trade[]): Trade[] {
 /** get_stats handler — applies filters, optional group_by breakdown. */
 function getStats(args: GetStatsArgs, ctx: ToolContext) {
   const accounts = ctx.accounts || [];
-  // Sjednoť kopie → počty/winrate logicky (1 obchod, ne 11). U group_by='account' NE (chceme per účet).
-  if (!args.group_by) return computeStats(collapseCopies(ctx.trades), args, accounts);
+  // Sjednoť kopie → počty/winrate logicky (1 obchod, ne 11). U per-account dotazů
+  // (account filtr NEBO group_by='account') NE — collapse dá sloučenému obchodu
+  // accountId mastera, takže kopie na jiných účtech z filtru zmizí a účet ukáže
+  // jen zlomek obchodů (bug „3 vs 37" vs. list_accounts).
+  if (!args.group_by) {
+    const base = args.account ? ctx.trades : collapseCopies(ctx.trades);
+    return computeStats(base, args, accounts);
+  }
 
   // Group: bucket the (filtered) trades, then run computeStats per bucket.
   const accNameById = new Map(accounts.map((a) => [String(a.id), String(a.name || a.id)]));
