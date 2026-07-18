@@ -253,6 +253,11 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       const pending = payouts.filter(p => p.accountId && allIds.has(p.accountId) && p.status === 'Pending').reduce((s, p) => s + p.amount, 0);
       const activeCount = all.filter(a => a.status === 'Active').length;
       const failedCount = all.filter(a => a.result === 'Failed').length;
+      // Koupeno = reálné nákupy. Challenge → funded je JEDEN účet/platba: passnutý
+      // challenge se archivuje (result=Passed) a vznikne funded následník, kterého
+      // už počítáme → odečteme passnuté archivy, ať se nákup nepočítá dvakrát.
+      const passedCount = all.filter(a => a.result === 'Passed').length;
+      const bought = all.length - passedCount;
 
       // Trading Σ přes účty viditelné v aktuální záložce (stejný vzorec jako karta)
       let sumBalance = 0, sumPnl = 0;
@@ -273,7 +278,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         return a.name.localeCompare(b.name, 'cs', { numeric: true });
       });
 
-      return { firm, visible: sortedVisible, bought: all.length, paid, received, pending, net: received - paid, activeCount, failedCount, sumBalance, sumPnl, multiplierLabel };
+      return { firm, visible: sortedVisible, bought, paid, received, pending, net: received - paid, activeCount, failedCount, sumBalance, sumPnl, multiplierLabel };
     }).sort((a, b) => (b.activeCount - a.activeCount) || a.firm.localeCompare(b.firm, 'cs'));
   }, [accounts, showInactive, payouts, pnlByAccount]);
 

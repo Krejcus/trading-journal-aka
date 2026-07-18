@@ -15,6 +15,7 @@ import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Skull, X, TrendingDown, Target, Calendar, Lightbulb, Scale, AlertTriangle, BookOpen, Check, BarChart3, Activity, Archive, Trophy } from 'lucide-react';
 import type { Account, Trade } from '../types';
+import { firmOf, firmLabel, firmInitials, firmColor, FIRM_LOGOS } from '../utils/accountFirm';
 
 interface Props {
     accounts: Account[]; // pouze spálené (result === 'Failed')
@@ -198,6 +199,21 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
         };
     }, [accounts, statsMap]);
 
+    // Seskupení náhrobků po firmách (pohřbíš celou firmu → nechceš je po jednom)
+    const firmGroups = useMemo(() => {
+        const byFirm = new Map<string, Account[]>();
+        for (const a of accounts) {
+            const f = firmOf(a);
+            if (!byFirm.has(f)) byFirm.set(f, []);
+            byFirm.get(f)!.push(a);
+        }
+        return [...byFirm.entries()].map(([firm, accts]) => ({
+            firm,
+            accts,
+            totalLost: accts.reduce((s, a) => s + (statsMap.get(a.id)?.amountLost || 0), 0),
+        })).sort((a, b) => b.accts.length - a.accts.length || b.totalLost - a.totalLost);
+    }, [accounts, statsMap]);
+
     const toggleSelect = (id: string) => {
         setSelected(prev => {
             const next = new Set(prev);
@@ -207,6 +223,60 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
     };
 
     const selectedAccounts = accounts.filter(a => selected.has(a.id));
+
+    // Jeden náhrobek (vytaženo z mřížky kvůli seskupení po firmách)
+    const renderTombstone = (acc: Account) => {
+        const s = statsMap.get(acc.id)!;
+        const isSel = selected.has(acc.id);
+        return (
+            <motion.div
+                key={acc.id}
+                layout
+                onClick={() => setDetailAccount(acc)}
+                className={`group relative cursor-pointer rounded-[24px] border p-5 transition-all ${isSel ? 'border-blue-500/60 ring-2 ring-blue-500/30' : isDark ? 'border-rose-500/15 hover:border-rose-500/30' : 'border-rose-200 hover:border-rose-300'} ${isDark ? 'bg-gradient-to-b from-rose-500/[0.06] to-slate-900/40' : 'bg-gradient-to-b from-rose-50 to-white'}`}
+            >
+                <button
+                    onClick={(e) => { e.stopPropagation(); toggleSelect(acc.id); }}
+                    className={`absolute top-4 right-4 w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${isSel ? 'bg-blue-500 border-blue-500 text-white' : isDark ? 'border-white/15 hover:border-white/40' : 'border-slate-300 hover:border-slate-400'}`}
+                >
+                    {isSel && <Check size={13} strokeWidth={3} />}
+                </button>
+
+                <div className="flex items-start gap-3 mb-4 pr-8">
+                    <div className="p-2 bg-rose-500/10 border border-rose-500/20 rounded-xl shrink-0">
+                        <Skull size={18} className="text-rose-500" />
+                    </div>
+                    <div className="min-w-0">
+                        <h3 className={`text-base font-black tracking-tight truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc.name}</h3>
+                        <p className="text-[10px] font-bold text-slate-500">† {fmtDate(acc.failureDate)}</p>
+                    </div>
+                </div>
+
+                <div className="mb-3 -mx-1">
+                    <MiniCurve data={s.equityCurve} />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                    <TombStat label="Spáleno" value={`-${fmt(s.amountLost)}`} accent="rose" isDark={isDark} />
+                    <TombStat label="K cíli" value={`${s.progressPct}%`} accent="amber" isDark={isDark} />
+                    <TombStat label="Dní" value={s.daysConsistency.toString()} isDark={isDark} />
+                </div>
+
+                {acc.failureReason && (
+                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold mb-2 ${isDark ? 'bg-rose-500/10 text-rose-400' : 'bg-rose-100 text-rose-600'}`}>
+                        <AlertTriangle size={10} /> {acc.failureReason}
+                    </div>
+                )}
+
+                {acc.failureKeyLesson && (
+                    <p className={`text-xs leading-snug line-clamp-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                        <Lightbulb size={11} className="inline mr-1 text-amber-500" />
+                        {acc.failureKeyLesson}
+                    </p>
+                )}
+            </motion.div>
+        );
+    };
 
     // All lessons across funerals
     const allLessons = useMemo(() =>
@@ -264,60 +334,24 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
                 </div>
             </div>
 
-            {/* ── Tombstone grid ── */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {accounts.map(acc => {
-                    const s = statsMap.get(acc.id)!;
-                    const isSel = selected.has(acc.id);
+            {/* ── Náhrobky seskupené po firmách ── */}
+            <div className="space-y-6">
+                {firmGroups.map(g => {
+                    const logo = FIRM_LOGOS[g.firm];
                     return (
-                        <motion.div
-                            key={acc.id}
-                            layout
-                            onClick={() => setDetailAccount(acc)}
-                            className={`group relative cursor-pointer rounded-[24px] border p-5 transition-all ${isSel ? 'border-blue-500/60 ring-2 ring-blue-500/30' : isDark ? 'border-rose-500/15 hover:border-rose-500/30' : 'border-rose-200 hover:border-rose-300'} ${isDark ? 'bg-gradient-to-b from-rose-500/[0.06] to-slate-900/40' : 'bg-gradient-to-b from-rose-50 to-white'}`}
-                        >
-                            {/* select checkbox */}
-                            <button
-                                onClick={(e) => { e.stopPropagation(); toggleSelect(acc.id); }}
-                                className={`absolute top-4 right-4 w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${isSel ? 'bg-blue-500 border-blue-500 text-white' : isDark ? 'border-white/15 hover:border-white/40' : 'border-slate-300 hover:border-slate-400'}`}
-                            >
-                                {isSel && <Check size={13} strokeWidth={3} />}
-                            </button>
-
-                            <div className="flex items-start gap-3 mb-4 pr-8">
-                                <div className="p-2 bg-rose-500/10 border border-rose-500/20 rounded-xl shrink-0">
-                                    <Skull size={18} className="text-rose-500" />
-                                </div>
-                                <div className="min-w-0">
-                                    <h3 className={`text-base font-black tracking-tight truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc.name}</h3>
-                                    <p className="text-[10px] font-bold text-slate-500">† {fmtDate(acc.failureDate)}</p>
-                                </div>
+                        <div key={g.firm}>
+                            <div className="flex items-center gap-2.5 mb-3 px-1">
+                                {logo
+                                    ? <img src={logo} alt="" className="w-6 h-6 rounded-md object-contain bg-white/90 p-0.5 border border-black/5 shrink-0 opacity-90" />
+                                    : <div className="w-6 h-6 rounded-md shrink-0 flex items-center justify-center text-[9px] font-black text-white opacity-90" style={{ background: firmColor(g.firm).bg }}>{firmInitials(g.firm)}</div>}
+                                <h4 className={`text-xs font-black uppercase tracking-tight ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{firmLabel(g.firm)}</h4>
+                                <span className="text-[10px] font-black uppercase tracking-widest text-rose-500/70">{g.accts.length} ☠</span>
+                                <span className="ml-auto text-[11px] font-black font-mono text-rose-500">−{fmt(g.totalLost)}</span>
                             </div>
-
-                            <div className="mb-3 -mx-1">
-                                <MiniCurve data={s.equityCurve} />
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {g.accts.map(renderTombstone)}
                             </div>
-
-                            {/* mini stats */}
-                            <div className="grid grid-cols-3 gap-2 mb-4">
-                                <TombStat label="Spáleno" value={`-${fmt(s.amountLost)}`} accent="rose" isDark={isDark} />
-                                <TombStat label="K cíli" value={`${s.progressPct}%`} accent="amber" isDark={isDark} />
-                                <TombStat label="Dní" value={s.daysConsistency.toString()} isDark={isDark} />
-                            </div>
-
-                            {acc.failureReason && (
-                                <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold mb-2 ${isDark ? 'bg-rose-500/10 text-rose-400' : 'bg-rose-100 text-rose-600'}`}>
-                                    <AlertTriangle size={10} /> {acc.failureReason}
-                                </div>
-                            )}
-
-                            {acc.failureKeyLesson && (
-                                <p className={`text-xs leading-snug line-clamp-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                                    <Lightbulb size={11} className="inline mr-1 text-amber-500" />
-                                    {acc.failureKeyLesson}
-                                </p>
-                            )}
-                        </motion.div>
+                        </div>
                     );
                 })}
             </div>
