@@ -497,7 +497,14 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           <div className={`flex justify-between items-start ${isSlave ? 'mb-4' : 'mb-6'} gap-2`}>
             <div className="flex items-center gap-3 min-w-0">
               <div className={`${isSlave ? 'p-2 rounded-xl' : 'p-3 rounded-2xl'} ${theme !== 'light' ? 'bg-white/5 shadow-inner' : 'bg-slate-100'} flex-shrink-0`}>
-                {getAccountIcon(acc.type, acc.status, acc.phase, isSlave ? 14 : 18, acc.result)}
+                {(() => {
+                  // Logo firmy u názvu účtu; fallback na status ikonu (backtest / neznámá firma).
+                  const fk = firmOf(acc);
+                  const logo = acc.type !== 'Backtest' ? FIRM_LOGOS[fk] : undefined;
+                  return logo
+                    ? <img src={logo} alt={fk} className={`${isSlave ? 'w-3.5 h-3.5' : 'w-[18px] h-[18px]'} object-contain`} />
+                    : getAccountIcon(acc.type, acc.status, acc.phase, isSlave ? 14 : 18, acc.result);
+                })()}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
