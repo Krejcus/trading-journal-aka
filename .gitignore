@@ -49,3 +49,4 @@ analyzy/
 # Lokální AI tooling konfigy (obsahují tokeny!) a Supabase CLI temp
 .codex/
 supabase/.temp/
+.env*
