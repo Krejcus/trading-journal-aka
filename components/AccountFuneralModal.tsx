@@ -22,6 +22,8 @@ import { supabase } from '../services/supabase';
 
 interface Props {
     account: Account;
+    accounts?: Account[];
+    title?: string;
     trades: Trade[];
     userId: string;
     onConfirm: (failureData: FailureData) => void;
@@ -50,32 +52,41 @@ const REASON_OPTIONS = [
     'Jiný důvod',
 ];
 
-const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfirm, onClose, theme }) => {
+const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades, userId, onConfirm, onClose, theme }) => {
     const isDark = theme !== 'light';
+    const targetAccounts = useMemo(() => accounts?.length ? accounts : [account], [accounts, account]);
+    const targetAccountIds = useMemo(() => new Set(targetAccounts.map(a => a.id)), [targetAccounts]);
+    const isGroup = targetAccounts.length > 1;
+    const displayName = title || account.name;
 
-    // Trades na tomto účtu, chronologicky
+    // Trades na tomto účtu / celé pohřbívané skupině, chronologicky
     const accountTrades = useMemo(() =>
         trades
-            .filter(t => t.accountId === account.id)
+            .filter(t => targetAccountIds.has(t.accountId))
             .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)),
-        [trades, account.id]
+        [trades, targetAccountIds]
     );
 
     // Auto-compute stats
     const stats = useMemo(() => {
+        const initialBalance = targetAccounts.reduce((sum, item) => sum + item.initialBalance, 0);
+        const challengeTarget = targetAccounts.reduce((sum, item) => {
+            const targetPct = (item.profitTarget && item.profitTarget > 0) ? item.profitTarget : 10;
+            return sum + item.initialBalance * (targetPct / 100);
+        }, 0);
         if (accountTrades.length === 0) {
-            return { peakEquity: 0, currentEquity: 0, maxDrawdown: 0, daysActive: 0, daysConsistency: 0, progressPct: 0, totalTrades: 0, peakProfit: 0, challengeTarget: 0 };
+            return { peakEquity: initialBalance, currentEquity: initialBalance, maxDrawdown: 0, daysActive: 0, daysConsistency: 0, progressPct: 0, totalTrades: 0, peakProfit: 0, challengeTarget };
         }
-        let runningEquity = account.initialBalance;
-        let peak = account.initialBalance;
+        let runningEquity = initialBalance;
+        let peak = initialBalance;
         accountTrades.forEach(t => {
             runningEquity += (t.pnl || 0);
             if (runningEquity > peak) peak = runningEquity;
         });
-        const peakProfit = peak - account.initialBalance;
+        const peakProfit = peak - initialBalance;
         // Max drawdown: largest peak-to-trough decline across the equity curve
-        let runDD = account.initialBalance;
-        let peakDD = account.initialBalance;
+        let runDD = initialBalance;
+        let peakDD = initialBalance;
         let maxDrawdown = 0;
         accountTrades.forEach(t => {
             runDD += (t.pnl || 0);
@@ -89,8 +100,6 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
         const daysActive = Math.max(1, Math.ceil((last - first) / (1000 * 60 * 60 * 24)));
         // Progress to target (Challenge: typicky 8-10% of initial balance)
         // Challenge target = initialBalance * profitTarget% (same source as AccountsManager progress bar)
-        const targetPct = (account.profitTarget && account.profitTarget > 0) ? account.profitTarget : 10;
-        const challengeTarget = account.initialBalance * (targetPct / 100);
         const progressPct = Math.round((peakProfit / challengeTarget) * 100);
 
         // Days of consistency = number of distinct calendar days with at least one trade
@@ -111,7 +120,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
             peakProfit: Math.round(peakProfit),
             challengeTarget: Math.round(challengeTarget),
         };
-    }, [accountTrades, account]);
+    }, [accountTrades, targetAccounts]);
 
     const today = new Date().toISOString().slice(0, 10);
     const [reason, setReason] = useState<string>(REASON_OPTIONS[0]);
@@ -145,11 +154,11 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
         // Insert do ai_coach_memory jako episode (importance 10 = nezapomeň!)
         try {
             const content = [
-                `KRITICKÁ EPIZODA — Spálení účtu ${account.name} (${failureDate})`,
+                `KRITICKÁ EPIZODA — ${isGroup ? 'Spálení skupiny účtů' : 'Spálení účtu'} ${displayName} (${failureDate})`,
                 ``,
                 `CONTEXT:`,
-                `• Účet: ${account.name} (${account.type}, ${account.currency})`,
-                `• Initial balance: $${account.initialBalance.toLocaleString()}`,
+                `• ${isGroup ? 'Skupina' : 'Účet'}: ${displayName}${isGroup ? ` (${targetAccounts.length} účtů: ${targetAccounts.map(a => a.name).join(', ')})` : ` (${account.type}, ${account.currency})`}`,
+                `• Initial balance: $${targetAccounts.reduce((sum, item) => sum + item.initialBalance, 0).toLocaleString()}`,
                 `• Peak equity: $${stats.peakEquity.toLocaleString()} (+$${stats.peakProfit})`,
                 `• Pokrok v challenge: ${stats.progressPct} % k targetu ($${stats.peakProfit}/$${stats.challengeTarget})`,
                 `• Dní konzistentní práce: ${stats.daysConsistency}`,
@@ -179,9 +188,10 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                 memory_date: failureDate,
                 metadata: {
                     event_type: 'account_blowup',
-                    account_id: account.id,
-                    account_name: account.name,
-                    account_type: account.type,
+                    account_id: isGroup ? null : account.id,
+                    account_ids: targetAccounts.map(item => item.id),
+                    account_name: displayName,
+                    account_type: isGroup ? 'group' : account.type,
                     amount_lost_usd: amountLost,
                     progress_at_blowup_pct: stats.progressPct,
                     progress_pnl_usd: stats.peakProfit,
@@ -221,7 +231,8 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                         </div>
                         <div>
                             <p className="text-[9px] font-black uppercase tracking-[0.3em] text-rose-500 mb-1">Account Funeral</p>
-                            <h2 className={`text-2xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{account.name}</h2>
+                            <h2 className={`text-2xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayName}</h2>
+                            {isGroup && <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">{targetAccounts.length} aktivních účtů</p>}
                         </div>
                     </div>
                 </div>
@@ -357,7 +368,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, trades, userId, onConfi
                             disabled={!canSave || saving}
                             className="flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest bg-gradient-to-r from-rose-600 to-rose-500 text-white shadow-lg shadow-rose-500/30 hover:shadow-rose-500/50 transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                            {saving ? 'Ukládám…' : '⚰️ Pohřbít účet'}
+                            {saving ? 'Ukládám…' : isGroup ? '⚰️ Pohřbít skupinu' : '⚰️ Pohřbít účet'}
                         </button>
                     </div>
                 </div>

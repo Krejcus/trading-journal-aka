@@ -151,6 +151,8 @@ export const storageService = {
         maePoints: d.maePoints != null ? Number(d.maePoints) : undefined,
         excursionAvailable: d.excursionAvailable === true || d.excursionAvailable === 'true',
         excursionComplete: d.excursionComplete == null ? undefined : (d.excursionComplete === true || d.excursionComplete === 'true'),
+        executionPath: d.executionPath || undefined,
+        executionPathComplete: d.executionPathComplete == null ? undefined : (d.executionPathComplete === true || d.executionPathComplete === 'true'),
         outcomeAmbiguous: d.outcomeAmbiguous === true || d.outcomeAmbiguous === 'true',
         slPlacement: d.slPlacement || undefined,
         targetType: d.targetType || undefined,
@@ -409,6 +411,8 @@ export const storageService = {
         maePoints:data->>maePoints,
         excursionAvailable:data->>excursionAvailable,
         excursionComplete:data->>excursionComplete,
+        executionPath:data->executionPath,
+        executionPathComplete:data->>executionPathComplete,
         outcomeAmbiguous:data->>outcomeAmbiguous,
         slPlacement:data->>slPlacement,
         targetType:data->>targetType,
@@ -508,6 +512,8 @@ export const storageService = {
       maePoints: t.maePoints != null ? Number(t.maePoints) : undefined,
       excursionAvailable: t.excursionAvailable === 'true' || t.excursionAvailable === true,
       excursionComplete: t.excursionComplete == null ? undefined : (t.excursionComplete === 'true' || t.excursionComplete === true),
+      executionPath: t.executionPath || undefined,
+      executionPathComplete: t.executionPathComplete == null ? undefined : (t.executionPathComplete === 'true' || t.executionPathComplete === true),
       outcomeAmbiguous: t.outcomeAmbiguous === 'true' || t.outcomeAmbiguous === true,
       slPlacement: t.slPlacement || undefined,
       targetType: t.targetType || undefined,
@@ -2731,12 +2737,14 @@ export const storageService = {
     return { ...data, category: (data.category ?? 'general') as AIConversation['category'], scope: (data.scope ?? 'live') as 'live' | 'backtest' };
   },
 
-  async updateConversation(id: string, updates: { title?: string; category?: AIConversation['category'] }): Promise<void> {
-    await supabase.from('ai_conversations').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id);
+  async updateConversation(id: string, updates: { title?: string; category?: AIConversation['category']; scope?: 'live' | 'backtest' }): Promise<void> {
+    const { error } = await supabase.from('ai_conversations').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw error;
   },
 
   async deleteConversation(id: string): Promise<void> {
-    await supabase.from('ai_conversations').delete().eq('id', id);
+    const { error } = await supabase.from('ai_conversations').delete().eq('id', id);
+    if (error) throw error;
   },
 
   async getMessages(conversationId: string): Promise<{ id: string; role: string; content: string; created_at: string }[]> {
@@ -2750,8 +2758,12 @@ export const storageService = {
   },
 
   async appendMessage(conversationId: string, role: 'user' | 'assistant', content: string): Promise<void> {
-    await supabase.from('ai_messages').insert({ conversation_id: conversationId, role, content });
-    await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversationId);
+    const { error: messageError } = await supabase.from('ai_messages').insert({ conversation_id: conversationId, role, content });
+    if (messageError) throw messageError;
+    const { error: conversationError } = await supabase.from('ai_conversations').update({ updated_at: new Date().toISOString() }).eq('id', conversationId);
+    // Zpráva už je bezpečně uložená. Selhání sekundárního timestampu nesmí vést
+    // k opakovanému insertu stejné zprávy při retry.
+    if (conversationError) console.warn('[AI] message saved, conversation timestamp update failed:', conversationError);
   },
 
   /**

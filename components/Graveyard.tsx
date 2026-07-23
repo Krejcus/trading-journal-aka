@@ -11,11 +11,12 @@
  *   4. Porovnání (výběr více karet) — sloučené ztráty, opakující se vzorce, společné lekce
  *   5. Zeď lekcí — všechny klíčové lekce pohromadě
  */
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Skull, X, TrendingDown, Target, Calendar, Lightbulb, Scale, AlertTriangle, BookOpen, Check, BarChart3, Activity, Archive, Trophy } from 'lucide-react';
+import { Skull, X, TrendingDown, Target, Calendar, Lightbulb, Scale, AlertTriangle, BookOpen, Check, BarChart3, Activity, Archive, Trophy, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Account, Trade } from '../types';
 import { firmOf, firmLabel, firmInitials, firmColor, FIRM_LOGOS } from '../utils/accountFirm';
+import { storageService } from '../services/storageService';
 
 interface Props {
     accounts: Account[]; // pouze spálené (result === 'Failed')
@@ -167,6 +168,7 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
     const [detailAccount, setDetailAccount] = useState<Account | null>(null);
     const [showCompare, setShowCompare] = useState(false);
     const [showLessons, setShowLessons] = useState(false);
+    const [expandedFunerals, setExpandedFunerals] = useState<Set<string>>(new Set());
 
     // Stats per account (memoized map)
     const statsMap = useMemo(() => {
@@ -199,7 +201,9 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
         };
     }, [accounts, statsMap]);
 
-    // Seskupení náhrobků po firmách (pohřbíš celou firmu → nechceš je po jednom)
+    // Seskupení po firmách a po společném Funeral obřadu. Nové hromadné pohřby mají
+    // failureGroupId; starší záznamy bezpečně domergujeme jen při shodné reflexi
+    // a archivaci v rámci jedné minuty.
     const firmGroups = useMemo(() => {
         const byFirm = new Map<string, Account[]>();
         for (const a of accounts) {
@@ -207,12 +211,36 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
             if (!byFirm.has(f)) byFirm.set(f, []);
             byFirm.get(f)!.push(a);
         }
-        return [...byFirm.entries()].map(([firm, accts]) => ({
-            firm,
-            accts,
-            totalLost: accts.reduce((s, a) => s + (statsMap.get(a.id)?.amountLost || 0), 0),
-        })).sort((a, b) => b.accts.length - a.accts.length || b.totalLost - a.totalLost);
+        return [...byFirm.entries()].map(([firm, accts]) => {
+            const byFuneral = new Map<string, Account[]>();
+            for (const a of accts) {
+                const legacyMinute = a.archivedAt ? Math.floor(a.archivedAt / 60_000) : a.id;
+                const reflection = [a.failureDate, a.failureReason, a.failureWhatHappened, a.failureKeyLesson].join('|');
+                const key = a.failureGroupId || `legacy:${legacyMinute}:${reflection}`;
+                if (!byFuneral.has(key)) byFuneral.set(key, []);
+                byFuneral.get(key)!.push(a);
+            }
+            const funerals = [...byFuneral.entries()].map(([key, funeralAccounts]) => ({
+                key,
+                accts: funeralAccounts,
+                totalLost: funeralAccounts.reduce((s, a) => s + (statsMap.get(a.id)?.amountLost || 0), 0),
+            })).sort((a, b) => (b.accts[0]?.archivedAt || 0) - (a.accts[0]?.archivedAt || 0));
+            return {
+                firm,
+                accts,
+                funerals,
+                totalLost: accts.reduce((s, a) => s + (statsMap.get(a.id)?.amountLost || 0), 0),
+            };
+        }).sort((a, b) => b.accts.length - a.accts.length || b.totalLost - a.totalLost);
     }, [accounts, statsMap]);
+
+    const toggleFuneral = (key: string) => {
+        setExpandedFunerals(prev => {
+            const next = new Set(prev);
+            next.has(key) ? next.delete(key) : next.add(key);
+            return next;
+        });
+    };
 
     const toggleSelect = (id: string) => {
         setSelected(prev => {
@@ -348,8 +376,57 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
                                 <span className="text-[10px] font-black uppercase tracking-widest text-rose-500/70">{g.accts.length} ☠</span>
                                 <span className="ml-auto text-[11px] font-black font-mono text-rose-500">−{fmt(g.totalLost)}</span>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {g.accts.map(renderTombstone)}
+                            <div className="space-y-3">
+                                {g.funerals.map(funeral => {
+                                    if (funeral.accts.length === 1) {
+                                        return <div key={funeral.key} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{renderTombstone(funeral.accts[0])}</div>;
+                                    }
+                                    const first = funeral.accts[0];
+                                    const expanded = expandedFunerals.has(funeral.key);
+                                    const avgProgress = Math.round(funeral.accts.reduce((sum, a) => sum + (statsMap.get(a.id)?.progressPct || 0), 0) / funeral.accts.length);
+                                    return (
+                                        <div key={funeral.key} className={`rounded-[24px] border overflow-hidden ${isDark ? 'bg-rose-500/[0.04] border-rose-500/15' : 'bg-rose-50/60 border-rose-200'}`}>
+                                            <button
+                                                onClick={() => toggleFuneral(funeral.key)}
+                                                className={`w-full p-4 flex items-center gap-4 text-left transition-colors ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-rose-50'}`}
+                                            >
+                                                <div className="relative p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500">
+                                                    <Skull size={19} />
+                                                    <span className="absolute -top-2 -right-2 min-w-5 h-5 px-1 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center">{funeral.accts.length}</span>
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <p className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>Hromadný pohřeb · {funeral.accts.length} účtů</p>
+                                                    <p className="text-[10px] font-bold text-slate-500 truncate">† {fmtDate(first.failureDate)} · {funeral.accts.map(a => a.name).join(', ')}</p>
+                                                </div>
+                                                <div className="hidden sm:block text-right">
+                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Spáleno celkem</p>
+                                                    <p className="text-sm font-black font-mono text-rose-500">−{fmt(funeral.totalLost)}</p>
+                                                </div>
+                                                <div className="hidden md:block text-right">
+                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Ø k cíli</p>
+                                                    <p className="text-sm font-black font-mono text-amber-500">{avgProgress}%</p>
+                                                </div>
+                                                {expanded ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
+                                            </button>
+                                            <AnimatePresence initial={false}>
+                                                {expanded && (
+                                                    <motion.div
+                                                        initial={{ height: 0, opacity: 0 }}
+                                                        animate={{ height: 'auto', opacity: 1 }}
+                                                        exit={{ height: 0, opacity: 0 }}
+                                                        className="overflow-hidden"
+                                                    >
+                                                        <div className={`p-4 pt-0 border-t ${isDark ? 'border-white/5' : 'border-rose-100'}`}>
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                                                                {funeral.accts.map(renderTombstone)}
+                                                            </div>
+                                                        </div>
+                                                    </motion.div>
+                                                )}
+                                            </AnimatePresence>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
                     );
@@ -416,6 +493,7 @@ const TombStat: React.FC<{ label: string; value: string; accent?: 'rose' | 'ambe
 // ── Memorial modal ──
 export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; trades: Trade[]; isDark: boolean; onClose: () => void; onOpenInDashboard?: (id: string) => void }> = ({ account, stats, trades, isDark, onClose, onOpenInDashboard }) => {
     const sorted = useMemo(() => [...trades].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)), [trades]);
+    const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
     const isFailed = account.result === 'Failed';
     const isPassed = account.result === 'Passed';
     const HeaderIcon = isFailed ? Skull : isPassed ? Trophy : Archive;
@@ -428,6 +506,15 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
     const iconWrap = isFailed ? 'bg-rose-500/10 border-rose-500/30' : isPassed ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-500/10 border-slate-500/30';
     const iconColor = isFailed ? 'text-rose-500' : isPassed ? 'text-emerald-500' : 'text-slate-400';
     const labelColor = isFailed ? 'text-rose-500' : isPassed ? 'text-emerald-500' : 'text-slate-400';
+    const selectedTradeIndex = selectedTrade ? sorted.findIndex(t => String(t.id) === String(selectedTrade.id)) : -1;
+    const showPreviousTrade = () => {
+        if (!sorted.length || selectedTradeIndex < 0) return;
+        setSelectedTrade(sorted[(selectedTradeIndex - 1 + sorted.length) % sorted.length]);
+    };
+    const showNextTrade = () => {
+        if (!sorted.length || selectedTradeIndex < 0) return;
+        setSelectedTrade(sorted[(selectedTradeIndex + 1) % sorted.length]);
+    };
     return (
         <div className="fixed inset-0 z-[320] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md" onClick={onClose}>
             <motion.div
@@ -513,14 +600,22 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
                         ) : (
                             <div className={`rounded-2xl border divide-y overflow-hidden ${isDark ? 'border-white/5 divide-white/5' : 'border-slate-200 divide-slate-100'}`}>
                                 {sorted.slice(0, 50).map(t => (
-                                    <div key={t.id} className={`flex items-center justify-between px-4 py-2.5 ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-50'}`}>
+                                    <button
+                                        key={t.id}
+                                        onClick={() => setSelectedTrade(t)}
+                                        className={`w-full flex items-center justify-between px-4 py-2.5 text-left transition-colors ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-50'}`}
+                                        title="Otevřít náhled obchodu"
+                                    >
                                         <div className="flex items-center gap-3 min-w-0">
                                             <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${t.direction === 'Long' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{t.direction === 'Long' ? 'L' : 'S'}</span>
                                             <span className={`text-xs font-bold truncate ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{t.instrument || t.symbol || '—'}</span>
                                             <span className="text-[10px] text-slate-500 shrink-0">{t.date}</span>
                                         </div>
-                                        <span className={`text-sm font-black font-mono shrink-0 ${(t.pnl || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{(t.pnl || 0) >= 0 ? '+' : '-'}{fmt(t.pnl || 0)}</span>
-                                    </div>
+                                        <span className="flex items-center gap-2 shrink-0">
+                                            <span className={`text-sm font-black font-mono ${(t.pnl || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{(t.pnl || 0) >= 0 ? '+' : '-'}{fmt(t.pnl || 0)}</span>
+                                            <ChevronRight size={14} className="text-slate-500" />
+                                        </span>
+                                    </button>
                                 ))}
                                 {sorted.length > 50 && (
                                     <div className="px-4 py-2 text-center text-[10px] font-bold text-slate-500">+ {sorted.length - 50} dalších obchodů</div>
@@ -530,9 +625,187 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
                     </div>
                 </div>
             </motion.div>
+
+            <AnimatePresence>
+                {selectedTrade && (
+                    <MemorialTradePreview
+                        trade={selectedTrade}
+                        accountName={account.name}
+                        isDark={isDark}
+                        tradePosition={selectedTradeIndex + 1}
+                        tradeCount={sorted.length}
+                        onPreviousTrade={showPreviousTrade}
+                        onNextTrade={showNextTrade}
+                        onClose={() => setSelectedTrade(null)}
+                    />
+                )}
+            </AnimatePresence>
         </div>
     );
 };
+
+const MemorialTradePreview: React.FC<{
+    trade: Trade;
+    accountName: string;
+    isDark: boolean;
+    tradePosition: number;
+    tradeCount: number;
+    onPreviousTrade: () => void;
+    onNextTrade: () => void;
+    onClose: () => void;
+}> = ({ trade, accountName, isDark, tradePosition, tradeCount, onPreviousTrade, onNextTrade, onClose }) => {
+    const [fullTrade, setFullTrade] = useState<Trade>(trade);
+    const [loadingImages, setLoadingImages] = useState(false);
+    const images = fullTrade.screenshots?.length ? fullTrade.screenshots : (fullTrade.screenshot ? [fullTrade.screenshot] : []);
+    const [selectedImage, setSelectedImage] = useState(0);
+    const directionLong = String(trade.direction).toLowerCase() === 'long';
+    const price = (value?: number) => value != null && Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—';
+    const dateLabel = (() => {
+        const parsed = new Date(trade.date || trade.timestamp);
+        return Number.isNaN(parsed.getTime()) ? trade.date : parsed.toLocaleString('cs-CZ', { dateStyle: 'medium', timeStyle: 'short' });
+    })();
+
+    const showPreviousImage = () => setSelectedImage(current => (current - 1 + images.length) % images.length);
+    const showNextImage = () => setSelectedImage(current => (current + 1) % images.length);
+
+    useEffect(() => {
+        let cancelled = false;
+        setFullTrade(trade);
+        setSelectedImage(0);
+
+        const loadImages = async () => {
+            if (!trade.id) return;
+            setLoadingImages(true);
+            try {
+                const detailed = await storageService.getTradeById(String(trade.id));
+                if (detailed && !cancelled) {
+                    setFullTrade(current => ({
+                        ...current,
+                        screenshot: detailed.screenshot ?? current.screenshot,
+                        screenshots: detailed.screenshots ?? current.screenshots,
+                    }));
+                }
+            } catch (error) {
+                console.error('[MemorialTradePreview] Nepodařilo se načíst screenshoty:', error);
+            } finally {
+                if (!cancelled) setLoadingImages(false);
+            }
+        };
+
+        loadImages();
+        return () => { cancelled = true; };
+    }, [trade]);
+
+    useEffect(() => {
+        if (tradeCount <= 1) return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                onPreviousTrade();
+            } else if (event.key === 'ArrowRight') {
+                event.preventDefault();
+                onNextTrade();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [tradeCount, onPreviousTrade, onNextTrade]);
+
+    return (
+        <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[340] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md"
+            onClick={onClose}
+        >
+            <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 10 }}
+                className={`relative w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-[28px] border shadow-2xl ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+                onClick={e => e.stopPropagation()}
+            >
+                <div className="absolute z-20 top-4 right-4 flex items-center gap-2">
+                    {tradeCount > 1 && (
+                        <>
+                            <button onClick={onPreviousTrade} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-slate-900/85 hover:bg-white/10 text-slate-200 border-white/10' : 'bg-white/90 hover:bg-slate-100 text-slate-600 border-slate-200'}`} title="Předchozí obchod (←)"><ChevronLeft size={18} /></button>
+                            <span className="px-2.5 py-2 rounded-full bg-slate-950/80 border border-white/10 text-[9px] font-black tracking-widest text-white">{tradePosition} / {tradeCount}</span>
+                            <button onClick={onNextTrade} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-slate-900/85 hover:bg-white/10 text-slate-200 border-white/10' : 'bg-white/90 hover:bg-slate-100 text-slate-600 border-slate-200'}`} title="Další obchod (→)"><ChevronRight size={18} /></button>
+                        </>
+                    )}
+                    <button onClick={onClose} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-slate-900/85 hover:bg-white/10 text-slate-300 border-white/10' : 'bg-white/90 hover:bg-slate-100 text-slate-500 border-slate-200'}`}><X size={18} /></button>
+                </div>
+
+                {loadingImages && images.length === 0 ? (
+                    <div className={`h-44 flex flex-col items-center justify-center border-b ${isDark ? 'bg-slate-800/40 border-white/5 text-slate-500' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                        <div className="w-6 h-6 mb-3 rounded-full border-2 border-slate-500/30 border-t-blue-500 animate-spin" />
+                        <p className="text-xs font-bold">Načítám screenshoty…</p>
+                    </div>
+                ) : images.length > 0 ? (
+                    <div className="relative p-3">
+                        <img src={images[selectedImage]} alt={`Screenshot obchodu ${selectedImage + 1}`} className="block w-full max-h-[58vh] object-contain rounded-2xl" />
+                        {images.length > 1 && (
+                            <>
+                                <button
+                                    onClick={showPreviousImage}
+                                    className="absolute left-6 top-1/2 -translate-y-1/2 p-3 rounded-full bg-slate-950/75 hover:bg-slate-950 text-white border border-white/15 shadow-xl transition-all active:scale-95"
+                                    aria-label="Předchozí screenshot"
+                                >
+                                    <ChevronLeft size={22} />
+                                </button>
+                                <button
+                                    onClick={showNextImage}
+                                    className="absolute right-6 top-1/2 -translate-y-1/2 p-3 rounded-full bg-slate-950/75 hover:bg-slate-950 text-white border border-white/15 shadow-xl transition-all active:scale-95"
+                                    aria-label="Další screenshot"
+                                >
+                                    <ChevronRight size={22} />
+                                </button>
+                                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-slate-950/80 border border-white/10 text-[10px] font-black tracking-widest text-white">
+                                    {selectedImage + 1} / {images.length}
+                                </div>
+                            </>
+                        )}
+                    </div>
+                ) : (
+                    <div className={`h-44 flex flex-col items-center justify-center border-b ${isDark ? 'bg-slate-800/40 border-white/5 text-slate-500' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                        <BarChart3 size={30} className="mb-2 opacity-40" />
+                        <p className="text-xs font-bold">K tomuto obchodu není uložený screenshot</p>
+                    </div>
+                )}
+
+                <div className="p-5 lg:p-6 space-y-5">
+                    <div className="flex items-start gap-3 pr-10">
+                        <span className={`mt-0.5 text-[10px] font-black uppercase px-2 py-1 rounded-lg ${directionLong ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{directionLong ? 'LONG' : 'SHORT'}</span>
+                        <div className="min-w-0 flex-1">
+                            <h3 className={`text-xl font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument || trade.symbol || 'Obchod'}</h3>
+                            <p className="text-[11px] font-bold text-slate-500">{accountName} · {dateLabel}</p>
+                        </div>
+                        <p className={`text-xl font-black font-mono ${(trade.pnl || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{(trade.pnl || 0) >= 0 ? '+' : '-'}{fmt(trade.pnl || 0)}</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                        <PreviewStat label="Entry" value={price(trade.entryPrice)} isDark={isDark} />
+                        <PreviewStat label="Exit" value={price(trade.exitPrice)} isDark={isDark} />
+                        <PreviewStat label="Stop-loss" value={price(trade.stopLoss)} accent="rose" isDark={isDark} />
+                        <PreviewStat label="Take-profit" value={price(trade.takeProfit)} accent="emerald" isDark={isDark} />
+                        <PreviewStat label="Pozice" value={trade.positionSize != null ? String(trade.positionSize) : '—'} isDark={isDark} />
+                    </div>
+
+                    {trade.notes && (
+                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-slate-800/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">Poznámka</p>
+                            <p className={`text-sm leading-relaxed whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{trade.notes}</p>
+                        </div>
+                    )}
+                </div>
+            </motion.div>
+        </motion.div>
+    );
+};
+
+const PreviewStat: React.FC<{ label: string; value: string; isDark: boolean; accent?: 'rose' | 'emerald' }> = ({ label, value, isDark, accent }) => (
+    <div className={`p-3 rounded-xl border ${isDark ? 'bg-slate-800/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+        <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">{label}</p>
+        <p className={`text-sm font-black font-mono ${accent === 'rose' ? 'text-rose-500' : accent === 'emerald' ? 'text-emerald-500' : isDark ? 'text-slate-200' : 'text-slate-800'}`}>{value}</p>
+    </div>
+);
 
 const MStat: React.FC<{ label: string; value: string; icon: any; color: 'emerald' | 'rose' | 'amber' | 'blue'; isDark: boolean; small?: boolean }> = ({ label, value, icon: Icon, color, isDark, small }) => {
     const colorMap = {

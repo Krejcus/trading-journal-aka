@@ -803,7 +803,7 @@ export const MessageBubble: React.FC<{
           } ${
             isStreaming ? 'coach-avatar-talk' : 'coach-avatar-breath'
           }`}
-          title={(msg.aiModel || 'analytical') === 'fast' ? 'Rychlý kouč (Haiku 4.5)' : 'Analytický kouč (Sonnet 4.6)'}
+          title={(msg.aiModel || 'analytical') === 'fast' ? 'Rychlý kouč (Haiku 4.5)' : 'Analytický kouč (Sonnet 5)'}
         >
           <img
             src={(msg.aiModel || 'analytical') === 'fast' ? '/fast-coach-option1-trans.png' : '/analytical-coach-option1-trans.png'}

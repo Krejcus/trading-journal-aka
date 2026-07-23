@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLabDatasetFromTrades, computeOverview, computeCfSummary, computeBiasSummary } from '../services/labAnalytics';
+import { buildLabDatasetFromTrades, computeOverview, computeCfSummary, computeBiasSummary, computeExecutionSummary, computePatternSummary, buildLabReport } from '../services/labAnalytics';
 import type { Trade } from '../types';
 
 // Minimální validní Trade pro Lab — přepíšeš jen co test potřebuje.
@@ -85,5 +85,68 @@ describe('computeBiasSummary — podíl aligned', () => {
     const b = computeBiasSummary(ds);
     expect(b.alignedSharePct).not.toBeNull();
     expect(b.alignedSharePct!).toBeLessThanOrEqual(100);
+  });
+});
+
+describe('computeExecutionSummary — 1m cesta po vstupu', () => {
+  const path = (maxAdverseR: number, time50: number | null, firstR: number | null) => ({
+    available: true, version: 1, complete: true,
+    maxAdverseR, maxFavorableR: 1.5,
+    timeToSlPct: { '25': 1, '50': time50, '75': null, '100': null },
+    timeToTpPct: { '25': 2, '50': 3, '100': 5 },
+    entryTouchBars: 2, minutesNearEntry: 3, closeCrossCount: 1,
+    candleStops: {
+      firstComplete: firstR == null ? { outcome: 'OPEN', realizedR: null } : { outcome: firstR > 0 ? 'WIN' : 'LOSS', realizedR: firstR },
+      firstTwoComplete: null,
+    },
+  });
+
+  it('rozdělí MAE podle procent původního SL a spočítá časy thresholdů', () => {
+    const ds = buildLabDatasetFromTrades([
+      mk({ pnl: 100, executionPath: path(0.2, null, 2) }),
+      mk({ pnl: -100, executionPath: path(0.55, 4, -1) }),
+    ]);
+    const ex = computeExecutionSummary(ds);
+    expect(ex.covered).toBe(2);
+    expect(ex.buckets.find(b => b.key === '0_25')?.n).toBe(1);
+    expect(ex.buckets.find(b => b.key === '50_75')?.n).toBe(1);
+    expect(ex.thresholds.sl50.reached).toBe(1);
+    expect(ex.thresholds.sl50.avgMinute).toBe(4);
+  });
+
+  it('candle stop porovnává párově pouze uzavřené varianty', () => {
+    const ds = buildLabDatasetFromTrades([
+      mk({ pnl: 100, executionPath: path(0.2, null, 2) }),
+      mk({ pnl: -100, executionPath: path(0.4, null, null) }),
+    ]);
+    const ex = computeExecutionSummary(ds);
+    expect(ex.candleStops.firstComplete.n).toBe(1);
+    expect(ex.candleStops.firstComplete.deltaR).toBeCloseTo(1); // varianta +2R vs realita +1R
+  });
+});
+
+describe('computePatternSummary — důkazní vrstva Coache', () => {
+  it('řadí pozorované kombinace podle avg R a vrací zdrojové trade IDs', () => {
+    const trades = [
+      ...Array.from({ length: 5 }, (_, i) => mk({ id: `ny-${i}`, pnl: 200, riskAmount: 100, direction: 'Long', session: 'New York', slPlacement: 'Swing' })),
+      ...Array.from({ length: 5 }, (_, i) => mk({ id: `lon-${i}`, pnl: -100, riskAmount: 100, direction: 'Short', session: 'London', slPlacement: 'FVG' })),
+    ];
+    const summary = computePatternSummary(buildLabDatasetFromTrades(trades));
+    expect(summary.bestCombinations[0].avgR).toBeGreaterThan(0);
+    expect(summary.bestCombinations[0].tradeIds.length).toBeGreaterThanOrEqual(3);
+    expect(summary.worstCombinations[0].avgR).toBeLessThan(0);
+  });
+
+  it('report označí malý vzorek jako anecdotal a leaks obsahují trade_ids', () => {
+    const trades = Array.from({ length: 8 }, (_, i) => mk({
+      id: `p-${i}`,
+      pnl: i < 3 ? 100 : -100,
+      riskAmount: 100,
+      session: i < 4 ? 'New York' : 'London',
+      direction: i < 4 ? 'Long' : 'Short',
+    }));
+    const report = buildLabReport(buildLabDatasetFromTrades(trades), 'patterns');
+    expect(report.patterns.nejlepsi_jednotlive_faktory[0]).toHaveProperty('confidence');
+    expect(report.patterns.nejlepsi_jednotlive_faktory[0]).toHaveProperty('trade_ids');
   });
 });

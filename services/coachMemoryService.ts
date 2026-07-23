@@ -17,6 +17,7 @@
 import { supabase } from './supabase';
 
 export type MemoryType = 'observation' | 'episode' | 'conversation_summary' | 'commitment';
+export type CoachScope = 'live' | 'backtest' | 'global';
 
 export interface CoachProfile {
   facts: Record<string, unknown>;
@@ -217,13 +218,16 @@ export async function recallMemory(opts: {
   date_from?: string;
   date_to?: string;
   similarity_threshold?: number;
+  scope?: Exclude<CoachScope, 'global'>;
 }): Promise<MemoryEntry[]> {
   const embedding = await embedTextViaEdge(opts.query);
   if (!embedding) return [];
 
   const { data, error } = await supabase.rpc('match_coach_memory', {
     query_embedding: embedding,
-    match_count: opts.limit ?? 10,
+    // Scope se zatím ukládá v JSON metadata; RPC ho nefiltruje. Overscan zajistí,
+    // že záznamy druhého světa nevytlačí relevantní výsledky aktuálního scope.
+    match_count: opts.scope ? Math.min((opts.limit ?? 10) * 4, 40) : (opts.limit ?? 10),
     similarity_threshold: opts.similarity_threshold ?? 0.2,
     filter_types: opts.types || null,
     filter_date_from: opts.date_from || null,
@@ -233,7 +237,29 @@ export async function recallMemory(opts: {
     console.warn('[coachMemory] recallMemory error:', error);
     return [];
   }
-  return (data || []) as MemoryEntry[];
+  let rows = (data || []) as MemoryEntry[];
+  // Starší verze RPC nemusí vracet metadata. Pro scope filtr si proto kandidáty
+  // dotáhni z tabulky podle ID a zachovej similarity z vektorového výsledku.
+  if (opts.scope && rows.length > 0) {
+    const similarities = new Map(rows.map(r => [String(r.id), r.similarity]));
+    const ids = rows.map(r => String(r.id));
+    const { data: detailed, error: detailError } = await supabase
+      .from('ai_coach_memory')
+      .select('id, type, content, metadata, importance, memory_date, source_ref, created_at')
+      .in('id', ids);
+    if (!detailError && detailed) {
+      const order = new Map(ids.map((id, index) => [id, index]));
+      rows = (detailed as MemoryEntry[])
+        .map(r => ({ ...r, similarity: similarities.get(String(r.id)) }))
+        .sort((a, b) => (order.get(String(a.id)) ?? 999) - (order.get(String(b.id)) ?? 999));
+    }
+  }
+  return rows.filter(row => {
+    if (!opts.scope) return true;
+    // Staré záznamy vznikly před backtest scope a patří proto do live světa.
+    const rowScope = String((row.metadata as any)?.scope || 'live');
+    return rowScope === 'global' || rowScope === opts.scope;
+  }).slice(0, opts.limit ?? 10);
 }
 
 export async function forgetMemory(memoryId: string): Promise<boolean> {
@@ -273,7 +299,7 @@ export async function clearAllMemory(): Promise<void> {
  * Vrací max 15 nejnovějších, importance-sorted. Injektuje se přímo do system promptu,
  * NE přes recall_memory (commitmenty nesmí coach "přehlédnout").
  */
-export async function getActiveCommitments(): Promise<MemoryEntry[]> {
+export async function getActiveCommitments(scope?: Exclude<CoachScope, 'global'>): Promise<MemoryEntry[]> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return [];
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -284,7 +310,7 @@ export async function getActiveCommitments(): Promise<MemoryEntry[]> {
     .eq('type', 'commitment')
     .order('importance', { ascending: false })
     .order('created_at', { ascending: false })
-    .limit(15);
+    .limit(scope ? 45 : 15);
   if (error) {
     console.warn('[coachMemory] getActiveCommitments error:', error);
     return [];
@@ -292,8 +318,10 @@ export async function getActiveCommitments(): Promise<MemoryEntry[]> {
   // Filter expired (metadata.expires_at < today). Trvalé (bez expires_at) projdou.
   return (data || []).filter((m: any) => {
     const exp = m.metadata?.expires_at;
-    if (!exp) return true;
-    return String(exp) >= todayIso;
+    if (exp && String(exp) < todayIso) return false;
+    if (!scope) return true;
+    const rowScope = String(m.metadata?.scope || 'global');
+    return rowScope === 'global' || rowScope === scope;
   }) as MemoryEntry[];
 }
 
@@ -301,7 +329,7 @@ export async function getActiveCommitments(): Promise<MemoryEntry[]> {
  * Posledních N conversation summaries chronologicky. Injektuje se do system promptu
  * jako "co jsme řešili předtím" timeline. Bez tohohle coach neviděl kontinuitu napříč chaty.
  */
-export async function getRecentConversationSummaries(limit = 5): Promise<MemoryEntry[]> {
+export async function getRecentConversationSummaries(limit = 5, scope?: Exclude<CoachScope, 'global'>): Promise<MemoryEntry[]> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return [];
   const { data, error } = await supabase
@@ -310,13 +338,20 @@ export async function getRecentConversationSummaries(limit = 5): Promise<MemoryE
     .eq('user_id', user.id)
     .eq('type', 'conversation_summary')
     .order('created_at', { ascending: false })
-    .limit(limit);
+    .limit(scope ? Math.min(limit * 4, 100) : limit);
   if (error) {
     console.warn('[coachMemory] getRecentConversationSummaries error:', error);
     return [];
   }
   // Reverse to get chronological (oldest first)
-  return ((data || []) as MemoryEntry[]).reverse();
+  return ((data || []) as MemoryEntry[])
+    .filter(m => {
+      if (!scope) return true;
+      // Staré summaries jsou z live coache; nepouštěj je do backtestu.
+      const rowScope = String((m.metadata as any)?.scope || 'live');
+      return rowScope === 'global' || rowScope === scope;
+    })
+    .reverse();
 }
 
 // ─── Conversation summarization ──────────────────────────────────────────────
@@ -331,6 +366,7 @@ export async function summarizeConversation(opts: {
   conversation_id: string;
   messages: { role: string; content: string }[];
   date?: string;
+  scope?: 'live' | 'backtest';
 }): Promise<{ ok: boolean; summary?: string; error?: string }> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { ok: false, error: 'no-session' };
@@ -347,10 +383,28 @@ export async function summarizeConversation(opts: {
         conversation_id: opts.conversation_id,
         messages: opts.messages,
         date: opts.date,
+        scope: opts.scope,
       }),
     });
     const data = await res.json();
     if (!res.ok) return { ok: false, error: data.error || 'http-error' };
+    // Kompatibilita s již nasazenou funkcí, která scope ještě nemusí sama ukládat.
+    // Summary dohledáme přes idempotentní source_ref a metadata doplníme klientem.
+    if (opts.scope) {
+      const { data: row } = await supabase
+        .from('ai_coach_memory')
+        .select('id, metadata')
+        .eq('type', 'conversation_summary')
+        .eq('source_ref', opts.conversation_id)
+        .maybeSingle();
+      if (row?.id) {
+        const { error: scopeError } = await supabase
+          .from('ai_coach_memory')
+          .update({ metadata: { ...((row as any).metadata || {}), scope: opts.scope } })
+          .eq('id', row.id);
+        if (scopeError) console.warn('[coachMemory] summary scope update failed:', scopeError);
+      }
+    }
     return { ok: true, summary: data.summary };
   } catch (e: any) {
     return { ok: false, error: e?.message || 'network' };

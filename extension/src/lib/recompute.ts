@@ -32,13 +32,13 @@ export async function backfillPendingExcursions(chartSymbol: string, opts?: { ma
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return empty;
 
-    // Pending = AlphaBridge zápis, u kterého excursion sken nedojel (excursionComplete === false).
-    // Starší obchody bez tohoto pole se neberou (null ≠ 'false') — cíleně jen nově označené.
+    // Pending = excursion nebo nová 1m execution path ještě nemá dost budoucích barů.
+    // Starší obchody bez těchto polí se neberou — cíleně jen nově označené záznamy.
     const { data: rows, error } = await supabase
         .from('trades')
         .select('id, direction, data')
         .eq('user_id', session.user.id)
-        .eq('data->>excursionComplete', 'false')
+        .or('data->>excursionComplete.eq.false,data->>executionPathComplete.eq.false')
         .limit(200);
     if (error || !rows || !rows.length) return empty;
 
@@ -81,8 +81,16 @@ export async function backfillPendingExcursions(chartSymbol: string, opts?: { ma
         const res = await computeCounterfactual(undefined, null, FLAT_BY_MIN, {
             isLong, entry, sl, tp, entryUnix: Math.round(entryMs / 1000),
         });
-        if (!res.ok || !res.excursion || !res.excursion.available || res.excursion.stopReason === 'end') {
-            stillPending += groupRows.length; continue; // bary pořád nestačí → nech celou skupinu pending
+        if (!res.ok) { stillPending += groupRows.length; continue; }
+        const excursionDone = !!(res.excursion && res.excursion.available && res.excursion.stopReason !== 'end');
+        const pathDone = !!(res.executionPath && res.executionPath.available && res.executionPath.complete);
+        // Dokonči jen to, co daná skupina opravdu čeká. Na jiném než 1m grafu se execution
+        // path nedopočítá a zůstane pending, ale hotovou excursion tím nezablokujeme.
+        const waitsExcursion = groupRows.some((r: any) => r.data?.excursionComplete === false);
+        const waitsPath = groupRows.some((r: any) => r.data?.executionPathComplete === false);
+        const canResolveAny = (waitsExcursion && excursionDone) || (waitsPath && pathDone);
+        if (!canResolveAny) {
+            stillPending += groupRows.length; continue;
         }
 
         const cf = (res.swing || res.ote || res.fvg || res.tpTargets)
@@ -93,17 +101,24 @@ export async function backfillPendingExcursions(chartSymbol: string, opts?: { ma
         // (účet, pnl, riskAmount) — přepisujeme jen counterfactual/excursion/entryMap + příznak.
         const results = await Promise.all(groupRows.map(async (r: any) => {
             const d = r.data || {};
+            const nextExcursionComplete = d.excursionComplete === false ? (excursionDone ? true : false) : d.excursionComplete;
+            const nextPathComplete = d.executionPathComplete === false ? (pathDone ? true : false) : d.executionPathComplete;
             const merged = {
                 ...d,
                 counterfactual: cf || d.counterfactual,
-                excursion: res.excursion,
+                excursion: d.excursionComplete === false && excursionDone ? res.excursion : d.excursion,
                 entryMap: res.entryMap || d.entryMap,
-                excursionComplete: true,
+                executionPath: d.executionPathComplete === false && pathDone ? res.executionPath : d.executionPath,
+                excursionComplete: nextExcursionComplete,
+                executionPathComplete: nextPathComplete,
             };
             const { error: upErr } = await supabase.from('trades').update({ data: merged }).eq('id', r.id).eq('user_id', session.user.id);
-            return !upErr;
+            return { ok: !upErr, pending: nextExcursionComplete === false || nextPathComplete === false };
         }));
-        for (const okRes of results) { if (okRes) completed++; else stillPending++; }
+        for (const result of results) {
+            if (!result.ok || result.pending) stillPending++;
+            else completed++;
+        }
     }
     return { checked, completed, stillPending };
 }

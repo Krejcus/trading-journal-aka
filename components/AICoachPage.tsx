@@ -11,7 +11,7 @@ import VoiceMemoButton from './VoiceMemoButton';
 import VoiceModeOverlay from './VoiceModeOverlay';
 import { enqueueSpeak, cleanForSpeech, cancelSpeech, unlockAudio } from '../services/ttsService';
 import { COACH_SESSIONS, buildDynamicSessionPrompt } from '../services/coachPrompts';
-import { COACH_PERSONAS, resolvePersona, type CoachPersonaSetting, type CoachPersonaId } from '../services/coachPersonas';
+import { resolvePersona } from '../services/coachPersonas';
 import { CoachSessionPreview } from './CoachSessionPreview';
 
 // ─── Session start cards ──────────────────────────────────────────────────────
@@ -71,11 +71,11 @@ const SessionStartCards: React.FC<{
 // ─── Quick prompts ────────────────────────────────────────────────────────────
 
 const QUICK_PROMPTS = [
-  'Jaké jsou moje nejčastější chyby?',
-  'Ukaž mi 3 nejhorší obchody',
-  'Jak vypadala moje poslední příprava?',
-  'Ukaž mi poslední audit',
-  'Jaký setup mi funguje nejlépe?',
+  'Analyzuj můj poslední obchod proti podobným obchodům',
+  'Najdi nejlepší a nejhorší kombinace setupu',
+  'Kde mi podle dat nejlépe vychází SL a TP?',
+  'Jaké psychologické chyby mě stojí nejvíc?',
+  'Navrhni jeden měřitelný experiment na tento týden',
 ];
 
 // ─── Category helpers ─────────────────────────────────────────────────────────
@@ -230,30 +230,6 @@ const AICoachPage: React.FC<Props> = ({
     }
   });
 
-  // Persona coache (osobnost/tón) — nezávislá osa na modelu. 'auto' = vybere se dle kontextu.
-  const [coachPersona, setCoachPersona] = useState<CoachPersonaSetting>(() => {
-    try {
-      const saved = localStorage.getItem('alphatrade_coach_persona');
-      return (saved as CoachPersonaSetting) || 'auto';
-    } catch {
-      return 'auto';
-    }
-  });
-  const [showPersonaDropdown, setShowPersonaDropdown] = useState(false);
-  const personaDropdownRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    try { localStorage.setItem('alphatrade_coach_persona', coachPersona); } catch { /* no-op */ }
-  }, [coachPersona]);
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (personaDropdownRef.current && !personaDropdownRef.current.contains(e.target as Node)) {
-        setShowPersonaDropdown(false);
-      }
-    };
-    if (showPersonaDropdown) document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showPersonaDropdown]);
-
   const isTodayWeekend = useMemo(() => {
     const d = new Date();
     const day = d.getDay();
@@ -359,7 +335,7 @@ const AICoachPage: React.FC<Props> = ({
         isSystemEvent: true,
         systemEventText: model === 'fast'
           ? 'Přepnuto na Rychlého kouče (Haiku 4.5)'
-          : 'Přepnuto na Analytického kouče (Sonnet 4.6)'
+          : 'Přepnuto na Analytického kouče (Sonnet 5)'
       };
       setMessages(prev => [...prev, systemMessage]);
     }
@@ -367,7 +343,9 @@ const AICoachPage: React.FC<Props> = ({
 
   // Nahřej memory cache (profil/závazky/summaries) hned při otevření stránky —
   // první zpráva pak nečeká na 3 DB roundtripy.
-  useEffect(() => { prewarmCoachMemory(); }, []);
+  useEffect(() => {
+    prewarmCoachMemory(dashboardMode === 'backtesting' ? 'backtest' : 'live');
+  }, [dashboardMode]);
   // Warning modal — pokud user mění konverzaci (nebo zakládá novou) během streamu.
   // Stejný princip jako navigace v App.tsx: stream se odpojí → odpověď zmizí.
   const [pendingConvAction, setPendingConvAction] = useState<(() => void) | null>(null);
@@ -781,6 +759,8 @@ const AICoachPage: React.FC<Props> = ({
   const prevConvIdRef = useRef<string | null>(null);
   const prevMessagesRef = useRef<ExtendedMessage[]>([]);
   const summarizedConvsRef = useRef<Set<string>>(new Set());
+  const conversationsRef = useRef(conversations);
+  useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
 
   // Chunk batching — accumulate streaming chunks and flush to state every ~50ms
   // Reduces React re-renders during streaming (less frame-drop interference with RAF)
@@ -996,7 +976,11 @@ const AICoachPage: React.FC<Props> = ({
     summarizeConversation({
       conversation_id: convId,
       messages: filteredMsgs.map(m => ({ role: m.role, content: m.content })),
-    }).catch(() => {});
+      scope: conversationsRef.current.find(c => c.id === convId)?.scope ?? 'live',
+    }).then(result => {
+      // Při síťové/DB chybě dovol další pokus při příštím přepnutí nebo unmountu.
+      if (!result.ok) summarizedConvsRef.current.delete(convId);
+    }).catch(() => { summarizedConvsRef.current.delete(convId); });
   }, []);
 
   // When activeConvId changes from a non-null value, summarize the previous one.
@@ -1134,14 +1118,39 @@ const AICoachPage: React.FC<Props> = ({
     const cmd = text.trim().toLowerCase();
     if (cmd === '/backtest' || cmd === '/live') {
       const newScope: 'live' | 'backtest' = cmd === '/backtest' ? 'backtest' : 'live';
+      if (newScope === coachScopeRef.current) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: newScope === 'backtest' ? '🧪 Už jsi v režimu **backtest dat**.' : '✅ Už jsi v režimu **živých dat**.',
+          isSystemEvent: true,
+        }]);
+        setInput('');
+        return '';
+      }
+      // Tvrdé oddělení světů: novému scope nikdy neposíláme historii konverzace
+      // z původního světa a zprávy ukládáme do konverzace se správným scope.
+      const conv = await storageService.createConversation(
+        newScope === 'backtest' ? 'Backtest analýza' : 'Live coaching',
+        newScope,
+      );
+      if (!conv) {
+        setCreateError('Nepodařilo se vytvořit konverzaci pro nový režim.');
+        return '';
+      }
+      coachScopeRef.current = newScope;
       setCoachScope(newScope);
+      justCreatedConvIdsRef.current.add(conv.id);
+      setConversations(prev => [conv, ...prev]);
+      setActiveConvId(conv.id);
       const info: ExtendedMessage = {
         role: 'assistant',
         content: newScope === 'backtest'
           ? '🧪 Přepnuto na **backtest data**. Od teď čtu jen z backtest účtů. Zpět na živá data: `/live`.'
           : '✅ Přepnuto zpět na **živá data**. Backtest je opět skrytý.',
+        isSystemEvent: true,
       };
-      setMessages(prev => [...prev, info]);
+      setMessages([info]);
+      firstMessageSentRef.current = false;
       setInput('');
       return '';
     }
@@ -1157,10 +1166,24 @@ const AICoachPage: React.FC<Props> = ({
     setInput('');
     setIsStreaming(true);
 
-    // Save user message to DB — fire-and-forget. Skrytý kickoff neukládáme (jen otvírák).
+    // Nejdřív bezpečně ulož user zprávu. Kdyby zápis selhal a AI přesto odpověděla,
+    // po reloadu by zůstal osiřelý assistant bez otázky.
     if (!hideUserMsg) {
-      storageService.appendMessage(convId, 'user', text.trim())
-        .catch(err => console.error('[AICoachPage] appendMessage failed:', err));
+      try {
+        await storageService.appendMessage(convId, 'user', text.trim());
+      } catch (err) {
+        console.error('[AICoachPage] appendMessage failed:', err);
+        setIsStreaming(false);
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === 'assistant' && !last.content) {
+            updated[updated.length - 1] = { ...last, content: '⚠️ Zprávu se nepodařilo uložit. Zkontroluj připojení a odešli ji znovu.' };
+          }
+          return updated;
+        });
+        return '';
+      }
     }
 
     // If this is the first message, auto-update conversation title (taky fire-and-forget).
@@ -1295,7 +1318,22 @@ const AICoachPage: React.FC<Props> = ({
         setToolStatus(null);
         if (finalContent) {
           const modelTag = `\n<!-- model:${voiceMode ? 'fast' : aiModel} -->`;
-          await storageService.appendMessage(convId, 'assistant', finalContent + modelTag);
+          try {
+            await storageService.appendMessage(convId, 'assistant', finalContent + modelTag);
+          } catch (e) {
+            console.error('[AICoachPage] assistant message save failed:', e);
+            setMessages(prev => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last?.role === 'assistant') {
+                updated[updated.length - 1] = {
+                  ...last,
+                  content: `${last.content}\n\n⚠️ _Odpověď se nepodařilo uložit — před opuštěním stránky ji zkopíruj._`,
+                };
+              }
+              return updated;
+            });
+          }
         } else {
           // Stream skončil bez textu (samé tool calls). Ukaž chybu místo prázdné bubliny.
           setMessages(prev => {
@@ -1379,8 +1417,8 @@ const AICoachPage: React.FC<Props> = ({
         onToolUse: (label) => setToolStatus(label),
         voiceMode,
         aiModel: voiceMode ? 'fast' : aiModel,
-        // Vyřeš personu: 'auto' → dle kontextu (seance, tilt/série ztrát), jinak ručně zvolená.
-        coachPersona: resolvePersona(coachPersona, {
+        // Persona se vždy automaticky přizpůsobí kontextu (seance, tilt/série ztrát).
+        coachPersona: resolvePersona('auto', {
           sessionMode: activeSessionMode,
           trades,
           todayISO: new Date().toISOString().slice(0, 10),
@@ -1391,7 +1429,7 @@ const AICoachPage: React.FC<Props> = ({
 
     // Vrať finální text — voice mód ho přečte nahlas.
     return finalContent;
-  }, [messages, traderContext, trades, scopedTrades, scopedAccounts, scopedPreps, scopedReviews, coachScope, fetchBacktestSessionsText, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, coachPersona, activeSessionMode, ironRules, sessions]);
+  }, [messages, traderContext, trades, scopedTrades, scopedAccounts, scopedPreps, scopedReviews, coachScope, fetchBacktestSessionsText, dailyPreps, dailyReviews, isStreaming, activeConvId, aiModel, activeSessionMode, ironRules, sessions]);
 
   // ─── Start with quick prompt (declared after sendMessage to avoid TDZ) ──────
 
@@ -1630,61 +1668,6 @@ const AICoachPage: React.FC<Props> = ({
             </span>
           ) : (
             <span className="text-sm font-bold text-[var(--text-primary)]">AI Coach</span>
-          )}
-        </div>
-
-        {/* Persona Selector Dropdown — osobnost/tón coache (nezávislé na modelu) */}
-        <div ref={personaDropdownRef} className="relative flex-shrink-0">
-          <button
-            onClick={() => setShowPersonaDropdown(prev => !prev)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-page)] border border-[var(--border-subtle)] text-[var(--text-primary)] hover:border-[var(--text-secondary)] transition-all cursor-pointer select-none"
-            title="Vyber osobnost kouče"
-          >
-            {coachPersona === 'auto' ? (
-              <><Sparkles size={14} className="text-violet-400" /><span>Auto</span></>
-            ) : (
-              <><span className="text-sm leading-none">{COACH_PERSONAS[coachPersona].emoji}</span><span>{COACH_PERSONAS[coachPersona].label}</span></>
-            )}
-            <ChevronDown size={14} className={`text-[var(--text-secondary)] transition-transform duration-200 ${showPersonaDropdown ? 'rotate-180' : ''}`} />
-          </button>
-
-          {showPersonaDropdown && (
-            <div className="absolute right-0 top-full mt-1.5 w-64 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-xl shadow-xl p-1.5 z-50 flex flex-col gap-1 animate-in fade-in duration-100">
-              <button
-                onClick={() => { setCoachPersona('auto'); setShowPersonaDropdown(false); }}
-                className={`flex items-start gap-2.5 p-2.5 rounded-lg text-left transition-all cursor-pointer ${
-                  coachPersona === 'auto'
-                    ? 'bg-violet-600/10 text-violet-400 border border-violet-500/20'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] border border-transparent'
-                }`}
-              >
-                <Sparkles size={16} className={`mt-0.5 flex-shrink-0 ${coachPersona === 'auto' ? 'text-violet-400' : 'text-[var(--text-secondary)]'}`} />
-                <div className="flex flex-col min-w-0">
-                  <span className="text-xs font-bold">Auto</span>
-                  <span className="text-[10px] text-[var(--text-secondary)] leading-normal mt-0.5">
-                    Persona se přizpůsobí kontextu — ráno hecuje, večer reflektuje, po sérii ztrát podrží.
-                  </span>
-                </div>
-              </button>
-
-              {(Object.values(COACH_PERSONAS)).map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => { setCoachPersona(p.id); setShowPersonaDropdown(false); }}
-                  className={`flex items-start gap-2.5 p-2.5 rounded-lg text-left transition-all cursor-pointer ${
-                    coachPersona === p.id
-                      ? 'bg-[var(--bg-page)] text-[var(--text-primary)] border border-[var(--border-subtle)]'
-                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] border border-transparent'
-                  }`}
-                >
-                  <span className="text-base leading-none mt-0.5 flex-shrink-0">{p.emoji}</span>
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-xs font-bold">{p.label}</span>
-                    <span className="text-[10px] text-[var(--text-secondary)] leading-normal mt-0.5">{p.tagline}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
           )}
         </div>
 

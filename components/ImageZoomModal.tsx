@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Minus, Plus, Maximize2 } from 'lucide-react';
 
 interface ImageZoomModalProps {
   images?: string[];      // all images to navigate (optional for legacy compat)
@@ -26,19 +26,38 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
   const [navDir, setNavDir] = useState<'left' | 'right' | null>(null); // for slide animation
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const dragStart = useRef({ x: 0, y: 0 });
   const dragTranslateStart = useRef({ x: 0, y: 0 });
+  const dragDistance = useRef(0);
   const lastTouchDist = useRef<number | null>(null);
   const lastTouchCenter = useRef<{ x: number; y: number } | null>(null);
   const isDraggingRef = useRef(false);
   const swipeStartX = useRef<number | null>(null);
+  const doubleClickOpenedZoom = useRef(false);
+  const clickGuardTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const commit = useCallback((scale: number, tx: number, ty: number) => {
-    stateRef.current = { scale, tx, ty };
-    setRenderState({ scale, tx, ty });
+    const container = containerRef.current;
+    const image = imageRef.current;
+    let nextTx = tx;
+    let nextTy = ty;
+
+    // Keep at least the image edge inside the viewport, so it can never get lost.
+    if (container && image && scale > 1) {
+      const maxX = Math.max(0, (image.clientWidth * scale - container.clientWidth) / 2);
+      const maxY = Math.max(0, (image.clientHeight * scale - container.clientHeight) / 2);
+      nextTx = Math.min(maxX, Math.max(-maxX, tx));
+      nextTy = Math.min(maxY, Math.max(-maxY, ty));
+    }
+
+    const next = { scale, tx: nextTx, ty: nextTy };
+    stateRef.current = next;
+    setRenderState(next);
   }, []);
 
   const reset = useCallback(() => {
+    dragDistance.current = 0;
     stateRef.current = { scale: 1, tx: 0, ty: 0 };
     setRenderState({ scale: 1, tx: 0, ty: 0 });
   }, []);
@@ -60,16 +79,9 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
     return () => clearTimeout(t);
   }, []);
 
-  // Keyboard: ESC closes, arrows navigate
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { onClose(); return; }
-      if (e.key === 'ArrowRight') navigate(1);
-      if (e.key === 'ArrowLeft') navigate(-1);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, navigate]);
+  useEffect(() => () => {
+    if (clickGuardTimer.current) clearTimeout(clickGuardTimer.current);
+  }, []);
 
   // Zoom toward a specific screen point (cursor/pinch center)
   const zoomToward = useCallback((clientX: number, clientY: number, newScale: number) => {
@@ -88,6 +100,27 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
     commit(clamped, cx - hw - imgX * clamped, cy - hh - imgY * clamped);
   }, [commit, reset]);
 
+  const zoomFromCenter = useCallback((factor: number) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    zoomToward(rect.left + rect.width / 2, rect.top + rect.height / 2, stateRef.current.scale * factor);
+  }, [zoomToward]);
+
+  // Keyboard: ESC closes, arrows navigate, +/- zoom, 0 fits the image.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onClose(); return; }
+      if (e.key === 'ArrowRight') navigate(1);
+      if (e.key === 'ArrowLeft') navigate(-1);
+      if (e.key === '+' || e.key === '=') zoomFromCenter(1.25);
+      if (e.key === '-') zoomFromCenter(1 / 1.25);
+      if (e.key === '0') reset();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, navigate, reset, zoomFromCenter]);
+
   // Wheel zoom
   useEffect(() => {
     const el = containerRef.current;
@@ -101,9 +134,25 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
     return () => el.removeEventListener('wheel', onWheel);
   }, [zoomToward]);
 
-  // Double-click zoom to cursor
+  const handleImageClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (dragDistance.current > 4 || stateRef.current.scale > 1) return;
+
+    doubleClickOpenedZoom.current = true;
+    if (clickGuardTimer.current) clearTimeout(clickGuardTimer.current);
+    clickGuardTimer.current = setTimeout(() => { doubleClickOpenedZoom.current = false; }, 350);
+    zoomToward(e.clientX, e.clientY, 2.5);
+  }, [zoomToward]);
+
+  // A double-click from fit view must not immediately undo the first click's zoom.
+  // When already zoomed, double-click resets the image to fit.
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    if (doubleClickOpenedZoom.current) {
+      doubleClickOpenedZoom.current = false;
+      if (clickGuardTimer.current) clearTimeout(clickGuardTimer.current);
+      return;
+    }
     stateRef.current.scale > 1 ? reset() : zoomToward(e.clientX, e.clientY, 2.5);
   }, [reset, zoomToward]);
 
@@ -113,12 +162,17 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
     e.preventDefault();
     isDraggingRef.current = true;
     setIsDragging(true);
+    dragDistance.current = 0;
     dragStart.current = { x: e.clientX, y: e.clientY };
     dragTranslateStart.current = { x: stateRef.current.tx, y: stateRef.current.ty };
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDraggingRef.current) return;
+    dragDistance.current = Math.max(
+      dragDistance.current,
+      Math.hypot(e.clientX - dragStart.current.x, e.clientY - dragStart.current.y),
+    );
     commit(stateRef.current.scale,
       dragTranslateStart.current.x + e.clientX - dragStart.current.x,
       dragTranslateStart.current.y + e.clientY - dragStart.current.y,
@@ -150,6 +204,7 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
     } else if (e.touches.length === 1) {
       swipeStartX.current = e.touches[0].clientX;
       if (stateRef.current.scale > 1) {
+        dragDistance.current = 0;
         dragStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         dragTranslateStart.current = { x: stateRef.current.tx, y: stateRef.current.ty };
         isDraggingRef.current = true;
@@ -167,6 +222,10 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
       lastTouchDist.current = newDist;
       lastTouchCenter.current = newCenter;
     } else if (e.touches.length === 1 && isDraggingRef.current && stateRef.current.scale > 1) {
+      dragDistance.current = Math.max(
+        dragDistance.current,
+        Math.hypot(e.touches[0].clientX - dragStart.current.x, e.touches[0].clientY - dragStart.current.y),
+      );
       commit(stateRef.current.scale,
         dragTranslateStart.current.x + e.touches[0].clientX - dragStart.current.x,
         dragTranslateStart.current.y + e.touches[0].clientY - dragStart.current.y,
@@ -207,6 +266,7 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
       {/* Close */}
       <button
         onClick={(e) => { e.stopPropagation(); onClose(); }}
+        aria-label="Zavřít prohlížeč obrázku"
         className="absolute top-5 right-5 z-20 p-2.5 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all active:scale-90 backdrop-blur-sm border border-white/10"
       >
         <X size={20} />
@@ -225,6 +285,7 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
       {hasMultiple && index > 0 && (
         <button
           onClick={(e) => { e.stopPropagation(); navigate(-1); }}
+          aria-label="Předchozí screenshot"
           className="absolute left-4 top-1/2 -translate-y-1/2 z-20 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all active:scale-90 backdrop-blur-sm border border-white/10"
         >
           <ChevronLeft size={24} />
@@ -235,6 +296,7 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
       {hasMultiple && index < images.length - 1 && (
         <button
           onClick={(e) => { e.stopPropagation(); navigate(1); }}
+          aria-label="Další screenshot"
           className="absolute right-4 top-1/2 -translate-y-1/2 z-20 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all active:scale-90 backdrop-blur-sm border border-white/10"
         >
           <ChevronRight size={24} />
@@ -243,11 +305,12 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
 
       {/* Dots indicator */}
       {hasMultiple && images.length <= 10 && (
-        <div className="absolute bottom-7 left-1/2 -translate-x-1/2 z-20 flex gap-1.5">
+        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 flex gap-1.5">
           {images.map((_, i) => (
             <button
               key={i}
               onClick={(e) => { e.stopPropagation(); if (i !== index) { setNavDir(i > index ? 'right' : 'left'); setIndex(i); reset(); setTimeout(() => setNavDir(null), 300); } }}
+              aria-label={`Otevřít screenshot ${i + 1}`}
               className={`rounded-full transition-all duration-200 ${i === index ? 'w-4 h-1.5 bg-white' : 'w-1.5 h-1.5 bg-white/30 hover:bg-white/60'}`}
             />
           ))}
@@ -257,17 +320,51 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
       {/* Gesture hint (single image only, auto-hides) */}
       {!hasMultiple && (
         <div
-          className="absolute bottom-7 left-1/2 -translate-x-1/2 z-10 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-sm pointer-events-none select-none transition-opacity duration-700"
+          className="absolute bottom-20 left-1/2 -translate-x-1/2 z-10 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-sm pointer-events-none select-none transition-opacity duration-700"
           style={{ opacity: showHint ? 1 : 0 }}
         >
           <span className="text-white/40 text-[10px] font-bold uppercase tracking-widest">
-            Scroll · Pinch · Double-tap
+            Klik · Kolečko · Pinch · Tažení
           </span>
         </div>
       )}
 
+      {/* Always-visible zoom controls */}
+      <div
+        className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-2xl border border-white/10 bg-black/60 p-1.5 text-white shadow-2xl backdrop-blur-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={() => zoomFromCenter(1 / 1.25)}
+          disabled={scale <= MIN_SCALE}
+          aria-label="Oddálit obrázek"
+          className="rounded-xl p-2 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <Minus size={17} />
+        </button>
+        <button
+          type="button"
+          onClick={reset}
+          aria-label="Přizpůsobit obrázek obrazovce"
+          className="flex min-w-[82px] items-center justify-center gap-2 rounded-xl px-2.5 py-2 text-[11px] font-black tabular-nums transition-colors hover:bg-white/10"
+        >
+          <Maximize2 size={14} /> {Math.round(scale * 100)} %
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomFromCenter(1.25)}
+          disabled={scale >= MAX_SCALE}
+          aria-label="Přiblížit obrázek"
+          className="rounded-xl p-2 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <Plus size={17} />
+        </button>
+      </div>
+
       {/* Image with slide animation */}
       <img
+        ref={imageRef}
         key={index}
         src={images[index]}
         className="max-w-full max-h-full object-contain select-none"
@@ -281,7 +378,7 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
             : undefined,
         }}
         draggable={false}
-        onClick={(e) => e.stopPropagation()}
+        onClick={handleImageClick}
         onDoubleClick={handleDoubleClick}
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}

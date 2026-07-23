@@ -572,10 +572,10 @@ mcp.tool('get_journal_day', {
 mcp.tool('get_lab_analytics', {
   description:
     'Deterministická Lab analytika (stejný kód jako záložka Lab v appce): counterfactual ' +
-    '„co kdyby" analýza SL/TP variant, bias alignment, session rozpady, detektory leaků ' +
+    '„co kdyby" analýza SL/TP variant, 1m cesta po vstupu (MAE pásma, čas u entry, SL za svíčkou), bias alignment, session rozpady, detektory leaků ' +
     '(revenge, martingale, slabé hodiny, bias flip, overtrading…). Čísla cituj přesně.',
   inputSchema: z.object({
-    section: z.enum(['all', 'overview', 'counterfactual', 'bias', 'sessions', 'leaks'])
+    section: z.enum(['all', 'overview', 'counterfactual', 'execution', 'bias', 'sessions', 'leaks'])
       .optional().describe('Default all'),
     world: z.enum(['live', 'backtest']).optional().describe('Default live'),
   }),

@@ -19,6 +19,11 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 // Strop max_tokens (obrana i proti zneužití přihlášeným účtem). Klient používá ≤4096.
 const MAX_TOKENS_CEILING = 8192;
+const MAX_BODY_BYTES = 2_000_000;
+const ALLOWED_MODELS = new Set(['claude-haiku-4-5', 'claude-sonnet-5']);
+const RATE_WINDOW_MS = 60_000;
+const RATE_LIMIT_PER_USER = 30;
+const rateWindows = new Map<string, number[]>();
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -58,14 +63,36 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  // Jednoduchý per-isolate burst limit. Není náhradou za globální billing quota,
+  // ale zastaví smyčku v jednom klientu dřív, než vyrobí neomezené API náklady.
+  const now = Date.now();
+  const userId = userData.user.id;
+  const recent = (rateWindows.get(userId) || []).filter(ts => now - ts < RATE_WINDOW_MS);
+  if (recent.length >= RATE_LIMIT_PER_USER) {
+    return new Response(JSON.stringify({ error: 'rate-limit', retry_after_seconds: 60 }), {
+      status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '60' },
+    });
+  }
+  recent.push(now);
+  rateWindows.set(userId, recent);
+
   // Parse + obrana proti zneužití: jen Claude modely, max_tokens se stropem.
   let payload: Record<string, unknown>;
-  try { payload = JSON.parse(await req.text()); } catch {
+  let rawBody = '';
+  try {
+    rawBody = await req.text();
+    if (new TextEncoder().encode(rawBody).byteLength > MAX_BODY_BYTES) {
+      return new Response(JSON.stringify({ error: 'payload-too-large' }), {
+        status: 413, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      });
+    }
+    payload = JSON.parse(rawBody);
+  } catch {
     return new Response(JSON.stringify({ error: 'invalid-json' }), {
       status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });
   }
-  if (typeof payload.model !== 'string' || !payload.model.startsWith('claude-')) {
+  if (typeof payload.model !== 'string' || !ALLOWED_MODELS.has(payload.model)) {
     return new Response(JSON.stringify({ error: 'invalid-model' }), {
       status: 400, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
     });

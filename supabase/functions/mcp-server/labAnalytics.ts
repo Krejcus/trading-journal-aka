@@ -70,6 +70,14 @@ export interface LabTrade {
     cf: { swing: CfVariantValue; ote: CfVariantValue; fvg: CfVariantValue; tpBest: { label: string; r: number } | null } | null;
     /** Excursion do konce dne — kolik zbylo na stole. */
     exc: { mfePotR: number | null; tpR: number | null; leftR: number | null; topReached: string | null } | null;
+    /** Prvních max. 30 kompletních 1m barů po vstupu (AlphaBridge executionPath v1). */
+    path: {
+        complete: boolean; maxAdverseR: number | null; maxFavorableR: number | null;
+        timeToSl: Record<string, number | null>; timeToTp: Record<string, number | null>;
+        entryTouchBars: number | null; minutesNearEntry: number | null; closeCrossCount: number | null;
+        firstStop: { outcome: string; realizedR: number | null } | null;
+        twoStop: { outcome: string; realizedR: number | null } | null;
+    } | null;
     emotions: string[];
     mistakes: string[];
     notes: string | null;
@@ -85,6 +93,8 @@ export interface LabCoverage {
     withR: number;
     withCf: number;
     withExc: number;
+    withPath: number;
+    withCompletePath: number;
     /** Obchodů s vyhodnotitelným biasem (aligned true/false). */
     withBias: number;
 }
@@ -238,6 +248,25 @@ const normalizeLabTrade = (t: Trade, prepByDay?: Map<string, PrepBiasDay>): LabT
         };
     }
 
+    const pathRaw: any = t.executionPath;
+    const variant = (v: any) => v && typeof v.outcome === 'string'
+        ? { outcome: v.outcome, realizedR: toNum(v.realizedR) }
+        : null;
+    const path: LabTrade['path'] = pathRaw && pathRaw.available && pathRaw.version === 1
+        ? {
+            complete: pathRaw.complete === true,
+            maxAdverseR: toNum(pathRaw.maxAdverseR),
+            maxFavorableR: toNum(pathRaw.maxFavorableR),
+            timeToSl: pathRaw.timeToSlPct || {},
+            timeToTp: pathRaw.timeToTpPct || {},
+            entryTouchBars: toNum(pathRaw.entryTouchBars),
+            minutesNearEntry: toNum(pathRaw.minutesNearEntry),
+            closeCrossCount: toNum(pathRaw.closeCrossCount),
+            firstStop: variant(pathRaw.candleStops?.firstComplete),
+            twoStop: variant(pathRaw.candleStops?.firstTwoComplete),
+        }
+        : null;
+
     return {
         id: t.id,
         accountId: String(t.accountId),
@@ -265,6 +294,7 @@ const normalizeLabTrade = (t: Trade, prepByDay?: Map<string, PrepBiasDay>): LabT
         biasSource,
         cf,
         exc,
+        path,
         emotions: t.emotions || [],
         mistakes: t.mistakes || [],
         notes: t.notes?.trim() || null,
@@ -345,6 +375,8 @@ export const buildLabDatasetFromTrades = (raw: Trade[], world: LabWorld = 'live'
             withR: lab.filter(t => t.r != null).length,
             withCf: lab.filter(t => t.cf != null).length,
             withExc: lab.filter(t => t.exc != null).length,
+            withPath: lab.filter(t => t.path != null).length,
+            withCompletePath: lab.filter(t => t.path?.complete).length,
             withBias: lab.filter(t => t.biasAligned != null).length,
         },
     };
@@ -1147,6 +1179,69 @@ export const computePsychoSummary = (
 // Coach ho dostane přes tool get_lab_analytics; čísla NIKDY nepočítá sám.
 // ============================================================================
 
+export const computeExecutionSummary = (ds: LabDataset) => {
+    const covered = ds.trades.filter(t => t.path?.complete && t.path.maxAdverseR != null);
+    const bucketDefs = [
+        { key: '0_25', label: '0–25 % SL', min: 0, max: 0.25 },
+        { key: '25_50', label: '25–50 % SL', min: 0.25, max: 0.5 },
+        { key: '50_75', label: '50–75 % SL', min: 0.5, max: 0.75 },
+        { key: '75_100', label: '75–100 % SL', min: 0.75, max: 1 },
+        { key: '100_plus', label: 'zásah SL', min: 1, max: Infinity },
+    ];
+    const stats = (arr: LabTrade[]) => {
+        const wins = arr.filter(t => t.outcome === 'Win').length;
+        const losses = arr.filter(t => t.outcome === 'Loss').length;
+        const rs = arr.filter(t => t.r != null).map(t => t.r as number);
+        return {
+            n: arr.length, wins, losses,
+            winratePct: wins + losses ? wins / (wins + losses) * 100 : null,
+            avgR: rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null,
+        };
+    };
+    const buckets = bucketDefs.map(b => ({
+        ...b,
+        ...stats(covered.filter(t => {
+            const x = t.path!.maxAdverseR as number;
+            return x >= b.min && x < b.max;
+        })),
+    }));
+    const threshold = (key: string) => {
+        const hit = covered.filter(t => t.path?.timeToSl?.[key] != null);
+        const times = hit.map(t => Number(t.path!.timeToSl[key])).filter(Number.isFinite);
+        return {
+            reached: hit.length,
+            sharePct: covered.length ? hit.length / covered.length * 100 : null,
+            avgMinute: times.length ? times.reduce((a, b) => a + b, 0) / times.length : null,
+            ...stats(hit),
+        };
+    };
+    const variant = (key: 'firstStop' | 'twoStop') => {
+        const pairs = covered.filter(t => {
+            const v = t.path?.[key];
+            return v && v.realizedR != null && v.outcome !== 'OPEN' && t.r != null;
+        });
+        const variantR = pairs.reduce((a, t) => a + (t.path![key]!.realizedR as number), 0);
+        const actualR = pairs.reduce((a, t) => a + (t.r as number), 0);
+        const wins = pairs.filter(t => t.path![key]!.outcome === 'WIN').length;
+        return { n: pairs.length, variantR, actualR, deltaR: variantR - actualR, winratePct: pairs.length ? wins / pairs.length * 100 : null };
+    };
+    const avg = (pick: (t: LabTrade) => number | null) => {
+        const xs = covered.map(pick).filter((x): x is number => x != null && Number.isFinite(x));
+        return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+    };
+    return {
+        covered: covered.length,
+        buckets,
+        thresholds: { sl25: threshold('25'), sl50: threshold('50'), sl75: threshold('75'), sl100: threshold('100') },
+        behavior: {
+            avgEntryTouchBars: avg(t => t.path!.entryTouchBars),
+            avgMinutesNearEntry: avg(t => t.path!.minutesNearEntry),
+            avgCloseCrossCount: avg(t => t.path!.closeCrossCount),
+        },
+        candleStops: { firstComplete: variant('firstStop'), firstTwoComplete: variant('twoStop') },
+    };
+};
+
 const round2 = (v: number | null | undefined): number | null =>
     v == null || Number.isNaN(v) ? null : Math.round(v * 100) / 100;
 
@@ -1160,6 +1255,8 @@ export const buildLabReport = (ds: LabDataset, section: string = 'all', prepDays
             s_riskem_R: ds.coverage.withR,
             s_counterfactual: ds.coverage.withCf,
             s_excursion: ds.coverage.withExc,
+            s_execution_path: ds.coverage.withPath,
+            s_execution_path_kompletni: ds.coverage.withCompletePath,
             s_biasem: ds.coverage.withBias,
         },
     };
@@ -1198,6 +1295,27 @@ export const buildLabReport = (ds: LabDataset, section: string = 'all', prepDays
                 na_stole_delta_usd: round2(cf.deltaUsd),
                 trailing_vs_fix: buildTrailInsight(cf),
                 kde_utekl_zisk: buildLeftInsight(cf),
+            };
+    }
+
+    if (want('execution')) {
+        const ex = computeExecutionSummary(ds);
+        out.execution = ex.covered === 0
+            ? { _pozn: 'Žádný obchod zatím nemá kompletní 1m executionPath v1.' }
+            : {
+                _pozn: 'MAE pásma jsou procenta PŮVODNÍ vzdálenosti entry–SL. Vstupní rozpracovaný bar je vyloučen; cesta začíná první kompletní 1m svíčkou po vstupu. Candle-stop výsledky jsou párové a jen pro varianty uzavřené během uloženého 30barového okna.',
+                n: ex.covered,
+                mae_pasmo: ex.buckets.map(b => ({ pasmo: b.label, n: b.n, wins: b.wins, losses: b.losses, winrate_pct: round2(b.winratePct), avg_R: round2(b.avgR) })),
+                dosazeni_sl: Object.fromEntries(Object.entries(ex.thresholds).map(([k, v]) => [k, { n: v.reached, podil_pct: round2(v.sharePct), prumerna_minuta: round2(v.avgMinute), wins: v.wins, losses: v.losses, winrate_pct: round2(v.winratePct), avg_R: round2(v.avgR) }])),
+                okoli_entry: {
+                    prumer_baru_s_dotykem_entry: round2(ex.behavior.avgEntryTouchBars),
+                    prumer_minut_v_pasmu_0_1R: round2(ex.behavior.avgMinutesNearEntry),
+                    prumer_prekrizeni_close_pres_entry: round2(ex.behavior.avgCloseCrossCount),
+                },
+                sl_za_svickou: {
+                    za_prvni_kompletni_1m: { ...ex.candleStops.firstComplete, variant_R: round2(ex.candleStops.firstComplete.variantR), realita_R: round2(ex.candleStops.firstComplete.actualR), delta_R: round2(ex.candleStops.firstComplete.deltaR), winrate_pct: round2(ex.candleStops.firstComplete.winratePct) },
+                    za_prvnimi_2_kompletnimi_1m: { ...ex.candleStops.firstTwoComplete, variant_R: round2(ex.candleStops.firstTwoComplete.variantR), realita_R: round2(ex.candleStops.firstTwoComplete.actualR), delta_R: round2(ex.candleStops.firstTwoComplete.deltaR), winrate_pct: round2(ex.candleStops.firstTwoComplete.winratePct) },
+                },
             };
     }
 

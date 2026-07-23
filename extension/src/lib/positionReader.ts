@@ -358,6 +358,143 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
 
         const roundTick2 = (x: number) => (minTick > 0 ? Math.round(x / minTick) * minTick : x);
 
+        // ── Execution path: prvních 30 KOMPLETNÍCH 1m barů po vstupu. ──────────
+        // Vstupní bar záměrně neukládáme jako "kompletní": RR box může být umístěný
+        // uprostřed svíčky a její finální H/L by tehdy ještě nebylo známé (look-ahead).
+        // Hodnoty normalizujeme do původního R; + = ve směru obchodu, − = proti.
+        const executionPath = (() => {
+            const boxSL = isLong ? entry - stopLevel * minTick : entry + stopLevel * minTick;
+            const risk = Math.abs(entry - boxSL);
+            if (!(risk > 0)) return { available: false, version: 1, reason: 'invalid-risk' };
+
+            // Ověř skutečný interval série. Na 5m/15m grafu nesmíme předstírat 1m data.
+            const steps: number[] = [];
+            for (let i = Math.max(first + 1, si0 - 4); i <= Math.min(lastI, si0 + 6); i++) {
+                const ta = ts.indexToTimePoint(i - 1), tb = ts.indexToTimePoint(i);
+                if (ta != null && tb != null && tb > ta && tb - ta < 3600) steps.push(tb - ta);
+            }
+            steps.sort((a, b) => a - b);
+            const stepSec = steps.length ? steps[Math.floor(steps.length / 2)] : null;
+            if (stepSec == null || Math.abs(stepSec - 60) > 2) {
+                return { available: false, version: 1, reason: 'requires-1m-chart', timeframeSeconds: stepSec };
+            }
+
+            const dir = isLong ? 1 : -1;
+            const rOf = (price: number) => Math.round(((price - entry) * dir / risk) * 10000) / 10000;
+            const maxBars = 30;
+            const pathBars: any[] = [];
+            const slThresholds = [0.25, 0.5, 0.75, 1];
+            const tpThresholds = [0.25, 0.5, 1];
+            const timeToSlPct: Record<string, number | null> = { '25': null, '50': null, '75': null, '100': null };
+            const timeToTpPct: Record<string, number | null> = { '25': null, '50': null, '100': null };
+            const entryBarTime = ts.indexToTimePoint(si0);
+            const originalTpR = Math.abs(tp - entry) / risk;
+            let terminal: string | null = null, terminalMinute: number | null = null, terminalAmbiguous = false;
+            let maxFavorableR = 0, maxAdverseR = 0, entryTouchBars = 0, minutesNearEntry = 0;
+            let closeCrossCount = 0, priorCloseSide = 0, hasGaps = false;
+
+            for (let i = si0 + 1; i <= lastI && pathBars.length < maxBars; i++) {
+                const bar = bars.valueAt(i); const bt = ts.indexToTimePoint(i);
+                if (!bar || bt == null) continue;
+                const prevT = ts.indexToTimePoint(i - 1);
+                if (prevT != null && Math.abs((bt - prevT) - 60) > 2) { hasGaps = true; break; }
+
+                const openR = rOf(bar[1]), closeR = rOf(bar[4]);
+                const bestR = isLong ? rOf(bar[2]) : rOf(bar[3]);
+                const worstR = isLong ? rOf(bar[3]) : rOf(bar[2]);
+                const minute = entryBarTime != null ? Math.max(1, Math.round((bt - entryBarTime) / 60)) : i - si0;
+                pathBars.push({ minute, time: bt, openR, bestR, worstR, closeR });
+
+                const hitSL = worstR <= -1;
+                const hitTP = isLong ? bar[2] >= tp : bar[3] <= tp;
+                // Na výstupním baru nepočítej pohyb ZA exitem. U SL baru je pořadí
+                // favorable wick vs. stop neznámé → favorable část z něj vynecháme.
+                if (!hitSL) maxFavorableR = Math.max(maxFavorableR, hitTP ? Math.min(bestR, originalTpR) : bestR);
+                maxAdverseR = Math.max(maxAdverseR, hitSL ? 1 : -worstR);
+                if (worstR <= 0 && bestR >= 0) entryTouchBars++;
+                if (worstR <= 0.1 && bestR >= -0.1) minutesNearEntry++;
+
+                const closeSide = closeR > 0 ? 1 : closeR < 0 ? -1 : 0;
+                if (closeSide !== 0) {
+                    if (priorCloseSide !== 0 && closeSide !== priorCloseSide) closeCrossCount++;
+                    priorCloseSide = closeSide;
+                }
+                for (const x of slThresholds) {
+                    const k = String(Math.round(x * 100));
+                    if (timeToSlPct[k] == null && worstR <= -x) timeToSlPct[k] = minute;
+                }
+                for (const x of tpThresholds) {
+                    const k = String(Math.round(x * 100));
+                    if (timeToTpPct[k] == null && bestR >= x) timeToTpPct[k] = minute;
+                }
+
+                if (hitSL || hitTP) {
+                    terminal = hitSL ? 'sl' : 'tp';
+                    terminalAmbiguous = hitSL && hitTP;
+                    terminalMinute = minute;
+                    break;
+                }
+            }
+
+            const simulateCandleStop = (formedBars: number) => {
+                if (pathBars.length < formedBars) return null;
+                const originalTpR = Math.round((Math.abs(tp - entry) / risk) * 100) / 100;
+                // Během tvorby svíček stále platí PŮVODNÍ SL/TP. Když obchod skončí dřív,
+                // nový candle-stop se nikdy neaktivoval a výsledek musí zůstat v původním R.
+                for (let i = si0 + 1; i <= si0 + formedBars; i++) {
+                    const bar = bars.valueAt(i); if (!bar) return null;
+                    const hitOriginal = isLong ? bar[3] <= boxSL : bar[2] >= boxSL;
+                    const hitTp = isLong ? bar[2] >= tp : bar[3] <= tp;
+                    if (hitOriginal || hitTp) {
+                        return {
+                            formedBars, activeFromMinute: formedBars + 1, stop: roundTick2(boxSL),
+                            stopDistanceR: 1, outcome: hitOriginal ? 'LOSS' : 'WIN', barsToOutcome: i - si0,
+                            realizedR: hitOriginal ? -1 : originalTpR, ambiguous: hitOriginal && hitTp, activated: false,
+                        };
+                    }
+                }
+                let protective = isLong ? Infinity : -Infinity;
+                for (let j = 0; j < formedBars; j++) {
+                    const src = bars.valueAt(si0 + 1 + j); if (!src) return null;
+                    protective = isLong ? Math.min(protective, src[3]) : Math.max(protective, src[2]);
+                }
+                const rawStop = roundTick2(protective + (isLong ? -minTick : minTick));
+                // Řízení pozice nikdy nesmí původní SL rozšířit.
+                const stop = isLong ? Math.max(boxSL, rawStop) : Math.min(boxSL, rawStop);
+                const stopDistanceR = Math.round((Math.abs(entry - stop) / risk) * 100) / 100;
+                let outcome = 'OPEN', barsToOutcome: number | null = null, ambiguous = false;
+                const scanLast = Math.min(lastI, si0 + pathBars.length);
+                for (let i = si0 + 1 + formedBars; i <= scanLast; i++) {
+                    const bar = bars.valueAt(i); if (!bar) continue;
+                    const hitStop = isLong ? bar[3] <= stop : bar[2] >= stop;
+                    const hitTp = isLong ? bar[2] >= tp : bar[3] <= tp;
+                    if (hitStop || hitTp) {
+                        ambiguous = hitStop && hitTp;
+                        outcome = hitStop ? 'LOSS' : 'WIN';
+                        barsToOutcome = i - si0;
+                        break;
+                    }
+                }
+                // Výsledek řízení měříme ve STEJNÉM původním R jako skutečný obchod.
+                const stopResultR = Math.round(rOf(stop) * 100) / 100;
+                const realizedR = outcome === 'LOSS' ? stopResultR : outcome === 'WIN' ? originalTpR : null;
+                return { formedBars, activeFromMinute: formedBars + 1, stop, stopDistanceR, outcome, barsToOutcome, realizedR, ambiguous, activated: true };
+            };
+
+            const enoughBars = pathBars.length >= maxBars;
+            return {
+                available: true, version: 1, timeframe: '1m', timeframeSeconds: stepSec,
+                entryBarTime, firstCompleteBarTime: pathBars.length ? pathBars[0].time : null,
+                maxBars, bars: pathBars, maxFavorableR: Math.round(maxFavorableR * 100) / 100,
+                maxAdverseR: Math.round(maxAdverseR * 100) / 100,
+                timeToSlPct, timeToTpPct, entryTouchBars, minutesNearEntry, closeCrossCount,
+                entryZoneR: 0.1, terminal, terminalMinute, terminalAmbiguous, hasGaps,
+                terminalBarOrderingUnknown: !!terminal,
+                complete: !!terminal || enoughBars,
+                candleStops: { firstComplete: simulateCandleStop(1), firstTwoComplete: simulateCandleStop(2) },
+            };
+        })();
+
         // Forward pivoty 1/1 od entry (sdílené pro všechny trailing simulace).
         const fpH: any[] = [], fpL: any[] = [];
         for (let i = si0; i <= lastI - 1; i++) {
@@ -1090,7 +1227,7 @@ export async function pageComputeCounterfactual(overrideLevels: any, boxId?: any
             ok: true, isLong: isLong, entry: entry, tp: roundTick2(tp),
             swing: scanSL(swingLvl), ote: scanSL(oteLvl), fvg: scanSL(fvgLvl),
             tpTargets: tpTargets, excursion: excursion, entryMap: entryMap,
-            entryContext: entryContext,
+            entryContext: entryContext, executionPath: executionPath,
         };
     } catch (e) {
         return { ok: false, reason: String(e) };
@@ -1282,6 +1419,17 @@ export interface CfExcursion {
     levels?: CfExcLevel[];
     trail?: { exit: number; exitR: number | null; reason: string; bars: number | null } | null;
 }
+export interface CfExecutionPathBar { minute: number; time: number; openR: number; bestR: number; worstR: number; closeR: number; }
+export interface CfCandleStopVariant { formedBars: number; activeFromMinute: number; stop: number; stopDistanceR: number; outcome: string; barsToOutcome: number | null; realizedR: number | null; ambiguous: boolean; activated: boolean; }
+export interface CfExecutionPath {
+    available: boolean; version: number; reason?: string; timeframe?: '1m'; timeframeSeconds?: number | null;
+    entryBarTime?: number | null; firstCompleteBarTime?: number | null; maxBars?: number; bars?: CfExecutionPathBar[];
+    maxFavorableR?: number; maxAdverseR?: number;
+    timeToSlPct?: Record<string, number | null>; timeToTpPct?: Record<string, number | null>;
+    entryTouchBars?: number; minutesNearEntry?: number; closeCrossCount?: number; entryZoneR?: number;
+    terminal?: string | null; terminalMinute?: number | null; terminalAmbiguous?: boolean; terminalBarOrderingUnknown?: boolean; hasGaps?: boolean; complete?: boolean;
+    candleStops?: { firstComplete: CfCandleStopVariant | null; firstTwoComplete: CfCandleStopVariant | null };
+}
 export interface CfEntryMap {
     available: boolean;
     structureType?: 'CHoCH' | 'BoS' | null;
@@ -1301,7 +1449,7 @@ export interface CfEntryContext {
     nearestUntappedAbove?: string | null; nearestUntappedBelow?: string | null;
     londonVsAsia?: string | null; entryMinutes?: number | null;
 }
-export interface CounterfactualRead { ok: boolean; isLong?: boolean; entry?: number; tp?: number; swing?: CfSlResult; ote?: CfSlResult; fvg?: CfSlResult; tpTargets?: CfTpTarget[]; excursion?: CfExcursion; entryMap?: CfEntryMap; entryContext?: CfEntryContext; reason?: string; }
+export interface CounterfactualRead { ok: boolean; isLong?: boolean; entry?: number; tp?: number; swing?: CfSlResult; ote?: CfSlResult; fvg?: CfSlResult; tpTargets?: CfTpTarget[]; excursion?: CfExcursion; entryMap?: CfEntryMap; entryContext?: CfEntryContext; executionPath?: CfExecutionPath; reason?: string; }
 
 // entryOverride = recompute uloženého obchodu bez RR boxu na grafu:
 //   { isLong, entry, sl, tp, entryUnix } (entryUnix = unix SEKUNDY vstupu).

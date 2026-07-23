@@ -26,17 +26,21 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
   const cf: any = trade.counterfactual;
   const exc: any = trade.excursion;
   const em: any = trade.entryMap;
+  const path: any = trade.executionPath;
 
   const hasCf = cf && cf.available;
   const hasExc = exc && exc.available;
+  const hasPath = path && path.available && path.version === 1;
+  const pathAttempted = !!path;
   // Pending = sken nedojel do konce dne (došly bary). Data jsou podhodnocená → dopočítá se později.
   const excPending = trade.excursionComplete === false || (exc && exc.stopReason === 'end');
+  const pathPending = trade.executionPathComplete === false || (hasPath && path.complete === false);
   const hasEm = em && em.available;
   const hasMetrics = trade.mfeR != null || trade.maeR != null;
   const hasTags = !!trade.slPlacement || !!trade.targetLevel || !!trade.management;
 
   // Nic z AlphaBridge → panel se vůbec nevykreslí (manuální / importované obchody).
-  if (!hasMetrics && !hasCf && !hasExc && !hasEm && !hasTags && trade.sessionBias == null) return null;
+  if (!hasMetrics && !hasCf && !hasExc && !hasEm && !hasTags && !pathAttempted && trade.sessionBias == null) return null;
 
   const chip = (label: string, tone: 'sky' | 'amber' | 'violet' | 'emerald' | 'rose' | 'slate') => {
     const tones: Record<string, string> = {
@@ -66,6 +70,7 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
         <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2">
           <Activity size={11} /> AlphaBridge Intel
           {excPending && <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-500 text-[7px] font-black uppercase tracking-widest">pending</span>}
+          {pathPending && <span className="px-1.5 py-0.5 rounded-md bg-sky-500/15 border border-sky-500/30 text-sky-500 text-[7px] font-black uppercase tracking-widest">1m path pending</span>}
         </p>
         <ChevronDown size={14} className={`text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -86,8 +91,63 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
         </div>
       )}
 
+      {hasPath && (
+        <div className={`p-2.5 rounded-xl border ${cardBg} grid grid-cols-3 gap-2 text-center mb-2`}>
+          <div>
+            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Max do SL</p>
+            <p className="text-sm font-black font-mono text-rose-500">{Math.round(Number(path.maxAdverseR || 0) * 100)} %</p>
+          </div>
+          <div>
+            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Dotyk entry</p>
+            <p className="text-sm font-black font-mono text-sky-500">{Number(path.entryTouchBars || 0)}×</p>
+          </div>
+          <div>
+            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">U entry ±0.1R</p>
+            <p className="text-sm font-black font-mono text-violet-500">{Number(path.minutesNearEntry || 0)} min</p>
+          </div>
+        </div>
+      )}
+
       {open && (
         <div className="space-y-3 mt-2">
+          {/* 1m cesta po vstupu — MAE thresholdy + test SL za uzavřenou svíčkou. */}
+          {pathAttempted && (
+            <div>
+              {label('Cesta po vstupu (1m)')}
+              {!hasPath ? (
+                <div className={`px-2.5 py-2 rounded-xl border text-[9px] font-bold ${isDark ? 'bg-amber-500/10 border-amber-500/20 text-amber-400' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                  Nedostupné: {path.reason === 'requires-1m-chart' ? 'při zápisu nebyl aktivní 1m graf' : (path.reason || 'chybí data')}.
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {pathPending && (
+                    <div className={`px-2.5 py-1.5 rounded-lg border text-[9px] font-bold ${isDark ? 'bg-sky-500/10 border-sky-500/20 text-sky-400' : 'bg-sky-50 border-sky-200 text-sky-700'}`}>
+                      Cesta je zatím neúplná; doplní se po načtení dalších 1m barů.
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    {[25, 50, 75, 100].map(pct => {
+                      const minute = path.timeToSlPct?.[String(pct)];
+                      return <React.Fragment key={pct}>{chip(`${pct}% SL: ${minute == null ? 'ne' : `${minute}. min`}`, minute == null ? 'slate' : pct >= 75 ? 'rose' : 'amber')}</React.Fragment>;
+                    })}
+                  </div>
+                  {(['firstComplete', 'firstTwoComplete'] as const).map((key, idx) => {
+                    const v = path.candleStops?.[key];
+                    if (!v) return null;
+                    return (
+                      <div key={key} className={`flex justify-between items-center px-2.5 py-1.5 rounded-lg border ${cardBg}`}>
+                        <span className="text-[9px] font-black uppercase text-slate-400">SL za {idx === 0 ? '1.' : 'prvními 2'} kompletní 1m</span>
+                        <span className={`text-[10px] font-black font-mono ${v.outcome === 'WIN' ? 'text-emerald-500' : v.outcome === 'LOSS' ? 'text-rose-500' : 'text-slate-500'}`}>
+                          {OUTCOME_LABEL[v.outcome] || v.outcome}{v.realizedR != null ? ` · ${fmtR(v.realizedR)}` : ''}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Excursion: kam by to došlo do konce dne — co zbylo na stole */}
           {hasExc && (
             <div>

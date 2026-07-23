@@ -35,6 +35,7 @@ vi.mock('../services/supabase', () => {
 });
 
 import { executeTool } from '../services/coachTools';
+import { formatTradesForAI } from '../services/aiService';
 
 const accounts = [
   { id: 'a-master', name: 'Tradeify 1', type: 'Funded', status: 'Active' },
@@ -79,5 +80,38 @@ describe('get_stats s account filtrem — konzistence s list_accounts (bug 3 vs 
     const master = res.groups.find((g: any) => g.group === 'Tradeify 1');
     expect(lucid.stats.totalTrades).toBe(5);
     expect(master.stats.totalTrades).toBe(4);
+  });
+});
+
+describe('list_trades — přesné řádky bez halucinovaných R', () => {
+  it('vrátí všechny výhry účtu seřazené podle přesného R', async () => {
+    const result: any = await executeTool('list_trades', {
+      account: 'Lucid', outcome: 'win', sort_by: 'r', order: 'asc', limit: 200,
+    }, ctx);
+    expect(result.exact).toBe(true);
+    expect(result.count).toBe(4);
+    expect(result.trades.map((t: any) => t.id)).toEqual(['c0', 'c1', 'c2', 'c3']);
+    expect(result.trades.every((t: any) => t.r === 2)).toBe(true);
+    expect(result.trades.every((t: any) => t.riskAmount === 45)).toBe(true);
+  });
+
+  it('u chybějícího riskAmount vrátí R=null a nic neodhaduje', async () => {
+    const noRiskCtx = {
+      ...ctx,
+      trades: [{ id: 'no-risk', accountId: 'a-lucid', pnl: 125, date: '2026-07-20', direction: 'Long', instrument: 'MNQ' }],
+    };
+    const result: any = await executeTool('list_trades', { sort_by: 'r' }, noRiskCtx);
+    expect(result.trades[0].r).toBeNull();
+    expect(result.trades[0].riskAmount).toBeNull();
+    expect(result.rDefinition).toContain('must not be estimated');
+  });
+
+  it('front-loaded prompt obsahuje risk a přesné R, nebo explicitní zákaz odhadu', () => {
+    const withRisk = formatTradesForAI([trades[0] as any]);
+    expect(withRisk).toContain('Risk:$50.00');
+    expect(withRisk).toContain('R:2.00');
+
+    const withoutRisk = formatTradesForAI([{ id: 'x', pnl: 100, date: '2026-07-20', direction: 'Long' } as any]);
+    expect(withoutRisk).toContain('R:NEZNÁMÉ-NEODHADOVAT');
   });
 });

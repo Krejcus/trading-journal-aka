@@ -1023,16 +1023,26 @@ const ExpandedSessionCard: React.FC<{
                 {prepSession.bias === 'Bullish' ? '🐂' : prepSession.bias === 'Bearish' ? '🐻' : '◐'} {prepSession.bias}
               </div>
             )}
-            {prepSession.plan && (
-              <div className={`p-3 rounded-xl mb-3 ${isDark ? 'bg-white/5' : 'bg-slate-50'}`}>
-                <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{prepSession.plan}</p>
-              </div>
-            )}
-            {prepSession.image && (
-              <div className="aspect-video rounded-xl overflow-hidden border border-slate-200 cursor-zoom-in" onClick={() => onZoom(fullSize(prepSession.image))}>
-                <img src={thumbLarge(prepSession.image)} className="w-full h-full object-cover" loading="lazy" alt="Analýza" />
-              </div>
-            )}
+            <div className={prepSession.plan && prepSession.image ? 'grid gap-3 md:grid-cols-2 md:items-start' : ''}>
+              {prepSession.plan && (
+                <div className={`h-full p-3 rounded-xl ${isDark ? 'bg-white/5' : 'bg-slate-50'}`}>
+                  <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{prepSession.plan}</p>
+                </div>
+              )}
+              {prepSession.image && (
+                <button
+                  type="button"
+                  className={`group relative block w-full ${prepSession.plan ? '' : 'max-w-md'} aspect-video rounded-xl overflow-hidden border cursor-zoom-in ${isDark ? 'border-slate-700' : 'border-slate-200'}`}
+                  onClick={() => onZoom(fullSize(prepSession.image))}
+                  aria-label="Zvětšit screenshot analýzy"
+                >
+                  <img src={thumbLarge(prepSession.image)} className="w-full h-full object-cover transition-transform group-hover:scale-[1.02]" loading="lazy" alt="Analýza" />
+                  <span className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-lg bg-slate-950/75 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white backdrop-blur-sm">
+                    <Maximize2 size={11} /> Zvětšit
+                  </span>
+                </button>
+              )}
+            </div>
           </>
         ) : (
           <button
@@ -1097,18 +1107,26 @@ const ExpandedSessionCard: React.FC<{
             onCancel={() => setEditingDebrief(false)}
           />
         ) : (breakdown?.notes || breakdown?.screenshot) ? (
-          <>
+          <div className={breakdown.notes && breakdown.screenshot ? 'grid gap-3 md:grid-cols-2 md:items-start' : ''}>
             {breakdown.notes && (
-              <div className={`p-3 rounded-xl mb-3 ${isDark ? 'bg-violet-500/10' : 'bg-violet-50'} border ${isDark ? 'border-violet-500/20' : 'border-violet-100'}`}>
+              <div className={`h-full p-3 rounded-xl ${isDark ? 'bg-violet-500/10' : 'bg-violet-50'} border ${isDark ? 'border-violet-500/20' : 'border-violet-100'}`}>
                 <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{breakdown.notes}</p>
               </div>
             )}
             {breakdown.screenshot && (
-              <div className="aspect-video rounded-xl overflow-hidden border border-violet-200 cursor-zoom-in" onClick={() => onZoom(fullSize(breakdown.screenshot!))}>
-                <img src={thumbLarge(breakdown.screenshot)} className="w-full h-full object-cover" loading="lazy" alt="Breakdown" />
-              </div>
+              <button
+                type="button"
+                className={`group relative block w-full ${breakdown.notes ? '' : 'max-w-md'} aspect-video rounded-xl overflow-hidden border cursor-zoom-in ${isDark ? 'border-violet-500/30' : 'border-violet-200'}`}
+                onClick={() => onZoom(fullSize(breakdown.screenshot!))}
+                aria-label="Zvětšit screenshot debriefu"
+              >
+                <img src={thumbLarge(breakdown.screenshot)} className="w-full h-full object-cover transition-transform group-hover:scale-[1.02]" loading="lazy" alt="Breakdown" />
+                <span className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-lg bg-slate-950/75 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white backdrop-blur-sm">
+                  <Maximize2 size={11} /> Zvětšit
+                </span>
+              </button>
             )}
-          </>
+          </div>
         ) : (
           <button
             onClick={() => onUpdateBreakdown ? setEditingDebrief(true) : onFallbackEditReview()}

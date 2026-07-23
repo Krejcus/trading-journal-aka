@@ -282,28 +282,39 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     }).sort((a, b) => (b.activeCount - a.activeCount) || a.firm.localeCompare(b.firm, 'cs'));
   }, [accounts, showInactive, payouts, pnlByAccount]);
 
-  // Hromadné pohřbení celé firmy — lehká varianta bez Funeral obřadu: všem AKTIVNÍM
-  // účtům firmy nastaví Failed naráz (Backtest účty vynechá). Individuální obřad
-  // s reflexí zůstává na lebce jednotlivého účtu.
-  const executeFirmFuneral = useCallback(() => {
+  // Hromadné pohřbení celé firmy používá stejný plný Funeral formulář jako
+  // jednotlivý účet a jeho reflexi uloží ke všem aktivním účtům skupiny.
+  const executeFirmFuneral = useCallback((failureData: FailureData) => {
     if (!firmFuneralTarget) return;
     const today = new Date().toISOString().split('T')[0];
-    const updated = accounts.map(a =>
-      firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest'
-        ? {
+    const funeralGroupId = crypto.randomUUID();
+    const archivedAt = Date.now();
+    const updated = accounts.map(a => {
+      if (firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest') {
+        const individualStats = computeStats(a, trades);
+        return {
             ...a,
             status: 'Inactive',
             isArchived: true,
-            archivedAt: Date.now(),
+            archivedAt,
             result: 'Failed',
-            failureDate: a.failureDate || today,
-            failureReason: a.failureReason || 'Hromadné pohřbení firmy',
-          } as Account
-        : a
-    );
+            failureDate: failureData.failureDate || today,
+            failureReason: failureData.reason,
+            failureWhatHappened: failureData.whatHappened,
+            // Reflexe je společná, finanční statistiky zůstávají za konkrétní účet,
+            // aby souhrn Hřbitova nenásobil skupinovou ztrátu počtem účtů.
+            failureAmountLost: individualStats.amountLost,
+            failureProgressPct: individualStats.progressPct,
+            failureDaysOfConsistency: individualStats.daysConsistency,
+            failureKeyLesson: failureData.keyLesson,
+            failureGroupId: funeralGroupId,
+          } as Account;
+      }
+      return a;
+    });
     onUpdate(updated);
     setFirmFuneralTarget(null);
-  }, [firmFuneralTarget, accounts, onUpdate]);
+  }, [firmFuneralTarget, accounts, trades, onUpdate]);
 
   const toggleFirmCollapsed = (firm: string) => {
     setCollapsedFirms(prev => {
@@ -859,15 +870,22 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
       <ConfirmationModal isOpen={!!accountToDelete} onClose={() => setAccountToDelete(null)} onConfirm={executeDelete} title="Smazat Účet" message={`Opravdu chcete smazat účet "${accountToDelete?.name}"? Smažou se i VŠECHNY jeho obchody — nevratně. Pro archivaci s historií použij lebku (Fail).`} theme={theme} />
 
-      <ConfirmationModal
-        isOpen={!!firmFuneralTarget}
-        onClose={() => setFirmFuneralTarget(null)}
-        onConfirm={executeFirmFuneral}
-        title={`Pohřbít firmu ${firmFuneralTarget || ''}`}
-        message={`Všech ${firmFuneralTarget ? accounts.filter(a => firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest').length : 0} aktivních účtů firmy ${firmFuneralTarget} se označí jako Failed a archivuje. Obchody a P&L zůstávají (nic se nemaže).`}
-        confirmText="Pohřbít"
-        theme={theme}
-      />
+      {firmFuneralTarget && (() => {
+        const targetAccounts = accounts.filter(a => firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest');
+        if (!targetAccounts.length) return null;
+        return (
+          <AccountFuneralModal
+            account={targetAccounts[0]}
+            accounts={targetAccounts}
+            title={firmFuneralTarget}
+            trades={trades}
+            userId={user.id}
+            onConfirm={executeFirmFuneral}
+            onClose={() => setFirmFuneralTarget(null)}
+            theme={theme}
+          />
+        );
+      })()}
 
       {archivedDetail && (
         <MemorialModal

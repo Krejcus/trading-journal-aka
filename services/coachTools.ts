@@ -121,6 +121,26 @@ export const COACH_TOOLS = [
     },
   },
   {
+    name: 'list_trades',
+    description:
+      'Deterministically return the exact trades matching filters. REQUIRED for tables, rankings, "show/list/sort my trades", and any claim about individual trades. Never reconstruct a trade list from memory or semantic search. R is exact pnl/riskAmount when riskAmount exists; otherwise it is null and MUST NOT be estimated.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date_from: { type: 'string', description: 'YYYY-MM-DD inclusive.' },
+        date_to: { type: 'string', description: 'YYYY-MM-DD inclusive.' },
+        account: { type: 'string', description: 'Account name substring or exact account ID.' },
+        instrument: { type: 'string', description: 'Exact instrument, e.g. NQ or MNQ.' },
+        direction: { type: 'string', enum: ['Long', 'Short'] },
+        outcome: { type: 'string', enum: ['win', 'loss', 'breakeven', 'all'], description: 'Default all.' },
+        sort_by: { type: 'string', enum: ['date', 'pnl', 'r', 'mfeR', 'maeR'], description: 'Default date.' },
+        order: { type: 'string', enum: ['asc', 'desc'], description: 'Default desc.' },
+        limit: { type: 'integer', description: '1-200, default 50.' },
+        include_missed: { type: 'boolean', description: 'Default false.' },
+      },
+    },
+  },
+  {
     name: 'list_accounts',
     description:
       'Vrátí VŠECHNY obchodní účty (i neaktivní/spálené) se stavem, fází, P&L a počtem obchodů. Pro "kolik mám účtů", "který účet jsem spálil", nebo jako kontext před filtrováním podle účtu. tradeCount/netPnl počítají řádky daného účtu (fan-out kopie na každém účtu zvlášť) — konzistentní s get_stats(account=...), ale záměrně vyšší než počet rozhodnutí v get_stats bez filtru.',
@@ -208,6 +228,11 @@ export const COACH_TOOLS = [
           type: 'string',
           description: 'YYYY-MM-DD — pro type=commitment: kdy závazek vyprší ("do pondělí", "do konce týdne"). Omit pro trvalé commitmenty.',
         },
+        scope: {
+          type: 'string',
+          enum: ['live', 'backtest', 'global'],
+          description: 'Kam paměť patří. Observation/episode defaultují na aktuální svět. Commitment defaultuje na global, pokud se týká tradingu obecně.',
+        },
         key: {
           type: 'string',
           description: 'For type=fact|preference: the key name (e.g. "preferred_display", "main_instrument"). Required for those types.',
@@ -277,13 +302,13 @@ export const COACH_TOOLS = [
   {
     name: 'get_lab_analytics',
     description:
-      'Deterministická čísla ze záložky Lab (stejný kód jako UI). VŽDY použij pro counterfactual otázky ("co kdybych měl SL na FVG/swing/OTE — jaký winrate/výsledek?", "kolik nechávám na stole", "fixní TP vs trailing"), pro bias analýzu ("pomáhá mi bias?") a pro leak detektory (revenge, sizing po ztrátě, slabé hodiny/session, overtrading, bez prepu). Counterfactual varianty jsou PÁROVÉ srovnání (varianta vs. skutečnost na týchž obchodech, pole delta_R) — to je jiné číslo než skupina obchodů, kde trader SL na X reálně dal (na to použij get_stats). Výstup nese pole `svet` (live/backtest) — uveď ho, když se uživatel dívá na jinou záložku. Vrácená čísla NEPŘEPOČÍTÁVEJ ani neodhaduj — cituj je přesně.',
+      'Deterministická čísla ze záložky Lab (stejný kód jako UI). VŽDY použij pro hledání nejlepších/nejhorších kombinací setupu (patterns), counterfactual otázky ("co kdybych měl SL na FVG/swing/OTE — jaký winrate/výsledek?", "kolik nechávám na stole", "fixní TP vs trailing"), pro 1m execution otázky (kolik obchodů jde do 25/50/75 % SL, jak dlouho tancují u entry, SL za první svíčkou), pro bias analýzu a pro leak detektory. Counterfactual varianty jsou PÁROVÉ srovnání (varianta vs. skutečnost na týchž obchodech, pole delta_R) — to je jiné číslo než skupina obchodů, kde trader SL na X reálně dal (na to použij get_stats). Výstup nese svět, pokrytí, n, confidence a trade_ids jako důkazy. Vrácená čísla NEPŘEPOČÍTÁVEJ ani neodhaduj — cituj je přesně.',
     input_schema: {
       type: 'object',
       properties: {
         section: {
           type: 'string',
-          enum: ['overview', 'counterfactual', 'bias', 'sessions', 'leaks', 'all'],
+          enum: ['overview', 'patterns', 'counterfactual', 'execution', 'bias', 'sessions', 'leaks', 'all'],
           description: 'Která část Lab analytiky. Default "all".',
         },
         account: {
@@ -508,6 +533,81 @@ function computeStats(allTrades: Trade[], args: GetStatsArgs, accounts: Account[
       from: filtered.reduce((min, t) => (t.date && t.date < min ? t.date.slice(0, 10) : min), '9999-12-31'),
       to: filtered.reduce((max, t) => (t.date && t.date > max ? t.date.slice(0, 10) : max), '0000-01-01'),
     },
+  };
+}
+
+interface ListTradesArgs {
+  date_from?: string;
+  date_to?: string;
+  account?: string;
+  instrument?: string;
+  direction?: 'Long' | 'Short';
+  outcome?: 'win' | 'loss' | 'breakeven' | 'all';
+  sort_by?: 'date' | 'pnl' | 'r' | 'mfeR' | 'maeR';
+  order?: 'asc' | 'desc';
+  limit?: number;
+  include_missed?: boolean;
+}
+
+/** Exact, deterministic rows for rankings/tables. No semantic search and no estimates. */
+function listTrades(args: ListTradesArgs = {}, ctx: ToolContext) {
+  const accountId = args.account ? resolveAccountId(args.account, ctx.accounts || []) : null;
+  if (args.account && !accountId) {
+    return { error: `Účet "${args.account}" nenalezen. Použij list_accounts pro seznam.` };
+  }
+  const outcome = args.outcome || 'all';
+  // Stejná konvence jako get_stats: bez account filtru = jedno rozhodnutí přes
+  // kopírku, s account filtrem = přesné řádky konkrétního účtu.
+  const sourceTrades = accountId ? ctx.trades : collapseCopies(ctx.trades);
+  const rows = sourceTrades.filter(t => {
+    if (!args.include_missed && t.executionStatus === 'Missed') return false;
+    if (args.date_from && t.date?.slice(0, 10) < args.date_from) return false;
+    if (args.date_to && t.date?.slice(0, 10) > args.date_to) return false;
+    if (accountId && String(t.accountId) !== accountId) return false;
+    if (args.instrument && t.instrument !== args.instrument) return false;
+    if (args.direction && t.direction !== args.direction) return false;
+    const isBE = t.isBE === true || Math.abs(t.pnl || 0) <= 0.01;
+    if (outcome === 'win' && (isBE || (t.pnl || 0) <= 0.01)) return false;
+    if (outcome === 'loss' && (isBE || (t.pnl || 0) >= -0.01)) return false;
+    if (outcome === 'breakeven' && !isBE) return false;
+    return true;
+  }).map(t => {
+    const riskAmount = Number(t.riskAmount);
+    const r = Number.isFinite(riskAmount) && riskAmount > 0 ? Number(((t.pnl || 0) / riskAmount).toFixed(4)) : null;
+    return {
+      id: String(t.id),
+      date: t.date,
+      accountId: String(t.accountId),
+      account: (ctx.accounts || []).find(a => String(a.id) === String(t.accountId))?.name || String(t.accountId),
+      instrument: t.instrument || null,
+      direction: t.direction || null,
+      pnl: Number((t.pnl || 0).toFixed(2)),
+      riskAmount: Number.isFinite(riskAmount) && riskAmount > 0 ? riskAmount : null,
+      r,
+      mfeR: t.mfeR ?? null,
+      maeR: t.maeR ?? null,
+      signal: t.signal || null,
+      session: t.session || null,
+      executionStatus: t.executionStatus || null,
+    };
+  });
+  const sortBy = args.sort_by || 'date';
+  const direction = args.order === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    const av = sortBy === 'date' ? new Date(a.date).getTime() : (a as any)[sortBy];
+    const bv = sortBy === 'date' ? new Date(b.date).getTime() : (b as any)[sortBy];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return (av < bv ? -1 : av > bv ? 1 : 0) * direction;
+  });
+  const limit = Math.max(1, Math.min(Number(args.limit) || 50, 200));
+  return {
+    count: rows.length,
+    returned: Math.min(rows.length, limit),
+    exact: true,
+    rDefinition: 'pnl / riskAmount; null means unavailable and must not be estimated',
+    trades: rows.slice(0, limit),
   };
 }
 
@@ -763,9 +863,10 @@ interface RememberArgs {
   expires_at?: string;
   key?: string;
   value?: unknown;
+  scope?: 'live' | 'backtest' | 'global';
 }
 
-async function rememberHandler(args: RememberArgs) {
+async function rememberHandler(args: RememberArgs, scope: 'live' | 'backtest' = 'live') {
   // Facts and preferences go to the flat profile (cheaper, always in prompt).
   if (args.type === 'fact' || args.type === 'preference') {
     if (!args.key || args.value === undefined) {
@@ -777,7 +878,9 @@ async function rememberHandler(args: RememberArgs) {
   // Observation/episode/commitment go to embedded long-term memory.
   // Commitments default to importance 8 (musí být vidět nad ostatními).
   const importance = args.importance ?? (args.type === 'commitment' ? 8 : undefined);
-  const metadata: Record<string, unknown> = {};
+  const metadata: Record<string, unknown> = {
+    scope: args.scope || (args.type === 'commitment' ? 'global' : scope),
+  };
   if (args.expires_at) metadata.expires_at = args.expires_at;
 
   const result = await addMemory({
@@ -797,11 +900,12 @@ interface RecallArgs {
   limit?: number;
 }
 
-async function recallHandler(args: RecallArgs) {
+async function recallHandler(args: RecallArgs, scope: 'live' | 'backtest' = 'live') {
   const results = await recallMemory({
     query: args.query,
     types: args.types,
     limit: args.limit ?? 5,
+    scope,
   });
   return {
     count: results.length,
@@ -949,6 +1053,8 @@ export async function executeTool(
         return await searchHistory(args, ctx.accounts || [], ctx.trades, ctx.scope || 'live');
       case 'get_stats':
         return getStats(args, ctx);
+      case 'list_trades':
+        return listTrades(args, ctx);
       case 'list_accounts':
         return listAccounts(args, ctx);
       case 'find_similar_trades':
@@ -956,13 +1062,11 @@ export async function executeTool(
       case 'get_recent_context':
         return getRecentContext(ctx.trades, ctx.preps, ctx.reviews, args?.limit, ctx.accounts || [], args?.account);
       case 'remember':
-        rememberHandler(args).catch(err => console.error('[coachTools] background remember failed:', err));
-        return { ok: true, type: args.type, status: 'persisted_in_background' };
+        return await rememberHandler(args, ctx.scope || 'live');
       case 'recall_memory':
-        return await recallHandler(args);
+        return await recallHandler(args, ctx.scope || 'live');
       case 'forget_memory':
-        forgetHandler(args).catch(err => console.error('[coachTools] background forget failed:', err));
-        return { ok: true, status: 'deleted_in_background' };
+        return await forgetHandler(args);
       case 'get_business_summary':
         return await getBusinessSummary(args);
       case 'get_lab_analytics':
@@ -998,6 +1102,8 @@ export function describeToolCall(name: string, args: any): string {
       if (args?.group_by) return `📊 Rozpad statistik dle ${args.group_by}${parts.length ? ` (${parts.join(', ')})` : ''}`;
       return `📊 Počítám statistiky${parts.length ? ` (${parts.join(', ')})` : ''}`;
     }
+    case 'list_trades':
+      return `📋 Načítám přesný seznam obchodů`;
     case 'list_accounts':
       return `🗂️ Načítám účty${args?.status && args.status !== 'all' ? ` (${args.status})` : ''}`;
     case 'find_similar_trades':
@@ -1016,7 +1122,7 @@ export function describeToolCall(name: string, args: any): string {
       return `💰 Načítám finance (${label[period] || period})`;
     }
     case 'get_lab_analytics': {
-      const secLabel: Record<string, string> = { overview: 'přehled', counterfactual: 'counterfactual', bias: 'bias', sessions: 'sessions', leaks: 'leaky', all: 'vše' };
+      const secLabel: Record<string, string> = { overview: 'přehled', patterns: 'patterny a kombinace', counterfactual: 'counterfactual', execution: 'SL/TP a 1m cesta', bias: 'bias', sessions: 'sessions', leaks: 'leaky', all: 'vše' };
       return `🧪 Lab analytika (${secLabel[args?.section] || 'vše'})${args?.account ? ` · ${args.account}` : ''}`;
     }
     default:

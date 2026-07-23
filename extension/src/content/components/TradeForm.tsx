@@ -1250,6 +1250,14 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     excursionComplete: (cf && cf.ok && cf.excursion && cf.excursion.available)
                         ? (cf.excursion.stopReason !== 'end')
                         : null,
+                    // Prvních 30 kompletních 1m barů po vstupu, normalizovaných do původního R.
+                    // Když graf není 1m, ukládáme available:false (nikdy nepředstíráme přesnost).
+                    executionPath: cf && cf.ok && cf.executionPath
+                        ? cf.executionPath
+                        : { available: false, version: 1, reason: 'no-data' },
+                    executionPathComplete: (cf && cf.ok && cf.executionPath && cf.executionPath.available)
+                        ? !!cf.executionPath.complete
+                        : null,
                     // Entry model — odraz level + struktura (kolikátý zlom) + entry na hraně FVG.
                     entryMap: cf && cf.ok && cf.entryMap ? cf.entryMap : { available: false },
                     // Kontext vstupu (fotka momentu načtení: kotvy DO/WO/pdVWAP/VWAP, sweepy,
@@ -1266,7 +1274,7 @@ export function TradeForm({ isWide = false, autoLoadSignal = 0, mode = 'normal',
                     // Meta — verze schématu a zdroj, ať AI ví, co kde čekat.
                     // v3: entryContext.ctx (kontext dne z CTX labelu), htfFvg (15m/1H FVG zóny),
                     // sweepAges (timing sweepů) + nové levely (ON/IB/DO/WO/kompas/PMH/PML/MO/wVWAP).
-                    schemaVersion: 3,
+                    schemaVersion: 4,
                     source: 'alphabridge',
                 };
 

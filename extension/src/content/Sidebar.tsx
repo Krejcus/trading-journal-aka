@@ -76,9 +76,9 @@ export function Sidebar() {
         await supabase.auth.signOut();
     };
 
-    // ── Auto-backfill pending excursion ──────────────────────────────────────────
-    // Obchod zapsaný před koncem dne (např. v 17:00) má „useknutou" excursion. Když
-    // otevřeš graf na tom instrumentu později (den dojel), dopočítá se sám — bez boxu.
+    // ── Auto-backfill pending excursion + 1m execution path ──────────────────────
+    // Obchod zapsaný příliš brzy může mít „useknutou" excursion nebo prvních 30 1m
+    // barů. Když otevřeš správný instrument (a pro path aktivní 1m graf), dopočítá se.
     const [backfilling, setBackfilling] = useState(false);
     const [backfillToast, setBackfillToast] = useState<{ text: string; tone: 'ok' | 'info' | 'warn' } | null>(null);
     const backfillRanRef = useRef<string>(''); // poslední symbol, na kterém auto-backfill proběhl
@@ -207,7 +207,7 @@ export function Sidebar() {
                             <button
                                 onClick={() => runBackfill(true)}
                                 disabled={backfilling}
-                                title="Přepočítat pending excursion pro tento graf – obchody zapsané před koncem dne"
+                                title="Přepočítat pending excursion a 1m cestu pro tento graf"
                                 className={`bg-transparent border-none cursor-pointer p-0 flex items-center justify-center transition-colors focus:outline-none disabled:opacity-40 ${theme === 'dark' ? 'text-slate-400 hover:text-violet-400' : 'text-slate-500 hover:text-violet-600'}`}
                             >
                                 <RefreshCw size={15} className={backfilling ? 'animate-spin' : ''} />

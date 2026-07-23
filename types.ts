@@ -154,6 +154,8 @@ export interface Account {
   failureProgressPct?: number;
   failureDaysOfConsistency?: number;
   failureKeyLesson?: string;
+  /** Sdílené ID účtů pohřbených jedním hromadným Funeral formulářem. */
+  failureGroupId?: string;
 }
 
 export type PnLDisplayMode = 'usd' | 'percent' | 'rr';
@@ -281,6 +283,10 @@ export interface Trade {
   /** false = excursion sken narazil na konec barů (den nedojel) → „pending", dopočítá se později.
    *  true = úplné (dojelo k flat-by nebo SL). null/undefined = žádná excursion (manuál/špatný SL). */
   excursionComplete?: boolean | null;
+  /** Prvních max. 30 kompletních 1m barů po vstupu + SL/entry metriky (AlphaBridge v1). */
+  executionPath?: any;
+  /** false = executionPath čeká na budoucí bary; true = došel k SL/TP nebo 30 barům. */
+  executionPathComplete?: boolean | null;
   /** Entry model — structureType/order, odrazLevels, entryFvg. */
   entryMap?: any;
   /** Kontext vstupu (snapshot z AlphaBridge): kotvy DO/WO/pdVWAP/VWAP, sweepy, magnet mapa, Londýn vs Asie. */
