@@ -36,6 +36,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
     user
 }) => {
     const isDark = theme !== 'light';
+    const [error, setError] = useState<string | null>(null);
     const [formData, setFormData] = useState<Partial<BusinessPayout>>({
         amount: 0,
         grossAmount: 0,
@@ -96,7 +97,10 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
     };
 
     const handleSave = () => {
-        if (!formData.amount || !formData.accountId) return;
+        // Dřív tu bylo tiché `return` → klik na Uložit nic neudělal a nedal důvod.
+        if (!formData.accountId) { setError('Vyber účet, ke kterému výplata patří.'); return; }
+        if (!formData.amount) { setError('Zadej částku výplaty.'); return; }
+        setError(null);
         // U editace nikdy nepodstrkuj dnešek — radši nech původní datum výplaty.
         const safeDate = formData.date || toDateInput(payout?.date) || new Date().toISOString().split('T')[0];
         onSave({
@@ -258,6 +262,12 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                             placeholder="Napiš cokoli k této výplatě..."
                         />
                     </div>
+
+                    {error && (
+                        <div className={`px-4 py-3 rounded-2xl border text-xs font-bold ${isDark ? 'bg-rose-500/10 border-rose-500/30 text-rose-300' : 'bg-rose-50 border-rose-200 text-rose-700'}`}>
+                            {error}
+                        </div>
+                    )}
 
                     <button
                         onClick={handleSave}

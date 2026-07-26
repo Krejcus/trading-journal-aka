@@ -111,6 +111,17 @@ const CustomEquityTooltip = (props: any) => {
               </p>
             </div>
           )}
+          {/* Netradový propad equity (výplata / incident) — ať je poznat, že to nebyla ztráta z obchodu */}
+          {!trade && data?.event && (
+            <div className="text-right">
+              <span className={`text-[9px] font-black uppercase tracking-tight block mb-0.5 ${data.event.kind === 'payout' ? 'text-emerald-500' : 'text-rose-400'}`}>
+                {data.event.kind === 'payout' ? '💸 Výplata' : '⚠️ Incident'}
+              </span>
+              <p className="font-black text-base leading-none text-slate-400">
+                −${Number(Math.abs(data.event.amount || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </p>
+            </div>
+          )}
         </div>
         {trade?.screenshot && (
           <div className="border-t border-white/5 pt-2">

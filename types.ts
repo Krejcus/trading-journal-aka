@@ -340,6 +340,8 @@ export interface EquityPoint {
   equity: number;
   validEquity: number;
   drawdown: number;
+  /** Netradový pohyb equity (výplata / incident) — bod křivky, který není obchod. */
+  event?: { kind: 'payout' | 'incident'; label: string; amount: number };
   trade?: {
     id: string | number;
     instrument: string;

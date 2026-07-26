@@ -1716,7 +1716,11 @@ const App: React.FC = () => {
   const [isBusinessDataLoaded, setIsBusinessDataLoaded] = useState(false);
 
   useEffect(() => {
-    if (activePage === 'business' && session && !isBusinessDataLoaded) {
+    // Payouty potřebuje i stránka Účty (odečítají balance účtu a plní byznys řádek
+    // firmy) a Dashboard (equity křivka je ukazuje jako výběr). Dokud se načítaly
+    // jen v Byznysu, vypadala výplata jako „nepropsala se do účtu".
+    const needsBusinessData = activePage === 'business' || activePage === 'accounts' || activePage === 'dashboard';
+    if (needsBusinessData && session && !isBusinessDataLoaded) {
       const userId = session.user.id;
 
       // Cache-first: show cached data instantly, then refresh in background
@@ -2576,14 +2580,46 @@ const App: React.FC = () => {
     [filteredAdjustmentEvents]
   );
 
+  // Výplaty do equity křivky: peníze reálně odešly z účtu, takže equity klesne —
+  // ale P&L NEsnižují (není to ztráta, jen výběr vydělaného), proto jdou jen sem
+  // a ne do filteredFinancialAdjustments.
+  const filteredPayoutEvents = useMemo(() => {
+    if (dashboardMode === 'backtesting') return [];
+    const scopeIds = new Set(
+      (filters.accounts.length > 0
+        ? contextAccounts.filter(a => filters.accounts.includes(a.id))
+        : contextAccounts).map(a => a.id)
+    );
+    const now = new Date();
+    return businessPayouts
+      .filter(p => p.accountId && scopeIds.has(p.accountId) && (p.status || 'Received') === 'Received' && p.amount > 0)
+      .filter(p => {
+        if (filters.period === 'all') return true;
+        const diffDays = (now.getTime() - new Date(p.date).getTime()) / (1000 * 3600 * 24);
+        const limit = { week: 7, month: 30, quarter: 90, year: 365 }[filters.period as 'week' | 'month' | 'quarter' | 'year'];
+        return limit === undefined || diffDays <= limit;
+      })
+      .map(p => ({
+        date: String(p.date).split('T')[0],
+        amount: -Math.abs(Number(p.grossAmount ?? p.amount) || 0),
+        kind: 'payout' as const,
+        label: 'Výplata',
+      }));
+  }, [dashboardMode, filters.accounts, filters.period, contextAccounts, businessPayouts]);
+
+  const filteredCurveEvents = useMemo(
+    () => [...filteredAdjustmentEvents, ...filteredPayoutEvents],
+    [filteredAdjustmentEvents, filteredPayoutEvents]
+  );
+
   const filteredStats = useMemo(() => {
     try {
-      return calculateStats(filteredDisplayTrades, displayBalance, filteredFinancialAdjustments, filteredAdjustmentEvents);
+      return calculateStats(filteredDisplayTrades, displayBalance, filteredFinancialAdjustments, filteredCurveEvents);
     } catch (e) {
       console.error("Filtered stats calculation error:", e);
       return calculateStats([], 0);
     }
-  }, [filteredDisplayTrades, displayBalance, filteredFinancialAdjustments, filteredAdjustmentEvents]);
+  }, [filteredDisplayTrades, displayBalance, filteredFinancialAdjustments, filteredCurveEvents]);
 
   const handleUpdateUser = async (updatedUser: User) => {
     setCurrentUser(updatedUser);

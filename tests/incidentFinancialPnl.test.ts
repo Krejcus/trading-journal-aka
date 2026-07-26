@@ -68,4 +68,22 @@ describe('incident bez tradů jako finanční P&L', () => {
     // Drawdown incident zahrnuje (reálně ztracené peníze); vrací se kladně
     expect(stats.maxDrawdown).toBe(500);
   });
+
+  it('výplata sníží equity křivku, ale NE P&L (není ztráta, jen výběr zisku)', () => {
+    const trades = [
+      { id: 'a', accountId: 'lucid', signal: 'x', pnl: 1000, riskAmount: 100, runUp: 0, drawdown: 0, date: '2026-07-22', direction: 'Long', timestamp: Date.parse('2026-07-22T10:00:00Z'), duration: '', durationMinutes: 1 },
+    ] as Trade[];
+    // Výplata jde JEN do událostí křivky, ne do financialAdjustments.
+    const stats = calculateStats(trades, 50_000, 0, [
+      { date: '2026-07-23', amount: -800, kind: 'payout', label: 'Výplata' },
+    ]);
+
+    expect(stats.tradePnL).toBe(1000);
+    expect(stats.totalPnL).toBe(1000);        // P&L výplatou neklesá
+    expect(stats.financialAdjustments).toBe(0);
+
+    const last = stats.equityCurve[stats.equityCurve.length - 1];
+    expect(last.equity).toBe(50_200);          // 50 000 + 1 000 − 800 = reálný zůstatek
+    expect(last.event).toEqual({ kind: 'payout', label: 'Výplata', amount: -800 });
+  });
 });

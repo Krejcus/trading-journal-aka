@@ -141,8 +141,16 @@ export const normalizeTrades = (raw: any[], accountId: string): Trade[] => {
     .sort((a, b) => a.timestamp - b.timestamp);
 };
 
-/** Datovaná finanční korekce (incident bez tradů) pro promítnutí do equity křivky. */
-export interface AdjustmentEvent { date: string; timestamp?: number; amount: number }
+/** Datovaný netradový pohyb equity — incident bez tradů nebo výplata.
+ *  POZOR: do totalPnL se promítá jen `financialAdjustments` (incidenty). Výplata
+ *  není ztráta, jen odchod vydělaných peněz → snižuje equity, ale NE P&L. */
+export interface AdjustmentEvent {
+  date: string;
+  timestamp?: number;
+  amount: number;
+  kind?: 'payout' | 'incident';
+  label?: string;
+}
 
 export const calculateStats = (
   trades: Trade[],
@@ -364,7 +372,7 @@ export const calculateStats = (
   // Do validEquity (disciplinovaná křivka) NEjdou — incident je z definice chyba,
   // takže mezera mezi křivkami ukazuje, co disciplína stála.
   if (adjustmentEvents.length > 0) {
-    type CurveStep = { ts: number; date: string; equityDelta: number; validDelta: number; point?: EquityPoint };
+    type CurveStep = { ts: number; date: string; equityDelta: number; validDelta: number; point?: EquityPoint; event?: EquityPoint['event'] };
     const steps: CurveStep[] = [];
     for (let i = 1; i < equityCurve.length; i++) {
       steps.push({
@@ -378,7 +386,14 @@ export const calculateStats = (
     for (const adj of adjustmentEvents) {
       if (!adj || !Number.isFinite(adj.amount) || adj.amount === 0) continue;
       const ts = adj.timestamp ?? new Date(`${adj.date}T12:00:00`).getTime();
-      steps.push({ ts: Number.isFinite(ts) ? ts : 0, date: adj.date, equityDelta: adj.amount, validDelta: 0 });
+      const kind = adj.kind || 'incident';
+      steps.push({
+        ts: Number.isFinite(ts) ? ts : 0,
+        date: adj.date,
+        equityDelta: adj.amount,
+        validDelta: 0,
+        event: { kind, label: adj.label || (kind === 'payout' ? 'Výplata' : 'Incident'), amount: adj.amount },
+      });
     }
     steps.sort((a, b) => a.ts - b.ts);
 
@@ -392,7 +407,7 @@ export const calculateStats = (
       if (dd < mdd) mdd = dd;
       rebuilt.push(step.point
         ? { ...step.point, equity: eq, validEquity: validEq, drawdown: dd }
-        : { date: step.date, equity: eq, validEquity: validEq, drawdown: dd });
+        : { date: step.date, equity: eq, validEquity: validEq, drawdown: dd, event: step.event });
     }
     equityCurve.length = 0;
     equityCurve.push(...rebuilt);

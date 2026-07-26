@@ -206,16 +206,6 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
         setNewExpense({ label: '', category: 'Challenges', amount: 0, date: new Date().toISOString().split('T')[0], recurring: 'monthly' });
     };
 
-    const handleTogglePayoutStatus = (payoutId: string) => {
-        const newPayouts = payouts.map(p => {
-            if (p.id === payoutId) {
-                return { ...p, status: p.status === 'Received' ? 'Pending' : 'Received' as any };
-            }
-            return p;
-        });
-        onUpdatePayouts(newPayouts);
-    };
-
     const handleSavePayout = (payout: BusinessPayout) => {
         const exists = payouts.find(p => p.id === payout.id);
         if (exists) {
@@ -580,7 +570,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                     <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Datum</th>
                                                     <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Účet</th>
                                                     <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Částka</th>
-                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Status</th>
+                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Důkaz</th>
                                                     <th className="pb-4"></th>
                                                 </tr>
                                             </thead>
@@ -602,20 +592,16 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                                 <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(p.date)}</td>
                                                                 <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý'}</td>
                                                                 <td className={`py-4 text-xs font-mono font-black text-emerald-500`}>{formatValue(p.amount)}</td>
+                                                                {/* Status toggle (Čeká se / Obdrženo) odstraněn — výplata se zapisuje
+                                                                    až když reálně dorazí, takže byla vždy „Obdrženo". Zůstává jen
+                                                                    značka archivu a indikátor přiloženého důkazu. */}
                                                                 <td className="py-4">
                                                                     <div className="flex items-center gap-3">
-                                                                        {isLegacy ? (
+                                                                        {isLegacy && (
                                                                             <span className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
-                                                                        ) : (
-                                                                            <button
-                                                                                onClick={(e) => { e.stopPropagation(); handleTogglePayoutStatus(p.id); }}
-                                                                                className={`px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all ${p.status === 'Received' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}
-                                                                            >
-                                                                                {p.status === 'Received' ? 'OBDRŽENO' : 'ČEKÁ SE'}
-                                                                            </button>
                                                                         )}
                                                                         {p.image && (
-                                                                            <div className="w-6 h-6 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-500">
+                                                                            <div className="w-6 h-6 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-500" title="Přiložen důkaz výplaty">
                                                                                 <Trophy size={12} />
                                                                             </div>
                                                                         )}
