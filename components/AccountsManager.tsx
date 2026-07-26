@@ -577,9 +577,21 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             </div>
             <div className="flex flex-col items-end space-y-1">
               <span className="text-[8px] uppercase font-black text-slate-500 tracking-wider">Net PnL</span>
-              <span className={`${isSlave ? 'text-base' : 'text-lg'} font-black font-mono ${totalPnL - accumulatedChallengePnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                {totalPnL - accumulatedChallengePnL >= 0 ? '+' : ''}${(totalPnL - accumulatedChallengePnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              </span>
+              {/* Vyplacené peníze se odečítají, ať platí balance = initial + Net PnL.
+                  Dřív balance výplatu odečetla, ale Net PnL ne → čísla si protiřečila. */}
+              {(() => {
+                const netPnl = totalPnL - accumulatedChallengePnL - grossWithdrawals;
+                return (
+                  <>
+                    <span className={`${isSlave ? 'text-base' : 'text-lg'} font-black font-mono ${netPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {netPnl >= 0 ? '+' : ''}${netPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                    {grossWithdrawals > 0 && (
+                      <span className="text-[8px] font-bold text-slate-500">vyplaceno −${grossWithdrawals.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
 

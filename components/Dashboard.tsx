@@ -1935,13 +1935,23 @@ const Dashboard: React.FC<DashboardProps> = ({
       case 'lab_top_leak': return <LabTopLeakWidget top={labTopLeak ?? null} nTrades={stats.trades.length} theme={theme} />;
       case 'kpi_pnl': {
         const totalRr = pnlDisplayMode === 'rr' ? calculateTotalRR(stats.trades) : undefined;
+        // Net P&L = reálný stav peněz (vč. výplat a incidentů). Když se od tradů
+        // liší, ukaž rozpad — jinak by nebylo poznat, proč číslo nesedí s obchody.
+        const payoutsAbs = Math.abs(stats.payouts || 0);
+        const adjAbs = Math.abs(stats.financialAdjustments || 0);
+        const fmtPlain = (v: number) => `$${Math.round(v).toLocaleString()}`;
+        const parts = [`Obchody ${stats.tradePnL >= 0 ? '+' : '−'}${fmtPlain(Math.abs(stats.tradePnL))}`];
+        if (payoutsAbs > 0) parts.push(`výplaty −${fmtPlain(payoutsAbs)}`);
+        if (adjAbs > 0) parts.push(`incidenty −${fmtPlain(adjAbs)}`);
+        const breakdown = (payoutsAbs > 0 || adjAbs > 0) ? parts.join(' · ') : undefined;
         return (
           <ProKpiCard
             theme={theme}
             label="Net P&L"
             value={formatValue(stats.totalPnL, pnlDisplayMode, stats.initialBalance, totalRr)}
+            subValue={pnlDisplayMode === 'rr' ? undefined : breakdown}
             sampleSize={stats.totalTrades}
-            info="Čistý zisk nebo ztráta po odečtení všech nákladů a poplatků."
+            info="Skutečný stav peněz: zisk z obchodů minus vyplacené peníze a incidenty mimo obchody."
             icon={<div className="bg-purple-100 text-purple-600 p-1 rounded-lg dark:bg-purple-500/20"><BarChart3 size={14} /></div>}
           />
         );

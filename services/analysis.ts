@@ -363,7 +363,14 @@ export const calculateStats = (
   else if (currentLossStreak > 0) currentTradeStreak = -currentLossStreak;
 
   const tradePnL = totalPnL;
-  totalPnL = tradePnL + financialAdjustments;
+  // Výplaty se berou z událostí křivky (kind='payout'). Do totalPnL patří, aby
+  // číslo sedělo s realitou na účtu (balance − initial): peníze fyzicky odešly.
+  // Do WR/RR/PF ani počtu obchodů nezasahují — to zůstává čistě z tradů.
+  const payoutTotal = adjustmentEvents.reduce(
+    (sum, e) => sum + (e && e.kind === 'payout' && Number.isFinite(e.amount) ? e.amount : 0),
+    0
+  );
+  totalPnL = tradePnL + financialAdjustments + payoutTotal;
 
   // ── Incidenty do equity křivky ─────────────────────────────────────────────
   // Bez tohohle končila křivka na tradePnL, zatímco Net P&L ukazoval totalPnL —
@@ -415,7 +422,7 @@ export const calculateStats = (
   }
 
   return {
-    initialBalance, tradePnL, financialAdjustments, totalPnL,
+    initialBalance, tradePnL, financialAdjustments, payouts: payoutTotal, totalPnL,
     winRate: (winningTrades + losingTrades) > 0 ? (winningTrades / (winningTrades + losingTrades)) * 100 : 0,
     executionRate: validSignalsCount > 0 ? (takenValidTrades / validSignalsCount) * 100 : 100,
     profitFactor: grossLoss > 0 ? grossProfit / grossLoss : 0,

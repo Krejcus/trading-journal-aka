@@ -69,7 +69,7 @@ describe('incident bez tradů jako finanční P&L', () => {
     expect(stats.maxDrawdown).toBe(500);
   });
 
-  it('výplata sníží equity křivku, ale NE P&L (není ztráta, jen výběr zisku)', () => {
+  it('výplata sníží equity i Net P&L (aby číslo sedělo s realitou na účtu), ale ne trade statistiky', () => {
     const trades = [
       { id: 'a', accountId: 'lucid', signal: 'x', pnl: 1000, riskAmount: 100, runUp: 0, drawdown: 0, date: '2026-07-22', direction: 'Long', timestamp: Date.parse('2026-07-22T10:00:00Z'), duration: '', durationMinutes: 1 },
     ] as Trade[];
@@ -78,12 +78,20 @@ describe('incident bez tradů jako finanční P&L', () => {
       { date: '2026-07-23', amount: -800, kind: 'payout', label: 'Výplata' },
     ]);
 
-    expect(stats.tradePnL).toBe(1000);
-    expect(stats.totalPnL).toBe(1000);        // P&L výplatou neklesá
-    expect(stats.financialAdjustments).toBe(0);
+    expect(stats.tradePnL).toBe(1000);          // výkon obchodování zůstává
+    expect(stats.payouts).toBe(-800);
+    expect(stats.financialAdjustments).toBe(0); // výplata NENÍ incident
+    expect(stats.totalPnL).toBe(200);           // reálně přibylo na účtu
+
+    // Trade statistiky se výplatou nezkreslí
+    const baseline = calculateStats(trades, 50_000);
+    expect(stats.winRate).toBe(baseline.winRate);
+    expect(stats.profitFactor).toBe(baseline.profitFactor);
+    expect(stats.totalTrades).toBe(baseline.totalTrades);
 
     const last = stats.equityCurve[stats.equityCurve.length - 1];
-    expect(last.equity).toBe(50_200);          // 50 000 + 1 000 − 800 = reálný zůstatek
+    expect(last.equity).toBe(50_200);           // = initial + totalPnL → čísla si neprotiřečí
+    expect(last.equity).toBe(50_000 + stats.totalPnL);
     expect(last.event).toEqual({ kind: 'payout', label: 'Výplata', amount: -800 });
   });
 });

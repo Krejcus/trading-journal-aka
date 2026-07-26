@@ -357,7 +357,10 @@ export interface TradeStats {
   tradePnL: number;
   /** Finanční korekce mimo trady (např. gambling bez rekonstruovaných vstupů). */
   financialAdjustments: number;
-  /** Skutečný finanční výsledek = tradePnL + financialAdjustments. */
+  /** Vyplacené peníze (záporné) — odešly z účtu, ale nejsou to ztráty z obchodů. */
+  payouts: number;
+  /** Skutečný stav peněz = tradePnL + financialAdjustments + payouts.
+   *  Odpovídá tomu, co reálně přibylo/ubylo na účtu (balance − initial). */
   totalPnL: number;
   winRate: number;
   executionRate: number;
