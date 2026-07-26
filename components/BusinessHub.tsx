@@ -25,6 +25,7 @@ import {
     Trophy
 } from 'lucide-react';
 import PayoutModal from './PayoutModal';
+import PayoutDetailModal from './PayoutDetailModal';
 import ConfirmationModal from './ConfirmationModal';
 import {
     Trade,
@@ -105,6 +106,9 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     const [payoutViewMode, setPayoutViewMode] = useState<'list' | 'grid'>('list');
     const [isAddingPayout, setIsAddingPayout] = useState(false);
     const [editingPayout, setEditingPayout] = useState<BusinessPayout | null>(null);
+    // Klik na výplatu otevře nejdřív kartu (čtení + listování šipkami); teprve
+    // tlačítko Upravit v ní pouští editační formulář.
+    const [detailPayoutId, setDetailPayoutId] = useState<string | null>(null);
 
     const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'expense' | 'payout' | 'goal' | 'playbook' | 'resource' } | null>(null);
     const [showMonthlyExpenseBreakdown, setShowMonthlyExpenseBreakdown] = useState(false);
@@ -240,6 +244,10 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     const unifiedPayouts = useMemo(() => {
         return [...payouts].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }, [payouts]);
+
+    // Index v seznamu, ne uložený objekt — po uložení editace se karta sama
+    // překreslí čerstvými daty a šipky respektují aktuální řazení.
+    const detailPayoutIndex = detailPayoutId ? unifiedPayouts.findIndex(p => p.id === detailPayoutId) : -1;
 
     const realizedTaxReserveValue = useMemo(() => (totalPayouts > 0 ? (totalPayouts * (settings.taxRatePct / 100)) : 0), [totalPayouts, settings.taxRatePct]);
     const netBusinessCashValue = useMemo(() => totalPayouts - normalizedTotalExpenses - realizedTaxReserveValue, [totalPayouts, normalizedTotalExpenses, realizedTaxReserveValue]);
@@ -562,6 +570,20 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     user={user}
                                 />
 
+                                {detailPayoutIndex >= 0 && (
+                                    <PayoutDetailModal
+                                        payouts={unifiedPayouts}
+                                        index={detailPayoutIndex}
+                                        onIndexChange={(i) => setDetailPayoutId(unifiedPayouts[i]?.id ?? null)}
+                                        accounts={accounts}
+                                        theme={theme}
+                                        formatValue={formatValue}
+                                        onEdit={(p) => { setDetailPayoutId(null); setEditingPayout(p); }}
+                                        onDelete={(p) => { setDetailPayoutId(null); setItemToDelete({ id: p.id, type: 'payout' }); }}
+                                        onClose={() => setDetailPayoutId(null)}
+                                    />
+                                )}
+
                                 {payoutViewMode === 'list' ? (
                                     <div className="overflow-x-auto">
                                         <table className="w-full text-left">
@@ -586,8 +608,8 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                         return (
                                                             <tr
                                                                 key={p.id}
-                                                                className={!isLegacy ? "cursor-pointer hover:bg-white/[0.02] transition-colors" : ""}
-                                                                onClick={() => !isLegacy && setEditingPayout(p)}
+                                                                className="cursor-pointer hover:bg-white/[0.02] transition-colors"
+                                                                onClick={() => setDetailPayoutId(p.id)}
                                                             >
                                                                 <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(p.date)}</td>
                                                                 <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý'}</td>
@@ -600,8 +622,18 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                                         {isLegacy && (
                                                                             <span className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
                                                                         )}
-                                                                        {p.image && (
-                                                                            <div className="w-6 h-6 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-500" title="Přiložen důkaz výplaty">
+                                                                        {/* Miniatura řekne na první pohled, co za důkaz je přiložený;
+                                                                            ikona trofeje zůstává jen jako fallback bez fotky. */}
+                                                                        {p.image ? (
+                                                                            <img
+                                                                                src={p.image}
+                                                                                alt="Důkaz výplaty"
+                                                                                title="Přiložen důkaz výplaty"
+                                                                                loading="lazy"
+                                                                                className={`w-10 h-10 rounded-lg object-cover border ${isDark ? 'border-white/10' : 'border-slate-200'}`}
+                                                                            />
+                                                                        ) : (
+                                                                            <div className="w-10 h-10 rounded-lg border border-dashed border-slate-500/25 flex items-center justify-center text-slate-600" title="Bez důkazu">
                                                                                 <Trophy size={12} />
                                                                             </div>
                                                                         )}
@@ -638,8 +670,8 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                 return (
                                                     <div
                                                         key={p.id}
-                                                        onClick={() => !isLegacy && setEditingPayout(p)}
-                                                        className={`aspect-square rounded-2xl border overflow-hidden relative group transition-all ${!isLegacy ? 'cursor-pointer hover:border-blue-500/50 hover:shadow-2xl hover:shadow-blue-500/10' : ''} ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50'}`}
+                                                        onClick={() => setDetailPayoutId(p.id)}
+                                                        className={`aspect-square rounded-2xl border overflow-hidden relative group transition-all cursor-pointer hover:border-blue-500/50 hover:shadow-2xl hover:shadow-blue-500/10 ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50'}`}
                                                     >
                                                         {p.image ? (
                                                             <img src={p.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="Payout proof" />
