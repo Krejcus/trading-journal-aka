@@ -576,6 +576,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                         index={detailPayoutIndex}
                                         onIndexChange={(i) => setDetailPayoutId(unifiedPayouts[i]?.id ?? null)}
                                         accounts={accounts}
+                                        trades={trades}
                                         theme={theme}
                                         formatValue={formatValue}
                                         onEdit={(p) => { setDetailPayoutId(null); setEditingPayout(p); }}

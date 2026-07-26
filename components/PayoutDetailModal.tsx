@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Maximize2, Pencil, Trash2, Trophy, X } from 'lucide-react';
-import { Account, BusinessPayout } from '../types';
+import { Account, BusinessPayout, Trade } from '../types';
 import { FIRM_LOGOS, firmInitials, firmOf } from '../utils/accountFirm';
 import ImageZoomModal from './ImageZoomModal';
 
@@ -10,6 +10,7 @@ interface PayoutDetailModalProps {
     index: number;
     onIndexChange: (index: number) => void;
     accounts: Account[];
+    trades: Trade[];
     theme: 'dark' | 'light' | 'oled';
     formatValue: (usdAmount: number) => string;
     onEdit: (payout: BusinessPayout) => void;
@@ -19,6 +20,44 @@ interface PayoutDetailModalProps {
 
 const isLegacyPayout = (p: BusinessPayout) => String(p.id).startsWith('legacy_');
 
+/** Datum čehokoliv → "YYYY-MM-DD" pro porovnávání i počítání unikátních dnů. */
+const dayKey = (value?: string): string => {
+    if (!value) return '';
+    const s = String(value);
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+};
+
+/** Kolik obchodních dní stálo dojít k této výplatě.
+ *  Počítadlo se po každé výplatě nuluje → okno je (předchozí výplata ze
+ *  stejného účtu, tato výplata]. U první výplaty se počítá od prvního obchodu.
+ *  Obchodní den = den, kdy na účtu padl aspoň jeden obchod. */
+export const tradingDaysForPayout = (
+    payout: BusinessPayout,
+    payouts: BusinessPayout[],
+    trades: Trade[],
+): { days: number; from: string } | null => {
+    const end = dayKey(payout.date);
+    if (!payout.accountId || !end) return null;
+
+    const prevEnd = payouts
+        .filter(p => p.accountId === payout.accountId && p.id !== payout.id)
+        .map(p => dayKey(p.date))
+        .filter(d => d && d < end)
+        .sort()
+        .pop() || '';
+
+    const days = new Set(
+        trades
+            .filter(t => t.accountId === payout.accountId)
+            .map(t => dayKey(t.date))
+            .filter(d => d && d <= end && d > prevEnd),
+    );
+
+    return { days: days.size, from: prevEnd };
+};
+
 const formatFullDate = (dateStr: string) => {
     if (!dateStr) return '—';
     const d = new Date(dateStr);
@@ -27,7 +66,7 @@ const formatFullDate = (dateStr: string) => {
 };
 
 const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
-    payouts, index, onIndexChange, accounts, theme, formatValue, onEdit, onDelete, onClose,
+    payouts, index, onIndexChange, accounts, trades, theme, formatValue, onEdit, onDelete, onClose,
 }) => {
     const isDark = theme !== 'light';
     const [zoomOpen, setZoomOpen] = useState(false);
@@ -65,12 +104,20 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
     const gross = payout.grossAmount || payout.amount;
     const split = payout.profitSplitUsed || 0;
 
-    const navBtn = `p-2 rounded-xl transition-all disabled:opacity-20 disabled:cursor-not-allowed ${isDark ? 'hover:bg-white/10 text-white' : 'hover:bg-slate-100 text-slate-900'}`;
+    const run = tradingDaysForPayout(payout, payouts, trades);
+    const runHint = !run || run.days === 0
+        ? 'žádné obchody na tomto účtu'
+        : run.from
+            ? `od výplaty ${new Date(run.from).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' })}`
+            : 'od prvního obchodu';
 
-    const Stat: React.FC<{ label: string; value: React.ReactNode; accent?: string }> = ({ label, value, accent }) => (
+    const navBtn =`p-2 rounded-xl transition-all disabled:opacity-20 disabled:cursor-not-allowed ${isDark ? 'hover:bg-white/10 text-white' : 'hover:bg-slate-100 text-slate-900'}`;
+
+    const Stat: React.FC<{ label: string; value: React.ReactNode; accent?: string; hint?: string }> = ({ label, value, accent, hint }) => (
         <div className={`px-4 py-3 rounded-2xl border ${isDark ? 'bg-white/[0.03] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
             <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">{label}</p>
             <p className={`mt-1 text-sm font-mono font-black ${accent || (isDark ? 'text-white' : 'text-slate-900')}`}>{value}</p>
+            {hint && <p className="mt-0.5 text-[9px] font-bold text-slate-500 truncate">{hint}</p>}
         </div>
     );
 
@@ -114,7 +161,11 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
                         <div className="grid grid-cols-3 gap-3">
                             <Stat label="Hrubý zisk" value={formatValue(gross)} />
                             <Stat label="Profit split" value={split ? `${split} %` : '—'} />
-                            <Stat label="Metoda" value={payout.payout_method || '—'} />
+                            <Stat
+                                label="Obchodních dní"
+                                value={run && run.days > 0 ? run.days : '—'}
+                                hint={runHint}
+                            />
                         </div>
 
                         {/* Důkaz výplaty */}
