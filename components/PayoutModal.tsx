@@ -17,7 +17,7 @@ const toDateInput = (value?: string): string => {
 interface PayoutModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSave: (payout: BusinessPayout) => void;
+    onSave: (payout: BusinessPayout) => boolean | void | Promise<boolean | void>;
     accounts: Account[];
     payout?: BusinessPayout | null;
     initialAccountId?: string;
@@ -37,6 +37,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
 }) => {
     const isDark = theme !== 'light';
     const [error, setError] = useState<string | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
     const [formData, setFormData] = useState<Partial<BusinessPayout>>({
         amount: 0,
         grossAmount: 0,
@@ -51,6 +52,10 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
         if (payout) {
             setFormData({
                 ...payout,
+                // Starší poškozené payouty mají v DB accountId=null. React select
+                // očekává string; prázdná hodnota dovolí účet bezpečně přiřadit znovu.
+                accountId: payout.accountId || '',
+                notes: payout.notes || '',
                 // <input type="date"> umí jen YYYY-MM-DD. Z DB chodí i plné ISO
                 // ("2026-07-24T00:00:00") → pole se tvářilo prázdné a při uložení
                 // se datum přepsalo na DNEŠEK (výplata pak v seznamu „zmizela" jinam).
@@ -96,22 +101,30 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
         }
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         // Dřív tu bylo tiché `return` → klik na Uložit nic neudělal a nedal důvod.
         if (!formData.accountId) { setError('Vyber účet, ke kterému výplata patří.'); return; }
         if (!formData.amount) { setError('Zadej částku výplaty.'); return; }
         setError(null);
         // U editace nikdy nepodstrkuj dnešek — radši nech původní datum výplaty.
         const safeDate = formData.date || toDateInput(payout?.date) || new Date().toISOString().split('T')[0];
-        onSave({
-            ...(formData as BusinessPayout),
-            id: formData.id || `payout_${Date.now()}`,
-            // Status jen doplň, nepřepisuj — editace Pending výplaty ji dřív
-            // natvrdo překlopila na Received.
-            status: formData.status || payout?.status || 'Received',
-            date: safeDate
-        });
-        onClose();
+        setIsSaving(true);
+        try {
+            const saved = await onSave({
+                ...(formData as BusinessPayout),
+                id: formData.id || `payout_${Date.now()}`,
+                // Status jen doplň, nepřepisuj — editace Pending výplaty ji dřív
+                // natvrdo překlopila na Received.
+                status: formData.status || payout?.status || 'Received',
+                date: safeDate
+            });
+            if (saved !== false) onClose();
+            else setError('Výplatu se nepodařilo uložit. Zkus to prosím znovu.');
+        } catch {
+            setError('Výplatu se nepodařilo uložit. Zkus to prosím znovu.');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const inputClass = `w-full px-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-blue-500/40 outline-none transition-all ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-white placeholder-slate-700' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400'
@@ -271,9 +284,10 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
 
                     <button
                         onClick={handleSave}
-                        className={`w-full py-4 rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg active:scale-[0.98] ${payout ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'}`}
+                        disabled={isSaving}
+                        className={`w-full py-4 rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait ${payout ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'}`}
                     >
-                        {payout ? 'Uložit změny' : 'Potvrdit výplatu'}
+                        {isSaving ? 'Ukládám…' : (payout ? 'Uložit změny' : 'Potvrdit výplatu')}
                     </button>
                 </div>
             </div>

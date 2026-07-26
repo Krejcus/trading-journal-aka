@@ -58,7 +58,7 @@ interface BusinessHubProps {
     resources: BusinessResource[];
     settings: BusinessSettings;
     onUpdateExpenses: (expenses: BusinessExpense[]) => void;
-    onUpdatePayouts: (payouts: BusinessPayout[]) => void;
+    onUpdatePayouts: (payouts: BusinessPayout[]) => boolean | void | Promise<boolean | void>;
     onUpdatePlaybook: (items: PlaybookItem[]) => void;
     onUpdateGoals: (goals: BusinessGoal[]) => void;
     onUpdateResources: (resources: BusinessResource[]) => void;
@@ -209,9 +209,9 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
     const handleSavePayout = (payout: BusinessPayout) => {
         const exists = payouts.find(p => p.id === payout.id);
         if (exists) {
-            onUpdatePayouts(payouts.map(p => p.id === payout.id ? payout : p));
+            return onUpdatePayouts(payouts.map(p => p.id === payout.id ? payout : p));
         } else {
-            onUpdatePayouts([...payouts, payout]);
+            return onUpdatePayouts([...payouts, payout]);
         }
     };
 

@@ -1820,45 +1820,56 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return [];
 
-    // Optimized: select individual JSON fields to avoid fetching heavy base64 images from description
+    // POZOR: `description` je TEXT sloupec, ve kterém je uložený JSON. Dřív se tu
+    // četlo přes JSON operátory (`description->>accountId`), jenže ty na textovém
+    // sloupci vrací NULL → účet, poznámky i status se NIKDY nenačetly a výplaty
+    // se po reloadu tvářily jako „Neznámý" účet, i když v DB byly celou dobu
+    // uložené správně. Proto načteme description celý a rozparsujeme na klientovi.
     const { data, error } = await supabase
       .from('business_payouts')
-      .select(`
-        id,
-        user_id,
-        date,
-        amount,
-        payout_method,
-        created_at,
-        updated_at,
-        grossAmount:description->grossAmount,
-        profitSplitUsed:description->profitSplitUsed,
-        accountId:description->>accountId,
-        notes:description->>notes,
-        status:description->>status
-      `)
+      .select('id, user_id, date, amount, payout_method, created_at, updated_at, description')
       .eq('user_id', userId)
       .order('date', { ascending: false });
 
     if (error) {
       console.error('[Storage] Error fetching payouts:', error);
-      return [];
+      // Prázdné pole znamená legitimně „uživatel nemá payouty“. Síťová/DB chyba
+      // musí propadnout volajícímu, jinak by následná synchronizace mohla přepsat
+      // funkční lokální stav a cache prázdným polem.
+      throw new Error('Failed to fetch payouts');
     }
 
-    return (data || []).map((d: any) => ({
-      id: d.id,
-      user_id: d.user_id,
-      date: d.date,
-      amount: d.amount,
-      payout_method: d.payout_method,
-      grossAmount: d.grossAmount ? Number(d.grossAmount) : undefined,
-      profitSplitUsed: d.profitSplitUsed ? Number(d.profitSplitUsed) : undefined,
-      accountId: d.accountId,
-      notes: d.notes,
-      status: d.status || 'Received',
-      created_at: d.created_at,
-      updated_at: d.updated_at
-    }));
+    // description může být string (TEXT sloupec) i objekt (kdyby se typ časem
+    // změnil na json/jsonb) — zvládneme obojí.
+    const parseDescription = (raw: any): Record<string, any> => {
+      if (!raw) return {};
+      if (typeof raw === 'object') return raw;
+      try {
+        const s = String(raw);
+        return s.startsWith('{') ? JSON.parse(s) : {};
+      } catch { return {}; }
+    };
+
+    return (data || []).map((d: any) => {
+      const meta = parseDescription(d.description);
+      return {
+        id: d.id,
+        user_id: d.user_id,
+        date: d.date,
+        amount: d.amount,
+        payout_method: d.payout_method,
+        grossAmount: meta.grossAmount != null ? Number(meta.grossAmount) : undefined,
+        profitSplitUsed: meta.profitSplitUsed != null ? Number(meta.profitSplitUsed) : undefined,
+        accountId: meta.accountId || undefined,
+        notes: meta.notes,
+        // Obrázek chodí rovnou s výplatou → screenshot je k dispozici hned a
+        // editace ho nemůže přepsat prázdnem (prefetch dobíhal až po renderu).
+        image: meta.image,
+        status: meta.status || 'Received',
+        created_at: d.created_at,
+        updated_at: d.updated_at
+      };
+    });
   },
 
   // Prefetch payout proof images in background (like trade screenshots)
@@ -1893,7 +1904,7 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) throw new Error('Not authenticated');
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('business_payouts')
       .insert({
         user_id: userId,
@@ -1908,9 +1919,11 @@ export const storageService = {
           status: payout.status
         }),
         payout_method: payout.payout_method
-      });
+      })
+      .select('id')
+      .single();
 
-    if (error) {
+    if (error || !data) {
       console.error('[Storage] Failed to save payout:', error);
       throw new Error('Failed to save payout');
     }
@@ -1929,12 +1942,17 @@ export const storageService = {
     // z `updates`, takže pole, které volající nedodal, zmizelo z DB. Nejhorší case:
     // getBusinessPayouts kvůli výkonu image vůbec nenačítá (chodí zvlášť přes
     // prefetchPayoutImages), takže editace výplaty mazala její screenshot natrvalo.
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from('business_payouts')
       .select('description')
       .eq('id', id)
       .eq('user_id', userId)
       .maybeSingle();
+
+    if (existingError || !existing) {
+      console.error('[Storage] Failed to load payout before update:', existingError);
+      throw new Error('Failed to load payout before update');
+    }
 
     let merged: Record<string, any> = {};
     try {
@@ -1950,13 +1968,15 @@ export const storageService = {
     }
     dbUpdates.description = JSON.stringify(merged);
 
-    const { error } = await supabase
+    const { data: updated, error } = await supabase
       .from('business_payouts')
       .update(dbUpdates)
       .eq('id', id)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .select('id')
+      .maybeSingle();
 
-    if (error) {
+    if (error || !updated) {
       console.error('[Storage] Failed to update payout:', error);
       throw new Error('Failed to update payout');
     }

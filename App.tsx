@@ -6,6 +6,7 @@ import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, typ
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { safeSetItem } from './utils/safeStorage';
+import { businessDataFingerprint, mergePayoutImages } from './utils/businessPayoutSync';
 import { clearAppStorage } from './utils/appStorage';
 import { firmOf } from './utils/accountFirm';
 import { adjustmentTotal, getFinancialAdjustments } from './services/tradingIncidents';
@@ -1679,7 +1680,7 @@ const App: React.FC = () => {
     // History/Deník/AI také potřebují, aby se v UI místo "Neznámý účet" objevil
     // název archivovaného (spáleného) účtu pro jeho staré obchody.
     // Combined ("Vše") na dashboardu chce zahrnout i archivované obchody → musíme načíst.
-    const needsArchived = (dashboardMode === 'archive' || dashboardMode === 'combined' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai' || activePage === 'lab');
+    const needsArchived = (dashboardMode === 'archive' || dashboardMode === 'combined' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai' || activePage === 'lab' || activePage === 'business');
     if (needsArchived && session && !isArchivedLoaded) {
       storageService.getArchivedAccounts().then(archived => {
         setArchivedAccounts(archived || []);
@@ -1745,12 +1746,12 @@ const App: React.FC = () => {
         storageService.getBusinessGoals(),
         storageService.getBusinessResources()
       ]).then(([expenses, payouts, goals, resources]) => {
-        // Guard: only update state if data actually changed (prevents flicker when cache == server)
-        // Using length + id+amount fingerprint avoids expensive JSON.stringify on objects with large fields (e.g. images)
-        const fingerprint = (arr: any[]) =>
-          arr.length + '|' + arr.map(x => `${x.id ?? ''}:${x.amount ?? x.target ?? x.updatedAt ?? ''}`).join(',');
+        // Guard: porovnej všechna metadata, ale ignoruj těžké base64 obrázky.
+        // Původní fingerprint kontroloval jen id+amount a chybně `updatedAt`
+        // místo DB pole `updated_at`. Změna accountId tak po reloadu zůstala
+        // schovaná za starou cache a výplata se dál tvářila jako „Neznámý“.
         const stableSet = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>, next: T[]) => {
-          setter(prev => fingerprint(next) === fingerprint(prev) ? prev : next);
+          setter(prev => businessDataFingerprint(next) === businessDataFingerprint(prev) ? prev : next);
         };
         stableSet(setBusinessExpenses, expenses || []);
         stableSet(setBusinessPayouts, payouts || []);
@@ -3091,31 +3092,23 @@ const App: React.FC = () => {
         if (isUUID(p.id)) await storageService.updateBusinessPayout(p.id, p);
       }
 
-      if (added.length > 0) {
+      if (added.length > 0 || updated.length > 0 || removed.length > 0) {
         const fresh = await storageService.getBusinessPayouts();
-        // getBusinessPayouts image nenačítá → vrátíme ho z lokálního stavu.
-        // Primárně podle id; heuristika (účet+datum+částka) jen pro nově vložené
-        // výplaty, které od DB teprve dostaly id. Dřív se párovalo JEN heuristikou,
-        // takže dvě výplaty stejného dne a částky si prohodily/ztratily screenshot.
-        const localById = new Map(newPayouts.map(np => [String(np.id), np]));
-        const usedLocalIds = new Set<string>();
-        setBusinessPayouts(fresh.map(fp => {
-          const byId = localById.get(String(fp.id));
-          if (byId?.image) { usedLocalIds.add(String(byId.id)); return { ...fp, image: byId.image }; }
-          const cand = newPayouts.find(np => np.image
-            && !usedLocalIds.has(String(np.id))
-            && !fresh.some(f => String(f.id) === String(np.id))
-            && np.accountId === fp.accountId && np.date === fp.date && np.amount === fp.amount);
-          if (cand) { usedLocalIds.add(String(cand.id)); return { ...fp, image: cand.image }; }
-          return fp;
-        }));
+        // Kanonický stav vždy znovu načti i po EDITACI/SMAZÁNÍ, ne jen po insertu.
+        // Cache ukládá metadata bez obrázků; screenshoty se doplní z lokálního stavu.
+        setBusinessPayouts(mergePayoutImages(fresh, newPayouts));
+        if (session?.user.id) {
+          safeSetItem(`alphatrade_biz_payouts_${session.user.id}`, JSON.stringify(fresh));
+        }
       }
+      return true;
     } catch (err) {
       console.error('[BusinessHub] Failed to sync payouts:', err);
       setBusinessPayouts(prev); // Rollback on failure
       setSyncError("Nepodařilo se uložit výplaty.");
+      return false;
     }
-  }, [businessPayouts]);
+  }, [businessPayouts, session]);
 
   const handleUpdateGoals = useCallback(async (newGoals: BusinessGoal[]) => {
     const prev = businessGoals;

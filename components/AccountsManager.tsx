@@ -42,7 +42,7 @@ interface AccountsManagerProps {
   onAddExpense?: (expense: any) => void;
   onOpenInDashboard?: (id: string) => void;
   onImportTradovate?: (id: string) => void;
-  onUpdatePayouts: (payouts: BusinessPayout[]) => void;
+  onUpdatePayouts: (payouts: BusinessPayout[]) => boolean | void | Promise<boolean | void>;
   payouts: BusinessPayout[];
   reviews: DailyReview[];
   user: User;
@@ -391,9 +391,9 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const handleSavePayout = (payout: BusinessPayout) => {
     const exists = payouts.find(p => p.id === payout.id);
     if (exists) {
-      onUpdatePayouts(payouts.map(p => p.id === payout.id ? payout : p));
+      return onUpdatePayouts(payouts.map(p => p.id === payout.id ? payout : p));
     } else {
-      onUpdatePayouts([...payouts, payout]);
+      return onUpdatePayouts([...payouts, payout]);
     }
   };
 
