@@ -3029,8 +3029,20 @@ const App: React.FC = () => {
       const updated = newPayouts.filter(np => {
         const old = prev.find(pp => pp.id === np.id);
         if (!old) return false;
-        // Compare metadata only — skip base64 image field to avoid slow serialization
-        return old.amount !== np.amount || old.date !== np.date || old.accountId !== np.accountId || old.notes !== np.notes;
+        // Base64 image neporovnáváme celý (drahé) — stačí přítomnost + délka.
+        const imageChanged = (old.image || '').length !== (np.image || '').length;
+        // POZOR: dřív se porovnávaly jen amount/date/accountId/notes, takže změna
+        // statusu, screenshotu, gross částky nebo splitu se do DB NIKDY neuložila
+        // a po reloadu se ztratila („uložím výplatu a ono to zmizí").
+        return old.amount !== np.amount
+          || old.date !== np.date
+          || old.accountId !== np.accountId
+          || old.notes !== np.notes
+          || old.status !== np.status
+          || old.grossAmount !== np.grossAmount
+          || old.profitSplitUsed !== np.profitSplitUsed
+          || old.payout_method !== np.payout_method
+          || imageChanged;
       });
 
       for (const p of added) {
@@ -3045,10 +3057,21 @@ const App: React.FC = () => {
 
       if (added.length > 0) {
         const fresh = await storageService.getBusinessPayouts();
-        // Merge images back from local state (getBusinessPayouts doesn't fetch images)
+        // getBusinessPayouts image nenačítá → vrátíme ho z lokálního stavu.
+        // Primárně podle id; heuristika (účet+datum+částka) jen pro nově vložené
+        // výplaty, které od DB teprve dostaly id. Dřív se párovalo JEN heuristikou,
+        // takže dvě výplaty stejného dne a částky si prohodily/ztratily screenshot.
+        const localById = new Map(newPayouts.map(np => [String(np.id), np]));
+        const usedLocalIds = new Set<string>();
         setBusinessPayouts(fresh.map(fp => {
-          const local = newPayouts.find(np => np.accountId === fp.accountId && np.date === fp.date && np.amount === fp.amount);
-          return local?.image ? { ...fp, image: local.image } : fp;
+          const byId = localById.get(String(fp.id));
+          if (byId?.image) { usedLocalIds.add(String(byId.id)); return { ...fp, image: byId.image }; }
+          const cand = newPayouts.find(np => np.image
+            && !usedLocalIds.has(String(np.id))
+            && !fresh.some(f => String(f.id) === String(np.id))
+            && np.accountId === fp.accountId && np.date === fp.date && np.amount === fp.amount);
+          if (cand) { usedLocalIds.add(String(cand.id)); return { ...fp, image: cand.image }; }
+          return fp;
         }));
       }
     } catch (err) {
@@ -3907,7 +3930,9 @@ const App: React.FC = () => {
                       user={currentUser}
                       exchangeRates={exchangeRates}
                       trades={trades}
-                      accounts={accounts}
+                      // Výplata přežije účet (typicky vybereš a účet pak spálíš) —
+                      // bez archivovaných se u ní v historii zobrazovalo „Neznámý".
+                      accounts={allAccountsWithArchived}
                       expenses={businessExpenses}
                       payouts={businessPayouts}
                       playbook={playbookItems}

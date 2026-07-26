@@ -1924,14 +1924,31 @@ export const storageService = {
     if (updates.date) dbUpdates.date = updates.date;
     if (updates.amount !== undefined) dbUpdates.amount = updates.amount;
     if (updates.payout_method) dbUpdates.payout_method = updates.payout_method;
-    dbUpdates.description = JSON.stringify({
-      grossAmount: updates.grossAmount,
-      profitSplitUsed: updates.profitSplitUsed,
-      accountId: updates.accountId,
-      image: updates.image,
-      notes: updates.notes,
-      status: updates.status
-    });
+
+    // description je JSON blob → načti původní a MERGUJ. Dřív se přepisoval celý
+    // z `updates`, takže pole, které volající nedodal, zmizelo z DB. Nejhorší case:
+    // getBusinessPayouts kvůli výkonu image vůbec nenačítá (chodí zvlášť přes
+    // prefetchPayoutImages), takže editace výplaty mazala její screenshot natrvalo.
+    const { data: existing } = await supabase
+      .from('business_payouts')
+      .select('description')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    let merged: Record<string, any> = {};
+    try {
+      const raw = (existing as any)?.description;
+      if (typeof raw === 'string' && raw.startsWith('{')) merged = JSON.parse(raw);
+      else if (raw && typeof raw === 'object') merged = { ...raw };
+    } catch { merged = {}; }
+
+    // Zapisujeme jen to, co volající skutečně poslal (undefined = "neměň").
+    const fields: (keyof BusinessPayout)[] = ['grossAmount', 'profitSplitUsed', 'accountId', 'image', 'notes', 'status'];
+    for (const key of fields) {
+      if (updates[key] !== undefined) merged[key] = updates[key];
+    }
+    dbUpdates.description = JSON.stringify(merged);
 
     const { error } = await supabase
       .from('business_payouts')

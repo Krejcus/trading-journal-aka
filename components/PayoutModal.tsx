@@ -2,6 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { X, Plus } from 'lucide-react';
 import { Account, BusinessPayout, User } from '../types';
 
+/** Cokoliv datumového → "YYYY-MM-DD" pro <input type="date">. Prázdné vstupy
+ *  nechává prázdné (ať se nepodstrčí dnešek tam, kde datum chybí). */
+const toDateInput = (value?: string): string => {
+    if (!value) return '';
+    const s = String(value);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})T/);
+    if (m) return m[1];
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? '' : d.toISOString().split('T')[0];
+};
+
 interface PayoutModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -38,6 +50,10 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
         if (payout) {
             setFormData({
                 ...payout,
+                // <input type="date"> umí jen YYYY-MM-DD. Z DB chodí i plné ISO
+                // ("2026-07-24T00:00:00") → pole se tvářilo prázdné a při uložení
+                // se datum přepsalo na DNEŠEK (výplata pak v seznamu „zmizela" jinam).
+                date: toDateInput(payout.date),
                 grossAmount: payout.grossAmount || payout.amount,
                 profitSplitUsed: payout.profitSplitUsed || 90
             });
@@ -81,11 +97,15 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
 
     const handleSave = () => {
         if (!formData.amount || !formData.accountId) return;
+        // U editace nikdy nepodstrkuj dnešek — radši nech původní datum výplaty.
+        const safeDate = formData.date || toDateInput(payout?.date) || new Date().toISOString().split('T')[0];
         onSave({
             ...(formData as BusinessPayout),
             id: formData.id || `payout_${Date.now()}`,
-            status: 'Received',
-            date: formData.date || new Date().toISOString().split('T')[0]
+            // Status jen doplň, nepřepisuj — editace Pending výplaty ji dřív
+            // natvrdo překlopila na Received.
+            status: formData.status || payout?.status || 'Received',
+            date: safeDate
         });
         onClose();
     };
@@ -122,9 +142,19 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                                 className={inputClass}
                             >
                                 <option value="">Vyberte účet...</option>
-                                {accounts.filter(a => a.status === 'Active').map(acc => (
+                                {accounts.filter(a => a.status === 'Active' && a.type !== 'Backtest').map(acc => (
                                     <option key={acc.id} value={acc.id}>{acc.name}</option>
                                 ))}
+                                {/* Archivované jdou vybrat taky — výplata může patřit
+                                    účtu, který mezitím padl (a u editace staré výplaty
+                                    by se jinak její účet ze selectu ztratil). */}
+                                {accounts.some(a => a.status !== 'Active' && a.type !== 'Backtest') && (
+                                    <optgroup label="Archivované / spálené">
+                                        {accounts.filter(a => a.status !== 'Active' && a.type !== 'Backtest').map(acc => (
+                                            <option key={acc.id} value={acc.id}>{acc.name}</option>
+                                        ))}
+                                    </optgroup>
+                                )}
                             </select>
                         </div>
                         <div className="space-y-2">
