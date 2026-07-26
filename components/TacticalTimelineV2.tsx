@@ -16,7 +16,7 @@ import {
   Sun, Moon, ChevronDown, MessageSquare, Sparkles, CheckCircle2, Image as ImageIcon,
   Plus, Trash2, AlertTriangle, Maximize2,
 } from 'lucide-react';
-import { DailyPrep, DailyReview, Trade, SessionConfig, SessionBreakdown, IronRule, QuickNote, SessionAnalysis } from '../types';
+import { Account, DailyPrep, DailyReview, Trade, SessionConfig, SessionBreakdown, IronRule, QuickNote, SessionAnalysis, TradingIncident, TradingIncidentAllocation } from '../types';
 import { storageService } from '../services/storageService';
 import { thumbSmall, thumbLarge, fullSize } from '../services/imageUrlService';
 import { getTradeEntryMinuteOfDay } from '../services/tradeTime';
@@ -29,6 +29,7 @@ interface Props {
   prep?: DailyPrep;
   review?: DailyReview;
   trades: Trade[];
+  accounts: Account[];
   theme: 'dark' | 'light' | 'oled';
   sessions?: SessionConfig[];
   sessionBreakdowns?: SessionBreakdown[];
@@ -54,7 +55,7 @@ interface Props {
 }
 
 const TacticalTimelineV2: React.FC<Props> = ({
-  date, prep, review, trades, theme,
+  date, prep, review, trades, accounts, theme,
   sessions = [], sessionBreakdowns = [],
   rituals = [], tradeRules = [],
   onEditPrep, onEditReview, onDeletePrep, onDeleteReview,
@@ -256,6 +257,7 @@ const TacticalTimelineV2: React.FC<Props> = ({
             isDark={isDark}
             review={review}
             trades={trades}
+            accounts={accounts}
             quickNotes={quickNotes}
             onEdit={onEditReview}
             onDelete={review && onDeleteReview ? () => onDeleteReview(date) : undefined}
@@ -1411,10 +1413,120 @@ const DebriefEditor: React.FC<{
   );
 };
 
+const IncidentComposer: React.FC<{
+  isDark: boolean;
+  accounts: Account[];
+  date: string;
+  onSave: (incident: TradingIncident) => void;
+  onCancel: () => void;
+}> = ({ isDark, accounts, date, onSave, onCancel }) => {
+  const [type, setType] = useState<TradingIncident['type']>('gambling');
+  const [title, setTitle] = useState('Impulzivní trading / gamble');
+  const [whatHappened, setWhatHappened] = useState('');
+  const [trigger, setTrigger] = useState('');
+  const [lesson, setLesson] = useState('');
+  const [rows, setRows] = useState<Array<{ id: string; target: string; amount: string }>>([
+    { id: crypto.randomUUID(), target: '', amount: '' },
+    { id: crypto.randomUUID(), target: '', amount: '' },
+  ]);
+
+  const liveAccounts = useMemo(() => accounts.filter(a => a.type !== 'Backtest'), [accounts]);
+  const firms = useMemo(() => Array.from(new Set(liveAccounts.map(a =>
+    (a.firmOverride || a.name.split(/[\s_-]+/)[0] || 'Ostatní').trim()
+  ))).sort((a, b) => a.localeCompare(b, 'cs')), [liveAccounts]);
+  const inputCls = `w-full px-3 py-2.5 rounded-xl border text-xs outline-none focus:ring-2 focus:ring-rose-500/20 ${
+    isDark ? 'bg-white/5 border-white/10 text-slate-100 placeholder:text-slate-600' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'
+  }`;
+
+  const resolveAllocation = (row: { id: string; target: string; amount: string }): TradingIncidentAllocation | null => {
+    const lossAmount = Number(row.amount.replace(',', '.'));
+    if (!row.target || !Number.isFinite(lossAmount) || lossAmount <= 0) return null;
+    if (row.target.startsWith('account:')) {
+      const accountId = row.target.slice(8);
+      const account = liveAccounts.find(a => a.id === accountId);
+      if (!account) return null;
+      return { id: row.id, scopeType: 'account', scopeId: account.id, label: account.name, lossAmount, currency: account.currency || 'USD' };
+    }
+    const firm = row.target.slice(5);
+    return { id: row.id, scopeType: 'firm', scopeId: firm, label: firm, lossAmount, currency: 'USD' };
+  };
+  const allocations = rows.map(resolveAllocation).filter((a): a is TradingIncidentAllocation => Boolean(a));
+  const total = allocations.reduce((sum, a) => sum + a.lossAmount, 0);
+  const canSave = whatHappened.trim().length >= 5 && allocations.length > 0 && total > 0;
+
+  const submit = () => {
+    if (!canSave) return;
+    onSave({
+      id: crypto.randomUUID(),
+      timestamp: new Date(`${date}T12:00:00`).getTime(),
+      type,
+      title: title.trim() || 'Trading incident',
+      whatHappened: whatHappened.trim(),
+      trigger: trigger.trim() || undefined,
+      lesson: lesson.trim() || undefined,
+      allocations,
+    });
+  };
+
+  return (
+    <div className={`p-4 rounded-2xl border mb-4 ${isDark ? 'bg-rose-500/5 border-rose-500/20' : 'bg-rose-50/70 border-rose-200'}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <p className="text-[9px] font-black uppercase tracking-widest text-rose-500">Zapsat incident bez tradů</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Ztráta se nepočítá do WR, RR ani počtu obchodů.</p>
+        </div>
+        <button onClick={onCancel} aria-label="Zavřít formulář" className="p-1.5 text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-2 mb-2">
+        <select value={type} onChange={e => setType(e.target.value as TradingIncident['type'])} className={inputCls}>
+          <option value="gambling">Gambling / impulzivní trading</option>
+          <option value="platform_error">Chyba platformy / kopírky</option>
+          <option value="other">Jiná událost</option>
+        </select>
+        <input value={title} onChange={e => setTitle(e.target.value)} className={inputCls} placeholder="Název incidentu" />
+      </div>
+      <textarea value={whatHappened} onChange={e => setWhatHappened(e.target.value)} rows={3} className={`${inputCls} resize-none mb-2`} placeholder="Co se stalo? Nemusíš rekonstruovat jednotlivé vstupy — popiš eskalaci." />
+      <div className="grid sm:grid-cols-2 gap-2 mb-3">
+        <textarea value={trigger} onChange={e => setTrigger(e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Trigger (např. nuda + chtěl jsem víc)" />
+        <textarea value={lesson} onChange={e => setLesson(e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Co si z toho odnáším / ochranné pravidlo" />
+      </div>
+      <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">Rozpad ztráty</p>
+      <div className="space-y-2">
+        {rows.map(row => (
+          <div key={row.id} className="grid grid-cols-[1fr_105px_28px] gap-2">
+            <select value={row.target} onChange={e => setRows(prev => prev.map(r => r.id === row.id ? { ...r, target: e.target.value } : r))} className={inputCls}>
+              <option value="">Vyber účet nebo firmu…</option>
+              <optgroup label="Celá firma / skupina">
+                {firms.map(firm => <option key={`firm:${firm}`} value={`firm:${firm}`}>{firm}</option>)}
+              </optgroup>
+              <optgroup label="Konkrétní účet">
+                {liveAccounts.map(a => <option key={a.id} value={`account:${a.id}`}>{a.name}</option>)}
+              </optgroup>
+            </select>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">-$</span>
+              <input inputMode="decimal" value={row.amount} onChange={e => setRows(prev => prev.map(r => r.id === row.id ? { ...r, amount: e.target.value } : r))} className={`${inputCls} pl-8 font-mono`} placeholder="0" />
+            </div>
+            <button onClick={() => setRows(prev => prev.filter(r => r.id !== row.id))} disabled={rows.length === 1} aria-label="Odebrat řádek" className="text-slate-400 hover:text-rose-500 disabled:opacity-30"><Trash2 size={13} /></button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between mt-3 gap-3">
+        <button onClick={() => setRows(prev => [...prev, { id: crypto.randomUUID(), target: '', amount: '' }])} className="text-[9px] font-black uppercase tracking-widest text-blue-500 hover:text-blue-600">+ Přidat účet/skupinu</button>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-sm font-black text-rose-500">Celkem -${total.toFixed(0)}</span>
+          <button onClick={submit} disabled={!canSave} className="px-4 py-2.5 rounded-xl bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-40">Uložit incident</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const ExpandedAuditCard: React.FC<{
   isDark: boolean;
   review?: DailyReview;
   trades: Trade[];
+  accounts: Account[];
   quickNotes: QuickNote[];
   onEdit: () => void;
   onDelete?: () => void;
@@ -1423,10 +1535,14 @@ const ExpandedAuditCard: React.FC<{
   onUpdateReview?: (updates: Partial<DailyReview>) => void;
   userMistakes?: string[];
   date: string;
-}> = ({ isDark, review, trades, quickNotes, onDelete, onCollapse, onDeleteNote, onUpdateReview, userMistakes = [] }) => {
+}> = ({ isDark, review, trades, accounts, quickNotes, onDelete, onCollapse, onDeleteNote, onUpdateReview, userMistakes = [], date }) => {
   const realTrades = trades.filter(t => t.executionStatus !== 'Missed');
   const pnl = realTrades.reduce((s, t) => s + (t.pnl || 0), 0);
   const pnlClass = pnl > 0 ? 'text-emerald-600' : pnl < 0 ? 'text-rose-600' : 'text-slate-500';
+  const [incidentOpen, setIncidentOpen] = useState(false);
+  const incidents = review?.incidents || [];
+  const incidentLoss = incidents.reduce((sum, incident) => sum + incident.allocations.reduce((s, a) => s + (Number(a.lossAmount) || 0), 0), 0);
+  const knownDayPnl = pnl - incidentLoss;
   const cardClass = isDark
     ? 'bg-gradient-to-br from-indigo-500/10 to-transparent border-[var(--border-subtle)]'
     : 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200 shadow-sm';
@@ -1475,11 +1591,55 @@ const ExpandedAuditCard: React.FC<{
         </div>
       )}
 
-      {/* Den P&L */}
+      {/* Den P&L — incidenty zůstávají oddělené od trade statistik. */}
       <div className={`p-3 rounded-xl border mb-4 ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-        <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Den P&L</p>
-        <p className={`text-lg font-black font-mono ${pnlClass}`}>{pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}</p>
+        <div className="grid grid-cols-3 gap-3">
+          <div><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Trade P&L</p><p className={`text-lg font-black font-mono ${pnlClass}`}>{pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}</p></div>
+          <div><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Mimo trady</p><p className="text-lg font-black font-mono text-rose-500">-${incidentLoss.toFixed(0)}</p></div>
+          <div><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Známý výsledek</p><p className={`text-lg font-black font-mono ${knownDayPnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{knownDayPnl >= 0 ? '+' : ''}${knownDayPnl.toFixed(0)}</p></div>
+        </div>
       </div>
+
+      {incidents.map(incident => {
+        const total = incident.allocations.reduce((sum, a) => sum + (Number(a.lossAmount) || 0), 0);
+        return (
+          <div key={incident.id} className={`p-4 rounded-2xl border mb-3 ${isDark ? 'bg-rose-500/5 border-rose-500/20' : 'bg-rose-50/70 border-rose-200'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[9px] font-black uppercase tracking-widest text-rose-500">⚠ Gambling incident · bez tradů</p>
+                <h4 className="font-black text-sm mt-1">{incident.title}</h4>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">{incident.whatHappened}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="font-mono font-black text-rose-500">-${total.toFixed(0)}</span>
+                {onUpdateReview && <button onClick={() => onUpdateReview({ incidents: incidents.filter(i => i.id !== incident.id) })} aria-label="Smazat incident" className="p-1.5 text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {incident.allocations.map(a => <span key={a.id} className={`px-2 py-1 rounded-lg text-[9px] font-black ${isDark ? 'bg-white/5 text-slate-300' : 'bg-white text-slate-600 border border-rose-100'}`}>{a.label} −${a.lossAmount.toFixed(0)}</span>)}
+            </div>
+            {incident.trigger && <p className="text-[10px] text-amber-600 mt-2"><b>Trigger:</b> {incident.trigger}</p>}
+            {incident.lesson && <p className="text-[10px] text-blue-600 mt-1"><b>Poučení:</b> {incident.lesson}</p>}
+          </div>
+        );
+      })}
+
+      {incidentOpen ? (
+        <IncidentComposer
+          isDark={isDark}
+          accounts={accounts}
+          date={date}
+          onCancel={() => setIncidentOpen(false)}
+          onSave={incident => {
+            onUpdateReview?.({ incidents: [...incidents, incident] });
+            setIncidentOpen(false);
+          }}
+        />
+      ) : onUpdateReview && (
+        <button onClick={() => setIncidentOpen(true)} className={`w-full mb-4 py-3 rounded-xl border border-dashed text-[9px] font-black uppercase tracking-widest transition-colors ${isDark ? 'border-rose-500/30 text-rose-400 hover:bg-rose-500/10' : 'border-rose-300 text-rose-600 hover:bg-rose-50'}`}>
+          + Zapsat gambling / ztrátu bez tradů
+        </button>
+      )}
 
       {/* CO SI ODNÁŠÍŠ */}
       <div className="mb-3">

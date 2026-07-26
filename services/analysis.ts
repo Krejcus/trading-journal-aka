@@ -141,7 +141,15 @@ export const normalizeTrades = (raw: any[], accountId: string): Trade[] => {
     .sort((a, b) => a.timestamp - b.timestamp);
 };
 
-export const calculateStats = (trades: Trade[], initialBalance: number = 0): TradeStats => {
+/** Datovaná finanční korekce (incident bez tradů) pro promítnutí do equity křivky. */
+export interface AdjustmentEvent { date: string; timestamp?: number; amount: number }
+
+export const calculateStats = (
+  trades: Trade[],
+  initialBalance: number = 0,
+  financialAdjustments: number = 0,
+  adjustmentEvents: AdjustmentEvent[] = []
+): TradeStats => {
   let totalPnL = 0;
   let grossProfit = 0;
   let grossLoss = 0;
@@ -167,6 +175,8 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
   });
 
   const equityCurve: EquityPoint[] = [{ date: 'Start', equity: initialBalance, validEquity: initialBalance, drawdown: 0 }];
+  // Časy bodů křivky (paralelně k equityCurve) — potřeba pro chronologické vložení incidentů níž.
+  const curveTimestamps: number[] = [Number.NEGATIVE_INFINITY];
   const calendarMap = new Map<string, { pnl: number; count: number }>();
   const signalMap = new Map<string, { pnl: number; wins: number; count: number; be: number }>();
   const days = ['Ne', 'Po', 'Út', 'St', 'Čt', 'Pá', 'So'];
@@ -211,6 +221,7 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
     const dd = currentEquity - maxEquity;
     if (dd < maxDrawdown) maxDrawdown = dd;
 
+    curveTimestamps.push(trade.timestamp || new Date(trade.date).getTime());
     equityCurve.push({
       date: trade.date,
       equity: currentEquity,
@@ -343,8 +354,53 @@ export const calculateStats = (trades: Trade[], initialBalance: number = 0): Tra
   if (currentWinStreak > 0) currentTradeStreak = currentWinStreak;
   else if (currentLossStreak > 0) currentTradeStreak = -currentLossStreak;
 
+  const tradePnL = totalPnL;
+  totalPnL = tradePnL + financialAdjustments;
+
+  // ── Incidenty do equity křivky ─────────────────────────────────────────────
+  // Bez tohohle končila křivka na tradePnL, zatímco Net P&L ukazoval totalPnL —
+  // dvě různá čísla pro tentýž den. Korekce vložíme chronologicky (podle data
+  // incidentu) a přepočítáme equity i drawdown; jsou to reálně ztracené peníze.
+  // Do validEquity (disciplinovaná křivka) NEjdou — incident je z definice chyba,
+  // takže mezera mezi křivkami ukazuje, co disciplína stála.
+  if (adjustmentEvents.length > 0) {
+    type CurveStep = { ts: number; date: string; equityDelta: number; validDelta: number; point?: EquityPoint };
+    const steps: CurveStep[] = [];
+    for (let i = 1; i < equityCurve.length; i++) {
+      steps.push({
+        ts: curveTimestamps[i],
+        date: equityCurve[i].date,
+        equityDelta: equityCurve[i].equity - equityCurve[i - 1].equity,
+        validDelta: equityCurve[i].validEquity - equityCurve[i - 1].validEquity,
+        point: equityCurve[i],
+      });
+    }
+    for (const adj of adjustmentEvents) {
+      if (!adj || !Number.isFinite(adj.amount) || adj.amount === 0) continue;
+      const ts = adj.timestamp ?? new Date(`${adj.date}T12:00:00`).getTime();
+      steps.push({ ts: Number.isFinite(ts) ? ts : 0, date: adj.date, equityDelta: adj.amount, validDelta: 0 });
+    }
+    steps.sort((a, b) => a.ts - b.ts);
+
+    let eq = initialBalance, validEq = initialBalance, peak = initialBalance, mdd = 0;
+    const rebuilt: EquityPoint[] = [{ date: 'Start', equity: initialBalance, validEquity: initialBalance, drawdown: 0 }];
+    for (const step of steps) {
+      eq += step.equityDelta;
+      validEq += step.validDelta;
+      if (eq > peak) peak = eq;
+      const dd = eq - peak;
+      if (dd < mdd) mdd = dd;
+      rebuilt.push(step.point
+        ? { ...step.point, equity: eq, validEquity: validEq, drawdown: dd }
+        : { date: step.date, equity: eq, validEquity: validEq, drawdown: dd });
+    }
+    equityCurve.length = 0;
+    equityCurve.push(...rebuilt);
+    maxDrawdown = mdd;
+  }
+
   return {
-    initialBalance, totalPnL,
+    initialBalance, tradePnL, financialAdjustments, totalPnL,
     winRate: (winningTrades + losingTrades) > 0 ? (winningTrades / (winningTrades + losingTrades)) * 100 : 0,
     executionRate: validSignalsCount > 0 ? (takenValidTrades / validSignalsCount) * 100 : 100,
     profitFactor: grossLoss > 0 ? grossProfit / grossLoss : 0,

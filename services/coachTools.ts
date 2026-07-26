@@ -18,6 +18,7 @@ import {
   type MemoryType,
 } from './coachMemoryService';
 import { buildLabDataset, buildLabReport, prepBiasFromPreps, prepDaysFromPreps, type PrepBiasDay } from './labAnalytics';
+import { adjustmentForAccount, getFinancialAdjustments } from './tradingIncidents';
 
 // ─── Tool definitions for Anthropic API ──────────────────────────────────────
 
@@ -143,7 +144,7 @@ export const COACH_TOOLS = [
   {
     name: 'list_accounts',
     description:
-      'Vrátí VŠECHNY obchodní účty (i neaktivní/spálené) se stavem, fází, P&L a počtem obchodů. Pro "kolik mám účtů", "který účet jsem spálil", nebo jako kontext před filtrováním podle účtu. tradeCount/netPnl počítají řádky daného účtu (fan-out kopie na každém účtu zvlášť) — konzistentní s get_stats(account=...), ale záměrně vyšší než počet rozhodnutí v get_stats bez filtru.',
+      'Vrátí VŠECHNY obchodní účty (i neaktivní/spálené) se stavem, fází, skutečným netPnl a počtem obchodů. netPnl = tradePnl + financialAdjustments (incidenty bez tradů); tyto korekce nikdy nezapočítej do tradeCount, WR, RR ani PF. Pro "kolik mám účtů", "který účet jsem spálil", nebo jako kontext před filtrováním podle účtu.',
     input_schema: {
       type: 'object',
       properties: {
@@ -726,7 +727,9 @@ function listAccounts(args: { status?: string }, ctx: ToolContext) {
     .filter((a) => !want || a.status === want)
     .map((a) => {
       const accTrades = ctx.trades.filter((t) => String(t.accountId) === String(a.id) && t.executionStatus !== 'Missed');
-      const pnl = accTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+      const tradePnl = accTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+      const financialAdjustments = adjustmentForAccount(getFinancialAdjustments(ctx.reviews), a);
+      const pnl = tradePnl + financialAdjustments;
       return {
         id: a.id,
         name: a.name,
@@ -736,6 +739,8 @@ function listAccounts(args: { status?: string }, ctx: ToolContext) {
         result: a.result,
         initialBalance: a.initialBalance,
         tradeCount: accTrades.length,
+        tradePnl: Number(tradePnl.toFixed(2)),
+        financialAdjustments: Number(financialAdjustments.toFixed(2)),
         netPnl: Number(pnl.toFixed(2)),
       };
     });
@@ -840,6 +845,17 @@ function getRecentContext(
       mistakes: r.mistakes,
       // Quick notes (myšlenky během dne) — coach je MUSÍ vidět. Bez tohoto o nich nevěděl.
       quickNotes: (r.quickNotes || []).map(n => n.text).filter(Boolean),
+      incidents: (r.incidents || []).map(i => ({
+        id: i.id,
+        type: i.type,
+        title: i.title,
+        whatHappened: i.whatHappened,
+        trigger: i.trigger,
+        lesson: i.lesson,
+        loss: i.allocations.reduce((sum, a) => sum + (Number(a.lossAmount) || 0), 0),
+        allocations: i.allocations.map(a => ({ label: a.label, lossAmount: a.lossAmount })),
+        excludedFromTradeStats: true,
+      })),
     })),
   };
 }

@@ -128,11 +128,19 @@ export function buildReviewContent(r: DailyReview): { content: string; metadata:
       .join(' | ');
     if (notesText) parts.push(`Poznámky během dne: ${cleanText(notesText, 800)}`);
   }
+  if (r.incidents?.length) {
+    for (const incident of r.incidents) {
+      const loss = incident.allocations.reduce((sum, a) => sum + (Number(a.lossAmount) || 0), 0);
+      const split = incident.allocations.map(a => `${a.label} -$${Number(a.lossAmount).toFixed(0)}`).join(', ');
+      parts.push(`Trading incident bez tradů: ${cleanText(incident.title, 120)}. Ztráta -$${loss.toFixed(0)} (${split}). ${cleanText(incident.whatHappened, 600)}${incident.trigger ? ` Trigger: ${cleanText(incident.trigger, 300)}.` : ''}${incident.lesson ? ` Poučení: ${cleanText(incident.lesson, 300)}.` : ''}`);
+    }
+  }
 
   const content = parts.join('. ');
 
   const metadata: Record<string, unknown> = {
     rating: r.rating ?? null,
+    incidentLoss: (r.incidents || []).reduce((sum, i) => sum + i.allocations.reduce((s, a) => s + (Number(a.lossAmount) || 0), 0), 0),
     scenarioResult: r.scenarioResult || null,
     mistakes: r.mistakes || [],
     hasBreakdowns: (r.sessionBreakdowns || []).some(b => b.notes?.trim()),

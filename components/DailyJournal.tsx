@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, WeeklyFocus, SessionConfig, SessionAnalysis, GoalResult } from '../types';
+import { Account, DailyPrep, DailyReview, Trade, IronRule, RuleCompletion, WeeklyReview, WeeklyFocus, SessionConfig, SessionAnalysis, GoalResult } from '../types';
 import DisciplineDashboard from './DisciplineDashboard';
 import TacticalTimelineV2 from './TacticalTimelineV2';
 import ImageZoomModal from './ImageZoomModal';
@@ -68,6 +68,7 @@ import {
 interface DailyJournalProps {
   theme: 'dark' | 'light' | 'oled';
   trades: Trade[];
+  accounts: Account[];
   preps: DailyPrep[];
   reviews: DailyReview[];
   onSavePrep: (prep: DailyPrep) => Promise<void> | void;
@@ -86,7 +87,7 @@ interface DailyJournalProps {
 }
 
 const DailyJournal: React.FC<DailyJournalProps> = ({
-  theme, trades, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = [], initialDate, userMistakes = []
+  theme, trades, accounts, preps, reviews, onSavePrep, onSaveReview, onDeletePrep, onDeleteReview, standardGoals, ironRules, viewMode, weeklyFocusList, activeTab, onTabChange, sessions = [], initialDate, userMistakes = []
 }) => {
   const getToday = () => new Date().toLocaleDateString('en-CA');
   const [selectedDate, setSelectedDate] = useState(initialDate ?? getToday());
@@ -255,7 +256,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       const p = lastPrepForm.current;
       const r = lastReviewForm.current;
       const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
-      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim()) && !r.goalResults?.some(g => g.achieved) && !r.weeklyGoalAdherence?.some(a => a.status !== 'Pending');
+      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim()) && !r.goalResults?.some(g => g.achieved) && !r.weeklyGoalAdherence?.some(a => a.status !== 'Pending') && !r.incidents?.length;
 
       if (!isPrepEmpty) unmountSaveRef.current.onSavePrep(p);
       if (!isReviewEmpty) unmountSaveRef.current.onSaveReview(r);
@@ -275,7 +276,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       const p = lastPrepForm.current;
       const r = lastReviewForm.current;
       const isPrepEmpty = !p.scenarios.bullish && !p.scenarios.bearish && !p.mindsetState && !p.scenarios.scenarioImages?.length && !p.scenarios.sessions?.some(s => s.plan?.trim() || s.image) && !p.ritualCompletions?.some(r => r.status === 'Pass');
-      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim()) && !r.goalResults?.some(g => g.achieved) && !r.weeklyGoalAdherence?.some(a => a.status !== 'Pending');
+      const isReviewEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim()) && !r.goalResults?.some(g => g.achieved) && !r.weeklyGoalAdherence?.some(a => a.status !== 'Pending') && !r.incidents?.length;
 
       if (!isPrepEmpty) onSavePrep(p);
       if (!isReviewEmpty) onSaveReview(r);
@@ -341,6 +342,14 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     ruleAdherence: (r.ruleAdherence || []).map(a => ({ ruleId: a.ruleId, status: a.status, label: a.label || '' })),
     weeklyGoalAdherence: (r.weeklyGoalAdherence || []).map(a => ({ ruleId: a.ruleId, status: a.status, label: a.label || '' })),
     sessionBreakdowns: (r.sessionBreakdowns || []).map(b => ({ sessionId: b.sessionId, notes: b.notes || '', screenshot: b.screenshot || '' })),
+    incidents: (r.incidents || []).map(i => ({
+      id: i.id, timestamp: i.timestamp, type: i.type, title: i.title,
+      whatHappened: i.whatHappened, trigger: i.trigger || '', lesson: i.lesson || '',
+      allocations: (i.allocations || []).map(a => ({
+        id: a.id, scopeType: a.scopeType, scopeId: a.scopeId || '', label: a.label,
+        lossAmount: a.lossAmount, currency: a.currency || 'USD',
+      })),
+    })),
     psycho: {
       stressors: r.psycho?.stressors || '',
       gratitude: r.psycho?.gratitude || '',
@@ -410,7 +419,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     if (!saved || normalizeReview(reviewForm) !== normalizeReview(saved)) {
       // Don't auto-save a brand new review if it's still empty
       if (!saved) {
-        const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes && !reviewForm.psycho?.stressors?.trim() && !reviewForm.psycho?.gratitude?.trim() && !reviewForm.ruleAdherence?.some(a => a.status !== 'Pending') && !reviewForm.sessionBreakdowns?.some(b => b.notes?.trim()) && !reviewForm.quickNotes?.length && !reviewForm.mistakes?.length;
+        const isEmpty = !reviewForm.mainTakeaway && !reviewForm.lessons && reviewForm.rating === 0 && !reviewForm.psycho?.notes && !reviewForm.psycho?.stressors?.trim() && !reviewForm.psycho?.gratitude?.trim() && !reviewForm.ruleAdherence?.some(a => a.status !== 'Pending') && !reviewForm.sessionBreakdowns?.some(b => b.notes?.trim()) && !reviewForm.quickNotes?.length && !reviewForm.mistakes?.length && !reviewForm.incidents?.length;
         if (isEmpty) return;
       }
       // Skip autosave when tab is hidden — prevents concurrent writes when multiple clients are open
@@ -872,7 +881,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       while (d.getDay() === 0 || d.getDay() === 6) {
         const dateStr = d.toLocaleDateString('en-CA');
         const isTodayWeekend = dateStr === today;
-        const hasContent = reviews.some(r => r.date === dateStr && (r.psycho?.notes?.trim() || r.quickNotes?.length || r.mainTakeaway?.trim() || r.lessons?.trim())) ||
+        const hasContent = reviews.some(r => r.date === dateStr && (r.psycho?.notes?.trim() || r.quickNotes?.length || r.mainTakeaway?.trim() || r.lessons?.trim() || r.incidents?.length)) ||
                            preps.some(p => p.date === dateStr && (p.mindsetState?.trim() || p.goals?.length || p.dailyFocus?.trim()));
         
         if (isTodayWeekend || hasContent) {
@@ -983,7 +992,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     // 1. Force save the PREVIOUS date's review if date changed, was dirty, and not empty
     if (dateActuallyChanged && lastReviewForm.current.date && lastReviewForm.current.date !== selectedDate && reviewFormDirty.current) {
       const r = lastReviewForm.current;
-      const isEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim());
+      const isEmpty = !r.mainTakeaway && !r.lessons && r.rating === 0 && !r.psycho?.notes && !r.psycho?.stressors?.trim() && !r.psycho?.gratitude?.trim() && !r.ruleAdherence?.some(a => a.status !== 'Pending') && !r.sessionBreakdowns?.some(b => b.notes?.trim()) && !r.incidents?.length;
       if (!isEmpty) void onSaveReview(r);
     }
 
@@ -1251,6 +1260,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 prep={prepForm}
                 review={reviewForm}
                 trades={currentTrades}
+                accounts={accounts}
                 theme={theme}
                 sessions={sessions}
                 sessionBreakdowns={reviewForm.sessionBreakdowns}

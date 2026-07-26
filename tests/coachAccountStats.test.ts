@@ -68,6 +68,24 @@ describe('get_stats s account filtrem — konzistence s list_accounts (bug 3 vs 
     expect(stats.totalPnL).toBe(lucid.netPnl);
   });
 
+  it('list_accounts odečte incident z netPnl, ale nemění tradeCount ani tradePnl', async () => {
+    const incidentCtx = {
+      ...ctx,
+      reviews: [{
+        id: 'r1', date: '2026-07-23', incidents: [{
+          id: 'i1', timestamp: 1, type: 'gambling', title: 'Gamble', whatHappened: 'Bez plánu',
+          allocations: [{ id: 'al1', scopeType: 'account', scopeId: 'a-lucid', label: 'Lucid Funded', lossAmount: 500 }],
+        }],
+      }],
+    };
+    const list: any = await executeTool('list_accounts', {}, incidentCtx);
+    const lucid = list.accounts.find((a: any) => a.name === 'Lucid Funded');
+    expect(lucid.tradeCount).toBe(5);
+    expect(lucid.tradePnl).toBe(280);
+    expect(lucid.financialAdjustments).toBe(-500);
+    expect(lucid.netPnl).toBe(-220);
+  });
+
   it('get_stats BEZ filtru dál slučuje kopie do rozhodnutí ($ přes účty)', async () => {
     const stats: any = await executeTool('get_stats', {}, ctx);
     expect(stats.totalTrades).toBe(5); // 5 rozhodnutí, ne 9 řádků

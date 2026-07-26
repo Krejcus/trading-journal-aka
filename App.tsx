@@ -7,6 +7,8 @@ import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { safeSetItem } from './utils/safeStorage';
 import { clearAppStorage } from './utils/appStorage';
+import { firmOf } from './utils/accountFirm';
+import { adjustmentTotal, getFinancialAdjustments } from './services/tradingIncidents';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
@@ -2526,14 +2528,62 @@ const App: React.FC = () => {
     return viewMode === 'combined' ? aggregateTrades(baseFilteredTrades, accounts) : baseFilteredTrades;
   }, [baseFilteredTrades, viewMode, accounts]);
 
+  // Vrací datované položky (ne jen součet) — equity křivka je potřebuje zasadit
+  // na správný den, jinak by končila jinde než Net P&L.
+  const filteredAdjustmentEvents = useMemo(() => {
+    if (dashboardMode === 'backtesting') return [];
+
+    // Incident nemá směr/setup/outcome. Při analytickém filtru konkrétního druhu
+    // obchodu ho proto nezapočítáváme; v běžném P&L pohledu ano.
+    const neutralTradeDimensions =
+      filters.directions.length === 2 &&
+      ['Win', 'Loss', 'BE'].every(outcome => filters.outcomes.includes(outcome as 'Win' | 'Loss' | 'BE')) &&
+      filters.executionStatuses.includes('Valid') && filters.executionStatuses.includes('Invalid') &&
+      filters.signals.length === 0 && filters.htfConfluences.length === 0 &&
+      filters.ltfConfluences.length === 0 && filters.mistakes.length === 0;
+    if (!neutralTradeDimensions) return [];
+
+    const now = new Date();
+    const scopeAccounts = filters.accounts.length > 0
+      ? contextAccounts.filter(account => filters.accounts.includes(account.id))
+      : contextAccounts;
+    const accountIds = new Set(scopeAccounts.map(account => account.id));
+    const firms = new Set(scopeAccounts.map(firmOf));
+
+    const matching = getFinancialAdjustments(dailyReviews).filter(adjustment => {
+      const inAccountScope = adjustment.accountId
+        ? accountIds.has(adjustment.accountId)
+        : adjustment.scopeType === 'firm' && firms.has(firmOf({ name: adjustment.firm || adjustment.label } as Account));
+      if (!inAccountScope) return false;
+
+      const date = new Date(`${adjustment.date}T12:00:00`);
+      const dayName = ['Ne', 'Po', 'Út', 'St', 'Čt', 'Pá', 'So'][date.getDay()];
+      if (!filters.days.includes(dayName)) return false;
+      if (filters.period !== 'all') {
+        const diffDays = (now.getTime() - date.getTime()) / (1000 * 3600 * 24);
+        if (filters.period === 'week' && diffDays > 7) return false;
+        if (filters.period === 'month' && diffDays > 30) return false;
+        if (filters.period === 'quarter' && diffDays > 90) return false;
+        if (filters.period === 'year' && diffDays > 365) return false;
+      }
+      return true;
+    });
+    return matching;
+  }, [dashboardMode, filters, contextAccounts, dailyReviews]);
+
+  const filteredFinancialAdjustments = useMemo(
+    () => adjustmentTotal(filteredAdjustmentEvents),
+    [filteredAdjustmentEvents]
+  );
+
   const filteredStats = useMemo(() => {
     try {
-      return calculateStats(filteredDisplayTrades, displayBalance);
+      return calculateStats(filteredDisplayTrades, displayBalance, filteredFinancialAdjustments, filteredAdjustmentEvents);
     } catch (e) {
       console.error("Filtered stats calculation error:", e);
       return calculateStats([], 0);
     }
-  }, [filteredDisplayTrades, displayBalance]);
+  }, [filteredDisplayTrades, displayBalance, filteredFinancialAdjustments, filteredAdjustmentEvents]);
 
   const handleUpdateUser = async (updatedUser: User) => {
     setCurrentUser(updatedUser);
@@ -3730,6 +3780,7 @@ const App: React.FC = () => {
                     <DailyJournal
                       theme={theme}
                       trades={filteredDisplayTrades}
+                      accounts={allAccountsWithArchived}
                       preps={dailyPreps}
                       reviews={dailyReviews}
                       onSavePrep={handleSavePrep}
@@ -3774,6 +3825,7 @@ const App: React.FC = () => {
                         onAddExpense={handleAddSingleExpense}
                         onUpdatePayouts={handleUpdatePayouts}
                         payouts={businessPayouts}
+                        reviews={dailyReviews}
                         user={currentUser}
                         onOpenInDashboard={(id) => {
                           setDashFocusAccount(id);

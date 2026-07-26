@@ -351,6 +351,11 @@ export interface EquityPoint {
 
 export interface TradeStats {
   initialBalance: number;
+  /** P&L pouze z obchodů; používá se pro WR/RR/PF a další trade statistiky. */
+  tradePnL: number;
+  /** Finanční korekce mimo trady (např. gambling bez rekonstruovaných vstupů). */
+  financialAdjustments: number;
+  /** Skutečný finanční výsledek = tradePnL + financialAdjustments. */
   totalPnL: number;
   winRate: number;
   executionRate: number;
@@ -466,6 +471,28 @@ export interface QuickNote {
   text: string;
 }
 
+export interface TradingIncidentAllocation {
+  id: string;
+  /** Konkrétní účet, celá firma/skupina, nebo ručně pojmenovaný celek. */
+  scopeType: 'account' | 'firm' | 'custom';
+  scopeId?: string;
+  label: string;
+  /** Absolutní hodnota ztráty v měně účtu (ukládá se kladně). */
+  lossAmount: number;
+  currency?: string;
+}
+
+export interface TradingIncident {
+  id: string;
+  timestamp: number;
+  type: 'gambling' | 'platform_error' | 'other';
+  title: string;
+  whatHappened: string;
+  trigger?: string;
+  lesson?: string;
+  allocations: TradingIncidentAllocation[];
+}
+
 export interface DailyReview {
   id: string;
   date: string;
@@ -485,6 +512,8 @@ export interface DailyReview {
   quickNotes?: QuickNote[];
   /** Auto-debrief flag pro loss day debrief modal. */
   autoDebrief?: boolean;
+  /** Události bez rekonstruovatelných tradů. Nezapočítávají se do WR/RR/trade count. */
+  incidents?: TradingIncident[];
 }
 
 export interface WeeklyGoal {

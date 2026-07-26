@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Account, Trade, BusinessPayout, User } from '../types';
+import { Account, Trade, BusinessPayout, User, DailyReview } from '../types';
 import {
   Activity,
   Plus,
@@ -28,6 +28,7 @@ import PayoutModal from './PayoutModal';
 import AccountFuneralModal, { type FailureData } from './AccountFuneralModal';
 import Graveyard, { MemorialModal, computeStats } from './Graveyard';
 import { firmOf, firmInitials, firmColor, firmLabel, FIRM_LOGOS, KNOWN_FIRMS } from '../utils/accountFirm';
+import { adjustmentForAccount, adjustmentTotal, directAdjustmentForFirm, getFinancialAdjustments } from '../services/tradingIncidents';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -43,6 +44,7 @@ interface AccountsManagerProps {
   onImportTradovate?: (id: string) => void;
   onUpdatePayouts: (payouts: BusinessPayout[]) => void;
   payouts: BusinessPayout[];
+  reviews: DailyReview[];
   user: User;
 }
 
@@ -159,6 +161,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   trades,
   onUpdatePayouts,
   payouts,
+  reviews,
   user,
   onAddExpense,
   onOpenInDashboard,
@@ -191,10 +194,14 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
   const [editFormData, setEditFormData] = useState<Partial<Account>>({});
 
+  const financialAdjustments = useMemo(() => getFinancialAdjustments(reviews), [reviews]);
+
   const portfolioStats = useMemo(() => {
     const totalChallengeCosts = accounts.reduce((sum, acc) => sum + (acc.challengeCost || 0), 0);
     const totalNetPayouts = payouts.filter(p => p.status === 'Received').reduce((sum, p) => sum + p.amount, 0);
-    const totalTradesPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
+    const tradePnL = trades.reduce((sum, t) => sum + t.pnl, 0);
+    const incidentPnL = adjustmentTotal(financialAdjustments);
+    const totalTradesPnL = tradePnL + incidentPnL;
     const netCashflow = totalNetPayouts - totalChallengeCosts;
 
     const challenges = accounts.filter(a => a.type === 'Funded');
@@ -206,13 +213,15 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       totalChallengeCosts,
       totalNetPayouts,
       totalTradesPnL,
+      tradePnL,
+      incidentPnL,
       netCashflow,
       challengeCount,
       passRate,
       activeCount: accounts.filter(a => a.status === 'Active').length,
       inactiveCount: accounts.filter(a => a.status === 'Inactive').length
     };
-  }, [accounts, trades, payouts]);
+  }, [accounts, trades, payouts, financialAdjustments]);
 
   // Spálené účty (result Failed) — zobrazí se v Hřbitově, ne v běžném gridu
   const failedAccounts = useMemo(
@@ -224,8 +233,11 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const pnlByAccount = useMemo(() => {
     const m: Record<string, number> = {};
     for (const t of trades) m[t.accountId] = (m[t.accountId] || 0) + t.pnl;
+    for (const account of accounts) {
+      m[account.id] = (m[account.id] || 0) + adjustmentForAccount(financialAdjustments, account);
+    }
     return m;
-  }, [trades]);
+  }, [trades, accounts, financialAdjustments]);
 
   // ── Seskupení po FIRMÁCH (TopStep / Tradeify / Lucid…) ──────────────────────
   // Kopírka jede z jednoho masteru → parentAccountId dávky nerozdělí. Firma se
@@ -267,6 +279,11 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         sumBalance += a.initialBalance + pnl - (a.accumulatedChallengePnL || 0) - gross;
         sumPnl += pnl - (a.accumulatedChallengePnL || 0);
       }
+      // Korekce zadaná přímo na firmu nemá jednoznačné rozdělení mezi její účty,
+      // ale patří do souhrnného balance/P&L firmy i portfolia.
+      const directFirmAdjustment = directAdjustmentForFirm(financialAdjustments, firm);
+      sumBalance += directFirmAdjustment;
+      sumPnl += directFirmAdjustment;
 
       const mults = [...new Set(visible.map(a => a.copyMultiplier || 1))];
       const multiplierLabel = mults.length === 1 ? (mults[0] > 1 ? `${mults[0]}×` : null) : 'mix';
@@ -280,7 +297,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
       return { firm, visible: sortedVisible, bought, paid, received, pending, net: received - paid, activeCount, failedCount, sumBalance, sumPnl, multiplierLabel };
     }).sort((a, b) => (b.activeCount - a.activeCount) || a.firm.localeCompare(b.firm, 'cs'));
-  }, [accounts, showInactive, payouts, pnlByAccount]);
+  }, [accounts, showInactive, payouts, pnlByAccount, financialAdjustments]);
 
   // Hromadné pohřbení celé firmy používá stejný plný Funeral formulář jako
   // jednotlivý účet a jeho reflexi uloží ke všem aktivním účtům skupiny.
@@ -485,7 +502,9 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
   const renderAccountCard = (acc: Account, isSlave = false) => {
     const accTrades = trades.filter(t => t.accountId === acc.id);
-    const totalPnL = accTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const tradePnL = accTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const incidentPnL = adjustmentForAccount(financialAdjustments, acc);
+    const totalPnL = tradePnL + incidentPnL;
     const accPayouts = payouts.filter(p => p.accountId === acc.id && p.status === 'Received');
     const grossWithdrawals = accPayouts.reduce((sum, p) => sum + (p.grossAmount || p.amount), 0);
     const accumulatedChallengePnL = acc.accumulatedChallengePnL || 0;
@@ -642,8 +661,11 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded-xl ${theme !== 'light' ? 'bg-blue-500/10 text-blue-500' : 'bg-blue-50 text-blue-500'}`}><Activity size={16} /></div>
             <div>
-              <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Trade PnL</p>
+              <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Skutečný PnL</p>
               <p className={`text-sm font-black font-mono ${portfolioStats.totalTradesPnL >= 0 ? 'text-slate-200' : 'text-rose-500'}`}>{portfolioStats.totalTradesPnL >= 0 ? '+' : ''}${portfolioStats.totalTradesPnL.toLocaleString()}</p>
+              {portfolioStats.incidentPnL !== 0 && (
+                <p className="text-[8px] font-bold text-rose-500">mimo trady {portfolioStats.incidentPnL.toLocaleString()}</p>
+              )}
             </div>
           </div>
           <div className="w-px h-8 bg-white/5" />

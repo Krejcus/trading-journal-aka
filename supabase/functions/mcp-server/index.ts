@@ -24,6 +24,7 @@ import {
   buildLabDataset, buildLabReport, dedupeDecisions,
   prepBiasFromPreps, prepDaysFromPreps,
 } from './labAnalytics.ts';
+import { incidentForMcp, incidentJournalLine, incidentLoss } from './journalIncidents.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -254,6 +255,21 @@ function buildJournalText(core: Core, days: number, includeNotes: boolean): stri
     }
   }
 
+  // Události bez rekonstruovatelných tradů (gambling, chyba platformy apod.).
+  // Jsou psychologicky zásadní, ale záměrně zůstávají mimo trade statistiky.
+  const incidentReviews = core.reviews
+    .filter(r => String(r.date) >= since && r.incidents?.length)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const incidents = incidentReviews.flatMap(r =>
+    (r.incidents || []).map((incident: any) => ({ date: r.date, incident })));
+  if (incidents.length) {
+    const totalLoss = incidents.reduce((sum, item) => sum + incidentLoss(item.incident), 0);
+    L.push('');
+    L.push(`[INCIDENTY BEZ TRADŮ — posledních ${days} dní] ${incidents.length} událostí · evidovaná ztráta -$${Math.round(totalLoss).toLocaleString('en-US')}`);
+    L.push('Tyto události analyzuj jako psychologii/chování. NEPŘIČÍTEJ je k trade P&L a nezahrnuj je do počtu obchodů, WR, RR ani PF.');
+    for (const item of incidents) L.push(`${item.date}: ${incidentJournalLine(item.incident)}`);
+  }
+
   // Přípravy (14 dní) — bias, fokus, cíle + PLÁN per session karta
   const preps14 = core.preps.filter(p => String(p.date) >= isoTZ(subDays(now, 14)));
   if (preps14.length) {
@@ -353,7 +369,8 @@ mcp.tool('load_journal', {
   description:
     'VŽDY ZAVOLEJ NA ZAČÁTKU KONVERZACE. Vrátí kompletní trading deník: aktivní závazky, ' +
     'statistiky, všechny obchody za posledních N dní (1 řádek = 1 rozhodnutí, $ sečtené přes ' +
-    'prop účty), měsíční souhrn starší historie, ranní přípravy (vč. plánů per session) ' +
+    'prop účty), incidenty bez tradů (gambling/platforma; oddělené od trade statistik), ' +
+    'měsíční souhrn starší historie, ranní přípravy (vč. plánů per session) ' +
     'a večerní audity (takeaway, lekce, poznámky). Delší texty jsou zkrácené — plný den ' +
     'bez zkracování vrací get_journal_day. Po načtení odpovídej z těchto dat.',
   inputSchema: z.object({
@@ -455,10 +472,9 @@ mcp.tool('get_stats', {
 mcp.tool('list_accounts', {
   description:
     'Přehled VŠECH obchodních účtů (i neaktivních/spálených): stav, typ, fáze, výsledek, ' +
-    'počet obchodů a PnL. Pro "kolik mám účtů", "který jsem spálil", nebo před per-účet ' +
-    'analýzou přes get_stats(account=...). POZOR: tradeCount/netPnl počítají řádky daného ' +
-    'účtu (fan-out kopie na každém účtu zvlášť) — konzistentní s get_stats(account=...), ' +
-    'ale záměrně VYŠŠÍ než počet rozhodnutí v load_journal/get_stats bez filtru.',
+    'počet obchodů a skutečný net PnL. netPnl = tradePnl + financialAdjustments z incidentů ' +
+    'bez tradů; korekce nepatří do tradeCount, WR, RR ani PF. Pro detail trade statistik ' +
+    'konkrétního účtu použij get_stats(account=...).',
   inputSchema: z.object({
     status: z.enum(['Active', 'Inactive', 'Archived', 'all']).optional().describe('Filtr stavu, default all'),
   }),
@@ -472,16 +488,24 @@ mcp.tool('list_accounts', {
         const accTrades = a.type === 'Backtest'
           ? core.trades.filter(t => String(t.accountId) === String(a.id) && t.executionStatus !== 'Missed')
           : raw.filter(t => String(t.accountId) === String(a.id));
+        const tradePnl = accTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+        const financialAdjustments = -core.reviews.reduce((sum, review) =>
+          sum + (review.incidents || []).reduce((incidentSum: number, incident: any) =>
+            incidentSum + (incident.allocations || [])
+              .filter((allocation: any) => allocation.scopeType === 'account' && String(allocation.scopeId) === String(a.id))
+              .reduce((allocationSum: number, allocation: any) => allocationSum + Math.abs(Number(allocation.lossAmount) || 0), 0), 0), 0);
         return {
           id: a.id, name: a.name, status: a.status, type: a.type,
           phase: a.phase ?? null, result: a.result ?? null,
           initialBalance: a.initialBalance ?? null,
           tradeCount: accTrades.length,
-          netPnl: Math.round(accTrades.reduce((s, t) => s + (t.pnl || 0), 0) * 100) / 100,
+          tradePnl: Math.round(tradePnl * 100) / 100,
+          financialAdjustments: Math.round(financialAdjustments * 100) / 100,
+          netPnl: Math.round((tradePnl + financialAdjustments) * 100) / 100,
         };
       });
     return text(JSON.stringify({
-      _pozn: 'tradeCount/netPnl = řádky per účet (kopie na každém účtu zvlášť). Pro detail účtu volej get_stats(account=name).',
+      _pozn: 'tradeCount a tradePnl jsou jen obchody. financialAdjustments jsou peníze mimo trady. netPnl je skutečný součet obojího.',
       count: out.length, accounts: out,
     }, null, 1));
   }),
@@ -511,7 +535,7 @@ mcp.tool('get_journal_day', {
   description:
     'KOMPLETNÍ detail jednoho dne BEZ zkracování: ranní příprava (plné plány per session, ' +
     'fokus, cíle, checklist, mindset), večerní audit (takeaway, lekce, chyby, poznámky ' +
-    'během dne, session breakdowny, stresory/vděčnost) a všechny obchody dne s plnými ' +
+    'během dne, session breakdowny, stresory/vděčnost, incidenty bez tradů) a všechny obchody dne s plnými ' +
     'poznámkami. Použij pro debrief konkrétního dne nebo když load_journal nestačí.',
   inputSchema: z.object({ date: z.string().describe('YYYY-MM-DD') }),
   handler: guard(async (args: { date: string }) => {
@@ -558,6 +582,7 @@ mcp.tool('get_journal_day', {
       psycho: r.psycho ? {
         stresory: r.psycho.stressors ?? [], vdecnost: r.psycho.gratitude ?? [],
       } : null,
+      incidenty_bez_tradu: (r.incidents || []).map((incident: any) => incidentForMcp(incident)),
       dokonceny: !!r.completed,
     } : null;
     return text(JSON.stringify({

@@ -3,6 +3,7 @@ import { COACH_TOOLS, executeTool, describeToolCall, collapseCopies } from './co
 import { getProfile, recallMemory, renderProfileForPrompt, getActiveCommitments, getRecentConversationSummaries } from './coachMemoryService';
 import { getPersonaBlock, DEFAULT_PERSONA, type CoachPersonaId } from './coachPersonas';
 import { supabase } from './supabase';
+import { adjustmentTotal, getFinancialAdjustments } from './tradingIncidents';
 
 // Anthropic API access goes through the `chat` Supabase Edge Function so the
 // API key lives only in Supabase secrets — never in the client bundle.
@@ -117,6 +118,10 @@ export function buildTraderContext(ctx: TraderContext): string {
   const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
   const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0;
 
+  const allIncidentAdjustments = getFinancialAdjustments(dailyReviews);
+  const allIncidentPnl = adjustmentTotal(allIncidentAdjustments);
+  const recentIncidentPnl = adjustmentTotal(allIncidentAdjustments.filter(a => a.timestamp > cutoff));
+
   // Ušlé statistiky (Opportunity cost / ušlý zisk nebo ztráta)
   const allMissedPnl = allMissedTrades.reduce((s, t) => s + t.pnl, 0);
   const recentMissedPnl = recentMissedTrades.reduce((s, t) => s + t.pnl, 0);
@@ -222,6 +227,13 @@ export function buildTraderContext(ctx: TraderContext): string {
           const notes = r.quickNotes.map(n => n.text?.trim()).filter(Boolean);
           if (notes.length) lines.push(`Poznámky během dne: ${notes.join(' | ')}`);
         }
+        if (r.incidents?.length) {
+          r.incidents.forEach(i => {
+            const loss = i.allocations.reduce((sum, a) => sum + (Number(a.lossAmount) || 0), 0);
+            const split = i.allocations.map(a => `${a.label} -$${Number(a.lossAmount).toFixed(0)}`).join(', ');
+            lines.push(`INCIDENT BEZ TRADŮ: ${i.title}; ztráta -$${loss.toFixed(0)} (${split}); co se stalo: ${i.whatHappened}${i.trigger ? `; trigger: ${i.trigger}` : ''}${i.lesson ? `; poučení: ${i.lesson}` : ''}. Nezapočítávat do počtu obchodů, WR ani RR.`);
+          });
+        }
         return lines.join('\n');
       }).join('\n\n')
     : 'Žádné audity';
@@ -247,14 +259,18 @@ POSLEDNÍ AKTIVITA (přesné hodnoty):
 VÝKON CELKEM (všechny obchody historicky):
 - Celkem realizovaných obchodů: ${executedTrades.length}
 - Win rate realizovaných: ${allWinRate}%
-- Celkové reálné PnL: $${allTotalPnl.toFixed(0)}
+- Trade PnL: $${allTotalPnl.toFixed(0)}
+- Finanční korekce / incidenty bez tradů: $${allIncidentPnl.toFixed(0)} (NEPATŘÍ do WR, RR ani PF)
+- Skutečné finanční PnL: $${(allTotalPnl + allIncidentPnl).toFixed(0)}
 - Počet ušlých obchodů: ${allMissedTrades.length}
 - Celkové potenciální PnL z ušlých obchodů: $${allMissedPnl.toFixed(0)}
 
 VÝKON (posledních 90 dní):
 - Realizovaných obchodů za 90 dní: ${recentExecutedTrades.length}
 - Win rate realizovaných: ${winRate}%
-- Celkové reálné PnL: $${totalPnl.toFixed(0)}
+- Trade PnL: $${totalPnl.toFixed(0)}
+- Finanční korekce / incidenty bez tradů: $${recentIncidentPnl.toFixed(0)} (NEPATŘÍ do WR, RR ani PF)
+- Skutečné finanční PnL: $${(totalPnl + recentIncidentPnl).toFixed(0)}
 - Průměrná výhra: $${avgWin.toFixed(0)}
 - Průměrná ztráta: $${avgLoss.toFixed(0)}
 - RR ratio: ${avgLoss !== 0 ? Math.abs(avgWin / avgLoss).toFixed(2) : 'N/A'}
