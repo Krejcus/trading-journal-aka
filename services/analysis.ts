@@ -150,6 +150,7 @@ export interface AdjustmentEvent {
   amount: number;
   kind?: 'payout' | 'incident';
   label?: string;
+  referenceId?: string;
 }
 
 export const calculateStats = (
@@ -399,7 +400,12 @@ export const calculateStats = (
         date: adj.date,
         equityDelta: adj.amount,
         validDelta: 0,
-        event: { kind, label: adj.label || (kind === 'payout' ? 'Výplata' : 'Incident'), amount: adj.amount },
+        event: {
+          kind,
+          label: adj.label || (kind === 'payout' ? 'Výplata' : 'Incident'),
+          amount: adj.amount,
+          ...(adj.referenceId ? { referenceId: adj.referenceId } : {}),
+        },
       });
     }
     steps.sort((a, b) => a.ts - b.ts);

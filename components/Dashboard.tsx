@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, DashboardLayouts, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout } from '../types';
+import { Trade, TradeStats, DailyPrep, DailyReview, DashboardWidgetConfig, DashboardLayouts, SessionConfig, TimeStat, MonthlyData, IronRule, Account, CustomEmotion, DashboardMode, User, PnLDisplayMode, BusinessPayout, EquityPoint } from '../types';
 import { formatPnL, calculateTotalRR, formatCurrency } from '../utils/formatPnL';
 import { currencyService, ExchangeRates } from '../services/currencyService';
 import { t } from '../services/translations';
@@ -54,6 +54,9 @@ import {
 import { fmtUsd as labFmtUsd, type LeakFinding } from '../services/labAnalytics';
 import DailyInsightWidget from './DailyInsightWidget';
 import DailyFocusWidget from './DailyFocusWidget';
+import EquityIncidentModal from './EquityIncidentModal';
+import PayoutDetailModal from './PayoutDetailModal';
+import type { AccountDrawdownSummary } from '../services/propDrawdown';
 
 interface DashboardProps {
   stats: TradeStats;
@@ -81,6 +84,7 @@ interface DashboardProps {
   exchangeRates: ExchangeRates | null;
   allTrades?: Trade[];
   payouts?: BusinessPayout[];
+  drawdownSummaries?: AccountDrawdownSummary[];
   isMobileEditing?: boolean;
   setIsMobileEditing?: (v: boolean) => void;
   /** Open AI Coach with a pre-filled analysis prompt (e.g. for a specific day/week). */
@@ -792,6 +796,34 @@ const LabTopLeakWidget: React.FC<{ top: LeakFinding | null; nTrades: number; the
   );
 };
 
+const PropDrawdownRoomWidget: React.FC<{
+  summaries: AccountDrawdownSummary[];
+  theme: 'dark' | 'light' | 'oled';
+  isCombined?: boolean;
+}> = ({ summaries, theme, isCombined = false }) => {
+  const weakest = useMemo(() => [...summaries].sort((a, b) => a.remainingPct - b.remainingPct)[0], [summaries]);
+  if (!weakest) {
+    return <ProKpiCard theme={theme} label="DD prostor" value="—" subValue="Nastav drawdown u účtu" info="Aktuální prostor mezi balance a prop-firm breach floorem." icon={<ShieldCheck size={14} />} />;
+  }
+  const portfolioMode = isCombined && summaries.length > 1;
+  const room = Math.round(portfolioMode
+    ? summaries.reduce((sum, summary) => sum + summary.remainingRoom, 0)
+    : weakest.remainingRoom);
+  const state = weakest.breached ? 'BREACH' : weakest.locked ? 'LOCKED' : 'TRAILING';
+  return (
+    <ProKpiCard
+      theme={theme}
+      label={portfolioMode ? 'Portfolio DD' : 'DD prostor'}
+      value={`${room < 0 ? '−' : ''}$${Math.abs(room).toLocaleString('en-US')}`}
+      subValue={`${portfolioMode ? 'Nejslabší: ' : ''}${weakest.accountName} · $${Math.round(weakest.remainingRoom).toLocaleString('en-US')} · ${state}`}
+      info={portfolioMode
+        ? 'Součet DD rezerv vybraných účtů. Rezerva není mezi účty přenositelná — stav i barva se proto vždy řídí nejslabším účtem.'
+        : 'Aktuální prostor do hard breach. U EOD účtu se floor posouvá až po uzavření dne, ale breach se hlídá během obchodování.'}
+      icon={<div className={`${weakest.remainingPct <= 25 ? 'bg-rose-500/15 text-rose-500' : weakest.remainingPct <= 50 ? 'bg-amber-500/15 text-amber-500' : 'bg-emerald-500/15 text-emerald-500'} p-1 rounded-lg`}><ShieldCheck size={14} /></div>}
+    />
+  );
+};
+
 const MASTER_WIDGET_LIST = [
   { id: 'avg_win_loss', label: 'Avg Win/Loss', category: 'KPIs', icon: <ArrowUp size={18} />, description: 'Poměr průměrného zisku a ztráty.', preview: <div className="text-emerald-500 font-black text-xl">3.40</div>, defaultRowSpan: 1 },
   { id: 'streak', label: 'Current Streak', category: 'Psychologie', icon: <Zap size={18} />, description: 'Aktuální série výher/proher.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 1 },
@@ -803,6 +835,7 @@ const MASTER_WIDGET_LIST = [
   { id: 'kpi_profit_factor', label: 'Profit factor', category: 'KPIs', icon: <BarChart3 size={18} />, description: 'Poměr hrubých zisků a ztrát.', preview: <div className={`${COLORS.textProfit} font-black text-xl`}>19.89</div>, defaultRowSpan: 1 },
   { id: 'kpi_day_winrate', label: 'Day win %', category: 'KPIs', icon: <CalendarIcon size={18} />, description: 'Procento ziskových obchodních dnů.', preview: <div className="text-purple-500 font-black text-xl">62.15%</div>, defaultRowSpan: 1 },
   { id: 'kpi_max_drawdown', label: 'Max Drawdown', category: 'KPIs', icon: <TrendingDown size={18} />, description: 'Největší propad kapitálu.', preview: <div className={`${COLORS.textLoss} font-black text-xl`}>12.4%</div>, defaultRowSpan: 1 },
+  { id: 'prop_drawdown_room', label: 'DD prostor', category: 'KPIs', icon: <ShieldCheck size={18} />, description: 'Nejmenší prostor do prop-firm hard breach.', preview: <div className="text-emerald-500 font-black text-xl">$1 640</div>, defaultRowSpan: 1 },
   { id: 'discipline', label: 'Rituály & Disciplína', category: 'Chování', icon: <Brain size={18} />, description: 'Sleduje tvé ranní a večerní rituály.', preview: <div className="text-blue-500 font-black text-xs">Streak: 5 days</div>, defaultRowSpan: 2 },
   { id: 'winners_losers', label: 'Výhry a Prohry', category: 'Analýza', icon: <TrendingUp size={18} />, description: 'Statistické srovnání zisků a ztrát.', preview: <div className="flex gap-1"><div className={`w-4 h-4 ${COLORS.bgProfit} ${COLORS.borderProfit} border rounded`} /><div className={`w-4 h-4 ${COLORS.bgLoss} ${COLORS.borderLoss} border rounded`} /></div>, defaultRowSpan: 2 },
   { id: 'monthly_performance', label: 'Měsíční Výkonnost', category: 'Analýza', icon: <CalendarIcon size={18} />, description: 'Měsíční přehled ziskovosti s heatmapou.', preview: <div className="grid grid-cols-4 gap-0.5"><div className="w-2 h-2 bg-emerald-500/40" /><div className="w-2 h-2 bg-emerald-500/80" /><div className="w-2 h-2 bg-emerald-500/20" /><div className="w-2 h-2 bg-rose-500/40" /></div>, defaultRowSpan: 2 },
@@ -1640,6 +1673,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   isEditing, onCloseEdit, accounts, emotions, viewMode, dashboardMode,
   setDashboardMode, onDeleteTrade, onUpdateTrade, user, pnlDisplayMode, exchangeRates,
   allTrades = [], payouts = [],
+  drawdownSummaries = [],
   isMobileEditing: isMobileEditingProp = false, setIsMobileEditing: setIsMobileEditingProp,
   onAnalyzeWithAI,
   onNavigateToSettings,
@@ -1708,12 +1742,23 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isArmoryOpen, setIsArmoryOpen] = useState(false);
   const [selectedTradeId, setSelectedTradeId] = useState<string | number | null>(null);
+  const [selectedPayoutIndex, setSelectedPayoutIndex] = useState<number | null>(null);
+  const [selectedIncidentPoint, setSelectedIncidentPoint] = useState<EquityPoint | null>(null);
   const [mcLabOpen, setMcLabOpen] = useState(false);
 
   const selectedTrade = useMemo(() => {
     if (!selectedTradeId) return null;
     return stats.trades.find(t => t.id === selectedTradeId);
   }, [selectedTradeId, stats.trades]);
+  const selectedIncident = useMemo(() => {
+    const id = selectedIncidentPoint?.event?.referenceId;
+    if (!id) return null;
+    for (const review of reviews) {
+      const found = review.incidents?.find(incident => incident.id === id);
+      if (found) return found;
+    }
+    return null;
+  }, [reviews, selectedIncidentPoint]);
   useEffect(() => {
     if (isEditing && window.innerWidth >= 1024) setIsArmoryOpen(true);
     else if (!isEditing) setIsArmoryOpen(false);
@@ -1968,6 +2013,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           />
         );
       }
+      case 'prop_drawdown_room': return <PropDrawdownRoomWidget summaries={drawdownSummaries} theme={theme} isCombined={viewMode === 'combined'} />;
       case 'kpi_winrate': {
         const { winCount, beCount, lossCount, totalCount } = kpiData;
         const winRate = totalCount > 0 ? ((winCount / totalCount) * 100).toFixed(1) : '0.0';
@@ -2057,6 +2103,14 @@ const Dashboard: React.FC<DashboardProps> = ({
           showDisciplinedCurve={config?.showDisciplinedCurve}
           onToggleDisciplined={() => toggleDisciplinedCurve('equity')}
           onTradeClick={(id) => setSelectedTradeId(id)}
+          onEventClick={(point) => {
+            if (point.event?.kind === 'payout') {
+              const payoutIndex = payouts.findIndex(item => item.id === point.event?.referenceId);
+              if (payoutIndex >= 0) setSelectedPayoutIndex(payoutIndex);
+              return;
+            }
+            if (point.event?.kind === 'incident') setSelectedIncidentPoint(point);
+          }}
           pnlDisplayMode={pnlDisplayMode}
         />
       );
@@ -2436,6 +2490,31 @@ const Dashboard: React.FC<DashboardProps> = ({
           />
         )
       }
+
+      {selectedPayoutIndex !== null && payouts[selectedPayoutIndex] && (
+        <PayoutDetailModal
+          payouts={payouts}
+          index={selectedPayoutIndex}
+          onIndexChange={setSelectedPayoutIndex}
+          accounts={accounts}
+          trades={allTrades.length > 0 ? allTrades : stats.trades}
+          theme={theme}
+          formatValue={(amount) => formatRawCurrency(amount)}
+          onEdit={() => {}}
+          onDelete={() => {}}
+          onClose={() => setSelectedPayoutIndex(null)}
+          readOnly
+        />
+      )}
+
+      {selectedIncidentPoint && selectedIncident && (
+        <EquityIncidentModal
+          point={selectedIncidentPoint}
+          incident={selectedIncident}
+          theme={theme}
+          onClose={() => setSelectedIncidentPoint(null)}
+        />
+      )}
 
       {mcLabOpen && (
         <MonteCarloLab

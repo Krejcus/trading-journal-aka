@@ -25,17 +25,26 @@ describe('obchodní dny k výplatě', () => {
 
   it('u první výplaty počítá od prvního obchodu a unikátní dny', () => {
     const run = tradingDaysForPayout(p1, payouts, trades);
-    expect(run).toEqual({ days: 2, from: '' });
+    expect(run).toEqual({ days: 2, tradeCount: 3, from: '' });
   });
 
   it('po výplatě se počítadlo nuluje — další výplata počítá jen novější dny', () => {
     const run = tradingDaysForPayout(p2, payouts, trades);
-    expect(run).toEqual({ days: 1, from: '2026-06-05' });
+    expect(run).toEqual({ days: 1, tradeCount: 1, from: '2026-06-05' });
   });
 
   it('zvládne ISO datum s časem i výplatu bez účtu', () => {
     const iso = payout('p3', 'acc-1', '2026-06-15T00:00:00');
     expect(tradingDaysForPayout(iso, [iso, p1], trades)?.days).toBe(1);
     expect(tradingDaysForPayout(payout('p4', '', '2026-06-15'), payouts, trades)).toBeNull();
+  });
+
+  it('zmeškaný obchod nezapočítá jako obchod ani obchodní den', () => {
+    const missed = { ...trade('acc-1', '2026-06-04', 'missed'), executionStatus: 'Missed' as const };
+    expect(tradingDaysForPayout(p1, payouts, [...trades, missed])).toEqual({
+      days: 2,
+      tradeCount: 3,
+      from: '',
+    });
   });
 });

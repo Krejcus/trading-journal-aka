@@ -10,6 +10,7 @@ import { businessDataFingerprint, mergePayoutImages } from './utils/businessPayo
 import { clearAppStorage } from './utils/appStorage';
 import { firmOf } from './utils/accountFirm';
 import { adjustmentTotal, getFinancialAdjustments } from './services/tradingIncidents';
+import { calculateAccountDrawdown, portfolioFloorForDate } from './services/propDrawdown';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
@@ -146,6 +147,7 @@ const WIDGET_CONSTRAINTS: Record<string, { minW: number; minH: number; maxW: num
   kpi_profit_factor: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   kpi_day_winrate: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   kpi_max_drawdown: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  prop_drawdown_room: { minW: 2, minH: 2, maxW: 6, maxH: 4 },
   discipline: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   winners_losers: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
   monthly_performance: { minW: 4, minH: 3, maxW: 12, maxH: 8 },
@@ -174,6 +176,7 @@ const WIDGET_CONSTRAINTS_XXL: Record<string, { minW: number; minH: number; maxW:
   kpi_profit_factor: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   kpi_day_winrate: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   kpi_max_drawdown: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
+  prop_drawdown_room: { minW: 2, minH: 2, maxW: 8, maxH: 4 },
   discipline: { minW: 8, minH: 3, maxW: 24, maxH: 8 },
   winners_losers: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
   monthly_performance: { minW: 6, minH: 3, maxW: 24, maxH: 8 },
@@ -237,6 +240,7 @@ const DEFAULT_WIDGETS_LG: DashboardWidgetConfig[] = [
   { id: 'kpi_pnl', label: 'Net P&L', visible: true, x: 0, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
   { id: 'kpi_winrate', label: 'Win Rate', visible: true, x: 2, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
   { id: 'kpi_profit_factor', label: 'Profit Factor', visible: true, x: 4, y: 0, w: 2, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
+  { id: 'prop_drawdown_room', label: 'DD prostor', visible: true, x: 6, y: 0, w: 3, h: 2, minW: 2, minH: 2, maxW: 6, maxH: 4 },
   { id: 'discipline', label: 'Disciplína', visible: true, x: 0, y: 2, w: 12, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
   { id: 'equity', label: 'Equity Curve', visible: true, x: 0, y: 6, w: 6, h: 4, minW: 4, minH: 3, maxW: 12, maxH: 8 },
   { id: 'calendar', label: 'Kalendář', visible: true, x: 6, y: 6, w: 6, h: 6, minW: 4, minH: 5, maxW: 12, maxH: 10 },
@@ -2605,11 +2609,15 @@ const App: React.FC = () => {
         amount: -Math.abs(Number(p.grossAmount ?? p.amount) || 0),
         kind: 'payout' as const,
         label: 'Výplata',
+        referenceId: p.id,
       }));
   }, [dashboardMode, filters.accounts, filters.period, contextAccounts, businessPayouts]);
 
   const filteredCurveEvents = useMemo(
-    () => [...filteredAdjustmentEvents, ...filteredPayoutEvents],
+    () => [
+      ...filteredAdjustmentEvents.map(event => ({ ...event, referenceId: event.incidentId })),
+      ...filteredPayoutEvents,
+    ],
     [filteredAdjustmentEvents, filteredPayoutEvents]
   );
 
@@ -2621,6 +2629,42 @@ const App: React.FC = () => {
       return calculateStats([], 0);
     }
   }, [filteredDisplayTrades, displayBalance, filteredFinancialAdjustments, filteredCurveEvents]);
+
+  // Prop-firm DD je lifetime risk stav, proto nerespektuje časový filtr dashboardu.
+  // Account filtr ale respektuje — při kopírce widget ukáže nejslabší z vybraných účtů.
+  const drawdownSummaries = useMemo(() => {
+    if (dashboardMode === 'backtesting') return [];
+    const selected = new Set(filters.accounts);
+    const scope = contextAccounts.filter(account =>
+      account.status === 'Active' &&
+      account.type !== 'Backtest' &&
+      (selected.size === 0 || selected.has(account.id))
+    );
+    const adjustments = getFinancialAdjustments(dailyReviews);
+    return scope
+      .map(account => calculateAccountDrawdown(account, trades, businessPayouts, adjustments))
+      .filter((summary): summary is NonNullable<typeof summary> => summary != null);
+  }, [dashboardMode, filters.accounts, contextAccounts, dailyReviews, trades, businessPayouts]);
+
+  const filteredStatsWithDrawdown = useMemo(() => {
+    if (drawdownSummaries.length === 0) return filteredStats;
+    const combined = viewMode === 'combined' && drawdownSummaries.length > 1;
+    if (!combined && drawdownSummaries.length !== 1) return filteredStats;
+    return {
+      ...filteredStats,
+      equityCurve: filteredStats.equityCurve.map(point => {
+        const portfolioFloor = portfolioFloorForDate(drawdownSummaries, point.date);
+        return {
+          ...point,
+          propDrawdownFloor: portfolioFloor.total,
+          ...(combined ? {
+            propDrawdownCombined: true,
+            propDrawdownBreakdown: portfolioFloor.breakdown,
+          } : {}),
+        };
+      }),
+    };
+  }, [filteredStats, drawdownSummaries, viewMode]);
 
   const handleUpdateUser = async (updatedUser: User) => {
     setCurrentUser(updatedUser);
@@ -3650,7 +3694,7 @@ const App: React.FC = () => {
                   {activePage === 'dashboard' && (
                     <Dashboard
                       labTopLeak={labTopLeak}
-                      stats={filteredStats}
+                      stats={filteredStatsWithDrawdown}
                       theme={theme}
                       preps={dailyPreps}
                       reviews={dailyReviews}
@@ -3693,6 +3737,7 @@ const App: React.FC = () => {
                       exchangeRates={exchangeRates}
                       allTrades={trades}
                       payouts={businessPayouts}
+                      drawdownSummaries={drawdownSummaries}
                       isMobileEditing={isMobileEditing}
                       setIsMobileEditing={setIsMobileEditing}
                       onAnalyzeWithAI={(prompt) => {

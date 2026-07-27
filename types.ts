@@ -156,6 +156,27 @@ export interface Account {
   failureKeyLesson?: string;
   /** Sdílené ID účtů pohřbených jedním hromadným Funeral formulářem. */
   failureGroupId?: string;
+  /** Prop-firm maximum-loss konfigurace. Ukládá se do existujícího accounts.meta JSONu. */
+  drawdownConfig?: AccountDrawdownConfig;
+}
+
+export type PropDrawdownMode = 'eod_trailing' | 'intraday_trailing' | 'static';
+
+export interface AccountDrawdownConfig {
+  /** false = drawdown pro účet nesledovat; undefined = použít firemní preset, pokud existuje. */
+  enabled?: boolean;
+  mode: PropDrawdownMode;
+  /** Maximální povolený pokles v USD. */
+  amount: number;
+  /** EOD balance, při které se trailing drawdown definitivně zamkne. */
+  lockTriggerBalance?: number;
+  /** Fixní floor po zamknutí. */
+  lockedFloor?: number;
+  /** Ruční potvrzení z dashboardu prop firmy. */
+  forceLocked?: boolean;
+  /** Ručně zadaný aktuální floor má přednost před výpočtem. */
+  manualCurrentFloor?: number;
+  timezone?: string;
 }
 
 export type PnLDisplayMode = 'usd' | 'percent' | 'rr';
@@ -340,8 +361,23 @@ export interface EquityPoint {
   equity: number;
   validEquity: number;
   drawdown: number;
+  /** Aktivní prop-firm breach floor pro daný obchodní den. V combined pohledu jde o součet floorů. */
+  propDrawdownFloor?: number;
+  /** Rozpad souhrnného DD flooru po účtech pro tooltip kombinované equity křivky. */
+  propDrawdownBreakdown?: Array<{
+    accountId: string;
+    accountName: string;
+    floor: number;
+  }>;
+  propDrawdownCombined?: boolean;
   /** Netradový pohyb equity (výplata / incident) — bod křivky, který není obchod. */
-  event?: { kind: 'payout' | 'incident'; label: string; amount: number };
+  event?: {
+    kind: 'payout' | 'incident';
+    label: string;
+    amount: number;
+    /** ID původní výplaty nebo incidentu pro otevření detailu z grafu. */
+    referenceId?: string;
+  };
   trade?: {
     id: string | number;
     instrument: string;

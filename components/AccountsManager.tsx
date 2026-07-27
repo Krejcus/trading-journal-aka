@@ -29,6 +29,7 @@ import AccountFuneralModal, { type FailureData } from './AccountFuneralModal';
 import Graveyard, { MemorialModal, computeStats } from './Graveyard';
 import { firmOf, firmInitials, firmColor, firmLabel, FIRM_LOGOS, KNOWN_FIRMS } from '../utils/accountFirm';
 import { adjustmentForAccount, adjustmentTotal, directAdjustmentForFirm, getFinancialAdjustments } from '../services/tradingIncidents';
+import { calculateAccountDrawdown, inferDrawdownConfig } from '../services/propDrawdown';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -178,6 +179,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   // Firmy: sbalené sekce + cíl hromadného pohřbení celé firmy
   const [collapsedFirms, setCollapsedFirms] = useState<Set<string>>(new Set());
   const [firmFuneralTarget, setFirmFuneralTarget] = useState<string | null>(null);
+  const [drawdownDetailAccountId, setDrawdownDetailAccountId] = useState<string | null>(null);
 
   const [newAccount, setNewAccount] = useState<Partial<Account>>({
     name: '',
@@ -195,6 +197,9 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const [editFormData, setEditFormData] = useState<Partial<Account>>({});
 
   const financialAdjustments = useMemo(() => getFinancialAdjustments(reviews), [reviews]);
+  const drawdownByAccount = useMemo(() => new Map(
+    accounts.map(account => [account.id, calculateAccountDrawdown(account, trades, payouts, financialAdjustments)] as const)
+  ), [accounts, trades, payouts, financialAdjustments]);
 
   const portfolioStats = useMemo(() => {
     const totalChallengeCosts = accounts.reduce((sum, acc) => sum + (acc.challengeCost || 0), 0);
@@ -471,7 +476,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const startEditing = (e: React.MouseEvent, acc: Account) => {
     e.stopPropagation();
     setEditingAccount(acc);
-    setEditFormData({ ...acc });
+    setEditFormData({ ...acc, drawdownConfig: acc.drawdownConfig || inferDrawdownConfig(acc) || undefined });
   };
 
   const saveEdit = () => {
@@ -511,6 +516,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     const isChallenge = (acc.phase || 'Challenge') === 'Challenge';
     const isBacktest = acc.type === 'Backtest';
     const currentPlatformBalance = acc.initialBalance + totalPnL - accumulatedChallengePnL - grossWithdrawals;
+    const propDrawdown = drawdownByAccount.get(acc.id) || null;
     const performanceColor = totalPnL >= 0 ? 'emerald' : 'rose';
 
     const cardPadding = isSlave ? 'p-4' : 'p-6';
@@ -596,6 +602,25 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           </div>
 
           <div className={`${isSlave ? 'mt-3 pt-3' : 'mt-4 pt-4'} border-t border-white/5`}>
+            {propDrawdown && !isBacktest && (
+              <button type="button" onClick={(event) => { event.stopPropagation(); setDrawdownDetailAccountId(acc.id); }} className="mb-3 w-full text-left rounded-xl hover:bg-rose-500/5 transition-colors p-1 -m-1">
+                <div className="flex items-center justify-between mb-1.5 gap-2">
+                  <span className={`text-[8px] font-black uppercase ${propDrawdown.remainingPct <= 25 ? 'text-rose-500' : propDrawdown.remainingPct <= 50 ? 'text-amber-500' : 'text-emerald-500'}`}>DD prostor</span>
+                  <span className="text-[8px] font-black text-slate-500 truncate">
+                    ${Math.round(propDrawdown.remainingRoom).toLocaleString('en-US')} · floor ${Math.round(propDrawdown.currentFloor).toLocaleString('en-US')} · {propDrawdown.locked ? 'LOCKED' : 'TRAILING'}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full overflow-hidden bg-slate-800/80">
+                  <div
+                    className={`h-full transition-all ${propDrawdown.remainingPct <= 25 ? 'bg-rose-500' : propDrawdown.remainingPct <= 50 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.max(0, Math.min(100, propDrawdown.remainingPct))}%` }}
+                  />
+                </div>
+                {propDrawdown.projectedNextFloor != null && propDrawdown.projectedNextFloor > propDrawdown.currentFloor && (
+                  <p className="mt-1 text-[8px] font-bold text-slate-500">Po dnešním EOD: ${Math.round(propDrawdown.projectedNextFloor).toLocaleString('en-US')}</p>
+                )}
+              </button>
+            )}
             {isBacktest ? (
               <div className="flex items-center justify-between">
                 <span className="text-[8px] font-black uppercase text-violet-400">Backtest účet</span>
@@ -836,9 +861,35 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
       <PayoutModal isOpen={!!payoutTargetAccountId} onClose={() => setPayoutTargetAccountId(null)} onSave={handleSavePayout} accounts={accounts} initialAccountId={payoutTargetAccountId || undefined} theme={theme} user={user} />
 
+      {drawdownDetailAccountId && (() => {
+        const summary = drawdownByAccount.get(drawdownDetailAccountId);
+        if (!summary) return null;
+        return (
+          <div className="fixed inset-0 z-[450] flex items-center justify-center p-4 bg-black/65 backdrop-blur-md" role="dialog" aria-label="Historie prop drawdownu" onClick={() => setDrawdownDetailAccountId(null)}>
+            <div className={`w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-[30px] border shadow-2xl ${theme !== 'light' ? 'bg-slate-950 border-white/10' : 'bg-white border-slate-200'}`} onClick={event => event.stopPropagation()}>
+              <div className="p-6 border-b border-white/10 flex items-start justify-between gap-4">
+                <div><p className="text-[9px] font-black uppercase tracking-widest text-rose-500">EOD Drawdown</p><h3 className="text-xl font-black">{summary.accountName}</h3><p className="text-xs text-slate-500">{summary.locked ? 'LOCKED' : 'TRAILING'} · floor ${Math.round(summary.currentFloor).toLocaleString('en-US')}</p></div>
+                <button type="button" aria-label="Zavřít drawdown" onClick={() => setDrawdownDetailAccountId(null)} className="p-2 rounded-xl text-slate-500 hover:text-rose-500 hover:bg-rose-500/10"><X size={20} /></button>
+              </div>
+              <div className="p-6 grid grid-cols-3 gap-3">
+                <div className="p-4 rounded-2xl bg-blue-500/8 border border-blue-500/15"><p className="text-[8px] font-black uppercase text-slate-500">Balance</p><p className="text-lg font-black font-mono">${Math.round(summary.currentBalance).toLocaleString('en-US')}</p></div>
+                <div className="p-4 rounded-2xl bg-rose-500/8 border border-rose-500/15"><p className="text-[8px] font-black uppercase text-slate-500">Hard breach floor</p><p className="text-lg font-black font-mono text-rose-500">${Math.round(summary.currentFloor).toLocaleString('en-US')}</p></div>
+                <div className="p-4 rounded-2xl bg-emerald-500/8 border border-emerald-500/15"><p className="text-[8px] font-black uppercase text-slate-500">Zbývající prostor</p><p className={`text-lg font-black font-mono ${summary.remainingPct <= 25 ? 'text-rose-500' : summary.remainingPct <= 50 ? 'text-amber-500' : 'text-emerald-500'}`}>${Math.round(summary.remainingRoom).toLocaleString('en-US')}</p></div>
+              </div>
+              <div className="px-6 pb-6 overflow-auto max-h-[52vh]">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-inherit"><tr className="text-[8px] uppercase tracking-widest text-slate-500"><th className="py-2">Den</th><th>EOD balance</th><th>Floor před</th><th>Floor po</th><th className="text-right">Prostor</th></tr></thead>
+                  <tbody>{[...summary.history].reverse().map(day => <tr key={day.date} className="border-t border-white/5"><td className="py-3 font-bold">{day.date}</td><td className="font-mono">${Math.round(day.closingBalance).toLocaleString('en-US')}</td><td className="font-mono text-slate-500">${Math.round(day.floorBefore).toLocaleString('en-US')}</td><td className="font-mono text-rose-400">${Math.round(day.projectedFloorAfter ?? day.floorAfter).toLocaleString('en-US')}{day.projectedFloorAfter != null ? ' odhad' : ''}</td><td className="font-mono font-black text-right">${Math.round(day.roomAfter).toLocaleString('en-US')}</td></tr>)}</tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {editingAccount && (
         <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setEditingAccount(null)}>
-          <div className={`max-w-xl w-full p-8 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200 shadow-2xl'}`} onClick={e => e.stopPropagation()}>
+          <div className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto p-8 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200 shadow-2xl'}`} onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3"><div className="p-3 bg-blue-500/10 text-blue-500 rounded-2xl"><Settings2 size={24} /></div><h3 className="text-xl font-black italic uppercase">Nastavení Účtu</h3></div><button onClick={() => setEditingAccount(null)} className="text-slate-500 hover:text-white"><X size={24} /></button></div>
             <div className="grid grid-cols-2 gap-6 mb-8">
               <div className="space-y-2"><label className="text-[10px] font-black uppercase text-slate-500">Název účtu</label><input type="text" value={editFormData.name || ''} onChange={e => setEditFormData({ ...editFormData, name: e.target.value })} className={inputClass} /></div>
@@ -873,6 +924,36 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                   className={inputClass}
                 />
                 <p className="text-[9px] text-slate-500 font-semibold">Násobek risku/kontraktů při fan-outu. Základ = 1×, dvojnásobný risk = 2×. Jen celá čísla.</p>
+              </div>
+              <div className="col-span-2 p-4 rounded-2xl border border-rose-500/20 bg-rose-500/5 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase text-rose-500">Prop-firm drawdown</p>
+                    <p className="text-[9px] text-slate-500 font-semibold">Preset se odvodí podle firmy; tady jej můžeš potvrdit nebo upravit.</p>
+                  </div>
+                  <label className="flex items-center gap-2 text-[9px] font-black uppercase text-slate-500">
+                    <input
+                      type="checkbox"
+                      checked={editFormData.drawdownConfig?.enabled !== false && !!editFormData.drawdownConfig}
+                      onChange={e => setEditFormData({
+                        ...editFormData,
+                        drawdownConfig: e.target.checked
+                          ? (editFormData.drawdownConfig || { enabled: true, mode: 'eod_trailing', amount: 2000, timezone: 'America/New_York' })
+                          : editFormData.drawdownConfig ? { ...editFormData.drawdownConfig, enabled: false } : { enabled: false, mode: 'eod_trailing', amount: 2000 },
+                      })}
+                    /> Sledovat
+                  </label>
+                </div>
+                {editFormData.drawdownConfig?.enabled !== false && editFormData.drawdownConfig && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="text-[9px] font-black uppercase text-slate-500">Typ</label><select value={editFormData.drawdownConfig.mode} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, mode: e.target.value as any } })} className={inputClass}><option value="eod_trailing">EOD trailing</option><option value="intraday_trailing">Intraday trailing</option><option value="static">Static</option></select></div>
+                    <div><label className="text-[9px] font-black uppercase text-slate-500">DD částka ($)</label><input type="number" value={editFormData.drawdownConfig.amount} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, amount: Number(e.target.value) } })} className={inputClass} /></div>
+                    <div><label className="text-[9px] font-black uppercase text-slate-500">Lock trigger balance</label><input type="number" value={editFormData.drawdownConfig.lockTriggerBalance ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, lockTriggerBalance: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
+                    <div><label className="text-[9px] font-black uppercase text-slate-500">Locked floor</label><input type="number" value={editFormData.drawdownConfig.lockedFloor ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, lockedFloor: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
+                    <div><label className="text-[9px] font-black uppercase text-slate-500">Aktuální floor (volitelné)</label><input type="number" value={editFormData.drawdownConfig.manualCurrentFloor ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, manualCurrentFloor: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
+                    <label className="flex items-end pb-3 gap-2 text-[9px] font-black uppercase text-slate-500"><input type="checkbox" checked={!!editFormData.drawdownConfig.forceLocked} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, forceLocked: e.target.checked } })} /> Už zamčeno</label>
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex gap-4"><button onClick={() => setEditingAccount(null)} className="flex-1 py-4 font-black uppercase text-[10px] text-slate-500 bg-white/5 rounded-2xl">Zrušit</button><button onClick={saveEdit} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase text-[10px] shadow-lg shadow-blue-600/20 active:scale-95 transition-all">Uložit Změny</button></div>

@@ -5,7 +5,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ReferenceLine, LabelList, Line
 } from 'recharts';
-import { TradeStats } from '../types';
+import { EquityPoint, TradeStats } from '../types';
 import { Info, Calendar, Clock, ShieldCheck, Activity } from 'lucide-react';
 import { thumbSmall } from '../services/imageUrlService';
 
@@ -38,6 +38,7 @@ interface ChartsProps {
   showDisciplinedCurve?: boolean;
   onToggleDisciplined?: () => void;
   onTradeClick?: (tradeId: string | number) => void;
+  onEventClick?: (point: EquityPoint) => void;
   /** PnL display mode — když je 'rr', equity křivka se přepne na kumulativní R. */
   pnlDisplayMode?: 'usd' | 'percent' | 'rr';
 }
@@ -144,6 +145,29 @@ const CustomEquityTooltip = (props: any) => {
             </p>
           </div>
         )}
+        {!isRR && Number.isFinite(data?.propDrawdownFloor) && (
+          <div className="pt-2 border-t border-white/5 space-y-1.5">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[9px] font-black uppercase tracking-tight text-rose-400">
+                {data.propDrawdownCombined ? 'Portfolio DD floor' : 'Trailing drawdown'}
+              </span>
+              <span className="font-black text-sm text-rose-500">${Number(data.propDrawdownFloor).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+            </div>
+            {data.propDrawdownCombined && Array.isArray(data.propDrawdownBreakdown) && (
+              <div className="space-y-0.5 pt-1">
+                {data.propDrawdownBreakdown.slice(0, 5).map((item: any) => (
+                  <div key={item.accountId} className="flex items-center justify-between gap-3 text-[9px] font-bold text-slate-400">
+                    <span className="truncate">{item.accountName}</span>
+                    <span className="font-mono">${Number(item.floor).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                  </div>
+                ))}
+                {data.propDrawdownBreakdown.length > 5 && (
+                  <div className="text-[9px] font-bold text-slate-500">+ {data.propDrawdownBreakdown.length - 5} dalších účtů</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>,
     document.body
@@ -205,12 +229,20 @@ interface CustomActiveDotProps {
   cy?: number;
   payload?: any;
   onTradeClick?: (tradeId: string | number) => void;
+  onEventClick?: (point: EquityPoint) => void;
 }
 
 const CustomActiveDot = (props: CustomActiveDotProps) => {
-  const { cx, cy, payload, onTradeClick } = props;
+  const { cx, cy, payload, onTradeClick, onEventClick } = props;
 
-  if (!onTradeClick || !payload || !payload.trade) return null;
+  if (!payload || (!payload.trade && !payload.event)) return null;
+  if (payload.trade && !onTradeClick) return null;
+  if (payload.event && !onEventClick) return null;
+  const color = payload.event?.kind === 'payout'
+    ? '#10b981'
+    : payload.event?.kind === 'incident'
+      ? '#f43f5e'
+      : '#3b82f6';
 
   return (
     <g>
@@ -223,7 +255,8 @@ const CustomActiveDot = (props: CustomActiveDotProps) => {
         onClick={(e) => {
           e.stopPropagation();
           _suppressTooltipUntil = Date.now() + 2000;
-          onTradeClick(payload.trade.id);
+          if (payload.trade) onTradeClick?.(payload.trade.id);
+          else if (payload.event) onEventClick?.(payload as EquityPoint);
         }}
       />
       <circle
@@ -231,7 +264,7 @@ const CustomActiveDot = (props: CustomActiveDotProps) => {
         cy={cy}
         r={6}
         fill="#fff"
-        stroke="#3b82f6"
+        stroke={color}
         strokeWidth={2}
         pointerEvents="none"
       />
@@ -240,7 +273,7 @@ const CustomActiveDot = (props: CustomActiveDotProps) => {
         cy={cy}
         r={10}
         fill="none"
-        stroke="#3b82f6"
+        stroke={color}
         strokeWidth={1}
         strokeOpacity={0.5}
         pointerEvents="none"
@@ -252,7 +285,7 @@ const CustomActiveDot = (props: CustomActiveDotProps) => {
   );
 };
 
-const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribution, isEditing, showDisciplinedCurve, onToggleDisciplined, onTradeClick, pnlDisplayMode = 'usd' }) => {
+const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribution, isEditing, showDisciplinedCurve, onToggleDisciplined, onTradeClick, onEventClick, pnlDisplayMode = 'usd' }) => {
   const axisColor = theme !== 'light' ? '#64748b' : '#94a3b8';
   const gridColor = theme !== 'light' ? '#334155' : '#e2e8f0';
 
@@ -297,7 +330,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
   // Dynamické vygenerování ticků na ose Y, aby obsahovaly i počáteční hodnotu (baseline)
   const yAxisTicks = React.useMemo(() => {
     if (equityData.length === 0) return [];
-    const values = equityData.map(d => d.equity);
+    const values = equityData.flatMap(d => [d.equity, ...(!isRRMode && Number.isFinite(d.propDrawdownFloor) ? [d.propDrawdownFloor] : [])]);
     // KRITICKÉ: kotva = baseline (v RR módu 0, v USD initialCap). Dřív se i v RR módu
     // kotvilo na initialCap (USD!) → funded účet s balance $250k dal range ~250 000
     // při kroku 5 → ~50 000 ticků → while smyčky + recharts zamrzly UI na minuty
@@ -398,6 +431,12 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                     if (trade && onTradeClick) {
                       _suppressTooltipUntil = Date.now() + 2000;
                       onTradeClick(trade.id);
+                      return;
+                    }
+                    const point = data.activePayload[0].payload;
+                    if (point?.event && onEventClick) {
+                      _suppressTooltipUntil = Date.now() + 2000;
+                      onEventClick(point as EquityPoint);
                     }
                   }
                 }}
@@ -473,9 +512,24 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
                   stroke="url(#splitColor)"
                   strokeWidth={2.5}
                   fill="url(#splitFill)"
-                  activeDot={(props) => <CustomActiveDot {...props} onTradeClick={onTradeClick} />}
+                  dot={false}
+                  activeDot={(props) => <CustomActiveDot {...props} onTradeClick={onTradeClick} onEventClick={onEventClick} />}
                   style={{ cursor: 'pointer' }}
                 />
+                {!isRRMode && equityData.some(point => Number.isFinite(point.propDrawdownFloor)) && (
+                  <Line
+                    type="stepAfter"
+                    dataKey="propDrawdownFloor"
+                    stroke="#f43f5e"
+                    strokeWidth={1}
+                    strokeOpacity={0.65}
+                    strokeDasharray="4 4"
+                    dot={false}
+                    activeDot={false}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           </div>

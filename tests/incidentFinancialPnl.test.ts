@@ -75,7 +75,7 @@ describe('incident bez tradů jako finanční P&L', () => {
     ] as Trade[];
     // Výplata jde JEN do událostí křivky, ne do financialAdjustments.
     const stats = calculateStats(trades, 50_000, 0, [
-      { date: '2026-07-23', amount: -800, kind: 'payout', label: 'Výplata' },
+      { date: '2026-07-23', amount: -800, kind: 'payout', label: 'Výplata', referenceId: 'payout-1' },
     ]);
 
     expect(stats.tradePnL).toBe(1000);          // výkon obchodování zůstává
@@ -92,6 +92,6 @@ describe('incident bez tradů jako finanční P&L', () => {
     const last = stats.equityCurve[stats.equityCurve.length - 1];
     expect(last.equity).toBe(50_200);           // = initial + totalPnL → čísla si neprotiřečí
     expect(last.equity).toBe(50_000 + stats.totalPnL);
-    expect(last.event).toEqual({ kind: 'payout', label: 'Výplata', amount: -800 });
+    expect(last.event).toEqual({ kind: 'payout', label: 'Výplata', amount: -800, referenceId: 'payout-1' });
   });
 });

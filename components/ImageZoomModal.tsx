@@ -4,6 +4,7 @@ import { X, ChevronLeft, ChevronRight, Minus, Plus, Maximize2 } from 'lucide-rea
 interface ImageZoomModalProps {
   images?: string[];      // all images to navigate (optional for legacy compat)
   initialIndex?: number;  // which one to open first
+  onIndexChange?: (index: number) => void;
   onClose: () => void;
   // legacy single-image support
   src?: string;
@@ -12,7 +13,7 @@ interface ImageZoomModalProps {
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
 
-const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, initialIndex = 0, src, onClose }) => {
+const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, initialIndex = 0, onIndexChange, src, onClose }) => {
   // Support legacy `src` prop — wrap in array
   const images = imagesProp?.length > 0 ? imagesProp : (src ? [src] : []);
   const [index, setIndex] = useState(Math.min(initialIndex, Math.max(0, images.length - 1)));
@@ -63,15 +64,14 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
   }, []);
 
   const navigate = useCallback((dir: 1 | -1) => {
-    setIndex(prev => {
-      const next = prev + dir;
-      if (next < 0 || next >= images.length) return prev;
-      setNavDir(dir === 1 ? 'right' : 'left');
-      setTimeout(() => setNavDir(null), 300);
-      return next;
-    });
+    const next = index + dir;
+    if (next < 0 || next >= images.length) return;
+    setNavDir(dir === 1 ? 'right' : 'left');
+    setTimeout(() => setNavDir(null), 300);
+    setIndex(next);
+    onIndexChange?.(next);
     reset();
-  }, [images.length, reset]);
+  }, [images.length, index, onIndexChange, reset]);
 
   // Auto-hide hint
   useEffect(() => {
@@ -309,7 +309,16 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
           {images.map((_, i) => (
             <button
               key={i}
-              onClick={(e) => { e.stopPropagation(); if (i !== index) { setNavDir(i > index ? 'right' : 'left'); setIndex(i); reset(); setTimeout(() => setNavDir(null), 300); } }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (i !== index) {
+                  setNavDir(i > index ? 'right' : 'left');
+                  setIndex(i);
+                  onIndexChange?.(i);
+                  reset();
+                  setTimeout(() => setNavDir(null), 300);
+                }
+              }}
               aria-label={`Otevřít screenshot ${i + 1}`}
               className={`rounded-full transition-all duration-200 ${i === index ? 'w-4 h-1.5 bg-white' : 'w-1.5 h-1.5 bg-white/30 hover:bg-white/60'}`}
             />
