@@ -6,7 +6,7 @@ import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, typ
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { safeSetItem } from './utils/safeStorage';
-import { businessDataFingerprint, mergePayoutImages } from './utils/businessPayoutSync';
+import { businessDataFingerprint, mergePayoutImages, stripPayoutImagesForCache } from './utils/businessPayoutSync';
 import { clearAppStorage } from './utils/appStorage';
 import { firmOf } from './utils/accountFirm';
 import { adjustmentTotal, getFinancialAdjustments } from './services/tradingIncidents';
@@ -1696,7 +1696,9 @@ const App: React.FC = () => {
   // --- LAZY LOADING: Lab experimenty (vlastní tabulka, zdroj pravdy) ---
   const [isLabExpLoaded, setIsLabExpLoaded] = useState(false);
   useEffect(() => {
-    if (activePage !== 'lab' || !session || isLabExpLoaded) return;
+    // Coach needs the same experiment state as Lab so it can avoid duplicates,
+    // report progress and create a new measured experiment safely.
+    if ((activePage !== 'lab' && activePage !== 'ai') || !session || isLabExpLoaded) return;
     setIsLabExpLoaded(true);
     storageService.getLabExperiments().then(rows => {
       if (rows.length > 0) {
@@ -1766,7 +1768,7 @@ const App: React.FC = () => {
         // Cache for next visit
         try {
           safeSetItem(`alphatrade_biz_expenses_${userId}`, JSON.stringify(expenses || []));
-          safeSetItem(`alphatrade_biz_payouts_${userId}`, JSON.stringify(payouts || []));
+          safeSetItem(`alphatrade_biz_payouts_${userId}`, JSON.stringify(stripPayoutImagesForCache(payouts || [])));
           safeSetItem(`alphatrade_biz_goals_${userId}`, JSON.stringify(goals || []));
           safeSetItem(`alphatrade_biz_resources_${userId}`, JSON.stringify(resources || []));
         } catch {}
@@ -3142,7 +3144,7 @@ const App: React.FC = () => {
         // Cache ukládá metadata bez obrázků; screenshoty se doplní z lokálního stavu.
         setBusinessPayouts(mergePayoutImages(fresh, newPayouts));
         if (session?.user.id) {
-          safeSetItem(`alphatrade_biz_payouts_${session.user.id}`, JSON.stringify(fresh));
+          safeSetItem(`alphatrade_biz_payouts_${session.user.id}`, JSON.stringify(stripPayoutImagesForCache(fresh)));
         }
       }
       return true;
@@ -3561,6 +3563,7 @@ const App: React.FC = () => {
                 accounts={allAccountsWithArchived}
                 ironRules={ironRules}
                 standardGoals={standardGoals}
+                labExperiments={labExperiments}
                 playbookItems={playbookItems}
                 dailyPreps={dailyPreps}
                 dailyReviews={dailyReviews}
@@ -3598,6 +3601,32 @@ const App: React.FC = () => {
                       };
                       setIronRules(prev => [...prev, newRule]);
                       markPreferencesDirty();
+                      break;
+                    }
+                    case 'lab_experiment': {
+                      // A measured experiment belongs to Lab, not to Iron Rules.
+                      // The action parser guarantees hypothesis/rule/targetTrades.
+                      const experiment: LabExperiment = {
+                        id: crypto.randomUUID(),
+                        createdAt: Date.now(),
+                        world: dashboardMode === 'backtesting' ? 'backtest' : 'live',
+                        title: action.label,
+                        hypothesis: action.hypothesis!,
+                        rule: action.rule!,
+                        sourceLeakId: action.sourceLeakId,
+                        targetTrades: action.targetTrades!,
+                        startTs: Date.now(),
+                        status: 'running',
+                      };
+                      setLabExperiments(prev => {
+                        // Idempotence: a conversation can be reopened and clicked again.
+                        if (prev.some(e => e.world === experiment.world && e.title.trim().toLowerCase() === experiment.title.trim().toLowerCase())) return prev;
+                        return [experiment, ...prev];
+                      });
+                      storageService.upsertLabExperiment(experiment).catch(err => {
+                        console.error('[Coach] Lab experiment persistence failed:', err);
+                        setLabExperiments(prev => prev.filter(e => e.id !== experiment.id));
+                      });
                       break;
                     }
                     case 'goal': {
@@ -3995,6 +4024,8 @@ const App: React.FC = () => {
                       onHardRefresh={handleHardRefresh}
                       accentColor={accentColor}
                       onAccentColorChange={handleAccentColorChange}
+                      onCreateAccount={(account) => setAccounts(prev => [...prev, account])}
+                      onImportIncidentSaved={handleSaveReview}
                     />
                   )}
 

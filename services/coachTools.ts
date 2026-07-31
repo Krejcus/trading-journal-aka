@@ -9,16 +9,26 @@
 // + get_stats × 2).
 
 import { supabase } from './supabase';
-import type { Trade, DailyPrep, DailyReview, Account } from '../types';
+import type { Trade, DailyPrep, DailyReview, Account, LabExperiment } from '../types';
 import {
   addMemory,
   recallMemory,
   forgetMemory,
+  supersedeMemory,
+  validateMemory,
   setProfileKey,
   type MemoryType,
+  type MemoryEvidenceRef,
 } from './coachMemoryService';
-import { buildLabDataset, buildLabReport, prepBiasFromPreps, prepDaysFromPreps, type PrepBiasDay } from './labAnalytics';
+import { buildLabDataset, buildLabReport, computeExperimentReport, prepBiasFromPreps, prepDaysFromPreps, type PrepBiasDay } from './labAnalytics';
 import { adjustmentForAccount, getFinancialAdjustments } from './tradingIncidents';
+import {
+  analyzeIncidentExecutions,
+  type ImportedOrderEvidence,
+} from './coachIncidentAnalytics';
+import type { ImportedExecution } from './importPairing';
+import { createCoachPage } from './coachPagination';
+import { createCoachMediaPayload } from './coachMedia';
 
 // ─── Tool definitions for Anthropic API ──────────────────────────────────────
 
@@ -199,6 +209,24 @@ export const COACH_TOOLS = [
     },
   },
   {
+    name: 'get_incident_analysis',
+    description:
+      'Load the canonical incident plus its linked Tradecopia executions and raw orders, then deterministically analyze decision count (copy fan-out collapsed), timing, size escalation, PnL and entry order-type evidence. Use whenever the user asks how a gambling/invalid incident actually unfolded. Order type is returned with confidence and must not be stated as fact when confidence is low/unknown.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        incident_id: {
+          type: 'string',
+          description: 'Exact incident ID. Omit to analyze the latest incident that has linked imported executions.',
+        },
+        date: {
+          type: 'string',
+          description: 'Optional YYYY-MM-DD filter, useful when the incident ID is unknown.',
+        },
+      },
+    },
+  },
+  {
     name: 'remember',
     description:
       'Persist a durable insight about the trader for future conversations. Use this ONLY for non-trivial learnings — patterns, preferences, breakthroughs, recurring issues, COMMITMENTS (dohody). NEVER store transient facts ("user said hi", "user is tired today"). The memory lives across sessions and is retrieved when relevant. CHOOSE TYPE CAREFULLY:\n- observation = recurring pattern/behavior\n- episode = notable event (large win/loss, regime change)\n- fact = static truth about user (style, account)\n- preference = how user wants Coach to communicate\n- commitment = AKTIVNÍ DOHODA/ZÁVAZEK uživatele co MUSÍŠ respektovat v každém dalším chatu ("do 10. jedu na sim", "max 1% risk", "už nebudu obchodovat NQ ve čtvrtek"). VŽDY použij když user vyjádří závazek nebo dohodnete plán. Commitmenty jdou DOdo system promptu příště — nesmíš jim odporovat.',
@@ -234,6 +262,51 @@ export const COACH_TOOLS = [
           enum: ['live', 'backtest', 'global'],
           description: 'Kam paměť patří. Observation/episode defaultují na aktuální svět. Commitment defaultuje na global, pokud se týká tradingu obecně.',
         },
+        confidence: {
+          type: 'number',
+          description: '0–1 confidence. Explicit user commitment = 1. Behavioral hypothesis without direct evidence should be <=0.5.',
+        },
+        evidence: {
+          type: 'array',
+          description: 'Canonical evidence references supporting the memory. Required for a claimed recurring pattern.',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['trade', 'prep', 'review', 'conversation', 'incident', 'execution', 'order', 'experiment', 'manual'] },
+              id: { type: 'string' },
+              date: { type: 'string', description: 'Optional YYYY-MM-DD.' },
+              note: { type: 'string', description: 'Short explanation of what the source proves.' },
+            },
+            required: ['type', 'id'],
+          },
+        },
+        counter_evidence: {
+          type: 'array',
+          description: 'Canonical sources that contradict or weaken this memory. Any counter-evidence makes the memory contested.',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['trade', 'prep', 'review', 'conversation', 'incident', 'execution', 'order', 'experiment', 'manual'] },
+              id: { type: 'string' },
+              date: { type: 'string' },
+              note: { type: 'string' },
+            },
+            required: ['type', 'id'],
+          },
+        },
+        validation_state: {
+          type: 'string',
+          enum: ['hypothesis', 'supported', 'contested', 'user_stated'],
+          description: 'Epistemic state. Recurring observations need at least 3 independent evidence refs before supported; otherwise use hypothesis.',
+        },
+        validation_note: {
+          type: 'string',
+          description: 'Short note explaining why the validation state changed.',
+        },
+        supersedes_memory_id: {
+          type: 'string',
+          description: 'ID of an outdated/contradictory memory this new entry replaces. Use instead of deleting history.',
+        },
         key: {
           type: 'string',
           description: 'For type=fact|preference: the key name (e.g. "preferred_display", "main_instrument"). Required for those types.',
@@ -243,6 +316,43 @@ export const COACH_TOOLS = [
         },
       },
       required: ['type', 'content'],
+    },
+  },
+  {
+    name: 'validate_memory',
+    description:
+      'Re-evaluate an existing observation/episode using new canonical supporting or counter evidence. Use after reviewing another occurrence or a completed experiment. This updates validation state and confidence without changing the memory text or erasing history. To correct the text itself use remember with supersedes_memory_id.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        memory_id: { type: 'string' },
+        evidence: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['trade', 'prep', 'review', 'conversation', 'incident', 'execution', 'order', 'experiment', 'manual'] },
+              id: { type: 'string' }, date: { type: 'string' }, note: { type: 'string' },
+            },
+            required: ['type', 'id'],
+          },
+        },
+        counter_evidence: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['trade', 'prep', 'review', 'conversation', 'incident', 'execution', 'order', 'experiment', 'manual'] },
+              id: { type: 'string' }, date: { type: 'string' }, note: { type: 'string' },
+            },
+            required: ['type', 'id'],
+          },
+        },
+        validation_state: { type: 'string', enum: ['hypothesis', 'supported', 'contested'] },
+        confidence: { type: 'number' },
+        validation_note: { type: 'string' },
+      },
+      required: ['memory_id', 'validation_note'],
     },
   },
   {
@@ -269,7 +379,7 @@ export const COACH_TOOLS = [
   {
     name: 'forget_memory',
     description:
-      'Delete a specific memory entry by ID. Use only when the user explicitly tells you to forget something OR when you discover a memory is outdated/wrong.',
+      'Permanently delete a specific memory entry by ID. Use only when the user explicitly asks to forget/delete it or for privacy removal. For outdated or corrected memories, call remember with supersedes_memory_id instead so the audit trail remains.',
     input_schema: {
       type: 'object',
       properties: {
@@ -301,6 +411,52 @@ export const COACH_TOOLS = [
     },
   },
   {
+    name: 'get_coach_records',
+    description:
+      'Canonical drill-down for Coach data that is not fully present in the 90-day prompt. Use for unlinked/pending Tradecopia imports, account events, daily/weekly insights, complete Business Hub records, backtest session notes, exact execution paths, or media references. Read-only and RLS-scoped.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          enum: ['execution_imports', 'account_events', 'insights', 'business', 'backtest_sessions', 'execution_path', 'trade_media'],
+        },
+        record_id: { type: 'string', description: 'Optional exact record/trade/account ID.' },
+        account: { type: 'string', description: 'Optional AlphaTrade account ID/name or external Tradecopia account ID/name.' },
+        status: { type: 'string', description: 'Optional status filter where supported.' },
+        date_from: { type: 'string', description: 'Optional YYYY-MM-DD.' },
+        date_to: { type: 'string', description: 'Optional YYYY-MM-DD.' },
+        limit: { type: 'integer', description: '1–200, default 50.' },
+        offset: { type: 'integer', description: '0 nebo vyšší. Pro další stránku použij next_offset z předchozí odpovědi.' },
+      },
+      required: ['domain'],
+    },
+  },
+  {
+    name: 'get_coach_media',
+    description:
+      'Load one exact screenshot as real vision input. REQUIRED before describing or interpreting what is visible in a trade, prep, review/debrief, or payout image. First use metadata/search tools to identify the exact record_id; index is zero-based when a record has multiple images.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        source_type: {
+          type: 'string',
+          enum: ['trade', 'prep', 'review', 'payout'],
+          description: 'Canonical source that owns the screenshot.',
+        },
+        record_id: {
+          type: 'string',
+          description: 'Exact record ID. For prep/review the exact YYYY-MM-DD date is accepted too.',
+        },
+        index: {
+          type: 'integer',
+          description: 'Zero-based screenshot index. Default 0.',
+        },
+      },
+      required: ['source_type', 'record_id'],
+    },
+  },
+  {
     name: 'get_lab_analytics',
     description:
       'Deterministická čísla ze záložky Lab (stejný kód jako UI). VŽDY použij pro hledání nejlepších/nejhorších kombinací setupu (patterns), counterfactual otázky ("co kdybych měl SL na FVG/swing/OTE — jaký winrate/výsledek?", "kolik nechávám na stole", "fixní TP vs trailing"), pro 1m execution otázky (kolik obchodů jde do 25/50/75 % SL, jak dlouho tancují u entry, SL za první svíčkou), pro bias analýzu a pro leak detektory. Counterfactual varianty jsou PÁROVÉ srovnání (varianta vs. skutečnost na týchž obchodech, pole delta_R) — to je jiné číslo než skupina obchodů, kde trader SL na X reálně dal (na to použij get_stats). Výstup nese svět, pokrytí, n, confidence a trade_ids jako důkazy. Vrácená čísla NEPŘEPOČÍTÁVEJ ani neodhaduj — cituj je přesně.',
@@ -321,6 +477,19 @@ export const COACH_TOOLS = [
           enum: ['live', 'backtest'],
           description: 'Explicitní svět dat. Default = aktuální coach scope. Použij, když se uživatel ptá na druhý svět.',
         },
+      },
+    },
+  },
+  {
+    name: 'get_experiments',
+    description:
+      'Returns Lab experiments and deterministically recomputes before/after progress from current trades. Use for mentor follow-up: what is running, whether the target sample is reached, and whether the hypothesis improved, worsened, or remains unproven. Never promote an incomplete experiment to a permanent rule.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        experiment_id: { type: 'string', description: 'Optional exact experiment ID.' },
+        status: { type: 'string', enum: ['running', 'evaluated', 'cancelled', 'all'], description: 'Default all.' },
+        world: { type: 'string', enum: ['live', 'backtest'], description: 'Default current Coach scope.' },
       },
     },
   },
@@ -358,7 +527,63 @@ interface SearchHistoryArgs {
   account?: string;
 }
 
-async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], trades: Trade[] = [], scope: 'live' | 'backtest' = 'live'): Promise<{
+export const normalizeSearchText = (value: unknown): string => String(value ?? '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().replace(/[^a-z0-9$+.-]+/g, ' ').trim();
+
+const searchTokens = (query: string): string[] => [...new Set(normalizeSearchText(query)
+  .split(/\s+/).filter(token => token.length >= 3))];
+
+export function lexicalHistoryCandidates(
+  args: SearchHistoryArgs,
+  trades: Trade[],
+  preps: DailyPrep[],
+  reviews: DailyReview[],
+  accountId: string | null,
+  scope: 'live' | 'backtest',
+): any[] {
+  const requested = new Set(args.source_types || ['trade', 'prep', 'review']);
+  const query = normalizeSearchText(args.query);
+  const tokens = searchTokens(args.query);
+  const score = (content: string): number => {
+    const normalized = normalizeSearchText(content);
+    if (!normalized || tokens.length === 0) return 0;
+    const matches = tokens.filter(token => normalized.includes(token)).length;
+    const phraseBonus = query.length >= 5 && normalized.includes(query) ? 0.4 : 0;
+    return Math.min(1, matches / tokens.length * 0.75 + phraseBonus);
+  };
+  const withinDate = (date?: string) => (!args.date_from || String(date || '').slice(0, 10) >= args.date_from)
+    && (!args.date_to || String(date || '').slice(0, 10) <= args.date_to);
+  const docs: any[] = [];
+
+  if (requested.has('trade')) for (const trade of trades) {
+    if (accountId && String(trade.accountId) !== accountId) continue;
+    if (!withinDate(trade.date)) continue;
+    const content = [
+      trade.instrument, trade.direction, trade.session, trade.signal,
+      trade.notes, trade.planAdherence, trade.outcome, ...(trade.tags || []),
+      ...(trade.mistakes || []), ...(trade.emotions || []),
+      ...(trade.htfConfluence || []), ...(trade.ltfConfluence || []),
+    ].filter(Boolean).join(' | ');
+    const lexicalScore = score(content);
+    if (lexicalScore > 0) docs.push({ source_type: 'trade', source_id: String(trade.id), date: trade.date, content, lexical_score: lexicalScore });
+  }
+  if (scope === 'live' && requested.has('prep')) for (const prep of preps) {
+    if (!withinDate(prep.date)) continue;
+    const content = JSON.stringify(prep);
+    const lexicalScore = score(content);
+    if (lexicalScore > 0) docs.push({ source_type: 'prep', source_id: String(prep.id || prep.date), date: prep.date, content, lexical_score: lexicalScore });
+  }
+  if (scope === 'live' && requested.has('review')) for (const review of reviews) {
+    if (!withinDate(review.date)) continue;
+    const content = JSON.stringify(review);
+    const lexicalScore = score(content);
+    if (lexicalScore > 0) docs.push({ source_type: 'review', source_id: String(review.id || review.date), date: review.date, content, lexical_score: lexicalScore });
+  }
+  return docs;
+}
+
+async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], trades: Trade[] = [], preps: DailyPrep[] = [], reviews: DailyReview[] = [], scope: 'live' | 'backtest' = 'live'): Promise<{
   results: Array<{
     source_type: string;
     source_id: string;
@@ -369,27 +594,25 @@ async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], 
   }>;
   count: number;
 }> {
-  const embedding = await embedQueryViaEdge(args.query);
-  if (!embedding) return { results: [], count: 0 };
-
   const limit = Math.min(args.limit ?? 10, 20);
   // Při account filtru načteme víc kandidátů (overscan), pak ořežeme.
   const accId = args.account ? resolveAccountId(args.account, accounts) : null;
   const matchCount = accId ? Math.min(limit * 4, 40) : limit;
-
-  const { data, error } = await supabase.rpc('match_embeddings', {
-    query_embedding: embedding,
-    match_count: matchCount,
-    similarity_threshold: 0.2,
-    filter_source_types: args.source_types || null,
-    filter_date_from: args.date_from || null,
-    filter_date_to: args.date_to || null,
-  });
-  if (error) {
-    console.warn('[coachTools] search_history rpc error:', error);
-    return { results: [], count: 0 };
+  const embedding = await embedQueryViaEdge(args.query);
+  let semanticResults: any[] = [];
+  if (embedding) {
+    const { data, error } = await supabase.rpc('match_embeddings', {
+      query_embedding: embedding,
+      match_count: Math.max(matchCount, limit * 3),
+      similarity_threshold: 0.2,
+      filter_source_types: args.source_types || null,
+      filter_date_from: args.date_from || null,
+      filter_date_to: args.date_to || null,
+    });
+    if (error) console.warn('[coachTools] search_history rpc error, using lexical fallback:', error);
+    else semanticResults = data || [];
   }
-  let results = data || [];
+  let results = semanticResults;
   // SCOPE PŘEPÁŽKA: RAG hledá přes embeddings VŠECH obchodů v DB (i backtest).
   // `trades` je ale už scoped (live/backtest) podle aktuálního režimu mentora,
   // takže trade výsledek pustíme jen pokud jeho source_id patří mezi známé scoped
@@ -409,8 +632,29 @@ async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], 
       r.source_type !== 'trade' || tradeAcct.get(String(r.source_id)) === accId
     );
   }
-  results = results.slice(0, limit);
-  return { results, count: results.length };
+  const lexical = lexicalHistoryCandidates(args, trades, preps, reviews, accId, scope);
+  const merged = new Map<string, any>();
+  for (const item of results) {
+    const key = `${item.source_type}:${item.source_id}`;
+    merged.set(key, { ...item, semantic_score: Number(item.similarity) || 0, lexical_score: 0 });
+  }
+  for (const item of lexical) {
+    const key = `${item.source_type}:${item.source_id}`;
+    const existing = merged.get(key);
+    merged.set(key, existing ? { ...existing, lexical_score: item.lexical_score, content: existing.content || item.content, date: existing.date || item.date } : item);
+  }
+  results = [...merged.values()]
+    .map(item => ({
+      ...item,
+      hybrid_score: Number(((Number(item.semantic_score || item.similarity) || 0) * 0.7 + (Number(item.lexical_score) || 0) * 0.3).toFixed(4)),
+    }))
+    .sort((a, b) => b.hybrid_score - a.hybrid_score || String(b.date || '').localeCompare(String(a.date || '')))
+    .slice(0, limit);
+  return {
+    results,
+    count: results.length,
+    retrieval: { semanticAvailable: !!embedding, lexicalCandidates: lexical.length, mode: embedding ? 'hybrid' : 'lexical-fallback' },
+  } as any;
 }
 
 interface GetStatsArgs {
@@ -860,6 +1104,109 @@ function getRecentContext(
   };
 }
 
+interface IncidentAnalysisArgs {
+  incident_id?: string;
+  date?: string;
+}
+
+const importSelect = 'id, account_ext_id, account_name, symbol, direction, buy_price, sell_price, qty, pnl, entry_at, exit_at, status, group_key, incident_ref';
+
+async function getIncidentAnalysis(args: IncidentAnalysisArgs, ctx: ToolContext): Promise<unknown> {
+  const datedReviews = [...ctx.reviews]
+    .filter(review => !args.date || review.date === args.date)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const incidents = datedReviews.flatMap(review => (review.incidents || []).map(incident => ({
+    review,
+    incident,
+  }))).sort((a, b) => {
+    const aTime = Number(a.incident.timestamp) || new Date(`${a.review.date}T00:00:00Z`).getTime();
+    const bTime = Number(b.incident.timestamp) || new Date(`${b.review.date}T00:00:00Z`).getTime();
+    return bTime - aTime;
+  });
+
+  // Without an explicit ID prefer the latest incident that actually has linked
+  // raw imports. A journal-only incident is still valid, but cannot answer
+  // questions about Market/Limit, timing or size escalation.
+  let selected = args.incident_id
+    ? incidents.find(item => item.incident.id === args.incident_id)
+    : undefined;
+  if (!selected && !args.incident_id && incidents.length > 0) {
+    const knownIds = incidents.map(item => item.incident.id).filter(Boolean);
+    if (knownIds.length > 0) {
+      const { data: linkedRows } = await supabase
+        .from('imported_trades')
+        .select('incident_ref, entry_at')
+        .in('incident_ref', knownIds)
+        .order('entry_at', { ascending: false })
+        .limit(5000);
+      const latestLinkedRef = (linkedRows || []).find(row => row.incident_ref)?.incident_ref;
+      if (latestLinkedRef) selected = incidents.find(item => item.incident.id === latestLinkedRef);
+    }
+    selected ||= incidents[0];
+  }
+  if (!selected) return { error: args.incident_id ? 'incident-not-found' : 'no-incident-found' };
+
+  const { data: executionRows, error: executionError } = await supabase
+    .from('imported_trades')
+    .select(importSelect)
+    .eq('incident_ref', selected.incident.id)
+    .order('entry_at', { ascending: true })
+    .limit(5000);
+  if (executionError) return { error: 'incident-executions-load-failed', detail: executionError.message };
+
+  const executions = (executionRows || []) as unknown as ImportedExecution[];
+  let orders: ImportedOrderEvidence[] = [];
+  if (executions.length > 0) {
+    const accountIds = [...new Set(executions.map(item => item.account_ext_id))];
+    const from = new Date(Math.min(...executions.map(item => new Date(item.entry_at).getTime())) - 2 * 60_000).toISOString();
+    const to = new Date(Math.max(...executions.map(item => new Date(item.exit_at).getTime())) + 2 * 60_000).toISOString();
+    const { data: orderRows, error: orderError } = await supabase
+      .from('imported_orders')
+      .select('id, account_ext_id, symbol, side, order_type, quantity, filled_qty, limit_price, stop_price, avg_fill_price, status, placed_at')
+      .in('account_ext_id', accountIds)
+      .gte('placed_at', from)
+      .lte('placed_at', to)
+      .order('placed_at', { ascending: true })
+      .limit(5000);
+    if (!orderError) orders = (orderRows || []) as ImportedOrderEvidence[];
+  }
+
+  const analysis = analyzeIncidentExecutions(executions, orders);
+  const loss = selected.incident.allocations.reduce((sum, allocation) =>
+    sum + (Number(allocation.lossAmount) || 0), 0);
+  return {
+    evidence: {
+      incident: { id: selected.incident.id, reviewDate: selected.review.date },
+      executionIds: executions.map(item => item.id),
+      orderIds: orders.map(item => item.id),
+      citationMarkers: [
+        `[INCIDENT:${selected.incident.id}]`,
+        ...executions.map(item => `[EXECUTION:${item.id}]`),
+        ...orders.map(item => `[ORDER:${item.id}]`),
+        `[REVIEW:${selected.review.date}]`,
+      ],
+    },
+    incident: {
+      id: selected.incident.id,
+      date: selected.review.date,
+      type: selected.incident.type,
+      title: selected.incident.title,
+      whatHappened: selected.incident.whatHappened,
+      trigger: selected.incident.trigger,
+      lesson: selected.incident.lesson,
+      recordedLoss: loss,
+      allocations: selected.incident.allocations,
+    },
+    analysis,
+    reconciliation: {
+      importedPnl: analysis.totalPnl,
+      recordedIncidentLoss: -Math.abs(loss),
+      difference: Number((analysis.totalPnl + Math.abs(loss)).toFixed(2)),
+    },
+    usageRule: 'Konkrétní tvrzení cituj vrácenými markery. orderType s confidence low/unknown není ověřený fakt.',
+  };
+}
+
 // ─── Public dispatcher ───────────────────────────────────────────────────────
 
 export interface ToolContext {
@@ -880,6 +1227,12 @@ interface RememberArgs {
   key?: string;
   value?: unknown;
   scope?: 'live' | 'backtest' | 'global';
+  confidence?: number;
+  evidence?: MemoryEvidenceRef[];
+  counter_evidence?: MemoryEvidenceRef[];
+  validation_state?: 'hypothesis' | 'supported' | 'contested' | 'user_stated';
+  validation_note?: string;
+  supersedes_memory_id?: string;
 }
 
 async function rememberHandler(args: RememberArgs, scope: 'live' | 'backtest' = 'live') {
@@ -896,16 +1249,26 @@ async function rememberHandler(args: RememberArgs, scope: 'live' | 'backtest' = 
   const importance = args.importance ?? (args.type === 'commitment' ? 8 : undefined);
   const metadata: Record<string, unknown> = {
     scope: args.scope || (args.type === 'commitment' ? 'global' : scope),
+    confidence: args.confidence,
+    evidence: args.evidence || [],
+    counter_evidence: args.counter_evidence || [],
+    validation_state: args.validation_state,
+    validation_note: args.validation_note,
+    last_validated_at: args.validation_state ? new Date().toISOString().slice(0, 10) : undefined,
   };
   if (args.expires_at) metadata.expires_at = args.expires_at;
 
-  const result = await addMemory({
+  const input = {
     type: args.type as MemoryType,
     content: args.content,
     importance,
     memory_date: args.memory_date,
     metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-  });
+    source_ref: args.evidence?.[0] ? `${args.evidence[0].type}:${args.evidence[0].id}` : undefined,
+  };
+  const result = args.supersedes_memory_id
+    ? await supersedeMemory(args.supersedes_memory_id, input)
+    : await addMemory(input);
   if (!result) return { error: 'Failed to persist memory' };
   return { ok: true, id: result.id, type: result.type, importance: result.importance };
 }
@@ -933,6 +1296,11 @@ async function recallHandler(args: RecallArgs, scope: 'live' | 'backtest' = 'liv
       importance: r.importance,
       similarity: r.similarity ? Number(r.similarity.toFixed(2)) : undefined,
       metadata: r.metadata,
+      evidence: r.metadata?.evidence || [],
+      confidence: r.metadata?.confidence,
+      validation_state: r.metadata?.validation_state,
+      counter_evidence: r.metadata?.counter_evidence || [],
+      validation_note: r.metadata?.validation_note,
     })),
   };
 }
@@ -943,10 +1311,356 @@ async function forgetHandler(args: { memory_id: string }) {
   return ok ? { ok: true } : { error: 'Delete failed' };
 }
 
+async function validateMemoryHandler(args: {
+  memory_id: string;
+  evidence?: MemoryEvidenceRef[];
+  counter_evidence?: MemoryEvidenceRef[];
+  validation_state?: 'hypothesis' | 'supported' | 'contested';
+  confidence?: number;
+  validation_note?: string;
+}) {
+  if (!args.memory_id || !args.validation_note?.trim()) return { error: 'memory_id and validation_note required' };
+  const result = await validateMemory(args.memory_id, args);
+  if (!result) return { error: 'Failed to validate memory' };
+  return {
+    ok: true,
+    id: result.id,
+    validation_state: result.metadata.validation_state,
+    confidence: result.metadata.confidence,
+    evidence_count: result.metadata.evidence?.length || 0,
+    counter_evidence_count: result.metadata.counter_evidence?.length || 0,
+  };
+}
+
 /**
  * Dispatch a tool call by name and arguments. Returns a JSON-serializable result
  * that gets fed back to Claude as the tool_result content.
  */
+interface CoachRecordsArgs {
+  domain: 'execution_imports' | 'account_events' | 'insights' | 'business' | 'backtest_sessions' | 'execution_path' | 'trade_media';
+  record_id?: string;
+  account?: string;
+  status?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+interface CoachMediaArgs {
+  source_type: 'trade' | 'prep' | 'review' | 'payout';
+  record_id: string;
+  index?: number;
+}
+
+const uniqueMedia = (values: unknown[]): string[] => [...new Set(
+  values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+)];
+
+const prepMedia = (prep: DailyPrep): string[] => uniqueMedia([
+  ...(prep.scenarios?.scenarioImages || []),
+  prep.scenarios?.bullishImage,
+  prep.scenarios?.bearishImage,
+  ...(prep.scenarios?.sessions || []).map(session => session.image),
+]);
+
+const reviewMedia = (review: DailyReview): string[] => uniqueMedia(
+  (review.sessionBreakdowns || []).map(breakdown => breakdown.screenshot),
+);
+
+async function getCoachMedia(args: CoachMediaArgs, ctx: ToolContext): Promise<unknown> {
+  const recordId = String(args.record_id || '').trim();
+  const index = Math.max(0, Math.floor(Number(args.index) || 0));
+  if (!recordId) return { error: 'record_id required' };
+
+  let media: string[] = [];
+  let label = '';
+  let evidence = '';
+
+  if (args.source_type === 'trade') {
+    const trade = ctx.trades.find(item => String(item.id) === recordId);
+    if (!trade) return { error: `Trade ${recordId} nebyl nalezen.` };
+    media = uniqueMedia([trade.screenshot, ...(trade.screenshots || [])]);
+    label = `Screenshot obchodu ${trade.instrument || ''} ${trade.date || ''}`.trim();
+    evidence = `[TRADE:${trade.id}]`;
+  } else if (args.source_type === 'prep') {
+    const prep = ctx.preps.find(item => String(item.id) === recordId || String(item.date) === recordId);
+    if (!prep) return { error: `Příprava ${recordId} nebyla nalezena.` };
+    media = prepMedia(prep);
+    label = `Screenshot ranní přípravy ${prep.date}`;
+    evidence = `[PREP:${prep.date}]`;
+  } else if (args.source_type === 'review') {
+    const review = ctx.reviews.find(item => String(item.id) === recordId || String(item.date) === recordId);
+    if (!review) return { error: `Debrief ${recordId} nebyl nalezen.` };
+    media = reviewMedia(review);
+    label = `Screenshot debriefu ${review.date}`;
+    evidence = `[REVIEW:${review.date}]`;
+  } else {
+    const { data, error } = await supabase.from('business_payouts')
+      .select('id, date, description').eq('id', recordId).maybeSingle();
+    if (error) return { error: error.message };
+    if (!data) return { error: `Payout ${recordId} nebyl nalezen.` };
+    let meta: Record<string, unknown> = {};
+    try {
+      meta = typeof data.description === 'string' ? JSON.parse(data.description) : (data.description || {});
+    } catch { meta = {}; }
+    media = uniqueMedia([meta.image]);
+    label = `Důkaz payoutu ${data.date || ''}`.trim();
+    evidence = `[PAYOUT:${data.id}]`;
+  }
+
+  if (!media.length) return { error: `Záznam ${recordId} nemá uložený screenshot.` };
+  if (index >= media.length) return { error: `Screenshot index ${index} neexistuje; dostupné indexy jsou 0–${media.length - 1}.` };
+  return createCoachMediaPayload(media[index], `${label} (${index + 1}/${media.length})`, evidence);
+}
+
+const mediaDescriptor = (value: unknown): unknown => {
+  if (typeof value === 'string' && value.startsWith('data:')) {
+    return { available: true, kind: 'embedded-data-url', bytesApprox: Math.round(value.length * 0.75) };
+  }
+  if (typeof value === 'string' && /^(https?:|blob:)/.test(value)) {
+    return { available: true, kind: 'url', url: value };
+  }
+  return value ? { available: true, kind: 'stored-reference' } : null;
+};
+
+async function getCoachRecords(args: CoachRecordsArgs, ctx: ToolContext): Promise<unknown> {
+  const limit = Math.max(1, Math.min(Number(args.limit) || 50, 200));
+  const offset = Math.max(0, Math.floor(Number(args.offset) || 0));
+  const page = <T>(rows: T[]) => createCoachPage(rows, offset, limit);
+
+  if (args.domain === 'execution_path') {
+    const rows = ctx.trades
+      .filter(trade => !args.record_id || String(trade.id) === String(args.record_id))
+      .filter(trade => !args.account || String(trade.accountId) === resolveAccountId(args.account!, ctx.accounts || []))
+      .filter(trade => !args.date_from || String(trade.date).slice(0, 10) >= args.date_from!)
+      .filter(trade => !args.date_to || String(trade.date).slice(0, 10) <= args.date_to!)
+      .slice(offset, offset + limit + 1)
+      .map(trade => ({
+        tradeId: trade.id,
+        date: trade.date,
+        accountId: trade.accountId,
+        instrument: trade.instrument,
+        direction: trade.direction,
+        riskAmount: trade.riskAmount ?? null,
+        mfeR: trade.mfeR ?? null,
+        maeR: trade.maeR ?? null,
+        counterfactual: trade.counterfactual ?? null,
+        executionPath: trade.executionPath ?? null,
+        excursionAvailable: trade.excursionAvailable ?? false,
+        bestTpReached: (trade as any).bestTpReached ?? null,
+        levels: (trade as any).levels ?? (trade as any).levelContext ?? null,
+        evidence: `[TRADE:${trade.id}]`,
+      }));
+    const result = page(rows);
+    return { domain: args.domain, count: result.rows.length, records: result.rows, pagination: result.pagination };
+  }
+
+  if (args.domain === 'trade_media') {
+    const tradeRecords = ctx.trades
+      .filter(trade => !args.record_id || String(trade.id) === String(args.record_id))
+      .filter(trade => !args.date_from || String(trade.date).slice(0, 10) >= args.date_from!)
+      .filter(trade => !args.date_to || String(trade.date).slice(0, 10) <= args.date_to!)
+      .map(trade => {
+        const media = [trade.screenshot, ...(trade.screenshots || [])].filter(Boolean);
+        return {
+          tradeId: trade.id,
+          date: trade.date,
+          count: media.length,
+          media: media.map(mediaDescriptor),
+          evidence: `[TRADE:${trade.id}]`,
+        };
+      })
+      .filter(record => record.count > 0);
+    const prepRecords = ctx.preps
+      .filter(prep => !args.record_id || String(prep.id) === String(args.record_id) || prep.date === args.record_id)
+      .filter(prep => !args.date_from || prep.date >= args.date_from!)
+      .filter(prep => !args.date_to || prep.date <= args.date_to!)
+      .map(prep => {
+        const media = prepMedia(prep);
+        return { sourceType: 'prep', recordId: prep.id, date: prep.date, count: media.length, media: media.map(mediaDescriptor), evidence: `[PREP:${prep.date}]` };
+      }).filter(record => record.count > 0);
+    const reviewRecords = ctx.reviews
+      .filter(review => !args.record_id || String(review.id) === String(args.record_id) || review.date === args.record_id)
+      .filter(review => !args.date_from || review.date >= args.date_from!)
+      .filter(review => !args.date_to || review.date <= args.date_to!)
+      .map(review => {
+        const media = reviewMedia(review);
+        return { sourceType: 'review', recordId: review.id, date: review.date, count: media.length, media: media.map(mediaDescriptor), evidence: `[REVIEW:${review.date}]` };
+      }).filter(record => record.count > 0);
+    let payoutQuery = supabase.from('business_payouts').select('id, date, description').order('date', { ascending: false });
+    if (args.record_id) payoutQuery = payoutQuery.eq('id', args.record_id);
+    if (args.date_from) payoutQuery = payoutQuery.gte('date', args.date_from);
+    if (args.date_to) payoutQuery = payoutQuery.lte('date', args.date_to);
+    const payoutResult = await payoutQuery;
+    const payoutRecords = (payoutResult.data || []).map((row: any) => {
+      let meta: any = {};
+      try { meta = typeof row.description === 'string' ? JSON.parse(row.description) : (row.description || {}); } catch { meta = {}; }
+      return { sourceType: 'payout', recordId: row.id, date: row.date, count: meta.image ? 1 : 0, media: meta.image ? [mediaDescriptor(meta.image)] : [], evidence: `[PAYOUT:${row.id}]` };
+    }).filter(record => record.count > 0);
+    const records = [
+      ...tradeRecords.map(record => ({ sourceType: 'trade', recordId: record.tradeId, ...record })),
+      ...prepRecords,
+      ...reviewRecords,
+      ...payoutRecords,
+    ].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    const result = page(records);
+    return {
+      domain: args.domain,
+      count: result.rows.length,
+      records: result.rows,
+      pagination: result.pagination,
+      ...(payoutResult.error ? { payoutWarning: payoutResult.error.message } : {}),
+      usageRule: 'Vyber sourceType + recordId + index a zavolej get_coach_media. Bez něj obsah obrázku netvrď.',
+    };
+  }
+
+  if (args.domain === 'execution_imports') {
+    let tradesQuery = supabase.from('imported_trades')
+      .select('id, source, external_key, account_ext_id, account_name, symbol, qty, buy_price, sell_price, pnl, entry_at, exit_at, duration, platform, direction, entry_order_type, tp_price, sl_final, sl_moves, group_key, status, linked_trade_id, match_score, incident_ref, resolved_at, created_at')
+      .order('entry_at', { ascending: false })
+      .range(offset, offset + limit);
+    if (args.record_id) tradesQuery = tradesQuery.eq('id', args.record_id);
+    if (args.status) tradesQuery = tradesQuery.eq('status', args.status);
+    if (args.date_from) tradesQuery = tradesQuery.gte('entry_at', `${args.date_from}T00:00:00Z`);
+    if (args.date_to) tradesQuery = tradesQuery.lte('entry_at', `${args.date_to}T23:59:59.999Z`);
+    if (args.account && /^\d+$/.test(args.account)) tradesQuery = tradesQuery.eq('account_ext_id', Number(args.account));
+    else if (args.account) tradesQuery = tradesQuery.ilike('account_name', `%${args.account}%`);
+
+    const [tradesResult, ordersResult, mapsResult] = await Promise.all([
+      tradesQuery,
+      supabase.from('imported_orders')
+        .select('id, source, account_ext_id, account_name, symbol, side, order_type, quantity, filled_qty, limit_price, stop_price, avg_fill_price, status, platform, placed_at, created_at')
+        .order('placed_at', { ascending: false }).range(offset, offset + limit),
+      supabase.from('import_account_map')
+        .select('id, source, account_ext_id, account_name, entity_id, mapped_account_id, status, is_connected, import_from_date, created_at, updated_at')
+        .order('updated_at', { ascending: false }).range(offset, offset + limit),
+    ]);
+    if (tradesResult.error) return { error: tradesResult.error.message };
+    const executionsPage = page(tradesResult.data || []);
+    const ordersPage = ordersResult.error ? null : page(ordersResult.data || []);
+    const mapsPage = mapsResult.error ? null : page(mapsResult.data || []);
+    return {
+      domain: args.domain,
+      executions: executionsPage.rows,
+      orders: ordersResult.error ? { unavailable: ordersResult.error.message } : ordersPage!.rows,
+      accountMap: mapsResult.error ? { unavailable: mapsResult.error.message } : mapsPage!.rows,
+      pagination: { executions: executionsPage.pagination, orders: ordersPage?.pagination, accountMap: mapsPage?.pagination },
+    };
+  }
+
+  if (args.domain === 'backtest_sessions') {
+    let query = supabase.from('backtest_sessions')
+      .select('id, account_id, date, block, data')
+      .order('date', { ascending: false }).range(offset, offset + limit);
+    if (args.record_id) query = query.eq('id', args.record_id);
+    if (args.date_from) query = query.gte('date', args.date_from);
+    if (args.date_to) query = query.lte('date', args.date_to);
+    if (args.account) {
+      const accountId = resolveAccountId(args.account, ctx.accounts || []);
+      if (!accountId) return { error: `Účet "${args.account}" nenalezen.` };
+      query = query.eq('account_id', accountId);
+    }
+    const { data, error } = await query;
+    if (error) return { error: error.message };
+    const result = page(data || []);
+    return { domain: args.domain, count: result.rows.length, records: result.rows, pagination: result.pagination };
+  }
+
+  if (args.domain === 'insights') {
+    const [daily, focus, reports] = await Promise.all([
+      supabase.from('daily_insights').select('id, headline, content, category, refs, generated_at, is_dismissed')
+        .order('generated_at', { ascending: false }).range(offset, offset + limit),
+      supabase.from('weekly_focus').select('id, week_iso, goals')
+        .order('week_iso', { ascending: false }).range(offset, offset + limit),
+      supabase.from('weekly_reports').select('id, week_start, report_md, stats, created_at')
+        .order('week_start', { ascending: false }).range(offset, offset + limit),
+    ]);
+    const dailyPage = daily.error ? null : page(daily.data || []);
+    const focusPage = focus.error ? null : page(focus.data || []);
+    const reportsPage = reports.error ? null : page(reports.data || []);
+    return {
+      domain: args.domain,
+      dailyInsights: daily.error ? { unavailable: daily.error.message } : dailyPage!.rows,
+      weeklyFocus: focus.error ? { unavailable: focus.error.message } : focusPage!.rows,
+      weeklyReports: reports.error ? { unavailable: reports.error.message } : reportsPage!.rows,
+      pagination: { dailyInsights: dailyPage?.pagination, weeklyFocus: focusPage?.pagination, weeklyReports: reportsPage?.pagination },
+    };
+  }
+
+  if (args.domain === 'business') {
+    const [expenses, payouts, goals, resources] = await Promise.all([
+      supabase.from('business_expenses').select('*').order('date', { ascending: false }).range(offset, offset + limit),
+      supabase.from('business_payouts').select('id, date, amount, payout_method, description, created_at, updated_at')
+        .order('date', { ascending: false }).range(offset, offset + limit),
+      supabase.from('business_goals').select('*').order('created_at', { ascending: false }).range(offset, offset + limit),
+      supabase.from('business_resources').select('*').order('created_at', { ascending: false }).range(offset, offset + limit),
+    ]);
+    const payoutRows = (payouts.data || []).map((row: any) => {
+      let meta: any = {};
+      try { meta = typeof row.description === 'string' && row.description.startsWith('{') ? JSON.parse(row.description) : {}; } catch {}
+      return { ...row, description: undefined, meta: { ...meta, image: mediaDescriptor(meta.image) } };
+    });
+    const expensesPage = expenses.error ? null : page(expenses.data || []);
+    const payoutsPage = payouts.error ? null : page(payoutRows);
+    const goalsPage = goals.error ? null : page(goals.data || []);
+    const resourcesPage = resources.error ? null : page(resources.data || []);
+    return {
+      domain: args.domain,
+      expenses: expenses.error ? { unavailable: expenses.error.message } : expensesPage!.rows,
+      payouts: payouts.error ? { unavailable: payouts.error.message } : payoutsPage!.rows,
+      goals: goals.error ? { unavailable: goals.error.message } : goalsPage!.rows,
+      resources: resources.error ? { unavailable: resources.error.message } : resourcesPage!.rows,
+      pagination: { expenses: expensesPage?.pagination, payouts: payoutsPage?.pagination, goals: goalsPage?.pagination, resources: resourcesPage?.pagination },
+    };
+  }
+
+  // Account events combine canonical account state, trades, payouts and journal incidents.
+  const accountId = args.account ? resolveAccountId(args.account, ctx.accounts || []) : args.record_id;
+  const accounts = (ctx.accounts || []).filter(account => !accountId || String(account.id) === String(accountId));
+  const tradeEvents = ctx.trades.filter(trade => !accountId || String(trade.accountId) === String(accountId))
+    .filter(trade => !args.date_from || String(trade.date).slice(0, 10) >= args.date_from!)
+    .filter(trade => !args.date_to || String(trade.date).slice(0, 10) <= args.date_to!)
+    .map(trade => ({ type: 'trade', id: trade.id, date: trade.date, pnl: trade.pnl, evidence: `[TRADE:${trade.id}]` }));
+  const incidents = ctx.reviews.flatMap(review => (review.incidents || []).flatMap(incident =>
+    (incident.allocations || []).filter(allocation => !args.account || allocation.label?.toLowerCase().includes(args.account!.toLowerCase()))
+      .map(allocation => ({ type: 'incident', id: incident.id, date: review.date, title: incident.title, loss: allocation.lossAmount, allocation: allocation.label, evidence: `[INCIDENT:${incident.id}]` }))));
+  let payoutsQuery = supabase.from('business_payouts')
+    .select('id, date, amount, payout_method, description, created_at, updated_at')
+    .order('date', { ascending: false }).range(offset, offset + limit);
+  if (args.date_from) payoutsQuery = payoutsQuery.gte('date', args.date_from);
+  if (args.date_to) payoutsQuery = payoutsQuery.lte('date', args.date_to);
+  const payoutsResult = await payoutsQuery;
+  const payoutRows = (payoutsResult.data || []).map((row: any) => {
+    let meta: any = {};
+    try { meta = typeof row.description === 'string' && row.description.startsWith('{') ? JSON.parse(row.description) : {}; } catch {}
+    return {
+      type: 'payout', id: row.id, date: row.date, amount: row.amount,
+      payoutMethod: row.payout_method, accountId: meta.accountId || null,
+      grossAmount: meta.grossAmount ?? null, profitSplitUsed: meta.profitSplitUsed ?? null,
+      status: meta.status || 'Received', notes: meta.notes || null,
+      media: mediaDescriptor(meta.image), evidence: `[PAYOUT:${row.id}]`,
+    };
+  });
+  const payoutPage = payoutsResult.error ? null : page(payoutRows);
+  const funeralEvents = accounts.filter((account: any) => account.failureDate || account.result === 'Failed').map((account: any) => ({
+    type: 'funeral', id: account.id, accountId: account.id, date: account.failureDate || null,
+    reason: account.failureReason || null, whatHappened: account.failureWhatHappened || null,
+    amountLost: account.failureAmountLost ?? null, progressPct: account.failureProgressPct ?? null,
+    keyLesson: account.failureKeyLesson || null, groupId: account.failureGroupId || null,
+    evidence: `[ACCOUNT:${account.id}]`,
+  }));
+  const eventPage = page([...tradeEvents, ...incidents].slice(offset, offset + limit + 1));
+  return {
+    domain: args.domain,
+    accounts,
+    events: eventPage.rows,
+    payouts: payoutsResult.error ? { unavailable: payoutsResult.error.message } : payoutPage!.rows,
+    funerals: funeralEvents,
+    pagination: { events: eventPage.pagination, payouts: payoutPage?.pagination },
+  };
+}
+
 interface BusinessSummaryArgs {
   period?: 'this_month' | 'last_month' | 'this_year' | 'all_time' | 'custom';
   date_from?: string;
@@ -1058,6 +1772,63 @@ function getLabAnalytics(args: { section?: string; account?: string; world?: str
   return buildLabReport(ds, args?.section || 'all', prepDays);
 }
 
+async function getExperiments(
+  args: { experiment_id?: string; status?: string; world?: string } | undefined,
+  ctx: ToolContext,
+): Promise<unknown> {
+  const world = args?.world === 'backtest' ? 'backtest' as const
+    : args?.world === 'live' ? 'live' as const
+    : ctx.scope === 'backtest' ? 'backtest' as const : 'live' as const;
+  let query = supabase.from('lab_experiments')
+    .select('id, data, created_at, updated_at')
+    .order('created_at', { ascending: true });
+  if (args?.experiment_id) query = query.eq('id', args.experiment_id);
+  const { data, error } = await query;
+  if (error) return { error: 'experiment-load-failed', detail: error.message };
+
+  const experiments = (data || [])
+    .map((row: any) => ({ ...(row.data || {}), id: row.id }) as LabExperiment)
+    .filter(exp => exp.world === world)
+    .filter(exp => !args?.status || args.status === 'all' || exp.status === args.status);
+  const ds = buildLabDataset(ctx.trades, ctx.accounts || [], {
+    world,
+    prepBias: world === 'live' ? prepBiasFromPreps(ctx.preps || []) : undefined,
+  });
+
+  return {
+    world,
+    count: experiments.length,
+    experiments: experiments.map(exp => {
+      const report = computeExperimentReport(ds, exp, world === 'live' ? prepDaysFromPreps(ctx.preps || []) : undefined);
+      const beforeIds = ds.trades.filter(trade => trade.ts < exp.startTs).map(trade => String(trade.id));
+      const afterIds = ds.trades.filter(trade => trade.ts >= exp.startTs).map(trade => String(trade.id));
+      return {
+        id: exp.id,
+        title: exp.title,
+        hypothesis: exp.hypothesis,
+        rule: exp.rule,
+        sourceLeakId: exp.sourceLeakId || null,
+        status: exp.status,
+        startAt: new Date(exp.startTs).toISOString(),
+        targetTrades: exp.targetTrades,
+        conclusion: exp.conclusion || null,
+        evaluatedAt: exp.evaluatedAt ? new Date(exp.evaluatedAt).toISOString() : null,
+        report,
+        evidence: {
+          experiment: `[EXPERIMENT:${exp.id}]`,
+          beforeTradeIds: beforeIds,
+          afterTradeIds: afterIds,
+          representativeTradeMarkers: [...beforeIds.slice(-3), ...afterIds.slice(-3)].map(id => `[TRADE:${id}]`),
+        },
+        mentorState: exp.status === 'running'
+          ? (report.ready ? 'ready-for-review' : 'collecting-sample')
+          : exp.status,
+      };
+    }),
+    usageRule: 'Pravidlo potvrď až po cílovém vzorku a evidovaném závěru. Jinak jej označ jako hypotézu/experiment.',
+  };
+}
+
 export async function executeTool(
   name: string,
   args: any,
@@ -1066,7 +1837,7 @@ export async function executeTool(
   try {
     switch (name) {
       case 'search_history':
-        return await searchHistory(args, ctx.accounts || [], ctx.trades, ctx.scope || 'live');
+        return await searchHistory(args, ctx.accounts || [], ctx.trades, ctx.preps, ctx.reviews, ctx.scope || 'live');
       case 'get_stats':
         return getStats(args, ctx);
       case 'list_trades':
@@ -1077,16 +1848,26 @@ export async function executeTool(
         return await findSimilarTrades(ctx.trades, args, ctx.accounts || []);
       case 'get_recent_context':
         return getRecentContext(ctx.trades, ctx.preps, ctx.reviews, args?.limit, ctx.accounts || [], args?.account);
+      case 'get_incident_analysis':
+        return await getIncidentAnalysis(args || {}, ctx);
       case 'remember':
         return await rememberHandler(args, ctx.scope || 'live');
+      case 'validate_memory':
+        return await validateMemoryHandler(args);
       case 'recall_memory':
         return await recallHandler(args, ctx.scope || 'live');
       case 'forget_memory':
         return await forgetHandler(args);
       case 'get_business_summary':
         return await getBusinessSummary(args);
+      case 'get_coach_records':
+        return await getCoachRecords(args, ctx);
+      case 'get_coach_media':
+        return await getCoachMedia(args, ctx);
       case 'get_lab_analytics':
         return getLabAnalytics(args, ctx);
+      case 'get_experiments':
+        return await getExperiments(args, ctx);
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -1126,8 +1907,12 @@ export function describeToolCall(name: string, args: any): string {
       return `🔗 Hledám podobné obchody${args?.trade_id ? ` k ${args.trade_id}` : ''}${args?.account ? ` (účet ${args.account})` : ''}`;
     case 'get_recent_context':
       return `📋 Načítám poslední obchody${args?.account ? ` (účet ${args.account})` : ''}`;
+    case 'get_incident_analysis':
+      return `🚨 Analyzuju průběh incidentu${args?.date ? ` (${args.date})` : ''}`;
     case 'remember':
       return `🧠 Ukládám si do paměti${args?.type ? ` (${args.type})` : ''}`;
+    case 'validate_memory':
+      return `🔎 Ověřuji starší poznatek proti novým důkazům`;
     case 'recall_memory':
       return `💭 Vybavuji si "${(args?.query || '').slice(0, 40)}${(args?.query?.length || 0) > 40 ? '…' : ''}"`;
     case 'forget_memory':
@@ -1137,10 +1922,26 @@ export function describeToolCall(name: string, args: any): string {
       const label: Record<string, string> = { this_month: 'tento měsíc', last_month: 'minulý měsíc', this_year: 'letos', all_time: 'celkem', custom: 'vlastní období' };
       return `💰 Načítám finance (${label[period] || period})`;
     }
+    case 'get_coach_records': {
+      const label: Record<string, string> = {
+        execution_imports: 'raw exekuce a objednávky',
+        account_events: 'časová osa účtu',
+        insights: 'insighty a reporty',
+        business: 'Business Hub detail',
+        backtest_sessions: 'backtest session poznámky',
+        execution_path: 'cesta obchodu',
+        trade_media: 'vizuální důkazy',
+      };
+      return `🗃️ Načítám ${label[args?.domain] || args?.domain}`;
+    }
+    case 'get_coach_media':
+      return `🖼️ Otevírám screenshot (${args?.source_type || 'médium'}${Number.isFinite(args?.index) ? ` #${Number(args.index) + 1}` : ''})`;
     case 'get_lab_analytics': {
       const secLabel: Record<string, string> = { overview: 'přehled', patterns: 'patterny a kombinace', counterfactual: 'counterfactual', execution: 'SL/TP a 1m cesta', bias: 'bias', sessions: 'sessions', leaks: 'leaky', all: 'vše' };
       return `🧪 Lab analytika (${secLabel[args?.section] || 'vše'})${args?.account ? ` · ${args.account}` : ''}`;
     }
+    case 'get_experiments':
+      return `🧫 Kontroluju mentor experimenty${args?.status && args.status !== 'all' ? ` (${args.status})` : ''}`;
     default:
       return `⚙️ ${name}`;
   }

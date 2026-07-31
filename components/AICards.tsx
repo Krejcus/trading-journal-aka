@@ -561,6 +561,7 @@ const ActionIcon: React.FC<{ type: SuggestedAction['type']; size?: number }> = (
   switch (type) {
     case 'rule': return <Shield size={size} strokeWidth={2.5} />;
     case 'experiment': return <FlaskConical size={size} strokeWidth={2.5} />;
+    case 'lab_experiment': return <FlaskConical size={size} strokeWidth={2.5} />;
     case 'goal': return <Flag size={size} strokeWidth={2.5} />;
     case 'checklist': return <ListChecks size={size} strokeWidth={2.5} />;
     case 'modify_rule': return <Pencil size={size} strokeWidth={2.5} />;
@@ -571,6 +572,7 @@ const ActionIcon: React.FC<{ type: SuggestedAction['type']; size?: number }> = (
 const ActionTypeLabel: Record<SuggestedAction['type'], string> = {
   rule: 'Iron Rule',
   experiment: 'Experiment',
+  lab_experiment: 'Lab experiment',
   goal: 'Cíl',
   checklist: 'Checklist',
   modify_rule: 'Úprava pravidla',
@@ -581,6 +583,7 @@ const ActionTypeLabel: Record<SuggestedAction['type'], string> = {
 const ActionDestinationHint: Record<SuggestedAction['type'], string> = {
   rule: 'Uloží se do Settings → Iron Rules',
   experiment: 'Time-boxed pravidlo v Settings → Iron Rules',
+  lab_experiment: 'Uloží se jako měřitelný test do Labu',
   goal: 'Uloží se do Goals',
   checklist: 'Uloží se jako Iron Rule s odrážkami v Settings → Pravidla',
   modify_rule: 'Změní existující pravidlo v Settings → Iron Rules',
@@ -686,6 +689,13 @@ export const ActionPanel: React.FC<{
                   ))}
                 </ul>
               )}
+              {action.type === 'lab_experiment' && (
+                <div className="mt-2 space-y-1 text-[10px] leading-snug text-[var(--text-secondary)]">
+                  <p><span className="font-black uppercase tracking-wider">Hypotéza:</span> {action.hypothesis}</p>
+                  <p><span className="font-black uppercase tracking-wider">Pravidlo:</span> {action.rule}</p>
+                  <p className="font-bold text-blue-500">Vyhodnotit po {action.targetTrades} obchodech</p>
+                </div>
+              )}
             </div>
             <button
               onClick={() => !applied && onApply(action, i)}
@@ -702,6 +712,8 @@ export const ActionPanel: React.FC<{
                 <>Změnit</>
               ) : action.type === 'remove_rule' ? (
                 <>Zrušit</>
+              ) : action.type === 'lab_experiment' ? (
+                <>Spustit test</>
               ) : (
                 <>+ Přidat</>
               )}

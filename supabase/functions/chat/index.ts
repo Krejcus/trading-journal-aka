@@ -19,7 +19,11 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 // Strop max_tokens (obrana i proti zneužití přihlášeným účtem). Klient používá ≤4096.
 const MAX_TOKENS_CEILING = 8192;
-const MAX_BODY_BYTES = 2_000_000;
+// Jeden Coach vision screenshot může mít po base64 převodu až ~10.7 MB
+// (8 MB binárně) a request navíc obsahuje systémový kontext + historii.
+// 16 MB zachová ochranu proti neomezeným payloadům a současně neodstřihne
+// legitimní get_coach_media tool_result ještě před Anthropic API.
+const MAX_BODY_BYTES = 16_000_000;
 const ALLOWED_MODELS = new Set(['claude-haiku-4-5', 'claude-sonnet-5']);
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT_PER_USER = 30;

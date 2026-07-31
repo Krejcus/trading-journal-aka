@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, ChevronDown, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen, Headphones, Brain, Zap } from 'lucide-react';
-import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation, SessionConfig, RuleCompletion, SessionAnalysis } from '../types';
-import { streamAIResponse, buildTraderContext, parseAllRefs, prewarmCoachMemory, type AIMessage } from '../services/aiService';
+import { Bot, Plus, Trash2, MessageSquare, ChevronLeft, ChevronDown, Send, Loader2, Sparkles, X, PanelLeftClose, PanelLeftOpen, Headphones, Brain, Zap, Search } from 'lucide-react';
+import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview, AIConversation, SessionConfig, RuleCompletion, SessionAnalysis, LabExperiment } from '../types';
+import { streamAIResponse, buildTraderContext, parseAllRefs, prewarmCoachMemory, invalidateMemoryCache, type AIMessage } from '../services/aiService';
 import { storageService } from '../services/storageService';
-import { summarizeConversation } from '../services/coachMemoryService';
+import { summarizeConversation, extractConversationMemory } from '../services/coachMemoryService';
 import { MessageBubble, type ExtendedMessage } from './AICards';
 import ConfirmationModal from './ConfirmationModal';
 import TradeDetailModal from './TradeDetailModal';
@@ -13,6 +13,13 @@ import { enqueueSpeak, cleanForSpeech, cancelSpeech, unlockAudio } from '../serv
 import { COACH_SESSIONS, buildDynamicSessionPrompt } from '../services/coachPrompts';
 import { resolvePersona } from '../services/coachPersonas';
 import { CoachSessionPreview } from './CoachSessionPreview';
+import {
+  buildExperimentCoachPrompt,
+  buildLabDataset,
+  computeExperimentReport,
+  prepBiasFromPreps,
+  prepDaysFromPreps,
+} from '../services/labAnalytics';
 
 // ─── Session start cards ──────────────────────────────────────────────────────
 
@@ -146,6 +153,8 @@ interface Props {
   ironRules: IronRule[];
   /** Aktuální seznam standardGoals — pro derivovaný "applied" stav v ActionPanelu */
   standardGoals?: string[];
+  /** Existing Lab experiments — keeps Coach action cards idempotent across reloads. */
+  labExperiments?: LabExperiment[];
   playbookItems: PlaybookItem[];
   dailyPreps: DailyPrep[];
   dailyReviews: DailyReview[];
@@ -169,7 +178,7 @@ interface Props {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 const AICoachPage: React.FC<Props> = ({
-  trades, accounts, ironRules, standardGoals, playbookItems,
+  trades, accounts, ironRules, standardGoals, labExperiments, playbookItems,
   dailyPreps, dailyReviews, theme,
   onOpenTrade, onOpenJournal, onApplyAction,
   initialConversationId, initialPrompt, onInitialPromptConsumed,
@@ -183,6 +192,7 @@ const AICoachPage: React.FC<Props> = ({
   const [activeConvId, setActiveConvId] = useState<string | null>(initialConversationId ?? null);
   const [messages, setMessages] = useState<ExtendedMessage[]>([]);
   const [input, setInput] = useState('');
+  const [conversationSearch, setConversationSearch] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolStatus, setToolStatus] = useState<string | null>(null);
   const [activeSessionMode, setActiveSessionMode] = useState<'morning_prep' | 'post_session' | 'evening_review' | null>(() => {
@@ -759,6 +769,7 @@ const AICoachPage: React.FC<Props> = ({
   const prevConvIdRef = useRef<string | null>(null);
   const prevMessagesRef = useRef<ExtendedMessage[]>([]);
   const summarizedConvsRef = useRef<Set<string>>(new Set());
+  const extractedConvsRef = useRef<Set<string>>(new Set());
   const conversationsRef = useRef(conversations);
   useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
 
@@ -818,6 +829,22 @@ const AICoachPage: React.FC<Props> = ({
   const scopedPreps = React.useMemo(() => coachScope === 'backtest' ? [] : dailyPreps, [coachScope, dailyPreps]);
   const scopedReviews = React.useMemo(() => coachScope === 'backtest' ? [] : dailyReviews, [coachScope, dailyReviews]);
 
+  // Mentor loop: hotový vzorek nesmí zůstat schovaný jen v Labu. Na úvodní
+  // obrazovce Coache nabídneme konkrétní follow-up s deterministickým reportem.
+  const readyExperimentReviews = React.useMemo(() => {
+    const world = coachScope === 'backtest' ? 'backtest' as const : 'live' as const;
+    const ds = buildLabDataset(scopedTrades, scopedAccounts, {
+      world,
+      prepBias: world === 'live' ? prepBiasFromPreps(scopedPreps) : undefined,
+    });
+    const prepDays = world === 'live' ? prepDaysFromPreps(scopedPreps) : undefined;
+    return (labExperiments || [])
+      .filter(exp => exp.world === world && exp.status === 'running')
+      .map(exp => ({ exp, report: computeExperimentReport(ds, exp, prepDays) }))
+      .filter(item => item.report.ready)
+      .sort((a, b) => a.exp.createdAt - b.exp.createdAt);
+  }, [coachScope, scopedTrades, scopedAccounts, scopedPreps, labExperiments]);
+
   const traderContext = React.useMemo(
     () => buildTraderContext({ trades: scopedTrades, accounts: scopedAccounts, ironRules, playbookItems, dailyPreps: scopedPreps, dailyReviews: scopedReviews }),
     [scopedTrades, scopedAccounts, ironRules, playbookItems, scopedPreps, scopedReviews],
@@ -843,8 +870,9 @@ const AICoachPage: React.FC<Props> = ({
     const set = new Set<string>();
     (ironRules || []).forEach(r => { if (r.label) set.add(r.label); });
     (standardGoals || []).forEach(g => set.add(g));
+    (labExperiments || []).forEach(e => { if (e.title) set.add(e.title); });
     return set;
-  }, [ironRules, standardGoals]);
+  }, [ironRules, standardGoals, labExperiments]);
 
   // Load conversations on mount
   useEffect(() => {
@@ -970,17 +998,37 @@ const AICoachPage: React.FC<Props> = ({
     if (!convId) return;
     const filteredMsgs = msgs.filter(m => !m.isSystemEvent);
     if (filteredMsgs.length < 4) return; // too short to be worth summarizing
-    if (summarizedConvsRef.current.has(convId)) return; // already done this session
-    summarizedConvsRef.current.add(convId);
-    // Fire-and-forget — silent on failure
-    summarizeConversation({
-      conversation_id: convId,
-      messages: filteredMsgs.map(m => ({ role: m.role, content: m.content })),
-      scope: conversationsRef.current.find(c => c.id === convId)?.scope ?? 'live',
-    }).then(result => {
-      // Při síťové/DB chybě dovol další pokus při příštím přepnutí nebo unmountu.
-      if (!result.ok) summarizedConvsRef.current.delete(convId);
-    }).catch(() => { summarizedConvsRef.current.delete(convId); });
+    const payload = filteredMsgs.map(m => ({ role: m.role, content: m.content }));
+    const scope = conversationsRef.current.find(c => c.id === convId)?.scope ?? 'live';
+
+    if (!summarizedConvsRef.current.has(convId)) {
+      summarizedConvsRef.current.add(convId);
+      // Fire-and-forget — silent on failure
+      summarizeConversation({
+        conversation_id: convId,
+        messages: payload,
+        scope,
+      }).then(result => {
+        // Při síťové/DB chybě dovol další pokus při příštím přepnutí nebo unmountu.
+        if (!result.ok) summarizedConvsRef.current.delete(convId);
+      }).catch(() => { summarizedConvsRef.current.delete(convId); });
+    }
+
+    // Automatická extrakce paměti (facts/preferences/observations/commitments).
+    // Spolehlivý zápis nezávislý na remember() toolu — viz extract-memory edge fn.
+    if (!extractedConvsRef.current.has(convId)) {
+      extractedConvsRef.current.add(convId);
+      extractConversationMemory({
+        conversation_id: convId,
+        messages: payload,
+        scope,
+      }).then(result => {
+        if (!result.ok) { extractedConvsRef.current.delete(convId); return; }
+        // Nová paměť se musí projevit hned v příští konverzaci, ne až za 2 minuty.
+        invalidateMemoryCache();
+        prewarmCoachMemory(scope);
+      }).catch(() => { extractedConvsRef.current.delete(convId); });
+    }
   }, []);
 
   // When activeConvId changes from a non-null value, summarize the previous one.
@@ -1471,10 +1519,15 @@ const AICoachPage: React.FC<Props> = ({
 
   // ─── Group conversations (filtrovano podle coachScope) ─────────────────────
 
-  const scopedConversations = React.useMemo(
-    () => conversations.filter(c => (c.scope ?? 'live') === coachScope),
-    [conversations, coachScope],
-  );
+  const scopedConversations = React.useMemo(() => {
+    const query = conversationSearch.trim().toLocaleLowerCase('cs-CZ');
+    return conversations.filter(c => {
+      if ((c.scope ?? 'live') !== coachScope) return false;
+      if (!query) return true;
+      return c.title.toLocaleLowerCase('cs-CZ').includes(query)
+        || CATEGORY_LABELS[c.category].toLocaleLowerCase('cs-CZ').includes(query);
+    });
+  }, [conversations, coachScope, conversationSearch]);
 
   const groupedConversations = React.useMemo(() => {
     const groups: Record<string, AIConversation[]> = {};
@@ -1521,20 +1574,53 @@ const AICoachPage: React.FC<Props> = ({
         </div>
       )}
 
+      {/* Local search keeps navigation fast and does not send conversation text to AI. */}
+      <div className="px-3 pt-3 flex-shrink-0">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] focus-within:border-blue-500/40 transition-colors">
+          <Search size={13} className="text-[var(--text-secondary)] flex-shrink-0" />
+          <input
+            value={conversationSearch}
+            onChange={e => setConversationSearch(e.target.value)}
+            placeholder="Hledat konverzaci…"
+            className="w-full min-w-0 bg-transparent outline-none text-[11px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]"
+          />
+          {conversationSearch && (
+            <button
+              onClick={() => setConversationSearch('')}
+              className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+              title="Vymazat hledání"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Conversation list */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden py-2 scrollbar-thin min-w-0 w-full">
         {scopedConversations.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 px-4 text-center">
-            <Bot size={28} className="text-[var(--text-secondary)]" />
+            {conversationSearch ? <Search size={28} className="text-[var(--text-secondary)]" /> : <Bot size={28} className="text-[var(--text-secondary)]" />}
             <p className="text-xs text-[var(--text-secondary)]">
-              {coachScope === 'backtest' ? 'Žádné backtest konverzace' : 'Zatím žádné konverzace'}
+              {conversationSearch
+                ? 'Žádná konverzace neodpovídá hledání'
+                : coachScope === 'backtest' ? 'Žádné backtest konverzace' : 'Zatím žádné konverzace'}
             </p>
-            <button
-              onClick={handleNewConversation}
-              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all"
-            >
-              Začít novou
-            </button>
+            {conversationSearch ? (
+              <button
+                onClick={() => setConversationSearch('')}
+                className="px-4 py-2 rounded-xl bg-[var(--bg-card)] text-[var(--text-primary)] text-xs font-bold transition-all"
+              >
+                Zrušit hledání
+              </button>
+            ) : (
+              <button
+                onClick={handleNewConversation}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all"
+              >
+                Začít novou
+              </button>
+            )}
           </div>
         ) : (
           groupedConversations.map(group => (
@@ -1767,6 +1853,22 @@ const AICoachPage: React.FC<Props> = ({
               )}
             </div>
 
+            {readyExperimentReviews.length > 0 && (
+              <div className="w-full space-y-2">
+                <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500 text-center">Čeká na vyhodnocení</div>
+                {readyExperimentReviews.slice(0, 3).map(({ exp, report }) => (
+                  <button
+                    key={exp.id}
+                    onClick={() => startWithPrompt(buildExperimentCoachPrompt(exp, report))}
+                    className="w-full text-left px-4 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10 transition-all"
+                  >
+                    <span className="block text-xs font-black text-[var(--text-primary)]">🧪 {exp.title}</span>
+                    <span className="block text-[10px] text-[var(--text-secondary)] mt-1">Vzorek {report.after.n}/{exp.targetTrades} · kvalita {report.sampleQuality} · probrat závěr s Coachem</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="w-full space-y-2">
               <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] text-center mb-1">Rychlé dotazy</div>
               {QUICK_PROMPTS.map(q => (
@@ -1824,6 +1926,22 @@ const AICoachPage: React.FC<Props> = ({
                     <SessionStartCards onStart={handleStartSession} />
                   )}
                 </div>
+
+                {readyExperimentReviews.length > 0 && (
+                  <div className="w-full space-y-2">
+                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500 text-center">Čeká na vyhodnocení</div>
+                    {readyExperimentReviews.slice(0, 3).map(({ exp, report }) => (
+                      <button
+                        key={exp.id}
+                        onClick={() => sendMessage(buildExperimentCoachPrompt(exp, report))}
+                        className="w-full text-left px-4 py-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10 transition-all"
+                      >
+                        <span className="block text-xs font-black text-[var(--text-primary)]">🧪 {exp.title}</span>
+                        <span className="block text-[10px] text-[var(--text-secondary)] mt-1">Vzorek {report.after.n}/{exp.targetTrades} · kvalita {report.sampleQuality} · probrat závěr s Coachem</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <div className="w-full space-y-2">
                   <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] text-center mb-1">Rychlé dotazy</div>

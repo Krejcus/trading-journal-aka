@@ -3,6 +3,14 @@ import type { BusinessPayout } from '../types';
 const BINARY_FIELDS = new Set(['image', 'receipt_url']);
 
 /**
+ * LocalStorage je jen rychlá metadata cache. Payout proof může být několik MB
+ * base64 a patří do Supabase/Storage, ne do omezené browserové kvóty.
+ */
+export function stripPayoutImagesForCache(items: BusinessPayout[]): BusinessPayout[] {
+  return items.map(({ image: _image, ...payout }) => payout);
+}
+
+/**
  * Fingerprint pro cache-first business data. Binární obrázky záměrně ignoruje,
  * ale metadata (včetně accountId a snake_case updated_at z DB) porovnává.
  */
@@ -52,4 +60,3 @@ export function mergePayoutImages(
     return { ...payout, image: candidate.image };
   });
 }
-

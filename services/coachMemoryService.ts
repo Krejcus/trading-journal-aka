@@ -15,9 +15,23 @@
 // injected via getActiveCommitments()).
 
 import { supabase } from './supabase';
-
-export type MemoryType = 'observation' | 'episode' | 'conversation_summary' | 'commitment';
-export type CoachScope = 'live' | 'backtest' | 'global';
+import {
+  normalizeMemoryMetadata,
+  type CoachMemoryMetadata,
+  type CoachScope,
+  type MemoryType,
+} from './coachMemoryContract';
+export {
+  normalizeMemoryEvidence,
+  normalizeMemoryMetadata,
+  type CoachMemoryMetadata,
+  type CoachScope,
+  type MemoryEvidenceRef,
+  type MemoryEvidenceType,
+  type MemoryStatus,
+  type MemoryType,
+  type MemoryValidationState,
+} from './coachMemoryContract';
 
 export interface CoachProfile {
   facts: Record<string, unknown>;
@@ -28,7 +42,7 @@ export interface MemoryEntry {
   id: string;
   type: MemoryType;
   content: string;
-  metadata: Record<string, unknown>;
+  metadata: CoachMemoryMetadata;
   importance: number;
   memory_date: string | null;
   source_ref: string | null;
@@ -39,7 +53,7 @@ export interface MemoryEntry {
 export interface NewMemory {
   type: MemoryType;
   content: string;
-  metadata?: Record<string, unknown>;
+  metadata?: CoachMemoryMetadata;
   importance?: number; // 1-10, default 5
   memory_date?: string | null; // YYYY-MM-DD
   source_ref?: string | null;
@@ -49,6 +63,13 @@ const EDGE_BASE = (() => {
   const url = (supabase as any).supabaseUrl || (import.meta as any).env?.VITE_SUPABASE_URL;
   return url || '';
 })();
+
+export function isMemoryActive(entry: Pick<MemoryEntry, 'metadata'>, todayIso = new Date().toISOString().slice(0, 10)): boolean {
+  const status = entry.metadata?.status || 'active';
+  if (status !== 'active') return false;
+  const expiresAt = entry.metadata?.expires_at;
+  return !expiresAt || String(expiresAt) >= todayIso;
+}
 
 // ─── Profile (L1+L2) ─────────────────────────────────────────────────────────
 
@@ -189,7 +210,7 @@ export async function addMemory(m: NewMemory): Promise<MemoryEntry | null> {
     user_id: user.id,
     type: m.type,
     content: m.content,
-    metadata: m.metadata || {},
+    metadata: normalizeMemoryMetadata(m.type, m.metadata),
     importance: Math.max(1, Math.min(10, m.importance ?? 5)),
     memory_date: m.memory_date ?? new Date().toISOString().slice(0, 10),
     source_ref: m.source_ref ?? null,
@@ -255,6 +276,7 @@ export async function recallMemory(opts: {
     }
   }
   return rows.filter(row => {
+    if (!isMemoryActive(row)) return false;
     if (!opts.scope) return true;
     // Staré záznamy vznikly před backtest scope a patří proto do live světa.
     const rowScope = String((row.metadata as any)?.scope || 'live');
@@ -272,9 +294,91 @@ export async function forgetMemory(memoryId: string): Promise<boolean> {
 }
 
 /**
+ * Replace an outdated memory without erasing its audit trail. The old row stays
+ * queryable as superseded, while normal recall and prompt injection ignore it.
+ */
+export async function supersedeMemory(memoryId: string, replacement: NewMemory): Promise<MemoryEntry | null> {
+  // Validate the target before creating the replacement. Otherwise a typo/nonexistent
+  // ID would leave a new active row that claims to supersede nothing.
+  const { data: old, error: oldReadError } = await supabase.from('ai_coach_memory')
+    .select('id, metadata')
+    .eq('id', memoryId)
+    .maybeSingle();
+  if (oldReadError || !old) {
+    console.warn('[coachMemory] supersedeMemory target not found:', oldReadError || memoryId);
+    return null;
+  }
+  const next = await addMemory({
+    ...replacement,
+    metadata: normalizeMemoryMetadata(replacement.type, {
+      ...(replacement.metadata || {}),
+      supersedes: [...((replacement.metadata?.supersedes as string[] | undefined) || []), memoryId],
+    }),
+  });
+  if (!next) return null;
+  const oldMetadata = ((old as any)?.metadata || {}) as CoachMemoryMetadata;
+  const { error } = await supabase.from('ai_coach_memory')
+    .update({ metadata: { ...oldMetadata, status: 'superseded', superseded_by: next.id } })
+    .eq('id', memoryId);
+  if (error) {
+    console.warn('[coachMemory] supersedeMemory old-row update failed:', error);
+    // Avoid two simultaneously active contradictory memories if the audit update fails.
+    await supabase.from('ai_coach_memory').delete().eq('id', next.id);
+    return null;
+  }
+  return next;
+}
+
+/**
+ * Re-evaluate an existing memory without rewriting history or changing its text.
+ * Supporting and contradicting references are merged with the previous set and
+ * the shared contract deterministically derives confidence/validation caps.
+ */
+export async function validateMemory(memoryId: string, update: {
+  evidence?: CoachMemoryMetadata['evidence'];
+  counter_evidence?: CoachMemoryMetadata['counter_evidence'];
+  validation_state?: CoachMemoryMetadata['validation_state'];
+  validation_note?: string;
+  confidence?: number;
+}): Promise<MemoryEntry | null> {
+  const { data: existing, error: readError } = await supabase.from('ai_coach_memory')
+    .select('id, type, content, metadata, importance, memory_date, source_ref, created_at')
+    .eq('id', memoryId)
+    .maybeSingle();
+  if (readError || !existing) {
+    console.warn('[coachMemory] validateMemory target not found:', readError || memoryId);
+    return null;
+  }
+  if ((existing as any).type === 'commitment' || (existing as any).type === 'conversation_summary') {
+    console.warn('[coachMemory] validateMemory only supports observation/episode:', (existing as any).type);
+    return null;
+  }
+  const previous = ((existing as any).metadata || {}) as CoachMemoryMetadata;
+  const metadata = normalizeMemoryMetadata((existing as any).type as MemoryType, {
+    ...previous,
+    evidence: [...(previous.evidence || []), ...(update.evidence || [])],
+    counter_evidence: [...(previous.counter_evidence || []), ...(update.counter_evidence || [])],
+    validation_state: update.validation_state ?? previous.validation_state,
+    validation_note: update.validation_note || previous.validation_note,
+    confidence: update.confidence ?? (update.validation_state && update.validation_state !== previous.validation_state ? undefined : previous.confidence),
+    last_validated_at: new Date().toISOString().slice(0, 10),
+  });
+  const { data, error } = await supabase.from('ai_coach_memory')
+    .update({ metadata })
+    .eq('id', memoryId)
+    .select('id, type, content, metadata, importance, memory_date, source_ref, created_at')
+    .single();
+  if (error) {
+    console.warn('[coachMemory] validateMemory update failed:', error);
+    return null;
+  }
+  return data as MemoryEntry;
+}
+
+/**
  * List all memory entries (for Settings UI). No semantic search — chronological.
  */
-export async function listMemories(limit = 200): Promise<MemoryEntry[]> {
+export async function listMemories(limit = 200, opts?: { includeInactive?: boolean }): Promise<MemoryEntry[]> {
   const { data, error } = await supabase
     .from('ai_coach_memory')
     .select('id, type, content, metadata, importance, memory_date, source_ref, created_at')
@@ -284,7 +388,8 @@ export async function listMemories(limit = 200): Promise<MemoryEntry[]> {
     console.warn('[coachMemory] listMemories error:', error);
     return [];
   }
-  return (data || []) as MemoryEntry[];
+  const rows = (data || []) as MemoryEntry[];
+  return opts?.includeInactive ? rows : rows.filter(entry => isMemoryActive(entry));
 }
 
 export async function clearAllMemory(): Promise<void> {
@@ -317,8 +422,7 @@ export async function getActiveCommitments(scope?: Exclude<CoachScope, 'global'>
   }
   // Filter expired (metadata.expires_at < today). Trvalé (bez expires_at) projdou.
   return (data || []).filter((m: any) => {
-    const exp = m.metadata?.expires_at;
-    if (exp && String(exp) < todayIso) return false;
+    if (!isMemoryActive(m, todayIso)) return false;
     if (!scope) return true;
     const rowScope = String(m.metadata?.scope || 'global');
     return rowScope === 'global' || rowScope === scope;
@@ -346,6 +450,7 @@ export async function getRecentConversationSummaries(limit = 5, scope?: Exclude<
   // Reverse to get chronological (oldest first)
   return ((data || []) as MemoryEntry[])
     .filter(m => {
+      if (!isMemoryActive(m)) return false;
       if (!scope) return true;
       // Staré summaries jsou z live coache; nepouštěj je do backtestu.
       const rowScope = String((m.metadata as any)?.scope || 'live');
@@ -406,6 +511,50 @@ export async function summarizeConversation(opts: {
       }
     }
     return { ok: true, summary: data.summary };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'network' };
+  }
+}
+
+// ─── Automatic memory extraction ─────────────────────────────────────────────
+
+/**
+ * Call the `extract-memory` Edge Function — a cheap Haiku pass over a finished
+ * conversation that extracts new facts/preferences (→ ai_coach_profile) and
+ * observations/commitments (→ ai_coach_memory). This is the reliable write path:
+ * unlike remember() tool calls, it does not depend on the model's willingness
+ * to call tools mid-chat.
+ *
+ * Idempotent: re-extraction of the same conversation replaces prior extracted
+ * rows (source_ref = `extract:<conversation_id>`).
+ */
+export async function extractConversationMemory(opts: {
+  conversation_id: string;
+  messages: { role: string; content: string }[];
+  scope?: 'live' | 'backtest';
+  date?: string;
+}): Promise<{ ok: boolean; extracted?: Record<string, number>; error?: string }> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { ok: false, error: 'no-session' };
+  if ((opts.messages || []).length < 4) return { ok: false, error: 'too-short' };
+
+  try {
+    const res = await fetch(`${EDGE_BASE}/functions/v1/extract-memory`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        conversation_id: opts.conversation_id,
+        messages: opts.messages,
+        scope: opts.scope,
+        date: opts.date,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data.error || 'http-error' };
+    return { ok: true, extracted: data.extracted };
   } catch (e: any) {
     return { ok: false, error: e?.message || 'network' };
   }

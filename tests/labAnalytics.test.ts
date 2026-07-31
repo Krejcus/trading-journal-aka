@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLabDatasetFromTrades, computeOverview, computeCfSummary, computeBiasSummary, computeExecutionSummary, computePatternSummary, buildLabReport } from '../services/labAnalytics';
+import { buildLabDatasetFromTrades, computeOverview, computeCfSummary, computeBiasSummary, computeExecutionSummary, computePatternSummary, buildLabReport, computeExperimentReport } from '../services/labAnalytics';
 import type { Trade } from '../types';
 
 // Minimální validní Trade pro Lab — přepíšeš jen co test potřebuje.
@@ -55,6 +55,44 @@ describe('computeOverview — konvence appky', () => {
     ]);
     const ov = computeOverview(ds);
     expect(ov.avgWinR).toBeCloseTo(2);
+  });
+});
+
+describe('experimenty — měřitelný source pattern bez falešné kauzality', () => {
+  it('měří výskyt bias flipu před/po a přizná observační omezení', () => {
+    const beforeDates = ['2026-01-01', '2026-01-02', '2026-01-03', '2026-01-04'];
+    const afterDates = ['2026-02-01', '2026-02-02', '2026-02-03', '2026-02-04'];
+    const ds = buildLabDatasetFromTrades([
+      ...beforeDates.map((d, i) => mk({ date: `${d}T16:00:00.000Z`, pnl: i < 2 ? -100 : 100, biasAligned: i < 2 })),
+      ...afterDates.map((d, i) => mk({ date: `${d}T16:00:00.000Z`, pnl: 100, biasAligned: i !== 0 })),
+    ]);
+    const report = computeExperimentReport(ds, {
+      startTs: new Date('2026-02-01T00:00:00.000Z').getTime(),
+      targetTrades: 4,
+      sourceLeakId: 'bias_flip',
+    });
+    expect(report.pattern).toMatchObject({ beforeCount: 2, afterCount: 1 });
+    expect(report.pattern?.deltaPercentagePoints).toBeCloseTo(-25);
+    expect(report.ready).toBe(true);
+    expect(report.limitation).toContain('bez kontrolní skupiny');
+    expect(report.verdict).toContain('POZOROVANÉ');
+  });
+
+  it('u obecného pravidla nepředstírá, že zná adherence', () => {
+    const ds = buildLabDatasetFromTrades([
+      mk({ date: '2026-01-01T16:00:00.000Z', pnl: -100 }),
+      mk({ date: '2026-01-02T16:00:00.000Z', pnl: 100 }),
+      mk({ date: '2026-01-03T16:00:00.000Z', pnl: 100 }),
+      mk({ date: '2026-02-01T16:00:00.000Z', pnl: 100 }),
+      mk({ date: '2026-02-02T16:00:00.000Z', pnl: 100 }),
+      mk({ date: '2026-02-03T16:00:00.000Z', pnl: 100 }),
+    ]);
+    const report = computeExperimentReport(ds, {
+      startTs: new Date('2026-02-01T00:00:00.000Z').getTime(),
+      targetTrades: 3,
+    });
+    expect(report.pattern).toBeNull();
+    expect(report.limitation).toContain('neví, zda bylo obecné pravidlo');
   });
 });
 

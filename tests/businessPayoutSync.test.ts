@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BusinessPayout } from '../types';
-import { businessDataFingerprint, mergePayoutImages } from '../utils/businessPayoutSync';
+import { businessDataFingerprint, mergePayoutImages, stripPayoutImagesForCache } from '../utils/businessPayoutSync';
 
 const payout = (overrides: Partial<BusinessPayout> = {}): BusinessPayout => ({
   id: '11111111-1111-4111-8111-111111111111',
@@ -27,6 +27,21 @@ describe('business payout cache synchronizace', () => {
     const withImage = [payout({ image: 'data:image/png;base64,abc' })];
 
     expect(businessDataFingerprint(withImage)).toBe(businessDataFingerprint(withoutImage));
+  });
+
+  it('do localStorage cache uloží metadata, ale ne těžký proof obrázek', () => {
+    const cached = stripPayoutImagesForCache([
+      payout({ image: 'data:image/png;base64,very-large-proof', notes: 'verified' }),
+    ]);
+
+    expect(cached).toHaveLength(1);
+    expect(cached[0]).toMatchObject({
+      id: '11111111-1111-4111-8111-111111111111',
+      accountId: 'account-a',
+      amount: 833.4,
+      notes: 'verified',
+    });
+    expect(cached[0]).not.toHaveProperty('image');
   });
 
   it('doplní screenshot do kanonických dat bez přepsání accountId z DB', () => {

@@ -942,7 +942,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     ) : (
                         <div className="space-y-3.5">
                             {worldExperiments.map(exp => {
-                                const report = computeExperimentReport(dsWorld, exp);
+                                const report = computeExperimentReport(dsWorld, exp, world === 'live' ? prepDaysFromPreps(preps) : undefined);
                                 const running = exp.status === 'running';
                                 const statusChip = exp.status === 'running'
                                     ? { label: 'Běží', cls: 'bg-violet-500/10 text-violet-400 border-violet-500/25' }
@@ -1006,6 +1006,9 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                 <b>Průběžně:</b> {report.verdict}{!report.ready ? ' (vzorek ještě neúplný)' : ''}
                                             </p>
                                         )}
+                                        <p className={`mt-2 text-[10px] leading-relaxed ${report.sampleQuality === 'insufficient' ? 'text-amber-500' : 'text-slate-500'}`}>
+                                            Kvalita vzorku: <b>{report.sampleQuality}</b> · {report.limitation}
+                                        </p>
 
                                         <div className="flex items-center gap-2 mt-3.5 flex-wrap">
                                             {running && (

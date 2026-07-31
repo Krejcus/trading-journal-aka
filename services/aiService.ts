@@ -1,6 +1,13 @@
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview } from '../types';
 import { COACH_TOOLS, executeTool, describeToolCall, collapseCopies } from './coachTools';
+import { coachMediaToAnthropicContent, isCoachMediaPayload, type AnthropicToolResultContent } from './coachMedia';
 import { getProfile, recallMemory, renderProfileForPrompt, getActiveCommitments, getRecentConversationSummaries } from './coachMemoryService';
+import {
+  actualCoachToolCallKeys,
+  coachRetrievalCallKey,
+  planCoachRetrieval,
+  renderRetrievalPlanForPrompt,
+} from './coachRetrievalPlanner';
 import { getPersonaBlock, DEFAULT_PERSONA, type CoachPersonaId } from './coachPersonas';
 import { supabase } from './supabase';
 import { adjustmentTotal, getFinancialAdjustments } from './tradingIncidents';
@@ -474,11 +481,19 @@ export type ChartSpec = {
  */
 export interface SuggestedAction {
     /** Type of action (determines what happens on click) */
-    type: 'rule' | 'experiment' | 'goal' | 'checklist' | 'modify_rule' | 'remove_rule';
+    type: 'rule' | 'experiment' | 'lab_experiment' | 'goal' | 'checklist' | 'modify_rule' | 'remove_rule';
     /** Display label (max 80 chars). Pro modify_rule = NOVÝ text pravidla. */
     label: string;
     /** Optional duration for time-boxed experiments ("1w", "2w", "1m") */
     duration?: string;
+    /** Expected measurable change for a real Lab experiment. */
+    hypothesis?: string;
+    /** Exact behavior to follow during a real Lab experiment. */
+    rule?: string;
+    /** Sample size after which Lab offers deterministic evaluation. */
+    targetTrades?: number;
+    /** Optional link to a detected Lab leak. */
+    sourceLeakId?: string;
     /** Optional severity hint for UI styling */
     severity?: 'critical' | 'standard' | 'optional';
     /** Optional checklist items for type=checklist (pipe-separated in marker) */
@@ -583,7 +598,11 @@ export function parseAllRefs(text: string): ParsedRefs {
   const rawActions = extractJsonMarkers<SuggestedAction>(text, 'ACTION');
   for (const a of rawActions) {
     if (!a || !a.type || !a.label || a.label.length > 120) continue;
-    if (!['rule', 'experiment', 'goal', 'checklist', 'modify_rule', 'remove_rule'].includes(a.type)) continue;
+    if (!['rule', 'experiment', 'lab_experiment', 'goal', 'checklist', 'modify_rule', 'remove_rule'].includes(a.type)) continue;
+    if (a.type === 'lab_experiment') {
+      if (!a.hypothesis?.trim() || !a.rule?.trim()) continue;
+      if (!Number.isFinite(a.targetTrades) || (a.targetTrades || 0) < 5 || (a.targetTrades || 0) > 200) continue;
+    }
     // modify_rule/remove_rule musí cílit pravidlo přes targetId NEBO oldLabel
     // (App handler zkusí targetId a fallback na text). Bez obojího je marker neúplný.
     if ((a.type === 'modify_rule' || a.type === 'remove_rule') && !a.targetId && !a.oldLabel) continue;
@@ -662,6 +681,10 @@ export function stripAllRefs(text: string): string {
     .replace(/\[TRADE:[^\]]*\]?/g, '')
     .replace(/\[PREP:[^\]]*\]?/g, '')
     .replace(/\[REVIEW:[^\]]*\]?/g, '')
+    .replace(/\[INCIDENT:[^\]]*\]?/g, '')
+    .replace(/\[EXECUTION:[^\]]*\]?/g, '')
+    .replace(/\[ORDER:[^\]]*\]?/g, '')
+    .replace(/\[EXPERIMENT:[^\]]*\]?/g, '')
     .replace(/\[FOLLOWUP:[^\]]*\]?/g, '')
     .replace(/<!-- model:(fast|analytical) -->/g, '')
     .replace(/<!--\s*form_state:[\s\S]*?(-->|$)/g, '');
@@ -673,6 +696,61 @@ export function stripAllRefs(text: string): string {
   return out
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/**
+ * Tool results must remain valid JSON even when they are too large for the next
+ * model turn. A raw string slice produced invalid JSON and could make the Coach
+ * misread or ignore precisely the evidence it had just requested.
+ */
+export function serializeToolResult(result: unknown, maxChars = 12000): string {
+  const serialized = JSON.stringify(result);
+  if (serialized.length <= maxChars) return serialized;
+
+  const compact = (value: unknown, depth = 0): unknown => {
+    if (typeof value === 'string') {
+      return value.length > 1200 ? `${value.slice(0, 1200)}… [truncated]` : value;
+    }
+    if (value === null || typeof value !== 'object') return value;
+    if (depth >= 7) return '[nested data truncated]';
+    if (Array.isArray(value)) {
+      const kept = value.slice(0, 40).map(item => compact(item, depth + 1));
+      if (value.length > kept.length) kept.push(`[${value.length - kept.length} more items]`);
+      return kept;
+    }
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, compact(item, depth + 1)]),
+    );
+  };
+
+  const compacted = JSON.stringify({
+    _truncated: true,
+    _original_chars: serialized.length,
+    data: compact(result),
+  });
+  if (compacted.length <= maxChars) return compacted;
+
+  // Last-resort envelope is still valid JSON. Keep both ends because summaries
+  // and reconciliation warnings are often located after large evidence arrays.
+  let room = Math.max(100, Math.floor((maxChars - 500) / 2));
+  let envelope = '';
+  do {
+    envelope = JSON.stringify({
+      _truncated: true,
+      _original_chars: serialized.length,
+      _warning: 'Tool result exceeded context limit; request a narrower filter for full evidence.',
+      _head: serialized.slice(0, room),
+      _tail: serialized.slice(-room),
+    });
+    if (envelope.length <= maxChars || room <= 100) return envelope;
+    room = Math.max(100, room - Math.ceil((envelope.length - maxChars) / 2) - 10);
+  } while (true);
+}
+
+export function formatCoachToolResultContent(result: unknown): string | AnthropicToolResultContent {
+  return isCoachMediaPayload(result)
+    ? coachMediaToAnthropicContent(result)
+    : serializeToolResult(result);
 }
 
 // ─── Streaming chat ──────────────────────────────────────────────────────────
@@ -752,6 +830,7 @@ export async function streamAIResponse(
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
   // Strip CONTEXT blocks so we don't embed the giant prompt body sent by Day/Week analyze buttons.
   const recallQuery = lastUserMsg.replace(/\[CONTEXT\][\s\S]*?\[\/CONTEXT\]\s*/g, '').trim().slice(0, 500);
+  const retrievalPlan = planCoachRetrieval(recallQuery);
 
   let memoryBlock = '';
   try {
@@ -764,7 +843,13 @@ export async function streamAIResponse(
     // Recall (embed + vector RPC) nastartuj HNED — poběží souběžně s případným
     // cold-cache fetchem profilu/závazků níže, ne až po něm.
     const recallPromise = recallQuery
-      ? withTimeout(recallMemory({ query: recallQuery, limit: 6, similarity_threshold: 0.25, scope: options.scope || 'live' }), 800, [] as Awaited<ReturnType<typeof recallMemory>>)
+      ? withTimeout(
+        recallMemory({ query: recallQuery, limit: 6, similarity_threshold: 0.25, scope: options.scope || 'live' }),
+        // Dotaz typu „tohle se stalo před měsícem, pamatuješ?“ nesmí prohrát
+        // jen kvůli 800ms optimalizaci TTFT. Ostatní chat zůstává rychlý.
+        retrievalPlan.requiresLongTermRecall ? 4_000 : 800,
+        [] as Awaited<ReturnType<typeof recallMemory>>,
+      )
       : Promise.resolve([] as Awaited<ReturnType<typeof recallMemory>>);
 
     // Profil/commitmenty/summaries se mění zřídka — cache na ~2 min ušetří 3 DB
@@ -790,7 +875,7 @@ export async function streamAIResponse(
       lines.push('1. NIKDY nenavrhuj akci v rozporu s aktivním závazkem ("jdi do live" když je commit "jen sim").');
       lines.push('2. POKUD user navrhuje akci proti závazku, PŘIPOMEŇ mu závazek a zeptej se jestli ho chce změnit.');
       lines.push('3. Závazky NEMĚŇ bez explicitního souhlasu usera (typu "ruším ten commit", "už jsem připraven na live").');
-      lines.push('4. Pokud se závazek změní, ZAVOLEJ forget_memory na starý a remember s novým.');
+      lines.push('4. Pokud se závazek změní, zavolej remember s novým zněním a supersedes_memory_id starého. Historii nemaž.');
       return lines.join('\n');
     })();
 
@@ -813,9 +898,13 @@ export async function streamAIResponse(
         const date = r.memory_date ? `[${r.memory_date}] ` : '';
         const sim = r.similarity ? ` (sim ${r.similarity.toFixed(2)})` : '';
         const importance = r.importance >= 8 ? ' ⚡' : '';
-        lines.push(`- ${date}[${r.type}]${importance}${sim} ${r.content}`);
+        const validation = r.metadata?.validation_state || 'hypothesis';
+        const confidence = typeof r.metadata?.confidence === 'number' ? ` · confidence ${Math.round(r.metadata.confidence * 100)}%` : '';
+        const evidenceCount = Array.isArray(r.metadata?.evidence) ? r.metadata.evidence.length : 0;
+        const counterCount = Array.isArray(r.metadata?.counter_evidence) ? r.metadata.counter_evidence.length : 0;
+        lines.push(`- ${date}[${r.type} · ${validation}${confidence} · evidence ${evidenceCount}${counterCount ? ` · counter-evidence ${counterCount}` : ''}]${importance}${sim} ${r.content}`);
       }
-      lines.push('Využij tyto vzpomínky pokud souvisí s dotazem. Pokud zmíníš událost z paměti, buď konkrétní (cituj datum).');
+      lines.push('Vzpomínka je kandidátní kontext, ne automaticky pravda. hypothesis formuluj jako hypotézu; contested výslovně přiznej; supported můžeš použít jako vzorec s citací evidence. Pokud zmíníš událost, cituj datum.');
       return lines.join('\n');
     })();
 
@@ -991,6 +1080,7 @@ Formát: \`[ACTION:{"type":"TYP","label":"text max 80 znaků","duration":"VOLITE
 Typy (type):
 - **"rule"** — Iron Rule (trvalé pravidlo). Přidá se do Iron Rules v Settings.
 - **"experiment"** — Time-boxed experiment (rule s expirací). Vyžaduje "duration".
+- **"lab_experiment"** — SKUTEČNÝ měřitelný experiment v Labu. Vyžaduje "hypothesis", "rule" a "targetTrades" (5–200). Použij, když chceš ověřit hypotézu na dalších obchodech a porovnat before/after; ne pro pouhé dočasné pravidlo.
 - **"goal"** — Cíl (přidá se do Weekly Focus / Goals).
 - **"checklist"** — Pre-trade checklist položky. Vyžaduje "items": [...].
 - **"modify_rule"** — ÚPRAVA existujícího pravidla. Vyžaduje "targetId" (id pravidla z kontextu výše) + "label" (NOVÝ text) + "oldLabel" (současný text). Použij když pravidlo chce zpřísnit/přeformulovat (např. limit -$250 → -$200).
@@ -1006,6 +1096,7 @@ Duration formáty: "1w", "2w", "1m", "3m"
 Příklady:
 [ACTION:{"type":"rule","label":"Po 1 lossu = 20min pauza, pak reset checklist","severity":"critical"}]
 [ACTION:{"type":"experiment","label":"1 Loss = Done for London (skip London po prvním lossu)","duration":"2w","severity":"critical"}]
+[ACTION:{"type":"lab_experiment","label":"Stop po prvním lossu","hypothesis":"Omezení session po prvním lossu sníží ztrátu na den bez zhoršení expectancy.","rule":"Po prvním ztrátovém obchodu v dané session končím.","targetTrades":20,"severity":"standard"}]
 [ACTION:{"type":"goal","label":"Týdenní cíl: 0 revenge tradů"}]
 [ACTION:{"type":"checklist","label":"Pre-entry po lossu","items":["Mám HTF zónu?","Cena přišla ke mě?","Mám entry model?","Toto je A+ setup?"]}]
 [ACTION:{"type":"modify_rule","targetId":"rule_123","oldLabel":"Daily loss -$250 = konec","label":"Daily loss -$200 = konec","severity":"critical"}]
@@ -1015,7 +1106,7 @@ PRAVIDLA:
 - Pro pure informativní odpovědi (statistika, historie) NEPŘIDÁVEJ akce.
 - Label musí být jednoznačný a stručný (užiavatel ho uvidí jako text tlačítka).
 - Když navrhuješ ÚPRAVU konkrétního pravidla (zpřísnit/přeformulovat), přidej modify_rule marker s "targetId" (z řádku [id:...] v kontextu, malými písmeny) + "oldLabel" (přesný současný text) + "label" (nový text). To dá uživateli tlačítko "Změnit".
-- Když navrhuješ NOVÉ pravidlo, použij rule/experiment/checklist marker.
+- Když navrhuješ NOVÉ pravidlo, použij rule/experiment/checklist marker. Když navrhuješ měřitelnou změnu, kterou máme po vzorku vyhodnotit, použij lab_experiment.
 - MAZÁNÍ pravidel: NEgeneruj remove_rule markery. Místo toho v textu jasně řekni, KTERÁ pravidla doporučuješ smazat a proč — a dodej, že je uživatel smaže ručně v Nastavení → Pravidla (tam má plnou kontrolu). Mazání přes tlačítko v chatu záměrně neděláme (ochrana proti omylu).
 - Nikdy si targetId nevymýšlej — když pravidlo v kontextu není, nepoužívej modify_rule.
 
@@ -1040,7 +1131,7 @@ Vzorové ❌:
 "[FOLLOWUP:Chceš více informací?]" — vágní
 
 === PRAVIDLO CITACE (KRITICKÉ) ===
-Každé tvrzení o konkrétní události, čísle nebo datu MUSÍ být doložené citací (markerem [TRADE:id], [PREP:YYYY-MM-DD], [REVIEW:YYYY-MM-DD]).
+Každé tvrzení o konkrétní události, čísle nebo datu MUSÍ být doložené citací (markerem [TRADE:id], [PREP:YYYY-MM-DD], [REVIEW:YYYY-MM-DD], [INCIDENT:id], [EXECUTION:id] nebo [ORDER:id]).
 - "v březnu měl 8 ztrát" → musíš mít konkrétní [TRADE:id] markery
 - "tvůj nejlepší obchod byl X" → MUSÍ být [TRADE:id]
 - "lekce jsi napsal a porušil" → MUSÍ být [REVIEW:date] + [TRADE:id]
@@ -1058,12 +1149,17 @@ Data nástroje:
 - **list_accounts(status?)** — VŠECHNY účty (i spálené/neaktivní) se stavem, fází, výsledkem (Passed/Failed), P&L a počtem obchodů. Pro "kolik mám účtů", "který jsem spálil", nebo než budeš filtrovat podle účtu.
 - **find_similar_trades(trade_id? OR description?, limit?, account?)** — sémanticky podobné obchody, lze zúžit na konkrétní účet.
 - **get_recent_context(limit?, account?)** — poslední trades/preps/reviews pro vágní dotazy; s "account" filtruje obchody na daný účet (preps/reviews jsou globální).
+- **get_incident_analysis(incident_id?, date?)** — kanonický detail gambling/nevalidního incidentu včetně raw Tradecopia exekucí a objednávek; deterministicky slučuje copy fan-out, počítá rychlost, size eskalaci a P&L. Typ příkazu uváděj jako fakt jen při confidence=high|medium a vždy cituj vrácené incident/execution evidence.
 - **get_business_summary(period?, date_from?, date_to?, include?)** — finanční data z Business Hubu: výdaje (nákupy challenges, software), výplaty z funded účtů, breakdown po kategoriích. Period: this_month (default) | last_month | this_year | all_time | custom. POUŽIJ pro otázky typu "kolik jsem utratil za účty/challenge", "kolik mě stály challenge tento měsíc", "kolik mi prišlo z payoutů", "jsem v plusu / mínusu celkově", "kolik mě stojí provoz". Vrací reálná čísla z business_expenses + business_payouts tabulek.
+- **get_coach_records(domain, record_id?, account?, status?, date_from?, date_to?, limit?, offset?)** — kanonický read-only drill-down mimo 90denní prompt. Domain: execution_imports (i pending/unlinked + orders + map), account_events, insights (daily/weekly), business (cíle/zdroje/detail), backtest_sessions, execution_path nebo trade_media. Když pagination.has_more=true, pokračuj s vráceným next_offset, pokud otázka vyžaduje celou množinu. U trade_media nástroj vrátí přesné ID a počet obrázků.
+- **get_coach_media(source_type, record_id, index?)** — načte konkrétní screenshot jako SKUTEČNÝ vision vstup. Povinné před popisem toho, co je na obrázku. source_type: trade | prep | review | payout, index je od 0. Nejdřív zjisti přesný record_id z kanonického zdroje; nikdy neinterpretuj pouhé media metadata.
+- **get_experiments(experiment_id?, status?, world?)** — mentor loop nad Lab experimenty: hypotéza, pravidlo, before/after, cílový vzorek, průběžný verdikt a evidence. VŽDY použij při otázce „jak dopadl experiment / co jsme testovali“. Neúplný vzorek nesmíš povýšit na potvrzené pravidlo.
 
 Paměťové nástroje (DLOUHODOBÁ PAMĚŤ):
-- **remember(type, content, importance?, memory_date?, key?, value?)** — ulož trvalý insight. type=observation pro vzorce, episode pro události, fact/preference pro statické pravdy (s key+value).
+- **remember(type, content, importance?, memory_date?, key?, value?, confidence?, evidence?, counter_evidence?, validation_state?, validation_note?, supersedes_memory_id?)** — ulož trvalý insight. Pattern ukládej jen s konkrétními evidence refs; pozorování potřebuje aspoň 3 nezávislé evidence pro supported, jinak je hypothesis. Proti-důkaz patří do counter_evidence a stav je contested. Když nový poznatek ruší starý, použij supersedes_memory_id místo ztráty audit trailu.
+- **validate_memory(memory_id, evidence?, counter_evidence?, validation_state?, confidence?, validation_note)** — po nové podobné události nebo dokončeném experimentu znovu vyhodnoť existující observation/episode. Nepřidávej duplicitní pattern. Hypotézu povyš na supported až při nejméně 3 nezávislých refs; při rozporu ji označ contested.
 - **recall_memory(query, types?, limit?)** — vyhledej v dlouhodobé paměti. Často je vhodné zavolat na začátku komplexního dotazu, aby ses orientoval v historii.
-- **forget_memory(memory_id)** — smaž konkrétní paměť (jen když je nepřesná nebo když to user explicitně chce).
+- **forget_memory(memory_id)** — nevratně smaž konkrétní paměť pouze na explicitní žádost usera / kvůli soukromí. Zastaralý poznatek nahraď přes remember(..., supersedes_memory_id), ať zůstane audit trail.
 
 POVINNÉ remember() VOLÁNÍ:
 Pokud user řekne JAKOUKOLI z těchto věcí, MUSÍŠ ihned zavolat remember() PŘED odpovědí, jinak selháváš:
@@ -1083,14 +1179,14 @@ Pokud user řekne / dohodnete se na JAKÉMKOLI závazku / pravidlu / plánu, MUS
 - Dohodnete spolu plán/strategii → remember({type:'commitment', content:'Plán: ...', importance:8})
 
 Commitmenty jdou DO SYSTEM PROMPTU každého dalšího chatu — musíš je RESPEKTOVAT a nesmíš navrhovat akce v rozporu s nimi.
-Pokud jsi tu commit už uložil dnes a user ho opakuje, ZACHOVEJ existující (nezdvojuj). Pokud user ho ruší ("už to neplatí"), zavolej forget_memory.
+Pokud jsi tu commit už uložil dnes a user ho opakuje, ZACHOVEJ existující (nezdvojuj). Pokud user commit mění nebo ruší, nejdřív si vyžádej jeho ID přes recall_memory a ulož nové aktuální znění přes remember(..., supersedes_memory_id). forget_memory používej jen na explicitní žádost o smazání.
 
 Klíčové: NEŘÍKEJ jen "beru na vědomí" / "ok" / "rozumím". Když user vysloví preferenci nebo trvalý fakt, VŽDY nejdřív zavolej remember(), pak potvrď.
 
 OBECNÁ PRAVIDLA TOOL USE (RYCHLOST — ČTI POZORNĚ):
 0. ⚡ DATA UŽ MÁŠ V PROMPTU. Níže jsou KOMPLETNÍ obchody za posledních ${WINDOW_DAYS} dní + měsíční souhrn celé historie + přípravy + audity (vč. poznámek během dne). Pro naprostou většinu dotazů NEPOTŘEBUJEŠ žádný nástroj — odpověz ROVNOU z těchto dat. Každé volání nástroje = sekundy navíc, takže volej JEN když je to nutné.
 1. NEVOLEJ nástroj pokud odpověď najdeš v datech níže. To zahrnuje: konkrétní obchod z posledních ${WINDOW_DAYS} dní, dnešní/včerejší obchod, statistiky za týden/měsíc, dlouhodobé trendy (z měsíčního souhrnu), poznámky a audity z okna. Na tohle odpověz BEZ nástroje.
-2. Nástroje použij POUZE pro: (a) konkrétní obchod/záznam STARŠÍ než ${WINDOW_DAYS} dní, (b) sémantické hledání napříč celou historií když okno nestačí (search_history), (c) ukládání do paměti (remember).
+2. Nástroje použij POUZE pro: (a) konkrétní obchod/záznam STARŠÍ než ${WINDOW_DAYS} dní, (b) sémantické hledání napříč celou historií když okno nestačí (search_history), (c) ukládání do paměti (remember), (d) dotaz na skutečný průběh nevalidního/gambling incidentu — tam VŽDY použij get_incident_analysis, protože raw exekuce ani order type v promptu nejsou.
 3. find_similar_trades volej JEN když user EXPLICITNĚ chce porovnání s podobnými obchody z minulosti — ne automaticky u každé analýzy. U analýzy obchodu z okna nejdřív odpověz z dat co máš.
 4. NIKDY si nevymýšlej čísla, datumy ani události. Když data nemáš ani v promptu ani z nástroje, řekni to upřímně.
 
@@ -1112,8 +1208,9 @@ ${tradeWindow.rollupText}`;
   // (persona + pravidla + 90denní okno) zůstal cachnutý napříč zprávami konverzace.
   // Dřív byl currentTime (na minutu) i memoryBlock uvnitř cachovaného promptu → cache se
   // invalidovala každou zprávou a celý prefix (~20–35k tokenů) se posílal za plnou cenu.
+  const retrievalPlanBlock = renderRetrievalPlanForPrompt(retrievalPlan);
   const dynamicSystemBlock = `=== AKTUÁLNÍ ČAS ===
-${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''}`;
+${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''}${retrievalPlanBlock ? '\n\n' + retrievalPlanBlock : ''}`;
 
   // Rychlý i analytický režim jedou na CLAUDE (přes Supabase chat proxy):
   //   fast       → claude-haiku-4-5   (rychlá, levná, dobrá kvalita)
@@ -1127,7 +1224,7 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
     content: string | Array<
       | { type: 'text'; text: string }
       | { type: 'tool_use'; id: string; name: string; input: any }
-      | { type: 'tool_result'; tool_use_id: string; content: string }
+      | { type: 'tool_result'; tool_use_id: string; content: string | AnthropicToolResultContent }
     >;
   };
   const apiMessages: ApiMessage[] = messages.map(m => ({ role: m.role, content: m.content }));
@@ -1149,6 +1246,8 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
 
   let fullText = ''; // accumulated final-answer text across iterations (for ref parsing)
   const MAX_ITER = 10;
+  const calledRetrievalKeys = new Set<string>();
+  const missingRetrievalCalls = () => retrievalPlan.requiredCalls.filter(call => !calledRetrievalKeys.has(coachRetrievalCallKey(call)));
 
   // ── Síťová odolnost ─────────────────────────────────────────────────────────
   // Safari/WebKit hází na spadlý fetch/stream doslova "TypeError: Load failed"
@@ -1174,6 +1273,10 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
   try {
     for (let iter = 0; iter < MAX_ITER; iter++) {
       emittedThisRound = false;
+      // For planner-mandated retrieval, do not leak a confident answer before
+      // canonical tools ran. The first response is buffered; if the model tries
+      // to finish without evidence, it receives a corrective turn invisibly.
+      const holdTextForRequiredTools = missingRetrievalCalls().length > 0;
       const modelName = options.aiModel === 'fast' ? 'claude-haiku-4-5' : 'claude-sonnet-5';
       const body: any = {
         model: modelName,
@@ -1318,9 +1421,11 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
             if (event.delta?.type === 'text_delta' && blk.type === 'text') {
               const chunk = event.delta.text || '';
               blk.text += chunk;
-              fullText += chunk;
-              if (chunk) emittedThisRound = true; // od teď žádný tichý retry (duplicity)
-              onChunk(chunk);
+              if (!holdTextForRequiredTools) {
+                fullText += chunk;
+                if (chunk) emittedThisRound = true; // od teď žádný tichý retry (duplicity)
+                onChunk(chunk);
+              }
             } else if (event.delta?.type === 'input_json_delta' && blk.type === 'tool_use') {
               blk.jsonStr += event.delta.partial_json || '';
             } else if (event.delta?.type === 'thinking_delta' && blk.type === 'thinking') {
@@ -1349,6 +1454,33 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
 
       // Done streaming this iteration. Inspect stop reason.
       if (stopReason !== 'tool_use') {
+        const missingCalls = missingRetrievalCalls();
+        if (missingCalls.length > 0 && stopReason !== 'max_tokens') {
+          const assistantContent: any[] = blocks.map(b => {
+            if (b.type === 'text') return { type: 'text', text: b.text };
+            if (b.type === 'thinking') return { type: 'thinking', thinking: b.thinking, signature: b.signature };
+            let input: any = {};
+            try { input = b.jsonStr ? JSON.parse(b.jsonStr) : {}; } catch { input = {}; }
+            return { type: 'tool_use', id: b.id, name: b.name, input };
+          });
+          apiMessages.push({ role: 'assistant', content: assistantContent });
+          apiMessages.push({
+            role: 'user',
+            content: `Neodpovídej ještě. Retrieval verifier vyžaduje tato chybějící volání: ${missingCalls.map(call => call.args ? `${call.tool}(${JSON.stringify(call.args)})` : call.tool).join(', ')}. Použij přesně uvedené domény a teprve potom odpověz s evidence refs.`,
+          });
+          continue;
+        }
+        // A buffered response is safe to reveal only after all required tools
+        // were called (possible when an earlier iteration satisfied them).
+        if (holdTextForRequiredTools) {
+          const bufferedText = blocks.filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
+            .map(b => b.text).join('\n\n');
+          if (bufferedText) {
+            fullText += bufferedText;
+            emittedThisRound = true;
+            onChunk(bufferedText);
+          }
+        }
         // Normal end_turn (nebo max_tokens) — parse refs from the cumulative text and finish.
         const refs = parseAllRefs(fullText);
         // POZOR: podmínka musí zahrnovat i followups/actions, jinak odpověď obsahující jen
@@ -1396,9 +1528,14 @@ ${todayISO} (${weekday}) ${currentTime}${memoryBlock ? '\n\n' + memoryBlock : ''
           accounts: options.accounts || [],
           scope: options.scope || 'live',
         });
+        for (const key of actualCoachToolCallKeys(b.name, b.input)) calledRetrievalKeys.add(key);
         // Nový/zrušený závazek či fakt musí platit hned v další zprávě — zahoď cache.
-        if (b.name === 'remember' || b.name === 'forget_memory') invalidateMemoryCache();
-        return { type: 'tool_result' as const, tool_use_id: b.id, content: JSON.stringify(result).slice(0, 12000) };
+        if (b.name === 'remember' || b.name === 'validate_memory' || b.name === 'forget_memory') invalidateMemoryCache();
+        return {
+          type: 'tool_result' as const,
+          tool_use_id: b.id,
+          content: formatCoachToolResultContent(result),
+        };
       }));
 
       apiMessages.push({ role: 'user', content: toolResults });

@@ -6,6 +6,7 @@ import {
   listMemories as listCoachMemories,
   forgetMemory as forgetCoachMemory,
   clearAllMemory as clearAllCoachMemory,
+  isMemoryActive as isCoachMemoryActive,
   type MemoryEntry as CoachMemoryEntry,
   type CoachProfile,
 } from '../services/coachMemoryService';
@@ -14,10 +15,12 @@ import {
   Trash2, Plus, Brain, X, Target,
   Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck,
   ShieldAlert, Activity, Check, ChevronLeft,
-  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText, Lock
+  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText, Lock, Link2
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
-import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings } from '../types';
+import ImportSettings from './ImportSettings';
+import ImportQueue from './ImportQueue';
+import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 
 interface SettingsProps {
@@ -50,6 +53,10 @@ interface SettingsProps {
   onAccentColorChange?: (color: string) => void;
   activeTab?: 'psychology' | 'strategy' | 'market' | 'system';
   onTabChange?: (tab: 'psychology' | 'strategy' | 'market' | 'system') => void;
+  /** Vytvoří účet — auto-import ho volá při zakládání účtu z detekované challenge. */
+  onCreateAccount?: (account: Account) => void;
+  /** Promítne atomicky uložený importní incident také do živého stavu a offline cache. */
+  onImportIncidentSaved?: (review: DailyReview) => void | Promise<void>;
 }
 
 // Global Helper for Weekly Focus Consistency
@@ -187,7 +194,9 @@ const Settings: React.FC<SettingsProps> = ({
   accentColor = 'blue',
   onAccentColorChange,
   activeTab = 'psychology',
-  onTabChange
+  onTabChange,
+  onCreateAccount,
+  onImportIncidentSaved
 }) => {
   const isDark = theme !== 'light';
 
@@ -218,11 +227,12 @@ const Settings: React.FC<SettingsProps> = ({
 
   const [coachProfile, setCoachProfile] = useState<CoachProfile>({ facts: {}, preferences: {} });
   const [coachMemories, setCoachMemories] = useState<CoachMemoryEntry[]>([]);
-  const [memoryFilter, setMemoryFilter] = useState<'all' | 'observation' | 'episode' | 'conversation_summary'>('all');
+  const [memoryFilter, setMemoryFilter] = useState<'all' | 'observation' | 'episode' | 'conversation_summary' | 'commitment'>('all');
+  const [memoryStatusFilter, setMemoryStatusFilter] = useState<'active' | 'history'>('active');
   const [confirmClearMemory, setConfirmClearMemory] = useState(false);
 
   const refreshCoachMemory = useCallback(async () => {
-    const [profile, memories] = await Promise.all([getCoachProfile(), listCoachMemories(300)]);
+    const [profile, memories] = await Promise.all([getCoachProfile(), listCoachMemories(300, { includeInactive: true })]);
     setCoachProfile(profile);
     setCoachMemories(memories);
   }, []);
@@ -249,9 +259,11 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   const filteredMemories = useMemo(() => {
-    if (memoryFilter === 'all') return coachMemories;
-    return coachMemories.filter(m => m.type === memoryFilter);
-  }, [coachMemories, memoryFilter]);
+    return coachMemories.filter(m => {
+      const statusMatches = memoryStatusFilter === 'active' ? isCoachMemoryActive(m) : !isCoachMemoryActive(m);
+      return statusMatches && (memoryFilter === 'all' || m.type === memoryFilter);
+    });
+  }, [coachMemories, memoryFilter, memoryStatusFilter]);
 
   // Push notification diagnostics
   const [pushDiag, setPushDiag] = useState<{ isStandalone: boolean; isApple: boolean; permission: string; hasActiveSW: boolean; hasActiveSubscription: boolean; ready: boolean } | null>(null);
@@ -760,6 +772,21 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               </Card>
 
+              {/* Tradecopia auto-import — párování účtů */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Activity} title="Auto-import obchodů" subtitle="Tradecopia → AlphaTrade" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
+                <p className={`text-xs mb-4 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Sync agent čte lokální data Tradecopie a posílá obchody ze všech prop účtů. Tady je přiřadíš k účtům v appce — nové účty (koupené challenge) se detekují automaticky.
+                </p>
+                <ImportSettings isDark={isDark} onToast={showToast} onCreateAccount={onCreateAccount} />
+              </Card>
+
+              {/* Fronta importu — párování exekucí na deník */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Link2} title="Fronta importu" subtitle="Párování exekucí na deník" color="bg-gradient-to-br from-emerald-600 to-teal-600" isDark={isDark} />
+                <ImportQueue isDark={isDark} onToast={showToast} onIncidentSaved={onImportIncidentSaved} />
+              </Card>
+
               <div className="grid grid-cols-1 gap-6">
                 {/* Alpha Guardian */}
                 <Card isDark={isDark}>
@@ -873,10 +900,22 @@ const Settings: React.FC<SettingsProps> = ({
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <h4 className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>
-                      Dlouhodobá paměť ({coachMemories.length} záznamů)
+                      Dlouhodobá paměť ({coachMemories.filter(m => isCoachMemoryActive(m)).length} aktivních · {coachMemories.filter(m => !isCoachMemoryActive(m)).length} v historii)
                     </h4>
-                    <div className="flex gap-1 text-[9px]">
-                      {(['all', 'observation', 'episode', 'conversation_summary'] as const).map(t => (
+                    <div className="flex gap-1 text-[9px] flex-wrap justify-end">
+                      {(['active', 'history'] as const).map(status => (
+                        <button
+                          key={status}
+                          onClick={() => setMemoryStatusFilter(status)}
+                          className={`px-2.5 py-1 rounded-lg font-black uppercase tracking-wider transition-all ${memoryStatusFilter === status
+                            ? status === 'active' ? 'bg-emerald-600 text-white' : 'bg-slate-600 text-white'
+                            : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {status === 'active' ? 'Aktivní' : 'Historie'}
+                        </button>
+                      ))}
+                      {(['all', 'observation', 'episode', 'conversation_summary', 'commitment'] as const).map(t => (
                         <button
                           key={t}
                           onClick={() => setMemoryFilter(t)}
@@ -885,7 +924,7 @@ const Settings: React.FC<SettingsProps> = ({
                             : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                           }`}
                         >
-                          {t === 'all' ? 'Vše' : t === 'observation' ? 'Pozorování' : t === 'episode' ? 'Epizody' : 'Shrnutí'}
+                          {t === 'all' ? 'Vše' : t === 'observation' ? 'Pozorování' : t === 'episode' ? 'Epizody' : t === 'commitment' ? 'Závazky' : 'Shrnutí'}
                         </button>
                       ))}
                     </div>
@@ -898,15 +937,35 @@ const Settings: React.FC<SettingsProps> = ({
                   ) : (
                     <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
                       {filteredMemories.map(m => {
-                        const typeColor = m.type === 'episode' ? 'amber' : m.type === 'conversation_summary' ? 'blue' : 'emerald';
-                        const typeLabel = m.type === 'observation' ? 'Pozorování' : m.type === 'episode' ? 'Epizoda' : 'Shrnutí';
+                        const typeLabel = m.type === 'observation' ? 'Pozorování' : m.type === 'episode' ? 'Epizoda' : m.type === 'commitment' ? 'Závazek' : 'Shrnutí';
+                        const typeClass = m.type === 'episode'
+                          ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                          : m.type === 'conversation_summary'
+                            ? 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+                            : m.type === 'commitment'
+                              ? 'bg-purple-500/10 text-purple-500 border-purple-500/20'
+                              : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
+                        const validation = String(m.metadata?.validation_state || (m.type === 'commitment' ? 'user_stated' : 'hypothesis'));
+                        const confidence = typeof m.metadata?.confidence === 'number' ? Math.round(m.metadata.confidence * 100) : null;
+                        const evidenceCount = Array.isArray(m.metadata?.evidence) ? m.metadata.evidence.length : 0;
+                        const counterCount = Array.isArray(m.metadata?.counter_evidence) ? m.metadata.counter_evidence.length : 0;
+                        const status = String(m.metadata?.status || 'active');
                         return (
                           <div key={m.id} className={`p-3 rounded-xl border flex items-start gap-3 group ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                <span className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-${typeColor}-500/10 text-${typeColor}-500 border border-${typeColor}-500/20`}>
+                                <span className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ${typeClass}`}>
                                   {typeLabel}
                                 </span>
+                                <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded border ${validation === 'supported' || validation === 'user_stated'
+                                  ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                                  : validation === 'contested'
+                                    ? 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+                                    : 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                                }`}>
+                                  {validation === 'supported' ? 'podloženo' : validation === 'user_stated' ? 'řečeno uživatelem' : validation === 'contested' ? 'sporné' : 'hypotéza'}
+                                </span>
+                                {status !== 'active' && <span className="text-[9px] font-black uppercase text-slate-500">{status === 'superseded' ? 'nahrazeno' : 'staženo'}</span>}
                                 {m.memory_date && (
                                   <span className={`text-[9px] font-mono ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>{m.memory_date}</span>
                                 )}
@@ -915,6 +974,10 @@ const Settings: React.FC<SettingsProps> = ({
                                 )}
                               </div>
                               <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{m.content}</p>
+                              <div className={`mt-2 text-[9px] font-bold ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                                {confidence != null ? `Confidence ${confidence}% · ` : ''}evidence {evidenceCount}{counterCount ? ` · counter-evidence ${counterCount}` : ''}
+                                {m.metadata?.validation_note ? ` · ${String(m.metadata.validation_note)}` : ''}
+                              </div>
                             </div>
                             <button
                               onClick={() => handleForgetMemory(m.id)}

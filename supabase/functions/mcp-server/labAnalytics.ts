@@ -12,7 +12,8 @@
  *  - Missed obchody ven
  *  - každý agregát nese `n` a pokrytí — UI nikdy nepředstírá data, která nejsou
  */
-// Typy jsou runtime-erased — pro Deno bundle stačí volné aliasy (zdroj pravdy: /types.ts v repu).
+// Typy jsou runtime-erased — pro Deno bundle stačí volné aliasy
+// (zdroj pravdy je /types.ts v hlavní aplikaci).
 type Trade = Record<string, any>;
 type Account = Record<string, any>;
 
@@ -1242,6 +1243,105 @@ export const computeExecutionSummary = (ds: LabDataset) => {
     };
 };
 
+// ============================================================================
+// PATTERN COACH — deterministické pořadí jednotlivých faktorů a kombinací.
+// AI dostává hotová čísla + ID zdrojových obchodů, nic si nedopočítává sama.
+// ============================================================================
+
+export type PatternConfidence = 'high' | 'medium' | 'low' | 'anecdotal';
+
+export interface PatternRow {
+    label: string;
+    dimensions: string[];
+    n: number;
+    wins: number;
+    losses: number;
+    winratePct: number | null;
+    avgR: number | null;
+    totalR: number | null;
+    pnl: number;
+    confidence: PatternConfidence;
+    tradeIds: Array<string | number>;
+}
+
+const patternConfidence = (n: number): PatternConfidence =>
+    n >= 30 ? 'high' : n >= 10 ? 'medium' : n >= 5 ? 'low' : 'anecdotal';
+
+const patternStats = (label: string, dimensions: string[], rows: LabTrade[]): PatternRow => {
+    const wins = rows.filter(t => t.outcome === 'Win').length;
+    const losses = rows.filter(t => t.outcome === 'Loss').length;
+    const withR = rows.filter(t => t.r != null);
+    const totalR = withR.length ? withR.reduce((sum, t) => sum + (t.r as number), 0) : null;
+    return {
+        label,
+        dimensions,
+        n: rows.length,
+        wins,
+        losses,
+        winratePct: wins + losses ? wins / (wins + losses) * 100 : null,
+        avgR: totalR != null ? totalR / withR.length : null,
+        totalR,
+        pnl: rows.reduce((sum, t) => sum + t.pnl, 0),
+        confidence: patternConfidence(rows.length),
+        tradeIds: rows.map(t => t.id),
+    };
+};
+
+/**
+ * Hledá pouze pozorované kombinace (žádný Cartesian product). Minimum 3 obchody
+ * ponechá i malé backtesty použitelné, ale confidence je výslovně anecdotal.
+ */
+export const computePatternSummary = (ds: LabDataset) => {
+    const dims: Array<{ key: string; value: (t: LabTrade) => string | null }> = [
+        { key: 'session', value: t => t.session },
+        { key: 'direction', value: t => t.direction },
+        { key: 'instrument', value: t => t.instrument },
+        { key: 'sl', value: t => t.slPlacement },
+        { key: 'target', value: t => t.targetLevel || t.targetType },
+        { key: 'management', value: t => t.management },
+        { key: 'bias', value: t => t.biasAligned == null ? null : (t.biasAligned ? 'with bias' : 'against bias') },
+    ];
+    const group = (selected: typeof dims): PatternRow[] => {
+        const map = new Map<string, { labels: string[]; rows: LabTrade[] }>();
+        for (const trade of ds.trades) {
+            const values = selected.map(d => d.value(trade)?.trim()).filter((v): v is string => Boolean(v));
+            if (values.length !== selected.length) continue;
+            const key = values.map(v => v.toLocaleLowerCase()).join('\u001f');
+            const current = map.get(key) || { labels: values, rows: [] };
+            current.rows.push(trade);
+            map.set(key, current);
+        }
+        return [...map.values()]
+            .filter(g => g.rows.length >= 3)
+            .map(g => patternStats(g.labels.join(' + '), selected.map(d => d.key), g.rows));
+    };
+
+    const singles = dims.flatMap(d => group([d]));
+    const pairs: PatternRow[] = [];
+    for (let i = 0; i < dims.length; i++) {
+        for (let j = i + 1; j < dims.length; j++) pairs.push(...group([dims[i], dims[j]]));
+    }
+    const coreTriples = [
+        [dims[0], dims[1], dims[3]], // session + direction + SL
+        [dims[0], dims[1], dims[4]], // session + direction + target
+        [dims[0], dims[1], dims[6]], // session + direction + bias
+    ].flatMap(group);
+    const rank = (rows: PatternRow[], direction: 'best' | 'worst') => rows
+        .filter(r => r.avgR != null)
+        .sort((a, b) => direction === 'best'
+            ? ((b.avgR as number) - (a.avgR as number) || b.n - a.n)
+            : ((a.avgR as number) - (b.avgR as number) || b.n - a.n))
+        .slice(0, 8);
+
+    return {
+        minimumSample: 3,
+        bestSingles: rank(singles, 'best'),
+        worstSingles: rank(singles, 'worst'),
+        bestCombinations: rank([...pairs, ...coreTriples], 'best'),
+        worstCombinations: rank([...pairs, ...coreTriples], 'worst'),
+    };
+};
+
 const round2 = (v: number | null | undefined): number | null =>
     v == null || Number.isNaN(v) ? null : Math.round(v * 100) / 100;
 
@@ -1319,6 +1419,30 @@ export const buildLabReport = (ds: LabDataset, section: string = 'all', prepDays
             };
     }
 
+    if (want('patterns')) {
+        const p = computePatternSummary(ds);
+        const row = (r: PatternRow) => ({
+            kombinace: r.label,
+            dimenze: r.dimensions,
+            n: r.n,
+            wins: r.wins,
+            losses: r.losses,
+            winrate_pct: round2(r.winratePct),
+            avg_R: round2(r.avgR),
+            total_R: round2(r.totalR),
+            pnl_usd: round2(r.pnl),
+            confidence: r.confidence,
+            trade_ids: r.tradeIds,
+        });
+        out.patterns = {
+            _pozn: 'Řazeno deterministicky podle průměrného R. Minimum jsou 3 obchody; n<5 = anecdotal, 5–9 low, 10–29 medium, 30+ high. Malý vzorek není doporučení ke změně strategie.',
+            nejlepsi_jednotlive_faktory: p.bestSingles.map(row),
+            nejhorsi_jednotlive_faktory: p.worstSingles.map(row),
+            nejlepsi_kombinace: p.bestCombinations.map(row),
+            nejhorsi_kombinace: p.worstCombinations.map(row),
+        };
+    }
+
     if (want('bias')) {
         const b = computeBiasSummary(ds);
         out.bias = {
@@ -1352,6 +1476,7 @@ export const buildLabReport = (ds: LabDataset, section: string = 'all', prepDays
                 z_test: round2(f.z),
                 trend: f.trend,
                 n: f.n,
+                trade_ids: f.tradeIds,
             }));
     }
 
@@ -1402,7 +1527,80 @@ export interface ExperimentReport {
     verdict: string | null;
     /** Zlepšení Ø P&L na obchod (after − before), null bez dat. */
     deltaAvgPnl: number | null;
+    /** Kvalita vzorku, nikoli důkaz kauzality. */
+    sampleQuality: 'insufficient' | 'low' | 'medium' | 'high';
+    /** Výskyt konkrétního source leak patternu před/po, pokud je deterministicky měřitelný. */
+    pattern: null | {
+        leakId: string;
+        beforeCount: number;
+        afterCount: number;
+        beforeRate: number;
+        afterRate: number;
+        deltaPercentagePoints: number;
+    };
+    /** Tvrdé omezení interpretace, které musí UI i Coach ukázat. */
+    limitation: string;
 }
+
+/** Deterministicky označí obchody patřící do známého leak detektoru. */
+export const classifyExperimentLeakTrades = (
+    ds: LabDataset,
+    leakId: string | undefined,
+    prepDays?: PrepDayInfo[],
+    startTs?: number,
+): Set<string | number> | null => {
+    if (!leakId) return null;
+    const T = ds.trades;
+    const out = new Set<string | number>();
+    const byDay = new Map<string, LabTrade[]>();
+    for (const trade of T) {
+        if (!byDay.has(trade.dayKey)) byDay.set(trade.dayKey, []);
+        byDay.get(trade.dayKey)!.push(trade);
+    }
+    if (leakId === 'revenge') {
+        byDay.forEach(day => {
+            for (let i = 1; i < day.length; i++) {
+                const previous = day[i - 1];
+                if (previous.outcome !== 'Loss') continue;
+                const gapMin = ((day[i].entryTs ?? day[i].ts) - previous.ts) / 60000;
+                if (gapMin >= 0 && gapMin <= 30) out.add(day[i].id);
+            }
+        });
+    } else if (leakId === 'martingale') {
+        // Prah zmrazíme z baseline před startem, aby se během experimentu neposouval.
+        const baseline = T.filter(t => startTs == null || t.ts < startTs);
+        const risks = baseline.map(t => t.risk).filter((r): r is number => r != null).sort((a, b) => a - b);
+        if (!risks.length) return null;
+        const median = risks[Math.floor(risks.length / 2)];
+        byDay.forEach(day => {
+            for (let i = 1; i < day.length; i++) {
+                if (day[i - 1].outcome === 'Loss' && day[i].risk != null && (day[i].risk as number) > median * 1.5) out.add(day[i].id);
+            }
+        });
+    } else if (leakId.startsWith('weak_hour_')) {
+        const hour = Number(leakId.slice('weak_hour_'.length));
+        if (!Number.isFinite(hour)) return null;
+        T.filter(t => t.hour === hour).forEach(t => out.add(t.id));
+    } else if (leakId.startsWith('weak_session_')) {
+        const session = leakId.slice('weak_session_'.length);
+        T.filter(t => (t.session || 'Bez session') === session).forEach(t => out.add(t.id));
+    } else if (leakId === 'bias_flip') {
+        T.filter(t => t.biasAligned === false).forEach(t => out.add(t.id));
+    } else if (leakId === 'no_bias') {
+        T.filter(t => t.biasAligned == null && t.sessionBias == null).forEach(t => out.add(t.id));
+    } else if (leakId === 'overtrading') {
+        byDay.forEach(day => day.forEach((t, index) => { if (index >= 3) out.add(t.id); }));
+    } else if (leakId === 'cold_start') {
+        byDay.forEach(day => { if (day.length > 1) out.add(day[0].id); });
+    } else if (leakId === 'no_prep') {
+        if (!prepDays?.length) return null;
+        const prepped = new Set(prepDays.filter(p => p.completed).map(p => p.date));
+        T.filter(t => !prepped.has(t.dayKey)).forEach(t => out.add(t.id));
+    } else {
+        return null;
+    }
+    return out;
+};
 
 const sideStats = (arr: LabTrade[]): ExperimentSideStats => {
     const withR = arr.filter(t => t.r != null);
@@ -1419,18 +1617,38 @@ const sideStats = (arr: LabTrade[]): ExperimentSideStats => {
 
 export const computeExperimentReport = (
     ds: LabDataset,
-    exp: { startTs: number; targetTrades: number }
+    exp: { startTs: number; targetTrades: number; sourceLeakId?: string },
+    prepDays?: PrepDayInfo[],
 ): ExperimentReport => {
-    const before = sideStats(ds.trades.filter(t => t.ts < exp.startTs));
-    const after = sideStats(ds.trades.filter(t => t.ts >= exp.startTs));
+    const beforeTrades = ds.trades.filter(t => t.ts < exp.startTs);
+    const afterTrades = ds.trades.filter(t => t.ts >= exp.startTs);
+    const before = sideStats(beforeTrades);
+    const after = sideStats(afterTrades);
     const ready = after.n >= exp.targetTrades;
     const deltaAvgPnl = before.n > 0 && after.n > 0 ? after.avgPnl - before.avgPnl : null;
+
+    const classified = classifyExperimentLeakTrades(ds, exp.sourceLeakId, prepDays, exp.startTs);
+    const pattern = classified && exp.sourceLeakId ? (() => {
+        const beforeCount = beforeTrades.filter(t => classified.has(t.id)).length;
+        const afterCount = afterTrades.filter(t => classified.has(t.id)).length;
+        const beforeRate = beforeTrades.length ? (beforeCount / beforeTrades.length) * 100 : 0;
+        const afterRate = afterTrades.length ? (afterCount / afterTrades.length) * 100 : 0;
+        return { leakId: exp.sourceLeakId!, beforeCount, afterCount, beforeRate, afterRate, deltaPercentagePoints: afterRate - beforeRate };
+    })() : null;
+
+    const sampleQuality: ExperimentReport['sampleQuality'] = !ready || before.n < 5
+        ? 'insufficient'
+        : before.n >= 50 && after.n >= 50 ? 'high'
+            : before.n >= 20 && after.n >= 20 ? 'medium' : 'low';
 
     let verdict: string | null = null;
     if (before.n >= 3 && after.n >= 3) {
         const wrDelta = after.winRate - before.winRate;
-        const dir = (deltaAvgPnl as number) > 5 ? 'ZLEPŠENÍ' : (deltaAvgPnl as number) < -5 ? 'ZHORŠENÍ' : 'BEZE ZMĚNY';
-        verdict = `${dir}: Ø P&L na obchod ${fmtUsd(before.avgPnl)} → ${fmtUsd(after.avgPnl)} (${fmtUsd(deltaAvgPnl)}), WR ${Math.round(before.winRate)} % → ${Math.round(after.winRate)} % (${wrDelta >= 0 ? '+' : ''}${Math.round(wrDelta)} pb)${before.avgR != null && after.avgR != null ? `, Ø R ${fmtR(before.avgR)} → ${fmtR(after.avgR)}` : ''}. Vzorek: ${before.n} před / ${after.n} po.`;
+        const dir = (deltaAvgPnl as number) > 5 ? 'POZOROVANÉ ZLEPŠENÍ' : (deltaAvgPnl as number) < -5 ? 'POZOROVANÉ ZHORŠENÍ' : 'POZOROVANĚ BEZE ZMĚNY';
+        const patternText = pattern
+            ? ` Výskyt patternu ${pattern.beforeCount}/${before.n} (${pattern.beforeRate.toFixed(1)} %) → ${pattern.afterCount}/${after.n} (${pattern.afterRate.toFixed(1)} %, ${pattern.deltaPercentagePoints >= 0 ? '+' : ''}${pattern.deltaPercentagePoints.toFixed(1)} pb).`
+            : '';
+        verdict = `${dir}: Ø P&L na obchod ${fmtUsd(before.avgPnl)} → ${fmtUsd(after.avgPnl)} (${fmtUsd(deltaAvgPnl)}), WR ${Math.round(before.winRate)} % → ${Math.round(after.winRate)} % (${wrDelta >= 0 ? '+' : ''}${Math.round(wrDelta)} pb)${before.avgR != null && after.avgR != null ? `, Ø R ${fmtR(before.avgR)} → ${fmtR(after.avgR)}` : ''}.${patternText} Vzorek: ${before.n} před / ${after.n} po.`;
     }
 
     return {
@@ -1439,6 +1657,11 @@ export const computeExperimentReport = (
         ready,
         verdict,
         deltaAvgPnl,
+        sampleQuality,
+        pattern,
+        limitation: pattern
+            ? 'Observační before/after: výskyt source patternu je měřen z dat, ale změnu nelze bez kontrolní skupiny považovat za kauzální důkaz pravidla.'
+            : 'Observační before/after: aplikace neví, zda bylo obecné pravidlo u každého obchodu skutečně dodrženo. Výsledek není kauzální důkaz.',
     };
 };
 
@@ -1453,7 +1676,8 @@ export const buildExperimentCoachPrompt = (
     `- Před: ${report.before.n} obchodů, Ø ${fmtUsd(report.before.avgPnl)}/obchod, WR ${Math.round(report.before.winRate)} %${report.before.avgR != null ? `, Ø ${fmtR(report.before.avgR)}` : ''}\n` +
     `- Po: ${report.after.n} obchodů, Ø ${fmtUsd(report.after.avgPnl)}/obchod, WR ${Math.round(report.after.winRate)} %${report.after.avgR != null ? `, Ø ${fmtR(report.after.avgR)}` : ''}\n` +
     (report.verdict ? `- Deterministický verdikt: ${report.verdict}\n` : '') +
-    `\nČísla nepřepočítávej — jsou z kódu. Řekni mi: drží hypotéza, nebo je vzorek ještě malý na závěr? Mám pravidlo zafixovat do playbooku, upravit, nebo zrušit?`;
+    `- Kvalita vzorku: ${report.sampleQuality}\n- Omezení: ${report.limitation}\n` +
+    `\nČísla nepřepočítávej — jsou z kódu. Nezaměň before/after za kauzalitu. Řekni mi: drží hypotéza, nebo je vzorek ještě malý na závěr? Mám pravidlo zafixovat do playbooku, upravit, nebo zrušit?`;
 
 /** Prompt pro coache z leak nálezu — čísla dosazená, AI je jen interpretuje. */
 export const buildLeakCoachPrompt = (f: LeakFinding): string =>
