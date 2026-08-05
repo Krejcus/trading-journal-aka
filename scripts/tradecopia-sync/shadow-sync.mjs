@@ -11,10 +11,11 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-  assertSchemaCompatible, buildTableSnapshot, schemaHash, snapshotDigest,
+  assertSchemaCompatible, buildTableSnapshot, ENTITY_CONNECTION_COLUMNS, schemaHash,
+  snapshotDigest, sqlSelectProjection,
 } from './shadow-core.mjs';
 
-const AGENT_VERSION = '1.0.0';
+const AGENT_VERSION = '1.1.0';
 const CONFIG_DIR = join(homedir(), '.alphatrade');
 const SHADOW_CONFIG_PATH = join(CONFIG_DIR, 'tradecopia-shadow-sync.json');
 const LEGACY_CONFIG_PATH = join(CONFIG_DIR, 'tradecopia-sync.json');
@@ -43,6 +44,13 @@ const TABLES = [
   { db: 'main', table: 'group_leader_accounts', keyColumns: ['id'] },
   { db: 'main', table: 'group_follower_accounts', keyColumns: ['id'] },
   { db: 'main', table: 'prop_firm_accounts', keyColumns: ['id'], accountColumn: 'trading_account_id' },
+  {
+    db: 'main',
+    table: 'entities',
+    sourceTable: 'entity_connections',
+    keyColumns: ['id'],
+    selectColumns: ENTITY_CONNECTION_COLUMNS,
+  },
 ];
 
 function log(message) {
@@ -142,17 +150,27 @@ function collect(config, state) {
     for (const keyColumn of tableConfig.keyColumns) {
       if (!columnNames.has(keyColumn)) throw new Error(`Schema drift: ${tableConfig.table} nemá klíč ${keyColumn}`);
     }
-    const rows = sqliteJson(dbPath, `SELECT * FROM "${tableConfig.table}";`);
-    const tableKey = `${tableConfig.db}.${tableConfig.table}`;
-    schemas[tableKey] = columns.map(({ name, type, notnull, pk }) => ({ name, type, notnull, pk }));
-    const snapshot = buildTableSnapshot(tableConfig, rows, RESCAN ? {} : (state.hashes?.[tableKey] || {}));
+    const selectedColumns = tableConfig.selectColumns ?? columns.map(column => column.name);
+    for (const selectedColumn of selectedColumns) {
+      if (!columnNames.has(selectedColumn)) throw new Error(`Schema drift: ${tableConfig.table} nemá bezpečný sloupec ${selectedColumn}`);
+    }
+    const sourceTable = tableConfig.sourceTable ?? tableConfig.table;
+    const projection = sqlSelectProjection(selectedColumns);
+    const rows = sqliteJson(dbPath, `SELECT ${projection} FROM "${tableConfig.table}";`);
+    const tableKey = `${tableConfig.db}.${sourceTable}`;
+    const selectedSet = new Set(selectedColumns);
+    schemas[tableKey] = columns
+      .filter(column => selectedSet.has(column.name))
+      .map(({ name, type, notnull, pk }) => ({ name, type, notnull, pk }));
+    const snapshotConfig = { ...tableConfig, table: sourceTable };
+    const snapshot = buildTableSnapshot(snapshotConfig, rows, RESCAN ? {} : (state.hashes?.[tableKey] || {}));
     nextHashes[tableKey] = snapshot.hashes;
     rowCounts[tableKey] = rows.length;
     tableDigests[tableKey] = snapshotDigest(snapshot.hashes);
     changedTotal += snapshot.changedRows.length;
     tables.push({
       source_db: tableConfig.db,
-      source_table: tableConfig.table,
+      source_table: sourceTable,
       present_keys: snapshot.presentKeys,
       rows: snapshot.changedRows,
     });

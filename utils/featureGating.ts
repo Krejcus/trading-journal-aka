@@ -20,6 +20,7 @@ export const LOCKED_FOR_FRIEND: readonly string[] = [
     'lab',
     'ai',
     'business',
+    'live',
     'network',
 ];
 
@@ -55,5 +56,9 @@ export const FEATURE_DESCRIPTIONS: Record<string, { name: string; description: s
     network: {
         name: 'Network',
         description: 'Sledování ostatních traderů, sdílení obchodů, real-time notifikace na cizí aktivity.',
+    },
+    live: {
+        name: 'LIVE Control',
+        description: 'Soukromý dohled nad reálnými účty, otevřenými pozicemi, příkazy, kopírkou a riskem.',
     },
 };

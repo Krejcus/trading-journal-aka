@@ -17,6 +17,7 @@ import ConfirmationModal from './ConfirmationModal';
 import TradeExecutionIntel from './TradeExecutionIntel';
 import TradeConfluence from './TradeConfluence';
 const ManualTradeForm = React.lazy(() => import('./ManualTradeForm'));
+const TradeMarketChart = React.lazy(() => import('./TradeMarketChart'));
 import TradeShareModal from './TradeShareModal';
 
 interface PropertyProps {
@@ -271,6 +272,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [isZoomed, setIsZoomed] = useState(false);
     const [accountsExpanded, setAccountsExpanded] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
+    const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>('chart');
     const [shareCopied, setShareCopied] = useState(false);
     const [isShareCardOpen, setIsShareCardOpen] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -384,6 +386,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     useEffect(() => { setImageLoadError(false); }, [activeImageIndex]);
     // Reset error state when trade changes
     useEffect(() => { setImageLoadError(false); }, [activeTrade.id]);
+    useEffect(() => { setVisualMode('chart'); }, [activeTrade.id]);
 
 
     const handleShare = async () => {
@@ -451,6 +454,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 <p className={`text-[11px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                                     {trade.date ? new Date(trade.date).toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
                                 </p>
+                            </div>
+                            <div className={`hidden lg:flex p-1 rounded-xl border shrink-0 ${isDark ? 'bg-black/30 border-white/10' : 'bg-white/80 border-slate-200 shadow-sm'}`}>
+                                <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'chart' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Graf</button>
+                                <button onClick={() => setVisualMode('screenshots')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'screenshots' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Screenshoty {images.length ? `(${images.length})` : ''}</button>
                             </div>
                         </div>
 
@@ -665,103 +672,49 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             Na desktop: flex-1 (zabere prostor v row layoutu). */}
                         <div className="order-1 lg:order-2 flex-none lg:flex-1 flex flex-col overflow-hidden">
 
-                            {/* TOP: Screenshot — na mobile přizpůsobí výšku obrázku (žádné pruhy),
-                                na desktop fixní 3/5 flex prostor (lg:flex-[3_3_0] + absolute fill). */}
-                            <div className={`relative group lg:flex-[3_3_0] lg:min-h-0 lg:overflow-hidden`}>
-                            {/* Loading spinner while fetching full trade details */}
-                            {isLoadingDetails && (
-                                <div className="w-full py-16 lg:absolute lg:inset-0 flex items-center justify-center z-10">
-                                    <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" />
+                            {/* TOP: interaktivní CME graf je výchozí; screenshoty zůstávají jako evidence. */}
+                            <div className="relative group flex-none h-[420px] lg:flex-[3_3_0] lg:h-auto lg:min-h-0 lg:overflow-hidden">
+                                <div className={`absolute top-3 left-1/2 -translate-x-1/2 z-40 flex lg:hidden p-1 rounded-xl border backdrop-blur-xl ${isDark ? 'bg-black/70 border-white/10' : 'bg-white/80 border-slate-200 shadow-sm'}`}>
+                                    <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'chart' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Graf</button>
+                                    <button onClick={() => setVisualMode('screenshots')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'screenshots' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Screenshoty {images.length ? `(${images.length})` : ''}</button>
                                 </div>
-                            )}
-                            <AnimatePresence mode="wait">
-                                {!isLoadingDetails && (images.length > 0 && !imageLoadError) ? (
-                                    <motion.div
-                                        key={images[activeImageIndex]}
-                                        initial={{ opacity: 0 }}
-                                        animate={{ opacity: 1 }}
-                                        exit={{ opacity: 0 }}
-                                        transition={{ duration: 0.3 }}
-                                        className="relative lg:absolute lg:inset-0"
-                                    >
-                                        <img
-                                            src={images[activeImageIndex]}
-                                            className="block w-full h-auto lg:absolute lg:inset-0 lg:w-full lg:h-full lg:object-contain cursor-zoom-in"
-                                            onClick={() => setIsZoomed(true)}
-                                            onError={() => setImageLoadError(true)}
-                                        />
-                                        {/* Zoom on hover */}
-                                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                                            <div className="p-5 bg-black/40 backdrop-blur-md rounded-full text-white border border-white/20 shadow-2xl pointer-events-auto cursor-pointer hover:scale-110 transition-transform" onClick={() => setIsZoomed(true)}>
-                                                <Maximize2 size={28} />
+
+                                {visualMode === 'chart' ? (
+                                    <React.Suspense fallback={<div className="absolute inset-0 flex items-center justify-center"><div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" /></div>}>
+                                        <TradeMarketChart trade={activeTrade} isDark={isDark} />
+                                    </React.Suspense>
+                                ) : (
+                                    <>
+                                        {isLoadingDetails && (
+                                            <div className="absolute inset-0 flex items-center justify-center z-10">
+                                                <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" />
                                             </div>
-                                        </div>
-                                    </motion.div>
-                                ) : !isLoadingDetails ? (
-                                    <div className="w-full lg:h-full flex flex-col items-center justify-center opacity-20 text-slate-500 p-8 lg:p-20 text-center">
-                                        <div className="p-6 lg:p-10 rounded-[30px] lg:rounded-[40px] border-2 border-dashed border-slate-500">
-                                            <ImageIcon size={36} strokeWidth={1} className="lg:hidden" />
-                                            <ImageIcon size={64} strokeWidth={1} className="hidden lg:block" />
-                                        </div>
-                                        <p className="text-sm lg:text-xl font-black uppercase tracking-[0.3em] lg:tracking-[0.4em] mt-6 lg:mt-10">
-                                            {imageLoadError ? 'CHYBA NAČÍTÁNÍ' : 'NO VISUAL DATA'}
-                                        </p>
-                                        <p className="text-[9px] font-bold mt-1.5 opacity-60 hidden lg:block">
-                                            {imageLoadError ? 'Obrázek se nepodařilo načíst.' : 'Visual evidence not submitted for this transaction.'}
-                                        </p>
-                                    </div>
-                                ) : null}
-                            </AnimatePresence>
-
-                            {/* Floating Navigation Pill */}
-                            {images.length > 1 && (
-                                <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-30">
-                                    <div className="flex items-center gap-4 px-6 py-4 bg-black/60 backdrop-blur-2xl rounded-full border border-white/10 shadow-2xl">
-                                        <button
-                                            onClick={() => setActiveImageIndex((activeImageIndex - 1 + images.length) % images.length)}
-                                            className="p-2 text-white/50 hover:text-white transition-colors"
-                                        >
-                                            <ChevronLeft size={24} />
-                                        </button>
-
-                                        <div className="flex gap-2">
-                                            {images.map((_, i) => (
-                                                <button
-                                                    key={i}
-                                                    onClick={() => setActiveImageIndex(i)}
-                                                    className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${activeImageIndex === i ? 'w-6 bg-white' : 'bg-white/20 hover:bg-white/40'}`}
-                                                />
-                                            ))}
-                                        </div>
-
-                                        <button
-                                            onClick={() => setActiveImageIndex((activeImageIndex + 1) % images.length)}
-                                            className="p-2 text-white/50 hover:text-white transition-colors"
-                                        >
-                                            <ChevronRight size={24} />
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Canvas Nav Arrows (Desktop) */}
-                            {images.length > 1 && (
-                                <>
-                                    <button
-                                        onClick={() => setActiveImageIndex((activeImageIndex - 1 + images.length) % images.length)}
-                                        className="absolute left-8 top-1/2 -translate-y-1/2 p-4 text-white/20 hover:text-white opacity-0 group-hover:opacity-100 transition-all z-20"
-                                    >
-                                        <ChevronLeft size={48} />
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveImageIndex((activeImageIndex + 1) % images.length)}
-                                        className="absolute right-8 top-1/2 -translate-y-1/2 p-4 text-white/20 hover:text-white opacity-0 group-hover:opacity-100 transition-all z-20"
-                                    >
-                                        <ChevronRight size={48} />
-                                    </button>
-                                </>
-                            )}
-                        </div>
+                                        )}
+                                        <AnimatePresence mode="wait">
+                                            {!isLoadingDetails && (images.length > 0 && !imageLoadError) ? (
+                                                <motion.div key={images[activeImageIndex]} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">
+                                                    <img src={images[activeImageIndex]} className="absolute inset-0 w-full h-full object-contain cursor-zoom-in" onClick={() => setIsZoomed(true)} onError={() => setImageLoadError(true)} />
+                                                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                                        <div className="p-5 bg-black/40 backdrop-blur-md rounded-full text-white border border-white/20 shadow-2xl pointer-events-auto cursor-pointer" onClick={() => setIsZoomed(true)}><Maximize2 size={28} /></div>
+                                                    </div>
+                                                </motion.div>
+                                            ) : !isLoadingDetails ? (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center opacity-30 text-slate-500 p-8 text-center">
+                                                    <div className="p-8 rounded-[36px] border-2 border-dashed border-slate-500"><ImageIcon size={52} strokeWidth={1} /></div>
+                                                    <p className="text-sm font-black uppercase tracking-[0.3em] mt-7">{imageLoadError ? 'CHYBA NAČÍTÁNÍ' : 'BEZ SCREENSHOTU'}</p>
+                                                </div>
+                                            ) : null}
+                                        </AnimatePresence>
+                                        {images.length > 1 && (
+                                            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-black/60 backdrop-blur-xl rounded-full border border-white/10">
+                                                <button onClick={() => setActiveImageIndex((activeImageIndex - 1 + images.length) % images.length)} className="p-1 text-white/50 hover:text-white"><ChevronLeft size={18} /></button>
+                                                <span className="text-[10px] font-mono text-white/70">{activeImageIndex + 1} / {images.length}</span>
+                                                <button onClick={() => setActiveImageIndex((activeImageIndex + 1) % images.length)} className="p-1 text-white/50 hover:text-white"><ChevronRight size={18} /></button>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
 
                             {/* BOTTOM: AI + Notes (DESKTOP ONLY) — na mobile přesunuto do sidebar dole */}
                             <div className={`hidden lg:block flex-[2_2_0] min-h-0 overflow-y-auto no-scrollbar border-t ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/30'}`}>

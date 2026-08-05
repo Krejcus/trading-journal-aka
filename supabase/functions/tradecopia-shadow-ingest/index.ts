@@ -14,7 +14,7 @@ const ALLOWED_TABLES: Record<string, Set<string>> = {
     'accounts', 'cash_balances', 'positions', 'orders', 'fills',
     'account_risk_statuses', 'account_risk_configs', 'order_strategies',
     'groups', 'group_leader_accounts', 'group_follower_accounts',
-    'prop_firm_accounts',
+    'prop_firm_accounts', 'entity_connections',
   ]),
   logs: new Set([]),
 };

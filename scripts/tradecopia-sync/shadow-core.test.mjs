@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assertSchemaCompatible, buildTableSnapshot, canonicalJson, normalizeIso, schemaHash,
-  snapshotDigest, sourceKey,
+  assertSchemaCompatible, buildTableSnapshot, canonicalJson, ENTITY_CONNECTION_COLUMNS,
+  normalizeIso, schemaHash, snapshotDigest, sourceKey, sqlSelectProjection,
 } from './shadow-core.mjs';
 
 test('canonical JSON is stable across object key order', () => {
@@ -29,6 +29,12 @@ test('schema fingerprint changes when a column changes', () => {
 test('invalid timestamps become null', () => {
   assert.equal(normalizeIso('not-a-date'), null);
   assert.equal(normalizeIso(null), null);
+});
+
+test('safe entity projection never selects OAuth or personal fields', () => {
+  const projection = sqlSelectProjection(ENTITY_CONNECTION_COLUMNS);
+  assert.match(projection, /"is_connected"/);
+  assert.doesNotMatch(projection, /auth_token|email|address/i);
 });
 
 test('duplicate source keys fail instead of silently overwriting data', () => {

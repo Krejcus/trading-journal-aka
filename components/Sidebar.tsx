@@ -22,6 +22,7 @@ import {
     Radio,
     Layers,
     Microscope,
+    RadioTower,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User } from '../types';
@@ -90,6 +91,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     ];
 
     const secondaryItems = [
+        { id: 'live', label: 'LIVE', icon: RadioTower },
         { id: 'network', label: t('network', lang), icon: Globe },
         // V backtestu nemáš účty — místo nich "Session" (název + velikost).
         { id: 'accounts', label: isBacktest ? 'Session' : t('accounts', lang), icon: isBacktest ? Layers : Wallet },
@@ -98,7 +100,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // V backtest módu skryjeme nav, co k backtestu nepatří (Business hub, Síť).
     const visibleMain = isBacktest ? mainItems.filter(i => i.id !== 'business') : mainItems;
-    const visibleSecondary = isBacktest ? secondaryItems.filter(i => i.id !== 'network') : secondaryItems;
+    const visibleSecondary = isBacktest ? secondaryItems.filter(i => i.id !== 'network' && i.id !== 'live') : secondaryItems;
 
     const isDark = theme !== 'light';
 

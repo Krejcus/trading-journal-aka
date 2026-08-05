@@ -24,8 +24,10 @@ import WorldShiftOverlay, { WORLD_SHIFT_TIMING } from './components/WorldShiftOv
 const DailyJournal = React.lazy(() => import('./components/DailyJournal'));
 const BacktestSessionsView = React.lazy(() => import('./components/BacktestSessionsView'));
 const BacktestSessionsManager = React.lazy(() => import('./components/BacktestSessionsManager'));
+const BacktestWorkspace = React.lazy(() => import('./components/BacktestWorkspace'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
+const LiveDesk = React.lazy(() => import('./components/LiveDesk'));
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
@@ -85,6 +87,7 @@ import {
 
 import { supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
+import type { BacktestRun } from './services/backtestTypes';
 import MorningBriefBanner from './components/MorningBriefBanner';
 
 const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
@@ -675,6 +678,7 @@ const App: React.FC = () => {
   const [sessions, setSessions] = useState<SessionConfig[]>(DEFAULT_SESSIONS);
   // Samostatná sada sessionů pro backtest svět. Prázdné = použij živé `sessions` (fallback).
   const [backtestSessions, setBacktestSessions] = useState<SessionConfig[]>([]);
+  const [activeBacktestRun, setActiveBacktestRun] = useState<BacktestRun | null>(null);
   // Sady se přepínají automaticky podle světa (live vs backtest). Backtest s prázdnou sadou
   // spadne zpět na live sessiony → žádná migrace, nic se nerozbije.
   const activeSessions = useMemo(
@@ -3272,6 +3276,22 @@ const App: React.FC = () => {
 
       {worldShift.active && <WorldShiftOverlay to={worldShift.to} />}
 
+      {activeBacktestRun && (
+        <React.Suspense fallback={<QuantumLoader theme={theme} />}>
+          <BacktestWorkspace
+            run={activeBacktestRun}
+            isDark={theme !== 'light'}
+            onClose={(savedRun) => {
+              setActiveBacktestRun(null);
+              setActivePage('accounts');
+              setActiveAccountId(savedRun.accountId);
+              window.dispatchEvent(new CustomEvent('alphatrade:backtest-run-saved', { detail: savedRun.id }));
+            }}
+            onTradeClosed={handleManualTrade}
+          />
+        </React.Suspense>
+      )}
+
       {/* Sidebar — pouze desktop */}
       <div className="hidden lg:block">
         <Sidebar
@@ -3354,6 +3374,7 @@ const App: React.FC = () => {
               {activePage === 'accounts' && 'Portfolio'}
               {activePage === 'settings' && 'Nastavení'}
               {activePage === 'network' && 'Síť'}
+              {activePage === 'live' && 'LIVE'}
               {activePage === 'business' && 'Business Hub'}
               {activePage === 'ai' && 'AI Coach'}
             </h2>
@@ -3479,7 +3500,7 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-2 md:gap-3 relative z-10">
             {/* Item 1: Dashboard Mode Status */}
-            <div className="hidden md:flex items-center">
+            {activePage !== 'live' && <div className="hidden md:flex items-center">
               <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all duration-200 select-none ${
                 theme !== 'light'
                   ? 'bg-white/5 border-white/10 text-white shadow-inner'
@@ -3508,12 +3529,12 @@ const App: React.FC = () => {
                   {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : dashboardMode === 'backtesting' ? 'Backtesting' : 'All'}
                 </span>
               </div>
-            </div>
+            </div>}
 
             {/* Filtr + přepínač režimu — vlastní skupina blízko u sebe */}
             <div className="flex items-center gap-1.5">
             {/* Item 2: Filter Dropdown */}
-            <FilterDropdown
+            {activePage !== 'live' && <FilterDropdown
               filters={filters}
               setFilters={setFilters}
               accounts={contextAccounts}
@@ -3532,7 +3553,7 @@ const App: React.FC = () => {
               historyLayoutMode={activePage === 'history' ? historyLayoutMode : undefined}
               setHistoryLayoutMode={activePage === 'history' ? setHistoryLayoutMode : undefined}
               grouped={false}
-            />
+            />}
 
             {/* Item 3: Theme Toggle Button */}
             <button
@@ -3933,6 +3954,7 @@ const App: React.FC = () => {
                       // Merge zpět live účty, ať je BacktestSessionsManager nesmaže.
                       onUpdate={(next) => setAccounts([...accounts.filter(a => !isBacktestAccount(a)), ...next])}
                       onDelete={handleDeleteAccount}
+                      onOpenRun={setActiveBacktestRun}
                     />
                   )}
 
@@ -3998,6 +4020,9 @@ const App: React.FC = () => {
                       onNetworkNotificationsChange={(prefs) => { setNetworkNotifications(prefs); markPreferencesDirty(); }}
                       onSpectatingChange={setIsNetworkSpectating}
                     />
+                  )}
+                  {activePage === 'live' && (
+                    <LiveDesk theme={theme} />
                   )}
 
                   {activePage === 'settings' && (

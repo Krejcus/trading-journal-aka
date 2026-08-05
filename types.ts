@@ -200,6 +200,7 @@ export interface TradeFilters {
 export interface Trade {
   id: number | string;
   accountId: string;
+  backtestRunId?: string;
   instrument?: string;
   signal: string;
   pnl: number;

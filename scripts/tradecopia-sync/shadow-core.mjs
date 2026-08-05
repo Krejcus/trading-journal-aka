@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
 
+export const ENTITY_CONNECTION_COLUMNS = Object.freeze([
+  'id', 'name', 'status', 'organization', 'type', 'platform_id',
+  'is_connected', 'disconnected_at', 'disconnect_reason', 'updated_at',
+]);
+
 export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -16,6 +21,11 @@ export function normalizeIso(value) {
   if (value == null || value === '') return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function sqlSelectProjection(columns) {
+  if (!Array.isArray(columns) || columns.length === 0) throw new Error('SELECT projekce nesmí být prázdná');
+  return columns.map(column => `"${String(column).replaceAll('"', '""')}"`).join(', ');
 }
 
 export function sourceKey(row, keyColumns) {
