@@ -38,3 +38,44 @@ Při požadavku typu „vrať vše na backup“ se nejdříve musí potvrdit př
 7. Ověřit localhost a načíst obnovený `extension/dist` v prohlížeči.
 
 Tento dokument je provozní poznámka. Nemění runtime aplikace ani extensionu.
+
+## Migrační bod pro nový Mac — 6. 8. 2026
+
+Před smazáním původního Macu byl vytvořen nový lokální migrační bod z větve
+`codex/tradecopia-shadow-sync` na commitu
+`f060676bd4c8d819e56e9f5e583d08f3a5984936`.
+
+Migrační soubory jsou v adresáři:
+
+```text
+/Users/filipkrejca/Documents/AlphaTrade-migration-2026-08-06
+```
+
+Obsah:
+
+- `alphatrade-all-refs-2026-08-06.bundle` — kompletní Git historie a lokální větve.
+- `alphatrade-source-and-extension-2026-08-06.tar.gz` — aktuální zdrojový strom bez secrets, závislostí a build cache.
+- `alphabridge-dist-2026-08-06.tar.gz` — ověřený sestavený `extension/dist`.
+- `PRIVATE-local-config-2026-08-06.tar.gz` — `.env.local`, `.env.vercel.txt`, `.mcp.json` a lokální Codex konfigurace.
+- `PRIVATE-codex-continuity-2026-08-06.tar.gz` — lokální Codex tasky, paměti, skills, pravidla a stav aplikace bez `auth.json` a browser cookies.
+
+Soukromé archivy mají oprávnění pouze pro vlastníka. Přenášejí se přímo mezi
+Macy (například AirDrop nebo šifrovaný disk), nikdy přes GitHub ani nešifrované
+sdílené úložiště. Přihlašovací údaje a browser relace se na novém Macu obnoví
+novým přihlášením.
+
+Kontrolní součty všech migračních souborů jsou uložené vedle archivů v
+`SHA256SUMS.txt`.
+
+Před smazáním starého Macu musí na novém projít:
+
+1. Ověření uvedených SHA-256 a `git bundle verify`.
+2. Obnova/klon repozitáře a checkout commitu `f060676`.
+3. Bezpečné obnovení lokální konfigurace bez commitu secrets.
+4. `npm ci`, TypeScript, testy a produkční build hlavní aplikace.
+5. `npm ci` a build v `extension/`, následně načtení `extension/dist` v Chrome.
+6. Přihlášení do Codexu, GitHubu, Supabase, Vercelu, TradingView a TradeCopie.
+7. Ověření localhostu, MCP AlphaTrade, živého sběru dat a funkce AlphaBridge.
+
+Při vytvoření tohoto bodu prošlo 54 testovacích souborů / 319 testů, TypeScript,
+produkční build aplikace a produkční build AlphaBridge.
