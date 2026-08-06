@@ -33,6 +33,7 @@ import {
   type LiveOrder,
   type LiveSnapshot,
 } from '../services/tradecopiaLiveService';
+import LiveCopyTradeOverview from './LiveCopyTradeOverview';
 
 type LiveTab = 'overview' | 'accounts' | 'orders' | 'events';
 
@@ -137,14 +138,29 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
   const accountNamesJson = JSON.stringify(snapshot?.accounts.map(account => [account.id, account.name]) ?? []);
   const overviewReady = snapshot != null;
 
+  const refreshOrders = useCallback(async (quiet = false) => {
+    if (!overviewReady) return;
+    if (!quiet) setSecondaryLoading(true);
+    try {
+      const accountNames = new Map<number, string>(JSON.parse(accountNamesJson) as Array<[number, string]>);
+      const next = await loadTradecopiaLiveOrders(accountNames);
+      setOrders(next);
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Příkazy se nepodařilo načíst.');
+    } finally {
+      if (!quiet) setSecondaryLoading(false);
+    }
+  }, [accountNamesJson, overviewReady]);
+
   useEffect(() => {
-    if (!overviewReady || (tab !== 'orders' && tab !== 'events')) return;
+    if (!overviewReady || (tab !== 'overview' && tab !== 'orders' && tab !== 'events')) return;
     let active = true;
     const accountNames = new Map<number, string>(JSON.parse(accountNamesJson) as Array<[number, string]>);
     const load = async (quiet = false) => {
       if (!quiet) setSecondaryLoading(true);
       try {
-        if (tab === 'orders') {
+        if (tab === 'overview' || tab === 'orders') {
           const next = await loadTradecopiaLiveOrders(accountNames);
           if (active) setOrders(next);
         } else {
@@ -158,7 +174,7 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
       }
     };
     void load();
-    const interval = window.setInterval(() => void load(true), tab === 'orders' ? 5_000 : 10_000);
+    const interval = window.setInterval(() => void load(true), tab === 'overview' || tab === 'orders' ? 5_000 : 10_000);
     return () => {
       active = false;
       window.clearInterval(interval);
@@ -182,22 +198,22 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
 
   return (
     <div className="max-w-[1500px] mx-auto space-y-5 animate-in fade-in duration-300">
-      <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden shadow-sm">
+      <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
         <div className="p-5 lg:p-6 flex flex-col xl:flex-row xl:items-center gap-4 justify-between">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center shrink-0">
+            <div className="w-12 h-12 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center shrink-0">
               <RadioTower size={23} />
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-xl font-black text-[var(--text-primary)]">LIVE CONTROL</h2>
-                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-[0.18em] bg-slate-500/10 text-[var(--text-secondary)]">Pouze čtení</span>
+                <span className="px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-[0.18em] bg-indigo-500/10 text-indigo-500">OAuth ready</span>
               </div>
-              <p className="text-sm text-[var(--text-secondary)] mt-1">Reálný stav účtů, kopírky a příkazů ze zdroje TradeCopia.</p>
+              <p className="text-sm text-[var(--text-secondary)] mt-1">Živý přehled účtů a kompletní ovládání připravené pro naše OAuth API.</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <div className="px-4 py-2.5 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-page)] flex items-center gap-2">
+            <div className="px-4 py-2.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${status.dot} ${dataAge <= 90 ? 'animate-pulse' : ''}`} />
               <div>
                 <div className={`text-[10px] font-black tracking-[0.16em] ${status.text}`}>{status.label}</div>
@@ -209,7 +225,7 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
               onClick={() => void handleManualRefresh()}
               disabled={manualRefreshState === 'loading'}
               aria-label={manualRefreshState === 'loading' ? 'Obnovuji LIVE data' : manualRefreshState === 'done' ? 'LIVE data obnovena' : 'Obnovit LIVE data'}
-              className={`w-11 h-11 rounded-2xl border bg-[var(--bg-page)] transition-all flex items-center justify-center disabled:cursor-wait ${manualRefreshState === 'done' ? 'border-emerald-500/35 text-emerald-500 bg-emerald-500/10' : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-blue-500 hover:border-blue-500/30'}`}
+              className={`w-11 h-11 rounded-md border bg-[var(--bg-page)] transition-all flex items-center justify-center disabled:cursor-wait ${manualRefreshState === 'done' ? 'border-emerald-500/35 text-emerald-500 bg-emerald-500/10' : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-blue-500 hover:border-blue-500/30'}`}
               title={manualRefreshState === 'loading' ? 'Obnovuji…' : manualRefreshState === 'done' ? 'Obnoveno' : 'Obnovit LIVE data'}
             >
               {manualRefreshState === 'done' ? <CheckCircle2 size={19} /> : <RefreshCw size={18} className={manualRefreshState === 'loading' ? 'animate-spin text-blue-500' : ''} />}
@@ -221,7 +237,7 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
             {tabs.map(item => {
               const Icon = item.icon;
               return (
-                <button key={item.id} onClick={() => setTab(item.id)} className={`px-4 py-2.5 rounded-xl flex items-center gap-2 text-xs font-black uppercase tracking-wider transition-all ${tab === item.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-page)]'}`}>
+                <button key={item.id} onClick={() => setTab(item.id)} className={`px-4 py-2.5 rounded-md flex items-center gap-2 text-xs font-black uppercase tracking-wider transition-all ${tab === item.id ? 'bg-blue-600 text-white shadow-sm' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-page)]'}`}>
                   <Icon size={15} />{item.label}
                 </button>
               );
@@ -231,7 +247,7 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
       </section>
 
       {error && (
-        <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 flex items-center gap-3 text-rose-500">
+        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 p-4 flex items-center gap-3 text-rose-500">
           <AlertTriangle size={18} className="shrink-0" />
           <span className="text-sm font-semibold flex-1">{error}</span>
           <button onClick={() => void loadOverview()} className="text-xs font-black uppercase">Zkusit znovu</button>
@@ -239,7 +255,7 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
       )}
 
       {tab === 'overview' && snapshot && (
-        <Overview snapshot={snapshot} onAccount={setSelectedAccount} />
+        <LiveCopyTradeOverview snapshot={snapshot} orders={orders} onRefreshOrders={refreshOrders} onAccount={setSelectedAccount} />
       )}
 
       {tab === 'accounts' && snapshot && (
@@ -268,7 +284,7 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
 };
 
 const MetricCard = ({ label, value, sub, icon: Icon, valueClass = 'text-[var(--text-primary)]' }: { label: string; value: string; sub: string; icon: React.ElementType; valueClass?: string }) => (
-  <div className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 min-h-[142px] flex flex-col justify-between shadow-sm">
+  <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 min-h-[142px] flex flex-col justify-between">
     <div className="flex justify-between items-start gap-3">
       <span className="text-[10px] font-black uppercase tracking-[0.16em] text-[var(--text-secondary)]">{label}</span>
       <span className="w-9 h-9 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center"><Icon size={17} /></span>
@@ -277,99 +293,10 @@ const MetricCard = ({ label, value, sub, icon: Icon, valueClass = 'text-[var(--t
   </div>
 );
 
-const Overview = ({ snapshot, onAccount }: { snapshot: LiveSnapshot; onAccount: (account: LiveAccount) => void }) => (
-  <div className="space-y-5">
-    <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 lg:p-6 shadow-sm">
-      <div className="flex items-center justify-between gap-4 mb-4">
-        <div>
-          <h3 className="font-black text-[var(--text-primary)]">PŘIPOJENÍ PROP FIREM</h3>
-          <p className="text-xs text-[var(--text-secondary)] mt-1">Jeden stav za firmu — účty uvnitř se neopakují</p>
-        </div>
-        <Building2 className="text-blue-500" size={21} />
-      </div>
-      {snapshot.connections.length === 0 ? (
-        <Empty text="Stav připojení zatím nebyl načten." />
-      ) : (
-        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {snapshot.connections.map(connection => (
-            <div key={connection.id} className={`rounded-2xl border p-4 ${connection.connected ? 'border-emerald-500/20 bg-emerald-500/[0.045]' : 'border-rose-500/25 bg-rose-500/[0.055]'}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-black text-sm text-[var(--text-primary)]">{connection.firm}</div>
-                  <div className="text-[10px] text-[var(--text-secondary)] mt-1">{connection.accountCount} {connection.accountCount === 1 ? 'účet' : connection.accountCount >= 2 && connection.accountCount <= 4 ? 'účty' : 'účtů'}</div>
-                </div>
-                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase ${connection.connected ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                  {connection.connected ? <Link2 size={12} /> : <Unplug size={12} />}
-                  {connection.connected ? 'Připojeno' : 'Odpojeno'}
-                </span>
-              </div>
-              {!connection.connected && (
-                <div className="mt-3 text-[10px] leading-relaxed text-rose-500/90">
-                  Data těchto účtů mohou být zastaralá.
-                  {connection.disconnectedAt && <span className="block text-[var(--text-secondary)] mt-0.5">Od {dateTime.format(new Date(connection.disconnectedAt))}{connection.disconnectReason ? ` · ${connection.disconnectReason}` : ''}</span>}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-
-    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 lg:gap-4">
-      <MetricCard label="Celková equity" value={money.format(snapshot.totalEquity)} sub={`Balance ${money.format(snapshot.totalBalance)}`} icon={CircleDollarSign} />
-      <MetricCard label="Realizované P&L" value={signedMoney(snapshot.totalRealizedPnl)} sub="Součet načtených účtů" icon={Activity} valueClass={pnlColor(snapshot.totalRealizedPnl)} />
-      <MetricCard label="Live P&L" value={signedMoney(snapshot.totalUnrealizedPnl)} sub="Otevřené pozice" icon={snapshot.totalUnrealizedPnl >= 0 ? ArrowUpRight : ArrowDownRight} valueClass={pnlColor(snapshot.totalUnrealizedPnl)} />
-      <MetricCard label="Nejmenší rezerva" value={snapshot.worstCushion == null ? '—' : money.format(snapshot.worstCushion)} sub="K EOD trailing drawdownu" icon={ShieldAlert} valueClass={snapshot.worstCushion != null && snapshot.worstCushion <= 500 ? 'text-rose-500' : 'text-[var(--text-primary)]'} />
-    </div>
-
-    <div className="grid xl:grid-cols-[1.45fr_1fr] gap-5">
-      <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 lg:p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-5"><div><h3 className="font-black text-[var(--text-primary)]">KOPÍRKA</h3><p className="text-xs text-[var(--text-secondary)] mt-1">Shoda leadera a follower účtů podle pozic</p></div><CopyCheck className="text-blue-500" size={21} /></div>
-        <div className="space-y-3">
-          {snapshot.groups.length === 0 && <Empty text="Žádná skupina nebyla načtena." />}
-          {snapshot.groups.map(group => (
-            <div key={group.id} className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div><div className="font-black text-[var(--text-primary)]">{group.name}</div><div className="text-xs text-[var(--text-secondary)] mt-0.5">Leader: {group.leaderName}</div></div>
-                <span className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase ${group.warningCount === 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{group.syncedCount}/{group.followers.length} v synchronizaci</span>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {group.followers.map(follower => (
-                  <span key={follower.accountId} title={follower.mismatches.join('\n')} className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border ${follower.synced ? 'border-emerald-500/20 text-emerald-500 bg-emerald-500/5' : 'border-rose-500/20 text-rose-500 bg-rose-500/5'}`}>{follower.accountName} · {follower.scale}×</span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 lg:p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-5"><div><h3 className="font-black text-[var(--text-primary)]">UPOZORNĚNÍ</h3><p className="text-xs text-[var(--text-secondary)] mt-1">Jen skutečné odchylky a rizika</p></div><AlertTriangle className={snapshot.alerts.length ? 'text-amber-500' : 'text-emerald-500'} size={21} /></div>
-        <div className="space-y-2 max-h-[310px] overflow-y-auto custom-scrollbar">
-          {snapshot.alerts.length === 0 && <div className="rounded-2xl bg-emerald-500/8 border border-emerald-500/15 p-4 flex gap-3"><CheckCircle2 className="text-emerald-500 shrink-0" size={19} /><div><div className="text-sm font-black text-[var(--text-primary)]">Bez odchylek</div><div className="text-xs text-[var(--text-secondary)] mt-1">Načtené pozice a rizika vypadají v pořádku.</div></div></div>}
-          {snapshot.alerts.map((alert, index) => (
-            <button key={`${alert.title}-${index}`} onClick={() => { const account = snapshot.accounts.find(item => item.id === alert.accountId); if (account) onAccount(account); }} className="w-full text-left rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3.5 hover:border-amber-500/30 transition-colors">
-              <div className={`text-xs font-black ${alert.level === 'danger' ? 'text-rose-500' : alert.level === 'warning' ? 'text-amber-500' : 'text-blue-500'}`}>{alert.title}</div>
-              <div className="text-xs text-[var(--text-secondary)] mt-1">{alert.detail}</div>
-            </button>
-          ))}
-        </div>
-      </section>
-    </div>
-
-    <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 lg:p-6 shadow-sm">
-      <div className="flex items-center justify-between mb-4"><div><h3 className="font-black text-[var(--text-primary)]">RYCHLÝ STAV ÚČTŮ</h3><p className="text-xs text-[var(--text-secondary)] mt-1">Kliknutím otevřeš kompletní detail</p></div><WalletCards className="text-blue-500" size={21} /></div>
-      <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
-        {snapshot.accounts.map(account => <AccountMini key={account.id} account={account} onClick={() => onAccount(account)} />)}
-      </div>
-    </section>
-  </div>
-);
-
 const AccountMini = ({ account, onClick }: { account: LiveAccount; onClick: () => void }) => {
   const open = account.positions.filter(position => position.netPosition !== 0);
   return (
-    <button onClick={onClick} className="text-left rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4 hover:border-blue-500/35 hover:-translate-y-0.5 transition-all group">
+    <button onClick={onClick} className="text-left rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4 hover:border-blue-500/35 hover:bg-blue-500/[0.025] transition-colors group">
       <div className="flex justify-between gap-3"><div className="min-w-0"><div className="font-black text-sm text-[var(--text-primary)] truncate">{account.name}</div><div className="text-[10px] uppercase tracking-wider text-[var(--text-secondary)] mt-1">{account.firm}{account.phase ? ` · ${account.phase}` : ''}</div><div className={`text-[10px] font-bold mt-1.5 truncate ${account.mappedAccountName ? 'text-blue-500' : 'text-amber-500'}`}>{account.mappedAccountName ? `AlphaTrade → ${account.mappedAccountName}` : account.mappingStatus === 'ignored' ? 'V AlphaTrade ignorováno' : 'Nepřiřazeno k AlphaTrade'}</div></div><ChevronRight size={17} className="text-[var(--text-secondary)] group-hover:text-blue-500" /></div>
       <div className="mt-4 flex items-end justify-between gap-3"><div><div className="text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Equity</div><div className="font-black tabular-nums text-[var(--text-primary)]">{money.format(account.equity)}</div></div><div className="text-right"><div className="text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Pozice</div><div className={`text-xs font-black ${open.length ? 'text-blue-500' : 'text-[var(--text-secondary)]'}`}>{open.length ? open.map(position => `${position.netPosition > 0 ? '+' : ''}${position.netPosition} ${position.symbol}`).join(', ') : 'FLAT'}</div></div></div>
     </button>
@@ -377,7 +304,7 @@ const AccountMini = ({ account, onClick }: { account: LiveAccount; onClick: () =
 };
 
 const Accounts = ({ accounts, onAccount }: { accounts: LiveAccount[]; onAccount: (account: LiveAccount) => void }) => (
-  <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden shadow-sm">
+  <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
     <div className="p-5 lg:p-6 border-b border-[var(--border-subtle)]"><h3 className="font-black text-[var(--text-primary)]">ÚČTY ({accounts.length})</h3><p className="text-xs text-[var(--text-secondary)] mt-1">Balance, živá equity, pozice a dostupná rezerva k EOD drawdownu</p></div>
     <div className="hidden lg:grid grid-cols-[1.5fr_.8fr_.8fr_.75fr_.75fr_24px] gap-4 px-6 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-[var(--text-secondary)]"><span>Účet</span><span>Balance / equity</span><span>Realizované</span><span>Live P&L</span><span>Rezerva</span><span /></div>
     <div className="divide-y divide-[var(--border-subtle)]">
@@ -406,19 +333,19 @@ const Orders = ({ accounts, orders, loading }: { accounts: LiveAccount[]; orders
         <MetricCard label="Pracující příkazy" value={String(orders.filter(order => order.working).length)} sub="Limit, stop a další aktivní" icon={Activity} />
         <MetricCard label="Načtené příkazy" value={String(orders.length)} sub="Posledních 300 záznamů" icon={Database} />
       </div>
-      <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 lg:p-6 shadow-sm">
+      <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 lg:p-6">
         <div className="flex items-center justify-between mb-4"><div><h3 className="font-black text-[var(--text-primary)]">OTEVŘENÉ POZICE</h3><p className="text-xs text-[var(--text-secondary)] mt-1">Aktuální net pozice a živé P&L</p></div></div>
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
           {openPositions.length === 0 && <Empty text="Všechny účty jsou aktuálně flat." />}
           {openPositions.map(({ account, position }) => (
-            <div key={`${account.id}-${position.symbol}`} className="rounded-2xl border border-blue-500/20 bg-blue-500/[0.045] p-4">
+            <div key={`${account.id}-${position.symbol}`} className="rounded-md border border-blue-500/20 bg-blue-500/[0.045] p-4">
               <div className="flex items-start justify-between gap-3"><div><div className="font-black text-[var(--text-primary)]">{position.symbol}</div><div className="text-xs text-[var(--text-secondary)] mt-1">{account.name}</div></div><span className={`px-2 py-1 rounded-lg text-[10px] font-black ${position.netPosition > 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{position.netPosition > 0 ? 'LONG' : 'SHORT'} {Math.abs(position.netPosition)}</span></div>
               <div className="grid grid-cols-2 gap-3 mt-4"><div><div className="text-[9px] uppercase font-black text-[var(--text-secondary)]">Průměrná cena</div><div className="font-bold text-sm text-[var(--text-primary)] mt-1">{position.netPrice == null ? '—' : number.format(position.netPrice)}</div></div><div><div className="text-[9px] uppercase font-black text-[var(--text-secondary)]">Live P&L</div><div className={`font-black text-sm mt-1 ${pnlColor(position.unrealizedPnl)}`}>{signedMoney(position.unrealizedPnl)}</div></div></div>
             </div>
           ))}
         </div>
       </section>
-      <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden shadow-sm">
+      <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
         <div className="p-5 lg:p-6 border-b border-[var(--border-subtle)] flex items-center justify-between"><div><h3 className="font-black text-[var(--text-primary)]">PŘÍKAZY</h3><p className="text-xs text-[var(--text-secondary)] mt-1">Pracující příkazy jsou vždy nahoře</p></div>{loading && <Loader2 size={18} className="animate-spin text-blue-500" />}</div>
         <div className="divide-y divide-[var(--border-subtle)]">
           {[...orders].sort((a, b) => Number(b.working) - Number(a.working)).map(order => (
@@ -438,11 +365,11 @@ const Orders = ({ accounts, orders, loading }: { accounts: LiveAccount[]; orders
 };
 
 const Events = ({ events, loading }: { events: LiveEvent[]; loading: boolean }) => (
-  <section className="rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 lg:p-6 shadow-sm">
+  <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 lg:p-6">
     <div className="flex items-center justify-between mb-5"><div><h3 className="font-black text-[var(--text-primary)]">UDÁLOSTI</h3><p className="text-xs text-[var(--text-secondary)] mt-1">Změny po prvním výchozím načtení databáze</p></div>{loading && <Loader2 size={18} className="animate-spin text-blue-500" />}</div>
     <div className="relative pl-7 space-y-3 before:absolute before:left-[9px] before:top-2 before:bottom-2 before:w-px before:bg-[var(--border-subtle)]">
       {events.map(event => (
-        <div key={event.id} className="relative rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4">
+        <div key={event.id} className="relative rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4">
           <span className={`absolute -left-[25px] top-5 w-3 h-3 rounded-full ring-4 ring-[var(--bg-card)] ${event.changeType === 'deleted' ? 'bg-rose-500' : event.changeType === 'inserted' ? 'bg-emerald-500' : 'bg-blue-500'}`} />
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2"><div><div className="text-sm font-black text-[var(--text-primary)]">{event.title}</div><div className="text-xs text-[var(--text-secondary)] mt-1">{event.accountName} · {event.detail}</div></div><div className="text-[10px] font-bold text-[var(--text-secondary)] whitespace-nowrap">{dateTime.format(new Date(event.observedAt))}</div></div>
         </div>
@@ -466,10 +393,10 @@ const AccountDetail = ({
   onClose: () => void;
 }) => (
   <div className="fixed inset-0 z-[100] bg-black/65 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="w-full sm:max-w-3xl max-h-[92vh] overflow-y-auto custom-scrollbar rounded-t-3xl sm:rounded-3xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
+    <div className="w-full sm:max-w-3xl max-h-[92vh] overflow-y-auto custom-scrollbar rounded-t-xl sm:rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
       <div className="sticky top-0 z-10 p-5 lg:p-6 border-b border-[var(--border-subtle)] bg-[var(--bg-card)] flex items-center justify-between gap-4"><div><div className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-500">Live detail účtu</div><h3 className="text-xl font-black text-[var(--text-primary)] mt-1">{account.name}</h3><div className="text-xs text-[var(--text-secondary)] mt-1">{account.firm}{account.phase ? ` · ${account.phase}` : ''}</div></div><button onClick={onClose} className="w-10 h-10 rounded-xl bg-[var(--bg-page)] text-[var(--text-secondary)] hover:text-rose-500 flex items-center justify-center"><X size={19} /></button></div>
       <div className="p-5 lg:p-6 space-y-5">
-        <div className="rounded-2xl border border-blue-500/20 bg-blue-500/[0.045] p-4">
+        <div className="rounded-md border border-blue-500/20 bg-blue-500/[0.045] p-4">
           <div className="flex items-start gap-3">
             <span className="w-9 h-9 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0"><Link2 size={17} /></span>
             <div className="min-w-0 flex-1">
@@ -498,11 +425,11 @@ const AccountDetail = ({
           <DetailMetric label="Realizované P&L" value={signedMoney(account.realizedPnl)} color={pnlColor(account.realizedPnl)} />
           <DetailMetric label="Live P&L" value={signedMoney(account.unrealizedPnl)} color={pnlColor(account.unrealizedPnl)} />
         </div>
-        <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4">
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4">
           <div className="flex items-center justify-between mb-4"><div><div className="text-xs font-black text-[var(--text-primary)]">EOD TRAILING DRAWDOWN</div><div className="text-[10px] text-[var(--text-secondary)] mt-1">Jen z ověřených prop-firm parametrů a peak equity</div></div><ShieldAlert size={19} className={account.cushion != null && account.cushion <= 500 ? 'text-rose-500' : 'text-blue-500'} /></div>
           <div className="grid grid-cols-3 gap-3"><DetailMetric label="Peak equity" value={account.peakEquity == null ? '—' : money.format(account.peakEquity)} /><DetailMetric label="Floor" value={account.drawdownFloor == null ? '—' : money.format(account.drawdownFloor)} /><DetailMetric label="Rezerva" value={account.cushion == null ? '—' : money.format(account.cushion)} color={account.cushion != null && account.cushion <= 500 ? 'text-rose-500' : undefined} /></div>
         </div>
-        <div><div className="text-xs font-black uppercase tracking-wider text-[var(--text-secondary)] mb-3">Pozice</div><div className="space-y-2">{account.positions.map(position => <div key={position.symbol} className="rounded-2xl border border-[var(--border-subtle)] p-4 grid grid-cols-2 sm:grid-cols-4 gap-3"><DetailMetric label="Symbol" value={position.symbol} /><DetailMetric label="Net pozice" value={String(position.netPosition)} /><DetailMetric label="Průměr" value={position.netPrice == null ? '—' : number.format(position.netPrice)} /><DetailMetric label="Live P&L" value={signedMoney(position.unrealizedPnl)} color={pnlColor(position.unrealizedPnl)} /></div>)}{account.positions.length === 0 && <Empty text="Účet nemá načtenou pozici." />}</div></div>
+        <div><div className="text-xs font-black uppercase tracking-wider text-[var(--text-secondary)] mb-3">Pozice</div><div className="space-y-2">{account.positions.map(position => <div key={position.symbol} className="rounded-md border border-[var(--border-subtle)] p-4 grid grid-cols-2 sm:grid-cols-4 gap-3"><DetailMetric label="Symbol" value={position.symbol} /><DetailMetric label="Net pozice" value={String(position.netPosition)} /><DetailMetric label="Průměr" value={position.netPrice == null ? '—' : number.format(position.netPrice)} /><DetailMetric label="Live P&L" value={signedMoney(position.unrealizedPnl)} color={pnlColor(position.unrealizedPnl)} /></div>)}{account.positions.length === 0 && <Empty text="Účet nemá načtenou pozici." />}</div></div>
         <div className="text-[10px] text-[var(--text-secondary)]">Poslední změna zdroje: {account.updatedAt ? time.format(new Date(account.updatedAt)) : 'neznámá'}</div>
       </div>
     </div>
