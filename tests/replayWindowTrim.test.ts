@@ -23,22 +23,28 @@ describe('replayTrimStartIndex', () => {
     expect(start).toBeLessThan(7_500);
   });
 
-  // Pohled v novější polovině okna: ořez proběhne, ale musí obsáhnout pohled
-  // i rezervu na další scroll.
-  it('při pohledu v novější části okna ořízne a pohled zachová', () => {
-    const windowStart = 1_000;
+  // Ořez proběhne jen tehdy, když pohled sedí na konci okna — tedy když
+  // uživatel sleduje aktuální dění a odsunutí historie mu nevadí.
+  it('při sledování posledních svíček ořízne od konce', () => {
     const windowEnd = 12_000;
-    const viewEndIndex = 11_000;
-    const start = replayTrimStartIndex({ windowStart, windowEnd, viewEndIndex, maxBars, chunk });
-    expect(start).toBeLessThanOrEqual(viewEndIndex);
-    expect(start + maxBars).toBeGreaterThanOrEqual(viewEndIndex + chunk);
+    const start = replayTrimStartIndex({
+      windowStart: 1_000, windowEnd, viewEndIndex: 11_800, maxBars, chunk,
+    });
+    expect(start).toBe(windowEnd - maxBars);
+    expect(start).toBeLessThanOrEqual(11_800);
   });
 
   // Ořez je jen ochrana paměti. Uživatele, který si prohlíží historii, nesmí
-  // odsunout — tudy vedly oba pozorované skoky (na 6. 7. a hned pak na 3. 7.).
-  it('pohled ve starší polovině okna se neořezává vůbec', () => {
+  // odsunout — tudy vedly všechny pozorované skoky (6. 7., 3. 7. i 1. 7.).
+  // Poloviční hranice nestačila: s delší historií je uživatel u hranice dat
+  // a přitom pořád v novější polovině okna.
+  it('pohled mimo konec okna se neořezává vůbec', () => {
     expect(replayTrimStartIndex({
       windowStart: 1_000, windowEnd: 20_000, viewEndIndex: 5_800, maxBars, chunk,
+    })).toBe(1_000);
+    // I daleko v novější polovině, ale ne na konci — případ z 1. 7.
+    expect(replayTrimStartIndex({
+      windowStart: 1_000, windowEnd: 20_000, viewEndIndex: 15_000, maxBars, chunk,
     })).toBe(1_000);
   });
 
