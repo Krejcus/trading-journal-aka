@@ -12,23 +12,26 @@
  * Vrací index, na kterém má okno začínat.
  */
 export const replayTrimStartIndex = (params: {
-  /** Hranice aktuálního okna v poli svíček. */
+  /** Hranice aktuálního okna v poli svíček (po případném prependu). */
   windowStart: number;
   windowEnd: number;
-  /** Nejvyšší viditelný logický index (vůči začátku okna), pokud je znám. */
-  visibleTo: number | null;
+  /**
+   * Index svíčky, na kterou sahá pravý okraj pohledu — dohledaný podle ČASU
+   * v aktuálním poli. Logický index z grafu se použít nedá: vztahuje se ke
+   * starým vykresleným barům, kdežto okno je už z nového pole. Míchání obou
+   * soustav posunulo kotvu o celý prepend a graf odskočil o dny.
+   */
+  viewEndIndex: number | null;
   /** Maximální počet vykreslovaných barů. */
   maxBars: number;
   /** Rezerva, o kterou se okno posouvá při scrollu. */
   chunk: number;
 }): number => {
-  const { windowStart, windowEnd, visibleTo, maxBars, chunk } = params;
-  if (visibleTo === null || !Number.isFinite(visibleTo)) {
+  const { windowStart, windowEnd, viewEndIndex, maxBars, chunk } = params;
+  if (viewEndIndex === null || !Number.isFinite(viewEndIndex)) {
     return Math.max(0, windowEnd - maxBars);
   }
-  // Index v poli svíček, kam sahá pravý okraj pohledu.
-  const viewEnd = windowStart + Math.ceil(visibleTo);
   // Okno musí obsáhnout pohled i rezervu, ale nikdy nesmí přerůst konec dat.
-  const anchorEnd = Math.min(windowEnd, Math.max(viewEnd + chunk, windowStart + maxBars));
+  const anchorEnd = Math.min(windowEnd, Math.max(viewEndIndex + chunk, windowStart + maxBars));
   return Math.max(0, anchorEnd - maxBars);
 };

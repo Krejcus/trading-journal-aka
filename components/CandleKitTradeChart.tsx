@@ -2099,17 +2099,24 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     // Ořez kotvíme kolem aktuálního pohledu, ne na konec dat. Historie se
     // dotahuje právě když je uživatel scrollem v minulosti; kotva na konci mu
     // okno pod rukama přesunula dopředu a graf odskočil.
-    let visibleTo: number | null = null;
+    // Kotvíme přes ČAS pravého okraje pohledu, ne přes logický index. Logický
+    // index se vztahuje ke starým vykresleným barům, kdežto `current` je už
+    // z nového pole po prependu — smíchání obou soustav posunulo kotvu o celý
+    // prepend a graf odskočil o dny dopředu.
+    let viewEndIndex: number | null = null;
     try {
-      visibleTo = apiRef.current?.controller.getChart().timeScale()
-        .getVisibleLogicalRange()?.to ?? null;
+      const visibleRange = apiRef.current?.controller.getChart().timeScale().getVisibleRange();
+      const viewEndTime = visibleRange ? Number(visibleRange.to) : null;
+      if (viewEndTime !== null && Number.isFinite(viewEndTime)) {
+        viewEndIndex = candleIndexAtOrAfter(candles, viewEndTime);
+      }
     } catch {
       // Rozebraný ChartView — použije se původní chování (ořez od konce).
     }
     replayWindow.startTime = candles[replayTrimStartIndex({
       windowStart: current.start,
       windowEnd: current.end,
-      visibleTo,
+      viewEndIndex,
       maxBars,
       chunk: sizing.chunk,
     })]?.time ?? replayWindow.startTime;
