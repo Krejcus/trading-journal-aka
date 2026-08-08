@@ -114,6 +114,7 @@ import {
 } from '../services/chartPositionDrawing';
 import { calculatePositionProgress } from '../services/chartPositionProgress';
 import { replayBarShift } from '../services/replayViewportShift';
+import { replayTrimStartIndex } from '../services/replayWindowTrim';
 import { managedPositionDrawing, type BacktestManagedPositionBox } from '../services/backtestManagedPosition';
 import {
   countChartIndicators,
@@ -2095,8 +2096,23 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const maxBars = REPLAY_MAX_RENDER_BARS[timeframe][compactMode ? 'compact' : 'normal'];
     const current = replayRenderWindowIndexes(candles, replayWindow);
     if (current.end - current.start <= maxBars + sizing.chunk) return;
-    replayWindow.startTime = candles[Math.max(0, current.end - maxBars)]?.time
-      ?? replayWindow.startTime;
+    // Ořez kotvíme kolem aktuálního pohledu, ne na konec dat. Historie se
+    // dotahuje právě když je uživatel scrollem v minulosti; kotva na konci mu
+    // okno pod rukama přesunula dopředu a graf odskočil.
+    let visibleTo: number | null = null;
+    try {
+      visibleTo = apiRef.current?.controller.getChart().timeScale()
+        .getVisibleLogicalRange()?.to ?? null;
+    } catch {
+      // Rozebraný ChartView — použije se původní chování (ořez od konce).
+    }
+    replayWindow.startTime = candles[replayTrimStartIndex({
+      windowStart: current.start,
+      windowEnd: current.end,
+      visibleTo,
+      maxBars,
+      chunk: sizing.chunk,
+    })]?.time ?? replayWindow.startTime;
     setCandleWindow(value => ({ ...value }));
   }, [candles, compactMode, replayActive, timeframe]);
   const visibleCandles = useMemo(
