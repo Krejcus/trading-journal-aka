@@ -1,0 +1,2362 @@
+diff --git a/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs b/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
+index 773eea4..a9c080c 100644
+--- a/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
++++ b/node_modules/@getcandlekit/charts/dist/chunk-2K6NYX3W.cjs
+@@ -800,8 +800,11 @@ var TOOL_POINTS = {
+   Triangle: 3,
+   ParallelChannel: 3,
+   Arrow: 2,
++  Text: 1,
+   PriceRange: 2,
+   DateRange: 2,
++  LongPosition: 1,
++  ShortPosition: 1,
+   FibRetracement: 2,
+   FibExtension: 3
+ };
+@@ -813,6 +816,205 @@ var DEFAULT_STYLE = {
+ };
+ var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+ var FIB_EXT_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2, 2.618];
++var fibSettings = (style) => {
++  const fib = style.fib || {};
++  return {
++    levels: Array.isArray(fib.levels) && fib.levels.length ? fib.levels : FIB_LEVELS.map((value) => ({ value, visible: true, color: style.color, opacity: 100 })),
++    trendLineVisible: fib.trendLineVisible ?? false,
++    trendLineColor: fib.trendLineColor || style.color,
++    trendLineOpacity: fib.trendLineOpacity ?? 100,
++    trendLineWidth: fib.trendLineWidth ?? 1,
++    trendLineStyle: fib.trendLineStyle || "dashed",
++    levelLineWidth: fib.levelLineWidth ?? style.width ?? 1,
++    levelLineStyle: fib.levelLineStyle || (style.dashed ? "dashed" : "solid"),
++    extend: fib.extend || "right",
++    oneColor: fib.oneColor ?? false,
++    oneColorValue: fib.oneColorValue || style.color,
++    oneColorOpacity: fib.oneColorOpacity ?? 100,
++    backgroundVisible: fib.backgroundVisible ?? false,
++    backgroundOpacity: fib.backgroundOpacity ?? 8,
++    reverse: fib.reverse ?? false,
++    showPrices: fib.showPrices ?? false,
++    showLevels: fib.showLevels ?? true,
++    labelsPosition: fib.labelsPosition || "right",
++    labelsVertical: fib.labelsVertical || "top",
++    showText: fib.showText ?? false,
++    text: fib.text || "",
++    textPosition: fib.textPosition || "right",
++    textVertical: fib.textVertical || "top",
++    fontSize: fib.fontSize ?? 12,
++    logScale: fib.logScale ?? false,
++    locked: fib.locked ?? false,
++    hidden: fib.hidden ?? false,
++    visibility: fib.visibility,
++    runtimeTimeframeMinutes: fib.runtimeTimeframeMinutes
++  };
++};
++var fibAlpha = (color, opacity) => {
++  const alpha = Math.round(Math.max(0, Math.min(100, opacity)) / 100 * 255).toString(16).padStart(2, "0");
++  return /^#[0-9a-f]{6}$/i.test(color) ? `${color}${alpha}` : color;
++};
++var fibDash = (style, ratio) => style === "dotted" ? [2 * ratio, 3 * ratio] : style === "dashed" ? [6 * ratio, 4 * ratio] : [];
++var fibVisible = (fib) => {
++  const minutes = fib.runtimeTimeframeMinutes;
++  const visibility = fib.visibility;
++  if (!(minutes > 0) || !visibility) return true;
++  if (minutes < 1) {
++    const seconds = Math.max(1, Math.round(minutes * 60));
++    return visibility.seconds?.enabled !== false && seconds >= (visibility.seconds?.min ?? 1) && seconds <= (visibility.seconds?.max ?? 59);
++  }
++  if (minutes < 60) return visibility.minutes?.enabled !== false && minutes >= (visibility.minutes?.min ?? 1) && minutes <= (visibility.minutes?.max ?? 59);
++  if (minutes < 1440) {
++    const hours = minutes / 60;
++    return visibility.hours?.enabled !== false && hours >= (visibility.hours?.min ?? 1) && hours <= (visibility.hours?.max ?? 24);
++  }
++  if (minutes < 10080) {
++    const days = minutes / 1440;
++    return visibility.days?.enabled !== false && days >= (visibility.days?.min ?? 1) && days <= (visibility.days?.max ?? 366);
++  }
++  if (minutes < 43800) {
++    const weeks = minutes / 10080;
++    return visibility.weeks?.enabled !== false && weeks >= (visibility.weeks?.min ?? 1) && weeks <= (visibility.weeks?.max ?? 52);
++  }
++  const months = minutes / 43800;
++  return visibility.months?.enabled !== false && months >= (visibility.months?.min ?? 1) && months <= (visibility.months?.max ?? 12);
++};
++var positionSettings = (style) => {
++  const position = style.position || {};
++  return {
++    accountSize: Number.isFinite(Number(position.accountSize)) ? Math.max(0, Number(position.accountSize)) : 5e4,
++    lotSize: Number.isFinite(Number(position.lotSize)) ? Math.max(1e-6, Number(position.lotSize)) : 1,
++    risk: Number.isFinite(Number(position.risk)) ? Math.max(0, Number(position.risk)) : 100,
++    riskMode: position.riskMode === "percent" ? "percent" : "USD",
++    leverage: Number.isFinite(Number(position.leverage)) ? Math.max(1e-6, Number(position.leverage)) : 1e4,
++    tickSize: Number.isFinite(Number(position.tickSize)) ? Math.max(1e-6, Number(position.tickSize)) : 0.25,
++    pointValue: Number.isFinite(Number(position.pointValue)) ? Math.max(1e-6, Number(position.pointValue)) : 2,
++    intervalSeconds: Number.isFinite(Number(position.intervalSeconds)) ? Math.max(1, Number(position.intervalSeconds)) : 60,
++    initialBars: Number.isFinite(Number(position.initialBars)) ? Math.max(1, Math.round(Number(position.initialBars))) : 6,
++    initialTicks: Number.isFinite(Number(position.initialTicks)) ? Math.max(1, Math.round(Number(position.initialTicks))) : 200,
++    lineColor: position.lineColor || style.color || "#787b86",
++    stopColor: position.stopColor || "#ef535080",
++    targetColor: position.targetColor || "#26a69a80",
++    textColor: position.textColor || "#ffffff",
++    fontSize: Number.isFinite(Number(position.fontSize)) ? Math.max(8, Number(position.fontSize)) : 11,
++    priceLabels: position.priceLabels !== false,
++    stats: position.stats !== false,
++    compactStats: position.compactStats === true,
++    alwaysShowStats: position.alwaysShowStats === true,
++    showTargetPercent: position.showTargetPercent !== false,
++    showTargetTicks: position.showTargetTicks !== false,
++    showTargetAmount: position.showTargetAmount !== false,
++    showTargetPnl: position.showTargetPnl !== false,
++    showOpenPnl: position.showOpenPnl !== false,
++    showQuantity: position.showQuantity !== false,
++    showRiskReward: position.showRiskReward !== false,
++    showStopPercent: position.showStopPercent !== false,
++    showStopTicks: position.showStopTicks !== false,
++    showStopAmount: position.showStopAmount !== false,
++    showStopPnl: position.showStopPnl !== false,
++    qtyPrecision: position.qtyPrecision != null && Number.isFinite(Number(position.qtyPrecision)) ? Math.max(0, Math.min(8, Math.round(Number(position.qtyPrecision)))) : null
++  };
++};
++var normalizePositionDrawing = (drawing) => {
++  if (drawing.tool !== "LongPosition" && drawing.tool !== "ShortPosition") return drawing;
++  const tickSize = positionSettings(drawing.style).tickSize;
++  const config = positionSettings(drawing.style);
++  const snap = (price) => Math.round(price / tickSize) * tickSize;
++  if (drawing.points.length === 1) {
++    const entry = { ...drawing.points[0], price: snap(drawing.points[0].price) };
++    const distance = config.initialTicks * tickSize;
++    const endTime = entry.time + config.initialBars * config.intervalSeconds;
++    const targetPrice = drawing.tool === "LongPosition" ? entry.price + distance : entry.price - distance;
++    const stopPrice = drawing.tool === "LongPosition" ? entry.price - distance : entry.price + distance;
++    return { ...drawing, points: [entry, { time: endTime, price: targetPrice }, { time: endTime, price: stopPrice }] };
++  }
++  if (drawing.points.length >= 3) {
++    const entry = { ...drawing.points[0], price: snap(drawing.points[0].price) };
++    const rawTarget = snap(drawing.points[1].price);
++    const rawStop = snap(drawing.points[2].price);
++    const targetPrice = drawing.tool === "LongPosition" ? Math.max(entry.price + tickSize, rawTarget) : Math.min(entry.price - tickSize, rawTarget);
++    const stopPrice = drawing.tool === "LongPosition" ? Math.min(entry.price - tickSize, rawStop) : Math.max(entry.price + tickSize, rawStop);
++    return { ...drawing, points: [entry, { ...drawing.points[1], price: targetPrice }, { ...drawing.points[2], price: stopPrice }] };
++  }
++  if (drawing.points.length !== 2) return { ...drawing, points: drawing.points.map((point) => ({ ...point, price: snap(point.price) })) };
++  const entry = { ...drawing.points[0], price: snap(drawing.points[0].price) };
++  const second = { ...drawing.points[1], price: snap(drawing.points[1].price) };
++  const distance = Math.max(tickSize, Math.abs(second.price - entry.price));
++  const targetPrice = drawing.tool === "LongPosition" ? entry.price + distance : entry.price - distance;
++  const stopPrice = drawing.tool === "LongPosition" ? entry.price - distance : entry.price + distance;
++  return { ...drawing, points: [entry, { ...second, price: targetPrice }, { time: second.time, price: stopPrice }] };
++};
++var chartBarSpacing = (timeScale) => {
++  if (typeof timeScale.logicalToCoordinate === "function") {
++    const zero = timeScale.logicalToCoordinate(0);
++    const one = timeScale.logicalToCoordinate(1);
++    if (zero != null && one != null && Math.abs(one - zero) > 1e-6) return Math.abs(one - zero);
++  }
++  return 6;
++};
++var __alphatradeSeriesTimeCache = /* @__PURE__ */ new WeakMap();
++var latestSeriesTime = (series) => {
++  if (!series) return null;
++  // series.data() kopiruje CELY dataset (map pres vsechny svicky). Tahle
++  // funkce z nej pritom potrebuje jen posledni prvek a vola se pro kazdy bod
++  // kazde kresby pri kazdem prekresleni -- pri scrollu do historie to delalo
++  // stovky tisic pruchodu poli o tisicich svickach. Behem jednoho snimku se
++  // posledni cas serie nezmeni, takze staci cache na 16 ms.
++  const now = Date.now();
++  const cached = __alphatradeSeriesTimeCache.get(series);
++  if (cached && now - cached.at < 16) return cached.value;
++  const data = series?.data?.();
++  const time = Array.isArray(data) ? Number(data.at(-1)?.time) : NaN;
++  const value = Number.isFinite(time) ? time : null;
++  __alphatradeSeriesTimeCache.set(series, { at: now, value });
++  return value;
++};
++var __alphatradeSeriesIntervalCache = /* @__PURE__ */ new WeakMap();
++var seriesIntervalSeconds = (series, fallback = 60) => {
++  if (!series) return fallback;
++  // Stejny duvod jako u latestSeriesTime: series.data() kopiruje cely dataset.
++  // Rozestup svicek se behem snimku nemeni.
++  const now = Date.now();
++  const cached = __alphatradeSeriesIntervalCache.get(series);
++  if (cached && now - cached.at < 16) return cached.value;
++  const data = series?.data?.();
++  if (!Array.isArray(data) || data.length < 2) return fallback;
++  const last = Number(data.at(-1)?.time);
++  let value = fallback;
++  for (let index = data.length - 2; index >= 0; index -= 1) {
++    const previous = Number(data[index]?.time);
++    const interval = last - previous;
++    if (Number.isFinite(interval) && interval > 0) { value = interval; break; }
++  }
++  __alphatradeSeriesIntervalCache.set(series, { at: now, value });
++  return value;
++};
++var projectDrawingTime = (chart, time, referenceTime, intervalSeconds = 60, fallbackReferenceTime = null) => {
++  const timeScale = chart.timeScale();
++  const direct = timeScale.timeToCoordinate(time);
++  if (direct != null) return direct;
++  let anchorTime = referenceTime;
++  let referenceX = timeScale.timeToCoordinate(anchorTime);
++  if (referenceX == null && fallbackReferenceTime != null) {
++    anchorTime = fallbackReferenceTime;
++    referenceX = timeScale.timeToCoordinate(anchorTime);
++  }
++  if (referenceX == null) return null;
++  return referenceX + (time - anchorTime) / intervalSeconds * chartBarSpacing(timeScale);
++};
++var coordinateToDrawingTime = (chart, x, referenceTime, intervalSeconds = 60, fallbackReferenceTime = null) => {
++  const timeScale = chart.timeScale();
++  const direct = timeScale.coordinateToTime(x);
++  if (direct != null) return direct;
++  let anchorTime = referenceTime;
++  let referenceX = timeScale.timeToCoordinate(anchorTime);
++  if (referenceX == null && fallbackReferenceTime != null) {
++    anchorTime = fallbackReferenceTime;
++    referenceX = timeScale.timeToCoordinate(anchorTime);
++  }
++  if (referenceX == null) return null;
++  return anchorTime + Math.round((x - referenceX) / chartBarSpacing(timeScale)) * intervalSeconds;
++};
+ 
+ // src/drawing/geometry.ts
+ function distToSegment(p, a, b) {
+@@ -933,6 +1135,7 @@ var DrawingEngine = class {
+   }
+   /** Commit the draft (or a complete one-point drawing) as a real drawing. */
+   commit(drawing) {
++    drawing = normalizePositionDrawing(drawing);
+     this.drawings.push(drawing);
+     this.draft = null;
+     this.activeTool = null;
+@@ -955,7 +1158,9 @@ var DrawingEngine = class {
+   setPoints(id, points) {
+     const d = this.getById(id);
+     if (!d) return;
+-    d.points = points;
++    d.points = d.tool === "LongPosition" || d.tool === "ShortPosition"
++      ? normalizePositionDrawing({ ...d, points }).points
++      : points;
+     this.emit();
+   }
+   setStyle(id, patch) {
+@@ -1068,42 +1273,54 @@ var Renderer = class {
+         ctx.strokeStyle = style.color;
+         ctx.fillStyle = style.fill ?? "transparent";
+         ctx.lineWidth = Math.max(1, style.width) * hpr;
+-        ctx.setLineDash(style.dashed ? [6 * hpr, 4 * hpr] : []);
++        const lineStyle = style.lineStyle || (style.dashed ? "dashed" : "solid");
++        ctx.setLineDash(lineStyle === "dotted" ? [1.5 * hpr, 3 * hpr] : lineStyle === "dashed" ? [6 * hpr, 4 * hpr] : []);
++        ctx.lineCap = lineStyle === "dotted" ? "round" : "butt";
+         switch (tool) {
+           case "HorizontalLine":
+-            if (ay != null) line(ctx, 0, ay, W, ay);
++            if (ay != null) labelledHorizontalLine(ctx, 0, ay, W, style, hpr);
+             break;
+           case "HorizontalRay":
+-            if (ax != null && ay != null) line(ctx, ax, ay, W, ay);
++            if (ax != null && ay != null) labelledHorizontalLine(ctx, ax, ay, W, style, hpr);
+             break;
+           case "VerticalLine":
+-            if (ax != null) line(ctx, ax, 0, ax, H);
++            if (ax != null) labelledVerticalLine(ctx, ax, 0, H, style, hpr, vpr);
+             break;
+           case "CrossLine":
+             if (ax != null && ay != null) {
+-              line(ctx, 0, ay, W, ay);
+-              line(ctx, ax, 0, ax, H);
++              labelledHorizontalLine(ctx, 0, ay, W, style, hpr);
++              labelledCrossVerticalLine(ctx, ax, 0, H, ay, W, style, hpr, vpr);
+             }
+             break;
+           case "TrendLine":
+-            if (ax != null && ay != null && bx != null && by != null) line(ctx, ax, ay, bx, by);
++            if (ax != null && ay != null && bx != null && by != null) labelledLine(ctx, ax, ay, bx, by, style, hpr);
+             break;
+           case "Arrow":
+             if (ax != null && ay != null && bx != null && by != null) {
+-              line(ctx, ax, ay, bx, by);
+-              arrowHead(ctx, ax, ay, bx, by, 12 * hpr);
++              labelledArrow(ctx, ax, ay, bx, by, style, hpr);
++            }
++            break;
++          case "Text":
++            if (ax != null && ay != null && style.text) {
++              ctx.font = `${Math.max(8, style.fontSize || 14) * hpr}px ui-sans-serif, system-ui, sans-serif`;
++              ctx.fillStyle = style.color;
++              ctx.textAlign = "left";
++              ctx.textBaseline = "bottom";
++              const lines = String(style.text).split("\n");
++              const lineHeight = Math.max(8, style.fontSize || 14) * 1.2 * vpr;
++              lines.forEach((text, index) => ctx.fillText(text, ax, ay + (index - lines.length + 1) * lineHeight));
+             }
+             break;
+           case "Ray":
+             if (ax != null && ay != null && bx != null && by != null) {
+               const d = norm(bx - ax, by - ay);
+-              line(ctx, ax, ay, ax + d.x * BIG, ay + d.y * BIG);
++              labelledLine(ctx, ax, ay, ax + d.x * BIG, ay + d.y * BIG, style, hpr, ax, ay, bx, by);
+             }
+             break;
+           case "ExtendedLine":
+             if (ax != null && ay != null && bx != null && by != null) {
+               const d = norm(bx - ax, by - ay);
+-              line(ctx, ax - d.x * BIG, ay - d.y * BIG, ax + d.x * BIG, ay + d.y * BIG);
++              labelledLine(ctx, ax - d.x * BIG, ay - d.y * BIG, ax + d.x * BIG, ay + d.y * BIG, style, hpr, ax, ay, bx, by);
+             }
+             break;
+           case "Rectangle":
+@@ -1198,14 +1415,189 @@ var Renderer = class {
+               }
+             }
+             break;
++          case "LongPosition":
++          case "ShortPosition":
++            if (ax != null && ay != null && bx != null && by != null) {
++              const config = positionSettings(style);
++              const isLong = tool === "LongPosition";
++              const targetY = c == null ? isLong ? Math.min(by, ay - Math.abs(by - ay)) : Math.max(by, ay + Math.abs(by - ay)) : by;
++              const stopY = cy == null ? ay + (ay - targetY) : cy;
++              const left = Math.min(ax, bx);
++              const right = Math.max(ax, bx);
++              const entryPrice = pts[0]?.price ?? 0;
++              const targetPrice = pts[1]?.price ?? entryPrice;
++              const stopPrice = pts[2]?.price ?? entryPrice - (targetPrice - entryPrice);
++              const targetDistance = Math.abs(targetPrice - entryPrice);
++              const stopDistance = Math.abs(entryPrice - stopPrice);
++              const requestedRiskUsd = config.riskMode === "percent" ? config.accountSize * config.risk / 100 : config.risk;
++              const rr = stopDistance > 0 ? targetDistance / stopDistance : 0;
++              const riskQuantity = stopDistance > 0 ? requestedRiskUsd / (stopDistance * config.pointValue * config.lotSize) : 0;
++              const leverageQuantity = entryPrice === 0 ? Number.POSITIVE_INFINITY : config.accountSize * config.leverage / (Math.abs(entryPrice) * config.pointValue * config.lotSize);
++              const quantityRaw = Math.min(riskQuantity, leverageQuantity);
++              const quantity = config.qtyPrecision == null ? quantityRaw : Number(quantityRaw.toFixed(config.qtyPrecision));
++              const riskUsd = quantity * stopDistance * config.pointValue * config.lotSize;
++              ctx.fillStyle = config.targetColor;
++              ctx.fillRect(left, Math.min(ay, targetY), right - left, Math.abs(targetY - ay));
++              ctx.fillStyle = config.stopColor;
++              ctx.fillRect(left, Math.min(ay, stopY), right - left, Math.abs(stopY - ay));
++              ctx.strokeStyle = config.lineColor;
++              ctx.lineWidth = Math.max(1, style.width || 1) * hpr;
++              ctx.setLineDash([]);
++              line(ctx, left, ay, right, ay);
++              line(ctx, left, targetY, right, targetY);
++              line(ctx, left, stopY, right, stopY);
++              const showStats = config.stats && (config.alwaysShowStats || s.selected || s.hovered || s.draft);
++              ctx.font = `${config.fontSize * hpr}px ui-sans-serif, system-ui, sans-serif`;
++              ctx.fillStyle = config.textColor;
++              ctx.textAlign = "left";
++              ctx.textBaseline = "middle";
++              if (showStats) {
++                const targetTicks = targetDistance / config.tickSize;
++                const stopTicks = stopDistance / config.tickSize;
++                const targetPct = entryPrice === 0 ? 0 : targetDistance / Math.abs(entryPrice) * 100;
++                const stopPct = entryPrice === 0 ? 0 : stopDistance / Math.abs(entryPrice) * 100;
++                const targetPnl = riskUsd * rr;
++                const targetParts = [];
++                if (config.showTargetPercent) targetParts.push(`${targetPct.toFixed(2)}%`);
++                if (config.showTargetTicks) targetParts.push(`${targetTicks.toFixed(0)}t`);
++                if (config.showTargetAmount) targetParts.push(`Amount: ${(config.accountSize + targetPnl).toFixed(2)}`);
++                if (config.showTargetPnl) targetParts.push(`PnL: ${targetPnl.toFixed(2)}`);
++                const targetText = targetParts.length ? `Target: ${targetParts.join(", ")}` : "";
++                const entryParts = [];
++                if (config.showOpenPnl) entryParts.push("Open PnL: 0.00");
++                if (config.showQuantity) entryParts.push(`Qty: ${quantity.toFixed(config.qtyPrecision ?? 2)}`);
++                if (config.showRiskReward) entryParts.push(`Risk/reward ratio: ${rr.toFixed(2)}`);
++                const entryText = entryParts.join(", ");
++                const stopParts = [];
++                if (config.showStopPercent) stopParts.push(`${stopPct.toFixed(2)}%`);
++                if (config.showStopTicks) stopParts.push(`${stopTicks.toFixed(0)}t`);
++                if (config.showStopAmount) stopParts.push(`Amount: ${(config.accountSize - riskUsd).toFixed(2)}`);
++                if (config.showStopPnl) stopParts.push(`PnL: -${riskUsd.toFixed(2)}`);
++                const stopText = stopParts.length ? `Stop: ${stopParts.join(", ")}` : "";
++                const opaqueColor = (color, fallback) => typeof color === "string" && /^#[0-9a-f]{8}$/i.test(color) ? color.slice(0, 7) : color || fallback;
++                const fitPositionText = (text, maxWidth) => {
++                  const value = String(text);
++                  if (ctx.measureText(value).width <= maxWidth) return value;
++                  const ellipsis = "\u2026";
++                  let low = 0;
++                  let high = value.length;
++                  while (low < high) {
++                    const middle = Math.ceil((low + high) / 2);
++                    if (ctx.measureText(value.slice(0, middle) + ellipsis).width <= maxWidth) low = middle;
++                    else high = middle - 1;
++                  }
++                  return low > 0 ? value.slice(0, low) + ellipsis : "";
++                };
++                const drawPositionLabel = (text, y, background, reservedRight = 0, placement = "center") => {
++                  if (!text) return;
++                  const lines = String(text).split("\n");
++                  const lineHeight = (config.fontSize + 3) * vpr;
++                  const availableLeft = left;
++                  const availableRight = right - reservedRight;
++                  const availableWidth = Math.max(0, availableRight - availableLeft);
++                  if (availableWidth < 14 * hpr) return;
++                  const maxLabelWidth = Math.max(14 * hpr, W - 8 * hpr);
++                  const fittedLines = lines.map((line2) => fitPositionText(line2, Math.max(0, maxLabelWidth - 10 * hpr)));
++                  const labelWidth = Math.min(maxLabelWidth, Math.max(...fittedLines.map((line2) => ctx.measureText(line2).width)) + 10 * hpr);
++                  const labelHeight = lines.length * lineHeight + 4 * vpr;
++                  const labelGap = 3 * vpr;
++                  const labelTop = placement === "above" ? y - labelHeight - labelGap : placement === "below" ? y + labelGap : y - labelHeight / 2;
++                  const labelCenter = availableLeft + availableWidth / 2;
++                  const labelLeft = Math.max(4 * hpr, Math.min(labelCenter - labelWidth / 2, W - 4 * hpr - labelWidth));
++                  ctx.fillStyle = background;
++                  if (typeof ctx.roundRect === "function") {
++                    ctx.beginPath();
++                    ctx.roundRect(labelLeft, labelTop, labelWidth, labelHeight, 3 * Math.min(hpr, vpr));
++                    ctx.fill();
++                  } else {
++                    ctx.fillRect(labelLeft, labelTop, labelWidth, labelHeight);
++                  }
++                  ctx.fillStyle = config.textColor;
++                  ctx.textAlign = "center";
++                  ctx.textBaseline = "middle";
++                  fittedLines.forEach((line2, index) => {
++                    if (line2) ctx.fillText(line2, labelLeft + labelWidth / 2, labelTop + 2 * vpr + (index + 0.5) * lineHeight);
++                  });
++                };
++                const targetPlacement = targetY < ay ? "above" : "below";
++                const stopPlacement = stopY < ay ? "above" : "below";
++                drawPositionLabel(targetText, targetY, opaqueColor(config.targetColor, "#26a69a"), 0, targetPlacement);
++                drawPositionLabel(entryText.replace(", Risk/reward ratio:", "\nRisk/reward ratio:"), ay, "#2962ff", 0, targetPlacement);
++                drawPositionLabel(stopText, stopY, opaqueColor(config.stopColor, "#ef5350"), 0, stopPlacement);
++              }
++            }
++            break;
+           case "FibRetracement":
+-            if (ax != null && ay != null && by != null) {
+-              ctx.font = `${10 * hpr}px ui-monospace, monospace`;
+-              ctx.fillStyle = style.color;
+-              for (const lvl of FIB_LEVELS) {
+-                const y = ay + (by - ay) * lvl;
+-                line(ctx, 0, y, W, y);
+-                ctx.fillText(`${(lvl * 100).toFixed(1)}%`, 4 * hpr, y - 2 * hpr);
++            if (ax != null && ay != null && bx != null && by != null) {
++              const fib = fibSettings(style);
++              if (fib.hidden) break;
++              if (!fibVisible(fib)) break;
++              const leftAnchor = Math.min(ax, bx);
++              const rightAnchor = Math.max(ax, bx);
++              const left = fib.extend === "left" || fib.extend === "both" ? 0 : leftAnchor;
++              const right = fib.extend === "right" || fib.extend === "both" ? W : rightAnchor;
++              const visibleLevels = fib.levels.filter((level) => level.visible !== false && Number.isFinite(level.value)).map((level) => {
++                const effectiveLevel = fib.reverse ? level.value : 1 - level.value;
++                const firstPrice = pts[0].price;
++                const secondPrice = pts[1].price;
++                const price = fib.logScale && firstPrice > 0 && secondPrice > 0
++                  ? Math.exp(Math.log(firstPrice) + (Math.log(secondPrice) - Math.log(firstPrice)) * effectiveLevel)
++                  : firstPrice + (secondPrice - firstPrice) * effectiveLevel;
++                const pixelRatio = secondPrice === firstPrice ? effectiveLevel : (price - firstPrice) / (secondPrice - firstPrice);
++                return { ...level, y: ay + (by - ay) * pixelRatio, price };
++              }).sort((first, second) => first.y - second.y);
++              if (fib.backgroundVisible) {
++                for (let index = 0; index < visibleLevels.length - 1; index += 1) {
++                  const level = visibleLevels[index];
++                  const next = visibleLevels[index + 1];
++                  const color = fib.oneColor ? fib.oneColorValue : level.color || style.color;
++                  ctx.fillStyle = fibAlpha(color, fib.backgroundOpacity);
++                  ctx.fillRect(left, level.y, Math.max(0, right - left), Math.max(0, next.y - level.y));
++                }
++              }
++              for (const level of visibleLevels) {
++                const color = fib.oneColor ? fib.oneColorValue : level.color || style.color;
++                const opacity = fib.oneColor ? fib.oneColorOpacity : level.opacity ?? 100;
++                ctx.strokeStyle = fibAlpha(color, opacity);
++                ctx.lineWidth = Math.max(1, fib.levelLineWidth) * hpr;
++                ctx.setLineDash(fibDash(fib.levelLineStyle, hpr));
++                const labels = [];
++                if (fib.showLevels) labels.push(`${Number(level.value.toFixed(6))}`);
++                if (fib.showPrices) labels.push(level.price.toFixed(2));
++                const label = labels.join(" ");
++                if (label && fib.labelsVertical === "middle") {
++                  ctx.font = String(fib.fontSize * hpr) + "px ui-sans-serif, system-ui, sans-serif";
++                  const labelWidth = ctx.measureText(label).width;
++                  if (fib.labelsPosition === "left") line(ctx, Math.min(right, left + labelWidth + 8 * hpr), level.y, right, level.y);
++                  else line(ctx, left, level.y, Math.max(left, right - labelWidth - 8 * hpr), level.y);
++                } else {
++                  line(ctx, left, level.y, right, level.y);
++                }
++                if (labels.length) {
++                  ctx.font = `${fib.fontSize * hpr}px ui-sans-serif, system-ui, sans-serif`;
++                  ctx.fillStyle = fibAlpha(color, opacity);
++                  ctx.textAlign = fib.labelsPosition === "left" ? "left" : "right";
++                  ctx.textBaseline = fib.labelsVertical === "bottom" ? "top" : fib.labelsVertical === "middle" ? "middle" : "bottom";
++                  const labelX = fib.labelsPosition === "left" ? left + 4 * hpr : right - 4 * hpr;
++                  ctx.fillText(labels.join(" "), labelX, level.y + (fib.labelsVertical === "bottom" ? 2 * vpr : fib.labelsVertical === "top" ? -2 * vpr : 0));
++                }
++              }
++              if (fib.trendLineVisible) {
++                ctx.strokeStyle = fibAlpha(fib.trendLineColor, fib.trendLineOpacity);
++                ctx.lineWidth = Math.max(1, fib.trendLineWidth) * hpr;
++                ctx.setLineDash(fibDash(fib.trendLineStyle, hpr));
++                line(ctx, ax, ay, bx, by);
++              }
++              if (fib.showText && fib.text) {
++                const textX = fib.textPosition === "left" ? left + 4 * hpr : right - 4 * hpr;
++                const top = Math.min(ay, by);
++                const bottom = Math.max(ay, by);
++                const textY = fib.textVertical === "bottom" ? bottom - 4 * vpr : fib.textVertical === "middle" ? (top + bottom) / 2 : top + 4 * vpr;
++                ctx.font = `${fib.fontSize * hpr}px ui-sans-serif, system-ui, sans-serif`;
++                ctx.fillStyle = fib.oneColor ? fib.oneColorValue : style.color;
++                ctx.textAlign = fib.textPosition === "left" ? "left" : "right";
++                ctx.textBaseline = fib.textVertical === "bottom" ? "bottom" : fib.textVertical === "middle" ? "middle" : "top";
++                ctx.fillText(fib.text, textX, textY);
+               }
+             }
+             break;
+@@ -1225,17 +1617,88 @@ var Renderer = class {
+           default:
+             if (ax != null && ay != null && bx != null && by != null) line(ctx, ax, ay, bx, by);
+         }
++        if (tool !== "Text" && style.text && ax != null && ay != null) {
++          const fontSize = Math.max(8, style.fontSize || 12);
++          const horizontal = style.textHorizontal || "center";
++          const vertical = style.textVertical || "middle";
++          const anchors = [a, b, c].filter((point) => point?.x != null && point?.y != null).map((point) => ({ x: point.x * hpr, y: point.y * vpr }));
++          let textX;
++          let textY;
++          let textAngle = 0;
++          let rotateText = false;
++          let textBaseline = vertical === "top" ? "top" : vertical === "bottom" ? "bottom" : "middle";
++          if (["TrendLine", "Arrow", "Ray", "ExtendedLine"].includes(tool) && bx != null && by != null) {
++            const ratio = horizontal === "left" ? 0 : horizontal === "right" ? 1 : 0.5;
++            textX = ax + (bx - ax) * ratio;
++            textY = ay + (by - ay) * ratio;
++            textAngle = Math.atan2(by - ay, bx - ax);
++            if (textAngle > Math.PI / 2) textAngle -= Math.PI;
++            else if (textAngle < -Math.PI / 2) textAngle += Math.PI;
++            rotateText = true;
++            if (vertical === "top") {
++              textX += Math.sin(textAngle) * 4 * hpr;
++              textY -= Math.cos(textAngle) * 4 * vpr;
++              textBaseline = "bottom";
++            } else if (vertical === "bottom") {
++              textX -= Math.sin(textAngle) * 4 * hpr;
++              textY += Math.cos(textAngle) * 4 * vpr;
++              textBaseline = "top";
++            }
++          } else if (["HorizontalLine", "HorizontalRay", "CrossLine"].includes(tool)) {
++            const left = tool === "HorizontalRay" && ax != null ? ax : 0;
++            textX = horizontal === "left" ? left + 4 * hpr : horizontal === "right" ? W - 4 * hpr : (left + W) / 2;
++            textY = ay;
++            if (vertical === "top") {
++              textY -= 4 * vpr;
++              textBaseline = "bottom";
++            } else if (vertical === "bottom") {
++              textY += 4 * vpr;
++              textBaseline = "top";
++            }
++          } else if (tool === "VerticalLine") {
++            textX = ax;
++            textY = vertical === "top" ? 4 * vpr : vertical === "bottom" ? H - 4 * vpr : H / 2;
++          } else {
++            const xs = anchors.map((point) => point.x);
++            const ys = anchors.map((point) => point.y);
++            const left = Math.min(...xs);
++            const right = Math.max(...xs);
++            const top = Math.min(...ys);
++            const bottom = Math.max(...ys);
++            textX = horizontal === "left" ? left + 4 * hpr : horizontal === "right" ? right - 4 * hpr : (left + right) / 2;
++            textY = vertical === "top" ? top + 4 * vpr : vertical === "bottom" ? bottom - 4 * vpr : (top + bottom) / 2;
++          }
++          ctx.font = `${fontSize * hpr}px ui-sans-serif, system-ui, sans-serif`;
++          ctx.fillStyle = style.textColor || style.color;
++          ctx.textAlign = horizontal === "left" ? "left" : horizontal === "right" ? "right" : "center";
++          ctx.textBaseline = textBaseline;
++          const lines = String(style.text).split("\n");
++          const lineHeight = fontSize * 1.2 * vpr;
++          const firstY = -(lines.length - 1) * lineHeight / 2;
++          ctx.save();
++          if (rotateText) {
++            ctx.translate(textX, textY);
++            ctx.rotate(textAngle);
++            lines.forEach((text, index) => ctx.fillText(text, 0, firstY + index * lineHeight));
++          } else {
++            lines.forEach((text, index) => ctx.fillText(text, textX, textY + firstY + index * lineHeight));
++          }
++          ctx.restore();
++        }
+         ctx.restore();
+-        if (s.selected) {
++        if ((s.selected || s.hovered) && !(tool === "FibRetracement" && fibSettings(style).hidden)) {
+           ctx.save();
+           ctx.fillStyle = "#ffffff";
+           ctx.strokeStyle = style.color;
+-          ctx.lineWidth = 1.5 * hpr;
+-          const r = 4 * hpr;
+-          for (const an of s.anchors) {
++          const interactiveAnchors = s.handles || s.anchors;
++          for (let anchorIndex = 0; anchorIndex < interactiveAnchors.length; anchorIndex += 1) {
++            const an = interactiveAnchors[anchorIndex];
+             if (an?.x == null || an?.y == null) continue;
++            const anchorHovered = s.hoveredAnchorIndex === anchorIndex;
++            const r = (anchorHovered ? 4.5 : 3.5) * Math.min(hpr, vpr);
++            ctx.lineWidth = (anchorHovered ? 1.5 : 1) * hpr;
+             ctx.beginPath();
+-            ctx.rect(an.x * hpr - r, an.y * vpr - r, r * 2, r * 2);
++            ctx.arc(an.x * hpr, an.y * vpr, r, 0, Math.PI * 2);
+             ctx.fill();
+             ctx.stroke();
+           }
+@@ -1251,6 +1714,91 @@ function line(ctx, x1, y1, x2, y2) {
+   ctx.lineTo(x2, y2);
+   ctx.stroke();
+ }
++function labelledLine(ctx, x1, y1, x2, y2, style, hpr, labelX1 = x1, labelY1 = y1, labelX2 = x2, labelY2 = y2) {
++  if (!style.text || (style.textVertical || "middle") !== "middle") {
++    line(ctx, x1, y1, x2, y2);
++    return;
++  }
++  const dx = x2 - x1;
++  const dy = y2 - y1;
++  const length = Math.hypot(dx, dy);
++  if (length <= 0) return;
++  const labelDx = labelX2 - labelX1;
++  const labelDy = labelY2 - labelY1;
++  const horizontal = style.textHorizontal || "center";
++  const ratio = horizontal === "left" ? 0 : horizontal === "right" ? 1 : 0.5;
++  const anchorX = labelX1 + labelDx * ratio;
++  const anchorY = labelY1 + labelDy * ratio;
++  let angle = Math.atan2(labelDy, labelDx);
++  if (angle > Math.PI / 2) angle -= Math.PI;
++  else if (angle < -Math.PI / 2) angle += Math.PI;
++  const orientation = Math.cos(angle) * dx + Math.sin(angle) * dy >= 0 ? 1 : -1;
++  ctx.save();
++  ctx.font = `${Math.max(8, style.fontSize || 12) * hpr}px ui-sans-serif, system-ui, sans-serif`;
++  const width = Math.max(...String(style.text).split("\n").map((text) => ctx.measureText(text).width));
++  ctx.restore();
++  const localStart = horizontal === "left" ? 0 : horizontal === "right" ? -width : -width / 2;
++  const localEnd = horizontal === "left" ? width : horizontal === "right" ? 0 : width / 2;
++  const anchorDistance = (anchorX - x1) * dx / length + (anchorY - y1) * dy / length;
++  const padding = 4 * hpr;
++  const gapStart = Math.max(0, anchorDistance + Math.min(localStart * orientation, localEnd * orientation) - padding);
++  const gapEnd = Math.min(length, anchorDistance + Math.max(localStart * orientation, localEnd * orientation) + padding);
++  const ux = dx / length;
++  const uy = dy / length;
++  if (gapStart > 0) line(ctx, x1, y1, x1 + ux * gapStart, y1 + uy * gapStart);
++  if (gapEnd < length) line(ctx, x1 + ux * gapEnd, y1 + uy * gapEnd, x2, y2);
++}
++function labelledHorizontalLine(ctx, x1, y, x2, style, hpr) {
++  const inset = Math.min(4 * hpr, Math.max(0, x2 - x1) / 2);
++  labelledLine(ctx, x1, y, x2, y, style, hpr, x1 + inset, y, x2 - inset, y);
++}
++function labelledArrow(ctx, x1, y1, x2, y2, style, hpr) {
++  if (style.text && (style.textVertical || "middle") === "middle" && (style.textHorizontal || "center") === "right") {
++    const d = norm(x2 - x1, y2 - y1);
++    ctx.save();
++    ctx.font = String(Math.max(8, style.fontSize || 12) * hpr) + "px ui-sans-serif, system-ui, sans-serif";
++    const width = Math.max(...String(style.text).split("\n").map((text) => ctx.measureText(text).width));
++    ctx.restore();
++    const arrowX = x2 - d.x * (width + 4 * hpr);
++    const arrowY = y2 - d.y * (width + 4 * hpr);
++    line(ctx, x1, y1, arrowX, arrowY);
++    arrowHead(ctx, x1, y1, arrowX, arrowY, 12 * hpr);
++    return;
++  }
++  labelledLine(ctx, x1, y1, x2, y2, style, hpr);
++  arrowHead(ctx, x1, y1, x2, y2, 12 * hpr);
++}
++function labelledVerticalLine(ctx, x, y1, y2, style, hpr, vpr, anchorY = null) {
++  if (!style.text || (style.textVertical || "middle") !== "middle") {
++    line(ctx, x, y1, x, y2);
++    return;
++  }
++  const fontSize = Math.max(8, style.fontSize || 12);
++  const lineCount = String(style.text).split("\n").length;
++  const textY = anchorY ?? (y1 + y2) / 2;
++  const halfGap = lineCount * fontSize * 1.2 * vpr / 2 + 4 * vpr;
++  line(ctx, x, y1, x, Math.max(y1, textY - halfGap));
++  line(ctx, x, Math.min(y2, textY + halfGap), x, y2);
++}
++function labelledCrossVerticalLine(ctx, x, y1, y2, labelY, width, style, hpr, vpr) {
++  if (!style.text || (style.textVertical || "middle") !== "middle") {
++    line(ctx, x, y1, x, y2);
++    return;
++  }
++  const horizontal = style.textHorizontal || "center";
++  const textX = horizontal === "left" ? 4 * hpr : horizontal === "right" ? width - 4 * hpr : width / 2;
++  ctx.save();
++  ctx.font = String(Math.max(8, style.fontSize || 12) * hpr) + "px ui-sans-serif, system-ui, sans-serif";
++  const textWidth = Math.max(...String(style.text).split("\n").map((text) => ctx.measureText(text).width));
++  ctx.restore();
++  const left = horizontal === "left" ? textX : horizontal === "right" ? textX - textWidth : textX - textWidth / 2;
++  const right = horizontal === "left" ? textX + textWidth : horizontal === "right" ? textX : textX + textWidth / 2;
++  if (x < left - 4 * hpr || x > right + 4 * hpr) {
++    line(ctx, x, y1, x, y2);
++    return;
++  }
++  labelledVerticalLine(ctx, x, y1, y2, style, hpr, vpr, labelY);
++}
+ function norm(dx, dy) {
+   const len = Math.hypot(dx, dy) || 1;
+   return { x: dx / len, y: dy / len };
+@@ -1277,10 +1825,36 @@ var PaneView = class {
+     return new Renderer(this.primitive.shapes);
+   }
+ };
++var PositionPriceAxisView = class {
++  constructor(coordinate, value, backColor, textColor) {
++    this.coordinateValue = coordinate;
++    this.textValue = value.toFixed(2);
++    this.backgroundValue = backColor;
++    this.textColorValue = textColor;
++  }
++  coordinate() {
++    return this.coordinateValue;
++  }
++  text() {
++    return this.textValue;
++  }
++  textColor() {
++    return this.textColorValue;
++  }
++  backColor() {
++    return this.backgroundValue;
++  }
++  tickVisible() {
++    return true;
++  }
++};
+ var DrawingPrimitive = class {
+   constructor(engine) {
+     this.engine = engine;
+     this.shapes = [];
++    this.priceLabels = [];
++    this.hoveredId = null;
++    this.hoveredAnchorIndex = null;
+     this.chart = null;
+     this.series = null;
+     this.requestUpdate = null;
+@@ -1299,29 +1873,70 @@ var DrawingPrimitive = class {
+   paneViews() {
+     return [this.view];
+   }
++  priceAxisViews() {
++    return this.priceLabels;
++  }
+   /** Ask the chart to repaint (call after engine mutations). */
+   redraw() {
+     this.requestUpdate?.();
+   }
++  setHovered(id, anchorIndex = null) {
++    if (this.hoveredId === id && this.hoveredAnchorIndex === anchorIndex) return;
++    this.hoveredId = id;
++    this.hoveredAnchorIndex = anchorIndex;
++    this.redraw();
++  }
+   updateAllViews() {
+     if (!this.chart || !this.series) {
+       this.shapes = [];
++      this.priceLabels = [];
+       return;
+     }
+     const selectedId = this.engine.getSelectedId();
+     const list = [...this.engine.getDrawings()];
+     const draft = this.engine.getDraft();
+     if (draft) list.push(draft);
+-    this.shapes = list.map((d) => ({
+-      drawing: d,
+-      anchors: d.points.map((p) => this.project(p)),
+-      selected: d.id === selectedId,
+-      draft: draft?.id === d.id
+-    }));
++    const axisColor = (color, fallback) => typeof color === "string" && /^#[0-9a-f]{8}$/i.test(color) ? color.slice(0, 7) : color || fallback;
++    this.priceLabels = list.flatMap((drawing) => {
++      if ((drawing.tool !== "LongPosition" && drawing.tool !== "ShortPosition") || drawing.points.length < 3) return [];
++      const config = positionSettings(drawing.style);
++      if (!config.priceLabels) return [];
++      return [
++        [drawing.points[1].price, axisColor(config.targetColor, "#26a69a")],
++        [drawing.points[0].price, axisColor(config.lineColor, "#787b86")],
++        [drawing.points[2].price, axisColor(config.stopColor, "#ef5350")]
++      ].flatMap(([price, color]) => {
++        const coordinate = this.series.priceToCoordinate(price);
++        return coordinate == null ? [] : [new PositionPriceAxisView(coordinate, price, color, config.textColor)];
++      });
++    });
++    this.shapes = list.map((d) => {
++      const reference = d.points[0];
++      const anchors = d.points.map((p) => this.project(p, reference, d.style, d.tool));
++      const handles = (d.tool === "LongPosition" || d.tool === "ShortPosition") && d.points.length >= 3
++        ? [
++            this.project({ time: d.points[1].time, price: d.points[0].price }, reference, d.style, d.tool),
++            this.project({ time: d.points[0].time, price: d.points[1].price }, reference, d.style, d.tool),
++            this.project({ time: d.points[0].time, price: d.points[2].price }, reference, d.style, d.tool)
++          ]
++        : anchors;
++      return {
++        drawing: d,
++        anchors,
++        handles,
++        selected: d.id === selectedId,
++        hovered: d.id === this.hoveredId,
++        hoveredAnchorIndex: d.id === this.hoveredId ? this.hoveredAnchorIndex : null,
++        draft: draft?.id === d.id
++      };
++    });
+   }
+-  project(p) {
++  project(p, reference = p, style = {}, tool = null) {
+     if (!this.chart || !this.series) return { x: null, y: null };
+-    const x = this.chart.timeScale().timeToCoordinate(p.time);
++    const intervalSeconds = tool === "LongPosition" || tool === "ShortPosition"
++      ? positionSettings(style).intervalSeconds
++      : seriesIntervalSeconds(this.series);
++    const x = projectDrawingTime(this.chart, p.time, reference.time, intervalSeconds, latestSeriesTime(this.series));
+     const y = this.series.priceToCoordinate(p.price);
+     return { x: x == null ? null : x, y: y == null ? null : y };
+   }
+@@ -1360,6 +1975,7 @@ var DrawingController = class {
+     this.el = null;
+     this.primitive = null;
+     this.drag = null;
++    this.hover = null;
+     this.cleanup = [];
+     this.engine = opts.engine ?? new DrawingEngine();
+     this.tol = opts.hitTolerance ?? 6;
+@@ -1383,13 +1999,16 @@ var DrawingController = class {
+     const down = (e) => this.onDown(e);
+     const move = (e) => this.onMove(e);
+     const up = () => this.onUp();
++    const leave = () => this.onLeave();
+     const key = (e) => this.onKey(e);
+     el.addEventListener("mousedown", down, true);
+     el.addEventListener("mousemove", move);
++    el.addEventListener("mouseleave", leave);
+     window.addEventListener("mouseup", up);
+     window.addEventListener("keydown", key);
+     this.cleanup.push(() => el.removeEventListener("mousedown", down, true));
+     this.cleanup.push(() => el.removeEventListener("mousemove", move));
++    this.cleanup.push(() => el.removeEventListener("mouseleave", leave));
+     this.cleanup.push(() => window.removeEventListener("mouseup", up));
+     this.cleanup.push(() => window.removeEventListener("keydown", key));
+   }
+@@ -1403,6 +2022,7 @@ var DrawingController = class {
+       }
+     }
+     this.engine.destroy();
++    if (this.el) this.el.style.cursor = "";
+     this.chart = null;
+     this.series = null;
+     this.el = null;
+@@ -1410,10 +2030,13 @@ var DrawingController = class {
+   }
+   // ── pointer / keyboard ───────────────────────────────────────────────────────
+   onDown(e) {
+-    if (this.engine.isLocked()) return;
+-    const dp = this.unproject(e.offsetX, e.offsetY);
++    if (this.engine.isLocked()) {
++      this.clearHover();
++      return;
++    }
+     const tool = this.engine.getActiveTool();
+     if (tool) {
++      const dp = this.unproject(e.offsetX, e.offsetY);
+       if (!dp) return;
+       e.preventDefault();
+       e.stopPropagation();
+@@ -1442,30 +2065,52 @@ var DrawingController = class {
+       return;
+     }
+     const hit = this.hitTest(e.offsetX, e.offsetY);
++    const dp = this.unproject(e.offsetX, e.offsetY, hit?.id);
+     if (hit && dp) {
+       e.preventDefault();
+       e.stopPropagation();
+       this.engine.select(hit.id);
+       this.drag = { id: hit.id, kind: hit.kind, anchorIndex: hit.anchorIndex, last: dp };
++      this.hover = hit;
++      this.primitive?.setHovered(hit.id, hit.kind === "anchor" ? hit.anchorIndex : null);
++      this.setCursor(hit.kind === "anchor" ? "default" : "grabbing");
+       this.suppressPan(true);
+     } else {
+       this.engine.select(null);
+     }
+   }
+   onMove(e) {
+-    const dp = this.unproject(e.offsetX, e.offsetY);
+-    if (!dp) return;
+-    if (this.engine.getActiveTool() && this.engine.getDraft()) {
+-      this.engine.updateDraftEnd(dp);
++    if (this.engine.getActiveTool()) {
++      const dp = this.unproject(e.offsetX, e.offsetY);
++      if (!dp) return;
++      this.clearHover(false);
++      this.setCursor("crosshair");
++      if (this.engine.getDraft()) this.engine.updateDraftEnd(dp);
+       return;
+     }
+-    if (!this.drag) return;
++    if (!this.drag) {
++      this.updateHover(e.offsetX, e.offsetY);
++      return;
++    }
++    const dp = this.unproject(e.offsetX, e.offsetY, this.drag.id);
++    if (!dp) return;
+     const d = this.engine.getById(this.drag.id);
+     if (!d) return;
+     if (this.drag.kind === "anchor") {
+       const points = d.points.slice();
+-      points[this.drag.anchorIndex] = dp;
+-      this.engine.setPoints(this.drag.id, points);
++      if ((d.tool === "LongPosition" || d.tool === "ShortPosition") && points.length >= 3) {
++        if (this.drag.anchorIndex === 0) {
++          points[1] = { ...points[1], time: dp.time };
++          points[2] = { ...points[2], time: dp.time };
++        } else if (this.drag.anchorIndex === 1) {
++          points[1] = { ...points[1], price: dp.price };
++        } else if (this.drag.anchorIndex === 2) {
++          points[2] = { ...points[2], price: dp.price };
++        }
++      } else {
++        points[this.drag.anchorIndex] = dp;
++      }
++      this.engine.setPoints(this.drag.id, points, dp);
+     } else {
+       const dt = dp.time - this.drag.last.time;
+       const dpr = dp.price - this.drag.last.price;
+@@ -1473,18 +2118,26 @@ var DrawingController = class {
+       this.engine.setPoints(this.drag.id, points);
+     }
+     this.drag.last = dp;
++    this.setCursor(this.drag.kind === "anchor" ? "default" : "grabbing");
+   }
+   onUp() {
+     if (this.drag) {
+       this.drag = null;
+       this.suppressPan(false);
++      this.setCursor(this.hover?.kind === "anchor" ? "default" : this.hover ? "move" : "default");
+     }
+   }
++  onLeave() {
++    if (!this.drag) this.clearHover();
++  }
+   onKey(e) {
++    const target = e.target;
++    if (target && typeof target.closest === "function" && target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')) return;
+     if (e.key === "Delete" || e.key === "Backspace") {
+       if (this.engine.getSelectedId()) {
+         e.preventDefault();
+         this.engine.removeSelected();
++        this.clearHover();
+       }
+     } else if (e.key === "Escape") {
+       if (this.engine.getActiveTool() || this.engine.getDraft()) this.engine.cancelDraft();
+@@ -1496,16 +2149,61 @@ var DrawingController = class {
+   suppressPan(on) {
+     this.chart?.applyOptions({ handleScroll: { pressedMouseMove: !on } });
+   }
+-  unproject(x, y) {
++  setCursor(cursor) {
++    if (!this.el) return;
++    if (this.el.style.setProperty) this.el.style.setProperty("cursor", cursor, "important");
++    else this.el.style.cursor = cursor;
++    this.el.querySelectorAll?.("canvas").forEach((canvas) => canvas.style.setProperty("cursor", cursor, "important"));
++  }
++  clearHover(resetCursor = true) {
++    this.hover = null;
++    this.primitive?.setHovered(null);
++    if (resetCursor) this.setCursor("default");
++  }
++  updateHover(px, py) {
++    if (this.engine.isLocked()) {
++      this.clearHover();
++      return;
++    }
++    const hit = this.hitTest(px, py);
++    this.hover = hit;
++    this.primitive?.setHovered(hit?.id ?? null, hit?.kind === "anchor" ? hit.anchorIndex : null);
++    this.setCursor(hit?.kind === "anchor" ? "default" : hit ? "move" : "default");
++  }
++  unproject(x, y, preferredDrawingId = null) {
+     if (!this.chart || !this.series) return null;
+-    const time = this.chart.timeScale().coordinateToTime(x);
++    let time = this.chart.timeScale().coordinateToTime(x);
+     const price = this.series.coordinateToPrice(y);
++    if (time == null) {
++      const drawingId = preferredDrawingId || this.drag?.id || this.engine.getSelectedId();
++      const drawing = drawingId ? this.engine.getById(drawingId) : null;
++      if (drawing?.points[0]) {
++        const intervalSeconds = drawing.tool === "LongPosition" || drawing.tool === "ShortPosition"
++          ? positionSettings(drawing.style).intervalSeconds
++          : seriesIntervalSeconds(this.series);
++        time = coordinateToDrawingTime(this.chart, x, drawing.points[0].time, intervalSeconds, latestSeriesTime(this.series));
++      } else {
++        const activeTool = this.engine.getActiveTool();
++        const seriesData = activeTool ? this.series.data?.() : null;
++        const referenceTime = Array.isArray(seriesData) ? Number(seriesData.at(-1)?.time) : NaN;
++        if (Number.isFinite(referenceTime)) {
++          const intervalSeconds = activeTool === "LongPosition" || activeTool === "ShortPosition"
++            ? positionSettings(this.engine.getDefaultStyle()).intervalSeconds
++            : seriesIntervalSeconds(this.series);
++          time = coordinateToDrawingTime(this.chart, x, referenceTime, intervalSeconds, latestSeriesTime(this.series));
++        }
++      }
++    }
+     if (time == null || price == null) return null;
+     return { time, price };
+   }
+-  project(p) {
++  project(p, drawing = null) {
+     if (!this.chart || !this.series) return null;
+-    const x = this.chart.timeScale().timeToCoordinate(p.time);
++    const reference = drawing?.points?.[0] || p;
++    const intervalSeconds = drawing && (drawing.tool === "LongPosition" || drawing.tool === "ShortPosition")
++      ? positionSettings(drawing.style).intervalSeconds
++      : seriesIntervalSeconds(this.series);
++    const x = projectDrawingTime(this.chart, p.time, reference.time, intervalSeconds, latestSeriesTime(this.series));
+     const y = this.series.priceToCoordinate(p.price);
+     if (x == null || y == null) return null;
+     return { x, y };
+@@ -1514,27 +2212,53 @@ var DrawingController = class {
+     const p = { x: px, y: py };
+     const list = this.engine.getDrawings();
+     const selId = this.engine.getSelectedId();
++    const interactive = (drawing) => {
++      if (drawing.id.startsWith("auto-")) return false;
++      if (drawing.tool === "FibRetracement") {
++        const fib = fibSettings(drawing.style);
++        if (fib.locked || fib.hidden || !fibVisible(fib)) return false;
++      }
++      return true;
++    };
++    const anchorHit = (drawing) => {
++      if (!interactive(drawing)) return null;
++      const handlePoints = (drawing.tool === "LongPosition" || drawing.tool === "ShortPosition") && drawing.points.length >= 3
++        ? [
++            { time: drawing.points[1].time, price: drawing.points[0].price },
++            { time: drawing.points[0].time, price: drawing.points[1].price },
++            { time: drawing.points[0].time, price: drawing.points[2].price }
++          ]
++        : drawing.points;
++      for (let i = 0; i < handlePoints.length; i++) {
++        const pt = this.project(handlePoints[i], drawing);
++        if (pt && Math.hypot(pt.x - px, pt.y - py) <= this.tol + 3) {
++          return { id: drawing.id, kind: "anchor", anchorIndex: i };
++        }
++      }
++      return null;
++    };
+     if (selId) {
+       const sel = this.engine.getById(selId);
+       if (sel) {
+-        for (let i = 0; i < sel.points.length; i++) {
+-          const pt = this.project(sel.points[i]);
+-          if (pt && Math.hypot(pt.x - px, pt.y - py) <= this.tol + 3) {
+-            return { id: selId, kind: "anchor", anchorIndex: i };
+-          }
+-        }
++        const hit = anchorHit(sel);
++        if (hit) return hit;
+       }
+     }
+     for (let i = list.length - 1; i >= 0; i--) {
+-      if (this.bodyHit(list[i], p)) return { id: list[i].id, kind: "move", anchorIndex: 0 };
++      if (list[i].id === selId) continue;
++      const hit = anchorHit(list[i]);
++      if (hit) return hit;
++    }
++    for (let i = list.length - 1; i >= 0; i--) {
++      if (interactive(list[i]) && this.bodyHit(list[i], p)) return { id: list[i].id, kind: "move", anchorIndex: 0 };
+     }
+     return null;
+   }
+   bodyHit(d, p) {
+-    const a = this.project(d.points[0]);
++    const a = this.project(d.points[0], d);
+     if (!a) return false;
+-    const b = d.points[1] ? this.project(d.points[1]) : null;
+-    const c = d.points[2] ? this.project(d.points[2]) : null;
++    const b = d.points[1] ? this.project(d.points[1], d) : null;
++    const c = d.points[2] ? this.project(d.points[2], d) : null;
+     const t = this.tol;
+     switch (d.tool) {
+       case "HorizontalLine":
+@@ -1548,6 +2272,13 @@ var DrawingController = class {
+       case "TrendLine":
+       case "Arrow":
+         return !!b && distToSegment(p, a, b) <= t;
++      case "Text": {
++        const fontSize = Math.max(8, d.style.fontSize || 14);
++        const lines = String(d.style.text || "Text").split("\n");
++        const width = Math.max(...lines.map((line2) => line2.length), 1) * fontSize * 0.65;
++        const height = lines.length * fontSize * 1.2;
++        return p.x >= a.x - t && p.x <= a.x + width + t && p.y >= a.y - height - t && p.y <= a.y + t;
++      }
+       case "Ray":
+         return !!b && distToRay(p, a, b) <= t;
+       case "ExtendedLine":
+@@ -1555,6 +2286,9 @@ var DrawingController = class {
+       case "Rectangle":
+       case "PriceRange":
+         return !!b && (distToRectEdges(p, a, b) <= t || pointInRect(p, a, b));
++      case "LongPosition":
++      case "ShortPosition":
++        return !!b && !!c && (pointInRect(p, a, b) || pointInRect(p, a, c) || Math.abs(p.y - a.y) <= t);
+       case "DateRange":
+         return !!b && (Math.abs(p.x - a.x) <= t || Math.abs(p.x - b.x) <= t);
+       case "Circle":
+@@ -1567,7 +2301,29 @@ var DrawingController = class {
+         return distToSegment(p, a, b) <= t || distToSegment(p, c, c2) <= t;
+       }
+       case "FibRetracement":
+-        return !!b && FIB_LEVELS.some((lvl) => Math.abs(p.y - (a.y + (b.y - a.y) * lvl)) <= t);
++        if (!b) return false;
++        {
++          const fib = fibSettings(d.style);
++          if (fib.hidden) return false;
++          if (fib.locked) return false;
++          if (!fibVisible(fib)) return false;
++          const minX = Math.min(a.x, b.x);
++          const maxX = Math.max(a.x, b.x);
++          const inHorizontalRange = fib.extend === "both" || fib.extend === "left" && p.x <= maxX + t || fib.extend === "right" && p.x >= minX - t || fib.extend === "none" && p.x >= minX - t && p.x <= maxX + t;
++          if (!inHorizontalRange) return false;
++          if (fib.trendLineVisible && distToSegment(p, a, b) <= t) return true;
++          return fib.levels.some((level) => {
++            if (level.visible === false || !Number.isFinite(level.value)) return false;
++            const effectiveLevel = fib.reverse ? level.value : 1 - level.value;
++            const firstPrice = d.points[0].price;
++            const secondPrice = d.points[1].price;
++            const price = fib.logScale && firstPrice > 0 && secondPrice > 0
++              ? Math.exp(Math.log(firstPrice) + (Math.log(secondPrice) - Math.log(firstPrice)) * effectiveLevel)
++              : firstPrice + (secondPrice - firstPrice) * effectiveLevel;
++            const pixelRatio = secondPrice === firstPrice ? effectiveLevel : (price - firstPrice) / (secondPrice - firstPrice);
++            return Math.abs(p.y - (a.y + (b.y - a.y) * pixelRatio)) <= t;
++          });
++        }
+       case "FibExtension":
+         return !!b && !!c && FIB_EXT_LEVELS.some((lvl) => Math.abs(p.y - (c.y + (b.y - a.y) * lvl)) <= t);
+       default:
+diff --git a/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js b/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
+index e58972e..b793d2a 100644
+--- a/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
++++ b/node_modules/@getcandlekit/charts/dist/chunk-PF26Q4NQ.js
+@@ -799,8 +799,11 @@ var TOOL_POINTS = {
+   Triangle: 3,
+   ParallelChannel: 3,
+   Arrow: 2,
++  Text: 1,
+   PriceRange: 2,
+   DateRange: 2,
++  LongPosition: 1,
++  ShortPosition: 1,
+   FibRetracement: 2,
+   FibExtension: 3
+ };
+@@ -812,6 +815,205 @@ var DEFAULT_STYLE = {
+ };
+ var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+ var FIB_EXT_LEVELS = [0, 0.618, 1, 1.272, 1.618, 2, 2.618];
++var fibSettings = (style) => {
++  const fib = style.fib || {};
++  return {
++    levels: Array.isArray(fib.levels) && fib.levels.length ? fib.levels : FIB_LEVELS.map((value) => ({ value, visible: true, color: style.color, opacity: 100 })),
++    trendLineVisible: fib.trendLineVisible ?? false,
++    trendLineColor: fib.trendLineColor || style.color,
++    trendLineOpacity: fib.trendLineOpacity ?? 100,
++    trendLineWidth: fib.trendLineWidth ?? 1,
++    trendLineStyle: fib.trendLineStyle || "dashed",
++    levelLineWidth: fib.levelLineWidth ?? style.width ?? 1,
++    levelLineStyle: fib.levelLineStyle || (style.dashed ? "dashed" : "solid"),
++    extend: fib.extend || "right",
++    oneColor: fib.oneColor ?? false,
++    oneColorValue: fib.oneColorValue || style.color,
++    oneColorOpacity: fib.oneColorOpacity ?? 100,
++    backgroundVisible: fib.backgroundVisible ?? false,
++    backgroundOpacity: fib.backgroundOpacity ?? 8,
++    reverse: fib.reverse ?? false,
++    showPrices: fib.showPrices ?? false,
++    showLevels: fib.showLevels ?? true,
++    labelsPosition: fib.labelsPosition || "right",
++    labelsVertical: fib.labelsVertical || "top",
++    showText: fib.showText ?? false,
++    text: fib.text || "",
++    textPosition: fib.textPosition || "right",
++    textVertical: fib.textVertical || "top",
++    fontSize: fib.fontSize ?? 12,
++    logScale: fib.logScale ?? false,
++    locked: fib.locked ?? false,
++    hidden: fib.hidden ?? false,
++    visibility: fib.visibility,
++    runtimeTimeframeMinutes: fib.runtimeTimeframeMinutes
++  };
++};
++var fibAlpha = (color, opacity) => {
++  const alpha = Math.round(Math.max(0, Math.min(100, opacity)) / 100 * 255).toString(16).padStart(2, "0");
++  return /^#[0-9a-f]{6}$/i.test(color) ? `${color}${alpha}` : color;
++};
++var fibDash = (style, ratio) => style === "dotted" ? [2 * ratio, 3 * ratio] : style === "dashed" ? [6 * ratio, 4 * ratio] : [];
++var fibVisible = (fib) => {
++  const minutes = fib.runtimeTimeframeMinutes;
++  const visibility = fib.visibility;
++  if (!(minutes > 0) || !visibility) return true;
++  if (minutes < 1) {
++    const seconds = Math.max(1, Math.round(minutes * 60));
++    return visibility.seconds?.enabled !== false && seconds >= (visibility.seconds?.min ?? 1) && seconds <= (visibility.seconds?.max ?? 59);
++  }
++  if (minutes < 60) return visibility.minutes?.enabled !== false && minutes >= (visibility.minutes?.min ?? 1) && minutes <= (visibility.minutes?.max ?? 59);
++  if (minutes < 1440) {
++    const hours = minutes / 60;
++    return visibility.hours?.enabled !== false && hours >= (visibility.hours?.min ?? 1) && hours <= (visibility.hours?.max ?? 24);
++  }
++  if (minutes < 10080) {
++    const days = minutes / 1440;
++    return visibility.days?.enabled !== false && days >= (visibility.days?.min ?? 1) && days <= (visibility.days?.max ?? 366);
++  }
++  if (minutes < 43800) {
++    const weeks = minutes / 10080;
++    return visibility.weeks?.enabled !== false && weeks >= (visibility.weeks?.min ?? 1) && weeks <= (visibility.weeks?.max ?? 52);
++  }
++  const months = minutes / 43800;
++  return visibility.months?.enabled !== false && months >= (visibility.months?.min ?? 1) && months <= (visibility.months?.max ?? 12);
++};
++var positionSettings = (style) => {
++  const position = style.position || {};
++  return {
++    accountSize: Number.isFinite(Number(position.accountSize)) ? Math.max(0, Number(position.accountSize)) : 5e4,
++    lotSize: Number.isFinite(Number(position.lotSize)) ? Math.max(1e-6, Number(position.lotSize)) : 1,
++    risk: Number.isFinite(Number(position.risk)) ? Math.max(0, Number(position.risk)) : 100,
++    riskMode: position.riskMode === "percent" ? "percent" : "USD",
++    leverage: Number.isFinite(Number(position.leverage)) ? Math.max(1e-6, Number(position.leverage)) : 1e4,
++    tickSize: Number.isFinite(Number(position.tickSize)) ? Math.max(1e-6, Number(position.tickSize)) : 0.25,
++    pointValue: Number.isFinite(Number(position.pointValue)) ? Math.max(1e-6, Number(position.pointValue)) : 2,
++    intervalSeconds: Number.isFinite(Number(position.intervalSeconds)) ? Math.max(1, Number(position.intervalSeconds)) : 60,
++    initialBars: Number.isFinite(Number(position.initialBars)) ? Math.max(1, Math.round(Number(position.initialBars))) : 6,
++    initialTicks: Number.isFinite(Number(position.initialTicks)) ? Math.max(1, Math.round(Number(position.initialTicks))) : 200,
++    lineColor: position.lineColor || style.color || "#787b86",
++    stopColor: position.stopColor || "#ef535080",
++    targetColor: position.targetColor || "#26a69a80",
++    textColor: position.textColor || "#ffffff",
++    fontSize: Number.isFinite(Number(position.fontSize)) ? Math.max(8, Number(position.fontSize)) : 11,
++    priceLabels: position.priceLabels !== false,
++    stats: position.stats !== false,
++    compactStats: position.compactStats === true,
++    alwaysShowStats: position.alwaysShowStats === true,
++    showTargetPercent: position.showTargetPercent !== false,
++    showTargetTicks: position.showTargetTicks !== false,
++    showTargetAmount: position.showTargetAmount !== false,
++    showTargetPnl: position.showTargetPnl !== false,
++    showOpenPnl: position.showOpenPnl !== false,
++    showQuantity: position.showQuantity !== false,
++    showRiskReward: position.showRiskReward !== false,
++    showStopPercent: position.showStopPercent !== false,
++    showStopTicks: position.showStopTicks !== false,
++    showStopAmount: position.showStopAmount !== false,
++    showStopPnl: position.showStopPnl !== false,
++    qtyPrecision: position.qtyPrecision != null && Number.isFinite(Number(position.qtyPrecision)) ? Math.max(0, Math.min(8, Math.round(Number(position.qtyPrecision)))) : null
++  };
++};
++var normalizePositionDrawing = (drawing) => {
++  if (drawing.tool !== "LongPosition" && drawing.tool !== "ShortPosition") return drawing;
++  const tickSize = positionSettings(drawing.style).tickSize;
++  const config = positionSettings(drawing.style);
++  const snap = (price) => Math.round(price / tickSize) * tickSize;
++  if (drawing.points.length === 1) {
++    const entry = { ...drawing.points[0], price: snap(drawing.points[0].price) };
++    const distance = config.initialTicks * tickSize;
++    const endTime = entry.time + config.initialBars * config.intervalSeconds;
++    const targetPrice = drawing.tool === "LongPosition" ? entry.price + distance : entry.price - distance;
++    const stopPrice = drawing.tool === "LongPosition" ? entry.price - distance : entry.price + distance;
++    return { ...drawing, points: [entry, { time: endTime, price: targetPrice }, { time: endTime, price: stopPrice }] };
++  }
++  if (drawing.points.length >= 3) {
++    const entry = { ...drawing.points[0], price: snap(drawing.points[0].price) };
++    const rawTarget = snap(drawing.points[1].price);
++    const rawStop = snap(drawing.points[2].price);
++    const targetPrice = drawing.tool === "LongPosition" ? Math.max(entry.price + tickSize, rawTarget) : Math.min(entry.price - tickSize, rawTarget);
++    const stopPrice = drawing.tool === "LongPosition" ? Math.min(entry.price - tickSize, rawStop) : Math.max(entry.price + tickSize, rawStop);
++    return { ...drawing, points: [entry, { ...drawing.points[1], price: targetPrice }, { ...drawing.points[2], price: stopPrice }] };
++  }
++  if (drawing.points.length !== 2) return { ...drawing, points: drawing.points.map((point) => ({ ...point, price: snap(point.price) })) };
++  const entry = { ...drawing.points[0], price: snap(drawing.points[0].price) };
++  const second = { ...drawing.points[1], price: snap(drawing.points[1].price) };
++  const distance = Math.max(tickSize, Math.abs(second.price - entry.price));
++  const targetPrice = drawing.tool === "LongPosition" ? entry.price + distance : entry.price - distance;
++  const stopPrice = drawing.tool === "LongPosition" ? entry.price - distance : entry.price + distance;
++  return { ...drawing, points: [entry, { ...second, price: targetPrice }, { time: second.time, price: stopPrice }] };
++};
++var chartBarSpacing = (timeScale) => {
++  if (typeof timeScale.logicalToCoordinate === "function") {
++    const zero = timeScale.logicalToCoordinate(0);
++    const one = timeScale.logicalToCoordinate(1);
++    if (zero != null && one != null && Math.abs(one - zero) > 1e-6) return Math.abs(one - zero);
++  }
++  return 6;
++};
++var __alphatradeSeriesTimeCache = /* @__PURE__ */ new WeakMap();
++var latestSeriesTime = (series) => {
++  if (!series) return null;
++  // series.data() kopiruje CELY dataset (map pres vsechny svicky). Tahle
++  // funkce z nej pritom potrebuje jen posledni prvek a vola se pro kazdy bod
++  // kazde kresby pri kazdem prekresleni -- pri scrollu do historie to delalo
++  // stovky tisic pruchodu poli o tisicich svickach. Behem jednoho snimku se
++  // posledni cas serie nezmeni, takze staci cache na 16 ms.
++  const now = Date.now();
++  const cached = __alphatradeSeriesTimeCache.get(series);
++  if (cached && now - cached.at < 16) return cached.value;
++  const data = series?.data?.();
++  const time = Array.isArray(data) ? Number(data.at(-1)?.time) : NaN;
++  const value = Number.isFinite(time) ? time : null;
++  __alphatradeSeriesTimeCache.set(series, { at: now, value });
++  return value;
++};
++var __alphatradeSeriesIntervalCache = /* @__PURE__ */ new WeakMap();
++var seriesIntervalSeconds = (series, fallback = 60) => {
++  if (!series) return fallback;
++  // Stejny duvod jako u latestSeriesTime: series.data() kopiruje cely dataset.
++  // Rozestup svicek se behem snimku nemeni.
++  const now = Date.now();
++  const cached = __alphatradeSeriesIntervalCache.get(series);
++  if (cached && now - cached.at < 16) return cached.value;
++  const data = series?.data?.();
++  if (!Array.isArray(data) || data.length < 2) return fallback;
++  const last = Number(data.at(-1)?.time);
++  let value = fallback;
++  for (let index = data.length - 2; index >= 0; index -= 1) {
++    const previous = Number(data[index]?.time);
++    const interval = last - previous;
++    if (Number.isFinite(interval) && interval > 0) { value = interval; break; }
++  }
++  __alphatradeSeriesIntervalCache.set(series, { at: now, value });
++  return value;
++};
++var projectDrawingTime = (chart, time, referenceTime, intervalSeconds = 60, fallbackReferenceTime = null) => {
++  const timeScale = chart.timeScale();
++  const direct = timeScale.timeToCoordinate(time);
++  if (direct != null) return direct;
++  let anchorTime = referenceTime;
++  let referenceX = timeScale.timeToCoordinate(anchorTime);
++  if (referenceX == null && fallbackReferenceTime != null) {
++    anchorTime = fallbackReferenceTime;
++    referenceX = timeScale.timeToCoordinate(anchorTime);
++  }
++  if (referenceX == null) return null;
++  return referenceX + (time - anchorTime) / intervalSeconds * chartBarSpacing(timeScale);
++};
++var coordinateToDrawingTime = (chart, x, referenceTime, intervalSeconds = 60, fallbackReferenceTime = null) => {
++  const timeScale = chart.timeScale();
++  const direct = timeScale.coordinateToTime(x);
++  if (direct != null) return direct;
++  let anchorTime = referenceTime;
++  let referenceX = timeScale.timeToCoordinate(anchorTime);
++  if (referenceX == null && fallbackReferenceTime != null) {
++    anchorTime = fallbackReferenceTime;
++    referenceX = timeScale.timeToCoordinate(anchorTime);
++  }
++  if (referenceX == null) return null;
++  return anchorTime + Math.round((x - referenceX) / chartBarSpacing(timeScale)) * intervalSeconds;
++};
+ 
+ // src/drawing/geometry.ts
+ function distToSegment(p, a, b) {
+@@ -932,6 +1134,7 @@ var DrawingEngine = class {
+   }
+   /** Commit the draft (or a complete one-point drawing) as a real drawing. */
+   commit(drawing) {
++    drawing = normalizePositionDrawing(drawing);
+     this.drawings.push(drawing);
+     this.draft = null;
+     this.activeTool = null;
+@@ -954,7 +1157,9 @@ var DrawingEngine = class {
+   setPoints(id, points) {
+     const d = this.getById(id);
+     if (!d) return;
+-    d.points = points;
++    d.points = d.tool === "LongPosition" || d.tool === "ShortPosition"
++      ? normalizePositionDrawing({ ...d, points }).points
++      : points;
+     this.emit();
+   }
+   setStyle(id, patch) {
+@@ -1067,42 +1272,54 @@ var Renderer = class {
+         ctx.strokeStyle = style.color;
+         ctx.fillStyle = style.fill ?? "transparent";
+         ctx.lineWidth = Math.max(1, style.width) * hpr;
+-        ctx.setLineDash(style.dashed ? [6 * hpr, 4 * hpr] : []);
++        const lineStyle = style.lineStyle || (style.dashed ? "dashed" : "solid");
++        ctx.setLineDash(lineStyle === "dotted" ? [1.5 * hpr, 3 * hpr] : lineStyle === "dashed" ? [6 * hpr, 4 * hpr] : []);
++        ctx.lineCap = lineStyle === "dotted" ? "round" : "butt";
+         switch (tool) {
+           case "HorizontalLine":
+-            if (ay != null) line(ctx, 0, ay, W, ay);
++            if (ay != null) labelledHorizontalLine(ctx, 0, ay, W, style, hpr);
+             break;
+           case "HorizontalRay":
+-            if (ax != null && ay != null) line(ctx, ax, ay, W, ay);
++            if (ax != null && ay != null) labelledHorizontalLine(ctx, ax, ay, W, style, hpr);
+             break;
+           case "VerticalLine":
+-            if (ax != null) line(ctx, ax, 0, ax, H);
++            if (ax != null) labelledVerticalLine(ctx, ax, 0, H, style, hpr, vpr);
+             break;
+           case "CrossLine":
+             if (ax != null && ay != null) {
+-              line(ctx, 0, ay, W, ay);
+-              line(ctx, ax, 0, ax, H);
++              labelledHorizontalLine(ctx, 0, ay, W, style, hpr);
++              labelledCrossVerticalLine(ctx, ax, 0, H, ay, W, style, hpr, vpr);
+             }
+             break;
+           case "TrendLine":
+-            if (ax != null && ay != null && bx != null && by != null) line(ctx, ax, ay, bx, by);
++            if (ax != null && ay != null && bx != null && by != null) labelledLine(ctx, ax, ay, bx, by, style, hpr);
+             break;
+           case "Arrow":
+             if (ax != null && ay != null && bx != null && by != null) {
+-              line(ctx, ax, ay, bx, by);
+-              arrowHead(ctx, ax, ay, bx, by, 12 * hpr);
++              labelledArrow(ctx, ax, ay, bx, by, style, hpr);
++            }
++            break;
++          case "Text":
++            if (ax != null && ay != null && style.text) {
++              ctx.font = `${Math.max(8, style.fontSize || 14) * hpr}px ui-sans-serif, system-ui, sans-serif`;
++              ctx.fillStyle = style.color;
++              ctx.textAlign = "left";
++              ctx.textBaseline = "bottom";
++              const lines = String(style.text).split("\n");
++              const lineHeight = Math.max(8, style.fontSize || 14) * 1.2 * vpr;
++              lines.forEach((text, index) => ctx.fillText(text, ax, ay + (index - lines.length + 1) * lineHeight));
+             }
+             break;
+           case "Ray":
+             if (ax != null && ay != null && bx != null && by != null) {
+               const d = norm(bx - ax, by - ay);
+-              line(ctx, ax, ay, ax + d.x * BIG, ay + d.y * BIG);
++              labelledLine(ctx, ax, ay, ax + d.x * BIG, ay + d.y * BIG, style, hpr, ax, ay, bx, by);
+             }
+             break;
+           case "ExtendedLine":
+             if (ax != null && ay != null && bx != null && by != null) {
+               const d = norm(bx - ax, by - ay);
+-              line(ctx, ax - d.x * BIG, ay - d.y * BIG, ax + d.x * BIG, ay + d.y * BIG);
++              labelledLine(ctx, ax - d.x * BIG, ay - d.y * BIG, ax + d.x * BIG, ay + d.y * BIG, style, hpr, ax, ay, bx, by);
+             }
+             break;
+           case "Rectangle":
+@@ -1197,14 +1414,189 @@ var Renderer = class {
+               }
+             }
+             break;
++          case "LongPosition":
++          case "ShortPosition":
++            if (ax != null && ay != null && bx != null && by != null) {
++              const config = positionSettings(style);
++              const isLong = tool === "LongPosition";
++              const targetY = c == null ? isLong ? Math.min(by, ay - Math.abs(by - ay)) : Math.max(by, ay + Math.abs(by - ay)) : by;
++              const stopY = cy == null ? ay + (ay - targetY) : cy;
++              const left = Math.min(ax, bx);
++              const right = Math.max(ax, bx);
++              const entryPrice = pts[0]?.price ?? 0;
++              const targetPrice = pts[1]?.price ?? entryPrice;
++              const stopPrice = pts[2]?.price ?? entryPrice - (targetPrice - entryPrice);
++              const targetDistance = Math.abs(targetPrice - entryPrice);
++              const stopDistance = Math.abs(entryPrice - stopPrice);
++              const requestedRiskUsd = config.riskMode === "percent" ? config.accountSize * config.risk / 100 : config.risk;
++              const rr = stopDistance > 0 ? targetDistance / stopDistance : 0;
++              const riskQuantity = stopDistance > 0 ? requestedRiskUsd / (stopDistance * config.pointValue * config.lotSize) : 0;
++              const leverageQuantity = entryPrice === 0 ? Number.POSITIVE_INFINITY : config.accountSize * config.leverage / (Math.abs(entryPrice) * config.pointValue * config.lotSize);
++              const quantityRaw = Math.min(riskQuantity, leverageQuantity);
++              const quantity = config.qtyPrecision == null ? quantityRaw : Number(quantityRaw.toFixed(config.qtyPrecision));
++              const riskUsd = quantity * stopDistance * config.pointValue * config.lotSize;
++              ctx.fillStyle = config.targetColor;
++              ctx.fillRect(left, Math.min(ay, targetY), right - left, Math.abs(targetY - ay));
++              ctx.fillStyle = config.stopColor;
++              ctx.fillRect(left, Math.min(ay, stopY), right - left, Math.abs(stopY - ay));
++              ctx.strokeStyle = config.lineColor;
++              ctx.lineWidth = Math.max(1, style.width || 1) * hpr;
++              ctx.setLineDash([]);
++              line(ctx, left, ay, right, ay);
++              line(ctx, left, targetY, right, targetY);
++              line(ctx, left, stopY, right, stopY);
++              const showStats = config.stats && (config.alwaysShowStats || s.selected || s.hovered || s.draft);
++              ctx.font = `${config.fontSize * hpr}px ui-sans-serif, system-ui, sans-serif`;
++              ctx.fillStyle = config.textColor;
++              ctx.textAlign = "left";
++              ctx.textBaseline = "middle";
++              if (showStats) {
++                const targetTicks = targetDistance / config.tickSize;
++                const stopTicks = stopDistance / config.tickSize;
++                const targetPct = entryPrice === 0 ? 0 : targetDistance / Math.abs(entryPrice) * 100;
++                const stopPct = entryPrice === 0 ? 0 : stopDistance / Math.abs(entryPrice) * 100;
++                const targetPnl = riskUsd * rr;
++                const targetParts = [];
++                if (config.showTargetPercent) targetParts.push(`${targetPct.toFixed(2)}%`);
++                if (config.showTargetTicks) targetParts.push(`${targetTicks.toFixed(0)}t`);
++                if (config.showTargetAmount) targetParts.push(`Amount: ${(config.accountSize + targetPnl).toFixed(2)}`);
++                if (config.showTargetPnl) targetParts.push(`PnL: ${targetPnl.toFixed(2)}`);
++                const targetText = targetParts.length ? `Target: ${targetParts.join(", ")}` : "";
++                const entryParts = [];
++                if (config.showOpenPnl) entryParts.push("Open PnL: 0.00");
++                if (config.showQuantity) entryParts.push(`Qty: ${quantity.toFixed(config.qtyPrecision ?? 2)}`);
++                if (config.showRiskReward) entryParts.push(`Risk/reward ratio: ${rr.toFixed(2)}`);
++                const entryText = entryParts.join(", ");
++                const stopParts = [];
++                if (config.showStopPercent) stopParts.push(`${stopPct.toFixed(2)}%`);
++                if (config.showStopTicks) stopParts.push(`${stopTicks.toFixed(0)}t`);
++                if (config.showStopAmount) stopParts.push(`Amount: ${(config.accountSize - riskUsd).toFixed(2)}`);
++                if (config.showStopPnl) stopParts.push(`PnL: -${riskUsd.toFixed(2)}`);
++                const stopText = stopParts.length ? `Stop: ${stopParts.join(", ")}` : "";
++                const opaqueColor = (color, fallback) => typeof color === "string" && /^#[0-9a-f]{8}$/i.test(color) ? color.slice(0, 7) : color || fallback;
++                const fitPositionText = (text, maxWidth) => {
++                  const value = String(text);
++                  if (ctx.measureText(value).width <= maxWidth) return value;
++                  const ellipsis = "\u2026";
++                  let low = 0;
++                  let high = value.length;
++                  while (low < high) {
++                    const middle = Math.ceil((low + high) / 2);
++                    if (ctx.measureText(value.slice(0, middle) + ellipsis).width <= maxWidth) low = middle;
++                    else high = middle - 1;
++                  }
++                  return low > 0 ? value.slice(0, low) + ellipsis : "";
++                };
++                const drawPositionLabel = (text, y, background, reservedRight = 0, placement = "center") => {
++                  if (!text) return;
++                  const lines = String(text).split("\n");
++                  const lineHeight = (config.fontSize + 3) * vpr;
++                  const availableLeft = left;
++                  const availableRight = right - reservedRight;
++                  const availableWidth = Math.max(0, availableRight - availableLeft);
++                  if (availableWidth < 14 * hpr) return;
++                  const maxLabelWidth = Math.max(14 * hpr, W - 8 * hpr);
++                  const fittedLines = lines.map((line2) => fitPositionText(line2, Math.max(0, maxLabelWidth - 10 * hpr)));
++                  const labelWidth = Math.min(maxLabelWidth, Math.max(...fittedLines.map((line2) => ctx.measureText(line2).width)) + 10 * hpr);
++                  const labelHeight = lines.length * lineHeight + 4 * vpr;
++                  const labelGap = 3 * vpr;
++                  const labelTop = placement === "above" ? y - labelHeight - labelGap : placement === "below" ? y + labelGap : y - labelHeight / 2;
++                  const labelCenter = availableLeft + availableWidth / 2;
++                  const labelLeft = Math.max(4 * hpr, Math.min(labelCenter - labelWidth / 2, W - 4 * hpr - labelWidth));
++                  ctx.fillStyle = background;
++                  if (typeof ctx.roundRect === "function") {
++                    ctx.beginPath();
++                    ctx.roundRect(labelLeft, labelTop, labelWidth, labelHeight, 3 * Math.min(hpr, vpr));
++                    ctx.fill();
++                  } else {
++                    ctx.fillRect(labelLeft, labelTop, labelWidth, labelHeight);
++                  }
++                  ctx.fillStyle = config.textColor;
++                  ctx.textAlign = "center";
++                  ctx.textBaseline = "middle";
++                  fittedLines.forEach((line2, index) => {
++                    if (line2) ctx.fillText(line2, labelLeft + labelWidth / 2, labelTop + 2 * vpr + (index + 0.5) * lineHeight);
++                  });
++                };
++                const targetPlacement = targetY < ay ? "above" : "below";
++                const stopPlacement = stopY < ay ? "above" : "below";
++                drawPositionLabel(targetText, targetY, opaqueColor(config.targetColor, "#26a69a"), 0, targetPlacement);
++                drawPositionLabel(entryText.replace(", Risk/reward ratio:", "\nRisk/reward ratio:"), ay, "#2962ff", 0, targetPlacement);
++                drawPositionLabel(stopText, stopY, opaqueColor(config.stopColor, "#ef5350"), 0, stopPlacement);
++              }
++            }
++            break;
+           case "FibRetracement":
+-            if (ax != null && ay != null && by != null) {
+-              ctx.font = `${10 * hpr}px ui-monospace, monospace`;
+-              ctx.fillStyle = style.color;
+-              for (const lvl of FIB_LEVELS) {
+-                const y = ay + (by - ay) * lvl;
+-                line(ctx, 0, y, W, y);
+-                ctx.fillText(`${(lvl * 100).toFixed(1)}%`, 4 * hpr, y - 2 * hpr);
++            if (ax != null && ay != null && bx != null && by != null) {
++              const fib = fibSettings(style);
++              if (fib.hidden) break;
++              if (!fibVisible(fib)) break;
++              const leftAnchor = Math.min(ax, bx);
++              const rightAnchor = Math.max(ax, bx);
++              const left = fib.extend === "left" || fib.extend === "both" ? 0 : leftAnchor;
++              const right = fib.extend === "right" || fib.extend === "both" ? W : rightAnchor;
++              const visibleLevels = fib.levels.filter((level) => level.visible !== false && Number.isFinite(level.value)).map((level) => {
++                const effectiveLevel = fib.reverse ? level.value : 1 - level.value;
++                const firstPrice = pts[0].price;
++                const secondPrice = pts[1].price;
++                const price = fib.logScale && firstPrice > 0 && secondPrice > 0
++                  ? Math.exp(Math.log(firstPrice) + (Math.log(secondPrice) - Math.log(firstPrice)) * effectiveLevel)
++                  : firstPrice + (secondPrice - firstPrice) * effectiveLevel;
++                const pixelRatio = secondPrice === firstPrice ? effectiveLevel : (price - firstPrice) / (secondPrice - firstPrice);
++                return { ...level, y: ay + (by - ay) * pixelRatio, price };
++              }).sort((first, second) => first.y - second.y);
++              if (fib.backgroundVisible) {
++                for (let index = 0; index < visibleLevels.length - 1; index += 1) {
++                  const level = visibleLevels[index];
++                  const next = visibleLevels[index + 1];
++                  const color = fib.oneColor ? fib.oneColorValue : level.color || style.color;
++                  ctx.fillStyle = fibAlpha(color, fib.backgroundOpacity);
++                  ctx.fillRect(left, level.y, Math.max(0, right - left), Math.max(0, next.y - level.y));
++                }
++              }
++              for (const level of visibleLevels) {
++                const color = fib.oneColor ? fib.oneColorValue : level.color || style.color;
++                const opacity = fib.oneColor ? fib.oneColorOpacity : level.opacity ?? 100;
++                ctx.strokeStyle = fibAlpha(color, opacity);
++                ctx.lineWidth = Math.max(1, fib.levelLineWidth) * hpr;
++                ctx.setLineDash(fibDash(fib.levelLineStyle, hpr));
++                const labels = [];
++                if (fib.showLevels) labels.push(`${Number(level.value.toFixed(6))}`);
++                if (fib.showPrices) labels.push(level.price.toFixed(2));
++                const label = labels.join(" ");
++                if (label && fib.labelsVertical === "middle") {
++                  ctx.font = String(fib.fontSize * hpr) + "px ui-sans-serif, system-ui, sans-serif";
++                  const labelWidth = ctx.measureText(label).width;
++                  if (fib.labelsPosition === "left") line(ctx, Math.min(right, left + labelWidth + 8 * hpr), level.y, right, level.y);
++                  else line(ctx, left, level.y, Math.max(left, right - labelWidth - 8 * hpr), level.y);
++                } else {
++                  line(ctx, left, level.y, right, level.y);
++                }
++                if (labels.length) {
++                  ctx.font = `${fib.fontSize * hpr}px ui-sans-serif, system-ui, sans-serif`;
++                  ctx.fillStyle = fibAlpha(color, opacity);
++                  ctx.textAlign = fib.labelsPosition === "left" ? "left" : "right";
++                  ctx.textBaseline = fib.labelsVertical === "bottom" ? "top" : fib.labelsVertical === "middle" ? "middle" : "bottom";
++                  const labelX = fib.labelsPosition === "left" ? left + 4 * hpr : right - 4 * hpr;
++                  ctx.fillText(labels.join(" "), labelX, level.y + (fib.labelsVertical === "bottom" ? 2 * vpr : fib.labelsVertical === "top" ? -2 * vpr : 0));
++                }
++              }
++              if (fib.trendLineVisible) {
++                ctx.strokeStyle = fibAlpha(fib.trendLineColor, fib.trendLineOpacity);
++                ctx.lineWidth = Math.max(1, fib.trendLineWidth) * hpr;
++                ctx.setLineDash(fibDash(fib.trendLineStyle, hpr));
++                line(ctx, ax, ay, bx, by);
++              }
++              if (fib.showText && fib.text) {
++                const textX = fib.textPosition === "left" ? left + 4 * hpr : right - 4 * hpr;
++                const top = Math.min(ay, by);
++                const bottom = Math.max(ay, by);
++                const textY = fib.textVertical === "bottom" ? bottom - 4 * vpr : fib.textVertical === "middle" ? (top + bottom) / 2 : top + 4 * vpr;
++                ctx.font = `${fib.fontSize * hpr}px ui-sans-serif, system-ui, sans-serif`;
++                ctx.fillStyle = fib.oneColor ? fib.oneColorValue : style.color;
++                ctx.textAlign = fib.textPosition === "left" ? "left" : "right";
++                ctx.textBaseline = fib.textVertical === "bottom" ? "bottom" : fib.textVertical === "middle" ? "middle" : "top";
++                ctx.fillText(fib.text, textX, textY);
+               }
+             }
+             break;
+@@ -1224,17 +1616,88 @@ var Renderer = class {
+           default:
+             if (ax != null && ay != null && bx != null && by != null) line(ctx, ax, ay, bx, by);
+         }
++        if (tool !== "Text" && style.text && ax != null && ay != null) {
++          const fontSize = Math.max(8, style.fontSize || 12);
++          const horizontal = style.textHorizontal || "center";
++          const vertical = style.textVertical || "middle";
++          const anchors = [a, b, c].filter((point) => point?.x != null && point?.y != null).map((point) => ({ x: point.x * hpr, y: point.y * vpr }));
++          let textX;
++          let textY;
++          let textAngle = 0;
++          let rotateText = false;
++          let textBaseline = vertical === "top" ? "top" : vertical === "bottom" ? "bottom" : "middle";
++          if (["TrendLine", "Arrow", "Ray", "ExtendedLine"].includes(tool) && bx != null && by != null) {
++            const ratio = horizontal === "left" ? 0 : horizontal === "right" ? 1 : 0.5;
++            textX = ax + (bx - ax) * ratio;
++            textY = ay + (by - ay) * ratio;
++            textAngle = Math.atan2(by - ay, bx - ax);
++            if (textAngle > Math.PI / 2) textAngle -= Math.PI;
++            else if (textAngle < -Math.PI / 2) textAngle += Math.PI;
++            rotateText = true;
++            if (vertical === "top") {
++              textX += Math.sin(textAngle) * 4 * hpr;
++              textY -= Math.cos(textAngle) * 4 * vpr;
++              textBaseline = "bottom";
++            } else if (vertical === "bottom") {
++              textX -= Math.sin(textAngle) * 4 * hpr;
++              textY += Math.cos(textAngle) * 4 * vpr;
++              textBaseline = "top";
++            }
++          } else if (["HorizontalLine", "HorizontalRay", "CrossLine"].includes(tool)) {
++            const left = tool === "HorizontalRay" && ax != null ? ax : 0;
++            textX = horizontal === "left" ? left + 4 * hpr : horizontal === "right" ? W - 4 * hpr : (left + W) / 2;
++            textY = ay;
++            if (vertical === "top") {
++              textY -= 4 * vpr;
++              textBaseline = "bottom";
++            } else if (vertical === "bottom") {
++              textY += 4 * vpr;
++              textBaseline = "top";
++            }
++          } else if (tool === "VerticalLine") {
++            textX = ax;
++            textY = vertical === "top" ? 4 * vpr : vertical === "bottom" ? H - 4 * vpr : H / 2;
++          } else {
++            const xs = anchors.map((point) => point.x);
++            const ys = anchors.map((point) => point.y);
++            const left = Math.min(...xs);
++            const right = Math.max(...xs);
++            const top = Math.min(...ys);
++            const bottom = Math.max(...ys);
++            textX = horizontal === "left" ? left + 4 * hpr : horizontal === "right" ? right - 4 * hpr : (left + right) / 2;
++            textY = vertical === "top" ? top + 4 * vpr : vertical === "bottom" ? bottom - 4 * vpr : (top + bottom) / 2;
++          }
++          ctx.font = `${fontSize * hpr}px ui-sans-serif, system-ui, sans-serif`;
++          ctx.fillStyle = style.textColor || style.color;
++          ctx.textAlign = horizontal === "left" ? "left" : horizontal === "right" ? "right" : "center";
++          ctx.textBaseline = textBaseline;
++          const lines = String(style.text).split("\n");
++          const lineHeight = fontSize * 1.2 * vpr;
++          const firstY = -(lines.length - 1) * lineHeight / 2;
++          ctx.save();
++          if (rotateText) {
++            ctx.translate(textX, textY);
++            ctx.rotate(textAngle);
++            lines.forEach((text, index) => ctx.fillText(text, 0, firstY + index * lineHeight));
++          } else {
++            lines.forEach((text, index) => ctx.fillText(text, textX, textY + firstY + index * lineHeight));
++          }
++          ctx.restore();
++        }
+         ctx.restore();
+-        if (s.selected) {
++        if ((s.selected || s.hovered) && !(tool === "FibRetracement" && fibSettings(style).hidden)) {
+           ctx.save();
+           ctx.fillStyle = "#ffffff";
+           ctx.strokeStyle = style.color;
+-          ctx.lineWidth = 1.5 * hpr;
+-          const r = 4 * hpr;
+-          for (const an of s.anchors) {
++          const interactiveAnchors = s.handles || s.anchors;
++          for (let anchorIndex = 0; anchorIndex < interactiveAnchors.length; anchorIndex += 1) {
++            const an = interactiveAnchors[anchorIndex];
+             if (an?.x == null || an?.y == null) continue;
++            const anchorHovered = s.hoveredAnchorIndex === anchorIndex;
++            const r = (anchorHovered ? 4.5 : 3.5) * Math.min(hpr, vpr);
++            ctx.lineWidth = (anchorHovered ? 1.5 : 1) * hpr;
+             ctx.beginPath();
+-            ctx.rect(an.x * hpr - r, an.y * vpr - r, r * 2, r * 2);
++            ctx.arc(an.x * hpr, an.y * vpr, r, 0, Math.PI * 2);
+             ctx.fill();
+             ctx.stroke();
+           }
+@@ -1250,6 +1713,91 @@ function line(ctx, x1, y1, x2, y2) {
+   ctx.lineTo(x2, y2);
+   ctx.stroke();
+ }
++function labelledLine(ctx, x1, y1, x2, y2, style, hpr, labelX1 = x1, labelY1 = y1, labelX2 = x2, labelY2 = y2) {
++  if (!style.text || (style.textVertical || "middle") !== "middle") {
++    line(ctx, x1, y1, x2, y2);
++    return;
++  }
++  const dx = x2 - x1;
++  const dy = y2 - y1;
++  const length = Math.hypot(dx, dy);
++  if (length <= 0) return;
++  const labelDx = labelX2 - labelX1;
++  const labelDy = labelY2 - labelY1;
++  const horizontal = style.textHorizontal || "center";
++  const ratio = horizontal === "left" ? 0 : horizontal === "right" ? 1 : 0.5;
++  const anchorX = labelX1 + labelDx * ratio;
++  const anchorY = labelY1 + labelDy * ratio;
++  let angle = Math.atan2(labelDy, labelDx);
++  if (angle > Math.PI / 2) angle -= Math.PI;
++  else if (angle < -Math.PI / 2) angle += Math.PI;
++  const orientation = Math.cos(angle) * dx + Math.sin(angle) * dy >= 0 ? 1 : -1;
++  ctx.save();
++  ctx.font = `${Math.max(8, style.fontSize || 12) * hpr}px ui-sans-serif, system-ui, sans-serif`;
++  const width = Math.max(...String(style.text).split("\n").map((text) => ctx.measureText(text).width));
++  ctx.restore();
++  const localStart = horizontal === "left" ? 0 : horizontal === "right" ? -width : -width / 2;
++  const localEnd = horizontal === "left" ? width : horizontal === "right" ? 0 : width / 2;
++  const anchorDistance = (anchorX - x1) * dx / length + (anchorY - y1) * dy / length;
++  const padding = 4 * hpr;
++  const gapStart = Math.max(0, anchorDistance + Math.min(localStart * orientation, localEnd * orientation) - padding);
++  const gapEnd = Math.min(length, anchorDistance + Math.max(localStart * orientation, localEnd * orientation) + padding);
++  const ux = dx / length;
++  const uy = dy / length;
++  if (gapStart > 0) line(ctx, x1, y1, x1 + ux * gapStart, y1 + uy * gapStart);
++  if (gapEnd < length) line(ctx, x1 + ux * gapEnd, y1 + uy * gapEnd, x2, y2);
++}
++function labelledHorizontalLine(ctx, x1, y, x2, style, hpr) {
++  const inset = Math.min(4 * hpr, Math.max(0, x2 - x1) / 2);
++  labelledLine(ctx, x1, y, x2, y, style, hpr, x1 + inset, y, x2 - inset, y);
++}
++function labelledArrow(ctx, x1, y1, x2, y2, style, hpr) {
++  if (style.text && (style.textVertical || "middle") === "middle" && (style.textHorizontal || "center") === "right") {
++    const d = norm(x2 - x1, y2 - y1);
++    ctx.save();
++    ctx.font = String(Math.max(8, style.fontSize || 12) * hpr) + "px ui-sans-serif, system-ui, sans-serif";
++    const width = Math.max(...String(style.text).split("\n").map((text) => ctx.measureText(text).width));
++    ctx.restore();
++    const arrowX = x2 - d.x * (width + 4 * hpr);
++    const arrowY = y2 - d.y * (width + 4 * hpr);
++    line(ctx, x1, y1, arrowX, arrowY);
++    arrowHead(ctx, x1, y1, arrowX, arrowY, 12 * hpr);
++    return;
++  }
++  labelledLine(ctx, x1, y1, x2, y2, style, hpr);
++  arrowHead(ctx, x1, y1, x2, y2, 12 * hpr);
++}
++function labelledVerticalLine(ctx, x, y1, y2, style, hpr, vpr, anchorY = null) {
++  if (!style.text || (style.textVertical || "middle") !== "middle") {
++    line(ctx, x, y1, x, y2);
++    return;
++  }
++  const fontSize = Math.max(8, style.fontSize || 12);
++  const lineCount = String(style.text).split("\n").length;
++  const textY = anchorY ?? (y1 + y2) / 2;
++  const halfGap = lineCount * fontSize * 1.2 * vpr / 2 + 4 * vpr;
++  line(ctx, x, y1, x, Math.max(y1, textY - halfGap));
++  line(ctx, x, Math.min(y2, textY + halfGap), x, y2);
++}
++function labelledCrossVerticalLine(ctx, x, y1, y2, labelY, width, style, hpr, vpr) {
++  if (!style.text || (style.textVertical || "middle") !== "middle") {
++    line(ctx, x, y1, x, y2);
++    return;
++  }
++  const horizontal = style.textHorizontal || "center";
++  const textX = horizontal === "left" ? 4 * hpr : horizontal === "right" ? width - 4 * hpr : width / 2;
++  ctx.save();
++  ctx.font = String(Math.max(8, style.fontSize || 12) * hpr) + "px ui-sans-serif, system-ui, sans-serif";
++  const textWidth = Math.max(...String(style.text).split("\n").map((text) => ctx.measureText(text).width));
++  ctx.restore();
++  const left = horizontal === "left" ? textX : horizontal === "right" ? textX - textWidth : textX - textWidth / 2;
++  const right = horizontal === "left" ? textX + textWidth : horizontal === "right" ? textX : textX + textWidth / 2;
++  if (x < left - 4 * hpr || x > right + 4 * hpr) {
++    line(ctx, x, y1, x, y2);
++    return;
++  }
++  labelledVerticalLine(ctx, x, y1, y2, style, hpr, vpr, labelY);
++}
+ function norm(dx, dy) {
+   const len = Math.hypot(dx, dy) || 1;
+   return { x: dx / len, y: dy / len };
+@@ -1276,10 +1824,36 @@ var PaneView = class {
+     return new Renderer(this.primitive.shapes);
+   }
+ };
++var PositionPriceAxisView = class {
++  constructor(coordinate, value, backColor, textColor) {
++    this.coordinateValue = coordinate;
++    this.textValue = value.toFixed(2);
++    this.backgroundValue = backColor;
++    this.textColorValue = textColor;
++  }
++  coordinate() {
++    return this.coordinateValue;
++  }
++  text() {
++    return this.textValue;
++  }
++  textColor() {
++    return this.textColorValue;
++  }
++  backColor() {
++    return this.backgroundValue;
++  }
++  tickVisible() {
++    return true;
++  }
++};
+ var DrawingPrimitive = class {
+   constructor(engine) {
+     this.engine = engine;
+     this.shapes = [];
++    this.priceLabels = [];
++    this.hoveredId = null;
++    this.hoveredAnchorIndex = null;
+     this.chart = null;
+     this.series = null;
+     this.requestUpdate = null;
+@@ -1298,29 +1872,70 @@ var DrawingPrimitive = class {
+   paneViews() {
+     return [this.view];
+   }
++  priceAxisViews() {
++    return this.priceLabels;
++  }
+   /** Ask the chart to repaint (call after engine mutations). */
+   redraw() {
+     this.requestUpdate?.();
+   }
++  setHovered(id, anchorIndex = null) {
++    if (this.hoveredId === id && this.hoveredAnchorIndex === anchorIndex) return;
++    this.hoveredId = id;
++    this.hoveredAnchorIndex = anchorIndex;
++    this.redraw();
++  }
+   updateAllViews() {
+     if (!this.chart || !this.series) {
+       this.shapes = [];
++      this.priceLabels = [];
+       return;
+     }
+     const selectedId = this.engine.getSelectedId();
+     const list = [...this.engine.getDrawings()];
+     const draft = this.engine.getDraft();
+     if (draft) list.push(draft);
+-    this.shapes = list.map((d) => ({
+-      drawing: d,
+-      anchors: d.points.map((p) => this.project(p)),
+-      selected: d.id === selectedId,
+-      draft: draft?.id === d.id
+-    }));
++    const axisColor = (color, fallback) => typeof color === "string" && /^#[0-9a-f]{8}$/i.test(color) ? color.slice(0, 7) : color || fallback;
++    this.priceLabels = list.flatMap((drawing) => {
++      if ((drawing.tool !== "LongPosition" && drawing.tool !== "ShortPosition") || drawing.points.length < 3) return [];
++      const config = positionSettings(drawing.style);
++      if (!config.priceLabels) return [];
++      return [
++        [drawing.points[1].price, axisColor(config.targetColor, "#26a69a")],
++        [drawing.points[0].price, axisColor(config.lineColor, "#787b86")],
++        [drawing.points[2].price, axisColor(config.stopColor, "#ef5350")]
++      ].flatMap(([price, color]) => {
++        const coordinate = this.series.priceToCoordinate(price);
++        return coordinate == null ? [] : [new PositionPriceAxisView(coordinate, price, color, config.textColor)];
++      });
++    });
++    this.shapes = list.map((d) => {
++      const reference = d.points[0];
++      const anchors = d.points.map((p) => this.project(p, reference, d.style, d.tool));
++      const handles = (d.tool === "LongPosition" || d.tool === "ShortPosition") && d.points.length >= 3
++        ? [
++            this.project({ time: d.points[1].time, price: d.points[0].price }, reference, d.style, d.tool),
++            this.project({ time: d.points[0].time, price: d.points[1].price }, reference, d.style, d.tool),
++            this.project({ time: d.points[0].time, price: d.points[2].price }, reference, d.style, d.tool)
++          ]
++        : anchors;
++      return {
++        drawing: d,
++        anchors,
++        handles,
++        selected: d.id === selectedId,
++        hovered: d.id === this.hoveredId,
++        hoveredAnchorIndex: d.id === this.hoveredId ? this.hoveredAnchorIndex : null,
++        draft: draft?.id === d.id
++      };
++    });
+   }
+-  project(p) {
++  project(p, reference = p, style = {}, tool = null) {
+     if (!this.chart || !this.series) return { x: null, y: null };
+-    const x = this.chart.timeScale().timeToCoordinate(p.time);
++    const intervalSeconds = tool === "LongPosition" || tool === "ShortPosition"
++      ? positionSettings(style).intervalSeconds
++      : seriesIntervalSeconds(this.series);
++    const x = projectDrawingTime(this.chart, p.time, reference.time, intervalSeconds, latestSeriesTime(this.series));
+     const y = this.series.priceToCoordinate(p.price);
+     return { x: x == null ? null : x, y: y == null ? null : y };
+   }
+@@ -1359,6 +1974,7 @@ var DrawingController = class {
+     this.el = null;
+     this.primitive = null;
+     this.drag = null;
++    this.hover = null;
+     this.cleanup = [];
+     this.engine = opts.engine ?? new DrawingEngine();
+     this.tol = opts.hitTolerance ?? 6;
+@@ -1382,13 +1998,16 @@ var DrawingController = class {
+     const down = (e) => this.onDown(e);
+     const move = (e) => this.onMove(e);
+     const up = () => this.onUp();
++    const leave = () => this.onLeave();
+     const key = (e) => this.onKey(e);
+     el.addEventListener("mousedown", down, true);
+     el.addEventListener("mousemove", move);
++    el.addEventListener("mouseleave", leave);
+     window.addEventListener("mouseup", up);
+     window.addEventListener("keydown", key);
+     this.cleanup.push(() => el.removeEventListener("mousedown", down, true));
+     this.cleanup.push(() => el.removeEventListener("mousemove", move));
++    this.cleanup.push(() => el.removeEventListener("mouseleave", leave));
+     this.cleanup.push(() => window.removeEventListener("mouseup", up));
+     this.cleanup.push(() => window.removeEventListener("keydown", key));
+   }
+@@ -1402,6 +2021,7 @@ var DrawingController = class {
+       }
+     }
+     this.engine.destroy();
++    if (this.el) this.el.style.cursor = "";
+     this.chart = null;
+     this.series = null;
+     this.el = null;
+@@ -1409,10 +2029,13 @@ var DrawingController = class {
+   }
+   // ── pointer / keyboard ───────────────────────────────────────────────────────
+   onDown(e) {
+-    if (this.engine.isLocked()) return;
+-    const dp = this.unproject(e.offsetX, e.offsetY);
++    if (this.engine.isLocked()) {
++      this.clearHover();
++      return;
++    }
+     const tool = this.engine.getActiveTool();
+     if (tool) {
++      const dp = this.unproject(e.offsetX, e.offsetY);
+       if (!dp) return;
+       e.preventDefault();
+       e.stopPropagation();
+@@ -1441,30 +2064,52 @@ var DrawingController = class {
+       return;
+     }
+     const hit = this.hitTest(e.offsetX, e.offsetY);
++    const dp = this.unproject(e.offsetX, e.offsetY, hit?.id);
+     if (hit && dp) {
+       e.preventDefault();
+       e.stopPropagation();
+       this.engine.select(hit.id);
+       this.drag = { id: hit.id, kind: hit.kind, anchorIndex: hit.anchorIndex, last: dp };
++      this.hover = hit;
++      this.primitive?.setHovered(hit.id, hit.kind === "anchor" ? hit.anchorIndex : null);
++      this.setCursor(hit.kind === "anchor" ? "default" : "grabbing");
+       this.suppressPan(true);
+     } else {
+       this.engine.select(null);
+     }
+   }
+   onMove(e) {
+-    const dp = this.unproject(e.offsetX, e.offsetY);
+-    if (!dp) return;
+-    if (this.engine.getActiveTool() && this.engine.getDraft()) {
+-      this.engine.updateDraftEnd(dp);
++    if (this.engine.getActiveTool()) {
++      const dp = this.unproject(e.offsetX, e.offsetY);
++      if (!dp) return;
++      this.clearHover(false);
++      this.setCursor("crosshair");
++      if (this.engine.getDraft()) this.engine.updateDraftEnd(dp);
+       return;
+     }
+-    if (!this.drag) return;
++    if (!this.drag) {
++      this.updateHover(e.offsetX, e.offsetY);
++      return;
++    }
++    const dp = this.unproject(e.offsetX, e.offsetY, this.drag.id);
++    if (!dp) return;
+     const d = this.engine.getById(this.drag.id);
+     if (!d) return;
+     if (this.drag.kind === "anchor") {
+       const points = d.points.slice();
+-      points[this.drag.anchorIndex] = dp;
+-      this.engine.setPoints(this.drag.id, points);
++      if ((d.tool === "LongPosition" || d.tool === "ShortPosition") && points.length >= 3) {
++        if (this.drag.anchorIndex === 0) {
++          points[1] = { ...points[1], time: dp.time };
++          points[2] = { ...points[2], time: dp.time };
++        } else if (this.drag.anchorIndex === 1) {
++          points[1] = { ...points[1], price: dp.price };
++        } else if (this.drag.anchorIndex === 2) {
++          points[2] = { ...points[2], price: dp.price };
++        }
++      } else {
++        points[this.drag.anchorIndex] = dp;
++      }
++      this.engine.setPoints(this.drag.id, points, dp);
+     } else {
+       const dt = dp.time - this.drag.last.time;
+       const dpr = dp.price - this.drag.last.price;
+@@ -1472,18 +2117,26 @@ var DrawingController = class {
+       this.engine.setPoints(this.drag.id, points);
+     }
+     this.drag.last = dp;
++    this.setCursor(this.drag.kind === "anchor" ? "default" : "grabbing");
+   }
+   onUp() {
+     if (this.drag) {
+       this.drag = null;
+       this.suppressPan(false);
++      this.setCursor(this.hover?.kind === "anchor" ? "default" : this.hover ? "move" : "default");
+     }
+   }
++  onLeave() {
++    if (!this.drag) this.clearHover();
++  }
+   onKey(e) {
++    const target = e.target;
++    if (target && typeof target.closest === "function" && target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')) return;
+     if (e.key === "Delete" || e.key === "Backspace") {
+       if (this.engine.getSelectedId()) {
+         e.preventDefault();
+         this.engine.removeSelected();
++        this.clearHover();
+       }
+     } else if (e.key === "Escape") {
+       if (this.engine.getActiveTool() || this.engine.getDraft()) this.engine.cancelDraft();
+@@ -1495,16 +2148,61 @@ var DrawingController = class {
+   suppressPan(on) {
+     this.chart?.applyOptions({ handleScroll: { pressedMouseMove: !on } });
+   }
+-  unproject(x, y) {
++  setCursor(cursor) {
++    if (!this.el) return;
++    if (this.el.style.setProperty) this.el.style.setProperty("cursor", cursor, "important");
++    else this.el.style.cursor = cursor;
++    this.el.querySelectorAll?.("canvas").forEach((canvas) => canvas.style.setProperty("cursor", cursor, "important"));
++  }
++  clearHover(resetCursor = true) {
++    this.hover = null;
++    this.primitive?.setHovered(null);
++    if (resetCursor) this.setCursor("default");
++  }
++  updateHover(px, py) {
++    if (this.engine.isLocked()) {
++      this.clearHover();
++      return;
++    }
++    const hit = this.hitTest(px, py);
++    this.hover = hit;
++    this.primitive?.setHovered(hit?.id ?? null, hit?.kind === "anchor" ? hit.anchorIndex : null);
++    this.setCursor(hit?.kind === "anchor" ? "default" : hit ? "move" : "default");
++  }
++  unproject(x, y, preferredDrawingId = null) {
+     if (!this.chart || !this.series) return null;
+-    const time = this.chart.timeScale().coordinateToTime(x);
++    let time = this.chart.timeScale().coordinateToTime(x);
+     const price = this.series.coordinateToPrice(y);
++    if (time == null) {
++      const drawingId = preferredDrawingId || this.drag?.id || this.engine.getSelectedId();
++      const drawing = drawingId ? this.engine.getById(drawingId) : null;
++      if (drawing?.points[0]) {
++        const intervalSeconds = drawing.tool === "LongPosition" || drawing.tool === "ShortPosition"
++          ? positionSettings(drawing.style).intervalSeconds
++          : seriesIntervalSeconds(this.series);
++        time = coordinateToDrawingTime(this.chart, x, drawing.points[0].time, intervalSeconds, latestSeriesTime(this.series));
++      } else {
++        const activeTool = this.engine.getActiveTool();
++        const seriesData = activeTool ? this.series.data?.() : null;
++        const referenceTime = Array.isArray(seriesData) ? Number(seriesData.at(-1)?.time) : NaN;
++        if (Number.isFinite(referenceTime)) {
++          const intervalSeconds = activeTool === "LongPosition" || activeTool === "ShortPosition"
++            ? positionSettings(this.engine.getDefaultStyle()).intervalSeconds
++            : seriesIntervalSeconds(this.series);
++          time = coordinateToDrawingTime(this.chart, x, referenceTime, intervalSeconds, latestSeriesTime(this.series));
++        }
++      }
++    }
+     if (time == null || price == null) return null;
+     return { time, price };
+   }
+-  project(p) {
++  project(p, drawing = null) {
+     if (!this.chart || !this.series) return null;
+-    const x = this.chart.timeScale().timeToCoordinate(p.time);
++    const reference = drawing?.points?.[0] || p;
++    const intervalSeconds = drawing && (drawing.tool === "LongPosition" || drawing.tool === "ShortPosition")
++      ? positionSettings(drawing.style).intervalSeconds
++      : seriesIntervalSeconds(this.series);
++    const x = projectDrawingTime(this.chart, p.time, reference.time, intervalSeconds, latestSeriesTime(this.series));
+     const y = this.series.priceToCoordinate(p.price);
+     if (x == null || y == null) return null;
+     return { x, y };
+@@ -1513,27 +2211,53 @@ var DrawingController = class {
+     const p = { x: px, y: py };
+     const list = this.engine.getDrawings();
+     const selId = this.engine.getSelectedId();
++    const interactive = (drawing) => {
++      if (drawing.id.startsWith("auto-")) return false;
++      if (drawing.tool === "FibRetracement") {
++        const fib = fibSettings(drawing.style);
++        if (fib.locked || fib.hidden || !fibVisible(fib)) return false;
++      }
++      return true;
++    };
++    const anchorHit = (drawing) => {
++      if (!interactive(drawing)) return null;
++      const handlePoints = (drawing.tool === "LongPosition" || drawing.tool === "ShortPosition") && drawing.points.length >= 3
++        ? [
++            { time: drawing.points[1].time, price: drawing.points[0].price },
++            { time: drawing.points[0].time, price: drawing.points[1].price },
++            { time: drawing.points[0].time, price: drawing.points[2].price }
++          ]
++        : drawing.points;
++      for (let i = 0; i < handlePoints.length; i++) {
++        const pt = this.project(handlePoints[i], drawing);
++        if (pt && Math.hypot(pt.x - px, pt.y - py) <= this.tol + 3) {
++          return { id: drawing.id, kind: "anchor", anchorIndex: i };
++        }
++      }
++      return null;
++    };
+     if (selId) {
+       const sel = this.engine.getById(selId);
+       if (sel) {
+-        for (let i = 0; i < sel.points.length; i++) {
+-          const pt = this.project(sel.points[i]);
+-          if (pt && Math.hypot(pt.x - px, pt.y - py) <= this.tol + 3) {
+-            return { id: selId, kind: "anchor", anchorIndex: i };
+-          }
+-        }
++        const hit = anchorHit(sel);
++        if (hit) return hit;
+       }
+     }
+     for (let i = list.length - 1; i >= 0; i--) {
+-      if (this.bodyHit(list[i], p)) return { id: list[i].id, kind: "move", anchorIndex: 0 };
++      if (list[i].id === selId) continue;
++      const hit = anchorHit(list[i]);
++      if (hit) return hit;
++    }
++    for (let i = list.length - 1; i >= 0; i--) {
++      if (interactive(list[i]) && this.bodyHit(list[i], p)) return { id: list[i].id, kind: "move", anchorIndex: 0 };
+     }
+     return null;
+   }
+   bodyHit(d, p) {
+-    const a = this.project(d.points[0]);
++    const a = this.project(d.points[0], d);
+     if (!a) return false;
+-    const b = d.points[1] ? this.project(d.points[1]) : null;
+-    const c = d.points[2] ? this.project(d.points[2]) : null;
++    const b = d.points[1] ? this.project(d.points[1], d) : null;
++    const c = d.points[2] ? this.project(d.points[2], d) : null;
+     const t = this.tol;
+     switch (d.tool) {
+       case "HorizontalLine":
+@@ -1547,6 +2271,13 @@ var DrawingController = class {
+       case "TrendLine":
+       case "Arrow":
+         return !!b && distToSegment(p, a, b) <= t;
++      case "Text": {
++        const fontSize = Math.max(8, d.style.fontSize || 14);
++        const lines = String(d.style.text || "Text").split("\n");
++        const width = Math.max(...lines.map((line2) => line2.length), 1) * fontSize * 0.65;
++        const height = lines.length * fontSize * 1.2;
++        return p.x >= a.x - t && p.x <= a.x + width + t && p.y >= a.y - height - t && p.y <= a.y + t;
++      }
+       case "Ray":
+         return !!b && distToRay(p, a, b) <= t;
+       case "ExtendedLine":
+@@ -1554,6 +2285,9 @@ var DrawingController = class {
+       case "Rectangle":
+       case "PriceRange":
+         return !!b && (distToRectEdges(p, a, b) <= t || pointInRect(p, a, b));
++      case "LongPosition":
++      case "ShortPosition":
++        return !!b && !!c && (pointInRect(p, a, b) || pointInRect(p, a, c) || Math.abs(p.y - a.y) <= t);
+       case "DateRange":
+         return !!b && (Math.abs(p.x - a.x) <= t || Math.abs(p.x - b.x) <= t);
+       case "Circle":
+@@ -1566,7 +2300,29 @@ var DrawingController = class {
+         return distToSegment(p, a, b) <= t || distToSegment(p, c, c2) <= t;
+       }
+       case "FibRetracement":
+-        return !!b && FIB_LEVELS.some((lvl) => Math.abs(p.y - (a.y + (b.y - a.y) * lvl)) <= t);
++        if (!b) return false;
++        {
++          const fib = fibSettings(d.style);
++          if (fib.hidden) return false;
++          if (fib.locked) return false;
++          if (!fibVisible(fib)) return false;
++          const minX = Math.min(a.x, b.x);
++          const maxX = Math.max(a.x, b.x);
++          const inHorizontalRange = fib.extend === "both" || fib.extend === "left" && p.x <= maxX + t || fib.extend === "right" && p.x >= minX - t || fib.extend === "none" && p.x >= minX - t && p.x <= maxX + t;
++          if (!inHorizontalRange) return false;
++          if (fib.trendLineVisible && distToSegment(p, a, b) <= t) return true;
++          return fib.levels.some((level) => {
++            if (level.visible === false || !Number.isFinite(level.value)) return false;
++            const effectiveLevel = fib.reverse ? level.value : 1 - level.value;
++            const firstPrice = d.points[0].price;
++            const secondPrice = d.points[1].price;
++            const price = fib.logScale && firstPrice > 0 && secondPrice > 0
++              ? Math.exp(Math.log(firstPrice) + (Math.log(secondPrice) - Math.log(firstPrice)) * effectiveLevel)
++              : firstPrice + (secondPrice - firstPrice) * effectiveLevel;
++            const pixelRatio = secondPrice === firstPrice ? effectiveLevel : (price - firstPrice) / (secondPrice - firstPrice);
++            return Math.abs(p.y - (a.y + (b.y - a.y) * pixelRatio)) <= t;
++          });
++        }
+       case "FibExtension":
+         return !!b && !!c && FIB_EXT_LEVELS.some((lvl) => Math.abs(p.y - (c.y + (b.y - a.y) * lvl)) <= t);
+       default:
+diff --git a/node_modules/@getcandlekit/charts/dist/index.d.cts b/node_modules/@getcandlekit/charts/dist/index.d.cts
+index f9acbb7..031a84d 100644
+--- a/node_modules/@getcandlekit/charts/dist/index.d.cts
++++ b/node_modules/@getcandlekit/charts/dist/index.d.cts
+@@ -654,7 +654,7 @@ interface PredictionOverlay {
+  * and hit-test switch; the model below is the stable, serializable surface.
+  */
+ /** Built-in tool ids. Open-ended so you can add custom tools. */
+-type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "PriceRange" | "DateRange" | "FibRetracement" | "FibExtension" | (string & {});
++type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "Text" | "PriceRange" | "DateRange" | "LongPosition" | "ShortPosition" | "FibRetracement" | "FibExtension" | (string & {});
+ /** Number of anchor points each tool needs. */
+ declare const TOOL_POINTS: Record<string, number>;
+ /** An anchor in data space: `time` is the lightweight-charts time (epoch seconds). */
+@@ -666,6 +666,13 @@ interface DrawingStyle {
+     color: string;
+     width: number;
+     dashed: boolean;
++    lineStyle?: "solid" | "dashed" | "dotted";
++    text?: string;
++    textColor?: string;
++    fontSize?: number;
++    textHorizontal?: "left" | "center" | "right";
++    textVertical?: "top" | "middle" | "bottom";
++    position?: unknown;
+     /** Fill (rect/circle/fib bands). `null` = no fill. */
+     fill: string | null;
+ }
+@@ -791,6 +798,7 @@ declare class DrawingPrimitive implements ISeriesPrimitive<Time> {
+     attached(param: SeriesAttachedParameter<Time>): void;
+     detached(): void;
+     paneViews(): readonly IPrimitivePaneView[];
++    priceAxisViews(): readonly ISeriesPrimitiveAxisView[];
+     /** Ask the chart to repaint (call after engine mutations). */
+     redraw(): void;
+     updateAllViews(): void;
+diff --git a/node_modules/@getcandlekit/charts/dist/index.d.ts b/node_modules/@getcandlekit/charts/dist/index.d.ts
+index 6dcc3f6..d1332fb 100644
+--- a/node_modules/@getcandlekit/charts/dist/index.d.ts
++++ b/node_modules/@getcandlekit/charts/dist/index.d.ts
+@@ -654,7 +654,7 @@ interface PredictionOverlay {
+  * and hit-test switch; the model below is the stable, serializable surface.
+  */
+ /** Built-in tool ids. Open-ended so you can add custom tools. */
+-type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "PriceRange" | "DateRange" | "FibRetracement" | "FibExtension" | (string & {});
++type DrawingToolId = "TrendLine" | "Ray" | "ExtendedLine" | "HorizontalLine" | "HorizontalRay" | "VerticalLine" | "CrossLine" | "Rectangle" | "Circle" | "Triangle" | "ParallelChannel" | "Arrow" | "Text" | "PriceRange" | "DateRange" | "LongPosition" | "ShortPosition" | "FibRetracement" | "FibExtension" | (string & {});
+ /** Number of anchor points each tool needs. */
+ declare const TOOL_POINTS: Record<string, number>;
+ /** An anchor in data space: `time` is the lightweight-charts time (epoch seconds). */
+@@ -666,6 +666,13 @@ interface DrawingStyle {
+     color: string;
+     width: number;
+     dashed: boolean;
++    lineStyle?: "solid" | "dashed" | "dotted";
++    text?: string;
++    textColor?: string;
++    fontSize?: number;
++    textHorizontal?: "left" | "center" | "right";
++    textVertical?: "top" | "middle" | "bottom";
++    position?: unknown;
+     /** Fill (rect/circle/fib bands). `null` = no fill. */
+     fill: string | null;
+ }
+@@ -778,11 +785,13 @@ interface Shape {
+     drawing: Drawing;
+     anchors: Anchor[];
+     selected: boolean;
++    hovered: boolean;
+     draft: boolean;
+ }
+ declare class DrawingPrimitive implements ISeriesPrimitive<Time> {
+     private readonly engine;
+     shapes: Shape[];
++    private hoveredId;
+     private chart;
+     private series;
+     private requestUpdate;
+@@ -791,8 +800,10 @@ declare class DrawingPrimitive implements ISeriesPrimitive<Time> {
+     attached(param: SeriesAttachedParameter<Time>): void;
+     detached(): void;
+     paneViews(): readonly IPrimitivePaneView[];
++    priceAxisViews(): readonly ISeriesPrimitiveAxisView[];
+     /** Ask the chart to repaint (call after engine mutations). */
+     redraw(): void;
++    setHovered(id: string | null): void;
+     updateAllViews(): void;
+     private project;
+ }
+@@ -841,6 +852,7 @@ declare class DrawingController implements ChartPlugin {
+     private el;
+     private primitive;
+     private drag;
++    private hover;
+     private cleanup;
+     private readonly tol;
+     private readonly storageKey;
+@@ -851,8 +863,12 @@ declare class DrawingController implements ChartPlugin {
+     private onDown;
+     private onMove;
+     private onUp;
++    private onLeave;
+     private onKey;
+     private suppressPan;
++    private setCursor;
++    private clearHover;
++    private updateHover;
+     private unproject;
+     private project;
+     private hitTest;
