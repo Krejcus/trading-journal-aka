@@ -28,6 +28,15 @@ export const replayTrimStartIndex = (params: {
   chunk: number;
 }): number => {
   const { windowStart, windowEnd, viewEndIndex, maxBars, chunk } = params;
+
+  // Když pohled zasahuje do starší poloviny okna, neořezáváme vůbec. Ořez je
+  // jen ochrana paměti a nemá právo odsunout uživatele, který si prohlíží
+  // historii — právě tudy vedly oba skoky (na 6. 7. a hned pak na 3. 7.).
+  if (viewEndIndex !== null && Number.isFinite(viewEndIndex)
+    && viewEndIndex < windowStart + (windowEnd - windowStart) / 2) {
+    return windowStart;
+  }
+
   if (viewEndIndex === null || !Number.isFinite(viewEndIndex)) {
     // Neznámý pohled: ořízneme ZPRAVA (okno začne tam, kde začínalo). Kotva na
     // konec dat tady odhazovala uživatele dopředu právě na hranici historie,
