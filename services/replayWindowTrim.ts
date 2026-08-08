@@ -29,7 +29,10 @@ export const replayTrimStartIndex = (params: {
 }): number => {
   const { windowStart, windowEnd, viewEndIndex, maxBars, chunk } = params;
   if (viewEndIndex === null || !Number.isFinite(viewEndIndex)) {
-    return Math.max(0, windowEnd - maxBars);
+    // Neznámý pohled: ořízneme ZPRAVA (okno začne tam, kde začínalo). Kotva na
+    // konec dat tady odhazovala uživatele dopředu právě na hranici historie,
+    // kde graf hlásí prázdný viditelný rozsah — z 1. 7. skočil na 3. 7.
+    return windowStart;
   }
   // Okno musí obsáhnout pohled i rezervu, ale nikdy nesmí přerůst konec dat.
   const anchorEnd = Math.min(windowEnd, Math.max(viewEndIndex + chunk, windowStart + maxBars));

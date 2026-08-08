@@ -41,13 +41,15 @@ describe('replayTrimStartIndex', () => {
     expect(start).toBe(10_000 - maxBars);
   });
 
-  it('bez známého viewportu zachová původní ořez od konce', () => {
+  // Na hranici historie hlásí graf prázdný viditelný rozsah. Kotva na konec dat
+  // tam uživatele odhodila dopředu (z 1. 7. na 3. 7.), takže se ořezává zprava.
+  it('bez známého viewportu ořízne zprava a nechá začátek okna být', () => {
     expect(replayTrimStartIndex({
-      windowStart: 0, windowEnd: 10_000, viewEndIndex: null, maxBars, chunk,
-    })).toBe(5_500);
+      windowStart: 2_000, windowEnd: 10_000, viewEndIndex: null, maxBars, chunk,
+    })).toBe(2_000);
     expect(replayTrimStartIndex({
-      windowStart: 0, windowEnd: 10_000, viewEndIndex: NaN, maxBars, chunk,
-    })).toBe(5_500);
+      windowStart: 2_000, windowEnd: 10_000, viewEndIndex: NaN, maxBars, chunk,
+    })).toBe(2_000);
   });
 
   it('nikdy nevrátí záporný index', () => {
