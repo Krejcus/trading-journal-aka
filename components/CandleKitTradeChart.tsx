@@ -2003,8 +2003,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const nextFirst = candles[0]?.time ?? null;
     previousFirstCandleTimeRef.current = nextFirst;
     if (previousFirst === null || nextFirst === null || nextFirst >= previousFirst) return;
-    const visibleRange = apiRef.current?.controller.getChart().timeScale().getVisibleRange();
-    if (visibleRange) pendingVisibleRangeRef.current = visibleRange;
     if (replayActive) {
       const replayWindow = replayWindowRef.current;
       if (!replayWindow) return;
@@ -2027,6 +2025,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       setCandleWindow(current => ({ ...current }));
       return;
     }
+    const visibleRange = apiRef.current?.controller.getChart().timeScale().getVisibleRange();
+    if (visibleRange) pendingVisibleRangeRef.current = visibleRange;
     const prependedCount = candles.findIndex(candle => candle.time >= previousFirst);
     setCandleWindow(current => ({
       start: 0,
@@ -2095,8 +2095,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const maxBars = REPLAY_MAX_RENDER_BARS[timeframe][compactMode ? 'compact' : 'normal'];
     const current = replayRenderWindowIndexes(candles, replayWindow);
     if (current.end - current.start <= maxBars + sizing.chunk) return;
-    const visibleRange = apiRef.current?.controller.getChart().timeScale().getVisibleRange();
-    if (visibleRange) pendingVisibleRangeRef.current = visibleRange;
     replayWindow.startTime = candles[Math.max(0, current.end - maxBars)]?.time
       ?? replayWindow.startTime;
     setCandleWindow(value => ({ ...value }));
@@ -2437,8 +2435,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // děravá (víkendy, pauzy), takže si knihovna rozsah upravila po svém —
       // jednou o hodiny doleva, jindy rovnou na poslední svíčku. Posun okna
       // přitom známe přesně: stačí spočítat, o kolik barů se první bar hnul.
-      const visibleTimeRange = pendingVisibleRangeRef.current
-        ?? chart.timeScale().getVisibleRange();
       const barShift = replayBarShift({
         previousFirstSeconds: firstControllerTime / 1000,
         nextCandles: visibleCandles,
@@ -2447,16 +2443,21 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
       controller.setData(visibleCandles.map(candleKitBar));
 
-      if (viewportBeforeUpdate && barShift !== 0) {
+      // Základem musí být SKUTEČNÝ viewport, ne `replayViewportTargetRef`.
+      // Ten drží cíl pro sledování aktuální replay svíčky; při scrollu do
+      // historie se od ní vzdalujeme, takže je zastaralý a má i jinou šířku
+      // (naměřeno: cíl 136 barů proti skutečným 90 a 72). Graf pak po výměně
+      // okna skočil jinam a ještě si změnil přiblížení.
+      const anchorViewport = chart.timeScale().getVisibleLogicalRange() ?? viewportBeforeUpdate;
+      if (anchorViewport) {
         chart.timeScale().setVisibleLogicalRange({
-          from: viewportBeforeUpdate.from + barShift,
-          to: viewportBeforeUpdate.to + barShift,
+          from: anchorViewport.from + barShift,
+          to: anchorViewport.to + barShift,
         });
-      } else if (viewportBeforeUpdate) {
-        chart.timeScale().setVisibleLogicalRange(viewportBeforeUpdate);
-      } else if (visibleTimeRange) {
-        chart.timeScale().setVisibleRange(visibleTimeRange);
       }
+      // Replay nikdy neobnovujeme přes časy. I fallback přes setVisibleRange
+      // dokázal po opožděném callbacku přeskočit přes session gap až na konec
+      // dat. Logický rozsah výše je jediný zdroj pravdy pro replay viewport.
       pendingVisibleRangeRef.current = null;
       if (priceRangeBeforeUpdate) {
         const currentPriceScale = chart.priceScale('right');
@@ -3291,8 +3292,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         && !olderHistoryLoading
         && currentCandles[0]?.time !== olderHistoryRequestedBeforeRef.current;
       if (!nearLeftEdge && !nearRightEdge && !needsExternalHistory) return;
-      const visibleRange = chart.timeScale().getVisibleRange();
-      if (visibleRange) pendingVisibleRangeRef.current = visibleRange;
+      if (!replayActive) {
+        const visibleRange = chart.timeScale().getVisibleRange();
+        if (visibleRange) pendingVisibleRangeRef.current = visibleRange;
+      }
       expandingWindowRef.current = true;
       const chunk = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[timeframe].chunk;
       if (replayActive && replayWindowRef.current && (nearLeftEdge || nearRightEdge)) {
@@ -3323,10 +3326,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
     window.setTimeout(() => {
       const pendingRange = pendingVisibleRangeRef.current;
-      if (pendingRange) {
+      if (pendingRange && !replayActive) {
         chart.timeScale().setVisibleRange(pendingRange);
         pendingVisibleRangeRef.current = null;
       } else if (replayActive) {
+        // A ready callback can run after a replay window replacement. Never
+        // let a stale non-replay time range override the logical viewport.
+        pendingVisibleRangeRef.current = null;
         const transition = replayStartTransitionRef.current;
         replayStartTransitionRef.current = null;
         if (transition && visibleCandles.length > 0) {

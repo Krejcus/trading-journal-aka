@@ -4,8 +4,8 @@
     {
       "name": "alphatrade",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "autoPort": true
+      "runtimeArgs": ["run", "dev", "--", "--port", "5273", "--strictPort"],
+      "port": 5273
     }
   ]
 }
