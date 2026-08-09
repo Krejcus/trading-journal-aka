@@ -23,7 +23,7 @@ import ImportSettings from './ImportSettings';
 import ImportQueue from './ImportQueue';
 import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
-import { enablePush, disablePush, listPushDevices, type PushDevice } from '../services/pushSubscriptionService';
+import { enablePush, disablePush, listPushDevices, sendTestPush, type PushDevice } from '../services/pushSubscriptionService';
 
 interface SettingsProps {
   theme: 'dark' | 'light' | 'oled';
@@ -310,6 +310,19 @@ const Settings: React.FC<SettingsProps> = ({
     try {
       await disablePush();
       showToast('Notifikace vypnuty na tomto zařízení');
+      await refreshPushState();
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleTestPush = async () => {
+    setPushBusy(true);
+    try {
+      const result = await sendTestPush();
+      showToast(result.ok
+        ? `Odesláno na ${result.sent} z ${result.devices} zařízení — zavři appku a čekej`
+        : (result.message || 'Zkušební notifikaci se nepodařilo odeslat'));
       await refreshPushState();
     } finally {
       setPushBusy(false);
@@ -885,6 +898,16 @@ const Settings: React.FC<SettingsProps> = ({
                     </button>
                   )}
                 </div>
+
+                {pushDiag?.hasActiveSubscription && (
+                  <button
+                    onClick={handleTestPush}
+                    disabled={pushBusy}
+                    className="mt-2 w-full py-3 rounded-2xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40 transition-all active:scale-[0.98]"
+                  >
+                    {pushBusy ? 'Odesílám…' : 'Poslat zkušební notifikaci'}
+                  </button>
+                )}
 
                 {pushDevices.length > 0 && (
                   <div className="mt-6 pt-5 border-t border-[var(--border-subtle)]">

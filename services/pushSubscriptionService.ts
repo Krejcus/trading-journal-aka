@@ -240,6 +240,30 @@ export const disablePush = async (): Promise<void> => {
   writeLastEndpoint(null);
 };
 
+/**
+ * Pošle zkušební notifikaci na všechna zařízení uživatele. Autorizuje se JWT
+ * přihlášeného uživatele, takže se nikde nemusí zadávat CRON_SECRET.
+ */
+export const sendTestPush = async (): Promise<{ ok: boolean; sent: number; devices: number; message?: string }> => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { ok: false, sent: 0, devices: 0, message: 'Nejsi přihlášen.' };
+
+  try {
+    const response = await fetch('/api/push-test', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return { ok: false, sent: 0, devices: 0, message: result?.message || result?.error || `Chyba ${response.status}` };
+    }
+    return { ok: result.sent > 0, sent: result.sent ?? 0, devices: result.devices ?? 0, message: result.message };
+  } catch (err: any) {
+    return { ok: false, sent: 0, devices: 0, message: err?.message || 'Požadavek selhal.' };
+  }
+};
+
 /** Seznam zařízení pro diagnostiku v Settings. */
 export const listPushDevices = async (): Promise<PushDevice[]> => {
   const userId = await getUserId();
