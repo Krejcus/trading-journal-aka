@@ -15,13 +15,15 @@ import {
   Trash2, Plus, Brain, X, Target,
   Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck,
   ShieldAlert, Activity, Check, ChevronLeft,
-  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText, Lock, Link2
+  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText, Lock, Link2,
+  Smartphone
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import ImportSettings from './ImportSettings';
 import ImportQueue from './ImportQueue';
 import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
+import { enablePush, disablePush, listPushDevices, type PushDevice } from '../services/pushSubscriptionService';
 
 interface SettingsProps {
   theme: 'dark' | 'light' | 'oled';
@@ -46,7 +48,6 @@ interface SettingsProps {
   setSystemSettings: (settings: SystemSettings) => void;
   standardGoals: string[];
   setStandardGoals: (goals: string[]) => void;
-  onEnableNotifications?: () => void;
   appVersion?: string;
   onHardRefresh?: () => void;
   accentColor?: string;
@@ -190,7 +191,7 @@ const Settings: React.FC<SettingsProps> = ({
   weeklyFocusList, setWeeklyFocusList,
   systemSettings, setSystemSettings,
   standardGoals, setStandardGoals,
-  onEnableNotifications, appVersion, onHardRefresh,
+  appVersion, onHardRefresh,
   accentColor = 'blue',
   onAccentColorChange,
   activeTab = 'psychology',
@@ -266,12 +267,54 @@ const Settings: React.FC<SettingsProps> = ({
   }, [coachMemories, memoryFilter, memoryStatusFilter]);
 
   // Push notification diagnostics
-  const [pushDiag, setPushDiag] = useState<{ isStandalone: boolean; isApple: boolean; permission: string; hasActiveSW: boolean; hasActiveSubscription: boolean; ready: boolean } | null>(null);
+  const [pushDiag, setPushDiag] = useState<Awaited<ReturnType<typeof getPushDiagnostics>> | null>(null);
+  const [pushDevices, setPushDevices] = useState<PushDevice[]>([]);
+  const [pushBusy, setPushBusy] = useState(false);
+
+  const refreshPushState = useCallback(async () => {
+    const [diag, devices] = await Promise.all([
+      getPushDiagnostics().catch(() => null),
+      listPushDevices().catch(() => []),
+    ]);
+    setPushDiag(diag);
+    setPushDevices(devices);
+  }, []);
+
   useEffect(() => {
-    if (activeTab === 'system') {
-      getPushDiagnostics().then(setPushDiag).catch(() => { });
+    if (activeTab === 'system') void refreshPushState();
+  }, [activeTab, refreshPushState]);
+
+  const PUSH_ERRORS: Record<string, string> = {
+    unsupported: 'Tento prohlížeč notifikace nepodporuje.',
+    'ios-needs-standalone': 'Na iPhonu nejdřív přidej appku na plochu (Sdílet → Přidat na plochu) a otevři ji odtud.',
+    denied: 'Notifikace jsou zablokované. Povol je v nastavení prohlížeče a zkus to znovu.',
+    'subscribe-failed': 'Registrace odběru selhala. Zkus obnovit stránku.',
+    'save-failed': 'Odběr se nepodařilo uložit na server.',
+  };
+
+  const handleEnablePush = async () => {
+    setPushBusy(true);
+    try {
+      const result = await enablePush();
+      showToast(result.ok
+        ? 'Notifikace zapnuty na tomto zařízení'
+        : (PUSH_ERRORS[result.reason || ''] || 'Notifikace se nepodařilo zapnout'));
+      await refreshPushState();
+    } finally {
+      setPushBusy(false);
     }
-  }, [activeTab]);
+  };
+
+  const handleDisablePush = async () => {
+    setPushBusy(true);
+    try {
+      await disablePush();
+      showToast('Notifikace vypnuty na tomto zařízení');
+      await refreshPushState();
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   const showToast = (message: string) => {
     setToast({ message, id: Date.now() });
@@ -785,6 +828,88 @@ const Settings: React.FC<SettingsProps> = ({
               <Card isDark={isDark}>
                 <SectionHeader icon={Link2} title="Fronta importu" subtitle="Párování exekucí na deník" color="bg-gradient-to-br from-emerald-600 to-teal-600" isDark={isDark} />
                 <ImportQueue isDark={isDark} onToast={showToast} onIncidentSaved={onImportIncidentSaved} />
+              </Card>
+
+              {/* Push notifikace — doručení alertů i při zavřené aplikaci */}
+              <Card isDark={isDark}>
+                <SectionHeader icon={Bell} title="Push notifikace" subtitle="Alerty i při zavřené aplikaci" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
+                <p className={`text-xs mb-5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Bez zapnutého odběru chodí upozornění jen tehdy, když máš aplikaci otevřenou.
+                  Po zapnutí je posílá server, takže dorazí i se zavřenou appkou.
+                </p>
+
+                {pushDiag?.isApple && !pushDiag?.isStandalone && (
+                  <div className="mb-5 p-4 rounded-2xl border border-amber-500/20 bg-amber-500/5">
+                    <p className="text-[11px] font-black uppercase tracking-widest text-amber-500 mb-1">Nejdřív přidej na plochu</p>
+                    <p className="text-[10px] font-bold text-[var(--text-muted)] leading-relaxed">
+                      iPhone posílá push jen aplikacím přidaným na plochu. V Safari klepni na
+                      <span className="text-[var(--text-primary)]"> Sdílet → Přidat na plochu</span>, appku otevři z ikony na ploše a vrať se sem.
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-1.5 mb-5">
+                  {[
+                    { ok: !!pushDiag?.hasNotificationAPI, label: 'Prohlížeč podporuje notifikace' },
+                    { ok: !pushDiag?.isApple || !!pushDiag?.isStandalone, label: 'Aplikace běží z plochy (nutné na iPhonu)' },
+                    { ok: pushDiag?.permission === 'granted', label: 'Notifikace povoleny' },
+                    { ok: !!pushDiag?.hasActiveSW, label: 'Service worker aktivní' },
+                    { ok: !!pushDiag?.hasActiveSubscription, label: 'Odběr zaregistrován' },
+                  ].map(row => (
+                    <div key={row.label} className="flex items-center gap-2.5">
+                      {row.ok
+                        ? <Check size={13} className="text-emerald-500 shrink-0" />
+                        : <X size={13} className="text-[var(--text-muted)] shrink-0" />}
+                      <span className={`text-[10px] font-bold ${row.ok ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
+                        {row.label}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleEnablePush}
+                    disabled={pushBusy || !!pushDiag?.ready}
+                    className="flex-1 py-3 rounded-2xl bg-[var(--text-secondary)] text-[var(--bg-page)] text-[10px] font-black uppercase tracking-widest disabled:opacity-40 transition-all active:scale-[0.98]"
+                  >
+                    {pushDiag?.ready ? 'Notifikace aktivní' : (pushBusy ? 'Zapínám…' : 'Zapnout notifikace')}
+                  </button>
+                  {pushDiag?.hasActiveSubscription && (
+                    <button
+                      onClick={handleDisablePush}
+                      disabled={pushBusy}
+                      className="px-4 py-3 rounded-2xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-muted)] disabled:opacity-40 transition-all active:scale-[0.98]"
+                    >
+                      Vypnout
+                    </button>
+                  )}
+                </div>
+
+                {pushDevices.length > 0 && (
+                  <div className="mt-6 pt-5 border-t border-[var(--border-subtle)]">
+                    <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)] mb-3">
+                      Zařízení s odběrem ({pushDevices.length})
+                    </p>
+                    <div className="space-y-2">
+                      {pushDevices.map(device => (
+                        <div key={device.id} className="flex items-center gap-3">
+                          <Smartphone size={13} className={device.expiredAt ? 'text-rose-500 shrink-0' : 'text-[var(--text-muted)] shrink-0'} />
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-primary)] truncate">
+                              {device.platform || 'Zařízení'}
+                              {device.isCurrent && <span className="text-emerald-500"> · toto zařízení</span>}
+                              {device.expiredAt && <span className="text-rose-500"> · vypadlo</span>}
+                            </span>
+                            <span className="text-[9px] font-bold text-[var(--text-muted)] truncate">
+                              Naposledy {new Date(device.lastSeenAt).toLocaleString('cs-CZ')}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </Card>
 
               <div className="grid grid-cols-1 gap-6">
