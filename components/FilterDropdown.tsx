@@ -300,7 +300,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 : { transformOrigin: 'bottom center' }
             }
             ref={panelRef}
-            className={`fixed inset-x-0 bottom-0 top-auto sm:relative sm:inset-auto w-full sm:w-[320px] md:w-[400px] overflow-hidden border-t sm:border z-[1000] backdrop-blur-2xl rounded-t-[32px] sm:rounded-[24px] max-h-[85vh] sm:max-h-[80vh] flex flex-col ${isDark
+            className={`fixed inset-x-0 bottom-0 top-auto sm:relative sm:inset-auto w-full sm:w-[320px] md:w-[400px] overflow-hidden border-t sm:border z-[1000] backdrop-blur-2xl rounded-t-lg sm:rounded-lg max-h-[85vh] sm:max-h-[80vh] flex flex-col ${isDark
               ? 'bg-[rgba(15,18,28,0.06)] border-[rgba(255,255,255,0.04)] shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.5)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]'
               : 'bg-[rgba(255,255,255,0.06)] border-[rgba(255,255,255,0.18)] shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.05)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.1)]'
               }`}
@@ -334,7 +334,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
               </div>
             </div>
 
-            <div className="flex-1 p-4 space-y-5 overflow-y-auto no-scrollbar relative z-10">
+            <div className="flex-1 px-4 py-3 space-y-3 overflow-y-auto no-scrollbar relative z-10">
               {/* Režim — jen v live světě (backtest má vlastní svět přes sidebar, žádný výběr módu) */}
               {dashboardMode && setDashboardMode && dashboardMode !== 'backtesting' && (() => {
                 const liveModes = ['funded', 'combined', 'challenge', 'archive'];
@@ -342,7 +342,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 return (
                   <motion.div variants={itemVariants}>
                     <div className={sectionLabelClass}><Monitor size={10} /> Režim</div>
-                    <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                    <div className={`flex p-0.5 rounded-lg border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
                       <motion.div
                         animate={{ x: (idx * 100) + '%' }}
                         transition={{ type: 'spring', stiffness: 400, damping: 35 }}
@@ -372,10 +372,10 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 );
               })()}
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <motion.div variants={itemVariants}>
                   <div className={sectionLabelClass}><Layers size={10} /> Seskupení</div>
-                  <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                  <div className={`flex p-0.5 rounded-lg border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
                     <motion.div
                       animate={{ x: (viewMode === 'individual' ? 0 : 100) + '%' }}
                       transition={{ type: 'spring', stiffness: 400, damping: 35 }}
@@ -396,7 +396,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 {pnlDisplayMode && setPnlDisplayMode && (
                   <motion.div variants={itemVariants}>
                     <div className={sectionLabelClass}><TrendingUp size={10} /> P&L</div>
-                    <div className={`flex p-0.5 rounded-xl border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                    <div className={`flex p-0.5 rounded-lg border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
                       <motion.div
                         animate={{ x: (pnlDisplayMode === 'usd' ? 0 : pnlDisplayMode === 'percent' ? 100 : 200) + '%' }}
                         transition={{ type: 'spring', stiffness: 400, damping: 35 }}
@@ -590,7 +590,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                       <button
                         onClick={selectAllVisible}
                         disabled={allVisibleSelected}
-                        className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest transition-all ${
+                        className={`px-2 py-0.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all ${
                           allVisibleSelected
                             ? 'opacity-30 cursor-default'
                             : (isDark ? 'bg-white/10 text-slate-200 hover:bg-white/20' : 'bg-slate-200 text-slate-700 hover:bg-slate-300')
@@ -607,7 +607,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                             key={acc.id}
                             onClick={() => rowClick(acc.id)}
                             title="Klik = jen tento účet · další kliky přidávají/ubírají · klik na sólo účet = zpět všechny"
-                            className={`w-full py-2.5 px-3 flex items-center justify-between gap-2 rounded-xl ${getGlassBtnClass(selected)}`}
+                            className={`w-full py-2.5 px-3 flex items-center justify-between gap-2 rounded-lg ${getGlassBtnClass(selected)}`}
                           >
                             <span className={`truncate ${acc.status === 'Inactive' ? 'opacity-60' : ''}`}>
                               {acc.name}
@@ -632,7 +632,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 {setIsDashboardEditing && (
                   <button
                     onClick={() => { setIsDashboardEditing(!isDashboardEditing); setIsOpen(false); }}
-                    className={`hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
+                    className={`hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
                       isDashboardEditing
                         ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
                         : (isDark
@@ -648,7 +648,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 {setIsMobileEditing && (
                   <button
                     onClick={() => { setIsMobileEditing(!isMobileEditing); setIsOpen(false); }}
-                    className={`flex md:hidden items-center gap-1.5 px-3 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
+                    className={`flex md:hidden items-center gap-1.5 px-3 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
                       isMobileEditing
                         ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
                         : (isDark
@@ -662,7 +662,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 )}
                 <button
                   onClick={() => setIsOpen(false)}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-[9px] uppercase tracking-widest transition-all active:scale-95"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-black text-[9px] uppercase tracking-widest transition-all active:scale-95"
                 >
                   Hotovo
                 </button>
@@ -680,13 +680,13 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
         ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
         className={grouped ? (
-          `p-2.5 rounded-xl border transition-all duration-200 relative ${
+          `p-2.5 rounded-lg border transition-all duration-200 relative ${
             isOpen
               ? (isDark ? 'bg-white/15 border-white/20 text-white shadow-inner' : 'bg-slate-200 border-slate-300 text-slate-950 shadow-inner')
               : (isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white shadow-inner' : 'bg-white border-slate-200/80 hover:bg-slate-50 text-slate-700 shadow-xs')
           }`
         ) : (
-          `p-2.5 rounded-xl border transition-all duration-200 relative ${
+          `p-2.5 rounded-lg border transition-all duration-200 relative ${
             isOpen
               ? (isDark ? 'bg-white/15 border-white/25 text-white backdrop-blur-md shadow-[0_0_15px_rgba(255,255,255,0.05)]' : 'bg-white/80 border-slate-300 text-slate-900 shadow-sm backdrop-blur-sm')
               : (isDark ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white' : 'bg-white/40 border-black/5 hover:bg-white/60 text-slate-700 shadow-sm backdrop-blur-sm')

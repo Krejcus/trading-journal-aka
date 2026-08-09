@@ -109,7 +109,7 @@ interface GridCell {
 }
 
 const Tooltip: React.FC<{ text: string; theme: 'dark' | 'light' | 'oled'; subtext?: string }> = ({ text, theme, subtext }) => (
-   <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-48 p-3 rounded-2xl border shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl z-[400] opacity-0 pointer-events-none transition-all duration-200 translate-y-2 scale-95 group-hover:opacity-100 group-hover:translate-y-0 group-hover:scale-100 ${theme === 'oled' ? 'bg-black border-white/10 text-slate-200' :
+   <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-48 p-3 rounded-lg border shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl z-[400] opacity-0 pointer-events-none transition-all duration-200 translate-y-2 scale-95 group-hover:opacity-100 group-hover:translate-y-0 group-hover:scale-100 ${theme === 'oled' ? 'bg-black border-white/10 text-slate-200' :
       theme === 'dark' ? 'bg-slate-900/95 border-slate-700 text-slate-200' :
          'bg-white/95 border-slate-200 text-slate-700'
       }`}>
@@ -197,7 +197,7 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
    }, [trades, monthsData]);
 
    if (monthsData.length === 0) return (
-      <div className={`p-8 text-center rounded-xl border border-dashed ${theme !== 'light' ? 'border-slate-700 text-slate-500' : 'border-slate-300 text-slate-400'}`}>
+      <div className={`p-8 text-center rounded-lg border border-dashed ${theme !== 'light' ? 'border-slate-700 text-slate-500' : 'border-slate-300 text-slate-400'}`}>
          Žádná data pro kalendář.
       </div>
    );
@@ -352,7 +352,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
    const DAY_LABELS = ['Po', 'Út', 'St', 'Čt', 'Pá', 'Týden'];
 
    return (
-      <div className={`rounded-[32px] border shadow-sm overflow-visible transition-all flex flex-col h-full ${theme === 'oled' ? 'bg-black border-white/10 shadow-none' :
+      <div className={`rounded-lg border shadow-sm overflow-visible transition-all flex flex-col h-full ${theme === 'oled' ? 'bg-black border-white/10 shadow-none' :
          theme === 'dark' ? 'bg-theme-card-90 border-white/5 shadow-2xl backdrop-blur-xl' :
             'bg-white border-slate-200'
          }`}>
@@ -360,13 +360,13 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
          <div className={`px-4 pt-4 pb-3 md:hidden border-b ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'}`}>
             <div className="flex items-center justify-between">
                <div className="flex items-center gap-2 select-none">
-                  <button onClick={onPrev} disabled={!canPrev} className={`w-8 h-8 flex items-center justify-center rounded-xl transition-all active:scale-90 ${!canPrev ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/8 text-slate-300' : 'bg-slate-100')}`}><ChevronLeft size={16} /></button>
+                  <button onClick={onPrev} disabled={!canPrev} className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 ${!canPrev ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/8 text-slate-300' : 'bg-slate-100')}`}><ChevronLeft size={16} /></button>
                   <span className={`text-base font-black capitalize tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{monthName}</span>
-                  <button onClick={onNext} disabled={!canNext} className={`w-8 h-8 flex items-center justify-center rounded-xl transition-all active:scale-90 ${!canNext ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/8 text-slate-300' : 'bg-slate-100')}`}><ChevronRight size={16} /></button>
+                  <button onClick={onNext} disabled={!canNext} className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 ${!canNext ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/8 text-slate-300' : 'bg-slate-100')}`}><ChevronRight size={16} /></button>
                </div>
                <div className="flex flex-col items-end">
                   <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Měsíční PnL</span>
-                  <span className={`text-lg font-mono font-black tracking-tighter leading-tight ${monthIsPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  <span className={`text-lg font-mono font-bold tracking-tight leading-tight ${monthIsPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
                      {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                   </span>
                </div>
@@ -381,14 +381,14 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
                   <InfoIcon text="Denní přehled výsledků v kalendářním zobrazení. Zmeškané obchody neovlivňují statistiky ani barvu." theme={theme} />
                </h3>
                <div className="flex items-center gap-3 select-none ml-0.5">
-                  <button onClick={onPrev} disabled={!canPrev} className={`p-1.5 rounded-xl transition-all ${!canPrev ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5' : 'bg-slate-100 hover:bg-slate-200')}`}><ChevronLeft size={18} /></button>
-                  <div className="min-w-[130px]"><h3 className={`text-xl font-black capitalize leading-none tracking-tighter ${theme !== 'light' ? 'text-white' : 'text-blue-600'}`}>{monthName}</h3></div>
-                  <button onClick={onNext} disabled={!canNext} className={`p-1.5 rounded-xl transition-all ${!canNext ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5' : 'bg-slate-100 hover:bg-slate-200')}`}><ChevronRight size={18} /></button>
+                  <button onClick={onPrev} disabled={!canPrev} className={`p-1.5 rounded-lg transition-all ${!canPrev ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5' : 'bg-slate-100 hover:bg-slate-200')}`}><ChevronLeft size={18} /></button>
+                  <div className="min-w-[130px]"><h3 className={`text-xl font-black capitalize leading-none tracking-tighter ${theme !== 'light' ? 'text-white' : 'text-black'}`}>{monthName}</h3></div>
+                  <button onClick={onNext} disabled={!canNext} className={`p-1.5 rounded-lg transition-all ${!canNext ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5' : 'bg-slate-100 hover:bg-slate-200')}`}><ChevronRight size={18} /></button>
                </div>
             </div>
-            <div className={`flex flex-col items-end gap-1 px-5 py-3 rounded-2xl border ${theme === 'oled' ? 'bg-black border-white/10' : theme === 'dark' ? 'bg-slate-900/50 border-white/5' : 'bg-white border-slate-200'}`}>
+            <div className={`flex flex-col items-end gap-1 px-5 py-3 rounded-lg border ${theme === 'oled' ? 'bg-black border-white/10' : theme === 'dark' ? 'bg-slate-900/50 border-white/5' : 'bg-white border-slate-200'}`}>
                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-500">Měsíční PnL</span>
-               <span className={`text-2xl font-mono font-black tracking-tighter ${monthIsPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
+               <span className={`text-2xl font-mono font-bold tracking-tight ${monthIsPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
                   {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                </span>
             </div>
@@ -396,8 +396,8 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
 
          <div className="grid grid-cols-6 gap-1.5 md:gap-3 px-3 md:px-4 pt-3 md:pt-4 pb-0">
             {DAY_LABELS.map((label, idx) => (
-               <div key={label} className={`py-1.5 md:py-2 rounded-xl text-center text-[9px] md:text-[10px] font-black uppercase tracking-widest border transition-colors ${idx === 5
-                  ? 'text-blue-500 bg-blue-500/5 border-blue-500/20'
+               <div key={label} className={`py-1.5 md:py-2 rounded-lg text-center text-[9px] md:text-[10px] font-black uppercase tracking-widest border transition-colors ${idx === 5
+                  ? `${theme === 'light' ? 'text-black' : 'text-white'} bg-blue-500/5 border-blue-500/20`
                   : (theme === 'oled' ? 'text-slate-500 bg-black border-white/10' :
                      theme === 'dark' ? 'text-slate-500 bg-white/5 border-white/5' :
                         'text-slate-400 bg-slate-50 border-slate-100')
@@ -447,18 +447,24 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
       // V RR módu rozhoduj barvu podle RR (ne USD) — RR a USD se mohou rozcházet znaménkem
       const weekTrades = week.days.flatMap(d => d.trades);
       const colorMetric = pnlFormat === 'rr' ? calculateTotalRR(weekTrades) : pnl;
-      const isPositive = colorMetric >= 0;
+      const isPositive = colorMetric > 0;
+      const isNegative = colorMetric < 0;
+      const summaryTone = isPositive
+         ? 'border-emerald-500/25 bg-emerald-500/[0.045] hover:bg-emerald-500/[0.08]'
+         : isNegative
+            ? 'border-rose-500/25 bg-rose-500/[0.045] hover:bg-rose-500/[0.08]'
+            : (theme === 'oled'
+               ? 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'
+               : theme === 'dark'
+                  ? 'border-white/5 bg-white/[0.025] hover:bg-white/[0.05]'
+                  : 'border-slate-200 bg-slate-50/70 hover:bg-slate-100');
+      const summaryPnlColor = isPositive ? 'text-emerald-500' : isNegative ? 'text-rose-500' : 'text-slate-400';
       return (
-         <div onClick={() => onWeekClick(week)} className={`rounded-2xl flex flex-col items-center justify-center p-2 border transition-all cursor-pointer relative overflow-hidden group hover:ring-2 hover:ring-blue-500/50 ${theme === 'oled' ? 'bg-black border-white/10 text-slate-400 hover:bg-white/5' :
-            theme === 'dark' ? 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10' :
-               'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
-            }`}>
-            <div className={`absolute top-0 w-full h-1 ${isPositive ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+         <div onClick={() => onWeekClick(week)} className={`rounded-lg flex flex-col items-center justify-center p-2 border transition-colors cursor-pointer relative overflow-hidden group text-slate-500 hover:ring-1 hover:ring-blue-500/30 ${summaryTone}`}>
             <span className="text-[8px] font-black uppercase tracking-widest opacity-60 mb-0.5">T{weekIndex}</span>
-            <span className={`font-black font-mono text-[11px] md:text-sm leading-tight ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+            <span className={`font-semibold font-mono text-[11px] md:text-sm leading-tight ${summaryPnlColor}`}>
                {formatPnLCompact(pnl, pnlFormat, weekTrades, initialBalance)}
             </span>
-            <div className="absolute inset-0 bg-blue-500/0 group-hover:bg-blue-500/5 transition-colors duration-200" />
          </div>
       );
    }
@@ -473,14 +479,14 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
          <div
             onClick={() => onDayClick(gday)}
             title={`${gday.dateObj.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'long' })} (jiný měsíc)`}
-            className={`rounded-xl md:rounded-2xl p-1 md:p-3 flex flex-col cursor-pointer border border-dashed relative overflow-hidden transition-all opacity-40 hover:opacity-70 ${theme === 'oled' ? 'border-white/10 bg-transparent' : theme === 'dark' ? 'border-white/10 bg-white/[0.015]' : 'border-slate-200 bg-slate-50/40'}`}
+            className={`rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border border-dashed relative overflow-hidden transition-all opacity-40 hover:opacity-70 ${theme === 'oled' ? 'border-white/10 bg-transparent' : theme === 'dark' ? 'border-white/10 bg-white/[0.015]' : 'border-slate-200 bg-slate-50/40'}`}
          >
             <div className="flex justify-end">
                <span className={`font-mono text-[9px] md:text-xs font-black leading-none ${theme !== 'light' ? 'text-slate-600' : 'text-slate-400'}`}>{gday.dayNum}</span>
             </div>
             <div className="flex-1 flex items-center justify-center py-0.5">
                {gPnlCompact && (
-                  <span className={`font-black text-[10px] md:text-[13px] tracking-tight leading-none text-center ${gIsPositive ? 'text-emerald-500/50' : 'text-rose-500/50'}`}>
+                  <span className={`font-semibold text-[10px] md:text-[13px] tracking-tight leading-none text-center ${gIsPositive ? 'text-emerald-500/50' : 'text-rose-500/50'}`}>
                      {gPnlCompact}
                   </span>
                )}
@@ -503,7 +509,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    const pnlCompact = day.hasTrades ? formatPnLCompact(day.pnl, pnlFormat, day.trades, initialBalance) : null;
    const textColor = intensity > 0.6 ? 'text-white' : (dayIsPositive ? 'text-emerald-400' : 'text-rose-400');
    return (
-      <div onClick={() => onDayClick(day)} className={`rounded-xl md:rounded-2xl p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black shadow-none' : theme === 'dark' ? 'bg-white/5' : 'bg-white shadow-sm'}`} style={bgStyle}>
+      <div onClick={() => onDayClick(day)} className={`rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black shadow-none' : theme === 'dark' ? 'bg-white/5' : 'bg-white shadow-sm'}`} style={bgStyle}>
          {/* Day number */}
          <div className="flex justify-end">
             <span className={`font-mono text-[9px] md:text-xs font-black leading-none ${!day.hasTrades ? (theme !== 'light' ? 'text-slate-600' : 'text-slate-300') : (intensity > 0.5 ? 'text-white/70' : (theme !== 'light' ? 'text-slate-400' : 'text-slate-500'))}`}>{day.dayNum}</span>
@@ -511,7 +517,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
          {/* PNL centered — compact k-format on mobile */}
          <div className="flex-1 flex items-center justify-center py-0.5">
             {pnlCompact && (
-               <span className={`font-black text-[11px] md:text-sm tracking-tight leading-none text-center ${textColor}`}>
+               <span className={`font-semibold text-[11px] md:text-sm tracking-tight leading-none text-center ${textColor}`}>
                   {pnlCompact}
                </span>
             )}

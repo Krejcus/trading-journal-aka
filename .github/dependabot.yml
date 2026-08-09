@@ -8,6 +8,24 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # @getcandlekit/charts@0.1.0 má peerDependency flexlayout-react@^0.9.1.
+      # U verzí 0.x je minor bump reálně breaking, takže 0.10.x peer rozsah
+      # nesplní a `npm install` skončí na ERESOLVE (build na Vercelu spadne
+      # ještě před instalací). Odblokovat, až candlekit peer rozsah rozšíří.
+      - dependency-name: "flexlayout-react"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # Stejný důvod — candlekit váže i tyto balíky na konkrétní rozsahy
+      # (lightweight-charts@^5.0.0) a patch v patches/ cílí na jeho dist.
+      - dependency-name: "lightweight-charts"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "@getcandlekit/charts"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
   - package-ecosystem: "npm"
     directory: "/extension"
     schedule:

@@ -397,7 +397,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
 
       {/* 1. EQUITY CURVE */}
       {!onlyDistribution && (
-        <div className="p-6 rounded-[32px] transition-all overflow-visible h-full flex flex-col glass-panel">
+        <div className="p-6 rounded-lg transition-all overflow-visible h-full flex flex-col glass-panel">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
             <div>
               <h3 className={`text-xs font-black uppercase tracking-widest flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
@@ -409,7 +409,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
               <div className="flex items-center gap-3">
                 <button
                   onClick={onToggleDisciplined}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-[10px] font-black uppercase transition-all active:scale-95 animate-in slide-in-from-right-4 duration-300 ${showDisciplinedCurve
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-black uppercase transition-all active:scale-95 animate-in slide-in-from-right-4 duration-300 ${showDisciplinedCurve
                     ? 'bg-amber-500/20 border-amber-500/50 text-amber-500 ring-2 ring-amber-500/20'
                     : (theme !== 'light' ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-400')
                     }`}

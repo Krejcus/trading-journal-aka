@@ -79,6 +79,49 @@ describe('backtest chart order lines', () => {
     expect(lines[2].price).toBe(110);
   });
 
+  it('nabídne přidání SL/TP u objednávky, která je zatím nemá', () => {
+    // Objednávka z pravého kliku do grafu vzniká holá — brackety musí jít
+    // doplnit a natáhnout přímo v grafu.
+    const bare = createBacktestOrder({
+      runId: 'run', instrument: 'MNQ', side: 'buy', type: 'limit', quantity: 1,
+      limitPrice: 100, now: 1,
+    });
+    const [entry] = pendingOrderChartLines(bare);
+    expect(entry.addableBrackets).toEqual(['stopLoss', 'takeProfit']);
+  });
+
+  it('nabídne jen chybějící bracket', () => {
+    const withStop = createBacktestOrder({
+      runId: 'run', instrument: 'MNQ', side: 'buy', type: 'limit', quantity: 1,
+      limitPrice: 100, stopLoss: 95, now: 1,
+    });
+    expect(pendingOrderChartLines(withStop)[0].addableBrackets).toEqual(['takeProfit']);
+  });
+
+  it('objednávka s oběma brackety už nic nenabízí', () => {
+    const full = createBacktestOrder({
+      runId: 'run', instrument: 'MNQ', side: 'buy', type: 'limit', quantity: 1,
+      limitPrice: 100, stopLoss: 95, takeProfit: 110, now: 1,
+    });
+    expect(pendingOrderChartLines(full)[0].addableBrackets).toBeUndefined();
+  });
+
+  it('křížek na SL/TP objednávky maže bracket, ne celou objednávku', () => {
+    const order = createBacktestOrder({
+      runId: 'run', instrument: 'MNQ', side: 'buy', type: 'limit', quantity: 1,
+      limitPrice: 100, stopLoss: 95, takeProfit: 110, now: 1,
+    });
+    const lines = pendingOrderChartLines(order);
+    expect(lines.find(line => line.kind === 'stopLoss')).toMatchObject({
+      cancellable: true, cancelAction: 'remove-bracket',
+    });
+    expect(lines.find(line => line.kind === 'takeProfit')).toMatchObject({
+      cancellable: true, cancelAction: 'remove-bracket',
+    });
+    // Zrušení celé objednávky zůstává jen na entry lince.
+    expect(lines.find(line => line.kind === 'entry')?.cancelAction).toBe('cancel-order');
+  });
+
   it('locks a filled entry while keeping the bracket draggable', () => {
     const lines = positionChartLines({
       instrument: 'MNQ', side: 'long', quantity: 1, averagePrice: 100,

@@ -74,7 +74,8 @@ export async function getImportedAccountsOverview(): Promise<ImportedAccountOver
 export async function listAccountMap(): Promise<AccountMapRow[]> {
   const { data, error } = await supabase
     .from('import_account_map')
-    .select('id, account_ext_id, account_name, entity_id, mapped_account_id, status, is_connected, import_from_date');
+    .select('id, account_ext_id, account_name, entity_id, mapped_account_id, status, is_connected, import_from_date')
+    .eq('source', 'tradecopia');
   if (error) {
     console.warn('[import] listAccountMap error:', error);
     return [];

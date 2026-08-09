@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock, FlaskConical, Radio, Layers, Microscope } from 'lucide-react';
+import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock, FlaskConical, Radio, Layers, Microscope, RadioTower } from 'lucide-react';
 import type { UserRole } from '../types';
 import { isLocked } from '../utils/featureGating';
 
@@ -40,6 +40,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
     : [
         { id: 'lab', label: 'Lab', icon: Microscope },
         { id: 'business', label: 'Byznys', icon: Briefcase },
+        { id: 'live', label: 'LIVE', icon: RadioTower },
         { id: 'network', label: 'Síť', icon: Globe },
         { id: 'accounts', label: 'Účty', icon: Wallet },
         { id: 'settings', label: 'Nastavení', icon: Settings },

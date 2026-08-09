@@ -1067,7 +1067,7 @@ const ProKpiCard: React.FC<{
       if (chartData.length === 0) chartData.push({ name: 'Žádná data', value: 1, fill: isDark ? '#334155' : '#e2e8f0', unit: '' });
       return (
         <div className="flex flex-col items-center w-full">
-          <span className="text-2xl font-black tracking-tighter leading-none mb-1">
+          <span className="text-2xl font-bold tracking-tight tabular-nums leading-none mb-1">
             {displayValue}
           </span>
           <div className="h-16 w-full max-w-[140px] min-w-[1px] min-h-[1px] relative">
@@ -1101,32 +1101,32 @@ const ProKpiCard: React.FC<{
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex gap-1 mt-1">
+          <div className="flex gap-3 mt-1.5">
             {data.wins !== undefined && (
               <SmartTooltip text={`Vítězné ${unit.toLowerCase()}`} subtext={`${data.wins} ${unit}`} color={COLORS.profit} theme={theme}>
                 <div className="relative group" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === COLORS.profit); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
-                  <span className={`px-1.5 py-0.5 rounded-md ${COLORS.bgProfit} ${COLORS.textProfit} text-[9px] font-black border ${COLORS.borderProfit} cursor-help min-w-[24px] text-center block`}>{data.wins}</span>
+                  <span className={`${COLORS.textProfit} text-[11px] font-bold tabular-nums cursor-help min-w-[18px] text-center block`}>{data.wins}</span>
                 </div>
               </SmartTooltip>
             )}
             {data.be !== undefined && data.be > 0 && (
               <SmartTooltip text={`BE ${unit.toLowerCase()}`} subtext={`${data.be} ${unit}`} color="#3b82f6" theme={theme}>
                 <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === '#3b82f6'); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
-                  <span className="px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-500 text-[9px] font-black border border-blue-500/20 cursor-help min-w-[24px] text-center block">{data.be}</span>
+                  <span className="text-blue-500 text-[11px] font-bold tabular-nums cursor-help min-w-[18px] text-center block">{data.be}</span>
                 </div>
               </SmartTooltip>
             )}
             {data.losses !== undefined && (
               <SmartTooltip text={`Ztrátové ${unit.toLowerCase()}`} subtext={`${data.losses} ${unit}`} color={COLORS.loss} theme={theme}>
                 <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === COLORS.loss); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
-                  <span className={`px-1.5 py-0.5 rounded-md ${COLORS.bgLoss} ${COLORS.textLoss} text-[9px] font-black border ${COLORS.borderLoss} cursor-help min-w-[24px] text-center block`}>{data.losses}</span>
+                  <span className={`${COLORS.textLoss} text-[11px] font-bold tabular-nums cursor-help min-w-[18px] text-center block`}>{data.losses}</span>
                 </div>
               </SmartTooltip>
             )}
             {data.missed !== undefined && data.missed > 0 && (
               <SmartTooltip text={`Zmeškané ${unit.toLowerCase()}`} subtext={`${data.missed} ${unit}`} color="#64748b" theme={theme}>
                 <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === '#64748b'); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
-                  <span className={`px-1.5 py-0.5 rounded-md bg-slate-500/10 text-slate-500 text-[9px] font-black border border-slate-500/20 cursor-help min-w-[24px] text-center block`}>{data.missed}</span>
+                  <span className={`text-[var(--text-muted)] text-[11px] font-bold tabular-nums cursor-help min-w-[18px] text-center block`}>{data.missed}</span>
                 </div>
               </SmartTooltip>
             )}
@@ -1169,18 +1169,18 @@ const ProKpiCard: React.FC<{
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className={`text-xs font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayValue}</span>
+              <span className="text-[13px] font-bold tracking-tight tabular-nums text-[var(--text-primary)]">{displayValue}</span>
             </div>
           </div>
-          <div className="flex gap-1 mt-2">
+          <div className="flex gap-2 mt-2.5">
             <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === COLORS.profit); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
               <SmartTooltip text="Hrubý zisk" subtext={`$${(data.profit || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`} color={COLORS.profit} theme={theme}>
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 cursor-help shadow-lg" />
+                <div className="w-2 h-2 rounded-full bg-emerald-500 cursor-help" />
               </SmartTooltip>
             </div>
             <div className="relative" onMouseEnter={() => { const idx = chartData.findIndex(d => d.fill === COLORS.loss); if (idx >= 0) setActiveIndex(idx); }} onMouseLeave={() => setActiveIndex(-1)}>
               <SmartTooltip text="Hrubá ztráta" subtext={`$${(data.loss || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`} color={COLORS.loss} theme={theme}>
-                <div className="w-2.5 h-2.5 rounded-full bg-rose-500 cursor-help shadow-lg" />
+                <div className="w-2 h-2 rounded-full bg-rose-500 cursor-help" />
               </SmartTooltip>
             </div>
           </div>
@@ -1191,18 +1191,18 @@ const ProKpiCard: React.FC<{
   };
 
   return (
-    <div className="p-5 rounded-[24px] flex flex-col justify-between h-full relative overflow-visible transition-all hover:scale-[1.02] hover:shadow-xl glass-panel">
+    <div className="p-4 rounded-lg flex flex-col justify-between h-full relative overflow-visible border border-[var(--border-subtle)] bg-[var(--bg-card)] transition-colors">
       <div className="flex justify-between items-start mb-2">
-        <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+        <div className="text-[9px] font-black uppercase tracking-[0.13em] text-[var(--text-secondary)] flex items-center gap-1.5">
           {label}
-          {info && <SmartTooltip text="Info" subtext={info} theme={theme}><div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div></SmartTooltip>}
+          {info && <SmartTooltip text="Info" subtext={info} theme={theme}><div className="p-1 -m-1 cursor-help"><Info size={13} className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors" /></div></SmartTooltip>}
         </div>
       </div>
       <div className="flex-1 flex flex-col items-center justify-center min-h-[60px]">
         {type === 'text' && (
           <div className="text-center">
-            <p className="text-2xl lg:text-3xl font-black tracking-tighter">{displayValue}</p>
-            {subValue && <p className="text-xs font-bold theme-text-secondary mt-1">{subValue}</p>}
+            <p className="text-2xl lg:text-[28px] font-bold tracking-tight tabular-nums leading-none">{displayValue}</p>
+            {subValue && <p className="text-[11px] font-medium theme-text-secondary mt-2">{subValue}</p>}
           </div>
         )}
         {renderVisual()}
@@ -2224,10 +2224,10 @@ const Dashboard: React.FC<DashboardProps> = ({
                 const second = items[pairInfo];
                 rows.push(
                   <div key={`kpi-pair-${item.widget.id}-${second.widget.id}`} className="grid grid-cols-2 gap-3">
-                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={`dashboard-widget-shell ${editClass}`}>
                       {item.content}
                     </motion.div>
-                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={`dashboard-widget-shell ${editClass}`}>
                       {second.content}
                     </motion.div>
                   </div>
@@ -2237,7 +2237,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 // ne natažený přes celé pole (vypadalo by to směšně velké)
                 rows.push(
                   <div key={`kpi-solo-${item.widget.id}`} className="grid grid-cols-2 gap-3">
-                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                    <motion.div style={{ minHeight: 160 }} animate={wiggleAnimate} transition={wiggleTransition} className={`dashboard-widget-shell ${editClass}`}>
                       {item.content}
                     </motion.div>
                   </div>
@@ -2250,13 +2250,13 @@ const Dashboard: React.FC<DashboardProps> = ({
                   ? {}
                   : fixedHeight ? { height: fixedHeight } : { minHeight: 260 };
                 rows.push(
-                  <motion.div key={item.widget.id} style={style} animate={wiggleAnimate} transition={wiggleTransition} className={editClass}>
+                  <motion.div key={item.widget.id} style={style} animate={wiggleAnimate} transition={wiggleTransition} className={`dashboard-widget-shell ${editClass}`}>
                     {item.content}
                   </motion.div>
                 );
               }
             });
-            return <div className="flex flex-col gap-4 px-2">{rows}</div>;
+            return <div className="flex flex-col gap-3 px-2">{rows}</div>;
           })()}
 
           {/* Desktop: react-grid-layout */}
@@ -2268,7 +2268,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               breakpoints={GRID_BREAKPOINTS}
               cols={GRID_COLS}
               rowHeight={GRID_ROW_HEIGHT}
-              margin={[16, 16] as [number, number]}
+              margin={[12, 12] as [number, number]}
               dragConfig={{ enabled: isEditing }}
               resizeConfig={{ enabled: isEditing, handles: ['se'] }}
               onDragStop={handleDragOrResizeStop}
@@ -2287,7 +2287,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                       onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
                     />
                   )}
-                  <div className={isEditing ? 'h-full opacity-60 pointer-events-none select-none' : 'h-full'}>
+                  <div className={`dashboard-widget-shell ${isEditing ? 'h-full opacity-60 pointer-events-none select-none' : 'h-full'}`}>
                     {renderWidget(widget.id, widget)}
                   </div>
                 </div>

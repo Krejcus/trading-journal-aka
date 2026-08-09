@@ -14,8 +14,9 @@ import {
 } from '@getcandlekit/charts/react';
 import '@getcandlekit/charts/styles.css';
 import {
-  ColorType,
   createSeriesMarkers,
+  createTextWatermark,
+  LineSeries,
   type ISeriesApi,
   type IChartApi,
   type IPrimitivePaneRenderer,
@@ -41,6 +42,7 @@ import {
   Star,
   Trash2,
   Unlock,
+  Zap,
 } from 'lucide-react';
 import { Trade } from '../types';
 import ChartIndicatorSettingsDialog, {
@@ -108,14 +110,45 @@ import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
 import { installDrawingStyleDefaults } from '../services/chartDrawingStyleDefaults';
 import {
   calculatePositionMetrics,
+  applyPositionRuntimeInterval,
   installPositionDrawingDefaults,
   isPositionDrawing,
+  positionDefaultsForRoot,
   normalizePositionSettings,
 } from '../services/chartPositionDrawing';
 import { calculatePositionProgress } from '../services/chartPositionProgress';
-import { replayBarShift } from '../services/replayViewportShift';
-import { replayTrimStartIndex } from '../services/replayWindowTrim';
+import { chartAxisTickLabel, chartCrosshairTimeLabel } from '../services/chartTimeAxisFormat';
+import ChartSettingsDialog from './ChartSettingsDialog';
+import {
+  CHART_SETTINGS_EVENT,
+  barCloseCountdown,
+  broadcastChartSettings,
+  candleColorOverrides,
+  chartCanvasOptions,
+  chartPriceScaleMode,
+  chartSeriesOptions,
+  loadChartSettings,
+  lockedPriceRange,
+  chartPriceFormatter,
+  saveChartSettings,
+  type ChartButtonVisibility,
+  type ChartPriceScaleModeName,
+  type ChartSettings,
+  type ChartStatusLineSettings,
+} from '../services/chartSettings';
+import {
+  canvasLineDash,
+  previousDayClosePrice,
+  secondsToBarClose,
+  sessionBreakTimes,
+  shortenedPriceLines,
+  syncManagedPriceLine,
+  visibleHighLow,
+  type ManagedPriceLine,
+} from '../services/chartSettingsApply';
 import { managedPositionDrawing, type BacktestManagedPositionBox } from '../services/backtestManagedPosition';
+import { chartClickOrderOptions, type ChartClickOrderOption } from '../services/backtestQuickOrder';
+import type { BacktestOrderSide, BacktestOrderType } from '../services/backtestTypes';
 import {
   countChartIndicators,
   countManualChartDrawings,
@@ -124,12 +157,11 @@ import {
   resetChartView,
 } from '../services/chartContextMenu';
 import {
+  futureAxisTimes,
   nearestReplayCandleTime,
   retainReplayChartDataSeed,
-  replayRenderWindowIndexes,
+  replayLogicalRangeAfterPrepend,
   replayViewportAfterBarsUpdate,
-  shiftReplayRenderWindow,
-  type ReplayRenderWindowState,
 } from '../services/chartReplay';
 
 interface CandleKitTradeChartProps {
@@ -166,6 +198,15 @@ interface CandleKitTradeChartProps {
   onReplaySelectionTimeChange?: (time: number | null) => void;
   onReplayStart?: (time: number) => void;
   managedPositionBoxes?: BacktestManagedPositionBox[];
+  /** Počet kontraktů z obchodního panelu pro objednávku z pravého kliku. */
+  chartOrderQuantity?: number;
+  /** Rychlá objednávka z vybraného position boxu — totéž co tlačítko s bleskem. */
+  onPositionQuickOrder?: () => void;
+  positionQuickOrderDisabledReason?: string | null;
+  onChartOrder?: (
+    input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number },
+    candle: MarketCandle | null,
+  ) => void;
   onNeedOlderHistory?: (oldestTime: number) => void;
   olderHistoryLoading?: boolean;
 }
@@ -187,6 +228,13 @@ interface CandleKitBar {
   close: number;
   volume: number;
 }
+
+/**
+ * Kolik barů dopředu protáhnout časovou osu. Dost na to, aby při běžném
+ * přiblížení bylo vidět, kam čas poteče, a málo na to, aby oddálený graf
+ * netlačil svíčky do levého okraje.
+ */
+const FUTURE_AXIS_BARS = 120;
 
 const candleKitBar = (candle: MarketCandle): CandleKitBar => ({
   ts: candle.time * 1000,
@@ -223,6 +271,9 @@ const ChartIndicatorLegend: React.FC<{
   activeLibraryIndicators: string[];
   onEditCustom: (id: AlphaTradeIndicatorId) => void;
   offsetForToolbar: boolean;
+  statusLine: ChartStatusLineSettings;
+  paneButtons: ChartButtonVisibility;
+  getChartApi: () => ChartViewApi | null;
 }> = ({
   isDark,
   timeframe,
@@ -238,6 +289,9 @@ const ChartIndicatorLegend: React.FC<{
   activeLibraryIndicators,
   onEditCustom,
   offsetForToolbar,
+  statusLine,
+  paneButtons,
+  getChartApi,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -269,6 +323,29 @@ const ChartIndicatorLegend: React.FC<{
     ...customItems,
     ...libraryNames.map(name => ({ id: `library:${name}`, title: libraryTitles.get(name) ?? name, libraryName: name })),
   ];
+
+  /** `Vstupy` ve stavovém řádku: parametry, se kterými indikátor běží. */
+  const inputsLabel = (item: ChartIndicatorLegendItem): string => {
+    if (!item.libraryName) return '';
+    const params = controller?.getActive(item.libraryName)?.params;
+    const values = Object.values(params ?? {}).filter(value => typeof value === 'number' || typeof value === 'string');
+    return values.length ? `(${values.join(', ')})` : '';
+  };
+  /**
+   * `Hodnoty`: poslední bod série, kterou indikátor kreslí. CandleKit hodnoty
+   * sám nevystavuje, čtou se proto z panelu grafu podle názvu série.
+   */
+  const valuesLabel = (item: ChartIndicatorLegendItem): string => {
+    if (!item.libraryName) return '';
+    const pane = getChartApi()?.controller.getChart().panes()[0];
+    if (!pane) return '';
+    const values = pane.getSeries()
+      .filter(series => series.options().title?.startsWith(item.libraryName!))
+      .map(series => series.data().at(-1) as { value?: number } | undefined)
+      .map(point => point?.value)
+      .filter((value): value is number => typeof value === 'number');
+    return values.map(value => value.toFixed(2)).join('  ');
+  };
 
   const isHidden = (item: ChartIndicatorLegendItem) => item.customId
     ? hiddenCustom.has(item.customId)
@@ -330,9 +407,17 @@ const ChartIndicatorLegend: React.FC<{
             const hidden = isHidden(item);
             return (
               <div key={item.id} className="group relative">
-                <div className={`flex h-7 items-center rounded px-2 pr-1 shadow-sm ${hidden ? 'opacity-55' : ''} ${isDark ? 'bg-[#111821]/92 text-slate-200' : 'bg-white/95 text-slate-800'}`}>
-                  <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
-                  <div className={`pointer-events-none ml-2 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 ${isDark ? 'bg-[#111821]' : 'bg-white'}`}>
+                <div className={`flex h-7 items-center rounded px-2 pr-1 ${hidden ? 'opacity-55' : ''} ${statusLine.indicatorBackground ? `shadow-sm ${isDark ? 'bg-[#111821]/92' : 'bg-white/95'}` : ''} ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                  <span className="min-w-0 flex-1 truncate font-medium">
+                    {statusLine.indicatorTitles && item.title}
+                    {statusLine.indicatorInputs && <span className="ml-1 font-normal opacity-70">{inputsLabel(item)}</span>}
+                    {statusLine.indicatorValues && <span className="ml-1.5 font-semibold tabular-nums">{valuesLabel(item)}</span>}
+                  </span>
+                  <div className={`ml-2 flex items-center gap-0.5 transition-opacity ${paneButtons === 'always'
+                    ? 'opacity-100'
+                    : paneButtons === 'never'
+                      ? 'pointer-events-none hidden'
+                      : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'} ${isDark ? 'bg-[#111821]' : 'bg-white'}`}>
                     <button type="button" onClick={() => toggleVisibility(item)} className="rounded p-1 hover:bg-slate-500/15" title={hidden ? 'Zobrazit indikátor' : 'Skrýt indikátor'} aria-label={hidden ? `Zobrazit ${item.title}` : `Skrýt ${item.title}`}>
                       {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
@@ -496,20 +581,6 @@ const COMPACT_WINDOW_BARS: Record<MarketTimeframe, { before: number; after: numb
   '1d': { before: 20, after: 6, chunk: 20 },
 };
 
-/**
- * A replay session can keep weeks of minute data available for navigation,
- * while Lightweight Charts only needs a bounded working set on its canvases.
- */
-const REPLAY_MAX_RENDER_BARS: Record<MarketTimeframe, { normal: number; compact: number }> = {
-  '1m': { normal: 4_500, compact: 2_200 },
-  '5m': { normal: 3_000, compact: 1_500 },
-  '15m': { normal: 2_000, compact: 1_000 },
-  '30m': { normal: 1_400, compact: 700 },
-  '1h': { normal: 1_000, compact: 500 },
-  '4h': { normal: 500, compact: 260 },
-  '1d': { normal: 180, compact: 100 },
-};
-
 const LEVEL_CONTEXT_BARS: Record<MarketTimeframe, number> = {
   '1m': 12_000,
   '5m': 3_000,
@@ -526,6 +597,16 @@ interface CandleWindow {
   start: number;
   end: number;
 }
+
+/**
+ * Slice, která se v replayi nekopíruje. Replay dává grafu i indikátorům celou
+ * odhalenou sérii (start 0, end = délka), takže by `slice` na každý krok
+ * kopírovala desítky tisíc prvků jen proto, aby vrátila totéž pole.
+ */
+const candleWindowSlice = (candles: MarketCandle[], window: CandleWindow): MarketCandle[] =>
+  window.start === 0 && window.end >= candles.length
+    ? candles
+    : candles.slice(window.start, window.end);
 
 const unsubscribeVisibleRangeSafely = (subscription: { chart: IChartApi; handler: () => void } | null) => {
   if (!subscription) return;
@@ -1528,6 +1609,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   onReplaySelectionTimeChange,
   onReplayStart,
   managedPositionBoxes = [],
+  chartOrderQuantity,
+  onChartOrder,
+  onPositionQuickOrder,
+  positionQuickOrderDisabledReason,
   onNeedOlderHistory,
   olderHistoryLoading = false,
 }) => {
@@ -1556,11 +1641,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }>({ api: null, lines: [], primitives: [] });
   const ohlcValuesRef = useRef<HTMLSpanElement>(null);
   const ohlcChangeRef = useRef<HTMLSpanElement>(null);
+  const volumeValueRef = useRef<HTMLSpanElement>(null);
   const pendingVisibleRangeRef = useRef<{ from: Time; to: Time } | null>(null);
   const expandingWindowRef = useRef(false);
   const priceWheelFrameRef = useRef<number | null>(null);
   const priceWheelDeltaRef = useRef(0);
   const fvgPrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
+  const shortPriceLinesRequestUpdateRef = useRef<(() => void) | null>(null);
+  const futureAxisSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const levelsPrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
   const structurePrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
   const positionProgressPrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
@@ -1633,8 +1721,50 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const indicatorSettingsRef = useRef(indicatorSettings);
   indicatorSettingsRef.current = indicatorSettings;
   const [settingsDialogIndicator, setSettingsDialogIndicator] = useState<AlphaTradeIndicatorId | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ left: number; top: number; drawingCount: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    left: number;
+    top: number;
+    drawingCount: number;
+    price: number | null;
+    /** Je vybraný position box, ze kterého jde poslat rychlá objednávka? */
+    positionSelected: boolean;
+  } | null>(null);
   const settingsBackupRef = useRef<AlphaTradeIndicatorSettings | null>(null);
+
+  // --- Nastavení grafu (pravé tlačítko → Nastavení) ---------------------------
+  const chartSettingsSourceRef = useRef(Symbol('chart-settings'));
+  const [chartSettings, setChartSettings] = useState<ChartSettings>(() => loadChartSettings(isDark));
+  const chartSettingsRef = useRef(chartSettings);
+  chartSettingsRef.current = chartSettings;
+  const [chartSettingsOpen, setChartSettingsOpen] = useState(false);
+  const chartSettingsBackupRef = useRef<ChartSettings | null>(null);
+  const [priceScaleMode, setPriceScaleMode] = useState<ChartPriceScaleModeName>('normal');
+  const [priceScaleAuto, setPriceScaleAuto] = useState(true);
+  const [chartApiEpoch, setChartApiEpoch] = useState(0);
+  const chartApiInstanceRef = useRef<ChartViewApi | null>(null);
+  const previousDayCloseLineRef = useRef<ManagedPriceLine | null>(null);
+  const highLineRef = useRef<ManagedPriceLine | null>(null);
+  const lowLineRef = useRef<ManagedPriceLine | null>(null);
+  const watermarkRef = useRef<{ detach: () => void } | null>(null);
+  const [barCountdown, setBarCountdown] = useState<string | null>(null);
+  const [sessionBreakOffsets, setSessionBreakOffsets] = useState<number[]>([]);
+  const [pricePointer, setPricePointer] = useState<{ y: number; price: number } | null>(null);
+
+  const updateChartSettings = useCallback((next: ChartSettings, persist: boolean) => {
+    setChartSettings(next);
+    if (persist) saveChartSettings(next, chartSettingsSourceRef.current);
+    else broadcastChartSettings(next, chartSettingsSourceRef.current);
+  }, []);
+
+  useEffect(() => {
+    const sync = (event: Event) => {
+      const detail = (event as CustomEvent<{ settings: ChartSettings; source: symbol }>).detail;
+      if (!detail || detail.source === chartSettingsSourceRef.current) return;
+      setChartSettings(structuredClone(detail.settings));
+    };
+    window.addEventListener(CHART_SETTINGS_EVENT, sync);
+    return () => window.removeEventListener(CHART_SETTINGS_EVENT, sync);
+  }, []);
   const [hiddenCustomIndicators, setHiddenCustomIndicators] = useState<Set<AlphaTradeIndicatorId>>(new Set());
   const setCustomIndicatorHidden = useCallback((id: AlphaTradeIndicatorId, hidden: boolean) => {
     setHiddenCustomIndicators(current => {
@@ -1710,23 +1840,68 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     items[next]?.focus();
   }, [contextMenu]);
 
+  /** Právě vybraná kresba, pokud je to position box. */
+  const selectedPositionDrawing = (engine: CandleKitDrawingEngine | null | undefined) => {
+    const id = engine?.getSelectedId();
+    return id ? engine?.getById(id) : undefined;
+  };
+
+  /** Cena na svislé pozici kurzoru; `null`, když graf ještě neběží. */
+  const priceAtClientY = useCallback((clientY: number): number | null => {
+    const api = apiRef.current;
+    const host = api?.controller.getChart().chartElement();
+    if (!api || !host) return null;
+    const price = api.controller.getSeries().coordinateToPrice(clientY - host.getBoundingClientRect().top);
+    return price === null || !Number.isFinite(price) ? null : Number(price);
+  }, []);
+
   const openContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     if (target.closest('button, input, select, textarea, [role="dialog"], [role="menu"]')) return;
     event.preventDefault();
     event.stopPropagation();
     const menuWidth = 236;
-    const menuHeight = 116;
+    // Dvě položky s objednávkami menu prodlouží — bez toho by se u spodního
+    // okraje ořízlo.
+    const menuHeight = onChartOrder ? 240 : 160;
     setContextMenu({
       left: Math.max(6, Math.min(event.clientX, window.innerWidth - menuWidth - 6)),
       top: Math.max(6, Math.min(event.clientY, window.innerHeight - menuHeight - 6)),
       drawingCount: countManualChartDrawings(apiRef.current?.drawing?.engine),
+      // Cena pod kurzorem, ne pod myší v okamžiku výběru položky: menu se
+      // otevře jinde, než kam uživatel klikl, a objednávka musí mířit na
+      // úroveň, kterou si vybral.
+      price: priceAtClientY(event.clientY),
+      positionSelected: isPositionDrawing(selectedPositionDrawing(apiRef.current?.drawing?.engine)),
     });
-  }, []);
+  }, [onChartOrder, priceAtClientY]);
 
   const removeDrawings = useCallback(() => {
     removeManualChartDrawings(apiRef.current?.drawing?.engine);
     setContextMenu(null);
+  }, []);
+
+  /** Tlačítko plus se ukazuje jen nad cenovou osou, ve výšce kurzoru. */
+  const handlePricePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!chartSettingsRef.current.scales.plusButton) {
+      setPricePointer(current => (current === null ? current : null));
+      return;
+    }
+    const api = apiRef.current;
+    if (!api) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const scaleWidth = Math.max(64, api.controller.getChart().priceScale('right').width());
+    if (event.clientX < rect.right - scaleWidth) {
+      setPricePointer(current => (current === null ? current : null));
+      return;
+    }
+    const y = event.clientY - rect.top;
+    const price = api.controller.getSeries().coordinateToPrice(y);
+    if (price === null || !Number.isFinite(price)) {
+      setPricePointer(current => (current === null ? current : null));
+      return;
+    }
+    setPricePointer({ y, price: Number(price) });
   }, []);
   const replaySelectionForTime = useCallback((time: number) => {
     const api = apiRef.current;
@@ -1979,53 +2154,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     [candles, timeframe, trade, entryMs, exitMs, compactMode],
   );
   const [candleWindow, setCandleWindow] = useState<CandleWindow>(initialWindow);
-  const replayWindowRef = useRef<(ReplayRenderWindowState & {
-    timeframe: MarketTimeframe;
-    compactMode: boolean;
-  }) | null>(null);
   const previousFirstCandleTimeRef = useRef<number | null>(candles[0]?.time ?? null);
-
-  if (!replayActive) {
-    replayWindowRef.current = null;
-  } else if (!replayWindowRef.current
-    || replayWindowRef.current.timeframe !== timeframe
-    || replayWindowRef.current.compactMode !== compactMode) {
-    const sizing = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[timeframe];
-    replayWindowRef.current = {
-      timeframe,
-      compactMode,
-      startTime: candles[Math.max(0, candles.length - sizing.before - sizing.after)]?.time ?? 0,
-      endTime: null,
-    };
-  }
 
   useEffect(() => {
     const previousFirst = previousFirstCandleTimeRef.current;
     const nextFirst = candles[0]?.time ?? null;
     previousFirstCandleTimeRef.current = nextFirst;
+    // Replay dostává celou načtenou sérii, takže dotažená historie žádné okno
+    // posouvat nemusí. Nové bary předá grafu setData v layout efektu níž.
+    if (replayActive) return;
     if (previousFirst === null || nextFirst === null || nextFirst >= previousFirst) return;
-    if (replayActive) {
-      const replayWindow = replayWindowRef.current;
-      if (!replayWindow) return;
-      const sizing = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[timeframe];
-      const maxBars = REPLAY_MAX_RENDER_BARS[timeframe][compactMode ? 'compact' : 'normal'];
-      const shifted = shiftReplayRenderWindow(
-        candles,
-        replayWindow,
-        'older',
-        sizing.chunk,
-        maxBars,
-      );
-      // Make exactly one bounded piece of the freshly prepended history
-      // renderable. Jumping all the way to `nextFirst` left the chart at the
-      // new external edge and recursively requested every preceding segment.
-      // The time range captured above keeps the user's candles stationary;
-      // the newly exposed chunk simply becomes available to their left.
-      replayWindow.startTime = shifted.startTime;
-      replayWindow.endTime = shifted.endTime;
-      setCandleWindow(current => ({ ...current }));
-      return;
-    }
     const visibleRange = apiRef.current?.controller.getChart().timeScale().getVisibleRange();
     if (visibleRange) pendingVisibleRangeRef.current = visibleRange;
     const prependedCount = candles.findIndex(candle => candle.time >= previousFirst);
@@ -2033,7 +2171,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       start: 0,
       end: Math.min(candles.length, current.end + Math.max(0, prependedCount)),
     }));
-  }, [candles, compactMode, replayActive, timeframe]);
+  }, [candles, replayActive]);
 
   useEffect(() => {
     if (replayActive) return;
@@ -2076,54 +2214,20 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     onChartApiReady?.(null);
   }, [onChartApiReady]);
 
-  const renderedCandleWindow = useMemo<CandleWindow>(() => {
-    if (!replayActive) return candleWindow;
-    const window = replayWindowRef.current ?? {
-      startTime: candles[0]?.time ?? 0,
-      endTime: null,
-    };
-    return replayRenderWindowIndexes(candles, window);
-  }, [candleWindow, candles, compactMode, replayActive, timeframe]);
+  // Replay vykresluje celou odhalenou sérii. Virtualizaci renderu zvládne
+  // Lightweight Charts sám; vlastní okno tu jen dublovalo výpočty, které se
+  // musely trefit do stejného místa — a když se netrefily, graf odskočil.
+  const renderedCandleWindow = useMemo<CandleWindow>(
+    () => replayActive ? { start: 0, end: candles.length } : candleWindow,
+    [candleWindow, candles.length, replayActive],
+  );
   const candlesRef = useRef(candles);
   candlesRef.current = candles;
   const renderedCandleWindowRef = useRef(renderedCandleWindow);
   renderedCandleWindowRef.current = renderedCandleWindow;
 
-  useEffect(() => {
-    const replayWindow = replayWindowRef.current;
-    if (!replayActive || !replayWindow || replayWindow.endTime !== null) return;
-    const sizing = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[timeframe];
-    const maxBars = REPLAY_MAX_RENDER_BARS[timeframe][compactMode ? 'compact' : 'normal'];
-    const current = replayRenderWindowIndexes(candles, replayWindow);
-    if (current.end - current.start <= maxBars + sizing.chunk) return;
-    // Ořez kotvíme kolem aktuálního pohledu, ne na konec dat. Historie se
-    // dotahuje právě když je uživatel scrollem v minulosti; kotva na konci mu
-    // okno pod rukama přesunula dopředu a graf odskočil.
-    // Kotvíme přes ČAS pravého okraje pohledu, ne přes logický index. Logický
-    // index se vztahuje ke starým vykresleným barům, kdežto `current` je už
-    // z nového pole po prependu — smíchání obou soustav posunulo kotvu o celý
-    // prepend a graf odskočil o dny dopředu.
-    let viewEndIndex: number | null = null;
-    try {
-      const visibleRange = apiRef.current?.controller.getChart().timeScale().getVisibleRange();
-      const viewEndTime = visibleRange ? Number(visibleRange.to) : null;
-      if (viewEndTime !== null && Number.isFinite(viewEndTime)) {
-        viewEndIndex = candleIndexAtOrAfter(candles, viewEndTime);
-      }
-    } catch {
-      // Rozebraný ChartView — použije se původní chování (ořez od konce).
-    }
-    replayWindow.startTime = candles[replayTrimStartIndex({
-      windowStart: current.start,
-      windowEnd: current.end,
-      viewEndIndex,
-      maxBars,
-      chunk: sizing.chunk,
-    })]?.time ?? replayWindow.startTime;
-    setCandleWindow(value => ({ ...value }));
-  }, [candles, compactMode, replayActive, timeframe]);
   const visibleCandles = useMemo(
-    () => candles.slice(renderedCandleWindow.start, renderedCandleWindow.end),
+    () => candleWindowSlice(candles, renderedCandleWindow),
     [candles, renderedCandleWindow],
   );
 
@@ -2221,7 +2325,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       if (!visibleLevels) return EMPTY_LIQUIDITY_LEVELS;
       const end = renderedCandleWindow.end;
       const start = Math.max(0, end - LEVEL_CONTEXT_BARS[timeframe]);
-      return calculateLiquidityLevels(candles.slice(start, end), indicatorSettings.levels);
+      return calculateLiquidityLevels(candleWindowSlice(candles, { start, end }), indicatorSettings.levels);
     },
     [candles, renderedCandleWindow.end, indicatorSettings.levels, timeframe, visibleLevels],
   );
@@ -2235,7 +2339,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
     if (replayActive) {
       const replayContextStart = Math.max(0, renderedCandleWindow.start - 600);
-      const input = candles.slice(replayContextStart, renderedCandleWindow.end);
+      const input = candleWindowSlice(candles, { start: replayContextStart, end: renderedCandleWindow.end });
       const next = updateFairValueGapAccumulator(fvgAccumulatorRef.current, input);
       fvgAccumulatorRef.current = next;
       return next.gaps;
@@ -2252,7 +2356,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
     const firstRenderedTime = visibleCandles[0]?.time ?? Number.NEGATIVE_INFINITY;
     const contextStart = Math.max(0, renderedCandleWindow.start - STRUCTURE_CONTEXT_BARS);
-    const input = candles.slice(contextStart, renderedCandleWindow.end);
+    const input = candleWindowSlice(candles, { start: contextStart, end: renderedCandleWindow.end });
     const next = updateMarketStructureAccumulator(marketStructureAccumulatorRef.current, input);
     marketStructureAccumulatorRef.current = next;
     return next.events
@@ -2417,13 +2521,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
     let chart: IChartApi;
     let viewportBeforeUpdate: { from: number; to: number } | null;
+    let actualViewportBeforeUpdate: { from: number; to: number } | null;
     let visiblePriceRange: { from: number; to: number } | null;
     try {
       chart = controller.getChart();
       const timeScale = chart.timeScale();
       const priceScale = chart.priceScale('right');
-      viewportBeforeUpdate = replayViewportTargetRef.current
-        ?? timeScale.getVisibleLogicalRange();
+      actualViewportBeforeUpdate = timeScale.getVisibleLogicalRange();
+      viewportBeforeUpdate = replayViewportTargetRef.current ?? actualViewportBeforeUpdate;
       visiblePriceRange = priceScale.options().autoScale === false
         ? priceScale.getVisibleRange()
         : null;
@@ -2444,39 +2549,35 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const firstVisibleTime = visibleCandles[0]?.time * 1000;
     const lastVisibleTime = visibleCandles.at(-1)!.time * 1000;
 
-    // updateBar can append or replace the newest bar, but it cannot prepend an
-    // older working window. Replace the bounded controller data only when the
-    // user actually moved that window. A source prepend by itself preserves
-    // firstVisibleTime, so it never reaches setData(). Restore the time range
-    // in the same layout phase to prevent a one-frame jump to the latest bar.
-    const requiresWindowReplacement = firstControllerTime !== undefined
+    // `updateBar` umí jen přepsat nebo přidat nejnovější bar. Kompletní data
+    // proto graf dostane jen ve dvou případech: když se zepředu dotáhla starší
+    // historie, nebo když replay kurzor couvl a bary zezadu ubyly.
+    const requiresDataReplacement = firstControllerTime !== undefined
       && (firstControllerTime !== firstVisibleTime
         || (lastControllerTime !== undefined && lastControllerTime > lastVisibleTime));
-    if (requiresWindowReplacement) {
+    if (requiresDataReplacement) {
       // Viewport obnovujeme přes LOGICKÉ indexy, ne přes časy. setVisibleRange
       // vyžaduje, aby hraniční čas padl na existující bar; časová osa je ale
       // děravá (víkendy, pauzy), takže si knihovna rozsah upravila po svém —
-      // jednou o hodiny doleva, jindy rovnou na poslední svíčku. Posun okna
-      // přitom známe přesně: stačí spočítat, o kolik barů se první bar hnul.
-      const barShift = replayBarShift({
-        previousFirstSeconds: firstControllerTime / 1000,
-        nextCandles: visibleCandles,
-        previousTimesSeconds: controllerBars.map(bar => bar.ts / 1000),
-      });
+      // jednou o hodiny doleva, jindy rovnou na poslední svíčku. Posun přitom
+      // známe přesně: o kolik barů přibylo před dosavadní první bar.
+      const prependedBarCount = firstControllerTime > firstVisibleTime
+        ? candleIndexAtOrAfter(visibleCandles, firstControllerTime / 1000)
+        : 0;
 
       controller.setData(visibleCandles.map(candleKitBar));
 
-      // Základem musí být SKUTEČNÝ viewport, ne `replayViewportTargetRef`.
+      // Kotvou musí být SKUTEČNÝ viewport, ne `replayViewportTargetRef`.
       // Ten drží cíl pro sledování aktuální replay svíčky; při scrollu do
       // historie se od ní vzdalujeme, takže je zastaralý a má i jinou šířku
       // (naměřeno: cíl 136 barů proti skutečným 90 a 72). Graf pak po výměně
-      // okna skočil jinam a ještě si změnil přiblížení.
-      const anchorViewport = chart.timeScale().getVisibleLogicalRange() ?? viewportBeforeUpdate;
-      if (anchorViewport) {
-        chart.timeScale().setVisibleLogicalRange({
-          from: anchorViewport.from + barShift,
-          to: anchorViewport.to + barShift,
-        });
+      // dat skočil jinam a ještě si změnil přiblížení. Cíl počítáme absolutně
+      // z rozsahu PŘED setData, aby nezáleželo na tom, jak si knihovna rozsah
+      // sama upraví.
+      if (actualViewportBeforeUpdate) {
+        chart.timeScale().setVisibleLogicalRange(
+          replayLogicalRangeAfterPrepend(actualViewportBeforeUpdate, prependedBarCount),
+        );
       }
       // Replay nikdy neobnovujeme přes časy. I fallback přes setVisibleRange
       // dokázal po opožděném callbacku přeskočit přes session gap až na konec
@@ -2490,7 +2591,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       expandingWindowRef.current = false;
       replayViewportTargetRef.current = null;
       replayPriceRangeTargetRef.current = null;
-      chartRootRef.current?.setAttribute('data-replay-update-mode', 'window-replace');
+      chartRootRef.current?.setAttribute('data-replay-update-mode', 'data-replace');
       return;
     }
 
@@ -2584,8 +2685,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
   }, [visibleCandles, timeframe, trade, entryMs, exitMs]);
 
+  // Zaměřit obchod smí jen skutečný požadavek uživatele (čítač se zvýší).
+  // `focusTrade` mění identitu s každou změnou svíček, takže efekt se spouštěl
+  // i po dotažení starší historie a odhodil uživatele zpět k obchodu — naměřeno
+  // jako skok z 24. 6. na 5. 7. hned po prependu 6 660 barů.
+  const handledFocusRequestRef = useRef<number | null>(null);
   useEffect(() => {
     if (focusRequest === undefined) return;
+    if (handledFocusRequestRef.current === focusRequest) return;
+    handledFocusRequestRef.current = focusRequest;
     focusTrade();
   }, [focusRequest, focusTrade]);
 
@@ -2665,6 +2773,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       () => chart.priceScale('right').getVisibleRange(),
     );
     applyFibRuntimeTimeframe(api.drawing?.engine, timeframe);
+    applyPositionRuntimeInterval(api.drawing?.engine, timeframeMinutes(timeframe) * 60);
     if (chartChanged) {
       overlayArtifactsRef.current = { api, lines: [], primitives: [] };
     } else {
@@ -2680,15 +2789,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const applyTradingViewCandleStyle = () => {
       chart.applyOptions({ layout: { fontFamily: chartStyle.fontFamily } });
       series.applyOptions({
-        upColor: isDark ? chartStyle.bullBodyDark : chartStyle.bullBodyLight,
-        downColor: chartStyle.bear,
-        borderVisible: true,
-        borderUpColor: isDark ? chartStyle.bullLineDark : chartStyle.bullLineLight,
-        borderDownColor: chartStyle.bear,
-        wickVisible: true,
-        wickUpColor: isDark ? chartStyle.bullLineDark : chartStyle.bullLineLight,
-        wickDownColor: chartStyle.bear,
+        // Výchozí formát instrumentu; volba `Přesnost` ho v mapperu přepíše.
         priceFormat: { type: 'price', precision: 2, minMove: 0.25 },
+        ...chartSeriesOptions(chartSettingsRef.current),
       });
     };
     applyTradingViewCandleStyle();
@@ -2705,6 +2808,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const updateOhlcLegend = (candle: MarketCandle, previousClose?: number) => {
       if (ohlcValuesRef.current) {
         ohlcValuesRef.current.textContent = `O ${formatOhlcPrice(candle.open)}  H ${formatOhlcPrice(candle.high)}  L ${formatOhlcPrice(candle.low)}  C ${formatOhlcPrice(candle.close)}`;
+      }
+      if (volumeValueRef.current) {
+        volumeValueRef.current.textContent = `V ${Math.round(candle.volume).toLocaleString('cs-CZ')}`;
       }
       if (!ohlcChangeRef.current) return;
       if (!Number.isFinite(previousClose)) {
@@ -3305,6 +3411,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // Start the network request while there is still scrollable chart space.
       // The exact visible time is restored after prepend, so this headroom
       // hides most provider latency without moving the user's viewport.
+      // V replayi je okno vždy celá načtená série, takže obě hrany zůstávají
+      // false a jediným důvodem k akci je dotažení historie od providera.
       const atLeftEdge = logicalRange.from < 160;
       const nearLeftEdge = atLeftEdge && currentWindow.start > 0;
       const nearRightEdge = logicalRange.to > currentVisibleCount - 80 && currentWindow.end < currentCandles.length;
@@ -3320,23 +3428,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         if (visibleRange) pendingVisibleRangeRef.current = visibleRange;
       }
       expandingWindowRef.current = true;
-      const chunk = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[timeframe].chunk;
-      if (replayActive && replayWindowRef.current && (nearLeftEdge || nearRightEdge)) {
-        const maxBars = REPLAY_MAX_RENDER_BARS[timeframe][compactMode ? 'compact' : 'normal'];
-        const next = shiftReplayRenderWindow(
-          currentCandles,
-          replayWindowRef.current,
-          nearLeftEdge ? 'older' : 'newer',
-          chunk,
-          maxBars,
-        );
-        replayWindowRef.current.startTime = next.startTime;
-        replayWindowRef.current.endTime = next.endTime;
+      if (!replayActive) {
+        const chunk = (compactMode ? COMPACT_WINDOW_BARS : INITIAL_WINDOW_BARS)[timeframe].chunk;
+        setCandleWindow(current => ({
+          start: nearLeftEdge ? Math.max(0, current.start - chunk) : current.start,
+          end: nearRightEdge ? Math.min(currentCandles.length, current.end + chunk) : current.end,
+        }));
       }
-      setCandleWindow(current => ({
-        start: replayActive ? current.start : nearLeftEdge ? Math.max(0, current.start - chunk) : current.start,
-        end: replayActive ? current.end : nearRightEdge ? Math.min(currentCandles.length, current.end + chunk) : current.end,
-      }));
       if (needsExternalHistory && currentCandles[0]) {
         olderHistoryUserArmedRef.current = false;
         olderHistoryRequestedBeforeRef.current = currentCandles[0].time;
@@ -3418,6 +3516,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   handleReadyLatestRef.current = handleReadyLatest;
   const handleReady = useCallback((api: ChartViewApi) => {
     handleReadyLatestRef.current(api);
+    // Nastavení se aplikuje imperativně, takže potřebuje vědět o novém grafu.
+    // Přestavba overlayů volá handleReady taky, ale se stejnou instancí.
+    if (chartApiInstanceRef.current === api) return;
+    chartApiInstanceRef.current = api;
+    setChartApiEpoch(epoch => epoch + 1);
   }, []);
 
   useEffect(() => {
@@ -3467,6 +3570,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       ? managedPositionBoxes.map(box => managedPositionDrawing(
           box,
           Number(latestTime) + MARKET_TIMEFRAME_MINUTES[timeframe] * 60 * 5,
+          MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
         ))
       : [];
     const desiredIds = new Set(desired.map(drawing => drawing.id));
@@ -3488,7 +3592,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       }
     });
     protectedDrawingsUnsubscribeRef.current = protectGeneratedDrawings(engine);
-    engine.select(null);
+    // Odznačit smíme jen vlastní vygenerovaný box, který si `commit` označil
+    // sám. Plošné `select(null)` tady bralo výběr i uživateli: efekt běží při
+    // každém replay ticku, takže kliknutá kresba se odznačila dřív, než se
+    // stihl otevřít její panel.
+    const selectedId = engine.getSelectedId();
+    if (selectedId && selectedId.startsWith(prefix)) engine.select(null);
     positionProgressPrimitiveRequestUpdateRef.current?.();
   }, [managedPositionBoxes, replayActive, replayCursorTime, timeframe, visibleCandles]);
 
@@ -3503,6 +3612,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (ohlcValuesRef.current) {
       ohlcValuesRef.current.textContent = `O ${format(latest.open)}  H ${format(latest.high)}  L ${format(latest.low)}  C ${format(latest.close)}`;
     }
+    if (volumeValueRef.current) {
+      volumeValueRef.current.textContent = `V ${Math.round(latest.volume).toLocaleString('cs-CZ')}`;
+    }
     const previousClose = visibleCandles.at(-2)?.close;
     if (!ohlcChangeRef.current || !Number.isFinite(previousClose)) return;
     const change = latest.close - Number(previousClose);
@@ -3514,14 +3626,412 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       : change < 0 ? chartStyle.bearishStructure : (isDark ? '#94a3b8' : '#64748b');
   }, [isDark, replayActive, replayCursorTime, visibleCandles]);
 
-  const background = isDark ? '#090d12' : '#ffffff';
-  const text = isDark ? '#8794a5' : '#64748b';
-  const grid = 'transparent';
+  // --- Promítnutí nastavení grafu do plátna ---------------------------------
+  const chartSettingsOptions = useMemo(() => {
+    const canvas = chartCanvasOptions(chartSettings);
+    const { symbol, scales } = chartSettings;
+    return {
+      ...canvas,
+      layout: { ...canvas.layout, fontFamily: chartStyle.fontFamily },
+      timeScale: {
+        ...canvas.timeScale,
+        timeVisible: true,
+        secondsVisible: false,
+        lockVisibleTimeRangeOnResize: true,
+        tickMarkFormatter: (time: Time, tickMarkType: number) => chartAxisTickLabel(
+          Number(time),
+          tickMarkType,
+          { timeZone: symbol.timeZone, hour12: scales.hour12 },
+        ),
+      },
+      localization: {
+        locale: 'cs-CZ',
+        timeFormatter: (time: Time) => chartCrosshairTimeLabel(Number(time), {
+          // Denní svíčka pokrývá celý den, čas by u ní nic neříkal.
+          withTime: timeframe !== '1d',
+          timeZone: symbol.timeZone,
+          dateFormat: scales.dateFormat,
+          dayOfWeek: scales.dayOfWeekOnLabels,
+          hour12: scales.hour12,
+        }),
+        priceFormatter: chartPriceFormatter(symbol.precision, formatNqMnqTickPrice),
+      },
+    };
+  }, [chartSettings, timeframe]);
+
+  const appliedMarginRightRef = useRef<number | null>(null);
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const chart = api.controller.getChart();
+    const series = api.controller.getSeries();
+    const { timeScale: timeScaleOptions, ...rest } = chartSettingsOptions;
+    const { rightOffset, ...timeScaleRest } = timeScaleOptions;
+    const apply = () => {
+      chart.applyOptions({ ...rest, timeScale: timeScaleRest });
+      series.applyOptions(chartSeriesOptions(chartSettings));
+      // Pravý okraj hýbe výřezem, proto se sahá jen na skutečnou změnu.
+      if (appliedMarginRightRef.current !== rightOffset) {
+        appliedMarginRightRef.current = rightOffset ?? null;
+        chart.timeScale().applyOptions({ rightOffset });
+      }
+    };
+    apply();
+    // CandleKit po vlastním průchodu tématem barvy přepíše; druhý běh je vrátí.
+    const frame = window.requestAnimationFrame(() => window.requestAnimationFrame(apply));
+    return () => window.cancelAnimationFrame(frame);
+  }, [chartApiEpoch, chartSettings, chartSettingsOptions]);
+
+  // Barvení podle předchozího close knihovna neumí z options — barvy jdou jen
+  // po jednotlivých svíčkách. Celá data se přepisují jen při skutečné změně,
+  // v replayi se dopisuje pouze poslední svíčka.
+  const paintedBarColorsRef = useRef<{ signature: string; firstTime: number; length: number } | null>(null);
+  useEffect(() => {
+    const series = apiRef.current?.controller.getSeries();
+    if (!series) return;
+    const overrides = candleColorOverrides(visibleCandles, chartSettings.symbol);
+    if (!overrides || !visibleCandles.length) {
+      paintedBarColorsRef.current = null;
+      return;
+    }
+    const bar = (index: number) => ({
+      time: visibleCandles[index].time as UTCTimestamp,
+      open: visibleCandles[index].open,
+      high: visibleCandles[index].high,
+      low: visibleCandles[index].low,
+      close: visibleCandles[index].close,
+      ...overrides[index],
+    });
+    const signature = JSON.stringify(chartSettings.symbol);
+    const painted = paintedBarColorsRef.current;
+    const firstTime = visibleCandles[0].time;
+    const appended = painted
+      && painted.signature === signature
+      && painted.firstTime === firstTime
+      && visibleCandles.length >= painted.length;
+    if (appended) {
+      for (let index = Math.max(0, painted!.length - 1); index < visibleCandles.length; index += 1) {
+        series.update(bar(index));
+      }
+    } else {
+      series.setData(visibleCandles.map((_, index) => bar(index)));
+    }
+    paintedBarColorsRef.current = { signature, firstTime, length: visibleCandles.length };
+  }, [chartApiEpoch, chartSettings.symbol, visibleCandles]);
+
+  // Cenové čáry PDC a extrémů: knihovna je nezná, kreslí se jako price lines.
+  const applyManagedPriceLines = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const series = api.controller.getSeries();
+    const { scales, symbol } = chartSettingsRef.current;
+    const candlesNow = candlesRef.current;
+    const range = api.controller.getChart().timeScale().getVisibleRange();
+    const extremes = visibleHighLow(
+      candlesNow,
+      range ? { from: Number(range.from), to: Number(range.to) } : null,
+    );
+    previousDayCloseLineRef.current = syncManagedPriceLine({
+      series,
+      previous: previousDayCloseLineRef.current,
+      settings: scales.previousDayClose,
+      price: previousDayClosePrice(candlesNow, symbol.timeZone),
+      title: 'PDC',
+    });
+    highLineRef.current = syncManagedPriceLine({
+      series,
+      previous: highLineRef.current,
+      settings: scales.highAndLow,
+      price: extremes?.high ?? null,
+      title: 'H',
+    });
+    lowLineRef.current = syncManagedPriceLine({
+      series,
+      previous: lowLineRef.current,
+      settings: scales.highAndLow,
+      price: extremes?.low ?? null,
+      title: 'L',
+    });
+    // Zkrácené čáry kreslí primitive, ale ten se sám nepřekresluje při změně
+    // nastavení — musí dostat pokyn.
+    shortPriceLinesRequestUpdateRef.current?.();
+  }, []);
+
+  /**
+   * Objednávky nabídnuté pravým klikem. Typ (limit/stop) plyne z toho, na které
+   * straně trhu uživatel klikl; množství se bere z obchodního panelu, ne z
+   * rizika position boxu.
+   */
+  const contextOrderCandle = visibleCandles.at(-1) ?? null;
+  const contextOrderOptions = useMemo<ChartClickOrderOption[]>(() => {
+    if (!onChartOrder || contextMenu?.price == null || !contextOrderCandle) return [];
+    return chartClickOrderOptions({
+      price: contextMenu.price,
+      marketPrice: contextOrderCandle.close,
+      quantity: Math.max(1, Math.floor(chartOrderQuantity ?? 1)),
+      tickSize: positionDefaultsForRoot(resolvedInstrumentRoot).tickSize,
+      symbol: resolvedInstrumentRoot,
+    });
+  }, [chartOrderQuantity, contextMenu?.price, contextOrderCandle, onChartOrder, resolvedInstrumentRoot]);
+
+  const submitContextOrder = useCallback((option: ChartClickOrderOption) => {
+    setContextMenu(null);
+    onChartOrder?.(
+      { side: option.side, type: option.type, quantity: option.quantity, price: option.price },
+      contextOrderCandle,
+    );
+  }, [contextOrderCandle, onChartOrder]);
+
+  /**
+   * Protažení časové osy za poslední svíčku.
+   *
+   * Data drží CandleKit controller, takže whitespace body nejde přidat do
+   * hlavní série — přepsal by je. Nese je proto vlastní neviditelná série;
+   * časová osa počítá se všemi sériemi v grafu, takže stačí k protažení.
+   * `autoscaleInfoProvider: () => null` drží cenovou osu mimo hru.
+   */
+  useEffect(() => {
+    const api = apiRef.current;
+    const chart = api?.controller.getChart();
+    if (!chart) return;
+    const series = chart.addSeries(LineSeries, {
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    futureAxisSeriesRef.current = series;
+    return () => {
+      futureAxisSeriesRef.current = null;
+      try { chart.removeSeries(series); } catch { /* graf už zmizel */ }
+    };
+  }, [chartApiEpoch]);
+
+  useEffect(() => {
+    const series = futureAxisSeriesRef.current;
+    if (!series) return;
+    const times = futureAxisTimes(
+      visibleCandles.at(-1)?.time,
+      MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
+      FUTURE_AXIS_BARS,
+    );
+    series.setData(times.map(time => ({ time: time as UTCTimestamp })));
+  }, [timeframe, visibleCandles]);
+
+  /**
+   * Pozice zrcadlené z jiného panelu si nesou jeho `intervalSeconds`, takže se
+   * na tomhle timeframu kreslí ve špatné šířce. Srovnat je stačí jednou při
+   * připojení a pak po každé změně kreseb — synchronizace je právě `import`,
+   * který změnu ohlásí.
+   */
+  useEffect(() => {
+    const engine = apiRef.current?.drawing?.engine;
+    if (!engine) return;
+    const intervalSeconds = timeframeMinutes(timeframe) * 60;
+    const align = () => { applyPositionRuntimeInterval(engine, intervalSeconds); };
+    align();
+    return engine.onChange(align);
+  }, [chartApiEpoch, timeframe]);
+
+  /**
+   * Čáry v režimu „od svíčky doprava". Knihovní price line umí jen plnou šířku,
+   * takže se zkrácená varianta kreslí ručně od X-ové souřadnice své svíčky až k
+   * cenové ose (pravý okraj plátna série).
+   *
+   * Primitive se připojí jednou a stav čte přes refy — přepojování při každé
+   * změně nastavení by blikalo.
+   */
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const series = api.controller.getSeries();
+    const chart = api.controller.getChart();
+    const renderer: IPrimitivePaneRenderer = {
+      draw: target => {
+        target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+          const { scales, symbol } = chartSettingsRef.current;
+          const range = chart.timeScale().getVisibleRange();
+          const lines = shortenedPriceLines({
+            scales,
+            // Odhalené svíčky, ne celá historie: v replay režimu série o
+            // budoucích svíčkách neví a kotva by neměla souřadnici.
+            candles: visibleCandlesRef.current,
+            timeZone: symbol.timeZone,
+            visibleRange: range ? { from: Number(range.from), to: Number(range.to) } : null,
+          });
+          if (!lines.length) return;
+          context.save();
+          lines.forEach(line => {
+            const y = series.priceToCoordinate(line.price);
+            if (y === null || y < 0 || y > mediaSize.height) return;
+            const rawX = chart.timeScale().timeToCoordinate(line.time as UTCTimestamp);
+            // Bez souřadnice nekresli vůbec. Kreslit od nuly by udělalo přesný
+            // opak volby — čáru přes celý graf.
+            if (rawX === null) return;
+            // Svíčka odrolovaná doleva z obrazu: čára pokračuje od okraje, aby
+            // úroveň nezmizela jen proto, že její začátek není vidět.
+            const startX = Math.max(0, rawX);
+            if (startX >= mediaSize.width) return;
+            context.beginPath();
+            context.moveTo(startX, y);
+            context.lineTo(mediaSize.width, y);
+            context.strokeStyle = line.color;
+            context.lineWidth = line.width;
+            context.setLineDash(canvasLineDash(line.style));
+            context.stroke();
+          });
+          context.restore();
+        });
+      },
+    };
+    const primitive: ISeriesPrimitive<Time> = {
+      attached: ({ requestUpdate }) => { shortPriceLinesRequestUpdateRef.current = requestUpdate; },
+      detached: () => { shortPriceLinesRequestUpdateRef.current = null; },
+      paneViews: () => [{ zOrder: () => 'top', renderer: () => renderer }],
+    };
+    series.attachPrimitive(primitive);
+    return () => {
+      try { series.detachPrimitive(primitive); } catch { /* graf už zmizel */ }
+    };
+  }, [chartApiEpoch]);
+
+  // Vodoznak je plugin knihovny, ne option — připojuje se k panelu.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const { watermark, watermarkColor } = chartSettings.canvas;
+    watermarkRef.current?.detach();
+    watermarkRef.current = null;
+    if (watermark === 'hidden') return;
+    const text = watermark === 'ticker'
+      ? resolvedInstrumentRoot
+      : watermark === 'interval'
+        ? instrumentLegend.timeframe
+        : instrumentLegend.name;
+    const pane = api.controller.getChart().panes()[0];
+    if (!pane) return;
+    watermarkRef.current = createTextWatermark(pane, {
+      horzAlign: 'center',
+      vertAlign: 'center',
+      lines: [{ text, color: watermarkColor, fontSize: 56, fontStyle: 'bold' }],
+    });
+    return () => {
+      watermarkRef.current?.detach();
+      watermarkRef.current = null;
+    };
+  }, [chartApiEpoch, chartSettings.canvas, instrumentLegend.name, instrumentLegend.timeframe, resolvedInstrumentRoot]);
+
+  // Odpočet do uzavření svíčky běží jen když ho uživatel zapne — jinak by
+  // sekundový interval budil překreslení úplně zbytečně.
+  useEffect(() => {
+    if (!chartSettings.scales.countdownToBarClose) {
+      setBarCountdown(null);
+      return;
+    }
+    const tick = () => {
+      const last = candlesRef.current.at(-1);
+      if (!last) return setBarCountdown(null);
+      // V replayi je „teď" kurzor přehrávání, ne hodiny na zdi.
+      const nowSeconds = replayActive
+        ? Number(replayCursorTime ?? last.time)
+        : Date.now() / 1_000;
+      setBarCountdown(barCloseCountdown(secondsToBarClose({
+        barTime: last.time,
+        timeframeMinutes: MARKET_TIMEFRAME_MINUTES[timeframe],
+        nowSeconds,
+      })));
+    };
+    tick();
+    if (replayActive) return;
+    const timer = window.setInterval(tick, 1_000);
+    return () => window.clearInterval(timer);
+  }, [chartSettings.scales.countdownToBarClose, replayActive, replayCursorTime, timeframe, visibleCandles]);
+
+  // Předěly seancí i zamčený poměr ceny ke svíčce reagují na posun grafu,
+  // takže se přepočítávají při každé změně výřezu.
+  const sessionBreakTimesValue = useMemo(
+    () => (chartSettings.canvas.sessionBreaks
+      ? sessionBreakTimes(visibleCandles, chartSettings.symbol.timeZone)
+      : []),
+    [chartSettings.canvas.sessionBreaks, chartSettings.symbol.timeZone, visibleCandles],
+  );
+  // Vše, co závisí na aktuálním výřezu, visí na jediném odběru: předěly seancí,
+  // zamčený poměr, čáry extrémů i zapamatovaný levý okraj.
+  const leftEdgeRef = useRef<{ time: number; span: number } | null>(null);
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const chart = api.controller.getChart();
+    const timeScale = chart.timeScale();
+    const { lockPriceToBarRatio, priceToBarRatio, placement, keepLeftEdgeOnIntervalChange } = chartSettings.scales;
+    let frame: number | null = null;
+    const refresh = () => {
+      frame = null;
+      setSessionBreakOffsets(sessionBreakTimesValue
+        .map(time => timeScale.timeToCoordinate(time as UTCTimestamp))
+        .filter((coordinate): coordinate is NonNullable<typeof coordinate> => coordinate !== null)
+        .map(Number));
+      applyManagedPriceLines();
+      const range = timeScale.getVisibleRange();
+      const logical = timeScale.getVisibleLogicalRange();
+      if (keepLeftEdgeOnIntervalChange && range && logical) {
+        leftEdgeRef.current = { time: Number(range.from), span: logical.to - logical.from };
+      }
+      if (!lockPriceToBarRatio) return;
+      const priceScale = chart.priceScale(placement === 'left' ? 'left' : 'right');
+      const current = priceScale.getVisibleRange();
+      const locked = lockedPriceRange({
+        ratio: priceToBarRatio,
+        barSpacing: timeScale.options().barSpacing,
+        paneHeight: chart.paneSize().height,
+        center: current ? (current.from + current.to) / 2 : Number.NaN,
+      });
+      if (locked) priceScale.setVisibleRange(locked);
+    };
+    const schedule = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(refresh);
+    };
+    refresh();
+    timeScale.subscribeVisibleLogicalRangeChange(schedule);
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      timeScale.unsubscribeVisibleLogicalRangeChange(schedule);
+    };
+  }, [applyManagedPriceLines, chartApiEpoch, chartSettings.scales, sessionBreakTimesValue, visibleCandles]);
+
+  // Po přepnutí intervalu vrátí graf na zapamatovaný levý okraj místo na
+  // výchozí výřez. Rozestup svíček se nemění, posouvá se jen pozice.
+  const appliedLeftEdgeTimeframeRef = useRef<MarketTimeframe | null>(timeframe);
+  useEffect(() => {
+    if (appliedLeftEdgeTimeframeRef.current === timeframe) return;
+    appliedLeftEdgeTimeframeRef.current = timeframe;
+    const edge = leftEdgeRef.current;
+    const api = apiRef.current;
+    if (!chartSettings.scales.keepLeftEdgeOnIntervalChange || !edge || !api) return;
+    const index = candleIndexAtOrAfter(candlesRef.current, edge.time);
+    api.controller.getChart().timeScale().setVisibleLogicalRange({
+      from: index,
+      to: index + edge.span,
+    });
+  }, [chartApiEpoch, chartSettings.scales.keepLeftEdgeOnIntervalChange, timeframe, visibleCandles]);
+
+  // Tlačítka A/L přepínají režim osy; stav se drží tady, ne v nastavení, aby
+  // odpovídal tomu, co uživatel zrovna kliknul.
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const scaleId = chartSettings.scales.placement === 'left' ? 'left' : 'right';
+    const priceScale = api.controller.getChart().priceScale(scaleId);
+    priceScale.applyOptions({ mode: chartPriceScaleMode(priceScaleMode) });
+    priceScale.setAutoScale(priceScaleAuto);
+  }, [chartApiEpoch, chartSettings.scales.placement, priceScaleAuto, priceScaleMode]);
+
 
   return (
     <div
       ref={chartRootRef}
-      className="absolute inset-0"
+      className="group/chart absolute inset-0"
       data-visible-bars={visibleCandles.length}
       data-total-bars={candles.length}
       data-window-start={renderedCandleWindow.start}
@@ -3539,7 +4049,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         }
       }}
       onPointerMoveCapture={handleManagedPositionPointerMove}
-      onPointerLeave={() => setManagedPositionHover(null)}
+      onPointerMove={handlePricePointerMove}
+      onPointerLeave={() => {
+        setManagedPositionHover(null);
+        setPricePointer(null);
+      }}
       onContextMenu={openContextMenu}
       onWheelCapture={event => {
         olderHistoryUserArmedRef.current = true;
@@ -3576,31 +4090,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         measurement
         onReady={handleReady}
         chartOptions={{
-          layout: {
-            background: { type: ColorType.Solid, color: background },
-            textColor: text,
-            fontFamily: chartStyle.fontFamily,
-          },
-          grid: { vertLines: { color: grid }, horzLines: { color: grid } },
-          rightPriceScale: { borderColor: grid, scaleMargins: { top: 0.08, bottom: 0.22 } },
+          ...chartSettingsOptions,
           timeScale: {
-            borderColor: grid,
-            timeVisible: true,
-            secondsVisible: false,
-            rightOffset: 6,
+            ...chartSettingsOptions.timeScale,
             barSpacing: 8,
             minBarSpacing: 0.5,
-            lockVisibleTimeRangeOnResize: true,
-            tickMarkFormatter: (time: Time) => new Date(Number(time) * 1000).toLocaleTimeString('cs-CZ', {
-              timeZone: 'Europe/Prague', hour: '2-digit', minute: '2-digit',
-            }),
-          },
-          localization: {
-            locale: 'cs-CZ',
-            timeFormatter: (time: Time) => new Date(Number(time) * 1000).toLocaleString('cs-CZ', {
-              timeZone: 'Europe/Prague', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-            }),
-            priceFormatter: formatNqMnqTickPrice,
           },
           handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
           handleScale: { axisPressedMouseMove: true, axisDoubleClickReset: true, mouseWheel: true, pinch: true },
@@ -3793,17 +4287,103 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       />}
       <div className={`pointer-events-none absolute left-2 top-1.5 z-20 max-w-[calc(100%-72px)] whitespace-nowrap text-[10px] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
         <div className="flex h-4 min-w-0 items-center gap-1.5" aria-label="Instrument a timeframe grafu">
-          <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-cyan-500 text-[9px] font-bold text-white">
-            {instrumentLegend.badge}
-          </span>
-          <span className="truncate font-semibold">{instrumentLegend.name}</span>
+          {chartSettings.statusLine.symbolTitle && (
+            <>
+              <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-cyan-500 text-[9px] font-bold text-white">
+                {instrumentLegend.badge}
+              </span>
+              <span className={`shrink-0 font-semibold ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{resolvedInstrumentRoot}</span>
+            </>
+          )}
+          {chartSettings.statusLine.symbolDescription && (
+            <span className="truncate font-semibold">{instrumentLegend.name}</span>
+          )}
           <span className={`shrink-0 font-semibold ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>· {instrumentLegend.timeframe}</span>
         </div>
         <div className={`flex h-4 items-center gap-2 font-medium ${isDark ? 'text-slate-300' : 'text-slate-600'}`} aria-label="OHLC označené svíčky">
-          <span ref={ohlcValuesRef} />
-          <span ref={ohlcChangeRef} />
+          <span ref={ohlcValuesRef} hidden={!chartSettings.statusLine.chartValues} />
+          <span ref={ohlcChangeRef} hidden={!chartSettings.statusLine.barChangeValues} />
+          {chartSettings.statusLine.volume && <span ref={volumeValueRef} />}
         </div>
       </div>
+      {sessionBreakOffsets.map(offset => (
+        <span
+          key={`session-break-${offset}`}
+          data-session-break={offset}
+          className="pointer-events-none absolute inset-y-0 z-[15]"
+          style={{
+            left: offset,
+            width: chartSettings.canvas.sessionBreak.width,
+            backgroundColor: chartSettings.canvas.sessionBreak.color,
+            opacity: chartSettings.canvas.sessionBreak.style === 'solid' ? 0.9 : 0.45,
+          }}
+        />
+      ))}
+      {barCountdown && (
+        <span
+          data-bar-countdown={barCountdown}
+          className="pointer-events-none absolute right-1 z-[60] rounded-sm bg-[#2962ff] px-1.5 py-0.5 text-[10px] font-semibold text-white"
+          style={{ bottom: 26 }}
+        >
+          {barCountdown}
+        </span>
+      )}
+      {chartSettings.scales.scaleModeButtons !== 'never' && (
+        <div
+          data-price-scale-modes
+          className={`absolute bottom-6 right-1 z-[60] flex gap-0.5 ${chartSettings.scales.scaleModeButtons === 'hover' ? 'opacity-0 transition-opacity hover:opacity-100 group-hover/chart:opacity-100' : ''}`}
+        >
+          <button
+            type="button"
+            aria-pressed={priceScaleAuto}
+            title="Automatické měřítko"
+            onClick={() => setPriceScaleAuto(auto => !auto)}
+            className={`h-5 w-5 rounded text-[9px] font-bold ${priceScaleAuto ? 'bg-[#2962ff] text-white' : isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-200 text-slate-700'}`}
+          >
+            A
+          </button>
+          <button
+            type="button"
+            aria-pressed={priceScaleMode === 'logarithmic'}
+            title="Logaritmické měřítko"
+            onClick={() => setPriceScaleMode(mode => (mode === 'logarithmic' ? 'normal' : 'logarithmic'))}
+            className={`h-5 w-5 rounded text-[9px] font-bold ${priceScaleMode === 'logarithmic' ? 'bg-[#2962ff] text-white' : isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-200 text-slate-700'}`}
+          >
+            L
+          </button>
+          <button
+            type="button"
+            aria-pressed={priceScaleMode === 'percentage'}
+            title="Procentní měřítko"
+            onClick={() => setPriceScaleMode(mode => (mode === 'percentage' ? 'normal' : 'percentage'))}
+            className={`h-5 w-5 rounded text-[9px] font-bold ${priceScaleMode === 'percentage' ? 'bg-[#2962ff] text-white' : isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-200 text-slate-700'}`}
+          >
+            %
+          </button>
+        </div>
+      )}
+      {chartSettings.scales.plusButton && pricePointer && (
+        <button
+          type="button"
+          data-price-scale-plus
+          title={`Vodorovná čára na ${formatNqMnqTickPrice(pricePointer.price)}`}
+          onClick={() => {
+            const engine = apiRef.current?.drawing?.engine;
+            const time = visibleCandles.at(-1)?.time;
+            if (!engine || time === undefined) return;
+            engine.commit({
+              id: `manual-plus-${Date.now()}`,
+              tool: 'HorizontalLine',
+              points: [{ time, price: pricePointer.price }],
+              style: { color: '#2962ff', width: 1, dashed: false, fill: 'transparent' },
+            } as Drawing);
+          }}
+          className="absolute z-[60] grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full bg-[#2962ff] text-[11px] font-bold text-white"
+          style={{ right: 4, top: pricePointer.y }}
+        >
+          +
+        </button>
+      )}
       <ChartIndicatorLegend
         isDark={isDark}
         timeframe={timeframe}
@@ -3816,6 +4396,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         onToggleLevels={onToggleLevels}
         onToggleStructure={onToggleStructure}
         controller={indicatorController}
+        statusLine={chartSettings.statusLine}
+        paneButtons={chartSettings.canvas.paneButtons}
+        getChartApi={() => apiRef.current}
         activeLibraryIndicators={activeLibraryIndicators}
         onEditCustom={id => {
           settingsBackupRef.current = structuredClone(indicatorSettings);
@@ -3823,14 +4406,32 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         }}
         offsetForToolbar={!hideDrawingToolbar}
       />
-      {!hideFocusButton && <button
+      {!hideFocusButton && chartSettings.canvas.navigationButtons !== 'never' && <button
         type="button"
         onClick={focusTrade}
-        className={`absolute ${hideDrawingToolbar ? 'left-12' : 'left-24'} ${compactToolbar ? 'top-7' : 'top-9'} z-20 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border backdrop-blur-md text-[8px] font-black uppercase tracking-wider shadow-sm transition-colors ${isDark ? 'bg-black/65 border-white/10 text-slate-300 hover:text-white' : 'bg-white/85 border-slate-200 text-slate-600 hover:text-slate-900'}`}
+        className={`absolute ${hideDrawingToolbar ? 'left-12' : 'left-24'} ${compactToolbar ? 'top-7' : 'top-9'} z-20 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border backdrop-blur-md text-[8px] font-black uppercase tracking-wider shadow-sm transition-colors ${chartSettings.canvas.navigationButtons === 'hover' ? 'opacity-0 group-hover/chart:opacity-100' : ''} ${isDark ? 'bg-black/65 border-white/10 text-slate-300 hover:text-white' : 'bg-white/85 border-slate-200 text-slate-600 hover:text-slate-900'}`}
         title="Vrátit graf na vstup obchodu"
       >
         <LocateFixed size={11} /> Obchod
       </button>}
+      {chartSettingsOpen && createPortal(
+        <ChartSettingsDialog
+          settings={chartSettings}
+          isDark={isDark}
+          onPreview={next => updateChartSettings(next, false)}
+          onCancel={() => {
+            if (chartSettingsBackupRef.current) updateChartSettings(chartSettingsBackupRef.current, false);
+            chartSettingsBackupRef.current = null;
+            setChartSettingsOpen(false);
+          }}
+          onApply={next => {
+            chartSettingsBackupRef.current = null;
+            updateChartSettings(next, true);
+            setChartSettingsOpen(false);
+          }}
+        />,
+        document.body,
+      )}
       {settingsDialogIndicator && (
         <ChartIndicatorSettingsDialog
           indicator={settingsDialogIndicator}
@@ -3873,6 +4474,42 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           onContextMenu={event => event.preventDefault()}
           onKeyDown={handleContextMenuKeyDown}
         >
+          {contextMenu.positionSelected && onPositionQuickOrder && <>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={Boolean(positionQuickOrderDisabledReason)}
+              title={positionQuickOrderDisabledReason ?? undefined}
+              className={`flex h-9 w-full items-center px-2 text-left outline-none transition-colors ${positionQuickOrderDisabledReason
+                ? 'cursor-default opacity-40'
+                : isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
+              onClick={() => { setContextMenu(null); onPositionQuickOrder(); }}
+            >
+              <span className="mr-2 flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden="true">
+                <Zap size={15} strokeWidth={1.55} />
+              </span>
+              Rychlá objednávka z position boxu
+            </button>
+            <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
+          </>}
+          {contextOrderOptions.length > 0 && <>
+            {contextOrderOptions.map(option => (
+              <button
+                key={`${option.side}-${option.type}`}
+                type="button"
+                role="menuitem"
+                className={`flex h-9 w-full items-center px-2 text-left outline-none transition-colors ${isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
+                onClick={() => submitContextOrder(option)}
+              >
+                <span
+                  className={`mr-2 h-6 w-1 shrink-0 rounded-full ${option.side === 'buy' ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                  aria-hidden="true"
+                />
+                {option.label}
+              </button>
+            ))}
+            <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
+          </>}
           <button
             type="button"
             role="menuitem"
@@ -3913,6 +4550,22 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
               <Eraser size={15} strokeWidth={1.55} />
             </span>
             Remove drawings ({contextMenu.drawingCount})
+          </button>
+          <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
+          <button
+            type="button"
+            role="menuitem"
+            className={`flex h-9 w-full items-center px-2 text-left outline-none transition-colors ${isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
+            onClick={() => {
+              chartSettingsBackupRef.current = structuredClone(chartSettingsRef.current);
+              setChartSettingsOpen(true);
+              setContextMenu(null);
+            }}
+          >
+            <span className="mr-2 flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden="true">
+              <Settings size={15} strokeWidth={1.55} />
+            </span>
+            Nastavení…
           </button>
         </div>,
         document.body,

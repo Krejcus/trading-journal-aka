@@ -22,6 +22,7 @@ import {
     Radio,
     Layers,
     Microscope,
+    RadioTower,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User } from '../types';
@@ -90,6 +91,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     ];
 
     const secondaryItems = [
+        { id: 'live', label: 'LIVE', icon: RadioTower },
         { id: 'network', label: t('network', lang), icon: Globe },
         // V backtestu nemáš účty — místo nich "Session" (název + velikost).
         { id: 'accounts', label: isBacktest ? 'Session' : t('accounts', lang), icon: isBacktest ? Layers : Wallet },
@@ -98,7 +100,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // V backtest módu skryjeme nav, co k backtestu nepatří (Business hub, Síť).
     const visibleMain = isBacktest ? mainItems.filter(i => i.id !== 'business') : mainItems;
-    const visibleSecondary = isBacktest ? secondaryItems.filter(i => i.id !== 'network') : secondaryItems;
+    const visibleSecondary = isBacktest ? secondaryItems.filter(i => i.id !== 'network' && i.id !== 'live') : secondaryItems;
 
     const isDark = theme !== 'light';
 
@@ -114,7 +116,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   `;
 
     const navItemClass = (isActive: boolean) => `
-    w-full flex items-center gap-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 relative group overflow-hidden h-10 liquid-glass-lens
+    flex items-center gap-3 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 relative group overflow-hidden h-10 liquid-glass-lens
     ${isActive
             ? (isDark
                 ? 'glass-lens-active-dark text-white'
@@ -162,10 +164,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                 }}
             >
                 {/* Plovoucí glass panel — čistá navigace (logo je v headeru) */}
-                <div className="floating-glass-header rounded-2xl flex flex-col max-h-full min-h-0 overflow-hidden relative">
+                <div className="floating-glass-header rounded-lg flex flex-col max-h-full min-h-0 overflow-hidden relative">
 
                     {/* Mobilní zavírací tlačítko */}
-                    <button onClick={() => setIsOpen(false)} className="lg:hidden absolute top-3 right-3 z-20 p-2 hover:bg-white/10 rounded-full text-slate-400"><X size={18} /></button>
+                    <button onClick={() => setIsOpen(false)} className="lg:hidden absolute top-3 right-3 z-20 p-2 hover:bg-white/10 rounded-lg text-slate-400"><X size={18} /></button>
 
                     {/* ZAPSAT OBCHOD - EMERALD GLASS STYLE */}
                     <div className="px-2 pt-4 mb-2 h-10 flex items-center shrink-0">
@@ -180,7 +182,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 ? 'bg-transparent border-emerald-500/25 text-emerald-400 shadow-[inset_0_1.5px_1.5px_rgba(0,0,0,0.05),inset_0_-1.5px_1.5px_rgba(255,255,255,0.2),0_3px_1.5px_-1.5px_rgba(16,185,129,0.15),0_0_1px_2px_inset_rgba(255,255,255,0.1)] hover:border-emerald-500/55 hover:text-emerald-300'
                                 : 'bg-transparent border-emerald-500/40 text-emerald-700 shadow-[inset_0_1.5px_1.5px_rgba(0,0,0,0.03),inset_0_-1.5px_1.5px_rgba(255,255,255,0.6),0_3px_1.5px_-1.5px_rgba(16,185,129,0.08),0_0_1px_2px_inset_rgba(255,255,255,0.15)] hover:border-emerald-500/70 hover:text-emerald-800'
                             }
-                ${!isExpanded ? 'w-10 rounded-xl mx-auto' : 'w-full rounded-xl px-6'}
+                ${!isExpanded ? 'w-10 rounded-lg mx-auto' : 'w-full rounded-lg px-6'}
               `}
                         >
                             <Plus size={18} strokeWidth={3} className="group-hover:rotate-90 transition-transform duration-500" />
@@ -212,7 +214,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 {isFirstSecondary && <div className="h-2" />}
                                 <button
                                     onClick={() => handleNavClick(item.id)}
-                                    className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto rounded-xl' : 'px-6 mx-2 rounded-xl'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
+                                    className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto rounded-lg' : 'w-[calc(100%_-_1rem)] px-6 mx-2 rounded-lg'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
                                     title={!isExpanded ? item.label + (locked ? ' (uzamčeno)' : '') : ''}
                                 >
                                     <span className="relative shrink-0 flex">
@@ -258,7 +260,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         onClick={onToggleBacktest}
                                         onMouseEnter={() => setWorldHover(true)}
                                         onMouseLeave={() => setWorldHover(false)}
-                                        className={`w-full flex items-center gap-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all duration-300 h-10 border ${!isExpanded ? 'justify-center w-10 mx-auto' : 'px-6 mx-2'} ${
+                                        className={`flex items-center gap-3 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 h-10 border ${!isExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'} ${
                                             showBacktest
                                                 ? 'bg-violet-500/10 border-violet-500/40 text-violet-500 hover:bg-violet-500/20'
                                                 : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/20'
@@ -307,7 +309,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         className={`
               flex items-center transition-all relative overflow-hidden group cursor-pointer liquid-glass-lens hover:scale-[0.98] active:scale-95 
               ${isDark ? 'glass-lens-dark' : 'glass-lens-light'} 
-              ${!isExpanded ? 'w-12 h-12 rounded-xl justify-center mx-auto' : 'h-14 rounded-xl justify-between px-4 gap-3'}
+              ${!isExpanded ? 'w-12 h-12 rounded-lg justify-center mx-auto' : 'h-14 rounded-lg justify-between px-4 gap-3'}
             `}
                     >
                         <div className={`flex items-center min-w-0 relative z-10 ${!isExpanded ? 'justify-center' : 'gap-4 w-full'}`}>
@@ -345,7 +347,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                     animate={{ opacity: 1 }}
                                     exit={{ opacity: 0 }}
                                     onClick={(e) => { e.stopPropagation(); onLogout(); }}
-                                    className="p-2 text-slate-500 hover:text-rose-500 hover:bg-rose-500/10 rounded-xl transition-all relative z-10"
+                                    className="p-2 text-slate-500 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all relative z-10"
                                     title="Odhlásit se"
                                 >
                                     <LogOut size={16} />

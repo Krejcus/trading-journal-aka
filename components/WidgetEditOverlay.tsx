@@ -52,7 +52,7 @@ const WidgetEditOverlay: React.FC<WidgetEditOverlayProps> = ({
       </div>
 
       {/* Edit ring */}
-      <div className="absolute inset-0 rounded-[24px] ring-1 ring-indigo-500/20 group-hover:ring-2 group-hover:ring-indigo-500/40 transition-all pointer-events-none z-20" />
+      <div className="absolute inset-0 rounded-lg ring-1 ring-indigo-500/20 group-hover:ring-2 group-hover:ring-indigo-500/40 transition-all pointer-events-none z-20" />
     </>
   );
 };

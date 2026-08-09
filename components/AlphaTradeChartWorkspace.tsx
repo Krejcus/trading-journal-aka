@@ -10,7 +10,6 @@ import { IndicatorController, createBuiltinRegistry, type ChartViewApi } from '@
 import type { Drawing } from '@getcandlekit/charts';
 import 'flexlayout-react/style/light.css';
 import {
-  BarChart3,
   Download,
   GripVertical,
   LayoutGrid,
@@ -79,12 +78,13 @@ import { isPositionDrawing, type PositionDrawing } from '../services/chartPositi
 import { countChartIndicators } from '../services/chartContextMenu';
 import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
 import BacktestTradeExecutionsOverlay from './BacktestTradeExecutionsOverlay';
-import type { BacktestClosedTrade, BacktestFill } from '../services/backtestTypes';
+import type { BacktestClosedTrade, BacktestFill, BacktestOrderSide, BacktestOrderType } from '../services/backtestTypes';
 import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../services/backtestOrderLines';
 import type { BacktestManagedPositionBox } from '../services/backtestManagedPosition';
 import {
   advanceReplayTimeByInterval,
   chartReplayDelayMs,
+  chartReplayShortcut,
   CHART_REPLAY_STEP_MINUTES,
   CHART_REPLAY_SPEEDS,
   DEFAULT_CHART_REPLAY_STATE,
@@ -94,8 +94,30 @@ import {
   type ChartReplayState,
   type ChartReplayStepMinutes,
 } from '../services/chartReplay';
+import ReplayGoToMenu from './ReplayGoToMenu';
+import { CHART_SETTINGS_EVENT, CHART_TIME_ZONES, loadChartSettings } from '../services/chartSettings';
+import {
+  DEFAULT_REPLAY_GO_TO_TIME_ZONE,
+  loadReplayGoToSettings,
+  REPLAY_GO_TO_FAILURE_MESSAGES,
+  resolveReplayGoTo,
+  type ReplayGoToRequest,
+  type ReplayGoToSettings,
+} from '../services/replayGoTo';
 
 const REPLAY_TOOLBAR_POSITION_KEY = 'alphatrade.chart-replay-toolbar-position.v1';
+
+/** Hláška po skoku ve stejném pásmu, jaké má časová osa grafu. */
+const goToTimeLabel = (unixSeconds: number, timeZone: string): string => {
+  try {
+    return new Intl.DateTimeFormat('cs-CZ', {
+      timeZone,
+      day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).format(unixSeconds * 1_000);
+  } catch {
+    return new Date(unixSeconds * 1_000).toLocaleString('cs-CZ');
+  }
+};
 const REPLAY_TIMEFRAME_LABELS: Record<ChartReplayStepMinutes, string> = {
   1: '1m',
   5: '5m',
@@ -155,6 +177,13 @@ export interface BacktestChartSessionBridge {
     candle: MarketCandle | null;
     instrument: MarketRoot;
   }) => { ok: boolean; message: string };
+  /** Počet kontraktů z obchodního panelu — objednávka z grafu bere stejné číslo. */
+  chartOrderQuantity?: number;
+  /** Objednávka zadaná pravým klikem do grafu na konkrétní cenové úrovni. */
+  onChartOrder?: (
+    input: { side: BacktestOrderSide; type: BacktestOrderType; quantity: number; price?: number },
+    candle: MarketCandle | null,
+  ) => void;
   orderLines?: BacktestChartOrderLine[];
   managedPositionBoxes?: BacktestManagedPositionBox[];
   closedTrades?: BacktestClosedTrade[];
@@ -208,6 +237,8 @@ interface WorkspaceDataContextValue {
   activatePanel: (id: string) => void;
   registerPanel: (id: string, control: WorkspacePanelControl) => void;
   unregisterPanel: (id: string) => void;
+  /** Rychlá objednávka z vybraného position boxu — sdílí ji blesk i kontextové menu. */
+  onPositionQuickOrder?: () => void;
 }
 
 interface WorkspacePanelControl {
@@ -504,6 +535,11 @@ const AlphaTradeWorkspacePanel: React.FC<{
             managedPositionBoxes={config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.managedPositionBoxes
               : undefined}
+            chartOrderQuantity={context.backtestSession?.chartOrderQuantity}
+            onPositionQuickOrder={context.onPositionQuickOrder}
+            onChartOrder={config.root === context.backtestSession?.executionInstrument
+              ? context.backtestSession.onChartOrder
+              : undefined}
             onNeedOlderHistory={backtestSession ? requestOlderHistory : undefined}
             olderHistoryLoading={sessionHistoryLoading}
             onReplaySelectionTimeChange={context.setReplaySelectionTime}
@@ -579,6 +615,24 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const [activePanelId, setActivePanelId] = useState(backtestSession?.workspaceState?.activePanelId || 'alphatrade-chart-1');
   const [replay, setReplay] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
   const [replaySelectionTime, setReplaySelectionTime] = useState<number | null>(null);
+  // Pásmo bere z nastavení grafu, aby Go To ukazovalo stejná čísla jako časová
+  // osa. Sleduje i změnu v Nastavení grafu, jinak by po přepnutí zóny nabízelo
+  // časy z jiného světa.
+  const [chartTimeZone, setChartTimeZone] = useState(
+    () => loadChartSettings(isDark).symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE,
+  );
+  useEffect(() => {
+    const sync = () => setChartTimeZone(loadChartSettings(isDark).symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE);
+    window.addEventListener(CHART_SETTINGS_EVENT, sync);
+    return () => window.removeEventListener(CHART_SETTINGS_EVENT, sync);
+  }, [isDark]);
+  const chartTimeZoneLabel = useMemo(
+    () => CHART_TIME_ZONES.find(zone => zone.id === chartTimeZone)?.label ?? chartTimeZone,
+    [chartTimeZone],
+  );
+  const [goToSettings, setGoToSettings] = useState<ReplayGoToSettings>(
+    () => loadReplayGoToSettings(loadChartSettings(isDark).symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE),
+  );
   const [replayToolbarPosition, setReplayToolbarPosition] = useState<ReplayToolbarPosition | null>(loadReplayToolbarPosition);
   const [layoutId, setLayoutId] = useState<ChartWorkspaceLayoutId>(initialLayoutIdRef.current);
   const [layoutPickerOpen, setLayoutPickerOpen] = useState(false);
@@ -699,6 +753,28 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     });
   }, [activePanelId, backtestSession?.candlesByRoot.MNQ]);
   const advanceReplay = useCallback(() => advanceReplayBy(1), [advanceReplayBy]);
+  const replayGoTo = useCallback((request: ReplayGoToRequest) => {
+    if (replay.phase !== 'active') return;
+    const source = backtestSession?.candlesByRoot.MNQ
+      ?? panelControlsRef.current.get(activePanelId)?.rawCandles
+      ?? [];
+    const result = resolveReplayGoTo(request, {
+      candles: source,
+      cursorTime: replay.cursorTime,
+      settings: goToSettings,
+      timeZone: chartTimeZone,
+      // Konec session, ne konec už načtených svíček — backtest dotahuje data po
+      // blocích a cíl skoro vždy leží až za posledním načteným barem.
+      dataEndTime: backtestSession ? Math.floor(backtestSession.endMs / 1_000) : null,
+    });
+    if (result.kind === 'error') {
+      setStatus(`Go To: ${REPLAY_GO_TO_FAILURE_MESSAGES[result.reason]}`);
+      return;
+    }
+    // Pauza je záměr: po skoku má uživatel rozhodnout, kdy se trh rozjede.
+    setReplay(current => ({ ...current, cursorTime: result.value.cursorTime, playing: false }));
+    setStatus(`Go To: ${goToTimeLabel(result.value.targetTime, chartTimeZone)}`);
+  }, [activePanelId, backtestSession, chartTimeZone, goToSettings, replay.cursorTime, replay.phase]);
   useEffect(() => {
     if (replay.phase !== 'active' || !replay.playing) return;
     const delay = chartReplayDelayMs(replay.speed);
@@ -786,6 +862,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     activatePanel,
     registerPanel,
     unregisterPanel,
+    // Přes ref, protože akce vzniká až pod kontextem (potřebuje replay svíčku).
+    onPositionQuickOrder: backtestSession?.onQuickOrder
+      ? () => positionQuickOrderRef.current()
+      : undefined,
   }), [activatePanel, activePanelId, backtestSession, entryMs, exitMs, initialCandles, initialRoot, isDark, registerPanel, replay, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const activeIndicatorCount = activeControl ? countChartIndicators(
@@ -813,6 +893,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const [positionSettingsOpen, setPositionSettingsOpen] = useState(false);
   const [drawingSettingsOpen, setDrawingSettingsOpen] = useState(false);
   const [quickOrderFeedback, setQuickOrderFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  const positionQuickOrderRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!quickOrderFeedback) return;
@@ -938,6 +1019,32 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [workspaceHistory]);
+
+  // Mezerník přehrává, šipka doprava krokuje o svíčku. Obojí jen v běžícím
+  // replay a mimo formulářová pole — jinak by mezerník nešel napsat do poznámky
+  // a šipka by neposunula kurzor v ceně objednávky.
+  useEffect(() => {
+    if (replay.phase !== 'active') return;
+    const handleReplayKey = (event: KeyboardEvent) => {
+      // `instanceof Element` není zbytečné: cílem může být i window (událost
+      // poslaná programově), a ten `closest` nemá — výjimka by zkratku shodila.
+      const target = event.target;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      const shortcut = chartReplayShortcut(event);
+      if (!shortcut) return;
+      // Mezerník jinak odscrolluje stránku, šipka posune časovou osu grafu.
+      event.preventDefault();
+      if (shortcut === 'step-forward') {
+        advanceReplay();
+        return;
+      }
+      setReplay(current => current.phase === 'active'
+        ? { ...current, playing: !current.playing }
+        : current);
+    };
+    window.addEventListener('keydown', handleReplayKey);
+    return () => window.removeEventListener('keydown', handleReplayKey);
+  }, [advanceReplay, replay.phase]);
 
   const updateSyncSetting = useCallback((key: keyof ChartWorkspaceSyncSettings, value: boolean) => {
     setSyncSettings(current => {
@@ -1144,7 +1251,17 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       ? `Quick Order lze zadat jen z ${backtestSession.executionInstrument} grafu`
       : null;
   const submitSelectedPositionQuickOrder = () => {
-    if (!selectedPosition || !backtestSession?.onQuickOrder || quickOrderDisabledReason) return;
+    if (!backtestSession?.onQuickOrder) return;
+    // Z kontextového menu se sem dá kliknout i v situaci, kdy to nejde —
+    // tichý návrat by vypadal jako rozbitá položka, tak řekni důvod.
+    if (quickOrderDisabledReason) {
+      setStatus(quickOrderDisabledReason);
+      return;
+    }
+    if (!selectedPosition) {
+      setStatus('Rychlá objednávka potřebuje vybraný position box');
+      return;
+    }
     const result = backtestSession.onQuickOrder({
       drawing: selectedPosition.drawing,
       candle: replayCandle,
@@ -1154,11 +1271,16 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setQuickOrderFeedback(result);
     setStatus(result.message);
   };
+  positionQuickOrderRef.current = submitSelectedPositionQuickOrder;
   return (
     <div className={`fixed inset-0 z-[300] flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
       <div className={`h-12 shrink-0 flex items-center gap-1 px-2 border-b ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
         <div className="flex items-center gap-2 mr-1 min-w-0">
-          <div className="w-8 h-8 rounded-full bg-[#2962ff] flex items-center justify-center text-white"><BarChart3 size={16} /></div>
+          <img
+            src="/logos/at_logo_light_clean.png"
+            alt="Alpha Trade"
+            className={`h-8 w-8 shrink-0 object-contain ${isDark ? 'drop-shadow-[0_0_12px_rgba(34,211,238,0.35)]' : ''}`}
+          />
         </div>
         <select
           value={activeControl?.config.root ?? initialRoot}
@@ -1346,6 +1468,17 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 title="O jednu svíčku dopředu"
                 aria-label="Bar Replay krok dopředu"
               ><StepForward size={15} /></button>
+              <ReplayGoToMenu
+                settings={goToSettings}
+                onSettingsChange={setGoToSettings}
+                onGoTo={replayGoTo}
+                disabled={replay.phase !== 'active' || replayAtEnd}
+                isDark={isDark}
+                cursorTime={replay.cursorTime}
+                timeZone={chartTimeZone}
+                timeZoneLabel={chartTimeZoneLabel}
+                buttonClassName={topButton}
+              />
               <select
                 value={replay.speed}
                 onChange={event => setReplay(current => ({ ...current, speed: Number(event.target.value) as ChartReplaySpeed }))}

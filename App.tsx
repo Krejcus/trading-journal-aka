@@ -24,8 +24,10 @@ import WorldShiftOverlay, { WORLD_SHIFT_TIMING } from './components/WorldShiftOv
 const DailyJournal = React.lazy(() => import('./components/DailyJournal'));
 const BacktestSessionsView = React.lazy(() => import('./components/BacktestSessionsView'));
 const BacktestSessionsManager = React.lazy(() => import('./components/BacktestSessionsManager'));
+const BacktestWorkspace = React.lazy(() => import('./components/BacktestWorkspace'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
+const LiveDesk = React.lazy(() => import('./components/LiveDesk'));
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
@@ -85,6 +87,7 @@ import {
 
 import { supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
+import type { BacktestRun } from './services/backtestTypes';
 import MorningBriefBanner from './components/MorningBriefBanner';
 
 const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
@@ -675,6 +678,7 @@ const App: React.FC = () => {
   const [sessions, setSessions] = useState<SessionConfig[]>(DEFAULT_SESSIONS);
   // Samostatná sada sessionů pro backtest svět. Prázdné = použij živé `sessions` (fallback).
   const [backtestSessions, setBacktestSessions] = useState<SessionConfig[]>([]);
+  const [activeBacktestRun, setActiveBacktestRun] = useState<BacktestRun | null>(null);
   // Sady se přepínají automaticky podle světa (live vs backtest). Backtest s prázdnou sadou
   // spadne zpět na live sessiony → žádná migrace, nic se nerozbije.
   const activeSessions = useMemo(
@@ -3272,6 +3276,22 @@ const App: React.FC = () => {
 
       {worldShift.active && <WorldShiftOverlay to={worldShift.to} />}
 
+      {activeBacktestRun && (
+        <React.Suspense fallback={<QuantumLoader theme={theme} />}>
+          <BacktestWorkspace
+            run={activeBacktestRun}
+            isDark={theme !== 'light'}
+            onClose={(savedRun) => {
+              setActiveBacktestRun(null);
+              setActivePage('accounts');
+              setActiveAccountId(savedRun.accountId);
+              window.dispatchEvent(new CustomEvent('alphatrade:backtest-run-saved', { detail: savedRun.id }));
+            }}
+            onTradeClosed={handleManualTrade}
+          />
+        </React.Suspense>
+      )}
+
       {/* Sidebar — pouze desktop */}
       <div className="hidden lg:block">
         <Sidebar
@@ -3333,7 +3353,7 @@ const App: React.FC = () => {
             <feDisplacementMap in="SourceGraphic" in2="map" scale={20} xChannelSelector="R" yChannelSelector="G" />
           </filter>
         </svg>
-        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-2xl floating-glass-header header-clear ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
+        <header className={`absolute z-40 px-6 py-2 flex items-center justify-between transition-all rounded-lg floating-glass-header header-clear ${isSidebarCollapsed ? 'lg:left-[96px]' : 'lg:left-[264px]'} left-4 right-4 top-4 lg:top-6 lg:right-6 ${isNetworkSpectating ? 'hidden' : ''}`}>
           {/* Vizuál headeru dělá CSS: gradient tint + border + stín + lupa přes backdrop-filter:url(#liquid-glass). */}
           <div className="flex items-center gap-3 relative z-10">
             <button onClick={() => setIsSidebarOpen(true)} className="hidden p-2 hover:bg-white/10 rounded-lg"><Menu size={20} /></button>
@@ -3354,6 +3374,7 @@ const App: React.FC = () => {
               {activePage === 'accounts' && 'Portfolio'}
               {activePage === 'settings' && 'Nastavení'}
               {activePage === 'network' && 'Síť'}
+              {activePage === 'live' && 'LIVE'}
               {activePage === 'business' && 'Business Hub'}
               {activePage === 'ai' && 'AI Coach'}
             </h2>
@@ -3361,7 +3382,7 @@ const App: React.FC = () => {
 
           {activePage === 'journal' && (
             <div className="hidden md:flex flex-1 justify-center relative z-10">
-              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
+              <div className="p-1 rounded-lg border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'daily', label: 'Dnešek', icon: Clock },
                   { id: 'weekly', label: 'Týden', icon: Calendar },
@@ -3370,12 +3391,12 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setJournalActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold uppercase transition-all ${journalActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase transition-all ${journalActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {journalActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeJournalTab"
-                        className={`absolute inset-0 rounded-xl shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
+                        className={`absolute inset-0 rounded-lg shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
                     )}
@@ -3390,7 +3411,7 @@ const App: React.FC = () => {
 
           {activePage === 'business' && (
             <div className="hidden md:flex flex-1 justify-center relative z-10">
-              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
+              <div className="p-1 rounded-lg border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'financials', label: 'Finance', icon: DollarSign },
                   { id: 'goals', label: 'Cíle', icon: Target }
@@ -3398,12 +3419,12 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setBusinessActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold uppercase transition-all ${businessActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase transition-all ${businessActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {businessActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeBusinessTab"
-                        className={`absolute inset-0 rounded-xl shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
+                        className={`absolute inset-0 rounded-lg shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
                     )}
@@ -3418,7 +3439,7 @@ const App: React.FC = () => {
 
           {activePage === 'network' && (
             <div className="hidden md:flex flex-1 justify-center relative z-10">
-              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
+              <div className="p-1 rounded-lg border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'feed', label: 'Feed', icon: Activity },
                   { id: 'leaderboard', label: 'Žebříček', icon: Trophy },
@@ -3429,12 +3450,12 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setNetworkActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold uppercase transition-all ${networkActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase transition-all ${networkActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {networkActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeNetworkTab"
-                        className={`absolute inset-0 rounded-xl shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
+                        className={`absolute inset-0 rounded-lg shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
                     )}
@@ -3449,7 +3470,7 @@ const App: React.FC = () => {
 
           {activePage === 'settings' && (
             <div className="hidden md:flex flex-1 justify-center relative z-10">
-              <div className="p-1 rounded-2xl border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
+              <div className="p-1 rounded-lg border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'psychology', label: 'Psychologie', icon: Brain },
                   { id: 'strategy', label: 'Strategie', icon: Target },
@@ -3459,12 +3480,12 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setSettingsActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold uppercase transition-all ${settingsActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase transition-all ${settingsActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {settingsActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeSettingsTab"
-                        className={`absolute inset-0 rounded-xl shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
+                        className={`absolute inset-0 rounded-lg shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
                     )}
@@ -3479,8 +3500,8 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-2 md:gap-3 relative z-10">
             {/* Item 1: Dashboard Mode Status */}
-            <div className="hidden md:flex items-center">
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all duration-200 select-none ${
+            {activePage !== 'live' && <div className="hidden md:flex items-center">
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-200 select-none ${
                 theme !== 'light'
                   ? 'bg-white/5 border-white/10 text-white shadow-inner'
                   : 'bg-white border-slate-200/80 text-slate-800 shadow-xs'
@@ -3508,12 +3529,12 @@ const App: React.FC = () => {
                   {dashboardMode === 'funded' ? 'Funded' : dashboardMode === 'challenge' ? 'Challenge' : dashboardMode === 'backtesting' ? 'Backtesting' : 'All'}
                 </span>
               </div>
-            </div>
+            </div>}
 
             {/* Filtr + přepínač režimu — vlastní skupina blízko u sebe */}
             <div className="flex items-center gap-1.5">
             {/* Item 2: Filter Dropdown */}
-            <FilterDropdown
+            {activePage !== 'live' && <FilterDropdown
               filters={filters}
               setFilters={setFilters}
               accounts={contextAccounts}
@@ -3532,7 +3553,7 @@ const App: React.FC = () => {
               historyLayoutMode={activePage === 'history' ? historyLayoutMode : undefined}
               setHistoryLayoutMode={activePage === 'history' ? setHistoryLayoutMode : undefined}
               grouped={false}
-            />
+            />}
 
             {/* Item 3: Theme Toggle Button */}
             <button
@@ -3542,7 +3563,7 @@ const App: React.FC = () => {
                 else if (theme === 'light') newTheme = 'oled';
                 setTheme(newTheme);
               }}
-              className={`p-2.5 rounded-xl border transition-all duration-200 ${
+              className={`p-2.5 rounded-lg border transition-all duration-200 ${
                 theme !== 'light'
                   ? 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white shadow-inner'
                   : 'bg-white border-slate-200/80 hover:bg-slate-50 text-slate-700 shadow-xs'
@@ -3933,6 +3954,7 @@ const App: React.FC = () => {
                       // Merge zpět live účty, ať je BacktestSessionsManager nesmaže.
                       onUpdate={(next) => setAccounts([...accounts.filter(a => !isBacktestAccount(a)), ...next])}
                       onDelete={handleDeleteAccount}
+                      onOpenRun={setActiveBacktestRun}
                     />
                   )}
 
@@ -3998,6 +4020,9 @@ const App: React.FC = () => {
                       onNetworkNotificationsChange={(prefs) => { setNetworkNotifications(prefs); markPreferencesDirty(); }}
                       onSpectatingChange={setIsNetworkSpectating}
                     />
+                  )}
+                  {activePage === 'live' && (
+                    <LiveDesk theme={theme} />
                   )}
 
                   {activePage === 'settings' && (

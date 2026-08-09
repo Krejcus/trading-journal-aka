@@ -819,7 +819,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             const dayBE = Math.abs(day.pnl) <= 0.01;
             const pnlColor = dayBE ? 'text-amber-500' : (dayWin ? 'text-emerald-500' : 'text-rose-500');
             return (
-              <div key={day.key} className={`rounded-2xl border overflow-hidden ${theme !== 'light' ? 'bg-amber-500/[0.04] border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
+              <div key={day.key} className={`rounded-lg border overflow-hidden ${theme !== 'light' ? 'bg-amber-500/[0.04] border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
                 {/* Hlavička dne — klik = rozbalit */}
                 <button
                   onClick={() => toggleInvalidDay(day.key)}
@@ -877,7 +877,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       )}
 
       {viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
           {validTrades.map((trade) => {
             const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
             const isMissed = status === 'Missed';
@@ -922,7 +922,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               <div
                 key={trade.id}
                 onClick={() => !isMultiSelectMode && setSelectedTrade(trade)}
-                className={`group relative flex flex-col md:flex-row h-auto md:h-56 rounded-[24px] border overflow-hidden transition-all duration-500 cursor-pointer ${glowClass} glass-panel hover:scale-[1.01] ${
+                className={`group relative flex flex-col md:flex-row h-auto md:h-56 rounded-lg border overflow-hidden transition-[border-color,box-shadow,background-color] duration-200 cursor-pointer ${glowClass} glass-panel ${
                   selectedTradeIds.has(trade.id) ? 'ring-2 ring-cyan-400' : ''
                 }`}
               >
@@ -1129,7 +1129,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           })}
         </div>
       ) : (
-        <div className={`rounded-3xl border overflow-hidden ${theme !== 'light' ? 'bg-white/[0.02] border-white/10' : 'bg-white border-slate-200'} backdrop-blur-md`}>
+        <div className={`rounded-lg border overflow-hidden ${theme !== 'light' ? 'bg-white/[0.02] border-white/10' : 'bg-white border-slate-200'} backdrop-blur-md`}>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
