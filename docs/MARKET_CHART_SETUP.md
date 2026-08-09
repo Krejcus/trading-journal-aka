@@ -14,6 +14,7 @@ Graf používá TradingView Lightweight Charts pouze jako renderer. OHLCV data p
 - 1m CHoCH/BOS podle `tradingview/alphatrade-bos-choch-cz.pine`: pivot 1/1, potvrzení closem, vodorovná čára od proraženého pivotu k break baru; na vyšších timeframech se entry struktura záměrně nezobrazuje;
 - screenshoty zůstávají ve vedlejší záložce jako původní evidence.
 - minutová data se načítají dopředu po čtrnáctidenních segmentech; starší HTF historie se načte až při prvním HTF panelu a dál po ročních blocích při scrollu doleva;
+- obchody ze stejného UTC dne sdílejí jedno Databento okno (`marketDataWindowForEntry`), takže překrývající se kopie účtů nevytvářejí další placené requesty;
 - úspěšné odpovědi se na 30 dní ukládají do lokální IndexedDB cache a souběžné identické requesty se deduplikují;
 - HTF provider svíčky překrývající začátek replaye se zahodí; od hranice replaye se 1h/4h/1d skládají pouze z již odhalených 1m svíček;
 - obchodní příkaz před časem začátku backtest session odmítne exekuční vrstva, i když je starší HTF historie viditelná;

@@ -52,8 +52,8 @@ import { currencyService, ExchangeRates } from './services/currencyService';
 import { t } from './services/translations';
 import { GuardianIntervention, GuardianOverlay, DebtCollector } from './components/GuardianSystem';
 import { getGuardianState, GuardianState } from './utils/guardianLogic';
-import { requestNotificationPermission, sendLocalNotification } from './utils/notificationHelper';
-// pushManager import removed — push notifications deferred to native app
+import { sendLocalNotification } from './utils/notificationHelper';
+import { syncPushSubscription, hasLocalPushEndpoint } from './services/pushSubscriptionService';
 import {
   Sun,
   Moon,
@@ -407,6 +407,9 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
   const [isInitialLoadDone, setIsInitialLoadDone] = useState(false);
+  // Když má zařízení živý push odběr, alerty posílá cron (api/cron/send-alerts).
+  // Lokální notifikace níž jsou pak jen zdroj duplicit, takže se vypnou.
+  const [isPushActive, setIsPushActive] = useState(hasLocalPushEndpoint);
   // Ochrana proti přepsání DB defaultními hodnotami z useState — autosave preferences
   // se spustí jen po prvním úspěšném applyPreferences (z cache NEBO DB).
   const prefsAppliedRef = useRef(false);
@@ -738,7 +741,43 @@ const App: React.FC = () => {
   const [isDebtCollectorOpen, setIsDebtCollectorOpen] = useState(false);
   const lastCheckTime = useRef<string>("");
 
+  // Ověření push odběru při startu. iOS odběry po delší nečinnosti nebo po
+  // aktualizaci systému tiše zahazuje — tohle je jediný okamžik, kdy to appka
+  // může zjistit a obnovit. Běží i při návratu z pozadí, protože právě tam
+  // (telefon uspaný přes noc) odběr nejčastěji vyprší.
   useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) {
+      setIsPushActive(false);
+      return;
+    }
+
+    let cancelled = false;
+    const check = () => {
+      syncPushSubscription().then(active => {
+        if (!cancelled) setIsPushActive(active);
+      });
+    };
+
+    check();
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    // Push aktivní → alerty doručuje cron (a dojdou i při zavřené appce).
+    // Lokální notifikace by je jen zdvojily, takže se v tom případě přeskočí.
+    // Když push aktivní není (nepovolený, nebo iOS bez PWA na ploše), zůstávají
+    // jediným kanálem — proto se nemažou.
+    const notifyLocal = (title: string, body: string, icon?: string) => {
+      if (isPushActive) return;
+      sendLocalNotification(title, body, icon);
+    };
+
     const checkGuardian = () => {
       const state = getGuardianState(systemSettings, sessions, dailyPreps, dailyReviews);
       setGuardian(state);
@@ -760,26 +799,26 @@ const App: React.FC = () => {
           const diffEnd = (endH * 60 + endM) - (now.getHours() * 60 + now.getMinutes());
 
           if (systemSettings.sessionStartAlert15m && diffStart === 15) {
-            sendLocalNotification(`Seance ${s.name} začíná za 15m`, "Jsi připraven? Zkontroluj svůj plán.");
+            notifyLocal(`Seance ${s.name} začíná za 15m`, "Jsi připraven? Zkontroluj svůj plán.");
           }
           if (systemSettings.sessionStartAlertExact && diffStart === 0) {
-            sendLocalNotification(`Seance ${s.name} právě začala`, "Přejeme úspěšný trading!");
+            notifyLocal(`Seance ${s.name} právě začala`, "Přejeme úspěšný trading!");
           }
           if (systemSettings.sessionEndAlertExact && diffEnd === 0) {
-            sendLocalNotification(`Konec seance ${s.name}`, "Je čas zastavit trading a jít na audit.");
+            notifyLocal(`Konec seance ${s.name}`, "Je čas zastavit trading a jít na audit.");
           }
           if (systemSettings.sessionEndAlert10m && diffEnd === -10) {
-            sendLocalNotification("Audit čeká", "Už je to 10m od konce seance. Máš hotový večerní audit?");
+            notifyLocal("Audit čeká", "Už je to 10m od konce seance. Máš hotový večerní audit?");
           }
         });
 
         // Guardian Alerts
         if (state.nextSession && state.isPrepMissing && systemSettings.guardianEnabled) {
           if (systemSettings.morningPrepAlert60m && state.nextSession.minutesToStart === 60) {
-            sendLocalNotification("Alpha Guardian: 60m do startu", "Máš dost času na kvalitní přípravu.");
+            notifyLocal("Alpha Guardian: 60m do startu", "Máš dost času na kvalitní přípravu.");
           }
           if (systemSettings.morningPrepAlert15m && state.nextSession.minutesToStart === 15) {
-            sendLocalNotification("Alpha Guardian: 15m do startu", "VAROVÁNÍ: Stále nemáš hotovou přípravu!", "/logos/at_logo_light_clean.png");
+            notifyLocal("Alpha Guardian: 15m do startu", "VAROVÁNÍ: Stále nemáš hotovou přípravu!", "/logos/at_logo_light_clean.png");
           }
         }
       }
@@ -801,14 +840,14 @@ const App: React.FC = () => {
 
       // Test Mode Notification
       if (systemSettings.testModeEnabled) {
-        sendLocalNotification(`Test: ${timeKey}`, "Alpha Guardian Test Notifikace");
+        notifyLocal(`Test: ${timeKey}`, "Alpha Guardian Test Notifikace");
       }
     };
 
     const timer = setInterval(checkGuardian, 30000);
     checkGuardian();
     return () => clearInterval(timer);
-  }, [systemSettings, sessions, dailyPreps, dailyReviews, isInitialLoadDone]);
+  }, [systemSettings, sessions, dailyPreps, dailyReviews, isInitialLoadDone, isPushActive]);
 
   useEffect(() => {
     if (isInitialLoadDone && guardian.isDebtActive && systemSettings.morningWakeUpDebtAlert) {

@@ -159,20 +159,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const dailyTip = TRADING_TIPS[tipIdx];
 
         // --- BATCH: Fetch all data in parallel (1 query each instead of per-user) ---
-        const [profilesResult, prepsResult, reviewsResult] = await Promise.all([
+        const [profilesResult, prepsResult, reviewsResult, subsResult] = await Promise.all([
             supabase.from('profiles').select('id, preferences'),
             supabase.from('daily_preps').select('user_id').eq('date', todayStr),
             supabase.from('daily_reviews').select('user_id').eq('date', todayStr),
+            // Odběry žijí ve vlastní tabulce, jeden řádek = jedno zařízení.
+            // Dřív to byl jediný objekt v preferences, takže druhé zařízení
+            // přepsalo první a alerty chodily náhodně jen na jedno z nich.
+            supabase
+                .from('push_subscriptions')
+                .select('id, user_id, endpoint, p256dh, auth')
+                .is('expired_at', null),
         ]);
 
         if (profilesResult.error || !profilesResult.data) {
             return res.status(500).json({ error: profilesResult.error?.message });
+        }
+        if (subsResult.error) {
+            return res.status(500).json({ error: subsResult.error.message });
         }
 
         const profiles = profilesResult.data;
         // Pre-built lookup sets: O(1) per user instead of O(1 DB query)
         const usersWithPrepToday = new Set((prepsResult.data || []).map(r => r.user_id));
         const usersWithReviewToday = new Set((reviewsResult.data || []).map(r => r.user_id));
+
+        // user_id -> všechna jeho aktivní zařízení
+        const devicesByUser = new Map<string, PushDevice[]>();
+        for (const row of subsResult.data || []) {
+            const list = devicesByUser.get(row.user_id) || [];
+            list.push({
+                id: row.id,
+                subscription: {
+                    endpoint: row.endpoint,
+                    keys: { p256dh: row.p256dh, auth: row.auth },
+                },
+            });
+            devicesByUser.set(row.user_id, list);
+        }
 
         console.log(`[Cron] ${pragueTime} (${currentMinutesTotal}min) | ${todayStr} | ${profiles.length} profiles | Mock: ${mockType || 'none'}`);
 
@@ -185,17 +209,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return '🔔';
         };
 
-        // Collect all push jobs across all users, then send in parallel
-        type PushJob = { sub: any; title: string; body: string; type: string; profileId: string; prefs: any };
+        // Collect all push jobs across all users, then send in parallel.
+        // Jeden job = jeden alert pro JEDNO zařízení, proto se dole rozgeneruje
+        // přes všechna zařízení uživatele.
+        type PushJob = { device: PushDevice; title: string; body: string; type: string; profileId: string };
         const pushJobs: PushJob[] = [];
 
         for (const profile of profiles) {
             const prefs = profile.preferences || {};
-            const sub = prefs.pushSubscription;
+            const devices = devicesByUser.get(profile.id) || [];
             const settings = prefs.systemSettings || {};
             const userSessions = prefs.sessions || [];
 
-            if (!sub) continue;
+            if (devices.length === 0) continue;
 
             const alerts: { title: string; body: string; type: string }[] = [];
 
@@ -316,14 +342,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                         // Fetch recent activity from watched users (all tables need created_at column)
                         const [recentTrades, recentPreps, recentReviews] = await Promise.all([
+                            // `id` je nutné: alert_type nese ID zdrojového řádku, takže
+                            // se každý obchod ohlásí právě jednou. Dřív byl klíč jen
+                            // user_id a 5min lookback ho poslal 5× po sobě.
                             watchedUserIds.some(uid => netNotifs[uid]?.newTrade)
-                                ? supabase.from('trades').select('user_id, instrument, direction').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newTrade)).gte('created_at', fiveMinAgo).limit(10)
+                                ? supabase.from('trades').select('id, user_id, instrument, direction').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newTrade)).gte('created_at', fiveMinAgo).limit(10)
                                 : Promise.resolve({ data: [] }),
                             watchedUserIds.some(uid => netNotifs[uid]?.newPrep)
-                                ? supabase.from('daily_preps').select('user_id').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newPrep)).gte('created_at', fiveMinAgo).limit(10)
+                                ? supabase.from('daily_preps').select('id, user_id').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newPrep)).gte('created_at', fiveMinAgo).limit(10)
                                 : Promise.resolve({ data: [] }),
                             watchedUserIds.some(uid => netNotifs[uid]?.newReview)
-                                ? supabase.from('daily_reviews').select('user_id').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newReview)).gte('created_at', fiveMinAgo).limit(10)
+                                ? supabase.from('daily_reviews').select('id, user_id').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newReview)).gte('created_at', fiveMinAgo).limit(10)
                                 : Promise.resolve({ data: [] }),
                         ]);
 
@@ -345,21 +374,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             if (seenTrade.has(t.user_id)) return;
                             seenTrade.add(t.user_id);
                             const name = nameMap[t.user_id] || 'Trader';
-                            alerts.push({ title: `📈 ${name} přidal obchod`, body: `${t.direction || ''} ${t.instrument || ''}`.trim(), type: `social-trade-${t.user_id}` });
+                            alerts.push({ title: `📈 ${name} přidal obchod`, body: `${t.direction || ''} ${t.instrument || ''}`.trim(), type: `social-trade-${t.id}` });
                         });
 
                         (recentPreps.data || []).forEach((p: any) => {
                             if (seenPrep.has(p.user_id)) return;
                             seenPrep.add(p.user_id);
                             const name = nameMap[p.user_id] || 'Trader';
-                            alerts.push({ title: `📋 ${name} dokončil přípravu`, body: 'Nová denní příprava k dispozici.', type: `social-prep-${p.user_id}` });
+                            alerts.push({ title: `📋 ${name} dokončil přípravu`, body: 'Nová denní příprava k dispozici.', type: `social-prep-${p.id}` });
                         });
 
                         (recentReviews.data || []).forEach((r: any) => {
                             if (seenReview.has(r.user_id)) return;
                             seenReview.add(r.user_id);
                             const name = nameMap[r.user_id] || 'Trader';
-                            alerts.push({ title: `📊 ${name} dokončil review`, body: 'Nový denní review k nahlédnutí.', type: `social-review-${r.user_id}` });
+                            alerts.push({ title: `📊 ${name} dokončil review`, body: 'Nový denní review k nahlédnutí.', type: `social-review-${r.id}` });
                         });
                     }
                 }
@@ -375,32 +404,83 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
 
             for (const alert of alerts) {
-                pushJobs.push({ sub, title: alert.title, body: alert.body, type: alert.type, profileId: profile.id, prefs });
+                for (const device of devices) {
+                    pushJobs.push({ device, title: alert.title, body: alert.body, type: alert.type, profileId: profile.id });
+                }
             }
         }
 
         // --- PARALLEL PUSH SENDING (batches of 10) ---
         let sentCount = 0;
-        const expiredUsers = new Set<string>();
+        let duplicateCount = 0;
+        const expiredDevices = new Set<string>();
 
         for (let i = 0; i < pushJobs.length; i += 10) {
             const batch = pushJobs.slice(i, i + 10);
             const results = await Promise.allSettled(
                 batch.map(async (job) => {
-                    if (expiredUsers.has(job.profileId)) return 'skip';
-                    const result = await sendPush(job.sub, job.title, job.body, job.type);
-                    if (result === 'expired') {
-                        expiredUsers.add(job.profileId);
-                        const cleanedPrefs = { ...job.prefs };
-                        delete cleanedPrefs.pushSubscription;
-                        await supabase.from('profiles').update({ preferences: cleanedPrefs }).eq('id', job.profileId);
-                        console.log(`[Cleanup] Expired subscription: ${job.profileId.slice(0, 8)}`);
+                    if (expiredDevices.has(job.device.id)) return 'skip';
+
+                    // IDEMPOTENCE: okna alertů jsou ±1 min a cron běží každou
+                    // minutu, takže bez tohohle claimu odejde stejný alert 3×.
+                    // Vloží se PŘED odesláním; konflikt = někdo (dřívější běh)
+                    // ho už poslal. V debug režimu se přeskakuje, ať jde testovat
+                    // opakovaně.
+                    let deliveryId: number | null = null;
+                    if (!mockType) {
+                        const claim = await supabase
+                            .from('alert_deliveries')
+                            .upsert(
+                                {
+                                    user_id: job.profileId,
+                                    alert_type: job.type,
+                                    alert_date: todayStr,
+                                    subscription_id: job.device.id,
+                                    status: 'sent',
+                                    title: job.title,
+                                    body: job.body,
+                                },
+                                { onConflict: 'user_id,alert_type,alert_date,subscription_id', ignoreDuplicates: true }
+                            )
+                            .select('id');
+
+                        if (claim.error) {
+                            console.error('[Cron] Claim selhal:', claim.error.message);
+                            return 'failed';
+                        }
+                        if (!claim.data || claim.data.length === 0) return 'duplicate';
+                        deliveryId = claim.data[0].id;
                     }
-                    return result;
+
+                    const result = await sendPush(job.device.subscription, job.title, job.body, job.type);
+
+                    if (result.status !== 'sent') {
+                        if (deliveryId !== null) {
+                            await supabase
+                                .from('alert_deliveries')
+                                .update({ status: result.status, status_code: result.statusCode ?? null, error: result.error ?? null })
+                                .eq('id', deliveryId);
+                        }
+                        if (result.status === 'expired') {
+                            // Cílený zápis na JEDNO zařízení. Dřív se tu přepisoval
+                            // celý preferences blob snapshotem z počátku běhu, což
+                            // uživateli mohlo vrátit stará nastavení.
+                            expiredDevices.add(job.device.id);
+                            await supabase
+                                .from('push_subscriptions')
+                                .update({ expired_at: new Date().toISOString(), last_error: result.error ?? null })
+                                .eq('id', job.device.id);
+                            console.log(`[Cleanup] Expired device ${job.device.id.slice(0, 8)} (user ${job.profileId.slice(0, 8)})`);
+                        }
+                    }
+
+                    return result.status;
                 })
             );
             for (const r of results) {
-                if (r.status === 'fulfilled' && r.value === 'sent') sentCount++;
+                if (r.status !== 'fulfilled') continue;
+                if (r.value === 'sent') sentCount++;
+                else if (r.value === 'duplicate') duplicateCount++;
             }
         }
 
@@ -415,15 +495,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             `);
         }
 
-        console.log(`[Cron] Done: ${sentCount} sent, ${pushJobs.length} total jobs, ${profiles.length} profiles`);
-        return res.status(200).json({ success: true, sent: sentCount, time: pragueTime, profiles: profiles.length });
+        console.log(`[Cron] Done: ${sentCount} sent, ${duplicateCount} deduped, ${pushJobs.length} total jobs, ${profiles.length} profiles, ${subsResult.data?.length || 0} devices`);
+        return res.status(200).json({
+            success: true,
+            sent: sentCount,
+            deduped: duplicateCount,
+            jobs: pushJobs.length,
+            devices: subsResult.data?.length || 0,
+            time: pragueTime,
+            profiles: profiles.length,
+        });
 
     } catch (err: any) {
         return res.status(500).json({ error: err.message });
     }
 }
 
-async function sendPush(sub: any, title: string, body: string, alertType: string): Promise<'sent' | 'expired' | 'failed'> {
+type PushDevice = {
+    id: string;
+    subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+};
+
+type PushResult = {
+    status: 'sent' | 'expired' | 'failed';
+    statusCode?: number;
+    error?: string;
+};
+
+async function sendPush(sub: any, title: string, body: string, alertType: string): Promise<PushResult> {
     const payload = JSON.stringify({ title, body, url: '/', tag: `alpha-${alertType}` });
     try {
         await webpush.sendNotification(sub, payload, {
@@ -434,13 +533,14 @@ async function sendPush(sub: any, title: string, body: string, alertType: string
                 'Urgency': 'high'
             }
         });
-        return 'sent';
+        return { status: 'sent' };
     } catch (e: any) {
         const statusCode = e?.statusCode || e?.status;
+        const message = String(e?.body || e?.message || e).slice(0, 500);
         if (statusCode === 410 || statusCode === 404) {
-            return 'expired';
+            return { status: 'expired', statusCode, error: message };
         }
-        console.error(`Push error (${statusCode}):`, e?.body || e?.message || e);
-        return 'failed';
+        console.error(`Push error (${statusCode}):`, message);
+        return { status: 'failed', statusCode, error: message };
     }
 }
