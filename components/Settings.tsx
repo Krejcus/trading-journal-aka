@@ -899,13 +899,17 @@ const Settings: React.FC<SettingsProps> = ({
                   )}
                 </div>
 
-                {pushDiag?.hasActiveSubscription && (
+                {/* Podmínkou je JAKÉKOLI registrované zařízení, ne odběr na tomhle.
+                    Jinak by šlo tlačítko zobrazit jen tam, kam se test posílá — a
+                    typický test je právě "kliknu na počítači, ať to dorazí na
+                    zavřený telefon". */}
+                {pushDevices.length > 0 && (
                   <button
                     onClick={handleTestPush}
                     disabled={pushBusy}
                     className="mt-2 w-full py-3 rounded-2xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40 transition-all active:scale-[0.98]"
                   >
-                    {pushBusy ? 'Odesílám…' : 'Poslat zkušební notifikaci'}
+                    {pushBusy ? 'Odesílám…' : `Poslat zkušební notifikaci (${pushDevices.length})`}
                   </button>
                 )}
 
