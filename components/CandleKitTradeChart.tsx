@@ -146,6 +146,8 @@ import {
   visibleHighLow,
   type ManagedPriceLine,
 } from '../services/chartSettingsApply';
+import { ANALYSIS_LEVEL_SETTINGS } from '../services/backtestEntryContext';
+import { advanceStrategyTracker, emptyStrategyTracker, strategyPositionBoxes } from '../services/strategyTracker';
 import { managedPositionDrawing, type BacktestManagedPositionBox } from '../services/backtestManagedPosition';
 import { chartClickOrderOptions, type ChartClickOrderOption } from '../services/backtestQuickOrder';
 import type { BacktestOrderSide, BacktestOrderType } from '../services/backtestTypes';
@@ -190,6 +192,8 @@ interface CandleKitTradeChartProps {
   onToggleLevels?: () => void;
   onToggleStructure?: () => void;
   instrumentRoot?: NasdaqFuturesRoot;
+  /** Ověřovací kreslení detektoru vstupního modelu. Jen v replay. */
+  strategyOverlay?: boolean;
   replayActive?: boolean;
   replayCursorTime?: number | null;
   replaySelecting?: boolean;
@@ -592,6 +596,14 @@ const LEVEL_CONTEXT_BARS: Record<MarketTimeframe, number> = {
 };
 
 const STRUCTURE_CONTEXT_BARS = 2_400;
+/**
+ * Kolik minut historie dostane detektor vstupního modelu.
+ *
+ * Musí pokrýt sweep i strukturu zpětně — den a něco stačí a je to řádově
+ * levnější než dvanáctitisícové okno, ze kterého se počítají levely.
+ */
+const STRATEGY_CONTEXT_BARS = 1_500;
+const EMPTY_STRATEGY_CANDLES: MarketCandle[] = [];
 
 interface CandleWindow {
   start: number;
@@ -1601,6 +1613,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   onToggleLevels,
   onToggleStructure,
   instrumentRoot,
+  strategyOverlay = false,
   replayActive = false,
   replayCursorTime = null,
   replaySelecting = false,
@@ -2329,6 +2342,52 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     },
     [candles, renderedCandleWindow.end, indicatorSettings.levels, timeframe, visibleLevels],
   );
+  const strategyOverlayRef = useRef(strategyOverlay);
+  strategyOverlayRef.current = strategyOverlay;
+  // Papírové pozice detektoru. Drží se v refu, protože je posouvá replay tick
+  // a překreslení řídí až změna výsledného seznamu boxů.
+  const strategyTrackerRef = useRef(emptyStrategyTracker());
+  const [strategyBoxes, setStrategyBoxes] = useState<BacktestManagedPositionBox[]>([]);
+
+  // Detektor jede z minutového streamu, ne z panelových svíček. Model je
+  // výslovně 1m — na pětiminutovém panelu by hledal pětiminutové mezery, což
+  // je jiná strategie. `rawCandles` je v replay ořezané kurzorem, takže se
+  // tudy nemůže dostat budoucnost.
+  const strategyCandles = useMemo(() => {
+    if (!replayActive || !strategyOverlay) return EMPTY_STRATEGY_CANDLES;
+    return rawCandles.length > STRATEGY_CONTEXT_BARS
+      ? rawCandles.slice(-STRATEGY_CONTEXT_BARS)
+      : rawCandles;
+  }, [rawCandles, replayActive, strategyOverlay]);
+
+  useEffect(() => {
+    if (!replayActive || !strategyOverlay) {
+      if (strategyTrackerRef.current.positions.length) {
+        strategyTrackerRef.current = emptyStrategyTracker();
+        setStrategyBoxes([]);
+      }
+      return;
+    }
+    if (strategyCandles.length < 5) return;
+    // Levely se pro detektor počítají zvlášť, se VŠÍM zapnutým. Ty na grafu
+    // se řídí tím, co má uživatel zobrazené — a jeho vizuální minimalismus by
+    // detektoru sebral zrovna ON H/L a IB H/L, na kterých model stojí.
+    const analysis = calculateLiquidityLevels(strategyCandles, ANALYSIS_LEVEL_SETTINGS);
+    const next = advanceStrategyTracker(strategyTrackerRef.current, {
+      candles: strategyCandles,
+      levels: analysis.levels,
+      dynamicLevels: [
+        { name: 'VWAP', points: analysis.vwap },
+        { name: 'VWAP +1σ', points: analysis.upper1 },
+        { name: 'VWAP -1σ', points: analysis.lower1 },
+        { name: 'VWAP +2σ', points: analysis.upper2 },
+        { name: 'VWAP -2σ', points: analysis.lower2 },
+      ],
+    });
+    if (next === strategyTrackerRef.current) return;
+    strategyTrackerRef.current = next;
+    setStrategyBoxes(strategyPositionBoxes(next, instrumentRoot ?? 'MNQ'));
+  }, [instrumentRoot, replayActive, strategyCandles, strategyOverlay]);
   const liquidityLevelsRef = useRef(liquidityLevels);
   liquidityLevelsRef.current = liquidityLevels;
   const fvgAccumulatorRef = useRef<FairValueGapAccumulator | null>(null);
@@ -3026,6 +3085,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       overlayArtifactsRef.current.primitives.push(levelPrimitive);
     }
 
+
     const entryTime = nearestCandleTime(visibleCandles, asUnix(trade.entryTime || trade.entryDate, entryMs));
     const exitTime = nearestCandleTime(visibleCandles, asUnix(trade.timestamp || trade.exitDate, exitMs));
     const isLong = String(trade.direction).toLowerCase() === 'long';
@@ -3564,10 +3624,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   useLayoutEffect(() => {
     const engine = apiRef.current?.drawing?.engine;
     if (!engine) return;
-    const prefix = 'auto-managed-position-';
+    const isGenerated = (id: string) => id.startsWith('auto-managed-position-') || id.startsWith('auto-strategy-');
     const latestTime = visibleCandles.at(-1)?.time ?? replayCursorTime;
     const desired = replayActive && latestTime !== null
-      ? managedPositionBoxes.map(box => managedPositionDrawing(
+      ? [...managedPositionBoxes, ...strategyBoxes].map(box => managedPositionDrawing(
           box,
           Number(latestTime) + MARKET_TIMEFRAME_MINUTES[timeframe] * 60 * 5,
           MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
@@ -3579,7 +3639,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     // the managed box move with replay without ever becoming user-draggable.
     protectedDrawingsUnsubscribeRef.current?.();
     engine.getDrawings()
-      .filter(drawing => drawing.id.startsWith(prefix) && !desiredIds.has(drawing.id))
+      .filter(drawing => isGenerated(drawing.id) && !desiredIds.has(drawing.id))
       .forEach(drawing => engine.remove(drawing.id));
     desired.forEach(drawing => {
       const current = engine.getById(drawing.id);
@@ -3597,9 +3657,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     // každém replay ticku, takže kliknutá kresba se odznačila dřív, než se
     // stihl otevřít její panel.
     const selectedId = engine.getSelectedId();
-    if (selectedId && selectedId.startsWith(prefix)) engine.select(null);
+    if (selectedId && isGenerated(selectedId)) engine.select(null);
     positionProgressPrimitiveRequestUpdateRef.current?.();
-  }, [managedPositionBoxes, replayActive, replayCursorTime, timeframe, visibleCandles]);
+  }, [managedPositionBoxes, replayActive, replayCursorTime, strategyBoxes, timeframe, visibleCandles]);
 
   useEffect(() => {
     if (!replayActive) return;

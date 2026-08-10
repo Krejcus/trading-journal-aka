@@ -23,6 +23,7 @@ import {
   Rewind,
   RotateCcw,
   Save,
+  Crosshair,
   StepForward,
   Undo2,
   Upload,
@@ -231,6 +232,8 @@ interface WorkspaceDataContextValue {
   backtestSession?: BacktestChartSessionBridge;
   activePanelId: string;
   replay: ChartReplayState;
+  /** Ověřovací kreslení detektoru vstupního modelu. */
+  strategyOverlay: boolean;
   replaySelectionTime: number | null;
   setReplaySelectionTime: (time: number | null) => void;
   selectReplayStart: (time: number) => void;
@@ -527,6 +530,7 @@ const AlphaTradeWorkspacePanel: React.FC<{
             hideFocusButton
             hideDrawingToolbar
             keyboardShortcutsActive={isActive}
+            strategyOverlay={context.strategyOverlay}
             replayActive={context.replay.phase === 'active'}
             replayCursorTime={context.replay.cursorTime}
             replaySelecting={context.replay.phase === 'selecting'}
@@ -615,6 +619,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const [activePanelId, setActivePanelId] = useState(backtestSession?.workspaceState?.activePanelId || 'alphatrade-chart-1');
   const [replay, setReplay] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
   const [replaySelectionTime, setReplaySelectionTime] = useState<number | null>(null);
+  // Ověřovací režim detektoru. Výchozí vypnuto: při sběru dat nemá nic
+  // ovlivňovat rozhodování, kreslí se jen když si to uživatel vyžádá.
+  const [strategyOverlay, setStrategyOverlay] = useState(false);
   // Pásmo bere z nastavení grafu, aby Go To ukazovalo stejná čísla jako časová
   // osa. Sleduje i změnu v Nastavení grafu, jinak by po přepnutí zóny nabízelo
   // časy z jiného světa.
@@ -856,6 +863,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     isDark,
     activePanelId,
     replay,
+    strategyOverlay,
     replaySelectionTime,
     setReplaySelectionTime,
     selectReplayStart,
@@ -866,7 +874,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     onPositionQuickOrder: backtestSession?.onQuickOrder
       ? () => positionQuickOrderRef.current()
       : undefined,
-  }), [activatePanel, activePanelId, backtestSession, entryMs, exitMs, initialCandles, initialRoot, isDark, registerPanel, replay, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+  }), [activatePanel, activePanelId, backtestSession, entryMs, exitMs, initialCandles, initialRoot, isDark, registerPanel, replay, replaySelectionTime, selectReplayStart, strategyOverlay, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const activeIndicatorCount = activeControl ? countChartIndicators(
     [
@@ -1479,6 +1487,20 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 timeZoneLabel={chartTimeZoneLabel}
                 buttonClassName={topButton}
               />
+              <button
+                type="button"
+                className={`${topButton} px-2 ${strategyOverlay ? (isDark ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-50 text-blue-700') : ''}`}
+                disabled={replay.phase !== 'active'}
+                onClick={() => setStrategyOverlay(current => !current)}
+                title={strategyOverlay
+                  ? 'Vypnout ověřovací kreslení detektoru'
+                  : 'Zapnout ověřovací kreslení detektoru (sweep, zlom, mezery, vstup)'}
+                aria-pressed={strategyOverlay}
+                aria-label="Detektor vstupního modelu"
+              >
+                <Crosshair size={14} />
+                <span>Model</span>
+              </button>
               <select
                 value={replay.speed}
                 onChange={event => setReplay(current => ({ ...current, speed: Number(event.target.value) as ChartReplaySpeed }))}
