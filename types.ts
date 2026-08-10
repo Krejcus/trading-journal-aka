@@ -820,6 +820,7 @@ export interface SystemSettings {
   eveningAuditAlertTime: string; // HH:mm
   morningWakeUpDebtAlert: boolean;
   testModeEnabled?: boolean;
+  tradecopiaNotifications?: import('./services/tradecopiaNotificationPreferences').TradecopiaNotificationPreferences;
 }
 
 

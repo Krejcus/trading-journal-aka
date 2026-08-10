@@ -24,6 +24,12 @@ import ImportQueue from './ImportQueue';
 import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 import { enablePush, disablePush, listPushDevices, sendTestPush, type PushDevice } from '../services/pushSubscriptionService';
+import {
+  mergeTradecopiaNotificationPreferences,
+  type TradecopiaNotificationPreferences,
+} from '../services/tradecopiaNotificationPreferences';
+
+export type SettingsTab = 'psychology' | 'strategy' | 'market' | 'notifications' | 'system';
 
 interface SettingsProps {
   theme: 'dark' | 'light' | 'oled';
@@ -52,8 +58,8 @@ interface SettingsProps {
   onHardRefresh?: () => void;
   accentColor?: string;
   onAccentColorChange?: (color: string) => void;
-  activeTab?: 'psychology' | 'strategy' | 'market' | 'system';
-  onTabChange?: (tab: 'psychology' | 'strategy' | 'market' | 'system') => void;
+  activeTab?: SettingsTab;
+  onTabChange?: (tab: SettingsTab) => void;
   /** Vytvoří účet — auto-import ho volá při zakládání účtu z detekované challenge. */
   onCreateAccount?: (account: Account) => void;
   /** Promítne atomicky uložený importní incident také do živého stavu a offline cache. */
@@ -281,7 +287,7 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'system') void refreshPushState();
+    if (activeTab === 'notifications') void refreshPushState();
   }, [activeTab, refreshPushState]);
 
   const PUSH_ERRORS: Record<string, string> = {
@@ -393,23 +399,41 @@ const Settings: React.FC<SettingsProps> = ({
     showToast('Nastavení aktualizováno');
   };
 
+  const tradecopiaNotifications = useMemo(
+    () => mergeTradecopiaNotificationPreferences(systemSettings.tradecopiaNotifications),
+    [systemSettings.tradecopiaNotifications],
+  );
+
+  const updateTradecopiaNotification = <K extends keyof TradecopiaNotificationPreferences>(
+    key: K,
+    value: TradecopiaNotificationPreferences[K],
+  ) => {
+    setSystemSettings({
+      ...systemSettings,
+      tradecopiaNotifications: { ...tradecopiaNotifications, [key]: value },
+    });
+    showToast('Nastavení notifikací aktualizováno');
+  };
+
   const tabs = [
     { id: 'psychology', label: 'Psychologie', icon: Brain, desc: 'Pravidla, Cíle & Focus' },
     { id: 'strategy', label: 'Strategie', icon: Target, desc: 'Confluence, Chyby & Emoce' },
     { id: 'market', label: 'Trh', icon: Clock, desc: 'Seance & Čas' },
+    { id: 'notifications', label: 'Notifikace', icon: Bell, desc: 'TradeCopia & Push' },
     { id: 'system', label: 'Systém', icon: Shield, desc: 'Alpha Guardian' },
   ] as const;
 
   return (
     <div className="max-w-7xl mx-auto pb-20 space-y-6">
 
-      {/* Mobilní přepínač tabů — skrytý na md+ kde je přepínač v headeru */}
+      {/* Kompaktní přepínač — do lg breakpointu, kde by se pět tabů nevešlo do headeru. */}
       {onTabChange && (
-        <div className="flex md:hidden w-full p-1 rounded-2xl border gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
+        <div className="flex lg:hidden w-full p-1 rounded-2xl border gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
           {([
             { id: 'psychology', label: 'Psycho' },
             { id: 'strategy', label: 'Strategie' },
             { id: 'market', label: 'Trh' },
+            { id: 'notifications', label: 'Notifikace' },
             { id: 'system', label: 'Systém' }
           ] as const).map(tab => (
             <button
@@ -766,6 +790,86 @@ const Settings: React.FC<SettingsProps> = ({
             </div>
           )}
 
+          {activeTab === 'notifications' && (
+            <div className="space-y-6">
+              <Card isDark={isDark}>
+                <SectionHeader icon={Bell} title="TradeCopia notifikace" subtitle="Jeden obchod · všechny kopírované účty" color="bg-gradient-to-br from-emerald-600 to-cyan-600" isDark={isDark} />
+
+                <div className={`mb-5 p-4 rounded-xl border ${isDark ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50 border-emerald-200'}`}>
+                  <p className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-500 mb-2">Ukázka výsledné zprávy</p>
+                  <p className="text-sm font-black text-[var(--text-primary)]">💰 LONG MNQ uzavřen na 13 účtech</p>
+                  <p className="mt-1 text-[11px] font-bold text-[var(--text-muted)]">Výsledek skupiny: +$428.50 · ✅ 13/13 účtů uzavřeno</p>
+                  <p className="mt-1 text-[10px] font-bold text-[var(--text-muted)]">Alpha 50K, Alpha 100K, Lucid 50K +10</p>
+                </div>
+
+                <div className="space-y-2">
+                  <Toggle
+                    active={tradecopiaNotifications.enabled}
+                    onClick={() => updateTradecopiaNotification('enabled', !tradecopiaNotifications.enabled)}
+                    label="TradeCopia notifikace"
+                    desc="Hlavní vypínač pro rychlé události z copieru."
+                    isDark={isDark}
+                  />
+                  <div className={`grid grid-cols-1 md:grid-cols-2 gap-2 ${tradecopiaNotifications.enabled ? '' : 'opacity-40 pointer-events-none'}`}>
+                    <Toggle active={tradecopiaNotifications.orderSubmitted} onClick={() => updateTradecopiaNotification('orderSubmitted', !tradecopiaNotifications.orderSubmitted)} label="📤 Objednávka zadána" desc="Kolik z očekávaných účtů ji přijalo." isDark={isDark} />
+                    <Toggle active={tradecopiaNotifications.tradeOpened} onClick={() => updateTradecopiaNotification('tradeOpened', !tradecopiaNotifications.tradeOpened)} label="🟢 Obchod otevřen" desc="Jedna souhrnná zpráva místo X zpráv." isDark={isDark} />
+                    <Toggle active={tradecopiaNotifications.tradeClosed} onClick={() => updateTradecopiaNotification('tradeClosed', !tradecopiaNotifications.tradeClosed)} label="💰 Obchod uzavřen" desc="Souhrn účtů a dostupné P&L skupiny." isDark={isDark} />
+                    <Toggle active={tradecopiaNotifications.copyPartial} onClick={() => updateTradecopiaNotification('copyPartial', !tradecopiaNotifications.copyPartial)} label="⚠️ Neúplné kopírování" desc="Například 11 z 13 účtů." isDark={isDark} />
+                    <Toggle active={tradecopiaNotifications.orderRejected} onClick={() => updateTradecopiaNotification('orderRejected', !tradecopiaNotifications.orderRejected)} label="🚫 Zamítnutá objednávka" desc="Chyba účtu nebo prop firmy." isDark={isDark} />
+                    <Toggle active={tradecopiaNotifications.connectionChanged} onClick={() => updateTradecopiaNotification('connectionChanged', !tradecopiaNotifications.connectionChanged)} label="🔌 Připojení prop firmy" desc="Odpojení i opětovné připojení." isDark={isDark} />
+                    <Toggle active={tradecopiaNotifications.positionMismatch} onClick={() => updateTradecopiaNotification('positionMismatch', !tradecopiaNotifications.positionMismatch)} label="🚨 Nesoulad pozic" desc="Follower nemá očekávanou pozici leaderu." isDark={isDark} />
+                    <Toggle active={tradecopiaNotifications.riskAlerts} onClick={() => updateTradecopiaNotification('riskAlerts', !tradecopiaNotifications.riskAlerts)} label="🛑 Drawdown a risk" desc="Blížící se nebo dosažený limit." isDark={isDark} />
+                  </div>
+                </div>
+
+                <div className="mt-6 pt-5 border-t border-[var(--border-subtle)] space-y-2">
+                  <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)] mb-3">Obsah zprávy</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <Toggle active={tradecopiaNotifications.includeAccountNames} onClick={() => updateTradecopiaNotification('includeAccountNames', !tradecopiaNotifications.includeAccountNames)} label="Názvy účtů" desc="Ukáže první tři a počet dalších." isDark={isDark} />
+                    <Toggle active={tradecopiaNotifications.includePnl} onClick={() => updateTradecopiaNotification('includePnl', !tradecopiaNotifications.includePnl)} label="P&L ve zprávě" desc="Jen když je v okamžiku události dostupné." isDark={isDark} />
+                  </div>
+                </div>
+
+                <div className="mt-6 pt-5 border-t border-[var(--border-subtle)] space-y-3">
+                  <Toggle active={tradecopiaNotifications.quietHoursEnabled} onClick={() => updateTradecopiaNotification('quietHoursEnabled', !tradecopiaNotifications.quietHoursEnabled)} label="Tichý režim" desc="Běžné zprávy v tomto čase nechodí." isDark={isDark} />
+                  {tradecopiaNotifications.quietHoursEnabled && (
+                    <div className="grid grid-cols-2 gap-3 px-4">
+                      <label className="text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">Od
+                        <input type="time" value={tradecopiaNotifications.quietHoursStart} onChange={event => updateTradecopiaNotification('quietHoursStart', event.target.value)} className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-input)] text-xs text-[var(--text-primary)]" />
+                      </label>
+                      <label className="text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">Do
+                        <input type="time" value={tradecopiaNotifications.quietHoursEnd} onChange={event => updateTradecopiaNotification('quietHoursEnd', event.target.value)} className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-input)] text-xs text-[var(--text-primary)]" />
+                      </label>
+                    </div>
+                  )}
+                  <Toggle active={tradecopiaNotifications.criticalBypassQuietHours} onClick={() => updateTradecopiaNotification('criticalBypassQuietHours', !tradecopiaNotifications.criticalBypassQuietHours)} label="Kritické zprávy vždy" desc="Zamítnutí, odpojení, nesoulad a drawdown obejdou tichý režim." isDark={isDark} />
+                </div>
+              </Card>
+
+              <Card isDark={isDark}>
+                <SectionHeader icon={Smartphone} title="Doručení na zařízení" subtitle="Web Push i při zavřené aplikaci" color="bg-gradient-to-br from-blue-600 to-indigo-600" isDark={isDark} />
+                <p className={`text-xs mb-5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Zapni odběr na každém telefonu nebo počítači, kam mají upozornění chodit.
+                </p>
+                {pushDiag?.isApple && !pushDiag?.isStandalone && (
+                  <div className="mb-5 p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 text-[10px] font-bold text-amber-500">
+                    Na iPhonu nejdřív v Safari použij Sdílet → Přidat na plochu a otevři AlphaTrade z nové ikony.
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button onClick={handleEnablePush} disabled={pushBusy || !!pushDiag?.ready} className="flex-1 py-3 rounded-xl bg-[var(--text-secondary)] text-[var(--bg-page)] text-[10px] font-black uppercase tracking-widest disabled:opacity-40">
+                    {pushDiag?.ready ? 'Notifikace aktivní' : (pushBusy ? 'Zapínám…' : 'Zapnout notifikace')}
+                  </button>
+                  {pushDiag?.hasActiveSubscription && <button onClick={handleDisablePush} disabled={pushBusy} className="px-4 py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase text-[var(--text-muted)]">Vypnout</button>}
+                </div>
+                {/* Test lze spustit i z počítače bez vlastního odběru; endpoint
+                    ho pošle na všechna registrovaná zařízení uživatele. */}
+                {pushDevices.length > 0 && <button onClick={handleTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)]">{pushBusy ? 'Odesílám…' : `Poslat zkušební notifikaci (${pushDevices.length})`}</button>}
+                <p className="mt-4 text-[10px] font-bold text-[var(--text-muted)]">Aktivní zařízení: {pushDevices.filter(device => !device.expiredAt).length} / {pushDevices.length}</p>
+              </Card>
+            </div>
+          )}
+
           {activeTab === 'system' && (
             <div className="space-y-6">
               {/* Accent Color Picker */}
@@ -841,102 +945,6 @@ const Settings: React.FC<SettingsProps> = ({
               <Card isDark={isDark}>
                 <SectionHeader icon={Link2} title="Fronta importu" subtitle="Párování exekucí na deník" color="bg-gradient-to-br from-emerald-600 to-teal-600" isDark={isDark} />
                 <ImportQueue isDark={isDark} onToast={showToast} onIncidentSaved={onImportIncidentSaved} />
-              </Card>
-
-              {/* Push notifikace — doručení alertů i při zavřené aplikaci */}
-              <Card isDark={isDark}>
-                <SectionHeader icon={Bell} title="Push notifikace" subtitle="Alerty i při zavřené aplikaci" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
-                <p className={`text-xs mb-5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Bez zapnutého odběru chodí upozornění jen tehdy, když máš aplikaci otevřenou.
-                  Po zapnutí je posílá server, takže dorazí i se zavřenou appkou.
-                </p>
-
-                {pushDiag?.isApple && !pushDiag?.isStandalone && (
-                  <div className="mb-5 p-4 rounded-2xl border border-amber-500/20 bg-amber-500/5">
-                    <p className="text-[11px] font-black uppercase tracking-widest text-amber-500 mb-1">Nejdřív přidej na plochu</p>
-                    <p className="text-[10px] font-bold text-[var(--text-muted)] leading-relaxed">
-                      iPhone posílá push jen aplikacím přidaným na plochu. V Safari klepni na
-                      <span className="text-[var(--text-primary)]"> Sdílet → Přidat na plochu</span>, appku otevři z ikony na ploše a vrať se sem.
-                    </p>
-                  </div>
-                )}
-
-                <div className="space-y-1.5 mb-5">
-                  {[
-                    { ok: !!pushDiag?.hasNotificationAPI, label: 'Prohlížeč podporuje notifikace' },
-                    { ok: !pushDiag?.isApple || !!pushDiag?.isStandalone, label: 'Aplikace běží z plochy (nutné na iPhonu)' },
-                    { ok: pushDiag?.permission === 'granted', label: 'Notifikace povoleny' },
-                    { ok: !!pushDiag?.hasActiveSW, label: 'Service worker aktivní' },
-                    { ok: !!pushDiag?.hasActiveSubscription, label: 'Odběr zaregistrován' },
-                  ].map(row => (
-                    <div key={row.label} className="flex items-center gap-2.5">
-                      {row.ok
-                        ? <Check size={13} className="text-emerald-500 shrink-0" />
-                        : <X size={13} className="text-[var(--text-muted)] shrink-0" />}
-                      <span className={`text-[10px] font-bold ${row.ok ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
-                        {row.label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleEnablePush}
-                    disabled={pushBusy || !!pushDiag?.ready}
-                    className="flex-1 py-3 rounded-2xl bg-[var(--text-secondary)] text-[var(--bg-page)] text-[10px] font-black uppercase tracking-widest disabled:opacity-40 transition-all active:scale-[0.98]"
-                  >
-                    {pushDiag?.ready ? 'Notifikace aktivní' : (pushBusy ? 'Zapínám…' : 'Zapnout notifikace')}
-                  </button>
-                  {pushDiag?.hasActiveSubscription && (
-                    <button
-                      onClick={handleDisablePush}
-                      disabled={pushBusy}
-                      className="px-4 py-3 rounded-2xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-muted)] disabled:opacity-40 transition-all active:scale-[0.98]"
-                    >
-                      Vypnout
-                    </button>
-                  )}
-                </div>
-
-                {/* Podmínkou je JAKÉKOLI registrované zařízení, ne odběr na tomhle.
-                    Jinak by šlo tlačítko zobrazit jen tam, kam se test posílá — a
-                    typický test je právě "kliknu na počítači, ať to dorazí na
-                    zavřený telefon". */}
-                {pushDevices.length > 0 && (
-                  <button
-                    onClick={handleTestPush}
-                    disabled={pushBusy}
-                    className="mt-2 w-full py-3 rounded-2xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40 transition-all active:scale-[0.98]"
-                  >
-                    {pushBusy ? 'Odesílám…' : `Poslat zkušební notifikaci (${pushDevices.length})`}
-                  </button>
-                )}
-
-                {pushDevices.length > 0 && (
-                  <div className="mt-6 pt-5 border-t border-[var(--border-subtle)]">
-                    <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)] mb-3">
-                      Zařízení s odběrem ({pushDevices.length})
-                    </p>
-                    <div className="space-y-2">
-                      {pushDevices.map(device => (
-                        <div key={device.id} className="flex items-center gap-3">
-                          <Smartphone size={13} className={device.expiredAt ? 'text-rose-500 shrink-0' : 'text-[var(--text-muted)] shrink-0'} />
-                          <div className="flex flex-col min-w-0">
-                            <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-primary)] truncate">
-                              {device.platform || 'Zařízení'}
-                              {device.isCurrent && <span className="text-emerald-500"> · toto zařízení</span>}
-                              {device.expiredAt && <span className="text-rose-500"> · vypadlo</span>}
-                            </span>
-                            <span className="text-[9px] font-bold text-[var(--text-muted)] truncate">
-                              Naposledy {new Date(device.lastSeenAt).toLocaleString('cs-CZ')}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </Card>
 
               <div className="grid grid-cols-1 gap-6">

@@ -81,6 +81,7 @@ import {
   MessageSquare,
   Activity,
   Brain,
+  Bell,
   Shield,
   Sparkles
 } from 'lucide-react';
@@ -906,7 +907,11 @@ const App: React.FC = () => {
     ...(networkNotifications ? { networkNotifications } : {}),
   });
 
-  const [activePage, setActivePage] = useState('dashboard');
+  const [activePage, setActivePage] = useState(() => {
+    const requestedPage = new URLSearchParams(window.location.search).get('page');
+    const supportedDeepLinks = new Set(['dashboard', 'history', 'journal', 'ai', 'lab', 'business', 'live', 'network', 'accounts', 'settings']);
+    return requestedPage && supportedDeepLinks.has(requestedPage) ? requestedPage : 'dashboard';
+  });
 
   /**
    * Wrapper kolem setActivePage — když je AI Coach v aktivním streamu a user
@@ -2347,7 +2352,7 @@ const App: React.FC = () => {
   const [quickNote, setQuickNote] = useState('');
 
   const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
-  const [settingsActiveTab, setSettingsActiveTab] = useState<'psychology' | 'strategy' | 'market' | 'system'>('psychology');
+  const [settingsActiveTab, setSettingsActiveTab] = useState<'psychology' | 'strategy' | 'market' | 'notifications' | 'system'>('psychology');
   const [businessActiveTab, setBusinessActiveTab] = useState<'financials' | 'goals'>('financials');
   const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
   const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'feed' | 'following' | 'followers' | 'requests' | 'share'>('feed');
@@ -3508,12 +3513,13 @@ const App: React.FC = () => {
           )}
 
           {activePage === 'settings' && (
-            <div className="hidden md:flex flex-1 justify-center relative z-10">
+            <div className="hidden lg:flex flex-1 justify-center relative z-10">
               <div className="p-1 rounded-lg border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
                 {[
                   { id: 'psychology', label: 'Psychologie', icon: Brain },
                   { id: 'strategy', label: 'Strategie', icon: Target },
                   { id: 'market', label: 'Trh', icon: Clock },
+                  { id: 'notifications', label: 'Notifikace', icon: Bell },
                   { id: 'system', label: 'Systém', icon: Shield }
                 ].map(tab => (
                   <button
