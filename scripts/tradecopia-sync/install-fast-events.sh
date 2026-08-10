@@ -12,7 +12,7 @@ LAUNCH_DIR="$HOME/Library/LaunchAgents"
 PLIST="$LAUNCH_DIR/com.alphatrade.tradecopia-fast-events.plist"
 LOG="$CONFIG_DIR/tradecopia-fast-events-launchd.log"
 NODE_BIN="$(command -v node || true)"
-NOTIFY_URL="${TRADECOPIA_NOTIFY_URL:-https://trading-journal-aka.vercel.app/api/tradecopia-events}"
+NOTIFY_URL="${TRADECOPIA_NOTIFY_URL:-https://alphatrade-mentor-15.vercel.app/api/tradecopia-events}"
 
 if [ ! -x "$NODE_BIN" ]; then echo "CHYBA: node není v PATH."; exit 1; fi
 if [ ! -f "$SOURCE_CONFIG" ]; then echo "CHYBA: chybí $SOURCE_CONFIG."; exit 1; fi
