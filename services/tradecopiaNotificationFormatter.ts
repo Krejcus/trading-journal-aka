@@ -1,4 +1,4 @@
-import type { TradecopiaNotificationPreferences } from './tradecopiaNotificationPreferences';
+import type { TradecopiaNotificationPreferences } from './tradecopiaNotificationPreferences.js';
 
 export interface TradecopiaFastEvent {
   key: string;

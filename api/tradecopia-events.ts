@@ -6,8 +6,8 @@ import {
   isInsideQuietHours,
   isTradecopiaNotificationEnabled,
   mergeTradecopiaNotificationPreferences,
-} from '../services/tradecopiaNotificationPreferences';
-import { formatTradecopiaNotification, type TradecopiaFastEvent } from '../services/tradecopiaNotificationFormatter';
+} from '../services/tradecopiaNotificationPreferences.js';
+import { formatTradecopiaNotification, type TradecopiaFastEvent } from '../services/tradecopiaNotificationFormatter.js';
 
 const PUBLIC_VAPID_KEY = 'BCwmYrmEguddSKE2FKQX0dv1gPwEDbwmuSXhN7wiNJ8tH0Aw2wHTVHpblm8_bDMUkgVqkvPSLJ32aqY84t_tOO4';
 const ALLOWED_TYPES = new Set(['order_submitted', 'trade_opened', 'trade_closed', 'copy_partial', 'order_rejected', 'connection_changed', 'position_mismatch', 'risk_alert']);
