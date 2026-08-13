@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      App Group `group.app.alphatrade.nativelab` je dočasně odebraná: free
+      Personal Team ji nepodepíše a build na fyzické zařízení by selhal.
+      Widgety proto běží na testovacích datech. S placeným Apple Developer
+      účtem vrátit zpět:
+
+      <key>com.apple.security.application-groups</key>
+      <array>
+          <string>group.app.alphatrade.nativelab</string>
+      </array>
+    -->
+</dict>
+</plist>
