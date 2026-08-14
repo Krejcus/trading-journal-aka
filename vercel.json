@@ -12,6 +12,10 @@
     ],
     "rewrites": [
         {
+            "source": "/oauth/tradovate/callback",
+            "destination": "/api/tradovate/oauth/callback"
+        },
+        {
             "source": "/share/:id",
             "destination": "/api/share/:id"
         }
