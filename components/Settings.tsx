@@ -16,7 +16,7 @@ import {
   Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck,
   ShieldAlert, Activity, Check, ChevronLeft,
   ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText, Lock, Link2,
-  Smartphone
+  Smartphone, Share2, CalendarPlus
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import ImportSettings from './ImportSettings';
@@ -28,6 +28,61 @@ import {
   mergeTradecopiaNotificationPreferences,
   type TradecopiaNotificationPreferences,
 } from '../services/tradecopiaNotificationPreferences';
+import {
+  formatTradecopiaNotification,
+  type TradecopiaFastEvent,
+} from '../services/tradecopiaNotificationFormatter';
+import { isNativeBuild } from '../utils/runtimeConfig';
+import {
+  getNativeNotificationPermission,
+  listPendingNativeNotifications,
+  listDeliveredNativeNotifications,
+  cancelNativeNotification,
+  removeDeliveredNativeNotification,
+  openDeliveredNativeNotification,
+  cancelPendingNativeTestNotifications,
+  requestNativeNotificationPermission,
+  scheduleNativeNotification,
+  scheduleNativeTestNotification,
+  type NativePendingNotification,
+  type NativeDeliveredNotification,
+} from '../services/nativeNotifications';
+import { createTradeNotificationAttachment } from '../services/nativeNotificationCard';
+import type { PermissionState } from '@capacitor/core';
+import {
+  buildNativeSessionReminderPlan,
+  NATIVE_SESSION_REMINDERS_SYNCED_EVENT,
+  syncNativeSessionReminders,
+  type NativeSessionReminderSyncResult,
+} from '../services/nativeSessionReminders';
+import {
+  authenticateNativePrivacy,
+  getNativePrivacyEnabled,
+  getNativePermissionStatus,
+  getNativeKeepAwakeState,
+  lockNativePrivacy,
+  playNativeHaptic,
+  requestNativeSpeechPermissions,
+  openNativeAppSettings,
+  setNativePrivacyEnabled,
+  setNativeKeepAwakeEnabled,
+  startNativeDictation,
+  stopNativeDictation,
+  type NativeHapticStyle,
+  type NativePermissionStatus,
+  type NativeTradeDraft,
+  nativePermissionLabel,
+  clearNativeBadgeCount,
+  getNativeBadgeCount,
+  setNativeBadgeCount,
+  getNativeLiveActivityState,
+  startNativeLiveActivity,
+  updateNativeLiveActivity,
+  endNativeLiveActivity,
+  type NativeLiveActivityState,
+  presentNativeCalendarEvent,
+} from '../services/nativeCapabilities';
+import { shareTextNative } from '../services/nativeShare';
 
 export type SettingsTab = 'psychology' | 'strategy' | 'market' | 'notifications' | 'system';
 
@@ -64,6 +119,8 @@ interface SettingsProps {
   onCreateAccount?: (account: Account) => void;
   /** Promítne atomicky uložený importní incident také do živého stavu a offline cache. */
   onImportIncidentSaved?: (review: DailyReview) => void | Promise<void>;
+  /** Otevře nový obchod s lokálně rozpoznanými hodnotami; nic automaticky neukládá. */
+  onOpenTradeDraft?: (draft: NativeTradeDraft) => void;
 }
 
 // Global Helper for Weekly Focus Consistency
@@ -77,6 +134,71 @@ const getWeekISOString = (date: Date) => {
 };
 
 const COMMON_EMOJIS = ['🎯', '🔥', '💎', '🚀', '📈', '🧘', '🧠', '⚡', '🏆', '💰', '📉', '🛡️', '✅', '❌', '⏰', '📅', '📊', '💪', '🦁', '🦅'];
+
+const LOCAL_ALERT_SAMPLES: Array<{ label: string; event: TradecopiaFastEvent }> = [
+  {
+    label: 'Objednávka zadána',
+    event: {
+      key: 'local-order-submitted', type: 'order_submitted', severity: 'info', occurredAt: '2026-08-10T09:30:00Z',
+      symbol: 'MNQ', side: 'LONG', quantity: 1, orderType: 'Market', copiedAccountCount: 13, expectedAccountCount: 13,
+      leaderName: 'Alpha Leader', accountNames: ['Alpha 50K', 'Alpha 100K', 'Lucid 50K', 'Tradeify 50K'],
+    },
+  },
+  {
+    label: 'Obchod otevřen',
+    event: {
+      key: 'local-trade-opened', type: 'trade_opened', severity: 'info', occurredAt: '2026-08-10T09:30:01Z',
+      symbol: 'MNQ', side: 'LONG', quantity: 1, price: 21842.25, copiedAccountCount: 13, expectedAccountCount: 13,
+      leaderName: 'Alpha Leader', accountNames: ['Alpha 50K', 'Alpha 100K', 'Lucid 50K', 'Tradeify 50K'],
+    },
+  },
+  {
+    label: 'Obchod uzavřen',
+    event: {
+      key: 'local-trade-closed', type: 'trade_closed', severity: 'info', occurredAt: '2026-08-10T09:42:00Z',
+      symbol: 'MNQ', side: 'LONG', quantity: 1, price: 21858.75, pnl: 428.5, copiedAccountCount: 13, expectedAccountCount: 13,
+      accountNames: ['Alpha 50K', 'Alpha 100K', 'Lucid 50K', 'Tradeify 50K'],
+    },
+  },
+  {
+    label: 'Neúplné kopírování',
+    event: {
+      key: 'local-copy-partial', type: 'copy_partial', severity: 'warning', occurredAt: '2026-08-10T09:30:02Z',
+      symbol: 'MNQ', side: 'LONG', quantity: 1, copiedAccountCount: 11, expectedAccountCount: 13, failedAccountCount: 2,
+      accountNames: ['Alpha 50K', 'Alpha 100K', 'Lucid 50K'],
+    },
+  },
+  {
+    label: 'Objednávka zamítnuta',
+    event: {
+      key: 'local-order-rejected', type: 'order_rejected', severity: 'critical', occurredAt: '2026-08-10T09:30:02Z',
+      symbol: 'MNQ', side: 'SHORT', quantity: 1, copiedAccountCount: 11, expectedAccountCount: 13, failedAccountCount: 2,
+      reasons: ['Účet překročil maximální velikost pozice', 'Spojení s brokerem vypršelo'],
+    },
+  },
+  {
+    label: 'Prop účet odpojen',
+    event: {
+      key: 'local-connection-changed', type: 'connection_changed', severity: 'critical', occurredAt: '2026-08-10T09:35:00Z',
+      firm: 'Tradeify', connected: false, copiedAccountCount: 0, expectedAccountCount: 13, reason: 'Přihlášení vypršelo',
+    },
+  },
+  {
+    label: 'Nesoulad pozic',
+    event: {
+      key: 'local-position-mismatch', type: 'position_mismatch', severity: 'critical', occurredAt: '2026-08-10T09:36:00Z',
+      symbol: 'MNQ', groupName: 'MNQ skupina', copiedAccountCount: 11, expectedAccountCount: 13, failedAccountCount: 2,
+      accountNames: ['Alpha 50K', 'Alpha 100K'],
+    },
+  },
+  {
+    label: 'Drawdown upozornění',
+    event: {
+      key: 'local-risk-alert', type: 'risk_alert', severity: 'critical', occurredAt: '2026-08-10T09:40:00Z',
+      cushion: 342, drawdownFloor: 50000, balance: 50342, accountNames: ['Alpha 50K'],
+    },
+  },
+];
 
 const EmojiPicker = ({ onSelect, onClose, isDark }: { onSelect: (e: string) => void, onClose: () => void, isDark: boolean }) => (
   <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -203,7 +325,8 @@ const Settings: React.FC<SettingsProps> = ({
   activeTab = 'psychology',
   onTabChange,
   onCreateAccount,
-  onImportIncidentSaved
+  onImportIncidentSaved,
+  onOpenTradeDraft,
 }) => {
   const isDark = theme !== 'light';
 
@@ -228,6 +351,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
   const [toast, setToast] = useState<{ message: string, id: number } | null>(null);
+  const [localAlertBusyKey, setLocalAlertBusyKey] = useState<string | null>(null);
 
   // Screenshot migration state
 
@@ -276,18 +400,109 @@ const Settings: React.FC<SettingsProps> = ({
   const [pushDiag, setPushDiag] = useState<Awaited<ReturnType<typeof getPushDiagnostics>> | null>(null);
   const [pushDevices, setPushDevices] = useState<PushDevice[]>([]);
   const [pushBusy, setPushBusy] = useState(false);
+  const [nativeNotificationPermission, setNativeNotificationPermission] = useState<PermissionState>('prompt');
+  const [nativePendingNotifications, setNativePendingNotifications] = useState<NativePendingNotification[]>([]);
+  const [nativeDeliveredNotifications, setNativeDeliveredNotifications] = useState<NativeDeliveredNotification[]>([]);
+  const [nativeBadgeCount, setNativeBadgeCountState] = useState(0);
+  const [nativePrivacyEnabled, setNativePrivacyEnabledState] = useState(false);
+  const [nativeCapabilityBusy, setNativeCapabilityBusy] = useState(false);
+  const [nativeDictating, setNativeDictating] = useState(false);
+  const [nativeDictationText, setNativeDictationText] = useState('');
+  const [nativePermissionStatus, setNativePermissionStatus] = useState<NativePermissionStatus | null>(null);
+  const [nativeKeepAwakeEnabled, setNativeKeepAwakeEnabledState] = useState(false);
+  const [nativeKeepAwakeEffective, setNativeKeepAwakeEffective] = useState(false);
+  const [nativeReminderSync, setNativeReminderSync] = useState<NativeSessionReminderSyncResult | null>(null);
+  const [nativeLiveActivityState, setNativeLiveActivityState] = useState<NativeLiveActivityState | null>(null);
+
+  const refreshNativePermissionStatus = useCallback(async () => {
+    if (!isNativeBuild) return;
+    const status = await getNativePermissionStatus().catch(() => null);
+    setNativePermissionStatus(status);
+  }, []);
+
+  const refreshNativeKeepAwakeState = useCallback(async () => {
+    if (!isNativeBuild) return;
+    const state = await getNativeKeepAwakeState().catch(() => null);
+    if (!state) return;
+    setNativeKeepAwakeEnabledState(state.enabled);
+    setNativeKeepAwakeEffective(state.effective);
+  }, []);
+
+  const refreshNativeLiveActivityState = useCallback(async () => {
+    if (!isNativeBuild) return;
+    const state = await getNativeLiveActivityState().catch(() => null);
+    setNativeLiveActivityState(state);
+  }, []);
 
   const refreshPushState = useCallback(async () => {
+    if (isNativeBuild) {
+      const [permission, pendingNotifications, deliveredNotifications, badgeCount] = await Promise.all([
+        getNativeNotificationPermission().catch(() => 'prompt' as PermissionState),
+        listPendingNativeNotifications().catch(() => [] as NativePendingNotification[]),
+        listDeliveredNativeNotifications().catch(() => [] as NativeDeliveredNotification[]),
+        getNativeBadgeCount().catch(() => 0),
+      ]);
+      setNativeNotificationPermission(permission);
+      setNativePendingNotifications(pendingNotifications);
+      const reminderCount = pendingNotifications.filter(notification => notification.source === 'sessionReminder').length;
+      const requestedReminderCount = buildNativeSessionReminderPlan(sessions, systemSettings, Number.MAX_SAFE_INTEGER).requestedCount;
+      setNativeReminderSync(reminderCount > 0
+        ? { status: 'scheduled', scheduledCount: reminderCount, omittedCount: Math.max(0, requestedReminderCount - reminderCount) }
+        : null);
+      setNativeDeliveredNotifications(deliveredNotifications);
+      setNativeBadgeCountState(badgeCount);
+      setPushDiag(null);
+      setPushDevices([]);
+      return;
+    }
     const [diag, devices] = await Promise.all([
       getPushDiagnostics().catch(() => null),
       listPushDevices().catch(() => []),
     ]);
     setPushDiag(diag);
     setPushDevices(devices);
-  }, []);
+  }, [sessions, systemSettings]);
 
   useEffect(() => {
     if (activeTab === 'notifications') void refreshPushState();
+  }, [activeTab, refreshPushState]);
+
+  useEffect(() => {
+    if (isNativeBuild && activeTab === 'system') {
+      void getNativePrivacyEnabled().then(setNativePrivacyEnabledState).catch(() => undefined);
+      void refreshNativeKeepAwakeState();
+      void refreshNativePermissionStatus();
+      void refreshNativeLiveActivityState();
+    }
+  }, [activeTab, refreshNativeKeepAwakeState, refreshNativeLiveActivityState, refreshNativePermissionStatus]);
+
+  useEffect(() => {
+    if (!isNativeBuild) return;
+    const refreshAfterSettings = () => {
+      if (document.visibilityState !== 'visible') return;
+      void refreshNativePermissionStatus();
+      if (activeTab === 'system') {
+        void refreshNativeKeepAwakeState();
+        void refreshNativeLiveActivityState();
+      }
+      if (activeTab === 'notifications') void refreshPushState();
+    };
+    document.addEventListener('visibilitychange', refreshAfterSettings);
+    window.addEventListener('focus', refreshAfterSettings);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshAfterSettings);
+      window.removeEventListener('focus', refreshAfterSettings);
+    };
+  }, [activeTab, refreshNativeKeepAwakeState, refreshNativeLiveActivityState, refreshNativePermissionStatus, refreshPushState]);
+
+  useEffect(() => {
+    if (!isNativeBuild) return;
+    const handleReminderSync = (event: Event) => {
+      setNativeReminderSync((event as CustomEvent<NativeSessionReminderSyncResult>).detail);
+      if (activeTab === 'notifications') void refreshPushState();
+    };
+    window.addEventListener(NATIVE_SESSION_REMINDERS_SYNCED_EVENT, handleReminderSync);
+    return () => window.removeEventListener(NATIVE_SESSION_REMINDERS_SYNCED_EVENT, handleReminderSync);
   }, [activeTab, refreshPushState]);
 
   const PUSH_ERRORS: Record<string, string> = {
@@ -301,6 +516,18 @@ const Settings: React.FC<SettingsProps> = ({
   const handleEnablePush = async () => {
     setPushBusy(true);
     try {
+      if (isNativeBuild) {
+        const permission = await requestNativeNotificationPermission();
+        setNativeNotificationPermission(permission);
+        if (permission === 'granted') {
+          setNativeReminderSync(await syncNativeSessionReminders(sessions, systemSettings));
+        }
+        await refreshNativePermissionStatus();
+        showToast(permission === 'granted'
+          ? 'Nativní iOS notifikace jsou zapnuté'
+          : 'Notifikace nejsou v Nastavení iOS povolené');
+        return;
+      }
       const result = await enablePush();
       showToast(result.ok
         ? 'Notifikace zapnuty na tomto zařízení'
@@ -325,6 +552,12 @@ const Settings: React.FC<SettingsProps> = ({
   const handleTestPush = async () => {
     setPushBusy(true);
     try {
+      if (isNativeBuild) {
+        await scheduleNativeTestNotification();
+        await refreshPushState();
+        showToast('Test naplánován — zavři appku a počkej 2 sekundy');
+        return;
+      }
       const result = await sendTestPush();
       showToast(result.ok
         ? `Odesláno na ${result.sent} z ${result.devices} zařízení — zavři appku a čekej`
@@ -332,6 +565,275 @@ const Settings: React.FC<SettingsProps> = ({
       await refreshPushState();
     } finally {
       setPushBusy(false);
+    }
+  };
+
+  const handleNativeBadge = async (count: number) => {
+    setPushBusy(true);
+    try {
+      const permission = await requestNativeNotificationPermission();
+      if (permission !== 'granted') {
+        showToast('Badge vyžaduje povolené notifikace v Nastavení iOS');
+        return;
+      }
+      const nextCount = count === 0
+        ? (await clearNativeBadgeCount(), 0)
+        : await setNativeBadgeCount(count);
+      setNativeBadgeCountState(nextCount);
+      showToast(nextCount === 0 ? 'Badge ikony vymazán' : `Badge ikony nastaven na ${nextCount}`);
+    } catch (error) {
+      showToast(`Badge selhal: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleNativeAlertGallery = async () => {
+    setPushBusy(true);
+    try {
+      const permission = await requestNativeNotificationPermission();
+      if (permission !== 'granted') {
+        showToast('Notifikace nejsou v Nastavení iOS povolené');
+        return;
+      }
+
+      for (const [index, sample] of LOCAL_ALERT_SAMPLES.entries()) {
+        const event = { ...sample.event, occurredAt: new Date().toISOString() };
+        const formatted = formatTradecopiaNotification(event, tradecopiaNotifications);
+        const isTradeEvent = event.type === 'trade_opened' || event.type === 'trade_closed';
+        const attachmentUrl = isTradeEvent
+          ? await createTradeNotificationAttachment(event)
+          : undefined;
+        await scheduleNativeNotification({
+          title: formatted.title,
+          body: formatted.body,
+          route: event.type === 'trade_closed' ? 'journal' : 'live',
+          threadIdentifier: `alphatrade-${event.type}`,
+          attachmentUrl,
+          actionType: event.severity === 'critical' ? 'risk' : (isTradeEvent ? 'trade' : 'general'),
+          interruptionLevel: event.severity === 'critical' ? 'timeSensitive' : 'active',
+          delayMs: 4_000 + index * 8_000,
+        });
+      }
+      await refreshPushState();
+      showToast(`Naplánováno ${LOCAL_ALERT_SAMPLES.length} iOS scénářů během jedné minuty`);
+    } catch (error) {
+      showToast(`Galerie selhala: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleCancelNativeAlerts = async () => {
+    setPushBusy(true);
+    try {
+      const cancelledCount = await cancelPendingNativeTestNotifications();
+      await refreshPushState();
+      showToast(cancelledCount > 0
+        ? `Zrušeno ${cancelledCount} čekajících testů; session plán zůstal aktivní`
+        : 'Doručené testy byly vyčištěny; session plán zůstal aktivní');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleCancelNativeAlert = async (id: number) => {
+    setPushBusy(true);
+    try {
+      await cancelNativeNotification(id);
+      await refreshPushState();
+      showToast('Naplánovaná notifikace byla zrušena');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleRemoveDeliveredNativeAlert = async (id: number) => {
+    setPushBusy(true);
+    try {
+      await removeDeliveredNativeNotification(id);
+      await refreshPushState();
+      showToast('Doručená notifikace byla odstraněna z centra iOS');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleOpenDeliveredNativeAlert = (notification: NativeDeliveredNotification) => {
+    openDeliveredNativeNotification(notification);
+  };
+
+  const handleNativePrivacyToggle = async () => {
+    setNativeCapabilityBusy(true);
+    try {
+      if (!nativePrivacyEnabled) {
+        const authenticated = await authenticateNativePrivacy();
+        if (!authenticated) {
+          showToast('Ověření vlastníka nebylo dokončeno');
+          return;
+        }
+      }
+      const enabled = await setNativePrivacyEnabled(!nativePrivacyEnabled);
+      setNativePrivacyEnabledState(enabled);
+      // Enabling already required a successful owner check above. Only notify
+      // the global gate when disabling so it can dismiss any active overlay;
+      // dispatching after enable would immediately ask for Face ID a second time.
+      if (!enabled) window.dispatchEvent(new Event('alphatrade:privacy-changed'));
+      showToast(enabled ? 'Privacy Mode je aktivní' : 'Privacy Mode je vypnutý');
+    } finally {
+      setNativeCapabilityBusy(false);
+    }
+  };
+
+  const handleNativePrivacyLock = async () => {
+    await lockNativePrivacy();
+    window.dispatchEvent(new Event('alphatrade:privacy-changed'));
+  };
+
+  const handleHapticTest = async (style: NativeHapticStyle) => {
+    await playNativeHaptic(style);
+    showToast(`Haptika: ${style}`);
+  };
+
+  const openNativeDictationDraft = () => {
+    if (!nativeDictationText || !onOpenTradeDraft) return;
+    onOpenTradeDraft({ notes: `Nativní diktování:\n${nativeDictationText}` });
+  };
+
+  const handleNativeDictation = async () => {
+    if (nativeDictating) {
+      await stopNativeDictation().catch(() => undefined);
+      setNativeDictating(false);
+      return;
+    }
+
+    setNativeCapabilityBusy(true);
+    try {
+      const permission = await requestNativeSpeechPermissions();
+      await refreshNativePermissionStatus();
+      if (!permission.speech || !permission.microphone) {
+        showToast('Povol mikrofon a rozpoznávání řeči v Nastavení iOS');
+        return;
+      }
+      setNativeDictationText('');
+      setNativeDictating(true);
+      setNativeCapabilityBusy(false);
+      const text = await startNativeDictation();
+      setNativeDictationText(text);
+      await playNativeHaptic(text ? 'success' : 'warning');
+      showToast(text ? 'Diktování dokončeno' : 'Nebyla rozpoznána žádná řeč');
+    } catch (error) {
+      await playNativeHaptic('error').catch(() => undefined);
+      showToast(`Diktování selhalo: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
+    } finally {
+      setNativeDictating(false);
+      setNativeCapabilityBusy(false);
+    }
+  };
+
+  const handleOpenNativeSettings = async () => {
+    setNativeCapabilityBusy(true);
+    try {
+      const opened = await openNativeAppSettings();
+      if (!opened) showToast('Nastavení iOS se nepodařilo otevřít');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Nastavení iOS se nepodařilo otevřít');
+    } finally {
+      setNativeCapabilityBusy(false);
+    }
+  };
+
+  const handleNativeKeepAwakeToggle = async () => {
+    setNativeCapabilityBusy(true);
+    try {
+      const enabled = await setNativeKeepAwakeEnabled(!nativeKeepAwakeEnabled);
+      setNativeKeepAwakeEnabledState(enabled);
+      await refreshNativeKeepAwakeState();
+      await playNativeHaptic(enabled ? 'success' : 'selection').catch(() => undefined);
+      showToast(enabled ? 'Displej zůstane při LIVE režimu vzhůru' : 'Automatické uspání displeje je obnoveno');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Nastavení displeje se nepodařilo změnit');
+    } finally {
+      setNativeCapabilityBusy(false);
+    }
+  };
+
+  const handleNativeLiveActivity = async (action: 'start' | 'profit' | 'risk' | 'end') => {
+    setNativeCapabilityBusy(true);
+    try {
+      let state: NativeLiveActivityState;
+      if (action === 'end') {
+        state = await endNativeLiveActivity();
+      } else if (action === 'risk') {
+        state = await updateNativeLiveActivity({
+          symbol: 'MNQ',
+          status: 'RISK ALERT · TEST',
+          headline: 'Blížíš se dennímu limitu',
+          detail: 'Simulace varování · bez broker akce',
+          pnlText: '-$185.00',
+          isPositive: false,
+          progress: 0.88,
+          alert: true,
+        });
+      } else {
+        const payload = {
+          symbol: 'MNQ' as const,
+          status: 'NEW YORK · LIVE TEST',
+          headline: action === 'profit' ? 'Profit chráněn · plán splněn' : 'Seance pod kontrolou',
+          detail: action === 'profit' ? 'Risk 24 % · 2 / 3 obchody' : 'Risk 38 % · 3 / 3 obchody',
+          pnlText: action === 'profit' ? '+$612.75' : '+$428.50',
+          isPositive: true,
+          progress: action === 'profit' ? 0.82 : 0.62,
+          alert: action === 'profit',
+        };
+        state = action === 'start'
+          ? await startNativeLiveActivity(payload)
+          : await updateNativeLiveActivity(payload);
+      }
+      setNativeLiveActivityState(state);
+      await playNativeHaptic(action === 'end' ? 'selection' : action === 'risk' ? 'warning' : 'success').catch(() => undefined);
+      showToast(action === 'end' ? 'Live Activity ukončena' : action === 'start' ? 'Live Activity spuštěna — zamkni iPhone' : 'Live Activity aktualizována');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Live Activity se nepodařilo změnit');
+      await refreshNativeLiveActivityState();
+    } finally {
+      setNativeCapabilityBusy(false);
+    }
+  };
+
+  const handleNativeShareTest = async () => {
+    setNativeCapabilityBusy(true);
+    try {
+      const result = await shareTextNative({
+        text: 'AlphaTrade iOS · test nativního sdílení',
+        url: 'https://alphatrade-mentor-15.vercel.app',
+      });
+      showToast(result.completed ? 'Sdílení dokončeno' : 'Sdílení zrušeno');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Sdílení se nepodařilo otevřít');
+    } finally {
+      setNativeCapabilityBusy(false);
+    }
+  };
+
+  const handleNativeCalendarEvent = async () => {
+    setNativeCapabilityBusy(true);
+    try {
+      const start = new Date();
+      start.setHours(start.getHours() + 1, 0, 0, 0);
+      const result = await presentNativeCalendarEvent({
+        title: 'AlphaTrade · LIVE seance',
+        startTimestampMs: start.getTime(),
+        durationMinutes: 90,
+        location: 'AlphaTrade',
+        notes: 'Příprava, exekuce podle plánu a závěrečný audit. Událost byla předvyplněna aplikací AlphaTrade; uložení potvrzuje uživatel v Apple Kalendáři.',
+      });
+      await playNativeHaptic(result.action === 'saved' ? 'success' : 'selection').catch(() => undefined);
+      showToast(result.action === 'saved' ? 'Seance uložena do Kalendáře' : 'Kalendář zavřen bez uložení');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Kalendář se nepodařilo otevřít');
+    } finally {
+      setNativeCapabilityBusy(false);
     }
   };
 
@@ -403,6 +905,41 @@ const Settings: React.FC<SettingsProps> = ({
     () => mergeTradecopiaNotificationPreferences(systemSettings.tradecopiaNotifications),
     [systemSettings.tradecopiaNotifications],
   );
+
+  const isLocalAlertLab = isNativeBuild;
+
+  const localAlertSamples = useMemo(
+    () => LOCAL_ALERT_SAMPLES.map(sample => ({
+      ...sample,
+      formatted: formatTradecopiaNotification(sample.event, tradecopiaNotifications),
+    })),
+    [tradecopiaNotifications],
+  );
+
+  const handleLocalAlertTest = async (event: TradecopiaFastEvent) => {
+    setLocalAlertBusyKey(event.key);
+    try {
+      const formatted = formatTradecopiaNotification(event, tradecopiaNotifications);
+      const isTradeEvent = event.type === 'trade_opened' || event.type === 'trade_closed';
+      const attachmentUrl = isTradeEvent
+        ? await createTradeNotificationAttachment(event)
+        : undefined;
+      await scheduleNativeNotification({
+        title: formatted.title,
+        body: formatted.body,
+        route: event.type === 'trade_closed' ? 'journal' : 'live',
+        threadIdentifier: 'alphatrade-tradecopia',
+        attachmentUrl,
+        actionType: event.severity === 'critical' ? 'risk' : (isTradeEvent ? 'trade' : 'general'),
+        interruptionLevel: event.severity === 'critical' ? 'timeSensitive' : 'active',
+      });
+      showToast(`${attachmentUrl ? 'Rich' : 'Nativní'} alert naplánován — zavři appku a počkej 2 sekundy`);
+    } catch (error) {
+      showToast(`Push selhal: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
+    } finally {
+      setLocalAlertBusyKey(null);
+    }
+  };
 
   const updateTradecopiaNotification = <K extends keyof TradecopiaNotificationPreferences>(
     key: K,
@@ -846,32 +1383,340 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
               </Card>
 
+              {isLocalAlertLab && (
+                <Card isDark={isDark} className="!rounded-lg !p-0 overflow-hidden border-violet-500/30">
+                  <div className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-5 py-4 border-b ${isDark ? 'bg-violet-500/5 border-white/10' : 'bg-violet-50 border-violet-100'}`}>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-1 rounded-md bg-violet-600 text-white text-[8px] font-black uppercase tracking-[0.18em]">{isNativeBuild ? 'iOS Lab' : 'Pouze localhost'}</span>
+                        <h3 className="text-sm font-black uppercase tracking-tight text-[var(--text-primary)]">Alert test lab</h3>
+                      </div>
+                      <p className="mt-1.5 text-[10px] font-bold text-[var(--text-muted)]">Dočasný panel · nic neposílá na server ani do Supabase.</p>
+                    </div>
+                    <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      {isNativeBuild ? 'Nativní iOS alert · toto zařízení' : 'Skutečný Web Push · všechna zařízení'}
+                    </div>
+                  </div>
+
+                  {isNativeBuild && (
+                    <div className="px-5 py-4 border-b border-[var(--border-subtle)]">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={pushBusy || localAlertBusyKey !== null}
+                        onClick={() => void handleNativeAlertGallery()}
+                        className="py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-50"
+                      >
+                        {pushBusy ? 'Plánuji galerii…' : `Naplánovat všech ${LOCAL_ALERT_SAMPLES.length} scénářů`}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={pushBusy || nativePendingNotifications.every(notification => notification.source === 'sessionReminder')}
+                        onClick={() => void handleCancelNativeAlerts()}
+                        className="py-3 rounded-xl border border-[var(--border-subtle)] text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40"
+                      >
+                        Zrušit čekající testy ({nativePendingNotifications.filter(notification => notification.source !== 'sessionReminder').length})
+                      </button>
+                      </div>
+                      {nativePendingNotifications.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                          <p className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">Skutečně čeká v iOS</p>
+                          {nativePendingNotifications.map(notification => (
+                            <div key={notification.id} className="flex items-start gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-[10px] font-black text-[var(--text-primary)]">{notification.title}</p>
+                                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${notification.kind === 'risk' ? 'bg-red-500/10 text-red-500' : notification.kind === 'trade' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>{notification.source === 'sessionReminder' ? 'plán' : notification.kind}</span>
+                                </div>
+                                <p className="mt-1 line-clamp-2 text-[9px] font-semibold text-[var(--text-muted)]">{notification.body}</p>
+                                <p className="mt-1 text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{notification.scheduledAt ? new Date(notification.scheduledAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Čas řídí iOS'}{notification.route ? ` · otevře ${notification.route}` : ''}</p>
+                              </div>
+                              {notification.source !== 'sessionReminder' && <button type="button" disabled={pushBusy} onClick={() => void handleCancelNativeAlert(notification.id)} aria-label={`Zrušit ${notification.title}`} className="shrink-0 rounded-lg border border-red-500/20 p-2 text-red-500 disabled:opacity-40"><X size={13} /></button>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {nativeDeliveredNotifications.length > 0 && (
+                        <div className="mt-4 space-y-2 border-t border-[var(--border-subtle)] pt-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">Doručeno do centra iOS</p>
+                            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[8px] font-black text-emerald-500">{nativeDeliveredNotifications.length}</span>
+                          </div>
+                          {nativeDeliveredNotifications.map(notification => (
+                            <div key={notification.id} className="flex items-start gap-3 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.04] p-3">
+                              <button type="button" onClick={() => handleOpenDeliveredNativeAlert(notification)} className="min-w-0 flex-1 text-left">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-[10px] font-black text-[var(--text-primary)]">{notification.title}</p>
+                                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${notification.kind === 'risk' ? 'bg-red-500/10 text-red-500' : notification.kind === 'trade' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>{notification.kind}</span>
+                                  {notification.hasAttachment && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[7px] font-black uppercase text-violet-500">screen</span>}
+                                </div>
+                                <p className="mt-1 line-clamp-2 text-[9px] font-semibold text-[var(--text-muted)]">{notification.body}</p>
+                                <p className="mt-1 text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{notification.deliveredAt ? new Date(notification.deliveredAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Doručeno systémem'} · klepnutím otevřít {notification.route || 'dashboard'}</p>
+                              </button>
+                              <button type="button" disabled={pushBusy} onClick={() => void handleRemoveDeliveredNativeAlert(notification.id)} aria-label={`Odstranit doručenou notifikaci ${notification.title}`} className="shrink-0 rounded-lg border border-red-500/20 p-2 text-red-500 disabled:opacity-40"><Trash2 size={13} /></button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-left">
+                      <thead>
+                        <tr className="border-b border-[var(--border-subtle)] text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                          <th className="px-5 py-3 w-[175px]">Typ alertu</th>
+                          <th className="px-4 py-3">Přesný náhled zprávy</th>
+                          <th className="px-4 py-3 w-[100px]">Priorita</th>
+                          <th className="px-5 py-3 w-[125px] text-right">Test</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {localAlertSamples.map(({ label, event, formatted }) => {
+                          const severityStyle = event.severity === 'critical'
+                            ? 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+                            : event.severity === 'warning'
+                              ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                              : 'bg-blue-500/10 text-blue-500 border-blue-500/20';
+                          return (
+                            <tr key={event.key} className="border-b last:border-b-0 border-[var(--border-subtle)] hover:bg-[var(--bg-page)]/60 transition-colors">
+                              <td className="px-5 py-4 align-top">
+                                <p className="text-[11px] font-black text-[var(--text-primary)]">{label}</p>
+                                <p className="mt-1 text-[8px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{event.type.replaceAll('_', ' ')}</p>
+                              </td>
+                              <td className="px-4 py-4 align-top">
+                                <p className="text-[11px] font-black text-[var(--text-primary)]">{formatted.title}</p>
+                                <p className="mt-1 whitespace-pre-line text-[10px] font-semibold leading-relaxed text-[var(--text-muted)]">{formatted.body}</p>
+                              </td>
+                              <td className="px-4 py-4 align-top">
+                                <span className={`inline-flex px-2 py-1 rounded-md border text-[8px] font-black uppercase tracking-wider ${severityStyle}`}>{event.severity}</span>
+                              </td>
+                              <td className="px-5 py-4 align-top text-right">
+                                <button
+                                  type="button"
+                                  disabled={localAlertBusyKey !== null}
+                                  onClick={() => void handleLocalAlertTest(event)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-violet-600 hover:bg-violet-500 text-white text-[9px] font-black uppercase tracking-wider transition-colors active:scale-95 disabled:opacity-50 disabled:cursor-wait"
+                                >
+                                  <Bell size={12} /> {localAlertBusyKey === event.key ? 'Plánuji…' : (isNativeBuild ? 'Test na iPhone' : 'Odeslat push')}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
+
               <Card isDark={isDark}>
-                <SectionHeader icon={Smartphone} title="Doručení na zařízení" subtitle="Web Push i při zavřené aplikaci" color="bg-gradient-to-br from-blue-600 to-indigo-600" isDark={isDark} />
+                <SectionHeader icon={Smartphone} title="Doručení na zařízení" subtitle={isNativeBuild ? 'Nativní iOS notifikace' : 'Web Push i při zavřené aplikaci'} color="bg-gradient-to-br from-blue-600 to-indigo-600" isDark={isDark} />
                 <p className={`text-xs mb-5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Zapni odběr na každém telefonu nebo počítači, kam mají upozornění chodit.
+                  {isNativeBuild
+                    ? 'Povol systémová upozornění. Testy se naplánují přímo v iPhonu a fungují i po zavření aplikace.'
+                    : 'Zapni odběr na každém telefonu nebo počítači, kam mají upozornění chodit.'}
                 </p>
-                {pushDiag?.isApple && !pushDiag?.isStandalone && (
+                {!isNativeBuild && pushDiag?.isApple && !pushDiag?.isStandalone && (
                   <div className="mb-5 p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 text-[10px] font-bold text-amber-500">
                     Na iPhonu nejdřív v Safari použij Sdílet → Přidat na plochu a otevři AlphaTrade z nové ikony.
                   </div>
                 )}
                 <div className="flex gap-2">
-                  <button onClick={handleEnablePush} disabled={pushBusy || !!pushDiag?.ready} className="flex-1 py-3 rounded-xl bg-[var(--text-secondary)] text-[var(--bg-page)] text-[10px] font-black uppercase tracking-widest disabled:opacity-40">
-                    {pushDiag?.ready ? 'Notifikace aktivní' : (pushBusy ? 'Zapínám…' : 'Zapnout notifikace')}
+                  <button onClick={handleEnablePush} disabled={pushBusy || (isNativeBuild ? nativeNotificationPermission === 'granted' : !!pushDiag?.ready)} className="flex-1 py-3 rounded-xl bg-[var(--text-secondary)] text-[var(--bg-page)] text-[10px] font-black uppercase tracking-widest disabled:opacity-40">
+                    {(isNativeBuild ? nativeNotificationPermission === 'granted' : pushDiag?.ready) ? 'Notifikace aktivní' : (pushBusy ? 'Zapínám…' : 'Zapnout notifikace')}
                   </button>
-                  {pushDiag?.hasActiveSubscription && <button onClick={handleDisablePush} disabled={pushBusy} className="px-4 py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase text-[var(--text-muted)]">Vypnout</button>}
+                  {!isNativeBuild && pushDiag?.hasActiveSubscription && <button onClick={handleDisablePush} disabled={pushBusy} className="px-4 py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase text-[var(--text-muted)]">Vypnout</button>}
                 </div>
                 {/* Test lze spustit i z počítače bez vlastního odběru; endpoint
                     ho pošle na všechna registrovaná zařízení uživatele. */}
-                {pushDevices.length > 0 && <button onClick={handleTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)]">{pushBusy ? 'Odesílám…' : `Poslat zkušební notifikaci (${pushDevices.length})`}</button>}
-                <p className="mt-4 text-[10px] font-bold text-[var(--text-muted)]">Aktivní zařízení: {pushDevices.filter(device => !device.expiredAt).length} / {pushDevices.length}</p>
+                {(isNativeBuild || pushDevices.length > 0) && <button onClick={handleTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)]">{pushBusy ? (isNativeBuild ? 'Plánuji…' : 'Odesílám…') : (isNativeBuild ? 'Naplánovat test za 2 sekundy' : `Poslat zkušební notifikaci (${pushDevices.length})`)}</button>}
+                {isNativeBuild && (
+                  <div className="mt-4 rounded-xl border border-[var(--border-subtle)] p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)]">Badge na ikoně</p>
+                      <span className="rounded-full bg-rose-600 px-2 py-0.5 text-[9px] font-black text-white">{nativeBadgeCount}</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[1, 5].map(count => (
+                        <button key={count} type="button" disabled={pushBusy} onClick={() => void handleNativeBadge(count)} className="rounded-lg bg-rose-600 py-2.5 text-[9px] font-black uppercase tracking-wider text-white disabled:opacity-40">Nastavit {count}</button>
+                      ))}
+                      <button type="button" disabled={pushBusy || nativeBadgeCount === 0} onClick={() => void handleNativeBadge(0)} className="rounded-lg border border-[var(--border-subtle)] py-2.5 text-[9px] font-black uppercase tracking-wider text-[var(--text-primary)] disabled:opacity-40">Vymazat</button>
+                    </div>
+                    <p className="mt-2 text-[9px] font-bold text-[var(--text-muted)]">Testovací notifikace nastaví 1; po jejím otevření se badge automaticky vymaže.</p>
+                  </div>
+                )}
+                <p className="mt-4 text-[10px] font-bold text-[var(--text-muted)]">
+                  {isNativeBuild
+                    ? `Oprávnění iOS: ${nativeNotificationPermission === 'granted' ? 'povoleno' : nativeNotificationPermission}`
+                    : `Aktivní zařízení: ${pushDevices.filter(device => !device.expiredAt).length} / ${pushDevices.length}`}
+                </p>
+                {isNativeBuild && nativeNotificationPermission === 'granted' && (
+                  <div className={`mt-3 rounded-xl border px-3 py-2.5 text-[9px] font-bold ${nativeReminderSync?.omittedCount ? 'border-amber-500/25 bg-amber-500/5 text-amber-500' : 'border-emerald-500/20 bg-emerald-500/5 text-emerald-500'}`}>
+                    {nativeReminderSync?.omittedCount
+                      ? `iOS plán: ${nativeReminderSync.scheduledCount} aktivních, ${nativeReminderSync.omittedCount} vynecháno kvůli systémovému limitu. Omez počet session alertů.`
+                      : `iOS plán session a auditu je aktivní${nativeReminderSync ? ` · ${nativeReminderSync.scheduledCount} opakování Po–Pá` : ''}. Funguje i při vypnuté aplikaci.`}
+                  </div>
+                )}
               </Card>
             </div>
           )}
 
           {activeTab === 'system' && (
             <div className="space-y-6">
+              {isNativeBuild && (
+                <Card isDark={isDark} className="border-blue-500/25">
+                  <SectionHeader icon={Smartphone} title="Nativní iOS funkce" subtitle="Face ID · Live Activity · Kalendář · Diktování · Haptika · Sdílení" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-[var(--border-subtle)] p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Oprávnění tohoto iPhonu</p>
+                          <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">Skutečný systémový stav, ne pouze stav uložený ve webové části.</p>
+                        </div>
+                        <button type="button" onClick={() => void refreshNativePermissionStatus()} className="rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-[8px] font-black uppercase tracking-wider text-[var(--text-primary)]">Obnovit</button>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        {([
+                          ['notifications', 'Notifikace'],
+                          ['microphone', 'Mikrofon'],
+                          ['speech', 'Rozpoznávání řeči'],
+                        ] as const).map(([key, label]) => {
+                          const state = nativePermissionStatus?.[key] ?? 'unknown';
+                          const allowed = state === 'authorized' || state === 'provisional' || state === 'ephemeral';
+                          return (
+                            <div key={key} className="rounded-xl bg-[var(--bg-page)] p-3">
+                              <p className="text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{label}</p>
+                              <p className={`mt-1 text-[10px] font-black ${allowed ? 'text-emerald-500' : state === 'denied' || state === 'restricted' ? 'text-red-500' : 'text-amber-500'}`}>{nativePermissionLabel(state)}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <button type="button" disabled={nativeCapabilityBusy} onClick={() => void handleOpenNativeSettings()} className="mt-3 w-full rounded-xl bg-blue-600 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-40">Otevřít Nastavení iOS</button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border-subtle)] p-4">
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Privacy Mode</p>
+                        <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">Při odchodu z appky skryje obsah a návrat chrání Face ID nebo kód zařízení.</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={nativeCapabilityBusy}
+                        onClick={() => void handleNativePrivacyToggle()}
+                        className={`shrink-0 rounded-xl px-4 py-2.5 text-[9px] font-black uppercase tracking-wider text-white ${nativePrivacyEnabled ? 'bg-emerald-600' : 'bg-slate-600'}`}
+                      >
+                        {nativePrivacyEnabled ? 'Aktivní' : 'Zapnout'}
+                      </button>
+                    </div>
+                    {nativePrivacyEnabled && (
+                      <button type="button" onClick={() => void handleNativePrivacyLock()} className="w-full rounded-xl border border-[var(--border-subtle)] py-3 text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)]">Uzamknout a vyzkoušet teď</button>
+                    )}
+
+                    <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border-subtle)] p-4">
+                      <div>
+                        <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">LIVE bez uspání displeje</p>
+                        <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">V LIVE světě nezhasne obrazovka. V Backtestu a na pozadí se zákaz uspání automaticky vypne.</p>
+                        {nativeKeepAwakeEnabled && (
+                          <p className={`mt-2 text-[9px] font-black uppercase tracking-wider ${nativeKeepAwakeEffective ? 'text-emerald-500' : 'text-amber-500'}`}>
+                            {nativeKeepAwakeEffective ? 'iOS právě drží displej vzhůru' : 'Nyní neaktivní — Backtest nebo pozadí'}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={nativeCapabilityBusy}
+                        onClick={() => void handleNativeKeepAwakeToggle()}
+                        className={`shrink-0 rounded-xl px-4 py-2.5 text-[9px] font-black uppercase tracking-wider text-white ${nativeKeepAwakeEnabled ? 'bg-emerald-600' : 'bg-slate-600'}`}
+                      >
+                        {nativeKeepAwakeEnabled ? 'Aktivní' : 'Zapnout'}
+                      </button>
+                    </div>
+
+                    <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/[0.035] p-4">
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-500"><Activity size={17} /></span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Live Activity</p>
+                            <span className={`rounded-full px-2 py-1 text-[8px] font-black uppercase ${nativeLiveActivityState?.activeCount ? 'bg-emerald-500/10 text-emerald-500' : nativeLiveActivityState?.enabled === false ? 'bg-red-500/10 text-red-500' : 'bg-slate-500/10 text-[var(--text-muted)]'}`}>
+                              {nativeLiveActivityState?.activeCount ? 'Aktivní' : nativeLiveActivityState?.enabled === false ? 'Vypnuto v iOS' : 'Připraveno'}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[9px] font-bold leading-4 text-[var(--text-muted)]">Test seance a P&amp;L na zamčené obrazovce; na podporovaných iPhonech také Dynamic Island. Data jsou označená TEST a nic neposílají brokerovi.</p>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <button type="button" disabled={nativeCapabilityBusy || !!nativeLiveActivityState?.activeCount || nativeLiveActivityState?.enabled === false} onClick={() => void handleNativeLiveActivity('start')} className="rounded-xl bg-cyan-600 px-3 py-3 text-[9px] font-black uppercase tracking-wider text-white disabled:opacity-35">Spustit test</button>
+                        <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('profit')} className="rounded-xl bg-emerald-600 px-3 py-3 text-[9px] font-black uppercase tracking-wider text-white disabled:opacity-35">Update +P&amp;L</button>
+                        <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('risk')} className="rounded-xl bg-orange-600 px-3 py-3 text-[9px] font-black uppercase tracking-wider text-white disabled:opacity-35">Risk alert</button>
+                        <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('end')} className="rounded-xl border border-[var(--border-subtle)] px-3 py-3 text-[9px] font-black uppercase tracking-wider text-[var(--text-primary)] disabled:opacity-35">Ukončit</button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">Haptická odezva</p>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {(['selection', 'success', 'warning', 'error'] as NativeHapticStyle[]).map(style => (
+                          <button key={style} type="button" onClick={() => void handleHapticTest(style)} className="rounded-xl border border-[var(--border-subtle)] px-3 py-3 text-[9px] font-black uppercase tracking-wider text-[var(--text-primary)]">{style}</button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/[0.035] p-4">
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-500"><CalendarPlus size={17} /></span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Apple Kalendář</p>
+                          <p className="mt-1 text-[9px] font-bold leading-4 text-[var(--text-muted)]">Otevře systémový editor s LIVE seancí na příští celou hodinu. AlphaTrade nečte tvoje kalendáře a bez klepnutí na Přidat nic neuloží.</p>
+                        </div>
+                      </div>
+                      <button type="button" disabled={nativeCapabilityBusy} onClick={() => void handleNativeCalendarEvent()} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-40">
+                        <CalendarPlus size={14} /> Naplánovat LIVE seanci
+                      </button>
+                    </div>
+
+                    <div className="rounded-2xl border border-blue-500/25 bg-blue-500/[0.035] p-4">
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500"><Zap size={17} /></span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Ovládací centrum iOS</p>
+                          <p className="mt-1 text-[9px] font-bold leading-4 text-[var(--text-muted)]">Přidej si ovladače AlphaTrade LIVE a Zapsat obchod přes upravení Ovládacího centra. Oba pouze otevřou správnou část appky; nikdy neposílají příkaz brokerovi ani samy neukládají obchod.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={nativeCapabilityBusy}
+                      onClick={() => void handleNativeShareTest()}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--border-subtle)] py-3 text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40"
+                    >
+                      <Share2 size={14} /> Otevřít iOS sdílení
+                    </button>
+
+                    <div className="rounded-2xl border border-[var(--border-subtle)] p-4">
+                      <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Nativní diktování poznámky</p>
+                      <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">Apple Speech poslouchá maximálně 30 sekund. Test nic automaticky neukládá ani neposílá.</p>
+                      <button
+                        type="button"
+                        disabled={nativeCapabilityBusy}
+                        onClick={() => void handleNativeDictation()}
+                        className={`mt-3 w-full rounded-xl px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white ${nativeDictating ? 'bg-red-600' : 'bg-blue-600'}`}
+                      >
+                        {nativeDictating ? 'Zastavit diktování' : 'Začít diktovat'}
+                      </button>
+                      {nativeDictationText && (
+                        <div className="mt-3 rounded-xl bg-[var(--bg-page)] p-3 text-[10px] font-semibold text-[var(--text-muted)]">
+                          <p>{nativeDictationText}</p>
+                          {onOpenTradeDraft && <button type="button" onClick={openNativeDictationDraft} className="mt-3 w-full rounded-lg bg-emerald-600 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-white">Použít jako poznámku obchodu</button>}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              )}
               {/* Accent Color Picker */}
               <Card isDark={isDark}>
                 <SectionHeader icon={Sliders} title="Accent Color" subtitle="Personalizuj barvu rozhraní" color="bg-gradient-to-br from-purple-600 to-pink-600" isDark={isDark} />

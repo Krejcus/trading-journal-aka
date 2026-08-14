@@ -1,4 +1,5 @@
 import path from 'path';
+import { rmSync } from 'node:fs';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -6,6 +7,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
+  const isNativeBuild = env.VITE_NATIVE_BUILD === 'true';
+  const nativeOutDir = 'dist-native';
   return {
     server: {
       // PORT env má přednost (preview/harness si přiděluje vlastní port),
@@ -21,9 +24,31 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [
+      {
+        name: 'native-build-cleanup',
+        transformIndexHtml(html) {
+          if (!isNativeBuild) return html;
+          return html
+            // WKWebView is already launched as a native app. These PWA hints
+            // are redundant and can trigger useless local manifest requests.
+            .replace(/\s*<!-- PWA Meta Tags -->[\s\S]*?<meta name="description"[^>]*>/, '\n  <meta name="description" content="Professional Trading Journal & Performance Analytics">')
+            .replace(/\s*<!-- PWA Manifest -->\s*<link rel="manifest"[^>]*>/, '')
+            .replace(/\s*<link rel="apple-touch-icon"[^>]*>/g, '')
+            // Tailwind is compiled by @tailwindcss/vite. Native launch must
+            // never depend on the development CDN or remote web fonts.
+            .replace(/\s*<script src="https:\/\/cdn\.tailwindcss\.com"><\/script>\s*<script>[\s\S]*?tailwind\.config[\s\S]*?<\/script>/, '')
+            .replace(/\s*<link\s+href="https:\/\/fonts\.googleapis\.com[^>]*>\s*/g, '\n');
+        },
+        closeBundle() {
+          if (!isNativeBuild) return;
+          // `public/sw.js` is otherwise copied even when VitePWA is disabled.
+          rmSync(path.resolve(__dirname, nativeOutDir, 'sw.js'), { force: true });
+        },
+      },
       react(),
       tailwindcss(),
       VitePWA({
+        disable: isNativeBuild,
         strategies: 'injectManifest',
         srcDir: 'public',
         filename: 'sw.js',
@@ -71,6 +96,7 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
+      outDir: isNativeBuild ? nativeOutDir : 'dist',
       rollupOptions: {
         output: {
           // Stabilní boot-vendor odděleně od app kódu — mění se jen při update závislostí,

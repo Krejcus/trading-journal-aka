@@ -417,7 +417,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     return (
         <ErrorBoundary name="TradeDetailModal">
-            <div className="fixed inset-0 z-[110] flex items-center justify-center p-0 md:p-6 lg:p-12 overflow-hidden">
+            <div className="native-modal-safe-area fixed inset-0 z-[110] flex items-center justify-center p-0 md:p-6 lg:p-12 overflow-hidden">
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}

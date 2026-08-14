@@ -4,6 +4,12 @@ import { motion, useMotionValue, useTransform } from 'framer-motion';
 import { Mail, Lock, Eye, EyeOff, ArrowRight, User, Loader2, CheckCircle2, ChevronLeft } from 'lucide-react';
 import { supabase } from '../services/supabase';
 import { cn } from "../lib/utils";
+import { authRedirectUrl, isNativeBuild } from '../utils/runtimeConfig';
+import { Browser } from '@capacitor/browser';
+import {
+  NATIVE_OAUTH_RESULT_EVENT,
+  type NativeOAuthResultDetail,
+} from '../services/nativeOAuth';
 
 interface AuthProps {
   onLogin: (user: any) => void;
@@ -38,6 +44,38 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
   const [message, setMessage] = useState<string | null>(null);
   const [showCheckEmail, setShowCheckEmail] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const oauthPendingRef = useRef(false);
+
+  useEffect(() => {
+    if (!isNativeBuild) return;
+    let disposed = false;
+    let removeBrowserListener: (() => Promise<void>) | undefined;
+
+    const handleResult = (event: Event) => {
+      const detail = (event as CustomEvent<NativeOAuthResultDetail>).detail;
+      oauthPendingRef.current = false;
+      setLoading(false);
+      if (!detail.success) setError(detail.message || 'Přihlášení přes Google se nepodařilo dokončit.');
+    };
+    window.addEventListener(NATIVE_OAUTH_RESULT_EVENT, handleResult);
+
+    void Browser.addListener('browserFinished', () => {
+      if (!oauthPendingRef.current || disposed) return;
+      oauthPendingRef.current = false;
+      setLoading(false);
+      setError('Přihlášení přes Google bylo zrušeno.');
+    }).then(handle => {
+      if (disposed) void handle.remove();
+      else removeBrowserListener = handle.remove;
+    });
+
+    return () => {
+      disposed = true;
+      oauthPendingRef.current = false;
+      window.removeEventListener(NATIVE_OAUTH_RESULT_EVENT, handleResult);
+      void removeBrowserListener?.();
+    };
+  }, []);
 
   // For 3D card effect
   const mouseX = useMotionValue(0);
@@ -223,7 +261,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
         if (data.user) setShowCheckEmail(true);
       } else if (authMode === 'forgot-password') {
         const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: window.location.origin,
+          redirectTo: authRedirectUrl(),
         });
         if (resetError) throw resetError;
         setMessage('Odkaz pro obnovu hesla byl odeslán na tvůj e-mail.');
@@ -244,14 +282,22 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
     setLoading(true);
     setError(null);
     try {
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin,
+          redirectTo: authRedirectUrl(),
+          skipBrowserRedirect: isNativeBuild,
         },
       });
       if (oauthError) throw oauthError;
+      if (isNativeBuild && data.url) {
+        oauthPendingRef.current = true;
+        await Browser.open({ url: data.url, presentationStyle: 'popover' });
+      } else if (isNativeBuild) {
+        throw new Error('Google neposkytl adresu pro přihlášení.');
+      }
     } catch (err: any) {
+      oauthPendingRef.current = false;
       setError(err.message || 'Chyba při přihlášení přes Google.');
       setLoading(false);
     }

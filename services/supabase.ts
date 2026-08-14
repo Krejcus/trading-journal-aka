@@ -1,5 +1,7 @@
 
 import { createClient } from '@supabase/supabase-js';
+import { isNativeBuild } from '../utils/runtimeConfig';
+import { createNativeSecureAuthStorage } from './nativeSecureStorage';
 
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
 const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
@@ -36,9 +38,12 @@ export const supabase = createClient(
         auth: {
             persistSession: true,
             autoRefreshToken: true,
-            detectSessionInUrl: true,
+            detectSessionInUrl: !isNativeBuild,
+            flowType: isNativeBuild ? 'pkce' : 'implicit',
             storageKey: 'alphatrade-auth-token',
-            storage: createSafariCompatibleStorage()
+            storage: isNativeBuild
+                ? createNativeSecureAuthStorage(createSafariCompatibleStorage())
+                : createSafariCompatibleStorage()
         }
     }
 );

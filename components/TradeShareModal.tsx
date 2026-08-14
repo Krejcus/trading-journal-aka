@@ -12,11 +12,13 @@
  */
 import React, { useRef, useState, useEffect, useCallback, useLayoutEffect } from 'react';
 import { motion } from 'framer-motion';
-import { X, Download, Copy, Loader2, Link as LinkIcon } from 'lucide-react';
+import { X, Download, Copy, Loader2, Link as LinkIcon, Share2 } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import type { Trade } from '../types';
 import { storageService } from '../services/storageService';
 import TradeShareCard from './TradeShareCard';
+import { isNativeBuild } from '../utils/runtimeConfig';
+import { shareTradeImageNative, tradeShareFileName } from '../services/nativeShare';
 
 interface Props {
     trade: Trade;
@@ -121,6 +123,31 @@ const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', avatarU
         setFeedback('Staženo ✓');
         setTimeout(() => setFeedback(null), 2000);
     }, [generatePng, trade]);
+
+    const handleNativeShare = useCallback(async () => {
+        setGenerating(true);
+        setFeedback(null);
+        try {
+            const blob = await generatePng();
+            if (!blob || blob.size < 1000) throw new Error('Obrázek se nepodařilo vygenerovat.');
+            const result = await shareTradeImageNative({
+                image: blob,
+                fileName: tradeShareFileName(trade.instrument, trade.date),
+                text: `${trade.instrument || 'Trade'} · AlphaTrade`,
+                url: shareUrl,
+            });
+            if (result.completed) {
+                setFeedback('Sdíleno přes iOS ✓');
+                setTimeout(() => setFeedback(null), 2500);
+            }
+        } catch (error) {
+            console.error('[Share] Native share failed:', error);
+            setFeedback(error instanceof Error ? error.message : 'Sdílení selhalo');
+            setTimeout(() => setFeedback(null), 3500);
+        } finally {
+            setGenerating(false);
+        }
+    }, [generatePng, shareUrl, trade.date, trade.instrument]);
 
     const handleCopyLink = useCallback(async () => {
         // Debug log — pomůže zjistit pokud trade.id chybí nebo není UUID
@@ -253,10 +280,18 @@ const TradeShareModal: React.FC<Props> = ({ trade, username = '@trader', avatarU
                         {feedback}
                     </div>
                 )}
+                {isNativeBuild && <button
+                    onClick={() => void handleNativeShare()}
+                    disabled={generating}
+                    className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-600/40 disabled:opacity-50"
+                >
+                    {generating ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />}
+                    Sdílet přes iOS
+                </button>}
                 <button
                     onClick={handleDownload}
                     disabled={generating}
-                    className="flex items-center gap-2 px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-600/40 disabled:opacity-50"
+                    className={`flex items-center gap-2 px-5 py-3 rounded-2xl ${isNativeBuild ? 'bg-white/10 hover:bg-white/15 border border-white/15 backdrop-blur' : 'bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/40'} text-white text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-50`}
                 >
                     {generating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                     Stáhnout PNG

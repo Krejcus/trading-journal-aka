@@ -82,6 +82,7 @@ import {
   Activity,
   Brain,
   Bell,
+  WifiOff,
   Shield,
   Sparkles
 } from 'lucide-react';
@@ -89,7 +90,10 @@ import {
 import { supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
+import { playNativeHapticIfAvailable, type NativeTradeDraft } from './services/nativeCapabilities';
 import MorningBriefBanner from './components/MorningBriefBanner';
+import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld } from './utils/nativeShell';
+import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 
 const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
 
@@ -415,8 +419,23 @@ const App: React.FC = () => {
   // se spustí jen po prvním úspěšném applyPreferences (z cache NEBO DB).
   const prefsAppliedRef = useRef(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [offlineSnapshotAt, setOfflineSnapshotAt] = useState<number | null>(null);
+  const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine !== false);
   const [initStatus, setInitStatus] = useState<string>("Inicializace...");
   const [showRetry, setShowRetry] = useState(false);
+
+  useEffect(() => {
+
+    const handleOffline = () => setNetworkOnline(false);
+    const handleOnline = () => setNetworkOnline(true);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, []);
 
   useEffect(() => {
 
@@ -851,6 +870,13 @@ const App: React.FC = () => {
   }, [systemSettings, sessions, dailyPreps, dailyReviews, isInitialLoadDone, isPushActive]);
 
   useEffect(() => {
+    if (!isNativeShell() || !isInitialLoadDone || !session?.user?.id) return;
+    void syncNativeSessionReminders(sessions, systemSettings).catch(error => {
+      console.warn('[Native reminders] Sync failed:', error instanceof Error ? error.message : error);
+    });
+  }, [isInitialLoadDone, session?.user?.id, sessions, systemSettings]);
+
+  useEffect(() => {
     if (isInitialLoadDone && guardian.isDebtActive && systemSettings.morningWakeUpDebtAlert) {
       setIsDebtCollectorOpen(true);
     }
@@ -932,6 +958,41 @@ const App: React.FC = () => {
       setActivePage('dashboard');
     }
   }, [activePage, currentUser.role]);
+
+  // Nativní iOS shell nahrazuje BottomNav systémovým TabView a přepíná sekce
+  // přes tento most — bez reloadu, takže session i stav zůstávají.
+  const inNativeShell = useMemo(() => isNativeShell(), []);
+  const openNativeTradeDraft = useCallback((draft?: NativeTradeDraft) => {
+    setNativeTradeDraft(draft ?? null);
+    if (systemSettings.strictModeEnabled && guardian.isPrepMissing) {
+      playNativeHapticIfAvailable('warning');
+      setIsGuardianOverlayOpen(true);
+    } else {
+      playNativeHapticIfAvailable('medium');
+      setIsManualEntryOpen(true);
+    }
+  }, [systemSettings.strictModeEnabled, guardian.isPrepMissing]);
+  const nativeActions = useRef({ navigate: navigateTo, addTrade: openNativeTradeDraft, toggleWorld: toggleBacktestMode });
+  nativeActions.current = { navigate: navigateTo, addTrade: openNativeTradeDraft, toggleWorld: toggleBacktestMode };
+  useEffect(
+    () =>
+      registerNativeShellBridge({
+        navigate: (page) => {
+          if (page === 'native-system') {
+            window.dispatchEvent(new Event('alphatrade:open-native-system'));
+            return;
+          }
+          nativeActions.current.navigate(page);
+        },
+        addTrade: (draft) => nativeActions.current.addTrade(draft),
+        toggleWorld: () => nativeActions.current.toggleWorld(),
+        refresh: () => window.dispatchEvent(new Event('alphatrade:native-refresh')),
+      }),
+    []
+  );
+  useEffect(() => {
+    reportNativeShellWorld(dashboardMode === 'backtesting' ? 'backtest' : 'live');
+  }, [dashboardMode]);
   const [isClearTradesModalOpen, setIsClearTradesModalOpen] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light' | 'oled'>(() => {
     try {
@@ -1046,6 +1107,7 @@ const App: React.FC = () => {
   };
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
+  const [nativeTradeDraft, setNativeTradeDraft] = useState<NativeTradeDraft | null>(null);
   const [isDashboardEditing, setIsDashboardEditing] = useState(false);
   const [isMobileEditing, setIsMobileEditing] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -1337,7 +1399,12 @@ const App: React.FC = () => {
           setAccounts([DEFAULT_ACCOUNT]);
           setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
-        // User profile NEČTEME z cache — vždy z DB.
+        // Session already proves the user identity. A same-user cached profile
+        // lets the native app leave its splash screen during a real outage.
+        if (cached.user?.id === session.user.id) {
+          setCurrentUser(cached.user);
+          setIsUserFromDb(true);
+        }
         if (cached.preferences) {
           applyPreferences(cached.preferences);
         }
@@ -1345,6 +1412,7 @@ const App: React.FC = () => {
         setDailyReviews(cached.reviews || []);
         setWeeklyFocusList(cached.weeklyFocus || []);
         setSyncError(null);
+        setOfflineSnapshotAt(navigator.onLine === false ? (cached.cachedAt || -1) : null);
         setLoading(false);
         setIsInitialLoadDone(true);
         isFetchingRef.current = false;
@@ -1389,9 +1457,11 @@ const App: React.FC = () => {
           setWeeklyFocusList(prev =>
             fingerprintSimple(fresh.weeklyFocus) !== fingerprintSimple(prev) ? (fresh.weeklyFocus || []) : prev
           );
+          setOfflineSnapshotAt(null);
           isSyncedWithDbRef.current = true; // Mark as synced
         }).catch(err => {
           console.warn('[Load] Background refresh failed:', err);
+          setOfflineSnapshotAt(cached.cachedAt || -1);
           isSyncedWithDbRef.current = true; // Fallback
         });
         return;
@@ -2015,6 +2085,11 @@ const App: React.FC = () => {
     }
   }, [weeklyFocusList, canSave]);
 
+  // Nativní shell sleduje téma, aby tab bar ladil s obsahem.
+  useEffect(() => {
+    reportNativeShellTheme(theme);
+  }, [theme]);
+
   // Handle theme persistence independently of session
   useEffect(() => {
     try {
@@ -2358,6 +2433,16 @@ const App: React.FC = () => {
   const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'feed' | 'following' | 'followers' | 'requests' | 'share'>('feed');
   const [isNetworkSpectating, setIsNetworkSpectating] = useState(false);
 
+  useEffect(() => {
+    if (!inNativeShell) return;
+    const openNativeSystem = () => {
+      setSettingsActiveTab('system');
+      nativeActions.current.navigate('settings');
+    };
+    window.addEventListener('alphatrade:open-native-system', openNativeSystem);
+    return () => window.removeEventListener('alphatrade:open-native-system', openNativeSystem);
+  }, [inNativeShell]);
+
   const displayTrades = useMemo(() => {
     if (viewMode === 'individual') {
       // Indiv. mód = každý obchod zvlášť (žádné agregování přes master/groupId).
@@ -2458,11 +2543,24 @@ const App: React.FC = () => {
         if (!isPreferencesDirty.current) applyPreferences(dbPrefs);
       }
 
+      setOfflineSnapshotAt(null);
+
     } catch (error) {
       console.error('[Refresh] Error:', error);
       throw error; // Re-throw to show error in Pull-to-Refresh
     }
   }, [session, isPrepsDirty, isReviewsDirty, isPreferencesDirty, applyPreferences]);
+
+  useEffect(() => {
+    if (!inNativeShell) return;
+    const refreshFromNativeShell = () => {
+      void handleRefreshData()
+        .then(() => reportNativeRefreshComplete(true))
+        .catch(() => reportNativeRefreshComplete(false));
+    };
+    window.addEventListener('alphatrade:native-refresh', refreshFromNativeShell);
+    return () => window.removeEventListener('alphatrade:native-refresh', refreshFromNativeShell);
+  }, [handleRefreshData, inNativeShell]);
 
   const baseFilteredTrades = useMemo(() => {
     const now = new Date();
@@ -2899,12 +2997,19 @@ const App: React.FC = () => {
     });
 
     // Save ONLY the new/changed trades (not ALL trades — prevents screenshot data loss)
-    storageService.saveTrades(newTradesArray).catch(err => {
-      console.error("Manual trade save failed:", err);
-      setSyncError("Nepodařilo se uložit obchod.");
-    });
+    storageService.saveTrades(newTradesArray)
+      .then(saved => {
+        if (!saved || saved.length === 0) throw new Error('Uložení nevrátilo žádný obchod.');
+        playNativeHapticIfAvailable('success');
+      })
+      .catch(err => {
+        console.error("Manual trade save failed:", err);
+        setSyncError("Nepodařilo se uložit obchod.");
+        playNativeHapticIfAvailable('error');
+      });
 
     setIsManualEntryOpen(false);
+    setNativeTradeDraft(null);
   };
 
   const handleUpdateTrades = useCallback((updatedTrades: Trade[]) => {
@@ -3313,6 +3418,7 @@ const App: React.FC = () => {
   return (
     <div
       className="h-screen font-sans flex overflow-hidden transition-colors duration-300 bg-[var(--bg-page)] text-[var(--text-primary)]"
+      style={inNativeShell ? { paddingTop: 'env(safe-area-inset-top)' } : undefined}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
@@ -3366,7 +3472,8 @@ const App: React.FC = () => {
         />
       </div>
 
-      {/* Bottom navigation — pouze mobil */}
+      {/* Bottom navigation — pouze mobil; v nativním shellu ji nahrazuje TabView */}
+      {!inNativeShell && (
       <BottomNav
         activePage={activePage}
         onNavigate={navigateTo}
@@ -3378,6 +3485,7 @@ const App: React.FC = () => {
         dashboardMode={dashboardMode}
         onToggleBacktest={toggleBacktestMode}
       />
+      )}
 
       {/* Locked feature info modal — friend role klikne na uzamčenou položku */}
       <LockedFeatureModal
@@ -3385,7 +3493,7 @@ const App: React.FC = () => {
         onClose={() => setLockedFeatureModal(null)}
       />
 
-      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[88px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} pb-[72px] lg:pb-0`}>
+      <main className={`flex-1 h-screen overflow-hidden transition-all duration-300 relative flex flex-col ${isSidebarCollapsed ? 'lg:pl-[88px]' : 'lg:pl-[240px]'} ${isNetworkSpectating ? '!ml-0' : ''} ${inNativeShell ? 'pb-0' : 'pb-[72px]'} lg:pb-0`}>
         {/* SVG displacement filter pro liquid-glass edge refrakci (Stage 2).
             Nízká baseFrequency = velké hladké blobу (jemné lámání), ne wavy koupelnové sklo.
             scale řídí sílu ohybu — laditelné. Použito přes backdrop-filter: url(#liquid-glass). */}
@@ -3753,13 +3861,22 @@ const App: React.FC = () => {
         <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''}`}>
           <PullToRefresh
             onRefresh={handleRefreshData}
-            disabled={!session || loading}
+            disabled={inNativeShell || !session || loading}
           >
-            <div className="flex-1 overflow-x-hidden px-4 lg:px-8 pb-12 pt-[80px] lg:pt-[96px]">
+            <div className={`flex-1 overflow-x-hidden px-4 lg:px-8 pb-12 pt-[80px] lg:pt-[96px] ${inNativeShell ? `native-page-scroll-content ${activePage === 'accounts' || activePage === 'live' ? 'native-page-scroll-content-extra' : ''}` : ''}`}>
               {syncError && (
                 <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold animate-pulse">
                   <AlertTriangle size={16} />
                   <span>{syncError}</span>
+                </div>
+              )}
+              {(!networkOnline || offlineSnapshotAt !== null) && !syncError && (
+                <div className="mb-4 bg-amber-500/10 border border-amber-500/25 text-amber-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold">
+                  <WifiOff size={16} />
+                  <span>
+                    {networkOnline ? 'Cloudová synchronizace není dostupná' : 'Offline režim'} — zobrazuji poslední známá data{offlineSnapshotAt && offlineSnapshotAt > 0 ? ` z ${new Date(offlineSnapshotAt).toLocaleString('cs-CZ')}` : ' z lokální cache'}.
+                    Změny vyžadující cloud teď nemusí být synchronizované.
+                  </span>
                 </div>
               )}
               {appError ? (
@@ -4096,6 +4213,10 @@ const App: React.FC = () => {
                       onAccentColorChange={handleAccentColorChange}
                       onCreateAccount={(account) => setAccounts(prev => [...prev, account])}
                       onImportIncidentSaved={handleSaveReview}
+                      onOpenTradeDraft={(draft) => {
+                        setNativeTradeDraft(draft);
+                        setIsManualEntryOpen(true);
+                      }}
                     />
                   )}
 
@@ -4182,7 +4303,7 @@ const App: React.FC = () => {
         isManualEntryOpen && (
           <ManualTradeForm
             onAdd={handleManualTrade}
-            onClose={() => setIsManualEntryOpen(false)}
+            onClose={() => { setIsManualEntryOpen(false); setNativeTradeDraft(null); }}
             theme={theme}
             accounts={accounts}
             activeAccountId={activeAccountId}
@@ -4191,6 +4312,7 @@ const App: React.FC = () => {
             availableHtfOptions={htfOptions}
             availableLtfOptions={ltfOptions}
             viewMode={viewMode}
+            initialDraft={nativeTradeDraft}
           />
         )
       }

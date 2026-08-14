@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import { Trade, Account, CustomEmotion } from '../types';
+import type { NativeTradeDraft } from '../services/nativeCapabilities';
 
 interface ManualTradeFormProps {
   // Create mode (default)
@@ -30,6 +31,7 @@ interface ManualTradeFormProps {
   availableLtfOptions: string[];
   instrumentFees?: Record<string, number>;
   viewMode?: 'individual' | 'combined';
+  initialDraft?: NativeTradeDraft | null;
 }
 
 const INSTRUMENTS = [
@@ -45,7 +47,7 @@ const INSTRUMENTS = [
 const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   onAdd, editTrade, onUpdate, onClose, theme, accounts, activeAccountId,
   availableEmotions, availableMistakes, availableHtfOptions, availableLtfOptions,
-  instrumentFees, viewMode = 'individual'
+  instrumentFees, viewMode = 'individual', initialDraft
 }) => {
   // Edit mode: pokud je editTrade nastaveno, nezobrazujeme multi-account, draft,
   // a Save volá onUpdate s diff místo onAdd s novými trades.
@@ -99,17 +101,17 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     }
     return {
       accountIds: [activeAccountId],
-      instrument: 'MNQ',
+      instrument: initialDraft?.instrument || 'MNQ',
       customMultiplier: '1',
       entryDate: getLocalISOString(),
       exitDate: getLocalISOString(new Date(Date.now() + 15 * 60000)),
-      entryPrice: '',
+      entryPrice: initialDraft?.entryPrice || '',
       exitPrice: '',
-      stopLoss: '',
-      takeProfit: '',
-      positionSize: '1',
-      pnl: '',
-      notes: '',
+      stopLoss: initialDraft?.stopLoss || '',
+      takeProfit: initialDraft?.takeProfit || '',
+      positionSize: initialDraft?.positionSize || '1',
+      pnl: initialDraft?.pnl || '',
+      notes: initialDraft?.notes || '',
       htfConfluence: [] as string[],
       ltfConfluence: [] as string[],
       mistakes: [] as string[],
@@ -443,8 +445,8 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 z-[120] flex items-center justify-center p-2 md:p-4 bg-[var(--bg-page)]/60 backdrop-blur-2xl animate-in fade-in duration-500">
-        <div className={`w-full max-w-[1400px] max-h-[96vh] rounded-[32px] md:rounded-[40px] shadow-[0_32px_128px_rgba(0,0,0,0.8)] border flex flex-col overflow-hidden animate-in zoom-in-95 duration-500 relative z-10 ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-2xl'}`}>
+      <div className="native-modal-safe-area fixed inset-0 z-[120] flex items-center justify-center p-2 md:p-4 bg-[var(--bg-page)]/60 backdrop-blur-2xl animate-in fade-in duration-500">
+        <div className={`native-modal-panel w-full max-w-[1400px] max-h-[96vh] rounded-[32px] md:rounded-[40px] shadow-[0_32px_128px_rgba(0,0,0,0.8)] border flex flex-col overflow-hidden animate-in zoom-in-95 duration-500 relative z-10 ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-2xl'}`}>
           <div className={`px-5 py-4 md:px-8 md:py-5 border-b flex justify-between items-center bg-[var(--bg-page)]/50 border-[var(--border-subtle)] backdrop-blur-md shrink-0`}>
             <div className="flex items-center gap-3 md:gap-4">
               <div className={`p-2.5 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/20`}><Plus size={18} className="text-white" /></div>
@@ -596,6 +598,9 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                   </div>
                   <div className={inputContainerClass}><div className={inlineLabelClass}>Výstup</div><input type="number" step="any" value={formData.exitPrice} onChange={e => setFormData({ ...formData, exitPrice: e.target.value })} className={inputClass} placeholder="0.00" /></div>
                   <div className={inputContainerClass}><div className={inlineLabelClass}>Cíl (TP)</div><input type="number" step="any" value={formData.takeProfit} onChange={e => setFormData({ ...formData, takeProfit: e.target.value })} className={`${inputClass} text-emerald-500`} placeholder="0.00" /></div>
+                  {!formData.entryPrice && !formData.exitPrice && (
+                    <div className={inputContainerClass}><div className={inlineLabelClass}>P&amp;L</div><input type="number" step="any" value={formData.pnl} onChange={e => setFormData({ ...formData, pnl: e.target.value })} className={inputClass} placeholder="0.00" /></div>
+                  )}
                   <div className={inputContainerClass}><div className={inlineLabelClass}>Konec</div><input type="datetime-local" value={formData.exitDate} onChange={e => setFormData({ ...formData, exitDate: e.target.value })} className={`${inputClass} text-[10px]`} /></div>
 
                   <div className="space-y-1.5">

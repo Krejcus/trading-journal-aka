@@ -86,6 +86,21 @@ const updateCacheTimestamp = async () => {
   }
 };
 
+const dashboardSnapshotKey = (userId: string) => `alphatrade_dashboard_snapshot_v1_${userId}`;
+
+type DashboardSnapshot = {
+  version: 1;
+  userId: string;
+  cachedAt: number;
+  trades: Trade[];
+  accounts: Account[];
+  preps: DailyPrep[];
+  reviews: DailyReview[];
+  preferences: UserPreferences | null;
+  user: User;
+  weeklyFocus: WeeklyFocus[];
+};
+
 export const storageService = {
 
   // Single RPC call to load all dashboard data at once (replaces 7 parallel HTTP requests)
@@ -197,16 +212,40 @@ export const storageService = {
       return { id: d.id, weekISO: d.week_iso, goals };
     }) as WeeklyFocus[];
 
-    // Update caches so individual methods stay fresh
+    // Store one complete envelope as the reliable last-known dashboard. The
+    // individual keys stay in place because save methods update them between
+    // full dashboard refreshes. Cache failures must never turn a successful
+    // server response into an application error.
     const userId = raw.user?.id;
-    if (userId) {
-      set(`alphatrade_trades_${userId}`, trades);
-      set(`alphatrade_daily_preps_${userId}`, preps);
-      set(`alphatrade_daily_reviews_${userId}`, reviews);
-      set(`alphatrade_user_profile_${userId}`, user);
+    if (userId && user) {
+      const cachedAt = Date.now();
+      const snapshot: DashboardSnapshot = {
+        version: 1,
+        userId,
+        cachedAt,
+        trades,
+        accounts,
+        preps,
+        reviews,
+        preferences,
+        user,
+        weeklyFocus,
+      };
+      try {
+        await Promise.all([
+          set(dashboardSnapshotKey(userId), snapshot),
+          set(`alphatrade_trades_${userId}`, trades),
+          set(`alphatrade_daily_preps_${userId}`, preps),
+          set(`alphatrade_daily_reviews_${userId}`, reviews),
+          set(`alphatrade_user_profile_${userId}`, user),
+          set(`alphatrade_weekly_focus_${userId}`, weeklyFocus),
+        ]);
+        safeSetItem(`alphatrade_cache_timestamp_${userId}`, String(cachedAt));
+      } catch (cacheError) {
+        console.warn('[Cache] Full dashboard snapshot could not be persisted:', cacheError);
+      }
       safeSetItem(`alphatrade_accounts_${userId}`, accounts);
       if (preferences) safeSetItem(`alphatrade_preferences_${userId}`, preferences);
-      set(`alphatrade_weekly_focus_${userId}`, weeklyFocus);
     }
 
     return { trades, accounts, preps, reviews, preferences, user, weeklyFocus };
@@ -216,30 +255,40 @@ export const storageService = {
   async getCachedDashboardData(userId: string): Promise<{
     trades: Trade[]; accounts: Account[]; preps: DailyPrep[];
     reviews: DailyReview[]; preferences: UserPreferences | null;
-    user: User | null; weeklyFocus: WeeklyFocus[];
+    user: User | null; weeklyFocus: WeeklyFocus[]; cachedAt: number | null;
   } | null> {
     try {
-      const [trades, preps, reviews, user, weeklyFocus] = await Promise.all([
+      const [snapshotValue, trades, preps, reviews, user, weeklyFocus] = await Promise.all([
+        get(dashboardSnapshotKey(userId)),
         get(`alphatrade_trades_${userId}`),
         get(`alphatrade_daily_preps_${userId}`),
         get(`alphatrade_daily_reviews_${userId}`),
         get(`alphatrade_user_profile_${userId}`),
         get(`alphatrade_weekly_focus_${userId}`)
       ]);
-      // Require user data to consider cache valid
-      if (!user) return null;
+      const snapshot = snapshotValue as DashboardSnapshot | undefined;
+      const validSnapshot = snapshot?.version === 1 && snapshot.userId === userId && snapshot.user?.id === userId
+        ? snapshot
+        : undefined;
+      const cachedUser = (user as User | undefined) || validSnapshot?.user;
+      // A user-scoped authenticated profile is the minimum proof that this
+      // cache belongs to the active Supabase session.
+      if (!cachedUser || cachedUser.id !== userId) return null;
       const accountsRaw = localStorage.getItem(`alphatrade_accounts_${userId}`);
-      const accounts = accountsRaw ? JSON.parse(accountsRaw) : [];
+      const accounts = accountsRaw ? JSON.parse(accountsRaw) : (validSnapshot?.accounts || []);
       const prefsRaw = localStorage.getItem(`alphatrade_preferences_${userId}`);
-      const preferences = prefsRaw ? JSON.parse(prefsRaw) : null;
+      const preferences = prefsRaw ? JSON.parse(prefsRaw) : (validSnapshot?.preferences || null);
+      const timestampRaw = localStorage.getItem(`alphatrade_cache_timestamp_${userId}`);
+      const timestamp = timestampRaw ? Number(timestampRaw) : NaN;
       return {
-        trades: (trades || []) as Trade[],
+        trades: (trades || validSnapshot?.trades || []) as Trade[],
         accounts: accounts as Account[],
-        preps: (preps || []) as DailyPrep[],
-        reviews: (reviews || []) as DailyReview[],
+        preps: (preps || validSnapshot?.preps || []) as DailyPrep[],
+        reviews: (reviews || validSnapshot?.reviews || []) as DailyReview[],
         preferences,
-        user: user as User,
-        weeklyFocus: (weeklyFocus || []) as WeeklyFocus[]
+        user: cachedUser,
+        weeklyFocus: (weeklyFocus || validSnapshot?.weeklyFocus || []) as WeeklyFocus[],
+        cachedAt: Number.isFinite(timestamp) ? timestamp : (validSnapshot?.cachedAt || null),
       };
     } catch (e) {
       console.warn('[Cache] getCachedDashboardData failed:', e);

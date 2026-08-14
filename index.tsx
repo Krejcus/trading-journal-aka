@@ -4,6 +4,10 @@ import App from './App';
 import { registerSW } from 'virtual:pwa-register';
 import { UpdateBanner } from './components/UpdateBanner';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { isNativeBuild } from './utils/runtimeConfig';
+import { registerNativeOAuthCallback } from './services/nativeOAuth';
+import { registerNativeNotificationActions } from './services/nativeNotifications';
+import NativePrivacyGate from './components/NativePrivacyGate';
 
 // iOS PWA (přidáno na plochu) detekce — `@media (display-mode: standalone)` je na
 // iOS nespolehlivá, proto přidáme třídu i přes navigator.standalone (legacy iOS API).
@@ -13,6 +17,22 @@ if (
   window.matchMedia('(display-mode: standalone)').matches
 ) {
   document.documentElement.classList.add('pwa-standalone');
+}
+
+if (isNativeBuild) {
+  // Full-bleed native canvas: fullscreen overlays may paint behind the iOS
+  // status bar, while App applies safe-area padding to ordinary content.
+  const viewport = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  if (viewport && !viewport.content.includes('viewport-fit=cover')) {
+    viewport.content = `${viewport.content}, viewport-fit=cover`;
+  }
+  document.documentElement.classList.add('native-shell');
+  void registerNativeOAuthCallback().catch(error => {
+    console.error('[Native bootstrap] OAuth callback registration failed:', error);
+  });
+  void registerNativeNotificationActions().catch(error => {
+    console.error('[Native bootstrap] Notification action registration failed:', error);
+  });
 }
 
 // Liquid-glass LUPA (backdrop-filter: url(#svg displacement)) funguje JEN v Chromiu —
@@ -32,7 +52,7 @@ let forceUpdate = false;
 // V dev (vč. testu PWA na ploše přes LAN) SW jen kešuje a brání aktualizacím,
 // takže ho nejen neregistrujeme, ale i odregistrujeme případný starý + smažeme cache.
 let updateSW: ((reloadPage?: boolean) => Promise<void>) | undefined;
-if (import.meta.env.PROD) {
+if (import.meta.env.PROD && !isNativeBuild) {
   updateSW = registerSW({
     onNeedRefresh() {
       console.log('[PWA] New version available!');
@@ -49,7 +69,7 @@ if (import.meta.env.PROD) {
       }
     }
   });
-} else {
+} else if (!isNativeBuild) {
   // DEV: zabít existující service worker + vyčistit cache → PWA na ploše vždy svěží kód.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.getRegistrations().then((regs) => {
@@ -89,6 +109,7 @@ const renderApp = () => {
           forceUpdate={forceUpdate}
         />
         <App />
+        <NativePrivacyGate />
       </ErrorBoundary>
     </React.StrictMode>
   );

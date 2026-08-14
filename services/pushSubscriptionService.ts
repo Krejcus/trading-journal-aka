@@ -15,6 +15,7 @@ import { supabase } from './supabase';
 import { getUserId } from './storageService';
 import { subscribeUserToPush } from '../utils/pushManager';
 import { isPWA, isIOS } from '../utils/notificationHelper';
+import { apiUrl } from '../utils/runtimeConfig';
 
 const LAST_ENDPOINT_KEY = 'alphatrade_push_endpoint';
 
@@ -249,7 +250,7 @@ export const sendTestPush = async (): Promise<{ ok: boolean; sent: number; devic
   if (!session) return { ok: false, sent: 0, devices: 0, message: 'Nejsi přihlášen.' };
 
   try {
-    const response = await fetch('/api/push-test', {
+    const response = await fetch(apiUrl('/api/push-test'), {
       method: 'POST',
       headers: { Authorization: `Bearer ${session.access_token}` },
     });

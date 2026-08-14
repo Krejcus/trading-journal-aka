@@ -84,6 +84,62 @@ body {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
+/* Capacitor's WKWebView intentionally extends beneath the transparent status
+   area and the native Liquid Glass tab bar. Full-screen artwork may use that
+   space, but modal controls and the end of a modal scroller must stay tappable.
+   The UIKit tab bar is exactly 49 pt plus the device bottom safe-area. */
+html.native-shell {
+  --native-shell-tab-bar-height: calc(49px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Regular pages still paint and scroll beneath Liquid Glass, while this real
+   trailing space lets their final control move completely above the tab bar. */
+html.native-shell .native-page-scroll-content {
+  padding-bottom: calc(var(--native-shell-tab-bar-height) + 1rem);
+}
+
+/* Dense account rows need one more line of travel before the final row clears
+   the floating glass bar. Keep this targeted to Accounts and LIVE. */
+html.native-shell .native-page-scroll-content.native-page-scroll-content-extra {
+  padding-bottom: calc(var(--native-shell-tab-bar-height) + 3.5rem);
+}
+
+/* Every full-screen flex dialog in the shared React app gets a safe interactive
+   viewport on iOS. The backdrop still paints edge-to-edge because backgrounds
+   cover padding and absolute inset backdrops use the full padding box. */
+html.native-shell :is(.native-modal-safe-area, .fixed.inset-0.flex) {
+  box-sizing: border-box;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
+  padding-bottom: calc(var(--native-shell-tab-bar-height) + 0.5rem);
+}
+
+/* A modal panel sized in vh used to ignore the safe padding of its parent and
+   overflow straight back below the status/tab bars. Clamp the panel to the
+   parent's real content box; explicit native-modal-panel is used on the main
+   trade form and the generic direct-child rule covers existing dialogs. */
+html.native-shell :is(.native-modal-panel, .fixed.inset-0.flex:not(.flex-col) > :where(div, section, form):not(.absolute)) {
+  max-height: 100%;
+}
+
+/* Full-height scroll workspaces keep scrolling visually beneath Liquid Glass.
+   A real trailing spacer makes their final control scroll completely above the
+   native bar instead of merely changing scrollIntoView alignment. */
+html.native-shell .native-modal-safe-area:has(.overflow-y-auto),
+html.native-shell .fixed.inset-0.flex.flex-col:has(> .overflow-y-auto) {
+  padding-bottom: 0;
+}
+
+html.native-shell .native-modal-safe-area .overflow-y-auto::after,
+html.native-shell .fixed.inset-0.flex.flex-col > .overflow-y-auto::after {
+  content: '';
+  display: block;
+  height: calc(var(--native-shell-tab-bar-height) + 0.5rem);
+  min-height: calc(var(--native-shell-tab-bar-height) + 0.5rem);
+  flex: 0 0 auto;
+  grid-column: 1 / -1;
+  pointer-events: none;
+}
+
 /* Theme-aware background helpers (respects dark / oled / light themes) */
 .bg-theme-page    { background-color: var(--bg-page); }
 .bg-theme-card    { background-color: var(--bg-card); }
