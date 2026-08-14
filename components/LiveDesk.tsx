@@ -36,6 +36,13 @@ import {
   type LiveOrder,
   type LiveSnapshot,
 } from '../services/tradecopiaLiveService';
+import {
+  beginTradovateOAuth,
+  loadTradovateOAuthStatus,
+  runTradovateReadOnlyPreflight,
+  type TradovateOAuthStatus,
+  type TradovatePreflightResult,
+} from '../services/tradovateOAuthConnection';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
 
 type LiveTab = 'connections' | 'overview' | 'accounts' | 'orders' | 'events';
@@ -225,6 +232,8 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
         </div>
       )}
 
+      {tab === 'connections' && <TradovateOAuthPanel />}
+
       {tab === 'connections' && snapshot && (
         <ConnectionsPage
           snapshot={snapshot}
@@ -263,6 +272,107 @@ const LiveDesk: React.FC<LiveDeskProps> = () => {
         />
       )}
     </div>
+  );
+};
+
+const TradovateOAuthPanel = () => {
+  const [oauthStatus, setOauthStatus] = useState<TradovateOAuthStatus | null>(null);
+  const [oauthBusy, setOauthBusy] = useState<'status' | 'connect' | 'preflight' | null>('status');
+  const [oauthError, setOauthError] = useState<string | null>(null);
+  const [preflight, setPreflight] = useState<TradovatePreflightResult | null>(null);
+
+  const refreshOauthStatus = useCallback(async () => {
+    setOauthBusy('status');
+    try {
+      setOauthStatus(await loadTradovateOAuthStatus());
+      setOauthError(null);
+    } catch (reason) {
+      setOauthError(reason instanceof Error ? reason.message : 'Stav Tradovate OAuth se nepodařilo načíst.');
+    } finally {
+      setOauthBusy(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshOauthStatus();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('tradovate') === 'error') setOauthError('Tradovate OAuth připojení se nepodařilo dokončit.');
+    if (params.has('tradovate')) {
+      params.delete('tradovate');
+      params.delete('reason');
+      const suffix = params.toString();
+      window.history.replaceState({}, '', `${window.location.pathname}${suffix ? `?${suffix}` : ''}${window.location.hash}`);
+    }
+  }, [refreshOauthStatus]);
+
+  const connectOauth = async () => {
+    setOauthBusy('connect');
+    setOauthError(null);
+    try {
+      await beginTradovateOAuth();
+    } catch (reason) {
+      setOauthError(reason instanceof Error ? reason.message : 'Tradovate OAuth se nepodařilo spustit.');
+      setOauthBusy(null);
+    }
+  };
+
+  const runPreflight = async () => {
+    setOauthBusy('preflight');
+    setOauthError(null);
+    try {
+      setPreflight(await runTradovateReadOnlyPreflight());
+    } catch (reason) {
+      setOauthError(reason instanceof Error ? reason.message : 'Read-only preflight selhal.');
+    } finally {
+      setOauthBusy(null);
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-blue-500/25 bg-blue-500/[0.04] overflow-hidden">
+      <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Link2 size={16} className="text-blue-500" />
+            <h2 className="text-sm font-black text-[var(--text-primary)]">AlphaTrade · Tradovate OAuth</h2>
+          </div>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">
+            {oauthBusy === 'status'
+              ? 'Ověřuji stav…'
+              : oauthStatus?.connected
+                ? 'Připojeno. Copier zůstává DISARMED; zatím jsou povolené pouze read-only kontroly.'
+                : 'Zatím nepřipojeno. Přihlášení proběhne přímo u Tradovate.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {oauthStatus?.connected ? (
+            <button type="button" onClick={() => void runPreflight()} disabled={oauthBusy != null} className="h-9 px-4 rounded-md bg-emerald-600 text-white text-xs font-black disabled:opacity-50">
+              {oauthBusy === 'preflight' ? 'Kontroluji…' : 'Read-only test'}
+            </button>
+          ) : (
+            <button type="button" onClick={() => void connectOauth()} disabled={oauthBusy != null} className="h-9 px-4 rounded-md bg-indigo-600 text-white text-xs font-black disabled:opacity-50">
+              {oauthBusy === 'connect' ? 'Přesměrovávám…' : 'Připojit Tradovate'}
+            </button>
+          )}
+          <button type="button" onClick={() => void refreshOauthStatus()} disabled={oauthBusy != null} className="w-9 h-9 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] flex items-center justify-center disabled:opacity-50" aria-label="Obnovit stav Tradovate OAuth">
+            <RefreshCw size={15} className={oauthBusy === 'status' ? 'animate-spin' : ''} />
+          </button>
+        </div>
+      </div>
+      {oauthError && <div className="px-4 py-2.5 border-t border-rose-500/20 bg-rose-500/10 text-xs font-bold text-rose-500">{oauthError}</div>}
+      {preflight && (
+        <div className="px-4 py-3 border-t border-blue-500/15 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {preflight.accounts.map(account => (
+            <div key={account.id} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 text-xs">
+              <div className="font-black text-[var(--text-primary)]">{account.name}</div>
+              <div className="mt-1 text-[var(--text-secondary)]">
+                {account.active ? 'Active' : 'Inactive'} · {account.canTrade ? 'Execution permission' : 'Read only'} · pozice {account.netPositionCount} · working {account.workingOrderCount}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 };
 
@@ -316,7 +426,7 @@ const ConnectionsPage = ({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button disabled className="h-9 px-4 rounded-md bg-indigo-600 text-white text-xs font-black opacity-60 cursor-not-allowed" title="Dostupné po aktivaci vlastního OAuth">Add Connection</button>
+            <button disabled className="h-9 px-4 rounded-md bg-indigo-600 text-white text-xs font-black opacity-60 cursor-not-allowed" title="Správa legacy TradeCopia připojení není součástí OAuth aktivace">Legacy Source</button>
             <button className="w-9 h-9 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] flex items-center justify-center" aria-label="Nápověda k připojením"><HelpCircle size={16} /></button>
             <button className="w-9 h-9 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] flex items-center justify-center" aria-label="Nastavení tabulky"><Settings2 size={16} /></button>
             <button onClick={onRefresh} disabled={manualRefreshState === 'loading'} className="w-9 h-9 rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] flex items-center justify-center disabled:cursor-wait" aria-label="Obnovit připojení">
