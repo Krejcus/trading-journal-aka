@@ -3,10 +3,12 @@ import {
   decryptTradovateSecret,
   encryptTradovateSecret,
   refreshTradovateAccessToken,
+  type TradovateEnvironment,
   type TradovateTokenResponse,
 } from './tradovateOAuth.js';
 
 export interface TradovateServerConfig {
+  environment: TradovateEnvironment;
   clientId: string;
   clientSecret: string;
   redirectUri: string;
@@ -19,6 +21,7 @@ export interface TradovateServerConfig {
 
 export interface TradovateConnectionStatus {
   connected: boolean;
+  environment: TradovateEnvironment;
   expiresAt: string | null;
   hasRefreshToken: boolean;
   connectedAt: string | null;
@@ -29,6 +32,7 @@ export interface TradovateConnectionStatus {
 
 interface ConnectionRow {
   user_id: string;
+  environment: TradovateEnvironment;
   encrypted_access_token: string;
   encrypted_refresh_token: string | null;
   access_token_expires_at: string;
@@ -47,8 +51,17 @@ const required = (name: string): string => {
   return value;
 };
 
+const tradovateEnvironment = (): TradovateEnvironment => {
+  const value = required('TRADOVATE_ENVIRONMENT').toLowerCase();
+  if (value !== 'demo' && value !== 'live') {
+    throw new Error('TRADOVATE_ENVIRONMENT must be demo or live');
+  }
+  return value;
+};
+
 export function readTradovateServerConfig(): TradovateServerConfig {
   return {
+    environment: tradovateEnvironment(),
     clientId: required('TRADOVATE_CLIENT_ID'),
     clientSecret: required('TRADOVATE_CLIENT_SECRET'),
     redirectUri: required('TRADOVATE_REDIRECT_URI'),
@@ -95,6 +108,7 @@ export async function saveTradovateConnection(options: {
   const now = options.now ?? Date.now();
   const { error } = await options.db.from('tradovate_oauth_connections').upsert({
     user_id: options.userId,
+    environment: options.config.environment,
     encrypted_access_token: encryptTradovateSecret(options.token.accessToken, options.config.tokenEncryptionKey),
     encrypted_refresh_token: options.token.refreshToken
       ? encryptTradovateSecret(options.token.refreshToken, options.config.tokenEncryptionKey)
@@ -121,21 +135,29 @@ async function connectionRow(db: SupabaseClient, userId: string): Promise<Connec
   return data;
 }
 
-const sanitizedStatus = (row: ConnectionRow | null): TradovateConnectionStatus => ({
-  connected: row != null,
-  expiresAt: row?.access_token_expires_at ?? null,
-  hasRefreshToken: Boolean(row?.encrypted_refresh_token),
-  connectedAt: row?.connected_at ?? null,
-  refreshedAt: row?.refreshed_at ?? null,
-  tradovateUserId: row?.tradovate_user_id ?? null,
-  tradovateEmail: row?.tradovate_email ?? null,
-});
+const sanitizedStatus = (
+  row: ConnectionRow | null,
+  environment: TradovateEnvironment,
+): TradovateConnectionStatus => {
+  const activeRow = row?.environment === environment ? row : null;
+  return {
+    connected: activeRow != null,
+    environment,
+    expiresAt: activeRow?.access_token_expires_at ?? null,
+    hasRefreshToken: Boolean(activeRow?.encrypted_refresh_token),
+    connectedAt: activeRow?.connected_at ?? null,
+    refreshedAt: activeRow?.refreshed_at ?? null,
+    tradovateUserId: activeRow?.tradovate_user_id ?? null,
+    tradovateEmail: activeRow?.tradovate_email ?? null,
+  };
+};
 
 export async function getTradovateConnectionStatus(
   db: SupabaseClient,
   userId: string,
+  environment: TradovateEnvironment,
 ): Promise<TradovateConnectionStatus> {
-  return sanitizedStatus(await connectionRow(db, userId));
+  return sanitizedStatus(await connectionRow(db, userId), environment);
 }
 
 export async function getValidTradovateAccessToken(options: {
@@ -148,6 +170,9 @@ export async function getValidTradovateAccessToken(options: {
   const now = options.now ?? Date.now();
   const row = await connectionRow(options.db, options.userId);
   if (!row) throw new Error('tradovate-not-connected');
+  if (row.environment !== options.config.environment) {
+    throw new Error('tradovate-reauthorization-required');
+  }
   const expires = Date.parse(row.access_token_expires_at);
   if (Number.isFinite(expires) && expires - now > 120_000) {
     return {
@@ -164,6 +189,7 @@ export async function getValidTradovateAccessToken(options: {
       refreshToken,
       clientId: options.config.clientId,
       clientSecret: options.config.clientSecret,
+      environment: options.config.environment,
       fetchImpl: options.fetchImpl,
     });
   } catch (error) {

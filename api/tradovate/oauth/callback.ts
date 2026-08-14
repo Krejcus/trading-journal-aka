@@ -39,6 +39,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       clientId: config.clientId,
       clientSecret: config.clientSecret,
       redirectUri: config.redirectUri,
+      environment: config.environment,
     });
     await saveTradovateConnection({
       db: createTradovateAdminClient(config),

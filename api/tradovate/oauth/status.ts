@@ -18,7 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await deleteTradovateConnection(db, userId);
       return res.status(200).json({ connected: false });
     }
-    return res.status(200).json(await getTradovateConnectionStatus(db, userId));
+    return res.status(200).json(await getTradovateConnectionStatus(db, userId, config.environment));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') {

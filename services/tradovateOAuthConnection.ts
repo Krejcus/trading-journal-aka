@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 
 export interface TradovateOAuthStatus {
   connected: boolean;
+  environment: 'demo' | 'live';
   expiresAt: string | null;
   hasRefreshToken: boolean;
   connectedAt: string | null;
@@ -20,7 +21,7 @@ export interface TradovatePreflightAccount {
 }
 
 export interface TradovatePreflightResult {
-  environment: 'live';
+  environment: 'demo' | 'live';
   accounts: TradovatePreflightAccount[];
 }
 

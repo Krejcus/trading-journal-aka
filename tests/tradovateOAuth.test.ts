@@ -8,6 +8,8 @@ import {
   exchangeTradovateAuthorizationCode,
   parseCookies,
   refreshTradovateAccessToken,
+  tradovateApiBaseUrl,
+  tradovateOAuthTokenUrl,
   verifyTradovateOAuthState,
 } from '../server/tradovateOAuth';
 
@@ -52,7 +54,13 @@ describe('Tradovate OAuth primitives', () => {
     expect(() => decryptTradovateSecret(parts.join('.'), encryptionKey)).toThrow('authentication failed');
   });
 
-  it('vymění code i refresh token form-encoded přes produkční endpoint', async () => {
+  it('oddělí LIVE a DEMO endpointy', () => {
+    expect(tradovateApiBaseUrl('live')).toBe('https://live.tradovateapi.com/v1');
+    expect(tradovateApiBaseUrl('demo')).toBe('https://demo.tradovateapi.com/v1');
+    expect(tradovateOAuthTokenUrl('demo')).toBe('https://demo.tradovateapi.com/v1/auth/oauthtoken');
+  });
+
+  it('vymění code i refresh token form-encoded přes zvolené prostředí', async () => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
       requests.push({ url: String(url), init: init ?? {} });
@@ -64,14 +72,14 @@ describe('Tradovate OAuth primitives', () => {
 
     await exchangeTradovateAuthorizationCode({
       code: 'single-use-code', clientId: 'client', clientSecret: 'secret',
-      redirectUri: 'https://example.com/oauth/tradovate/callback', fetchImpl,
+      redirectUri: 'https://example.com/oauth/tradovate/callback', environment: 'demo', fetchImpl,
     });
     await refreshTradovateAccessToken({
-      refreshToken: 'refresh-old', clientId: 'client', clientSecret: 'secret', fetchImpl,
+      refreshToken: 'refresh-old', clientId: 'client', clientSecret: 'secret', environment: 'demo', fetchImpl,
     });
 
     expect(requests).toHaveLength(2);
-    expect(requests[0].url).toBe('https://live.tradovateapi.com/auth/oauthtoken');
+    expect(requests[0].url).toBe('https://demo.tradovateapi.com/v1/auth/oauthtoken');
     expect(new URLSearchParams(String(requests[0].init.body)).get('grant_type')).toBe('authorization_code');
     expect(new URLSearchParams(String(requests[0].init.body)).get('code')).toBe('single-use-code');
     expect(new URLSearchParams(String(requests[1].init.body)).get('grant_type')).toBe('refresh_token');

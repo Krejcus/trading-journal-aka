@@ -340,8 +340,8 @@ const TradovateOAuthPanel = () => {
             {oauthBusy === 'status'
               ? 'Ověřuji stav…'
               : oauthStatus?.connected
-                ? 'Připojeno. Copier zůstává DISARMED; zatím jsou povolené pouze read-only kontroly.'
-                : 'Zatím nepřipojeno. Přihlášení proběhne přímo u Tradovate.'}
+                ? `Připojeno k ${oauthStatus.environment.toUpperCase()}. Copier zůstává DISARMED; zatím jsou povolené pouze read-only kontroly.`
+                : `Zatím nepřipojeno k ${(oauthStatus?.environment ?? 'demo').toUpperCase()}. Přihlášení proběhne přímo u Tradovate.`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -362,6 +362,11 @@ const TradovateOAuthPanel = () => {
       {oauthError && <div className="px-4 py-2.5 border-t border-rose-500/20 bg-rose-500/10 text-xs font-bold text-rose-500">{oauthError}</div>}
       {preflight && (
         <div className="px-4 py-3 border-t border-blue-500/15 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {preflight.accounts.length === 0 && (
+            <div className="text-xs font-bold text-amber-600">
+              {preflight.environment.toUpperCase()} API nevrátilo žádný viditelný účet. Copier zůstává DISARMED.
+            </div>
+          )}
           {preflight.accounts.map(account => (
             <div key={account.id} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 text-xs">
               <div className="font-black text-[var(--text-primary)]">{account.name}</div>

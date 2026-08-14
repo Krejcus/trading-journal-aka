@@ -7,9 +7,16 @@ import {
 } from 'node:crypto';
 
 export const TRADOVATE_OAUTH_AUTHORIZE_URL = 'https://trader.tradovate.com/oauth';
-export const TRADOVATE_OAUTH_TOKEN_URL = 'https://live.tradovateapi.com/auth/oauthtoken';
 export const TRADOVATE_OAUTH_COOKIE = '__Host-at_tv_oauth';
 export const TRADOVATE_OAUTH_STATE_TTL_SECONDS = 10 * 60;
+
+export type TradovateEnvironment = 'demo' | 'live';
+
+export const tradovateApiBaseUrl = (environment: TradovateEnvironment): string =>
+  `https://${environment}.tradovateapi.com/v1`;
+
+export const tradovateOAuthTokenUrl = (environment: TradovateEnvironment): string =>
+  `${tradovateApiBaseUrl(environment)}/auth/oauthtoken`;
 
 export interface TradovateOAuthState {
   sub: string;
@@ -205,9 +212,10 @@ function normalizeTokenResponse(value: unknown): TradovateTokenResponse {
 
 async function requestToken(
   fields: Record<string, string>,
+  environment: TradovateEnvironment,
   fetchImpl: typeof fetch,
 ): Promise<TradovateTokenResponse> {
-  const response = await fetchImpl(TRADOVATE_OAUTH_TOKEN_URL, {
+  const response = await fetchImpl(tradovateOAuthTokenUrl(environment), {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(fields).toString(),
@@ -229,6 +237,7 @@ export function exchangeTradovateAuthorizationCode(options: {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
+  environment: TradovateEnvironment;
   fetchImpl?: typeof fetch;
 }): Promise<TradovateTokenResponse> {
   return requestToken({
@@ -237,13 +246,14 @@ export function exchangeTradovateAuthorizationCode(options: {
     client_secret: options.clientSecret,
     redirect_uri: options.redirectUri,
     code: options.code,
-  }, options.fetchImpl ?? fetch);
+  }, options.environment, options.fetchImpl ?? fetch);
 }
 
 export function refreshTradovateAccessToken(options: {
   refreshToken: string;
   clientId: string;
   clientSecret: string;
+  environment: TradovateEnvironment;
   fetchImpl?: typeof fetch;
 }): Promise<TradovateTokenResponse> {
   return requestToken({
@@ -251,5 +261,5 @@ export function refreshTradovateAccessToken(options: {
     client_id: options.clientId,
     client_secret: options.clientSecret,
     refresh_token: options.refreshToken,
-  }, options.fetchImpl ?? fetch);
+  }, options.environment, options.fetchImpl ?? fetch);
 }
