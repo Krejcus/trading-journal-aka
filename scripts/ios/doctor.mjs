@@ -85,6 +85,7 @@ for (const family of ['accessoryInline', 'accessoryCircular', 'accessoryRectangu
 requireMatch(widgetSource, /AccessoryWidgetBackground\(\)/, 'Kruhové Lock Screen widgety nemají adaptivní systémové pozadí');
 requireMatch(widgetSource, /func alphaTradeLockSurface\(\)[\s\S]*containerBackground\(Color\.clear, for: \.widget\)/, 'Lock Screen widgety nemají povinné WidgetKit containerBackground');
 requireMatch(appDelegate, /WidgetCenter\.shared\.reloadAllTimelines\(\)/, 'Aplikace po aktualizaci neobnoví staré WidgetKit snapshots');
+requireMatch(appDelegate, /AlphaTradeAppShortcuts\.updateAppShortcutParameters\(\)/, 'Aplikace při startu neregistruje App Shortcuts pro Siri a Spotlight');
 for (const kind of ['AlphaTradeLockPnL', 'AlphaTradeLockDiscipline', 'AlphaTradeLockLive']) {
   requireMatch(widgetSource, new RegExp(`kind: "${kind}"[\\s\\S]{0,320}alphaTradeLockSurface\\(\\)`), `Widget ${kind} nepoužívá Lock Screen containerBackground`);
 }

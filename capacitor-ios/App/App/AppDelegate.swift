@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import AppIntents
 import WidgetKit
 
 @UIApplicationMain
@@ -9,6 +10,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         AlphaTradeSpotlight.indexDestinations()
+        if #available(iOS 16.0, *) {
+            AlphaTradeAppShortcuts.updateAppShortcutParameters()
+        }
         WidgetCenter.shared.reloadAllTimelines()
         return true
     }
