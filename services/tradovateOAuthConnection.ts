@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 
 export interface TradovateOAuthStatus {
   connected: boolean;
+  environment: 'demo' | 'live';
   expiresAt: string | null;
   hasRefreshToken: boolean;
   connectedAt: string | null;
@@ -17,11 +18,62 @@ export interface TradovatePreflightAccount {
   canTrade: boolean;
   netPositionCount: number;
   workingOrderCount: number;
+  balance: {
+    coverage: TradovateSourceCoverage;
+    totalCashValue: number | null;
+    netLiq: number | null;
+    netLiqSOD: number | null;
+    openPnL: number | null;
+    realizedPnL: number | null;
+    weekRealizedPnL: number | null;
+    initialMargin: number | null;
+    maintenanceMargin: number | null;
+    autoLiqLevel: number | null;
+  };
+  activity: {
+    positionCount: number;
+    netPositionCount: number;
+    workingOrderCount: number;
+    orderCount: number;
+    fillCount: number;
+    fillPairCount: number;
+    knownFees: number;
+    firstFillAt: string | null;
+    lastFillAt: string | null;
+  };
+  history: {
+    coverage: TradovateSourceCoverage;
+    entryCount: number;
+    firstEntryAt: string | null;
+    lastEntryAt: string | null;
+    realizedBalanceDrawdown: number | null;
+  };
+  risk: {
+    statusCoverage: TradovateSourceCoverage;
+    limitsCoverage: TradovateSourceCoverage;
+    adminAction: string | null;
+    maxNetLiq: number | null;
+    minNetLiq: number | null;
+    dailyLossAutoLiq: number | null;
+    weeklyLossAutoLiq: number | null;
+    trailingMaxDrawdown: number | null;
+    trailingMaxDrawdownLimit: number | null;
+    trailingMaxDrawdownMode: string | null;
+    changesLocked: boolean | null;
+  };
+}
+
+export interface TradovateSourceCoverage {
+  availability: 'available' | 'empty' | 'denied' | 'unavailable';
+  count: number;
+  httpStatus: number | null;
 }
 
 export interface TradovatePreflightResult {
-  environment: 'live';
+  environment: 'demo' | 'live';
+  capturedAt: string;
   accounts: TradovatePreflightAccount[];
+  coverage: Record<'accounts' | 'positions' | 'orders' | 'fills' | 'fillPairs' | 'fillFees', TradovateSourceCoverage>;
 }
 
 const authorization = async (): Promise<string> => {

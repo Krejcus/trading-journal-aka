@@ -58,6 +58,7 @@ const dateTime = new Intl.DateTimeFormat('cs-CZ', { day: 'numeric', month: 'shor
 
 const signedMoney = (value: number) => `${value > 0 ? '+' : ''}${money.format(value)}`;
 const pnlColor = (value: number) => value > 0 ? 'text-emerald-500' : value < 0 ? 'text-rose-500' : 'text-[var(--text-secondary)]';
+const optionalMoney = (value: number | null) => value == null ? 'nedostupné' : money.format(value);
 
 const ageSeconds = (date: string | null | undefined, now: number) => {
   if (!date) return Number.POSITIVE_INFINITY;
@@ -340,8 +341,8 @@ const TradovateOAuthPanel = () => {
             {oauthBusy === 'status'
               ? 'Ověřuji stav…'
               : oauthStatus?.connected
-                ? 'Připojeno. Copier zůstává DISARMED; zatím jsou povolené pouze read-only kontroly.'
-                : 'Zatím nepřipojeno. Přihlášení proběhne přímo u Tradovate.'}
+                ? `Připojeno k ${oauthStatus.environment.toUpperCase()}. Copier zůstává DISARMED; zatím jsou povolené pouze read-only kontroly.`
+                : `Zatím nepřipojeno k ${(oauthStatus?.environment ?? 'demo').toUpperCase()}. Přihlášení proběhne přímo u Tradovate.`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -362,11 +363,35 @@ const TradovateOAuthPanel = () => {
       {oauthError && <div className="px-4 py-2.5 border-t border-rose-500/20 bg-rose-500/10 text-xs font-bold text-rose-500">{oauthError}</div>}
       {preflight && (
         <div className="px-4 py-3 border-t border-blue-500/15 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {preflight.accounts.length === 0 && (
+            <div className="text-xs font-bold text-amber-600">
+              {preflight.environment.toUpperCase()} API nevrátilo žádný viditelný účet. Copier zůstává DISARMED.
+            </div>
+          )}
           {preflight.accounts.map(account => (
-            <div key={account.id} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 text-xs">
+            <div key={account.id} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3 text-xs">
               <div className="font-black text-[var(--text-primary)]">{account.name}</div>
               <div className="mt-1 text-[var(--text-secondary)]">
                 {account.active ? 'Active' : 'Inactive'} · {account.canTrade ? 'Execution permission' : 'Read only'} · pozice {account.netPositionCount} · working {account.workingOrderCount}
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                <span className="text-[var(--text-secondary)]">Balance</span>
+                <span className="text-right font-bold text-[var(--text-primary)]">{optionalMoney(account.balance.totalCashValue)}</span>
+                <span className="text-[var(--text-secondary)]">Net liq</span>
+                <span className="text-right font-bold text-[var(--text-primary)]">{optionalMoney(account.balance.netLiq)}</span>
+                <span className="text-[var(--text-secondary)]">Realized P&amp;L</span>
+                <span className={`text-right font-bold ${account.balance.realizedPnL == null ? 'text-[var(--text-secondary)]' : pnlColor(account.balance.realizedPnL)}`}>
+                  {account.balance.realizedPnL == null ? 'nedostupné' : signedMoney(account.balance.realizedPnL)}
+                </span>
+                <span className="text-[var(--text-secondary)]">Historie / fills</span>
+                <span className="text-right font-bold text-[var(--text-primary)]">{account.history.entryCount} / {account.activity.fillCount}</span>
+                <span className="text-[var(--text-secondary)]">Realized DD</span>
+                <span className="text-right font-bold text-[var(--text-primary)]">{optionalMoney(account.history.realizedBalanceDrawdown)}</span>
+                <span className="text-[var(--text-secondary)]">Trailing DD limit</span>
+                <span className="text-right font-bold text-[var(--text-primary)]">{optionalMoney(account.risk.trailingMaxDrawdownLimit)}</span>
+              </div>
+              <div className="mt-2 text-[10px] text-[var(--text-secondary)]">
+                Risk: {account.risk.limitsCoverage.availability} · historie: {account.history.coverage.availability} · poplatky {preflight.coverage.fillFees.availability === 'available' ? optionalMoney(account.activity.knownFees) : preflight.coverage.fillFees.availability}
               </div>
             </div>
           ))}
