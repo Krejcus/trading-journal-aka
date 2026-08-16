@@ -63,6 +63,8 @@ const PREFETCH_MS = 24 * 60 * 60 * 1_000;
 const PREFETCH_MIN_BARS = 240;
 /** Jak často jde plný stav do Supabase; lokální checkpoint běží každých 1,5 s. */
 const CLOUD_SYNC_INTERVAL_MS = 60_000;
+/** Nejdelší doba, po kterou smí React při přehrávání ukazovat starší equity. */
+const RUNTIME_RENDER_INTERVAL_MS = 500;
 // Deep context is requested in the native provider resolution needed by the
 // panel. Intraday charts stay on bounded 1m chunks; HTF charts can jump a year
 // at a time with hourly bars instead of downloading and aggregating hundreds
@@ -131,13 +133,26 @@ const BacktestWorkspace: React.FC<Props> = ({
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const emittedTradesRef = useRef(new Set(initialRun.runtimeState.closedTrades.map(trade => trade.id)));
   const lastProcessedCursorRef = useRef<number | null>(initialRun.runtimeState.replay.cursorTime);
+  const lastRuntimeRenderRef = useRef(0);
 
-  const updateRun = useCallback((updater: (current: BacktestRun) => BacktestRun) => {
+  /**
+   * `render: false` aktualizuje jen ref a dirty flagy — checkpoint i engine
+   * vidí čerstvý stav, ale React se nepřekresluje. Přehrávání tak neplatí
+   * jeden re-render celého workspace za každý tik kurzoru; do stavu se stav
+   * propíše při událostech enginu, pauze, nebo nejpozději po půl sekundě.
+   */
+  const updateRun = useCallback((
+    updater: (current: BacktestRun) => BacktestRun,
+    options?: { render?: boolean },
+  ) => {
     const next = updater(runRef.current);
     runRef.current = next;
-    setRun(next);
     dirtyRef.current = true;
     cloudDirtyRef.current = true;
+    if (options?.render !== false) {
+      lastRuntimeRenderRef.current = performance.now();
+      setRun(next);
+    }
   }, []);
 
   /**
@@ -370,6 +385,19 @@ const BacktestWorkspace: React.FC<Props> = ({
     } else if (replay.cursorTime !== null) {
       lastProcessedCursorRef.current = replay.cursorTime;
     }
+    // Tik, který nezměnil nic než kurzor a mark-to-market, nemusí překreslit
+    // workspace: graf posouvá kurzor vlastní cestou (setReplay) a runtime tu
+    // čte checkpoint i engine z refu. React dostane stav při událostech
+    // enginu (fill, objednávka, pozice), pauze a nejméně dvakrát za sekundu,
+    // aby equity v panelu neujížděla.
+    const previousRuntime = runRef.current.runtimeState;
+    const engineChanged = runtime.orders !== previousRuntime.orders
+      || runtime.fills !== previousRuntime.fills
+      || runtime.positions !== previousRuntime.positions
+      || runtime.closedTrades !== previousRuntime.closedTrades;
+    const render = engineChanged
+      || !replay.playing
+      || performance.now() - lastRuntimeRenderRef.current >= RUNTIME_RENDER_INTERVAL_MS;
     updateRun(current => ({
       ...current,
       cursorAt: replay.cursorTime ? replay.cursorTime * 1_000 : current.cursorAt,
@@ -377,7 +405,7 @@ const BacktestWorkspace: React.FC<Props> = ({
       status: replay.playing ? 'active' : current.status === 'completed' ? 'completed' : 'paused',
       updatedAt: Date.now(),
       lastOpenedAt: Date.now(),
-    }));
+    }), { render });
     maybePrefetch(replay.cursorTime, executionCandles);
     emitClosedTrades(runtime);
   }, [candlesByRoot, emitClosedTrades, maybePrefetch, updateRun]);
