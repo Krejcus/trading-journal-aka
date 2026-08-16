@@ -1,6 +1,12 @@
 import type { Drawing, DrawingEngine, DrawingStyle, DrawingToolId } from '@getcandlekit/charts';
+import {
+  CHART_APPEARANCE_STORAGE_KEYS,
+  onChartAppearanceScopeReset,
+  readChartAppearance,
+  writeChartAppearance,
+} from './chartAppearanceScope';
 
-const STORAGE_KEY = 'alphatrade:chart-drawing-style-defaults:v1';
+const STORAGE_KEY = CHART_APPEARANCE_STORAGE_KEYS.drawingStyleDefaults;
 
 interface StorageLike {
   getItem: (key: string) => string | null;
@@ -11,6 +17,8 @@ type DrawingStyleDefaults = Record<string, DrawingStyle>;
 
 let memoryDefaults: DrawingStyleDefaults = {};
 const patchedEngines = new WeakSet<DrawingEngine>();
+
+onChartAppearanceScopeReset(() => { memoryDefaults = {}; });
 
 const finiteWidth = (value: unknown, fallback = 2): number => {
   const width = Number(value);
@@ -60,13 +68,26 @@ const resolveStorage = (storage?: StorageLike | null): StorageLike | null => {
   return window.localStorage;
 };
 
+const isRecord = (value: unknown): value is DrawingStyleDefaults => (
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+);
+
+// Explicitně předané úložiště patří testům a volajícím s vlastní pamětí; scope
+// backtest session se do nich neplete.
 const readDefaults = (storage?: StorageLike | null): DrawingStyleDefaults => {
+  if (storage === undefined) {
+    const scoped = readChartAppearance('drawingStyleDefaults');
+    if (isRecord(scoped)) {
+      memoryDefaults = scoped;
+      return memoryDefaults;
+    }
+  }
   const target = resolveStorage(storage);
   if (!target) return memoryDefaults;
   try {
     const parsed = JSON.parse(target.getItem(STORAGE_KEY) || '{}');
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      memoryDefaults = parsed as DrawingStyleDefaults;
+    if (isRecord(parsed)) {
+      memoryDefaults = parsed;
       return memoryDefaults;
     }
   } catch { /* invalid or private storage */ }
@@ -75,6 +96,7 @@ const readDefaults = (storage?: StorageLike | null): DrawingStyleDefaults => {
 
 const writeDefaults = (defaults: DrawingStyleDefaults, storage?: StorageLike | null) => {
   memoryDefaults = defaults;
+  if (storage === undefined && writeChartAppearance('drawingStyleDefaults', defaults)) return;
   try { resolveStorage(storage)?.setItem(STORAGE_KEY, JSON.stringify(defaults)); } catch { /* private storage */ }
 };
 

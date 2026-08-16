@@ -315,7 +315,8 @@ export const ChartIndicatorSettingsDialog: React.FC<{
   settings: AlphaTradeIndicatorSettings;
   onPreview: (settings: AlphaTradeIndicatorSettings) => void;
   onCancel: () => void;
-  onApply: (settings: AlphaTradeIndicatorSettings) => void;
+  /** `allPanels` odlišuje „Ok" (jen upravovaný graf) od „Na všechny grafy". */
+  onApply: (settings: AlphaTradeIndicatorSettings, allPanels: boolean) => void;
 }> = ({ indicator, settings, onPreview, onCancel, onApply }) => {
   const [tab, setTab] = useState<TabId>('inputs');
   const [draft, setDraft] = useState(settings);
@@ -477,7 +478,16 @@ export const ChartIndicatorSettingsDialog: React.FC<{
             defaultValue={DEFAULT_INDICATOR_SETTINGS[indicator]}
             onApply={applyIndicatorTemplate}
           />
-          <div className="flex gap-3"><button type="button" onClick={onCancel} className="h-9 rounded-md border border-slate-300 px-5 text-[13px] font-medium hover:bg-slate-50">Cancel</button><button type="button" onClick={() => onApply(draft)} className="h-9 rounded-md bg-[#2962ff] px-6 text-[13px] font-semibold text-white hover:bg-[#1e53e5]">Ok</button></div>
+          <div className="flex gap-3">
+            <button type="button" onClick={onCancel} className="h-9 rounded-md border border-slate-300 px-5 text-[13px] font-medium hover:bg-slate-50">Cancel</button>
+            <button
+              type="button"
+              onClick={() => onApply(draft, true)}
+              title="Přepíše nastavení indikátorů ve všech grafech workspace"
+              className="h-9 rounded-md border border-slate-300 px-4 text-[13px] font-medium hover:bg-slate-50"
+            >Na všechny grafy</button>
+            <button type="button" onClick={() => onApply(draft, false)} className="h-9 rounded-md bg-[#2962ff] px-6 text-[13px] font-semibold text-white hover:bg-[#1e53e5]">Ok</button>
+          </div>
         </footer>
       </section>
     </div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CandlestickChart, LayoutGrid, Rows3, Ruler, X } from 'lucide-react';
+import { CandlestickChart, LayoutGrid, Rows3, Ruler, X, Zap } from 'lucide-react';
 import TradingViewColorPicker from './TradingViewColorPicker';
 import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 import {
@@ -7,6 +7,7 @@ import {
   CHART_TIME_ZONES,
   mergeChartSettings,
   type ChartButtonVisibility,
+  type ChartExecutionMarkerSize,
   type ChartGridLines,
   type ChartLineAppearance,
   type ChartLineStyleName,
@@ -20,7 +21,7 @@ import {
 } from '../services/chartSettings';
 import { CHART_DATE_FORMATS, formatChartDate, type ChartDateFormat, zonedTimeParts } from '../services/chartTimeAxisFormat';
 
-type TabId = 'symbol' | 'statusLine' | 'scales' | 'canvas';
+type TabId = 'symbol' | 'statusLine' | 'scales' | 'trading' | 'canvas';
 
 /** Jmenný prostor v úložišti šablon, aby se nemíchaly s šablonami indikátorů. */
 const CHART_SETTINGS_TEMPLATE_NAMESPACE = 'chart-settings';
@@ -29,6 +30,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'symbol', label: 'Symbol', icon: <CandlestickChart size={15} strokeWidth={1.6} /> },
   { id: 'statusLine', label: 'Stavový řádek', icon: <Rows3 size={15} strokeWidth={1.6} /> },
   { id: 'scales', label: 'Osy a čáry', icon: <Ruler size={15} strokeWidth={1.6} /> },
+  { id: 'trading', label: 'Obchodování', icon: <Zap size={15} strokeWidth={1.6} /> },
   { id: 'canvas', label: 'Plátno', icon: <LayoutGrid size={15} strokeWidth={1.6} /> },
 ];
 
@@ -207,7 +209,8 @@ export interface ChartSettingsDialogProps {
   isDark: boolean;
   onPreview: (settings: ChartSettings) => void;
   onCancel: () => void;
-  onApply: (settings: ChartSettings) => void;
+  /** `allPanels` odlišuje „Ok" (jen upravovaný graf) od „Na všechny grafy". */
+  onApply: (settings: ChartSettings, allPanels: boolean) => void;
 }
 
 export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
@@ -242,7 +245,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
     commit({ ...draft, [key]: { ...draft[key], ...patch } });
   };
 
-  const { symbol, statusLine, scales, canvas } = draft;
+  const { symbol, statusLine, scales, trading, canvas } = draft;
   // Vzorek data v náhledu formátu je stejný, jaký ukazuje TradingView.
   const sampleParts = zonedTimeParts(Date.UTC(1997, 8, 29, 12) / 1_000, symbol.timeZone);
 
@@ -501,6 +504,61 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
               </>
             )}
 
+            {tab === 'trading' && (
+              <>
+                <Section title="Rychlé objednávky">
+                  <Check
+                    checked={trading.quickOrderButton}
+                    onChange={quickOrderButton => update('trading', { quickOrderButton })}
+                    label="Zobrazit blesk Quick Order u position boxu"
+                  />
+                  <Check
+                    checked={trading.positionBoxes}
+                    onChange={positionBoxes => update('trading', { positionBoxes })}
+                    label="Zobrazit automatický position box"
+                  />
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                    Blesk okamžitě vytvoří Market, Limit nebo Stop objednávku podle position boxu. Box lze skrýt a ponechat jen fill markery.
+                  </p>
+                </Section>
+
+                <Section title="Objednávky a pozice">
+                  <Check
+                    checked={trading.orderLines}
+                    onChange={orderLines => update('trading', { orderLines })}
+                    label="Zobrazit čáry objednávek, pozice, SL a TP"
+                  />
+                </Section>
+
+                <Section title="Provedené obchody">
+                  <Check
+                    checked={trading.tradeLines}
+                    onChange={tradeLines => update('trading', { tradeLines })}
+                    label="Zobrazit spojnici vstupu a výstupu"
+                  />
+                  <Check
+                    checked={trading.executionMarkers}
+                    onChange={executionMarkers => update('trading', { executionMarkers })}
+                    label="Zobrazit trojúhelníky jednotlivých fillů"
+                  />
+                  {trading.executionMarkers && (
+                    <Row label="Velikost trojúhelníků">
+                      <Select
+                        value={trading.executionMarkerSize}
+                        width="w-[136px]"
+                        options={([
+                          ['small', 'Malá'],
+                          ['medium', 'Střední'],
+                          ['large', 'Velká'],
+                        ] as [ChartExecutionMarkerSize, string][]).map(([value, label]) => ({ value, label }))}
+                        onChange={executionMarkerSize => update('trading', { executionMarkerSize })}
+                      />
+                    </Row>
+                  )}
+                </Section>
+              </>
+            )}
+
             {tab === 'canvas' && (
               <>
                 <Section title="Základní styly grafu">
@@ -625,7 +683,13 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
           />
           <div className="flex gap-3">
             <button type="button" onClick={onCancel} className="h-8 rounded-md border border-slate-300 px-5 text-[13px] font-medium hover:bg-slate-50">Zrušit</button>
-            <button type="button" onClick={() => onApply(draft)} className="h-8 rounded-md bg-[#2962ff] px-6 text-[13px] font-semibold text-white hover:bg-[#1e53e5]">Ok</button>
+            <button
+              type="button"
+              onClick={() => onApply(draft, true)}
+              title="Přepíše nastavení ve všech grafech workspace"
+              className="h-8 rounded-md border border-slate-300 px-4 text-[13px] font-medium hover:bg-slate-50"
+            >Na všechny grafy</button>
+            <button type="button" onClick={() => onApply(draft, false)} className="h-8 rounded-md bg-[#2962ff] px-6 text-[13px] font-semibold text-white hover:bg-[#1e53e5]">Ok</button>
           </div>
         </footer>
       </section>

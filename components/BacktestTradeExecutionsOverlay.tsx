@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import type { UTCTimestamp } from 'lightweight-charts';
 import type { BacktestClosedTrade, BacktestFill } from '../services/backtestTypes';
+import type { ChartExecutionMarkerSize } from '../services/chartSettings';
 import {
   backtestExecutionMarkers,
   type BacktestExecutionMarker,
@@ -12,9 +13,13 @@ interface Props {
   trades: BacktestClosedTrade[];
   fills: BacktestFill[];
   isDark: boolean;
+  showTradeLines: boolean;
+  showExecutionMarkers: boolean;
+  executionMarkerSize: ChartExecutionMarkerSize;
+  onTradeSelect?: (tradeId: string) => void;
 }
 
-interface TradeCoordinates {
+export interface TradeCoordinates {
   id: string;
   entryX: number;
   entryY: number;
@@ -27,7 +32,7 @@ interface PointerPosition {
   clientY: number;
 }
 
-interface MarkerCoordinates extends BacktestExecutionMarker {
+export interface MarkerCoordinates extends BacktestExecutionMarker {
   x: number;
   y: number;
 }
@@ -97,6 +102,33 @@ const hoveredMarkerAtPointer = (
   return nearest && nearestDistance <= 9 ? { id: nearest.id, x: nearest.x, y: nearest.y } : null;
 };
 
+export const backtestTradeIdAtPointer = ({
+  coordinates,
+  markers,
+  executionMarkers,
+  trades,
+  pointer,
+  rect,
+}: {
+  coordinates: TradeCoordinates[];
+  markers: MarkerCoordinates[];
+  executionMarkers: BacktestExecutionMarker[];
+  trades: BacktestClosedTrade[];
+  pointer: PointerPosition;
+  rect: DOMRect;
+}): string | null => {
+  const lineHit = hoveredTradeAtPointer(coordinates, pointer, rect);
+  if (lineHit) return lineHit.id;
+  const markerHit = hoveredMarkerAtPointer(markers, pointer, rect);
+  if (!markerHit) return null;
+  const marker = executionMarkers.find(candidate => candidate.id === markerHit.id);
+  if (!marker) return null;
+  return trades.find(candidate => (
+    candidate.instrument === marker.instrument
+    && (candidate.entryTime === marker.time || candidate.exitTime === marker.time)
+  ))?.id ?? null;
+};
+
 type HoverPoint = { id: string; x: number; y: number } | null;
 
 /**
@@ -119,6 +151,7 @@ const paintTradeExecutions = (
   markers: MarkerCoordinates[],
   width: number,
   height: number,
+  markerSize: ChartExecutionMarkerSize,
 ) => {
   const ratio = window.devicePixelRatio || 1;
   const pixelWidth = Math.max(1, Math.round(width * ratio));
@@ -148,13 +181,15 @@ const paintTradeExecutions = (
     context.restore();
 
   });
+  const markerHeight = markerSize === 'small' ? 4 : markerSize === 'large' ? 8 : 5;
+  const markerHalfWidth = markerSize === 'small' ? 3 : markerSize === 'large' ? 6 : 4;
   markers.forEach(marker => {
-    const baseY = marker.y + (marker.pointsUp ? 5 : -5);
+    const baseY = marker.y + (marker.pointsUp ? markerHeight : -markerHeight);
     context.fillStyle = marker.color;
     context.beginPath();
     context.moveTo(marker.x, marker.y);
-    context.lineTo(marker.x - 4, baseY);
-    context.lineTo(marker.x + 4, baseY);
+    context.lineTo(marker.x - markerHalfWidth, baseY);
+    context.lineTo(marker.x + markerHalfWidth, baseY);
     context.closePath();
     context.fill();
   });
@@ -162,10 +197,20 @@ const paintTradeExecutions = (
 const exitLabel = (reason: BacktestClosedTrade['reason']) => {
   if (reason === 'stop-loss') return 'SL';
   if (reason === 'take-profit') return 'TP';
+  if (reason === 'session-close') return 'EOD';
   return 'Exit';
 };
 
-const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, isDark }) => {
+const BacktestTradeExecutionsOverlay: React.FC<Props> = ({
+  api,
+  trades,
+  fills,
+  isDark,
+  showTradeLines,
+  showExecutionMarkers,
+  executionMarkerSize,
+  onTradeSelect,
+}) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tradesRef = useRef(trades);
@@ -173,16 +218,20 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
   const markerCoordinatesRef = useRef<MarkerCoordinates[]>([]);
   const pointerRef = useRef<PointerPosition | null>(null);
   const refreshRef = useRef<(() => void) | null>(null);
+  const presentationRef = useRef({ showTradeLines, showExecutionMarkers, executionMarkerSize });
   const [hovered, setHovered] = useState<{ id: string; x: number; y: number } | null>(null);
   const [hoveredMarker, setHoveredMarker] = useState<{ id: string; x: number; y: number } | null>(null);
   tradesRef.current = trades;
+  presentationRef.current = { showTradeLines, showExecutionMarkers, executionMarkerSize };
 
   // Markery závisí jen na fillech, ne na rozsahu grafu. Dřív se přepočítávaly
   // uvnitř `update`, tedy při každé změně viditelného rozsahu — při scrollu
   // desetkrát za snímek.
   const executionMarkers = useMemo(() => backtestExecutionMarkers(fills), [fills]);
   const executionMarkersRef = useRef(executionMarkers);
+  const onTradeSelectRef = useRef(onTradeSelect);
   executionMarkersRef.current = executionMarkers;
+  onTradeSelectRef.current = onTradeSelect;
 
   useEffect(() => {
     let frame = 0;
@@ -190,7 +239,8 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
     const series = api.controller.getSeries();
     const update = () => {
       frame = 0;
-      const next = tradesRef.current.flatMap<TradeCoordinates>(trade => {
+      const presentation = presentationRef.current;
+      const next = presentation.showTradeLines ? tradesRef.current.flatMap<TradeCoordinates>(trade => {
         const entryX = chart.timeScale().timeToCoordinate(trade.entryTime as UTCTimestamp);
         const exitX = chart.timeScale().timeToCoordinate(trade.exitTime as UTCTimestamp);
         const entryY = series.priceToCoordinate(trade.entryPrice);
@@ -203,13 +253,13 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
           exitX,
           exitY,
         }];
-      });
-      const markerCoordinates = executionMarkersRef.current.flatMap<MarkerCoordinates>(marker => {
+      }) : [];
+      const markerCoordinates = presentation.showExecutionMarkers ? executionMarkersRef.current.flatMap<MarkerCoordinates>(marker => {
         const x = chart.timeScale().timeToCoordinate(marker.time as UTCTimestamp);
         const y = series.priceToCoordinate(marker.price);
         if (x === null || y === null) return [];
         return [{ ...marker, x, y }];
-      });
+      }) : [];
       coordinatesRef.current = next;
       markerCoordinatesRef.current = markerCoordinates;
       const rect = rootRef.current?.getBoundingClientRect();
@@ -221,6 +271,7 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
           markerCoordinates,
           rect.width,
           rect.height,
+          presentation.executionMarkerSize,
         );
         // Hover patří pointeru, ne rozsahu grafu — `update` ho proto řeší jen
         // tehdy, když kurzor nad grafem opravdu je (scroll pod nehybným
@@ -236,7 +287,10 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
     const schedule = () => {
       if (!frame) frame = window.requestAnimationFrame(update);
     };
-    refreshRef.current = schedule;
+    // Změna vzhledu z dialogu musí překreslit canvas hned. Kdyby ref ukazoval
+    // na RAF scheduler, už naplánovaný frame z pointer eventu mohl změnu
+    // spolknout a stará spojnice zůstala na canvasu až do dalšího pohybu grafu.
+    refreshRef.current = update;
     // The logical-range callback runs after Lightweight Charts updates its
     // scale, so update synchronously to avoid a one-frame detached overlay.
     chart.timeScale().subscribeVisibleLogicalRangeChange(update);
@@ -264,7 +318,7 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
     };
   }, [api]);
 
-  useEffect(() => { refreshRef.current?.(); }, [fills, trades]);
+  useEffect(() => { refreshRef.current?.(); }, [executionMarkerSize, fills, showExecutionMarkers, showTradeLines, trades]);
 
   useEffect(() => {
     const updatePassiveHover = (event: PointerEvent) => {
@@ -278,6 +332,31 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
     window.addEventListener('pointermove', updatePassiveHover, { capture: true, passive: true });
     return () => window.removeEventListener('pointermove', updatePassiveHover, true);
   }, []);
+
+  useEffect(() => {
+    if (!onTradeSelect) return;
+    const openTradeReview = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      if (event.target instanceof Element && event.target.closest('[data-backtest-trade-review]')) return;
+      const rect = rootRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const pointer = { clientX: event.clientX, clientY: event.clientY };
+      const tradeId = backtestTradeIdAtPointer({
+        coordinates: coordinatesRef.current,
+        markers: markerCoordinatesRef.current,
+        executionMarkers: executionMarkersRef.current,
+        trades: tradesRef.current,
+        pointer,
+        rect,
+      });
+      if (tradeId) onTradeSelectRef.current?.(tradeId);
+    };
+    // The canvas remains pointer-events:none so chart drag/zoom stays native.
+    // A capture listener only reacts when the pointer is actually close to a
+    // connector or fill marker.
+    window.addEventListener('click', openTradeReview, true);
+    return () => window.removeEventListener('click', openTradeReview, true);
+  }, [onTradeSelect]);
 
   const hoveredTrade = hovered ? trades.find(trade => trade.id === hovered.id) : undefined;
   const hoveredExecutionMarker = hoveredMarker
@@ -297,6 +376,7 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
           {hoveredExecutionMarker.side.toUpperCase()} {hoveredExecutionMarker.quantity} {hoveredExecutionMarker.instrument}
           <span className="mx-1.5 text-slate-400">·</span>
           {hoveredExecutionMarker.price.toFixed(2)}
+          {onTradeSelect ? <span className="ml-1.5 text-blue-400">· klikni pro detail</span> : null}
         </div>
       )}
       {hovered && hoveredTrade && (
@@ -311,6 +391,7 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({ api, trades, fills, i
           <span className={`ml-2 ${hoveredTrade.pnl > 0 ? 'text-emerald-500' : hoveredTrade.pnl < 0 ? 'text-rose-500' : 'text-blue-500'}`}>
             P&amp;L {formatMoney(hoveredTrade.pnl)}
           </span>
+          {onTradeSelect ? <span className="ml-1.5 text-blue-400">· klikni pro detail</span> : null}
         </div>
       )}
     </div>

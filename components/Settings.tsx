@@ -906,7 +906,9 @@ const Settings: React.FC<SettingsProps> = ({
     [systemSettings.tradecopiaNotifications],
   );
 
-  const isLocalAlertLab = isNativeBuild;
+  const isLocalAlertLab = isNativeBuild || (import.meta.env.DEV
+    && typeof window !== 'undefined'
+    && ['localhost', '127.0.0.1'].includes(window.location.hostname));
 
   const localAlertSamples = useMemo(
     () => LOCAL_ALERT_SAMPLES.map(sample => ({
@@ -919,21 +921,45 @@ const Settings: React.FC<SettingsProps> = ({
   const handleLocalAlertTest = async (event: TradecopiaFastEvent) => {
     setLocalAlertBusyKey(event.key);
     try {
-      const formatted = formatTradecopiaNotification(event, tradecopiaNotifications);
-      const isTradeEvent = event.type === 'trade_opened' || event.type === 'trade_closed';
-      const attachmentUrl = isTradeEvent
-        ? await createTradeNotificationAttachment(event)
-        : undefined;
-      await scheduleNativeNotification({
-        title: formatted.title,
-        body: formatted.body,
-        route: event.type === 'trade_closed' ? 'journal' : 'live',
-        threadIdentifier: 'alphatrade-tradecopia',
-        attachmentUrl,
-        actionType: event.severity === 'critical' ? 'risk' : (isTradeEvent ? 'trade' : 'general'),
-        interruptionLevel: event.severity === 'critical' ? 'timeSensitive' : 'active',
+      if (isNativeBuild) {
+        const formatted = formatTradecopiaNotification(event, tradecopiaNotifications);
+        const isTradeEvent = event.type === 'trade_opened' || event.type === 'trade_closed';
+        const attachmentUrl = isTradeEvent
+          ? await createTradeNotificationAttachment(event)
+          : undefined;
+        await scheduleNativeNotification({
+          title: formatted.title,
+          body: formatted.body,
+          route: event.type === 'trade_closed' ? 'journal' : 'live',
+          threadIdentifier: 'alphatrade-tradecopia',
+          attachmentUrl,
+          actionType: event.severity === 'critical' ? 'risk' : (isTradeEvent ? 'trade' : 'general'),
+          interruptionLevel: event.severity === 'critical' ? 'timeSensitive' : 'active',
+        });
+        showToast(`${attachmentUrl ? 'Rich' : 'Nativní'} alert naplánován — zavři appku a počkej 2 sekundy`);
+        return;
+      }
+      const response = await fetch('/__dev/tradecopia-alert-lab', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: {
+            ...event,
+            key: `${event.key}:${Date.now()}:${crypto.randomUUID()}`,
+            occurredAt: new Date().toISOString(),
+          },
+        }),
       });
-      showToast(`${attachmentUrl ? 'Rich' : 'Nativní'} alert naplánován — zavři appku a počkej 2 sekundy`);
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        showToast(result.error ? `Push selhal: ${result.error}` : `Push selhal: HTTP ${response.status}`);
+      } else if (Number(result.sent || 0) > 0) {
+        showToast(`Skutečný push odeslán na ${result.sent} z ${result.devices} zařízení`);
+      } else if (Number(result.skipped || 0) > 0) {
+        showToast('Tento typ alertu je vypnutý nebo právě běží tichý režim');
+      } else {
+        showToast('Žádné aktivní zařízení push nepřijalo');
+      }
     } catch (error) {
       showToast(`Push selhal: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
     } finally {

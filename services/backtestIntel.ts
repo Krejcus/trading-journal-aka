@@ -11,6 +11,11 @@ import {
   type BacktestPlacementRead,
 } from './backtestEntryContext';
 import { backtestStructuralTrail, readBacktestStructure } from './backtestStructureLevels';
+import {
+  backtestSessionCutoffSeconds,
+  DEFAULT_BACKTEST_FLAT_BY_MINUTE,
+  DEFAULT_BACKTEST_FLAT_TIME_ZONE,
+} from './backtestSessionClose';
 import type { BacktestClosedTrade, BacktestInstrument, BacktestOrderEvent } from './backtestTypes';
 
 /**
@@ -659,6 +664,7 @@ const EXCURSION_LEVEL_LIMIT = 10;
 export interface BacktestExcursionOptions {
   timeZone: string;
   flatByMinute?: number;
+  flatTimeZone?: string;
   /**
    * Pojmenované likviditní úrovně nad (u longu) nebo pod vstupem. Bez nich se
    * použijí násobky R, ale `topReached` pak nese jen „3R" místo „PDH".
@@ -681,8 +687,9 @@ export const backtestExcursion = (
 ): BacktestExcursion => {
   const risk = riskDistanceOf(trade);
   if (risk === null) return { available: false, reason: 'no-initial-stop' };
-  const flatByMin = options.flatByMinute ?? 22 * 60;
-  const cutoff = dayCutoffSeconds(trade.entryTime, options.timeZone, flatByMin);
+  const flatByMin = options.flatByMinute ?? DEFAULT_BACKTEST_FLAT_BY_MINUTE;
+  const flatTimeZone = options.flatTimeZone ?? DEFAULT_BACKTEST_FLAT_TIME_ZONE;
+  const cutoff = backtestSessionCutoffSeconds(trade.entryTime, flatTimeZone, flatByMin);
   const all = barsAfterEntry(candles, trade.entryTime);
   const following = all.filter(candle => candle.time <= cutoff);
   if (following.length === 0) return { available: false, reason: 'no-bars-after-entry' };
@@ -771,18 +778,6 @@ export const backtestExcursion = (
   };
 };
 
-/** Unixový čas, kdy v daný den (v zóně session) nastane `minuteOfDay`. */
-const dayCutoffSeconds = (unixSeconds: number, timeZone: string, minuteOfDay: number): number => {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone, hour12: false, hour: '2-digit', minute: '2-digit',
-  }).formatToParts(new Date(unixSeconds * 1_000));
-  const value = (type: string) => Number(parts.find(part => part.type === type)?.value ?? '0');
-  const currentMinute = value('hour') * 60 + value('minute');
-  const remaining = minuteOfDay - currentMinute;
-  // Vstup po cutoffu se pouští do dalšího dne, jinak by okno mělo zápornou délku.
-  return unixSeconds + (remaining > 0 ? remaining : remaining + 24 * 60) * 60;
-};
-
 export const backtestPointValueOf = (instrument: BacktestInstrument) => backtestPointValue(instrument);
 
 export interface BacktestTradeIntel {
@@ -810,6 +805,7 @@ export interface BacktestIntelOptions {
   orderEvents: readonly BacktestOrderEvent[];
   timeZone: string;
   flatByMinute?: number;
+  flatTimeZone?: string;
   /** Hodinové svíčky pro HTF kontext. Bez nich se HTF označí za nedostupný. */
   htfCandles?: readonly MarketCandle[];
   /**
@@ -847,6 +843,7 @@ export const backtestTradeIntel = (
     excursion: backtestExcursion(options.candles, trade, {
       timeZone: options.timeZone,
       flatByMinute: options.flatByMinute,
+      flatTimeZone: options.flatTimeZone,
       namedLevels: context.favorableLevels(trade),
     }),
     executionPath: backtestExecutionPath(options.candles, trade),
@@ -863,8 +860,24 @@ export const backtestTradeIntel = (
 export interface BacktestTradeMappingOptions extends BacktestIntelOptions {
   accountId: string;
   sessionBias?: 'Long' | 'Short' | 'Neutral' | null;
+  sessionPreNotes?: string | null;
+  sessionPostNotes?: string | null;
   strategy?: string;
 }
+
+/** Verze data blobu; drží krok s AlphaBridge, ať AI ví, co kde čekat. */
+export const BACKTEST_TRADE_SCHEMA_VERSION = 4;
+
+/** HH:MM v zóně session — AlphaBridge i importy tohle pole plní. */
+const clockTime = (unixSeconds: number, timeZone: string): string => {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone, hour12: false, hour: '2-digit', minute: '2-digit',
+    }).format(new Date(unixSeconds * 1_000));
+  } catch {
+    return new Date(unixSeconds * 1_000).toISOString().slice(11, 16);
+  }
+};
 
 /**
  * Uzavřený backtest obchod jako plnohodnotný `Trade`.
@@ -905,8 +918,11 @@ export const backtestClosedTradeToTrade = (
     durationMinutes,
     entryPrice: closed.entryPrice,
     exitPrice: closed.exitPrice,
-    stopLoss: closed.initialStopLoss,
-    takeProfit: closed.initialTakeProfit,
+    // Obchody z doby před zavedením vstupního bracketu mají jen bracket platný
+    // při výstupu. Pro zobrazení je to pořád lepší než prázdno; do rizika a R
+    // se ale nepromítá — posunutá stopka by 1R nafoukla nebo vynulovala.
+    stopLoss: closed.initialStopLoss ?? closed.stopLoss,
+    takeProfit: closed.initialTakeProfit ?? closed.takeProfit,
     positionSize: closed.quantity,
     session: intel.session,
     sessionBias: bias,
@@ -924,7 +940,9 @@ export const backtestClosedTradeToTrade = (
     executionPathComplete: intel.executionPath.available ? intel.executionPath.complete === true : null,
     counterfactual: intel.counterfactual,
     entryMap: intel.entryMap,
-    entryContext: { ...intel.entryContext, htf: intel.htfContext },
+    // Placement zůstává uvnitř entryContext, aby přesné OTE/swing/FVG
+    // kandidáty i target policy přežily uložení a byly auditovatelné v review.
+    entryContext: { ...intel.entryContext, htf: intel.htfContext, placement: intel.placement },
     htfConfluence: intel.htfConfluence,
     ltfConfluence: intel.ltfConfluence,
     slPlacement: intel.placement.slPlacement ?? undefined,
@@ -932,6 +950,19 @@ export const backtestClosedTradeToTrade = (
     targetLevel: intel.placement.targetLevel ?? undefined,
     management: intel.management.label,
     notes: `Backtest session · ${closed.reason}`,
+    // Pole, která AlphaBridge plní u každého obchodu a replay je dosud
+    // vynechával — bez nich se replay obchody chovaly v deníku i v analytice
+    // jinak než ty živé.
+    // `status: 'CLOSED'` z AlphaBridge záměrně nepřebírám — v datech je, ale
+    // žádná read-path ho nečte a replay obchod jiný stav ani mít nemůže.
+    time: clockTime(closed.entryTime, options.timeZone),
+    outcomeAmbiguous: closed.outcomeAmbiguous ?? false,
+    isBE: closed.pnl === 0 ? true : undefined,
+    // `phase` AlphaBridge do obchodu kopíruje, ale aplikace ho ignoruje —
+    // TradeHistory bere fázi z účtu jako ze zdroje pravdy.
+    sessionPreNotes: options.sessionPreNotes ?? null,
+    sessionPostNotes: options.sessionPostNotes ?? null,
+    schemaVersion: BACKTEST_TRADE_SCHEMA_VERSION,
     source: 'backtest-replay',
   };
 };

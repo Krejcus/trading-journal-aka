@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { hoverUpdater } from '../components/BacktestTradeExecutionsOverlay';
+import { backtestTradeIdAtPointer, hoverUpdater } from '../components/BacktestTradeExecutionsOverlay';
+import type { BacktestClosedTrade } from '../services/backtestTypes';
 
 /**
  * Regrese na zamrzání grafu při scrollování zpět do historie.
@@ -39,5 +40,41 @@ describe('hoverUpdater', () => {
     expect(hoverUpdater(null)({ ...point })).toBeNull();
     const appearing = { ...point };
     expect(hoverUpdater(appearing)(null)).toBe(appearing);
+  });
+});
+
+describe('backtestTradeIdAtPointer', () => {
+  const rect = { left: 100, top: 50, width: 500, height: 300 } as DOMRect;
+  const trade: BacktestClosedTrade = {
+    id: 'trade-1', runId: 'run-1', instrument: 'MNQ', direction: 'Long', quantity: 1,
+    entryPrice: 20000, exitPrice: 20010, entryTime: 100, exitTime: 200,
+    grossPnl: 20, commission: 1, pnl: 19, reason: 'take-profit',
+  };
+
+  it('opens the trade when clicking close to its entry-exit connector', () => {
+    expect(backtestTradeIdAtPointer({
+      coordinates: [{ id: trade.id, entryX: 10, entryY: 20, exitX: 110, exitY: 20 }],
+      markers: [], executionMarkers: [], trades: [trade], rect,
+      pointer: { clientX: 160, clientY: 72 },
+    })).toBe(trade.id);
+  });
+
+  it('maps an entry fill marker back to the closed trade', () => {
+    const marker = {
+      id: 'fill-1', time: trade.entryTime, price: trade.entryPrice, instrument: 'MNQ' as const,
+      side: 'buy' as const, quantity: 1, pointsUp: true, color: '#2563eb',
+    };
+    expect(backtestTradeIdAtPointer({
+      coordinates: [], markers: [{ ...marker, x: 40, y: 60 }], executionMarkers: [marker],
+      trades: [trade], rect, pointer: { clientX: 140, clientY: 110 },
+    })).toBe(trade.id);
+  });
+
+  it('does not steal ordinary chart clicks', () => {
+    expect(backtestTradeIdAtPointer({
+      coordinates: [{ id: trade.id, entryX: 10, entryY: 20, exitX: 110, exitY: 20 }],
+      markers: [], executionMarkers: [], trades: [trade], rect,
+      pointer: { clientX: 400, clientY: 250 },
+    })).toBeNull();
   });
 });

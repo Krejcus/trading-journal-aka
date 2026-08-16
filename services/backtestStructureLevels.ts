@@ -16,8 +16,8 @@ import type { MarketCandle } from './marketData';
 
 /** Okno barů před vstupem, ve kterém se hledají pivoty. Stejné jako v extension. */
 const STRUCTURE_LOOKBACK_BARS = 200;
-/** Jak daleko od vstupu smí ležet proximální hrana FVG, aby se brala. */
-const FVG_MAX_ENTRY_DISTANCE = 6;
+/** Entry musí ležet na proximální hraně FVG, ne pouze někde poblíž zóny. */
+const FVG_ENTRY_TOLERANCE_TICKS = 1;
 /** Kolik barů zpět od vstupu se mezery hledají. */
 const FVG_LOOKBACK_BARS = 40;
 /** Retracement, na kterém leží OTE. */
@@ -33,6 +33,19 @@ export interface BacktestStructureEvent {
   atIndex: number;
 }
 
+export interface BacktestEntryFvgRead {
+  timeframe: '1m';
+  direction: 'bull' | 'bear';
+  bornTime: number;
+  top: number;
+  bottom: number;
+  /** Hrana, na kterou se limit vrací jako první. */
+  proximal: number;
+  /** Chráněná vzdálená hrana — kandidát na FVG stop. */
+  distal: number;
+  entryDistanceTicks: number;
+}
+
 export interface BacktestStructureRead {
   available: boolean;
   events: BacktestStructureEvent[];
@@ -46,11 +59,13 @@ export interface BacktestStructureRead {
   swing: number | null;
   ote: number | null;
   fvg: number | null;
+  /** Potvrzené a v okamžiku před vstupní svíčkou stále aktivní 1m FVG. */
+  entryFvg: BacktestEntryFvgRead | null;
 }
 
 const emptyRead = (): BacktestStructureRead => ({
   available: false, events: [], structureType: null, structureOrder: 0,
-  odrazPrice: null, odrazIndex: null, swing: null, ote: null, fvg: null,
+  odrazPrice: null, odrazIndex: null, swing: null, ote: null, fvg: null, entryFvg: null,
 });
 
 /** Index svíčky, na které obchod vstoupil. `-1` když čas v datech není. */
@@ -75,7 +90,9 @@ export const readBacktestStructure = (
   // ── pivoty 1/1 do vstupu ──
   const pivotHighs: { index: number; price: number }[] = [];
   const pivotLows: { index: number; price: number }[] = [];
-  for (let index = windowStart; index <= entryIndex - 1; index += 1) {
+  // Vstupní 1m bar není v okamžiku fillu hotový. Ani jeho close, ani jeho použití
+  // jako pravé strany pivotu proto nesmí rozhodovat o kontextu vstupu.
+  for (let index = windowStart; index <= entryIndex - 2; index += 1) {
     const current = candles[index];
     const previous = candles[index - 1];
     const next = candles[index + 1];
@@ -94,7 +111,7 @@ export const readBacktestStructure = (
     for (let k = pivots.length - 1; k >= 0; k -= 1) if (pivots[k].index <= limit) return pivots[k];
     return null;
   };
-  for (let index = windowStart + 2; index <= entryIndex; index += 1) {
+  for (let index = windowStart + 2; index <= entryIndex - 1; index += 1) {
     const candle = candles[index];
     if (!candle) continue;
     const high = latestBefore(pivotHighs, index - 1);
@@ -130,7 +147,7 @@ export const readBacktestStructure = (
   if (directional?.protectedPrice != null && directional.protectedIndex != null) {
     if (long) {
       let peak = -Infinity;
-      for (let index = directional.protectedIndex; index <= entryIndex; index += 1) {
+      for (let index = directional.protectedIndex; index <= entryIndex - 1; index += 1) {
         const candle = candles[index];
         if (candle && candle.high > peak) peak = candle.high;
       }
@@ -138,7 +155,7 @@ export const readBacktestStructure = (
       if (peak > base && peak !== -Infinity) ote = peak - OTE_RATIO * (peak - base);
     } else {
       let trough = Infinity;
-      for (let index = directional.protectedIndex; index <= entryIndex; index += 1) {
+      for (let index = directional.protectedIndex; index <= entryIndex - 1; index += 1) {
         const candle = candles[index];
         if (candle && candle.low < trough) trough = candle.low;
       }
@@ -148,12 +165,21 @@ export const readBacktestStructure = (
   }
 
   // ── FVG = vzdálená hrana mezery, jejíž bližší hrana leží u vstupu ──
-  let fvg: number | null = null;
+  let entryFvg: BacktestEntryFvgRead | null = null;
   let bestDistance = Infinity;
-  for (let index = Math.max(1, entryIndex - FVG_LOOKBACK_BARS); index <= entryIndex; index += 1) {
+  for (let index = Math.max(1, entryIndex - FVG_LOOKBACK_BARS); index <= entryIndex - 2; index += 1) {
     const before = candles[index - 1];
     const after = candles[index + 1];
     if (!before || !after) continue;
+    const bornIndex = index + 1;
+    const activeUntilEntry = (direction: 'bull' | 'bear', top: number, bottom: number) => {
+      for (let scan = bornIndex + 1; scan < entryIndex; scan += 1) {
+        const candle = candles[scan];
+        if (!candle) continue;
+        if (direction === 'bull' ? candle.low <= bottom : candle.high >= top) return false;
+      }
+      return true;
+    };
     if (long) {
       // Bullish mezera: dno = high první svíčky, strop = low třetí. Vstup leží
       // u stropu, chráněná strana je dno.
@@ -161,18 +187,32 @@ export const readBacktestStructure = (
         const top = after.low;
         const bottom = before.high;
         const distance = Math.abs(entryPrice - top);
-        if (bottom < entryPrice && distance < bestDistance && distance <= FVG_MAX_ENTRY_DISTANCE) {
+        if (bottom < entryPrice
+          && activeUntilEntry('bull', top, bottom)
+          && distance < bestDistance
+          && distance <= tickSize * FVG_ENTRY_TOLERANCE_TICKS) {
           bestDistance = distance;
-          fvg = bottom;
+          entryFvg = {
+            timeframe: '1m', direction: 'bull', bornTime: after.time,
+            top, bottom, proximal: top, distal: bottom,
+            entryDistanceTicks: tickSize > 0 ? distance / tickSize : 0,
+          };
         }
       }
     } else if (after.high < before.low) {
       const top = before.low;
       const bottom = after.high;
       const distance = Math.abs(entryPrice - bottom);
-      if (top > entryPrice && distance < bestDistance && distance <= FVG_MAX_ENTRY_DISTANCE) {
+      if (top > entryPrice
+        && activeUntilEntry('bear', top, bottom)
+        && distance < bestDistance
+        && distance <= tickSize * FVG_ENTRY_TOLERANCE_TICKS) {
         bestDistance = distance;
-        fvg = top;
+        entryFvg = {
+          timeframe: '1m', direction: 'bear', bornTime: after.time,
+          top, bottom, proximal: bottom, distal: top,
+          entryDistanceTicks: tickSize > 0 ? distance / tickSize : 0,
+        };
       }
     }
   }
@@ -201,7 +241,14 @@ export const readBacktestStructure = (
     odrazIndex: run.length ? run[0].protectedIndex : null,
     swing: roundTick(swing),
     ote: roundTick(ote),
-    fvg: roundTick(fvg),
+    fvg: roundTick(entryFvg?.distal ?? null),
+    entryFvg: entryFvg ? {
+      ...entryFvg,
+      top: roundTick(entryFvg.top) as number,
+      bottom: roundTick(entryFvg.bottom) as number,
+      proximal: roundTick(entryFvg.proximal) as number,
+      distal: roundTick(entryFvg.distal) as number,
+    } : null,
   };
 };
 

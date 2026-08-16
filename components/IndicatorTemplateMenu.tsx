@@ -1,27 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronUp, Save, Trash2 } from 'lucide-react';
+import {
+  chartTemplateId,
+  chartTemplates,
+  deleteChartTemplate,
+  saveChartTemplate,
+  subscribeChartTemplates,
+  type ChartTemplateRecord,
+} from '../services/chartTemplateStore';
 
-const STORAGE_KEY = 'alphatrade:chart-indicator-templates:v1';
+export type IndicatorTemplateRecord = ChartTemplateRecord;
 
-export interface IndicatorTemplateRecord {
-  id: string;
-  indicator: string;
-  name: string;
-  value: unknown;
-  updatedAt: string;
-}
-
-export const upsertIndicatorTemplate = (
-  records: IndicatorTemplateRecord[],
-  next: IndicatorTemplateRecord,
-): IndicatorTemplateRecord[] => {
-  const matching = records.find(record => (
-    record.indicator === next.indicator
-    && record.name.trim().toLocaleLowerCase('cs-CZ') === next.name.trim().toLocaleLowerCase('cs-CZ')
-  ));
-  const saved = matching ? { ...next, id: matching.id } : next;
-  return [...records.filter(record => record.id !== saved.id), saved];
-};
+export { upsertChartTemplate as upsertIndicatorTemplate } from '../services/chartTemplateStore';
 
 const comparableTemplateValue = (value: unknown): string | null => {
   try {
@@ -44,19 +34,6 @@ export const matchingIndicatorTemplateName = (
     record.indicator === indicator
     && comparableTemplateValue(record.value) === signature
   ))?.name ?? null;
-};
-
-const readTemplates = (): IndicatorTemplateRecord[] => {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.filter(record => record && typeof record.name === 'string') : [];
-  } catch {
-    return [];
-  }
-};
-
-const writeTemplates = (records: IndicatorTemplateRecord[]) => {
-  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(records)); } catch { /* private storage */ }
 };
 
 const IndicatorTemplateMenu: React.FC<{
@@ -86,7 +63,7 @@ const IndicatorTemplateMenu: React.FC<{
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
-  const [templates, setTemplates] = useState<IndicatorTemplateRecord[]>(() => typeof window === 'undefined' ? [] : readTemplates());
+  const [templates, setTemplates] = useState<IndicatorTemplateRecord[]>(() => typeof window === 'undefined' ? [] : chartTemplates());
   const visibleTemplates = templates
     .filter(template => template.indicator === indicator)
     .sort((a, b) => a.name.localeCompare(b.name, 'cs'));
@@ -109,27 +86,25 @@ const IndicatorTemplateMenu: React.FC<{
     if (naming) window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [naming]);
 
+  // Šablony žijí v cloudu, takže se sada může doplnit až po dorovnání z jiného
+  // zařízení. Odběr drží všechna otevřená menu na stejném seznamu.
+  useEffect(() => subscribeChartTemplates(setTemplates), []);
+
   const save = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    const next = upsertIndicatorTemplate(templates, {
-      id: typeof globalThis.crypto?.randomUUID === 'function' ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    void saveChartTemplate({
+      id: chartTemplateId(),
       indicator,
       name: trimmed,
       value: structuredClone(value),
       updatedAt: new Date().toISOString(),
     });
-    setTemplates(next);
-    writeTemplates(next);
     setName('');
     setNaming(false);
   };
 
-  const remove = (id: string) => {
-    const next = templates.filter(template => template.id !== id);
-    setTemplates(next);
-    writeTemplates(next);
-  };
+  const remove = (id: string) => { void deleteChartTemplate(id); };
 
   const menuItem = 'flex min-h-9 w-full items-center gap-2 px-3 text-left text-[13px] text-slate-800 hover:bg-slate-100';
 

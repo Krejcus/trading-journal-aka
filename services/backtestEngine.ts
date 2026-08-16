@@ -12,6 +12,11 @@ import {
   type BacktestRuntimeState,
 } from './backtestTypes';
 import { DEFAULT_CHART_REPLAY_STATE } from './chartReplay';
+import {
+  backtestSessionCutoffSeconds,
+  DEFAULT_BACKTEST_FLAT_BY_MINUTE,
+  DEFAULT_BACKTEST_FLAT_TIME_ZONE,
+} from './backtestSessionClose';
 
 const POINT_VALUE: Record<BacktestInstrument, number> = { MNQ: 2, NQ: 20 };
 const TICK_SIZE: Record<BacktestInstrument, number> = { MNQ: 0.25, NQ: 0.25 };
@@ -226,6 +231,8 @@ const applyFill = (
   time: number,
   config: BacktestRunConfig,
   reason: BacktestFill['reason'],
+  /** Svíčka trefila stopku i target — výsledek z minutových dat nerozhodneme. */
+  outcomeAmbiguous = false,
 ): ApplyFillResult => {
   const quantity = order.remainingQuantity;
   const commission = config.commissionPerSide[order.instrument] * quantity;
@@ -290,6 +297,7 @@ const applyFill = (
       initialStopLoss: current.initialStopLoss,
       initialTakeProfit: current.initialTakeProfit,
       riskAmount: riskAmountOf(order.instrument, current.averagePrice, current.initialStopLoss, closingQuantity),
+      ...(outcomeAmbiguous ? { outcomeAmbiguous: true } : {}),
       ...closedExcursion(current, price, riskDistance),
     });
     if (current.quantity > closingQuantity) {
@@ -359,6 +367,52 @@ export const processBacktestCandle = (
   config: BacktestRunConfig,
 ): BacktestRuntimeState => {
   let next: BacktestRuntimeState = { ...runtime, orders: [...runtime.orders], fills: [...runtime.fills], positions: [...runtime.positions], closedTrades: [...runtime.closedTrades] };
+  const flatTimeZone = config.flatTimeZone ?? DEFAULT_BACKTEST_FLAT_TIME_ZONE;
+  const flatByMinute = config.flatByMinute ?? DEFAULT_BACKTEST_FLAT_BY_MINUTE;
+
+  // Žádný čekající vstup nesmí přežít denní prop-firm cutoff. Rušíme ho před
+  // vyhodnocením high/low cutoff svíčky, takže se na ní nemůže zpětně vyplnit.
+  const expired = next.orders.filter(order => order.status === 'pending'
+    && order.instrument === instrument
+    && candle.time >= backtestSessionCutoffSeconds(order.createdAt, flatTimeZone, flatByMinute));
+  for (const order of expired) {
+    next = {
+      ...next,
+      orders: next.orders.map(item => item.id === order.id
+        ? { ...item, status: 'cancelled', cancelledAt: candle.time, updatedAt: candle.time }
+        : item),
+    };
+    next = appendOrderEvent(next, runId, {
+      orderId: order.id, kind: 'cancelled', instrument, marketTime: candle.time,
+      side: order.side, quantity: order.remainingQuantity,
+    });
+  }
+
+  // Pozici zavíráme na open první dostupné 1m svíčky v/po cutoffu. Její
+  // high/low už nesmí vstoupit do MFE/MAE ani rozhodnout bracket.
+  const positionAtCutoff = next.positions.find(item => item.instrument === instrument
+    && candle.time >= backtestSessionCutoffSeconds(item.openedAt, flatTimeZone, flatByMinute));
+  if (positionAtCutoff) {
+    const side: BacktestOrderSide = positionAtCutoff.side === 'long' ? 'sell' : 'buy';
+    const order = bracketOrder(runId, positionAtCutoff, side, candle.open, candle.time);
+    const price = slippagePrice(candle.open, side, instrument, config);
+    const result = applyFill(next, order, price, candle.time, config, 'session-close');
+    next = {
+      ...next,
+      orders: [...next.orders, { ...order, status: 'filled', remainingQuantity: 0, filledAt: candle.time, updatedAt: candle.time }],
+      positions: result.positions,
+      fills: [...next.fills, result.fill],
+      closedTrades: [...next.closedTrades, ...result.closedTrades],
+      realizedPnl: next.realizedPnl + result.fill.realizedPnl - result.fill.commission,
+      commissions: next.commissions + result.fill.commission,
+      balance: next.balance + result.fill.realizedPnl - result.fill.commission,
+    };
+    next = appendOrderEvent(next, runId, {
+      orderId: order.id, kind: 'filled', instrument, marketTime: candle.time,
+      side, quantity: order.quantity, price,
+    });
+  }
+
   // Extrémy se musí posunout dřív, než bracket pozici zavře — jinak by se
   // svíčka, která trefila stopku, do MAE vůbec nedostala.
   next.positions = next.positions.map(item => item.instrument === instrument && candle.time > item.openedAt
@@ -377,7 +431,7 @@ export const processBacktestCandle = (
         : requestedLevel;
       const order = bracketOrder(runId, position, side, requested, candle.time);
       const price = slippagePrice(requested, side, instrument, config);
-      const result = applyFill(next, order, price, candle.time, config, reason);
+      const result = applyFill(next, order, price, candle.time, config, reason, stopTouched && targetTouched);
       next = {
         ...next,
         orders: [...next.orders, { ...order, status: 'filled', remainingQuantity: 0, filledAt: candle.time, updatedAt: candle.time }],

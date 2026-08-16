@@ -41,6 +41,24 @@ describe('calculateLiquidityLevels', () => {
     ], value);
     expect(result.sessionBoxes).toEqual([expect.objectContaining({ name: 'ASIA', high: 108, low: 98 })]);
     expect(result.levels.map(level => level.name)).toEqual(expect.arrayContaining(['ASIA H', 'ASIA L']));
+    expect(result.levels.find(level => level.name === 'ASIA H')?.startTime)
+      .toBe(Date.parse('2026-08-02T03:00:00Z') / 1000);
+  });
+
+  it('during an active session shows only its growing box, not provisional H/L levels', () => {
+    const value = settings();
+    value.timezone = 'UTC';
+    value.asiaStart = 1;
+    value.asiaEnd = 3;
+    value.showLondon = false;
+    value.showNewYork = false;
+    const result = calculateLiquidityLevels([
+      candle('2026-08-02T01:00:00Z', 100, 105, 99, 102),
+      candle('2026-08-02T02:00:00Z', 102, 108, 98, 104),
+    ], value);
+
+    expect(result.sessionBoxes).toEqual([expect.objectContaining({ name: 'ASIA', high: 108, low: 98 })]);
+    expect(result.levels.some(level => level.name === 'ASIA H' || level.name === 'ASIA L')).toBe(false);
   });
 
   it('calculates both independent VWAP deviation multipliers', () => {

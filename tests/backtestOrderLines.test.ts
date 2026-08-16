@@ -43,7 +43,10 @@ describe('backtest chart order lines', () => {
     expect(source).toContain('context.lineWidth = 0.75');
     expect(source).toContain('context.closePath()');
     expect(source).toContain('context.fill()');
-    expect(source).toContain('marker.x - 4');
+    expect(source).toContain("markerSize === 'large' ? 6 : 4");
+    expect(source).toContain('marker.x - markerHalfWidth');
+    expect(source).toContain('presentation.showExecutionMarkers');
+    expect(source).toContain('presentation.showTradeLines');
     expect(source).toContain('data-backtest-execution-marker-tooltip');
     expect(source).toContain('hoveredExecutionMarker.quantity');
     expect(source).toContain('hoveredExecutionMarker.instrument');

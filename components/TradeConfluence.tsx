@@ -35,7 +35,10 @@ const entryTone = (t: string): Tone => {
 };
 
 const SL_LABEL: Record<string, string> = { fvg: 'SL na FVG', swing: 'SL na swingu', ote: 'SL na OTE', other: 'SL jinde' };
-const TGT_LABEL: Record<string, string> = { deviation: 'TP VWAP deviace', daily: 'TP denní level', liquidity: 'TP likvidita', fixed_rr: 'TP fixní RR', other: 'TP jiný cíl' };
+const TGT_LABEL: Record<string, string> = {
+  deviation: 'TP VWAP deviace', daily: 'TP denní level', liquidity: 'TP likvidita',
+  fixed_rr: 'TP fixní RR', session_close: 'Výstup EOD', other: 'TP jiný cíl',
+};
 
 /** Fallback pro obchody bez ltfConfluence (starší zápisy): poskládej tagy ze strukturovaných polí. */
 const buildEntryTags = (trade: Trade): string[] => {
@@ -66,7 +69,11 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
   const fvg: any = ec?.htfFvg;
   const isLongT = String(trade.direction || '').toUpperCase() === 'LONG';
 
-  const entryTags = (trade.ltfConfluence?.length ? trade.ltfConfluence : buildEntryTags(trade));
+  const entryTags = [...(trade.ltfConfluence?.length ? trade.ltfConfluence : buildEntryTags(trade))];
+  if (trade.slPlacement) entryTags.push(SL_LABEL[trade.slPlacement] || `SL ${trade.slPlacement}`);
+  if (trade.targetLevel) entryTags.push(trade.targetLevel === 'EOD' ? 'Výstup EOD' : `TP ${trade.targetLevel}`);
+  else if (trade.targetType) entryTags.push(TGT_LABEL[trade.targetType] || `TP ${trade.targetType}`);
+  const uniqueEntryTags = [...new Set(entryTags)];
   const htfManual = trade.htfConfluence || [];
 
   const chip = (label: string, tone: Tone, key?: string) => {
@@ -141,15 +148,15 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
   const mins = ec?.entryMinutes;
   const timeStr = mins != null ? `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}` : null;
 
-  if (!entryTags.length && !htfChips.length && !hasLevels) return null;
+  if (!uniqueEntryTags.length && !htfChips.length && !hasLevels) return null;
 
   return (
     <>
       {/* 1 · Entry Confluence — všechno o tomhle vstupu (auto z AlphaBridge + ruční tagy) */}
-      {entryTags.length > 0 && (
+      {uniqueEntryTags.length > 0 && (
         <div className={sectionCls}>
           {heading(Zap, 'Entry Confluence')}
-          <div className="flex flex-wrap gap-1.5">{entryTags.map((t, i) => chip(t, entryTone(t), `e${i}`))}</div>
+          <div className="flex flex-wrap gap-1.5">{uniqueEntryTags.map((t, i) => chip(t, entryTone(t), `e${i}`))}</div>
         </div>
       )}
 

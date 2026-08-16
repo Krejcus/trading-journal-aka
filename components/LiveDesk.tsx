@@ -596,8 +596,8 @@ const AccountDetail = ({
   onMappingChange: (mappedAccountId: string | null) => void;
   onClose: () => void;
 }) => (
-  <div className="fixed inset-0 z-[100] bg-black/65 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="w-full sm:max-w-3xl max-h-[92vh] overflow-y-auto custom-scrollbar rounded-t-xl sm:rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
+  <div className="native-modal-safe-area fixed inset-0 z-[100] bg-black/65 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="native-modal-panel w-full sm:max-w-3xl max-h-[92vh] overflow-y-auto custom-scrollbar rounded-t-xl sm:rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
       <div className="sticky top-0 z-10 p-5 lg:p-6 border-b border-[var(--border-subtle)] bg-[var(--bg-card)] flex items-center justify-between gap-4"><div><div className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-500">Live detail účtu</div><h3 className="text-xl font-black text-[var(--text-primary)] mt-1">{account.name}</h3><div className="text-xs text-[var(--text-secondary)] mt-1">{account.firm}{account.phase ? ` · ${account.phase}` : ''}</div></div><button onClick={onClose} className="w-10 h-10 rounded-xl bg-[var(--bg-page)] text-[var(--text-secondary)] hover:text-rose-500 flex items-center justify-center"><X size={19} /></button></div>
       <div className="p-5 lg:p-6 space-y-5">
         <div className="rounded-md border border-blue-500/20 bg-blue-500/[0.045] p-4">

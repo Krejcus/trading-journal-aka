@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createBacktestContextSource } from '../services/backtestEntryContext';
 import type { BacktestClosedTrade } from '../services/backtestTypes';
-import type { MarketCandle } from '../services/marketData';
+import {
+  type MarketCandle,
+} from '../services/marketData';
+import { readBacktestStructure } from '../services/backtestStructureLevels';
 
 const MINUTE = 60;
 /** 2026-03-02 00:00 UTC — pondělí, ať týdenní kotvy dávají smysl. */
@@ -93,10 +96,19 @@ describe('entryMap', () => {
     candles.push(bar(last.time + 5 * MINUTE, 100, 105, 99.75, 104.5));
     const entryTime = last.time + 5 * MINUTE;
     const map = source(candles).entryMap(trade({ entryTime, entryPrice: 104.5, initialStopLoss: 99 }));
+    const structure = readBacktestStructure(candles, entryTime, 104.5, true, 0.25);
     expect(map.available).toBe(true);
-    expect(map.structureType).not.toBeNull();
+    expect(map.structureType).toBe(structure.structureType);
     expect(map.structureOrder).toBeGreaterThanOrEqual(1);
     expect(map.structureBarsAgo).not.toBeNull();
+    // Odraz = chráněný protilehlý pivot prvního zlomu série.
+    expect(map.odrazPrice).toBe(structure.odrazPrice);
+    // Název levelu se přidá jen při shodě s už potvrzeným levelem. Probíhající
+    // session H/L se sem záměrně nesmí propsat.
+    if (map.odrazLevelPrice !== null) {
+      expect(map.odrazLevels.length).toBeGreaterThan(0);
+      expect(Math.abs(Number(map.odrazLevelPrice) - Number(structure.odrazPrice))).toBeLessThanOrEqual(0.75);
+    }
   });
 
   it('pozná vstup na hraně fair value gapu a uloží chráněnou stranu', () => {
@@ -108,11 +120,15 @@ describe('entryMap', () => {
     candles.push(bar(last.time + 3 * MINUTE, 105.5, 106.5, 103, 104));
     candles.push(bar(last.time + 4 * MINUTE, 104, 104.5, 101.5, 102));
     const entryTime = last.time + 4 * MINUTE;
-    const map = source(candles).entryMap(trade({ entryTime, entryPrice: 102, initialStopLoss: 99 }));
+    const map = source(candles).entryMap(trade({ entryTime, entryPrice: 103, initialStopLoss: 99 }));
     expect(map.entryFvg).toBe(true);
-    // Ukládá se dno mezery (kandidát na stopku) a vstup — vzdálená hrana je to,
-    // co má pro umístění stopky význam.
-    expect(map.entryFvgSpan).toMatchObject({ bottom: 101, top: 102 });
+    expect(map).toMatchObject({
+      entryFvgValid: true,
+      entryFvgTimeframe: '1m',
+      entryFvgEdge: 'proximal',
+      entryFvgDistanceTicks: 0,
+      entryFvgSpan: { bottom: 101, top: 103 },
+    });
   });
 
   it('bez struktury i mezery zůstanou pole prázdná, ne vymyšlená', () => {
@@ -142,22 +158,80 @@ describe('htfContext', () => {
       expect(context.aligned).toBe(context.structureDirection === 'bullish');
     }
   });
+
+  it('u pozdějšího obchodu nevrací HTF strukturu zamrzlou na prvním vstupu', () => {
+    const htf = [
+      bar(DAY_START, 100, 101, 99, 100),
+      bar(DAY_START + 3_600, 100, 102, 99.5, 101.5),
+      bar(DAY_START + 2 * 3_600, 101.5, 101.6, 100, 101),
+      bar(DAY_START + 3 * 3_600, 101, 103, 100.5, 102.5),
+      bar(DAY_START + 4 * 3_600, 102.5, 103, 98, 98.5),
+      bar(DAY_START + 5 * 3_600, 98.5, 101, 99, 100),
+      bar(DAY_START + 6 * 3_600, 100, 100.5, 97, 97.5),
+    ];
+    const shared = source(twoDaySeries(), htf);
+    const early = shared.htfContext(trade({ entryTime: DAY_START + 4 * 3_600 }));
+    const late = shared.htfContext(trade({ entryTime: DAY_START + 7 * 3_600 }));
+
+    expect(early.structureDirection).toBe('bullish');
+    expect(late.structureDirection).toBe('bearish');
+  });
 });
 
 describe('placement', () => {
-  it('kulatý násobek rizika čte jako fixní RR', () => {
-    const read = source().placement(trade({ entryPrice: 100, initialStopLoss: 96, initialTakeProfit: 108 }));
-    expect(read.targetType).toBe('fixed_rr');
-    expect(read.targetLevel).toBe('2R');
+  it('rozpozná TP na VWAP deviaci v okamžiku vstupu místo vzdáleného statického levelu', () => {
+    const shared = source();
+    const baseTrade = trade({ entryPrice: 100, initialStopLoss: 96 });
+    const deviation = shared.favorableLevels(baseTrade)
+      .find(level => /^VWAP [+-][12]σ$/.test(level.label));
+    expect(deviation).toBeTruthy();
+
+    const read = shared.placement(trade({
+      entryPrice: 100,
+      initialStopLoss: 96,
+      initialTakeProfit: deviation?.price,
+    }));
+    expect(read).toMatchObject({
+      targetType: 'deviation',
+      targetLevel: deviation?.label,
+      targetPolicy: {
+        expected: 'nearest_level',
+        nearestLevel: deviation?.label,
+        actualPrice: deviation?.price,
+        distanceTicks: 0,
+        valid: true,
+      },
+    });
   });
 
-  it('stopku za extrémem posledních barů čte jako swing', () => {
+  it('target mimo nejbližší netknutý level označí jako nevalidní', () => {
+    const read = source().placement(trade({ entryPrice: 100, initialStopLoss: 96, initialTakeProfit: 108 }));
+    expect(read.targetType).toBe('other');
+    expect(read.targetPolicy).toMatchObject({ expected: 'nearest_level', actualPrice: 108, valid: false });
+  });
+
+  it('obchod bez pevného TP sbírá jako plánovaný výstup na konci session', () => {
+    const read = source().placement(trade({ initialStopLoss: 96, initialTakeProfit: undefined }));
+    expect(read).toMatchObject({
+      targetType: 'session_close', targetLevel: 'EOD',
+      targetPolicy: { expected: 'session_close', actualPrice: null, valid: true },
+    });
+  });
+
+  it('SL přesně na chráněném swingu označí jako swing', () => {
     const candles = twoDaySeries();
-    const window = candles.slice(-20);
-    const low = Math.min(...window.map(item => item.low));
-    const entryTime = candles[candles.length - 1].time;
-    const read = source(candles).placement(trade({ entryTime, entryPrice: low + 8, initialStopLoss: low }));
+    const last = candles[candles.length - 1];
+    candles.push(bar(last.time + MINUTE, 100, 104, 99.75, 103));
+    candles.push(bar(last.time + 2 * MINUTE, 103, 103.5, 101, 101.5));
+    candles.push(bar(last.time + 3 * MINUTE, 101.5, 102, 99, 99.5));
+    candles.push(bar(last.time + 4 * MINUTE, 99.5, 100.5, 99.25, 100));
+    candles.push(bar(last.time + 5 * MINUTE, 100, 105, 99.75, 104.5));
+    candles.push(bar(last.time + 6 * MINUTE, 104.5, 105, 103.5, 104));
+    const entryTime = last.time + 6 * MINUTE;
+    const structure = readBacktestStructure(candles, entryTime, 104, true, 0.25);
+    const read = source(candles).placement(trade({ entryTime, entryPrice: 104, initialStopLoss: structure.swing ?? undefined }));
     expect(read.slPlacement).toBe('swing');
+    expect(read.slCandidates.swing.matched).toBe(true);
   });
 
   it('stopka uvnitř mezery, ale daleko od její hrany, není FVG placement', () => {
@@ -174,7 +248,7 @@ describe('placement', () => {
 
   it('bez stop lossu se placement nedohaduje', () => {
     expect(source().placement(trade({ initialStopLoss: undefined })))
-      .toEqual({ slPlacement: null, targetType: null, targetLevel: null });
+      .toMatchObject({ slPlacement: null, targetType: null, targetLevel: null });
   });
 });
 
@@ -185,5 +259,72 @@ describe('confluence', () => {
     expect(new Set(ltf).size).toBe(ltf.length);
     expect(ltf.some(tag => tag.includes('VWAP'))).toBe(true);
     expect(htf.some(tag => tag.includes('Day Open'))).toBe(true);
+  });
+});
+
+describe('entryContext — plný sběr levelů', () => {
+  it('vzdálenost hlásí pro každý level a se znaménkem podle strany vstupu', () => {
+    const context = source().entryContext(trade());
+    const entries = Object.entries(context.levelDist);
+    expect(entries.length).toBeGreaterThan(0);
+    entries.forEach(([name, distance]) => {
+      const level = context.nearbyLevels.find(item => item.label === name);
+      if (!level) return;
+      expect(Math.abs(distance)).toBeCloseTo(level.distancePoints, 2);
+      expect(distance > 0).toBe(level.price > 100);
+    });
+  });
+
+  it('netknuté seznamy jsou seřazené od nejbližšího a sedí s počty', () => {
+    const context = source().entryContext(trade());
+    expect(context.untappedAboveList).toHaveLength(context.untappedAbove);
+    expect(context.untappedBelowList).toHaveLength(context.untappedBelow);
+    expect(context.untappedAboveList[0]?.level ?? null).toBe(context.nearestUntappedAbove);
+    expect(context.untappedBelowList[0]?.level ?? null).toBe(context.nearestUntappedBelow);
+    const distances = context.untappedAboveList.map(item => item.dist);
+    expect([...distances].sort((left, right) => left - right)).toEqual(distances);
+    distances.forEach(distance => expect(distance).toBeGreaterThanOrEqual(0));
+  });
+
+  it('sweep ages pokrývají sebrané levely a jsou od nejčerstvějšího', () => {
+    const context = source().entryContext(trade());
+    const ages = context.sweepAges;
+    expect(ages.length).toBeGreaterThan(0);
+    expect(ages.length).toBeLessThanOrEqual(10);
+    ages.forEach(age => {
+      expect(context.sweptLevels).toContain(age.level);
+      expect(age.minAgo).toBeGreaterThanOrEqual(0);
+    });
+    const minutes = ages.map(age => age.minAgo);
+    expect([...minutes].sort((left, right) => left - right)).toEqual(minutes);
+  });
+
+  it('kontext dne dodá čísla, ne jen text z bias tabulky', () => {
+    const context = source().entryContext(trade());
+    expect(context.ctx).not.toBeNull();
+    expect(['pre', 'form', 'in', 'up', 'down', 'both']).toContain(context.ctx?.ib);
+    expect(typeof context.ctx?.atr).toBe('number');
+    // Denní ATR potřebuje aspoň dva uzavřené dny; fixture má jen jeden, takže
+    // se hlásí jako chybějící místo nuly, která by se tvářila jako změřená.
+    expect(context.ctx?.dAtr).toBeNull();
+    expect(context.ctx?.onWidthAtr).toBeNull();
+  });
+
+  it('HTF FVG sekce existuje i bez hodinových svíček', () => {
+    const context = source().entryContext(trade());
+    expect(context.htfFvg).not.toBeNull();
+    expect(Array.isArray(context.htfFvg?.zones)).toBe(true);
+    expect(context.htfFvg?.inside60).toBeNull();
+  });
+
+  it('bez dostatku historie vrátí prázdné sekce místo výmyslů', () => {
+    const short = twoDaySeries().slice(0, 30);
+    const context = createBacktestContextSource({ candles: short, timeZone: 'Europe/Prague' })
+      .entryContext(trade({ entryTime: short[short.length - 1].time }));
+    expect(context.available).toBe(false);
+    expect(context.sweepAges).toEqual([]);
+    expect(context.levelDist).toEqual({});
+    expect(context.ctx).toBeNull();
+    expect(context.htfFvg).toBeNull();
   });
 });

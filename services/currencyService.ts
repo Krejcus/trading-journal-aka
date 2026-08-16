@@ -1,3 +1,4 @@
+import { apiUrl } from '../utils/runtimeConfig';
 
 export interface ExchangeRates {
     USD: number;
@@ -23,7 +24,7 @@ export const currencyService = {
         try {
             const endpoint = import.meta.env.DEV
                 ? 'https://api.frankfurter.app/latest?from=USD&to=CZK,EUR'
-                : '/api/exchange-rates';
+                : apiUrl('/api/exchange-rates');
             const response = await fetch(endpoint, { signal: AbortSignal.timeout(5000) });
             if (!response.ok) throw new Error(`Exchange-rate API returned ${response.status}`);
             const result = await response.json();

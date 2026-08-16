@@ -280,6 +280,7 @@ describe('backtestClosedTradeToTrade', () => {
     expect(trade.counterfactual?.available).toBe(true);
     expect(trade.management).toBe('fixed');
     expect(trade.session).toBe('Asia');
+    expect(trade.entryContext).toHaveProperty('placement');
   });
 
   it('bez stop lossu obchod projde, jen bez R metrik', () => {
@@ -288,5 +289,52 @@ describe('backtestClosedTradeToTrade', () => {
     expect(trade.excursionAvailable).toBe(false);
     expect(trade.excursionComplete).toBeNull();
     expect(trade.pnl).toBe(3.26);
+  });
+});
+
+describe('backtestClosedTradeToTrade — parita s AlphaBridge', () => {
+  const map = (partial: Partial<BacktestClosedTrade> = {}) =>
+    backtestClosedTradeToTrade(longTrade(partial), {
+      accountId: 'acc-1',
+      candles: [bar(1_000, 100, 100, 100, 100), ...risingSeries(20)],
+      orderEvents: [],
+      timeZone: 'Europe/Prague',
+    });
+
+  it('starší obchod bez vstupního bracketu ukáže aspoň ten finální', () => {
+    const trade = map({
+      initialStopLoss: undefined, initialTakeProfit: undefined,
+      riskAmount: undefined, mfeR: undefined, maeR: undefined,
+      stopLoss: 97.5, takeProfit: 103.5,
+    });
+    expect(trade.stopLoss).toBe(97.5);
+    expect(trade.takeProfit).toBe(103.5);
+    // Posunutá stopka nesmí posloužit jako 1R — riziko zůstává neznámé.
+    expect(trade.riskAmount).toBeUndefined();
+    expect(trade.mfeR).toBeUndefined();
+  });
+
+  it('vstupní bracket má přednost před tím výstupním', () => {
+    const trade = map({ initialStopLoss: 98, stopLoss: 100 });
+    expect(trade.stopLoss).toBe(98);
+    expect(trade.riskAmount).toBe(4);
+  });
+
+  it('doplní pole, která AlphaBridge plní u každého obchodu', () => {
+    const trade = map();
+    expect(trade.schemaVersion).toBe(4);
+    expect(trade.source).toBe('backtest-replay');
+    expect(trade.outcomeAmbiguous).toBe(false);
+    // 1970-01-01 01:16 UTC → Praha je UTC+1 v zimě.
+    expect(trade.time).toMatch(/^\d{2}:\d{2}$/);
+  });
+
+  it('nejednoznačný výsledek z enginu projde až do obchodu', () => {
+    expect(map({ outcomeAmbiguous: true }).outcomeAmbiguous).toBe(true);
+  });
+
+  it('nulové PnL se označí jako breakeven', () => {
+    expect(map({ pnl: 0 }).isBE).toBe(true);
+    expect(map().isBE).toBeUndefined();
   });
 });

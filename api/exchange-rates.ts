@@ -1,8 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { handleNativeCors } from '../server/nativeCors';
 
 const FALLBACK = { USD: 1, CZK: 24.5, EUR: 0.92 };
 
-export default async function handler(_req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (handleNativeCors(req, res, ['GET'])) return;
+  if (req.method !== 'GET') return res.status(405).json({ error: 'method-not-allowed' });
   try {
     const upstream = await fetch('https://api.frankfurter.app/latest?from=USD&to=CZK,EUR', {
       signal: AbortSignal.timeout(5_000),

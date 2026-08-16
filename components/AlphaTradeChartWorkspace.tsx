@@ -78,9 +78,11 @@ import { isPositionDrawing, type PositionDrawing } from '../services/chartPositi
 import { countChartIndicators } from '../services/chartContextMenu';
 import BacktestOrderLinesOverlay from './BacktestOrderLinesOverlay';
 import BacktestTradeExecutionsOverlay from './BacktestTradeExecutionsOverlay';
+import BacktestTradeReviewDialog from './BacktestTradeReviewDialog';
 import type { BacktestClosedTrade, BacktestFill, BacktestOrderSide, BacktestOrderType } from '../services/backtestTypes';
 import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../services/backtestOrderLines';
 import type { BacktestManagedPositionBox } from '../services/backtestManagedPosition';
+import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import {
   advanceReplayTimeByInterval,
   chartReplayDelayMs,
@@ -95,7 +97,15 @@ import {
   type ChartReplayStepMinutes,
 } from '../services/chartReplay';
 import ReplayGoToMenu from './ReplayGoToMenu';
-import { CHART_SETTINGS_EVENT, CHART_TIME_ZONES, loadChartSettings } from '../services/chartSettings';
+import {
+  CHART_SETTINGS_EVENT,
+  CHART_TIME_ZONES,
+  loadChartSettings,
+  type ChartSettings,
+  type ChartTradingSettings,
+} from '../services/chartSettings';
+import { chartAppearanceSnapshot, type ChartAppearanceState } from '../services/chartAppearanceScope';
+import { panelSettingsTargetMatches, type PanelSettingsTarget } from '../services/chartPanelSettings';
 import {
   DEFAULT_REPLAY_GO_TO_TIME_ZONE,
   loadReplayGoToSettings,
@@ -171,6 +181,7 @@ export interface BacktestChartSessionBridge {
     layoutId: ChartWorkspaceLayoutId;
     activePanelId: string;
     syncSettings: ChartWorkspaceSyncSettings;
+    appearance: ChartAppearanceState | undefined;
   }) => void;
   onQuickOrder?: (context: {
     drawing: PositionDrawing;
@@ -188,6 +199,9 @@ export interface BacktestChartSessionBridge {
   managedPositionBoxes?: BacktestManagedPositionBox[];
   closedTrades?: BacktestClosedTrade[];
   fills?: BacktestFill[];
+  journalTrades?: Trade[];
+  onTradeRecalculate?: (tradeId: string) => Trade | Promise<Trade>;
+  onTradeReviewSave?: (tradeId: string, updates: Partial<Trade>, snapshotDataUrl?: string) => Promise<void>;
   onOrderLineChange?: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number) => void;
   onOrderLineCancel?: (line: BacktestChartOrderLine) => void;
   onOrderLineAddBracket?: (
@@ -239,6 +253,8 @@ interface WorkspaceDataContextValue {
   unregisterPanel: (id: string) => void;
   /** Rychlá objednávka z vybraného position boxu — sdílí ji blesk i kontextové menu. */
   onPositionQuickOrder?: () => void;
+  tradingSettings: ChartTradingSettings;
+  openBacktestTradeReview: (tradeId: string) => void;
 }
 
 interface WorkspacePanelControl {
@@ -521,6 +537,7 @@ const AlphaTradeWorkspacePanel: React.FC<{
             showStructure={config.showStructure}
             isDark={context.isDark}
             drawingScope={`${context.backtestSession ? `backtest:${context.backtestSession.id}` : 'workspace'}:${instance.id}:${config.root}:${config.timeframe}`}
+            settingsPanelId={instance.id}
             compactToolbar
             indicatorController={indicatorController}
             focusRequest={focusRequest}
@@ -532,11 +549,12 @@ const AlphaTradeWorkspacePanel: React.FC<{
             replaySelecting={context.replay.phase === 'selecting'}
             replaySelectionCandles={rawCandles}
             replaySelectionTime={context.replaySelectionTime}
-            managedPositionBoxes={config.root === context.backtestSession?.executionInstrument
+            managedPositionBoxes={context.tradingSettings.positionBoxes && config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.managedPositionBoxes
               : undefined}
+            showManagedPositionBoxes={context.tradingSettings.positionBoxes}
             chartOrderQuantity={context.backtestSession?.chartOrderQuantity}
-            onPositionQuickOrder={context.onPositionQuickOrder}
+            onPositionQuickOrder={context.tradingSettings.quickOrderButton ? context.onPositionQuickOrder : undefined}
             onChartOrder={config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.onChartOrder
               : undefined}
@@ -550,7 +568,7 @@ const AlphaTradeWorkspacePanel: React.FC<{
             onToggleLevels={() => updatePanelConfig({ showLevels: !config.showLevels })}
             onToggleStructure={() => updatePanelConfig({ showStructure: !config.showStructure })}
           />
-          {chartApi && config.root === context.backtestSession?.executionInstrument && context.backtestSession.orderLines?.length && context.backtestSession.onOrderLineChange && context.backtestSession.onOrderLineCancel ? (
+          {context.tradingSettings.orderLines && chartApi && config.root === context.backtestSession?.executionInstrument && context.backtestSession.orderLines?.length && context.backtestSession.onOrderLineChange && context.backtestSession.onOrderLineCancel ? (
             <BacktestOrderLinesOverlay
               api={chartApi}
               lines={context.backtestSession.orderLines}
@@ -559,12 +577,16 @@ const AlphaTradeWorkspacePanel: React.FC<{
               onAddBracket={context.backtestSession.onOrderLineAddBracket}
             />
           ) : null}
-          {chartApi && config.root === context.backtestSession?.executionInstrument && (context.backtestSession.fills?.length || context.backtestSession.closedTrades?.length) ? (
+          {(context.tradingSettings.tradeLines || context.tradingSettings.executionMarkers) && chartApi && config.root === context.backtestSession?.executionInstrument && (context.backtestSession.fills?.length || context.backtestSession.closedTrades?.length) ? (
             <BacktestTradeExecutionsOverlay
               api={chartApi}
               trades={context.backtestSession.closedTrades ?? []}
               fills={context.backtestSession.fills ?? []}
               isDark={context.isDark}
+              showTradeLines={context.tradingSettings.tradeLines}
+              showExecutionMarkers={context.tradingSettings.executionMarkers}
+              executionMarkerSize={context.tradingSettings.executionMarkerSize}
+              onTradeSelect={context.backtestSession.onTradeReviewSave ? context.openBacktestTradeReview : undefined}
             />
           ) : null}
           </>
@@ -613,25 +635,46 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const nextPanelNumberRef = useRef(getChartWorkspaceLayout(initialLayoutIdRef.current).panelCount + 1);
   const [status, setStatus] = useState('Layout je možné přetahovat a měnit jeho velikost');
   const [activePanelId, setActivePanelId] = useState(backtestSession?.workspaceState?.activePanelId || 'alphatrade-chart-1');
+  const [reviewTradeId, setReviewTradeId] = useState<string | null>(null);
   const [replay, setReplay] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
   const [replaySelectionTime, setReplaySelectionTime] = useState<number | null>(null);
   // Pásmo bere z nastavení grafu, aby Go To ukazovalo stejná čísla jako časová
   // osa. Sleduje i změnu v Nastavení grafu, jinak by po přepnutí zóny nabízelo
   // časy z jiného světa.
   const [chartTimeZone, setChartTimeZone] = useState(
-    () => loadChartSettings(isDark).symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE,
+    () => loadChartSettings(isDark, activePanelId).symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE,
   );
+  const [chartTradingSettings, setChartTradingSettings] = useState<ChartTradingSettings>(
+    () => loadChartSettings(isDark, activePanelId).trading,
+  );
+  // Nastavení je od téhle chvíle po panelech, takže lišta ukazuje hodnoty
+  // aktivního grafu — a přepnutí panelu je načte znovu.
   useEffect(() => {
-    const sync = () => setChartTimeZone(loadChartSettings(isDark).symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE);
+    const apply = (settings: ChartSettings) => {
+      setChartTimeZone(settings.symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE);
+      setChartTradingSettings(settings.trading);
+    };
+    apply(loadChartSettings(isDark, activePanelId));
+    const sync = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        settings?: ChartSettings;
+        target?: PanelSettingsTarget;
+        reload?: boolean;
+      }>).detail;
+      if (!detail) return;
+      if (detail.reload) return apply(loadChartSettings(isDark, activePanelId));
+      if (!detail.settings || !panelSettingsTargetMatches(detail.target, activePanelId)) return;
+      apply(detail.settings);
+    };
     window.addEventListener(CHART_SETTINGS_EVENT, sync);
     return () => window.removeEventListener(CHART_SETTINGS_EVENT, sync);
-  }, [isDark]);
+  }, [activePanelId, isDark]);
   const chartTimeZoneLabel = useMemo(
     () => CHART_TIME_ZONES.find(zone => zone.id === chartTimeZone)?.label ?? chartTimeZone,
     [chartTimeZone],
   );
   const [goToSettings, setGoToSettings] = useState<ReplayGoToSettings>(
-    () => loadReplayGoToSettings(loadChartSettings(isDark).symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE),
+    () => loadReplayGoToSettings(loadChartSettings(isDark, activePanelId).symbol.timeZone || DEFAULT_REPLAY_GO_TO_TIME_ZONE),
   );
   const [replayToolbarPosition, setReplayToolbarPosition] = useState<ReplayToolbarPosition | null>(loadReplayToolbarPosition);
   const [layoutId, setLayoutId] = useState<ChartWorkspaceLayoutId>(initialLayoutIdRef.current);
@@ -705,6 +748,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setPanelControls(next);
     setActivePanelId(current => current || id);
   }, []);
+  const openBacktestTradeReview = useCallback((tradeId: string) => setReviewTradeId(tradeId), []);
   const unregisterPanel = useCallback((id: string) => {
     const next = new Map(panelControlsRef.current);
     next.delete(id);
@@ -866,8 +910,20 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     onPositionQuickOrder: backtestSession?.onQuickOrder
       ? () => positionQuickOrderRef.current()
       : undefined,
-  }), [activatePanel, activePanelId, backtestSession, entryMs, exitMs, initialCandles, initialRoot, isDark, registerPanel, replay, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+    tradingSettings: chartTradingSettings,
+    openBacktestTradeReview,
+  }), [activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
+  const reviewTrade = reviewTradeId
+    ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)
+    : undefined;
+  const captureVisibleCharts = useCallback(async () => {
+    const workspaceElement = workspaceShellRef.current;
+    if (!workspaceElement || panelControlsRef.current.size === 0) {
+      throw new Error('Grafy ještě nejsou připravené.');
+    }
+    return captureChartWorkspaceSnapshotDataUrl(workspaceElement, isDark);
+  }, [isDark]);
   const activeIndicatorCount = activeControl ? countChartIndicators(
     [
       activeControl.config.showFvg,
@@ -985,6 +1041,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         layoutId,
         activePanelId,
         syncSettings,
+        // Vzhled musí být součástí otisku, jinak by se změna barvy levelu
+        // uložila až s příští úpravou layoutu nebo kresby.
+        appearance: chartAppearanceSnapshot(),
       };
       const fingerprint = JSON.stringify(state);
       if (fingerprint === lastFingerprint) return;
@@ -1406,7 +1465,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             drawing={selectedPosition.drawing}
             onClose={() => setPositionSettingsOpen(false)}
             onOpenSettings={() => setPositionSettingsOpen(true)}
-            onQuickOrder={backtestSession?.onQuickOrder ? submitSelectedPositionQuickOrder : undefined}
+            onQuickOrder={chartTradingSettings.quickOrderButton && backtestSession?.onQuickOrder ? submitSelectedPositionQuickOrder : undefined}
             quickOrderDisabled={Boolean(quickOrderDisabledReason)}
             quickOrderTitle={quickOrderDisabledReason ?? 'Quick Order — ihned zadat Market / Limit / Stop z position boxu'}
           />}
@@ -1504,6 +1563,18 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               </select>
             </div>
           )}
+          {reviewTrade && backtestSession?.onTradeReviewSave ? (
+            <BacktestTradeReviewDialog
+              trade={reviewTrade}
+              isDark={isDark}
+              onClose={() => setReviewTradeId(null)}
+              onCaptureSnapshot={captureVisibleCharts}
+              onRecalculate={backtestSession.onTradeRecalculate
+                ? () => backtestSession.onTradeRecalculate!(String(reviewTrade.id))
+                : undefined}
+              onSave={(updates, snapshotDataUrl) => backtestSession.onTradeReviewSave!(String(reviewTrade.id), updates, snapshotDataUrl)}
+            />
+          ) : null}
           {selectedFib && fibSettingsOpen && <FibDrawingSettingsDialog
             engine={selectedFib.engine}
             drawing={selectedFib.drawing}

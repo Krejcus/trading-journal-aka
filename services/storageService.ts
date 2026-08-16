@@ -6,6 +6,7 @@ import { maybeDetectEpisodes } from './coachMemoryService';
 import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
 import { stripAndUploadBase64Images, hasBase64Images } from './stripBase64';
 import { clearAppStorage } from '../utils/appStorage';
+import { parseOptionalTradeValidity } from './tradeValidity';
 
 const embedTrade = (trade: Trade) => void import('./embeddingService').then(module => module.embedTrade(trade));
 const embedPrep = (prep: DailyPrep) => void import('./embeddingService').then(module => module.embedPrep(prep));
@@ -130,11 +131,12 @@ export const storageService = {
         takeProfit: d.takeProfit ? Number(d.takeProfit) : undefined,
         quantity: d.quantity ? Number(d.quantity) : undefined,
         signal: d.signal, session: d.session,
+        backtestRunId: d.backtestRunId || undefined,
         confidence: d.confidence ? Number(d.confidence) : undefined,
         rr: d.rr ? Number(d.rr) : undefined,
         duration: d.duration,
         durationMinutes: d.durationMinutes ? Number(d.durationMinutes) : 0,
-        isValid: d.isValid === 'true' || d.isValid === true,
+        isValid: parseOptionalTradeValidity(d.isValid),
         groupId: d.groupId, phase: d.phase,
         htfConfluence: d.htfConfluence, ltfConfluence: d.ltfConfluence,
         mistakes: d.mistakes, emotions: d.emotions,
@@ -453,6 +455,7 @@ export const storageService = {
         aiSuggestions:data->aiSuggestions,
         visionAnalysis:data->visionAnalysis,
         source:data->>source,
+        backtestRunId:data->>backtestRunId,
         tsOrderIds:data->tsOrderIds,
         mfeR:data->>mfeR,
         maeR:data->>maeR,
@@ -518,11 +521,12 @@ export const storageService = {
       quantity: t.quantity ? Number(t.quantity) : undefined,
       signal: t.signal,
       session: t.session,
+      backtestRunId: t.backtestRunId || undefined,
       confidence: t.confidence ? Number(t.confidence) : undefined,
       rr: t.rr ? Number(t.rr) : undefined,
       duration: t.duration,
       durationMinutes: t.durationMinutes ? Number(t.durationMinutes) : 0,
-      isValid: t.isValid === 'true' || t.isValid === true,
+      isValid: parseOptionalTradeValidity(t.isValid),
       groupId: t.groupId,
       phase: t.phase,
       htfConfluence: t.htfConfluence,

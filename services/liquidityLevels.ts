@@ -31,6 +31,34 @@ export interface LiquidityBiasRow {
   strong?: boolean;
 }
 
+/**
+ * Kontext dne v číslech — tytéž hodnoty, jaké Pine indikátor posílá do
+ * AlphaBridge v CTX labelu. Bias tabulka je jen jejich formátovaná podoba;
+ * analytika potřebuje čísla, aby se s nimi dalo počítat.
+ */
+export interface LiquidityDayContext {
+  /** pre = před RTH, form = IB se tvoří, in/up/down/both = stav po uzavření IB. */
+  ibState: 'pre' | 'form' | 'in' | 'up' | 'down' | 'both';
+  /** (RTH open − PDC) v denním ATR. */
+  gapAtr: number | null;
+  /** Šířka overnight range v denním ATR. */
+  onWidthAtr: number | null;
+  /** Šířka initial balance v denním ATR. */
+  ibWidthAtr: number | null;
+  /** ATR(14) na svíčkách grafu. */
+  atr: number | null;
+  /** ATR(14) na denních svíčkách. */
+  dailyAtr: number | null;
+  onHigh: number | null;
+  onLow: number | null;
+  ibHigh: number | null;
+  ibLow: number | null;
+  rthOpen: number | null;
+  pdClose: number | null;
+  /** Začátek denní seance (unix s) — kotva pro dHigh/dLow k času vstupu. */
+  dayStartTime: number | null;
+}
+
 export interface LiquidityLevelsResult {
   levels: LiquidityLevel[];
   sessionBoxes: LiquiditySessionBox[];
@@ -40,6 +68,7 @@ export interface LiquidityLevelsResult {
   upper2: IndicatorPoint[];
   lower2: IndicatorPoint[];
   biasRows: LiquidityBiasRow[];
+  dayContext: LiquidityDayContext;
 }
 
 const nyParts = new Intl.DateTimeFormat('en-US', {
@@ -82,7 +111,7 @@ const zonedParts = (time: number, timeZone: string) => {
   return value;
 };
 
-const tradingDayKey = (time: number) => {
+export const tradingDayKey = (time: number) => {
   const cached = tradingDayKeyCache.get(time);
   if (cached) return cached;
   const value = Object.fromEntries(nyParts.formatToParts(new Date(time * 1000)).map(part => [part.type, part.value]));
@@ -132,17 +161,48 @@ const line = (
 
 type Period = { open: number; high: number; low: number; close: number; start: number; end: number; volume: number; pv: number; pv2: number };
 
-const averageTrueRange = (periods: Period[], length = 14) => {
-  if (periods.length < 2) return 0;
-  const ranges = periods.slice(-length).map((period, index, selected) => {
-    const previous = selected[index - 1] ?? periods[Math.max(0, periods.length - selected.length - 1)];
-    return Math.max(period.high - period.low, Math.abs(period.high - previous.close), Math.abs(period.low - previous.close));
-  });
-  return ranges.reduce((sum, value) => sum + value, 0) / ranges.length;
+const wilderAverage = (values: readonly number[], length: number): number | null => {
+  if (values.length < length) return null;
+  let value = values.slice(0, length).reduce((sum, item) => sum + item, 0) / length;
+  for (let index = length; index < values.length; index += 1) {
+    value = (value * (length - 1) + values[index]) / length;
+  }
+  return value;
 };
 
+export const wilderAverageTrueRange = (
+  periods: readonly Pick<Period, 'high' | 'low' | 'close'>[],
+  length = 14,
+): number | null => {
+  if (!periods.length) return null;
+  const ranges = periods.map((period, index) => {
+    const previousClose = periods[index - 1]?.close;
+    return previousClose === undefined
+      ? period.high - period.low
+      : Math.max(period.high - period.low, Math.abs(period.high - previousClose), Math.abs(period.low - previousClose));
+  });
+  return wilderAverage(ranges, length);
+};
+
+/** ATR(14) přímo na svíčkách grafu — protějšek `atrVal` z Pine indikátoru. */
+const candleAverageTrueRange = (candles: MarketCandle[], length = 14) => {
+  return wilderAverageTrueRange(candles, length);
+};
+
+export const EMPTY_LIQUIDITY_DAY_CONTEXT: LiquidityDayContext = {
+  ibState: 'pre', gapAtr: null, onWidthAtr: null, ibWidthAtr: null, atr: null, dailyAtr: null,
+  onHigh: null, onLow: null, ibHigh: null, ibLow: null, rthOpen: null, pdClose: null, dayStartTime: null,
+};
+
+const widthInAtr = (high: number | undefined, low: number | undefined, atr: number | null) => (
+  high === undefined || low === undefined || !atr || atr <= 0 ? null : (high - low) / atr
+);
+
 export function calculateLiquidityLevels(candles: MarketCandle[], settings: LevelsIndicatorSettings): LiquidityLevelsResult {
-  const empty: LiquidityLevelsResult = { levels: [], sessionBoxes: [], vwap: [], upper1: [], lower1: [], upper2: [], lower2: [], biasRows: [] };
+  const empty: LiquidityLevelsResult = {
+    levels: [], sessionBoxes: [], vwap: [], upper1: [], lower1: [], upper2: [], lower2: [],
+    biasRows: [], dayContext: EMPTY_LIQUIDITY_DAY_CONTEXT,
+  };
   if (!candles.length) return empty;
 
   const days: Period[] = [];
@@ -228,25 +288,31 @@ export function calculateLiquidityLevels(candles: MarketCandle[], settings: Leve
   const processSession = (name: LiquiditySessionBox['name'], enabled: boolean, showLines: boolean, color: string, startHour: number, endHour: number) => {
     if (!enabled) return;
     let active: LiquiditySessionBox | null = null;
-    const finished: LiquiditySessionBox[] = [];
+    const finished: Array<{ box: LiquiditySessionBox; completionIndex: number }> = [];
     const sessionCandles = candles.slice(currentDay.start);
-    sessionCandles.forEach(candle => {
+    sessionCandles.forEach((candle, localIndex) => {
       const part = zonedParts(candle.time, settings.timezone);
       const inside = inSession(part.hour, startHour, endHour);
       if (inside && !active) active = { name, color, startTime: candle.time, endTime: candle.time, high: candle.high, low: candle.low };
       else if (inside && active) { active.endTime = candle.time; active.high = Math.max(active.high, candle.high); active.low = Math.min(active.low, candle.low); }
-      else if (!inside && active) { finished.push(active); active = null; }
+      else if (!inside && active) {
+        // Teprve první bar mimo časové okno potvrzuje, že session skončila.
+        // Do té chvíle jsou high/low jen průběžné a nesmí se vydávat za level.
+        finished.push({ box: active, completionIndex: currentDay.start + localIndex });
+        active = null;
+      }
     });
-    if (active) finished.push(active);
-    const box = finished.at(-1);
-    if (!box) return;
-    if (settings.showSessionBoxes) sessionBoxes.push(box);
-    if (!showLines) return;
-    const after = sessionCandles.filter(candle => candle.time > box.endTime);
+    const completed = finished.at(-1);
+    const visibleBox = active ?? completed?.box;
+    // Box se může během session průběžně zvětšovat; pojmenované H/L levely ne.
+    if (settings.showSessionBoxes && visibleBox) sessionBoxes.push(visibleBox);
+    if (!showLines || !completed) return;
+    const { box, completionIndex } = completed;
+    const after = candles.slice(completionIndex);
     const highSwept = after.some(candle => candle.high > box.high);
     const lowSwept = after.some(candle => candle.low < box.low);
-    if (!highSwept || box.endTime === latest.time) push(line(`${name === 'LONDON' ? 'LON' : name === 'NEW YORK' ? 'NY' : 'ASIA'} H`, box.high, color, settings.sessionLineWidth, settings.sessionLineStyle, candles.findIndex(c => c.time === box.endTime), candles, highSwept));
-    if (!lowSwept || box.endTime === latest.time) push(line(`${name === 'LONDON' ? 'LON' : name === 'NEW YORK' ? 'NY' : 'ASIA'} L`, box.low, color, settings.sessionLineWidth, settings.sessionLineStyle, candles.findIndex(c => c.time === box.endTime), candles, lowSwept));
+    if (!highSwept) push(line(`${name === 'LONDON' ? 'LON' : name === 'NEW YORK' ? 'NY' : 'ASIA'} H`, box.high, color, settings.sessionLineWidth, settings.sessionLineStyle, completionIndex, candles));
+    if (!lowSwept) push(line(`${name === 'LONDON' ? 'LON' : name === 'NEW YORK' ? 'NY' : 'ASIA'} L`, box.low, color, settings.sessionLineWidth, settings.sessionLineStyle, completionIndex, candles));
   };
   processSession('ASIA', settings.showAsia, settings.showAsiaLines, settings.asiaColor, settings.asiaStart, settings.asiaEnd);
   processSession('LONDON', settings.showLondon, settings.showLondonLines, settings.londonColor, settings.londonStart, settings.londonEnd);
@@ -292,12 +358,40 @@ export function calculateLiquidityLevels(candles: MarketCandle[], settings: Leve
     push(previousVwapLevel);
   }
 
+  // Kontext dne se počítá vždy, i když je bias tabulka schovaná — analytika ho
+  // potřebuje v číslech a vizuální přepínač nesmí rozhodovat o tom, co se sbírá.
+  const dailyAtr = wilderAverageTrueRange(days.slice(0, -1));
+  const pdClose = previousDay?.close;
+  const rthOpen = rthIndex >= 0 ? candles[rthIndex].open : latest.close;
+  const gap = pdClose !== undefined && dailyAtr !== null && dailyAtr > 0 ? (rthOpen - pdClose) / dailyAtr : undefined;
+  const afterIb = ibHigh !== undefined && ibLow !== undefined && rthIndex >= 0
+    ? candles.filter(candle => candle.time >= candles[rthIndex].time + 3600)
+    : [];
+  const brokeUp = ibHigh !== undefined && afterIb.some(candle => candle.high > Number(ibHigh));
+  const brokeDown = ibLow !== undefined && afterIb.some(candle => candle.low < Number(ibLow));
+  const dayContext: LiquidityDayContext = {
+    ibState: rthIndex < 0 ? 'pre'
+      : ibHigh === undefined ? 'form'
+        : brokeUp && brokeDown ? 'both'
+          : brokeUp ? 'up'
+            : brokeDown ? 'down'
+              : 'in',
+    gapAtr: gap ?? null,
+    onWidthAtr: widthInAtr(onHigh, onLow, dailyAtr),
+    ibWidthAtr: widthInAtr(ibHigh, ibLow, dailyAtr),
+    atr: candleAverageTrueRange(candles),
+    dailyAtr: dailyAtr !== null && dailyAtr > 0 ? dailyAtr : null,
+    onHigh: onHigh ?? null,
+    onLow: onLow ?? null,
+    ibHigh: ibHigh ?? null,
+    ibLow: ibLow ?? null,
+    rthOpen: rthIndex >= 0 ? candles[rthIndex].open : null,
+    pdClose: pdClose ?? null,
+    dayStartTime: candles[currentDay.start]?.time ?? null,
+  };
+
   const biasRows: LiquidityBiasRow[] = [];
   if (settings.showBiasTable) {
-    const dailyAtr = averageTrueRange(days.slice(0, -1));
-    const pdClose = previousDay?.close;
-    const rthOpen = rthIndex >= 0 ? candles[rthIndex].open : latest.close;
-    const gap = pdClose !== undefined && dailyAtr > 0 ? (rthOpen - pdClose) / dailyAtr : undefined;
     const gapAbs = Math.abs(gap ?? 0);
     const gapClass = gapAbs < .3 ? 'drobný' : gapAbs < .7 ? 'malý' : gapAbs < 1.2 ? 'střední' : 'VELKÝ';
     biasRows.push({ label: `Gap${rthIndex >= 0 ? '' : ' ~'}`, value: gap === undefined ? '—' : `${gap > 0 ? '▲ +' : '▼ '}${gap.toFixed(2)} ATR (${gapClass})`, tone: gap === undefined ? 'muted' : gap > 0 ? 'bull' : 'bear' });
@@ -311,12 +405,10 @@ export function calculateLiquidityLevels(candles: MarketCandle[], settings: Leve
     const ratio = valid ? bull / valid : .5;
     const verdict = !valid ? '—' : ratio >= .7 ? 'BULLISH' : ratio <= .3 ? 'BEARISH' : 'NEUTRAL';
     biasRows.push({ label: `SKÓRE ${bull}/${valid}`, value: `${verdict === 'BULLISH' ? '▲' : verdict === 'BEARISH' ? '▼' : '◆'} ${verdict}`, tone: verdict === 'BULLISH' ? 'bull' : verdict === 'BEARISH' ? 'bear' : 'muted', strong: true });
-    const afterIb = ibHigh !== undefined && ibLow !== undefined && rthIndex >= 0 ? candles.filter(c => c.time >= candles[rthIndex].time + 3600) : [];
-    const brokeUp = ibHigh !== undefined && afterIb.some(c => c.high > Number(ibHigh)); const brokeDown = ibLow !== undefined && afterIb.some(c => c.low < Number(ibLow));
     const ibText = rthIndex < 0 ? 'před RTH' : ibHigh === undefined ? 'tvoří se…' : brokeUp && brokeDown ? 'ROTACE (obě strany)' : brokeUp ? '↑ BREAK — trend?' : brokeDown ? '↓ BREAK — trend?' : 'uvnitř range';
     biasRows.push({ label: 'IB', value: ibText, tone: brokeUp && !brokeDown ? 'bull' : brokeDown && !brokeUp ? 'bear' : brokeUp && brokeDown ? 'warning' : 'muted' });
     if (gap !== undefined && Math.abs(gap) >= .15) biasRows.push({ label: '⛔', value: gap > 0 ? 'PDL dnes není target' : 'PDH dnes není target', tone: 'warning' });
   }
 
-  return { levels, sessionBoxes, vwap, upper1, lower1, upper2, lower2, biasRows };
+  return { levels, sessionBoxes, vwap, upper1, lower1, upper2, lower2, biasRows, dayContext };
 }

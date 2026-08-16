@@ -7,6 +7,7 @@ import TacticalTimelineV2 from './TacticalTimelineV2';
 import ImageZoomModal from './ImageZoomModal';
 import WeeklyOverview from './WeeklyOverview';
 import { storageService } from '../services/storageService';
+import { playNativeHapticIfAvailable } from '../services/nativeCapabilities';
 import {
   Coffee,
   Moon,
@@ -475,13 +476,59 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       setLastSaved(new Date());
       setHasUnsavedChanges(false);
       setSaveStatus('saved');
+      playNativeHapticIfAvailable('success');
       setTimeout(() => setSaveStatus('idle'), 2000);
     } catch {
       setSaveStatus('error');
+      playNativeHapticIfAvailable('error');
     } finally {
       setIsSaving(false);
     }
   }, [prepForm, reviewForm, onSavePrep, onSaveReview]);
+
+  const handleCompletePrep = useCallback(async () => {
+    const completed = { ...prepForm, completed: true };
+    skipAutoSavePrep.current = true;
+    setPrepForm(completed);
+    setSaveStatus('saving');
+    setIsSaving(true);
+    try {
+      await onSavePrep(completed);
+      prepFormDirty.current = false;
+      setHasUnsavedChanges(false);
+      setSaveStatus('saved');
+      playNativeHapticIfAvailable('success');
+      setView('timeline');
+      window.scrollTo(0, 0);
+    } catch {
+      setSaveStatus('error');
+      playNativeHapticIfAvailable('error');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [onSavePrep, prepForm]);
+
+  const handleCompleteReview = useCallback(async () => {
+    const completed = { ...reviewForm, completed: true };
+    skipAutoSaveReview.current = true;
+    setReviewForm(completed);
+    setSaveStatus('saving');
+    setIsSaving(true);
+    try {
+      await onSaveReview(completed);
+      reviewFormDirty.current = false;
+      setHasUnsavedChanges(false);
+      setSaveStatus('saved');
+      playNativeHapticIfAvailable('success');
+      setView('timeline');
+      window.scrollTo(0, 0);
+    } catch {
+      setSaveStatus('error');
+      playNativeHapticIfAvailable('error');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [onSaveReview, reviewForm]);
 
   // Handle navigation with unsaved changes check
   const handleNavigateWithCheck = useCallback((action: () => void) => {
@@ -499,12 +546,16 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
     try {
       if (view === 'edit-prep') {
         await onSavePrep({ ...prepForm, completed: true });
+        playNativeHapticIfAvailable('success');
       } else if (view === 'edit-review') {
         await onSaveReview({ ...reviewForm, completed: true });
+        playNativeHapticIfAvailable('success');
       } else {
         await handleManualSave();
       }
-    } catch { /* save failed, proceed anyway */ }
+    } catch {
+      playNativeHapticIfAvailable('error');
+    }
     prepFormDirty.current = false;
     reviewFormDirty.current = false;
     setHasUnsavedChanges(false);
@@ -1714,17 +1765,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
                   <div className="mt-8 relative z-10">
                     <button
-                      onClick={() => {
-                        // Same fix as Review: update local state FIRST so debounced autosave can't overwrite completed:true.
-                        const completed = { ...prepForm, completed: true };
-                        skipAutoSavePrep.current = true;
-                        setPrepForm(completed);
-                        onSavePrep(completed);
-                        prepFormDirty.current = false;
-                        setHasUnsavedChanges(false);
-                        setView('timeline');
-                        window.scrollTo(0, 0);
-                      }}
+                      onClick={() => void handleCompletePrep()}
+                      disabled={isSaving}
                       className={`w-full py-5 rounded-[24px] font-black text-[12px] uppercase tracking-[0.3em] text-white shadow-2xl active:scale-95 transition-all duration-500 bg-blue-600 hover:bg-blue-500 shadow-blue-500/30`}
                     >
                       DOKONČIT PŘÍPRAVU
@@ -1938,18 +1980,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
                   <div className="mt-6">
                     <button
-                      onClick={() => {
-                        // Update local state FIRST so subsequent autosaves carry completed:true.
-                        // Otherwise the 2s debounced autosave fires with the stale form and overwrites DB back to undefined.
-                        const completed = { ...reviewForm, completed: true };
-                        skipAutoSaveReview.current = true; // suppress imminent autosave for this state transition
-                        setReviewForm(completed);
-                        onSaveReview(completed);
-                        reviewFormDirty.current = false;
-                        setHasUnsavedChanges(false);
-                        setView('timeline');
-                        window.scrollTo(0, 0);
-                      }}
+                      onClick={() => void handleCompleteReview()}
+                      disabled={isSaving}
                       className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-indigo-500/20 active:scale-95 transition-all"
                     >
                       DOKONČIT REVIEW

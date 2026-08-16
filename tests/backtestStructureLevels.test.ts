@@ -28,6 +28,8 @@ const bullBreakSeries = (): MarketCandle[] => [
 ];
 
 const ENTRY_TIME = 1_000 + 6 * 60;
+// FVG z idx 4/5/6 je potvrzené až pro vstup na následujícím baru.
+const FVG_ENTRY_TIME = 1_000 + 7 * 60;
 
 describe('readBacktestStructure', () => {
   it('najde býčí zlom a jeho chráněné dno jako swing', () => {
@@ -66,9 +68,19 @@ describe('readBacktestStructure', () => {
   });
 
   it('FVG vrací vzdálenou hranu mezery, ne tu u vstupu', () => {
-    const read = readBacktestStructure(bullBreakSeries(), ENTRY_TIME, 100.5, true, 0.25);
+    const read = readBacktestStructure(bullBreakSeries(), FVG_ENTRY_TIME, 100.5, true, 0.25);
     // Mezera mezi high idx 4 (99.5) a low idx 6 (100.5); chráněná strana je dno.
     expect(read.fvg).toBe(99.5);
+    expect(read.entryFvg).toMatchObject({
+      timeframe: '1m', direction: 'bull', proximal: 100.5, distal: 99.5,
+      entryDistanceTicks: 0,
+    });
+  });
+
+  it('nepřijme FVG vzniklé až na vstupní svíčce', () => {
+    const read = readBacktestStructure(bullBreakSeries(), 1_000 + 6 * 60, 100.5, true, 0.25);
+    expect(read.entryFvg).toBeNull();
+    expect(read.fvg).toBeNull();
   });
 
   it('bez zlomu nevrací vymyšlené úrovně', () => {

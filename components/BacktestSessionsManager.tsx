@@ -64,7 +64,7 @@ const EXPORT_LEGEND = {
     outcome: "Win / Loss / BE — reálný výsledek",
     pnl: "reálný PnL v $",
     slPlacement: "kam reálně dal SL: fvg (pod FVG) | swing (pod strukturní swing) | ote (pod 0.79 OTE) | other",
-    targetType: "kam cílil TP: deviation | daily | fixed_rr | liquidity | other",
+    targetType: "kam cílil TP: deviation (VWAP ±1σ/±2σ) | liquidity (nejbližší level) | session_close (EOD) | other",
     management: "řízení pozice: trail_bos (trail za strukturou) | fixed (set&forget) | partial_runner | be_runner",
     sessionBias: "bias session (Long/Short/Neutral) zadaný PŘED obchodováním",
     biasAligned: "true = obchod ve směru biasu, false = proti biasu, null = Neutral/nezadáno",

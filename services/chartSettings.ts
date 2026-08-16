@@ -18,6 +18,21 @@ import {
   DEFAULT_CHART_DATE_FORMAT,
   type ChartDateFormat,
 } from './chartTimeAxisFormat';
+import {
+  CHART_APPEARANCE_STORAGE_KEYS,
+  inheritGlobalAppearance,
+  onChartAppearanceScopeBroadcast,
+  onChartAppearanceScopeReset,
+  readChartAppearance,
+  writeChartAppearance,
+} from './chartAppearanceScope';
+import {
+  DEFAULT_CHART_PANEL_ID,
+  readPanelSettings,
+  writeAllPanelSettings,
+  writePanelSettings,
+  type PanelSettingsTarget,
+} from './chartPanelSettings';
 
 export type ChartButtonVisibility = 'hover' | 'always' | 'never';
 export type ChartLineStyleName = 'solid' | 'dotted' | 'dashed' | 'large-dashed' | 'sparse-dotted';
@@ -26,6 +41,7 @@ export type ChartGridLines = 'both' | 'vert' | 'horz' | 'none';
 export type ChartWatermarkMode = 'hidden' | 'ticker' | 'interval' | 'description';
 export type ChartBackgroundType = 'solid' | 'gradient';
 export type ChartLastValueMode = 'priceAndPercentage' | 'valueAccordingToScale';
+export type ChartExecutionMarkerSize = 'small' | 'medium' | 'large';
 
 /**
  * `default` nechá formát podle instrumentu, čísla jsou počet desetinných míst,
@@ -160,11 +176,26 @@ export interface ChartCanvasSettings {
   marginRight: number;
 }
 
+export interface ChartTradingSettings {
+  /** Zobrazit blesk, který z vybraného position boxu okamžitě odešle objednávku. */
+  quickOrderButton: boolean;
+  /** Automatický position box vytvořený rychlou objednávkou. */
+  positionBoxes: boolean;
+  /** Čekající objednávky, otevřená pozice a její SL/TP čáry. */
+  orderLines: boolean;
+  /** Spojnice mezi vstupem a výstupem uzavřeného obchodu. */
+  tradeLines: boolean;
+  /** Trojúhelníkové markery jednotlivých fillů. */
+  executionMarkers: boolean;
+  executionMarkerSize: ChartExecutionMarkerSize;
+}
+
 export interface ChartSettings {
   symbol: ChartSymbolSettings;
   statusLine: ChartStatusLineSettings;
   scales: ChartScalesSettings;
   canvas: ChartCanvasSettings;
+  trading: ChartTradingSettings;
 }
 
 /** Světlé i tmavé téma sdílí jeden model; barvy plátna se liší jen ve výchozích hodnotách. */
@@ -251,6 +282,14 @@ export const defaultChartSettings = (isDark: boolean): ChartSettings => ({
     marginBottom: 22,
     marginRight: 6,
   },
+  trading: {
+    quickOrderButton: true,
+    positionBoxes: true,
+    orderLines: true,
+    tradeLines: true,
+    executionMarkers: true,
+    executionMarkerSize: 'medium',
+  },
 });
 
 /**
@@ -292,6 +331,7 @@ export const mergeChartSettings = (
       sessionBreak: { ...defaults.canvas.sessionBreak, ...parsed.canvas?.sessionBreak },
       crosshair: { ...defaults.canvas.crosshair, ...parsed.canvas?.crosshair },
     },
+    trading: { ...defaults.trading, ...parsed.trading },
   };
 };
 
@@ -527,33 +567,68 @@ export const barCloseCountdown = (secondsLeft: number): string => {
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
 };
 
-export const CHART_SETTINGS_STORAGE_KEY = 'alphatrade:chart-settings:shared';
+export const CHART_SETTINGS_STORAGE_KEY = CHART_APPEARANCE_STORAGE_KEYS.chartSettings;
 export const CHART_SETTINGS_EVENT = 'alphatrade:chart-settings-change';
 
 const cache = new Map<string, ChartSettings>();
 
-export const loadChartSettings = (isDark: boolean): ChartSettings => {
-  const cached = cache.get(CHART_SETTINGS_STORAGE_KEY);
+/** Uložená obálka — buď ze session, nebo z globálního localStorage. */
+const storedEnvelope = (): unknown => {
+  const scoped = readChartAppearance('chartSettings');
+  return scoped !== undefined ? scoped : inheritGlobalAppearance('chartSettings');
+};
+
+const persistEnvelope = (envelope: unknown) => {
+  if (writeChartAppearance('chartSettings', envelope)) return;
+  try {
+    window.localStorage.setItem(CHART_SETTINGS_STORAGE_KEY, JSON.stringify(envelope));
+  } catch { /* private storage */ }
+};
+
+export const loadChartSettings = (isDark: boolean, panelId = DEFAULT_CHART_PANEL_ID): ChartSettings => {
+  const cached = cache.get(panelId);
   if (cached) return structuredClone(cached);
-  let saved: string | null = null;
-  try { saved = window.localStorage.getItem(CHART_SETTINGS_STORAGE_KEY); } catch { /* private storage */ }
-  const settings = mergeChartSettings(saved ? JSON.parse(saved) as unknown : null, isDark);
-  cache.set(CHART_SETTINGS_STORAGE_KEY, settings);
+  const settings = mergeChartSettings(readPanelSettings(storedEnvelope(), panelId) ?? null, isDark);
+  cache.set(panelId, settings);
   return structuredClone(settings);
 };
 
 /**
- * Rozešle nastavení ostatním panelům, ale neuloží ho. Náhled v dialogu tak
- * vypadá stejně ve všech grafech a `Zrušit` se pořád má kam vrátit.
+ * Rozešle nastavení, ale neuloží ho — náhled v dialogu se tak projeví hned a
+ * `Zrušit` se pořád má kam vrátit. `target` říká, koho se změna týká: jen
+ * upravovaný panel, nebo po „Na všechny grafy" všechny.
  */
-export const broadcastChartSettings = (settings: ChartSettings, source: symbol): void => {
-  window.dispatchEvent(new CustomEvent(CHART_SETTINGS_EVENT, { detail: { settings, source } }));
+export const broadcastChartSettings = (
+  settings: ChartSettings,
+  source: symbol,
+  target: PanelSettingsTarget = { panelId: DEFAULT_CHART_PANEL_ID, allPanels: true },
+): void => {
+  window.dispatchEvent(new CustomEvent(CHART_SETTINGS_EVENT, { detail: { settings, source, target } }));
 };
 
-export const saveChartSettings = (settings: ChartSettings, source: symbol): void => {
-  cache.set(CHART_SETTINGS_STORAGE_KEY, structuredClone(settings));
-  try {
-    window.localStorage.setItem(CHART_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  } catch { /* private storage */ }
-  broadcastChartSettings(settings, source);
+export const saveChartSettings = (
+  settings: ChartSettings,
+  source: symbol,
+  target: PanelSettingsTarget = { panelId: DEFAULT_CHART_PANEL_ID, allPanels: true },
+): void => {
+  if (target.allPanels) {
+    cache.clear();
+    cache.set(target.panelId, structuredClone(settings));
+    persistEnvelope(writeAllPanelSettings(settings));
+  } else {
+    cache.set(target.panelId, structuredClone(settings));
+    persistEnvelope(writePanelSettings(storedEnvelope(), target.panelId, settings));
+  }
+  broadcastChartSettings(settings, source, target);
 };
+
+// Otevření i zavření session mění platný zdroj nastavení. Cache musí padnout a
+// namontované panely se to dozvědí stejnou cestou jako při běžné úpravě.
+onChartAppearanceScopeReset(() => cache.clear());
+onChartAppearanceScopeBroadcast(() => {
+  // Po přepnutí session si každý panel načte vlastní hodnotu sám; událost jen
+  // říká „přečti si to znovu", proto nese prázdné nastavení pro každý panel.
+  window.dispatchEvent(new CustomEvent(CHART_SETTINGS_EVENT, {
+    detail: { source: Symbol('chart-appearance-scope'), reload: true },
+  }));
+});

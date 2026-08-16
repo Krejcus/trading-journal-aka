@@ -93,7 +93,9 @@ describe('backtestEngine', () => {
     }));
     runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(1, 100, 100, 100, 100), DEFAULT_BACKTEST_CONFIG);
     runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(2, 100, 101.5, 98.5, 100), DEFAULT_BACKTEST_CONFIG);
-    expect(runtime.closedTrades[0]).toMatchObject({ exitPrice: 99, reason: 'stop-loss', grossPnl: -2 });
+    expect(runtime.closedTrades[0]).toMatchObject({
+      exitPrice: 99, reason: 'stop-loss', grossPnl: -2, outcomeAmbiguous: true,
+    });
   });
 
   it('fills limit and stop orders only when their prices are touched', () => {
@@ -163,6 +165,41 @@ describe('backtestEngine', () => {
     runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(1, 100, 100, 100, 100), DEFAULT_BACKTEST_CONFIG);
     runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(2, 98, 98.5, 97.5, 98), DEFAULT_BACKTEST_CONFIG);
     expect(runtime.closedTrades[0]).toMatchObject({ exitPrice: 98, reason: 'stop-loss', grossPnl: -4 });
+  });
+
+  it('force-closes an open position at the configured session cutoff', () => {
+    const config = { ...DEFAULT_BACKTEST_CONFIG, flatTimeZone: 'UTC', flatByMinute: 10 * 60 };
+    const beforeCutoff = Date.UTC(2026, 7, 10, 9, 59) / 1_000;
+    const cutoff = Date.UTC(2026, 7, 10, 10, 0) / 1_000;
+    let runtime = createBacktestRuntime(50_000);
+    runtime = enqueueBacktestOrder(runtime, createBacktestOrder({
+      runId: 'run', instrument: 'MNQ', side: 'buy', type: 'market', quantity: 1,
+      stopLoss: 90, takeProfit: 110, now: beforeCutoff,
+    }));
+    runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(beforeCutoff, 100, 100, 100, 100), config);
+    runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(cutoff, 101, 120, 80, 105), config);
+
+    expect(runtime.positions).toHaveLength(0);
+    expect(runtime.closedTrades[0]).toMatchObject({
+      exitTime: cutoff, exitPrice: 101, reason: 'session-close', mfePoints: 1, maePoints: 0,
+    });
+  });
+
+  it('cancels an unfilled entry before the cutoff candle can trigger it', () => {
+    const config = { ...DEFAULT_BACKTEST_CONFIG, flatTimeZone: 'UTC', flatByMinute: 10 * 60 };
+    const beforeCutoff = Date.UTC(2026, 7, 10, 9, 59) / 1_000;
+    const cutoff = Date.UTC(2026, 7, 10, 10, 0) / 1_000;
+    let runtime = createBacktestRuntime(50_000);
+    runtime = enqueueBacktestOrder(runtime, createBacktestOrder({
+      runId: 'run', instrument: 'MNQ', side: 'buy', type: 'limit', quantity: 1,
+      limitPrice: 99, now: beforeCutoff,
+    }));
+    runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(cutoff, 100, 101, 98, 100), config);
+
+    expect(runtime.positions).toHaveLength(0);
+    expect(runtime.fills).toHaveLength(0);
+    expect(runtime.orders[0]).toMatchObject({ status: 'cancelled', cancelledAt: cutoff });
+    expect(runtime.orderEvents?.map(event => event.kind)).toEqual(['created', 'cancelled']);
   });
 });
 

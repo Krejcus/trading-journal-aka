@@ -7,7 +7,17 @@ import {
   type MarketCandle,
   type MarketStructureEvent,
 } from './marketData';
-import { calculateLiquidityLevels, type LiquidityLevel } from './liquidityLevels';
+import {
+  calculateLiquidityLevels,
+  type LiquidityDayContext,
+  type LiquidityLevel,
+} from './liquidityLevels';
+import {
+  createHtfContextSource,
+  type HtfContextSource,
+  type HtfFvgRead,
+  type HtfStructureRead,
+} from './backtestHtfContext';
 import { backtestTickSize } from './backtestEngine';
 import { readBacktestStructure } from './backtestStructureLevels';
 import type { BacktestClosedTrade } from './backtestTypes';
@@ -43,8 +53,6 @@ export const ANALYSIS_LEVEL_SETTINGS: LevelsIndicatorSettings = {
   showOpen: true,
 };
 
-/** Kolik svíček před vstupem se prohlíží při hledání odrazu. */
-const BOUNCE_LOOKBACK_BARS = 5;
 /**
  * Kolik minut historie se do snapshotu bere.
  *
@@ -68,6 +76,35 @@ export interface BacktestLevelProximity {
   distanceR: number | null;
   /** Level už byl v době vstupu sebraný. */
   swept: boolean;
+}
+
+/**
+ * Kontext dne v číslech. Tvar i názvy kopírují CTX label z Pine indikátoru,
+ * aby stejná data z replay i z AlphaBridge uměla vykreslit jedna komponenta.
+ */
+export interface BacktestDayContext {
+  ib: LiquidityDayContext['ibState'];
+  gapAtr: number | null;
+  onWidthAtr: number | null;
+  ibWidthAtr: number | null;
+  atr: number | null;
+  dAtr: number | null;
+  /** Poslední zlom struktury na 15m před vstupem. */
+  s15: HtfStructureRead | null;
+  /** Totéž na hodinovém rámci. */
+  s60: HtfStructureRead | null;
+}
+
+export interface BacktestSweepAge {
+  level: string;
+  /** Minuty mezi posledním dotykem levelu a vstupem. */
+  minAgo: number;
+}
+
+export interface BacktestUntappedLevel {
+  level: string;
+  /** Vzdálenost od vstupu v bodech, vždy kladná. */
+  dist: number;
 }
 
 export interface BacktestEntryContext {
@@ -95,6 +132,19 @@ export interface BacktestEntryContext {
   ibState: string | null;
   gapAtr: string | null;
   biasScore: string | null;
+  /** Jak dávno před vstupem padl každý sebraný level. Nejčerstvější první. */
+  sweepAges: BacktestSweepAge[];
+  /** Vzdálenost každého levelu od vstupu v bodech; kladná = nad vstupem. */
+  levelDist: Record<string, number>;
+  /** Kolikrát se cena levelu dotkla od jeho vzniku. */
+  levelHits: Record<string, number>;
+  /** Celé seznamy nesebraných levelů nad a pod vstupem, od nejbližšího. */
+  untappedAboveList: BacktestUntappedLevel[];
+  untappedBelowList: BacktestUntappedLevel[];
+  /** Kontext dne v číslech — protějšek CTX labelu z indikátoru. */
+  ctx: BacktestDayContext | null;
+  /** FVG zóny na 15m a 1h k času vstupu. */
+  htfFvg: HtfFvgRead | null;
 }
 
 export interface BacktestEntryMap {
@@ -114,6 +164,12 @@ export interface BacktestEntryMap {
   entryLevels: string[];
   entryLevelPrice: number | null;
   entryFvg: boolean;
+  /** Strategie vyžaduje potvrzené FVG z 1m, které existovalo už před entry barem. */
+  entryFvgValid: boolean;
+  entryFvgTimeframe: '1m' | null;
+  entryFvgEdge: 'proximal' | null;
+  entryFvgBornTime: number | null;
+  entryFvgDistanceTicks: number | null;
   entryFvgSpan: { top: number; bottom: number } | null;
 }
 
@@ -129,15 +185,58 @@ export interface BacktestHtfContext {
 }
 
 export interface BacktestPlacementRead {
-  /** Kam reálně padl stop: fvg | swing | level | other. */
+  /** Kam reálně padl stop: ote | fvg | swing | other. */
   slPlacement: string | null;
-  /** Na co cílil TP: level | fixed_rr | other. */
+  /** Na co cílil TP: deviation | liquidity | session_close | other. */
   targetType: string | null;
   targetLevel: string | null;
+  /** Všechny tři přesné kandidáty; `matched` je nejvýš jeden tick od reálného SL. */
+  slCandidates: Record<'ote' | 'swing' | 'fvg', {
+    price: number | null;
+    distanceTicks: number | null;
+    matched: boolean;
+  }>;
+  targetPolicy: {
+    expected: 'nearest_level' | 'session_close';
+    nearestLevel: string | null;
+    nearestPrice: number | null;
+    actualPrice: number | null;
+    distanceTicks: number | null;
+    valid: boolean | null;
+  };
 }
+
+const emptyPlacement = (): BacktestPlacementRead => ({
+  slPlacement: null,
+  targetType: null,
+  targetLevel: null,
+  slCandidates: {
+    ote: { price: null, distanceTicks: null, matched: false },
+    swing: { price: null, distanceTicks: null, matched: false },
+    fvg: { price: null, distanceTicks: null, matched: false },
+  },
+  targetPolicy: {
+    expected: 'nearest_level', nearestLevel: null, nearestPrice: null,
+    actualPrice: null, distanceTicks: null, valid: null,
+  },
+});
 
 const toleranceOf = (riskDistance: number | null): number =>
   riskDistance ? Math.max(MIN_LEVEL_TOLERANCE, riskDistance * LEVEL_TOLERANCE_R) : MIN_LEVEL_TOLERANCE;
+
+const barsAgoLabel = (bars: number): string => {
+  const absolute = Math.abs(bars);
+  const suffix = absolute === 1 ? 'bar' : absolute >= 2 && absolute <= 4 ? 'bary' : 'barů';
+  return `${bars} ${suffix} zpět`;
+};
+
+const round2 = (value: number | null | undefined): number | null =>
+  (value === null || value === undefined || !Number.isFinite(value) ? null : Math.round(value * 100) / 100);
+
+/** Stejný dosah zpět, jaký počítá indikátor při hledání dotyků. */
+const SWEEP_LOOKBACK_BARS = 2_000;
+/** Kolik nejčerstvějších sweepů se ukládá k obchodu. */
+const MAX_SWEEP_AGES = 10;
 
 const riskDistanceOf = (trade: Pick<BacktestClosedTrade, 'entryPrice' | 'initialStopLoss'>): number | null => {
   if (!Number.isFinite(trade.initialStopLoss as number)) return null;
@@ -175,7 +274,10 @@ export interface BacktestContextInput {
 interface EntrySnapshot {
   history: MarketCandle[];
   levels: LiquidityLevel[];
+  /** Pohyblivé VWAP cíle zmrazené přesně v okamžiku vstupu. */
+  targetLevels: Array<{ name: string; price: number; type: 'deviation' }>;
   biasRows: { label: string; value: string }[];
+  dayContext: LiquidityDayContext;
   structure: MarketStructureEvent[];
   gaps: FairValueGap[];
   vwap: number | null;
@@ -202,8 +304,35 @@ export interface BacktestContextSource {
 }
 
 export const createBacktestContextSource = (input: BacktestContextInput): BacktestContextSource => {
-  const settings = input.levelSettings ?? ANALYSIS_LEVEL_SETTINGS;
+  // Výpočet a graf musí používat stejné časové pásmo. Dřív analytika vždy
+  // zdědila Europe/Prague z defaultu i u session s jinou zónou, takže session
+  // high/low, DO, VWAP i jejich swept stav mohly být posunuté.
+  const settings: LevelsIndicatorSettings = {
+    ...(input.levelSettings ?? ANALYSIS_LEVEL_SETTINGS),
+    timezone: input.timeZone,
+  };
   const snapshots = new Map<number, EntrySnapshot | null>();
+  const htf: HtfContextSource = createHtfContextSource({
+    candles: input.candles,
+    hourly: input.htfCandles,
+  });
+
+  /**
+   * Měsíční magnety se do inventáře přidávají zvlášť — `calculateLiquidityLevels`
+   * je nezná, protože pracuje s minutovým oknem posledních dní a měsíční extrém
+   * z něj složit nejde. Swept stav se počítá z celé dokončené hodinové
+   * historie aktuálního měsíce, ne z krátkého minutového snapshotu.
+   */
+  const monthlyLevelsAt = (entryTime: number): LiquidityLevel[] =>
+    htf.monthlyLevels(entryTime).map(level => ({
+      name: level.label,
+      price: level.price,
+      color: 'transparent',
+      width: 1 as const,
+      style: 'dotted' as const,
+      startTime: level.startTime,
+      swept: level.swept,
+    }));
 
   const snapshotAt = (entryTime: number): EntrySnapshot | null => {
     if (snapshots.has(entryTime)) return snapshots.get(entryTime) ?? null;
@@ -217,18 +346,50 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
       return null;
     }
     const levelsResult = calculateLiquidityLevels(history, settings);
+    const fullDailyAtr = htf.dailyAtr(entryTime);
+    const partialDay = levelsResult.dayContext;
+    const widthInAtr = (high: number | null, low: number | null) => (
+      high === null || low === null || fullDailyAtr === null || fullDailyAtr <= 0
+        ? null
+        : (high - low) / fullDailyAtr
+    );
+    const dayContext = fullDailyAtr === null ? partialDay : {
+      ...partialDay,
+      dailyAtr: fullDailyAtr,
+      gapAtr: partialDay.rthOpen === null || partialDay.pdClose === null
+        ? null
+        : (partialDay.rthOpen - partialDay.pdClose) / fullDailyAtr,
+      onWidthAtr: widthInAtr(partialDay.onHigh, partialDay.onLow),
+      ibWidthAtr: widthInAtr(partialDay.ibHigh, partialDay.ibLow),
+    };
     const indicators = calculateIndicators(history);
     const pdVwapLevel = levelsResult.levels.find(level => level.name === 'pdVWAP');
-    const vwap = valueAt(indicators.vwap, entryTime);
-    const upper = valueAt(indicators.upperDeviation, entryTime);
+    // Pro audit používáme stejné křivky i stejné násobky jako vykreslený
+    // Levels indikátor. Hodnoty zmrazíme v entry baru; pozdější pohyb VWAP
+    // nesmí zpětně změnit, kam byl původní fixní TP položený.
+    const vwap = valueAt(levelsResult.vwap, entryTime);
+    const upper1 = valueAt(levelsResult.upper1, entryTime);
+    const targetLevels = [
+      ['VWAP', vwap],
+      ['VWAP +1σ', valueAt(levelsResult.upper1, entryTime)],
+      ['VWAP -1σ', valueAt(levelsResult.lower1, entryTime)],
+      ['VWAP +2σ', valueAt(levelsResult.upper2, entryTime)],
+      ['VWAP -2σ', valueAt(levelsResult.lower2, entryTime)],
+    ].flatMap(([name, price]) => typeof price === 'number' && Number.isFinite(price)
+      ? [{ name: String(name), price, type: 'deviation' as const }]
+      : []);
     const snapshot: EntrySnapshot = {
       history,
-      levels: levelsResult.levels,
+      levels: [...levelsResult.levels, ...monthlyLevelsAt(entryTime)],
+      targetLevels,
       biasRows: levelsResult.biasRows,
+      dayContext,
       structure: calculateMarketStructure(history),
       gaps: findFairValueGaps(history),
       vwap,
-      vwapSigma: vwap !== null && upper !== null && upper > vwap ? upper - vwap : null,
+      vwapSigma: vwap !== null && upper1 !== null && upper1 > vwap
+        ? (upper1 - vwap) / Math.max(settings.dev1Multiplier, Number.EPSILON)
+        : null,
       dayOpen: valueAt(indicators.dayOpen, entryTime),
       weekOpen: valueAt(indicators.weekOpen, entryTime),
       pdVwap: pdVwapLevel?.price ?? null,
@@ -251,6 +412,57 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
     }))
     .sort((left, right) => left.distancePoints - right.distancePoints);
 
+  /**
+   * Jak dávno cena naposled protla každý sebraný level.
+   *
+   * Indikátor sice do labelu píše `[2x @15:42]`, ale to je poslední dotyk
+   * VŮBEC — u levelu, kterým cena prošla až po vstupu, je ten čas k ničemu.
+   * Replay má celé svíčky, takže se dotyk hledá zpět od vstupu a platí pro
+   * všechny levely včetně dHigh/dLow, které v labelu čas nikdy neměly.
+   */
+  const sweepAges = (snapshot: EntrySnapshot, entryTime: number): BacktestSweepAge[] => {
+    const wanted = new Map<string, number>();
+    snapshot.levels.forEach(level => {
+      if (level.swept && !wanted.has(level.name)) wanted.set(level.name, level.price);
+    });
+    if (!wanted.size) return [];
+    let entryIndex = -1;
+    for (let index = snapshot.history.length - 1; index >= 0; index -= 1) {
+      if (snapshot.history[index].time <= entryTime) { entryIndex = index; break; }
+    }
+    if (entryIndex < 0) return [];
+    const limit = Math.max(0, entryIndex - SWEEP_LOOKBACK_BARS);
+    const found: BacktestSweepAge[] = [];
+    for (let index = entryIndex; index >= limit && wanted.size; index -= 1) {
+      const candle = snapshot.history[index];
+      wanted.forEach((levelPrice, name) => {
+        if (candle.low <= levelPrice && candle.high >= levelPrice) {
+          found.push({ level: name, minAgo: Math.max(0, Math.round((entryTime - candle.time) / 60)) });
+          wanted.delete(name);
+        }
+      });
+    }
+    return found.sort((left, right) => left.minAgo - right.minAgo).slice(0, MAX_SWEEP_AGES);
+  };
+
+  /** Vzdálenost každého levelu od vstupu; kladná nad vstupem, záporná pod ním. */
+  const levelDistances = (snapshot: EntrySnapshot, price: number): Record<string, number> => {
+    const distances: Record<string, number> = {};
+    snapshot.levels.forEach(level => {
+      // První výskyt vyhrává — stejný název se může objevit u víc rámců.
+      if (distances[level.name] === undefined) distances[level.name] = round2(level.price - price) ?? 0;
+    });
+    return distances;
+  };
+
+  const levelHitCounts = (snapshot: EntrySnapshot): Record<string, number> => {
+    const counts: Record<string, number> = {};
+    snapshot.levels.forEach(level => {
+      if (level.hits !== undefined && counts[level.name] === undefined) counts[level.name] = level.hits;
+    });
+    return counts;
+  };
+
   const entryContext = (trade: BacktestClosedTrade): BacktestEntryContext => {
     const snapshot = snapshotAt(trade.entryTime);
     if (!snapshot) {
@@ -261,6 +473,9 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
         nearestUntappedAbove: null, nearestUntappedBelow: null, targetMagnetR: null,
         londonVsAsia: null, entryMinutes: null, nearbyLevels: [],
         ibState: null, gapAtr: null, biasScore: null,
+        sweepAges: [], levelDist: {}, levelHits: {},
+        untappedAboveList: [], untappedBelowList: [],
+        ctx: null, htfFvg: null,
       };
     }
     const risk = riskDistanceOf(trade);
@@ -295,6 +510,28 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
       ibState: biasValue('IB'),
       gapAtr: biasValue('Gap') ?? biasValue('Gap ~'),
       biasScore: snapshot.biasRows.find(row => row.label.startsWith('SKÓRE'))?.value ?? null,
+      sweepAges: sweepAges(snapshot, trade.entryTime),
+      levelDist: levelDistances(snapshot, price),
+      levelHits: levelHitCounts(snapshot),
+      untappedAboveList: untappedAbove.map(level => ({
+        level: level.name,
+        dist: round2(level.price - price),
+      })),
+      untappedBelowList: untappedBelow.map(level => ({
+        level: level.name,
+        dist: round2(price - level.price),
+      })),
+      ctx: {
+        ib: snapshot.dayContext.ibState,
+        gapAtr: round2(snapshot.dayContext.gapAtr),
+        onWidthAtr: round2(snapshot.dayContext.onWidthAtr),
+        ibWidthAtr: round2(snapshot.dayContext.ibWidthAtr),
+        atr: round2(snapshot.dayContext.atr),
+        dAtr: round2(snapshot.dayContext.dailyAtr),
+        s15: htf.structure(trade.entryTime, '15'),
+        s60: htf.structure(trade.entryTime, '60'),
+      },
+      htfFvg: htf.fvg(trade.entryTime, price),
     };
   };
 
@@ -306,38 +543,38 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
         structureType: null, structureOrder: 0, structureBarsAgo: null,
         odrazLevels: [], odrazPrice: null, odrazLevelPrice: null,
         entryLevels: [], entryLevelPrice: null,
-        entryFvg: false, entryFvgSpan: null,
+        entryFvg: false, entryFvgValid: false, entryFvgTimeframe: null,
+        entryFvgEdge: null, entryFvgBornTime: null, entryFvgDistanceTicks: null,
+        entryFvgSpan: null,
       };
     }
     const long = trade.direction === 'Long';
     const risk = riskDistanceOf(trade);
     const tolerance = toleranceOf(risk);
-    const tickSize = backtestTickSize(trade.instrument);
-    // Struktura se čte stejným postupem jako v extension, ne přes
-    // `calculateMarketStructure` — viz komentář v backtestStructureLevels.
     const structure = readBacktestStructure(
-      snapshot.history, trade.entryTime, trade.entryPrice, long, tickSize,
+      snapshot.history, trade.entryTime, trade.entryPrice, long, backtestTickSize(trade.instrument),
     );
-    const lastEvent = structure.events[structure.events.length - 1];
-    const barsAgo = lastEvent
-      ? snapshot.history.length - 1 - lastEvent.atIndex
-      : null;
+    const lastEvent = structure.events.filter(event => event.direction === (long ? 'bull' : 'bear')).at(-1);
+    const barsAgo = lastEvent ? Math.max(0, snapshot.history.length - 1 - lastEvent.atIndex) : null;
 
     const entryLevels = snapshot.levels
       .filter(level => Math.abs(level.price - trade.entryPrice) <= tolerance)
       .sort((a, b) => Math.abs(a.price - trade.entryPrice) - Math.abs(b.price - trade.entryPrice));
 
-    // Odraz = úrovně u chráněného extrému PRVNÍHO zlomu série, tedy tam, kde se
-    // pohyb doopravdy otočil. Není to „knot do levelu a zpět" pár barů před
-    // vstupem — to by označilo každý průlet kolem úrovně.
+    // Odraz = úrovně u bodu, ve kterém se pohyb doopravdy otočil. Indikátor
+    // v události nese jen proražený pivot, ne chráněný extrém — ten se ale dá
+    // z replay svíček dopočítat: je to nejnižší low (resp. nejvyšší high) mezi
+    // pivotem a jeho proražením. Není to „knot do levelu a zpět" pár barů před
+    // vstupem, to by označilo každý průlet kolem úrovně.
+    const odrazPrice = structure.odrazPrice;
     const odrazLevels: string[] = [];
     let odrazLevelPrice: number | null = null;
-    if (structure.odrazPrice !== null) {
+    if (odrazPrice !== null) {
       const nearest = [...snapshot.levels]
-        .sort((a, b) => Math.abs(a.price - Number(structure.odrazPrice)) - Math.abs(b.price - Number(structure.odrazPrice)))[0];
-      if (nearest && Math.abs(nearest.price - Number(structure.odrazPrice)) <= tolerance) {
+        .sort((a, b) => Math.abs(a.price - odrazPrice) - Math.abs(b.price - odrazPrice))[0];
+      if (nearest && Math.abs(nearest.price - odrazPrice) <= tolerance) {
         // Konfluence: úrovně naskládané na témže místě se tagují všechny.
-        const band = Math.max(tickSize * 16, tolerance * 0.6);
+        const band = Math.max(MIN_LEVEL_TOLERANCE, tolerance * 0.6);
         snapshot.levels.forEach(level => {
           if (Math.abs(level.price - nearest.price) <= band && !odrazLevels.includes(level.name)) {
             odrazLevels.push(level.name);
@@ -348,23 +585,24 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
     }
 
     return {
-      available: structure.available,
+      available: structure.available || structure.entryFvg !== null || entryLevels.length > 0,
       structureType: structure.structureType,
       structureOrder: structure.structureOrder,
       structureBarsAgo: barsAgo,
       odrazLevels,
-      odrazPrice: structure.odrazPrice,
+      odrazPrice,
       odrazLevelPrice,
       entryLevels: entryLevels.map(level => level.name),
       entryLevelPrice: entryLevels[0]?.price ?? null,
-      // Stejné pravidlo jako v extension: mezera, jejíž bližší hrana leží
-      // u vstupu, a jejíž vzdálená hrana je kandidát na stopku.
-      entryFvg: structure.fvg !== null,
-      entryFvgSpan: structure.fvg === null
-        ? null
-        : long
-          ? { bottom: structure.fvg, top: trade.entryPrice }
-          : { bottom: trade.entryPrice, top: structure.fvg },
+      entryFvg: structure.entryFvg !== null,
+      entryFvgValid: structure.entryFvg !== null,
+      entryFvgTimeframe: structure.entryFvg?.timeframe ?? null,
+      entryFvgEdge: structure.entryFvg ? 'proximal' : null,
+      entryFvgBornTime: structure.entryFvg?.bornTime ?? null,
+      entryFvgDistanceTicks: round2(structure.entryFvg?.entryDistanceTicks),
+      entryFvgSpan: structure.entryFvg
+        ? { bottom: structure.entryFvg.bottom, top: structure.entryFvg.top }
+        : null,
     };
   };
 
@@ -373,28 +611,25 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
     const snapshot = snapshotAt(trade.entryTime);
     if (!snapshot) return [];
     const long = trade.direction === 'Long';
-    return snapshot.levels
-      .filter(level => long ? level.price > trade.entryPrice : level.price < trade.entryPrice)
-      .map(level => ({ label: level.name, price: level.price }));
+    return [
+      ...snapshot.levels
+        .filter(level => !level.swept)
+        .map(level => ({ label: level.name, price: level.price })),
+      ...snapshot.targetLevels.map(level => ({ label: level.name, price: level.price })),
+    ].filter(level => long ? level.price > trade.entryPrice : level.price < trade.entryPrice);
   };
 
-  let htfStructure: MarketStructureEvent[] | null = null;
   const htfContext = (trade: BacktestClosedTrade): BacktestHtfContext => {
     if (!input.htfCandles || input.htfCandles.length < 3) {
       return { available: false, reason: 'no-htf-candles', structureType: null, structureDirection: null, aligned: null, htfLevels: [] };
     }
-    if (htfStructure === null) {
-      htfStructure = calculateMarketStructure(input.htfCandles.filter(candle => candle.time <= trade.entryTime));
-    }
     const long = trade.direction === 'Long';
-    // `findEntryStructureEvent` filtruje na směr obchodu; tady nás zajímá
-    // poslední událost bez ohledu na směr, ať se pozná i vstup proti HTF.
-    const latest = [...htfStructure]
-      .filter(event => event.breakTime <= trade.entryTime)
-      .sort((left, right) => right.breakTime - left.breakTime)[0];
+    // Stejný zdroj jako `ctx.s60`, aby chip v deníku a tahle sekce nikdy
+    // netvrdily o téže hodině dvě různé věci.
+    const latest = htf.structure(trade.entryTime, '60');
     const snapshot = snapshotAt(trade.entryTime);
     const risk = riskDistanceOf(trade);
-    const htfLabels = new Set(['PDH', 'PDL', 'PWH', 'PWL', 'WO', 'DO', 'PDC', 'PD MID']);
+    const htfLabels = new Set(['PDH', 'PDL', 'PWH', 'PWL', 'PMH', 'PML', 'MO', 'WO', 'DO', 'PDC', 'PD MID']);
     const htfLevels = snapshot
       ? proximities(snapshot, trade.entryPrice, risk)
         .filter(item => htfLabels.has(item.label) && item.distancePoints <= toleranceOf(risk) * 4)
@@ -402,9 +637,9 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
       : [];
     return {
       available: true,
-      structureType: latest ? (latest.type === 'BOS' ? 'BoS' : 'CHoCH') : null,
-      structureDirection: latest?.direction ?? null,
-      aligned: latest ? (latest.direction === 'bullish') === long : null,
+      structureType: latest?.type ?? null,
+      structureDirection: latest ? (latest.dir === 'bull' ? 'bullish' : 'bearish') : null,
+      aligned: latest ? (latest.dir === 'bull') === long : null,
       htfLevels,
     };
   };
@@ -417,7 +652,12 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
     if (htf.structureType && htf.structureDirection) {
       htfTags.push(`1h ${htf.structureType} ${htf.structureDirection === 'bullish' ? 'bullish' : 'bearish'}`);
     }
+    if (context.ctx?.s15) {
+      htfTags.push(`15m ${context.ctx.s15.type} ${context.ctx.s15.dir === 'bull' ? 'bullish' : 'bearish'}`);
+    }
     htf.htfLevels.forEach(label => htfTags.push(`u ${label}`));
+    if (context.htfFvg?.inside15) htfTags.push('v 15m FVG');
+    if (context.htfFvg?.inside60) htfTags.push('v 1h FVG');
     if (context.aboveDO !== null) htfTags.push(context.aboveDO ? 'nad Day Open' : 'pod Day Open');
     if (context.aboveWO !== null) htfTags.push(context.aboveWO ? 'nad Week Open' : 'pod Week Open');
 
@@ -425,7 +665,7 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
     if (map.structureType) {
       ltfTags.push(map.structureBarsAgo === null
         ? `1m ${map.structureType}`
-        : `1m ${map.structureType} (${map.structureBarsAgo} barů zpět)`);
+        : `1m ${map.structureType} (${barsAgoLabel(map.structureBarsAgo)})`);
     }
     if (map.entryFvg) ltfTags.push('vstup ve FVG');
     map.odrazLevels.forEach(label => ltfTags.push(`odraz od ${label}`));
@@ -439,42 +679,63 @@ export const createBacktestContextSource = (input: BacktestContextInput): Backte
     const snapshot = snapshotAt(trade.entryTime);
     const risk = riskDistanceOf(trade);
     if (!snapshot || !Number.isFinite(trade.initialStopLoss as number)) {
-      return { slPlacement: null, targetType: null, targetLevel: null };
+      return emptyPlacement();
     }
     const long = trade.direction === 'Long';
-    const tolerance = toleranceOf(risk);
+    const tickSize = backtestTickSize(trade.instrument);
+    const tolerance = tickSize;
     const stop = Number(trade.initialStopLoss);
+    const structure = readBacktestStructure(
+      snapshot.history, trade.entryTime, trade.entryPrice, long, tickSize,
+    );
+    const candidate = (price: number | null) => ({
+      price,
+      distanceTicks: price === null ? null : round2(Math.abs(stop - price) / tickSize),
+      matched: price !== null && Math.abs(stop - price) <= tolerance,
+    });
+    const slCandidates = {
+      ote: candidate(structure.ote),
+      swing: candidate(structure.swing),
+      fvg: candidate(structure.fvg),
+    };
+    const matched = (Object.entries(slCandidates) as Array<['ote' | 'swing' | 'fvg', typeof slCandidates.ote]>)
+      .filter(([, value]) => value.matched)
+      .sort((left, right) => (left[1].distanceTicks ?? Infinity) - (right[1].distanceTicks ?? Infinity));
+    const slPlacement = matched[0]?.[0] ?? 'other';
 
-    const stopLevel = proximities(snapshot, stop, risk).find(item => item.distancePoints <= tolerance);
-    // „SL na FVG" znamená za vzdálenou hranou mezery, ne kdekoli uvnitř ní.
-    // Kdyby stačilo být v rozsahu, spadla by pod FVG skoro každá stopka —
-    // mezer je na minutovém grafu spousta a bývají široké.
-    const stopGap = snapshot.gaps.find(gap => gap.startTime <= trade.entryTime
-      && Math.abs(stop - (long ? gap.bottom : gap.top)) <= tolerance);
-    // Swing = stopka leží za extrémem posledních barů, tedy tam, kde by ji
-    // struktura popřela.
-    const lookback = snapshot.history.slice(-BOUNCE_LOOKBACK_BARS * 4);
-    const extreme = lookback.length
-      ? long ? Math.min(...lookback.map(candle => candle.low)) : Math.max(...lookback.map(candle => candle.high))
-      : null;
-    const atSwing = extreme !== null && Math.abs(stop - extreme) <= tolerance;
-
-    // Struktura má přednost: když stopka sedí na swingu i na hraně mezery, jde
-    // o tutéž cenu a swing je silnější důvod, proč tam trader stop dal.
-    const slPlacement = atSwing ? 'swing' : stopGap ? 'fvg' : stopLevel ? 'level' : 'other';
+    const favorable = [
+      ...snapshot.levels
+        .filter(level => !level.swept)
+        .map(level => ({ name: level.name, price: level.price, type: 'liquidity' as const })),
+      ...snapshot.targetLevels,
+    ]
+      .filter(level => long ? level.price > trade.entryPrice : level.price < trade.entryPrice)
+      .sort((left, right) => Math.abs(left.price - trade.entryPrice) - Math.abs(right.price - trade.entryPrice));
+    const nearest = favorable[0] ?? null;
 
     if (!Number.isFinite(trade.initialTakeProfit as number)) {
-      return { slPlacement, targetType: null, targetLevel: null };
+      return {
+        slPlacement, targetType: 'session_close', targetLevel: 'EOD', slCandidates,
+        targetPolicy: {
+          expected: 'session_close', nearestLevel: nearest?.name ?? null,
+          nearestPrice: nearest?.price ?? null, actualPrice: null,
+          distanceTicks: null, valid: true,
+        },
+      };
     }
     const target = Number(trade.initialTakeProfit);
-    const targetLevel = proximities(snapshot, target, risk).find(item => item.distancePoints <= tolerance);
-    const multiple = risk ? Math.abs(target - trade.entryPrice) / risk : null;
-    // Kulatý násobek rizika (±0,05R) je fixní RR, ne cíl na úrovni.
-    const roundMultiple = multiple !== null && Math.abs(multiple - Math.round(multiple)) <= 0.05 && Math.round(multiple) >= 1;
+    const distanceTicks = nearest ? Math.abs(target - nearest.price) / tickSize : null;
+    const targetValid = distanceTicks !== null ? distanceTicks <= 1 : false;
     return {
       slPlacement,
-      targetType: targetLevel ? 'level' : roundMultiple ? 'fixed_rr' : 'other',
-      targetLevel: targetLevel?.label ?? (roundMultiple ? `${Math.round(multiple as number)}R` : null),
+      targetType: targetValid ? nearest?.type ?? 'liquidity' : 'other',
+      targetLevel: targetValid ? nearest?.name ?? null : null,
+      slCandidates,
+      targetPolicy: {
+        expected: 'nearest_level', nearestLevel: nearest?.name ?? null,
+        nearestPrice: nearest?.price ?? null, actualPrice: target,
+        distanceTicks: round2(distanceTicks), valid: targetValid,
+      },
     };
   };
 

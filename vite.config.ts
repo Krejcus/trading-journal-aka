@@ -1,5 +1,6 @@
 import path from 'path';
-import { rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -24,6 +25,78 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [
+      {
+        // Dočasný localhost-only most pro Alert Test Lab. Token zůstává pouze
+        // v lokálním Node procesu a nikdy se neposílá do klientského bundlu.
+        name: 'local-tradecopia-alert-lab',
+        configureServer(server) {
+          server.middlewares.use('/__dev/tradecopia-alert-lab', async (req, res) => {
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              res.end(JSON.stringify({ ok: false, error: 'method-not-allowed' }));
+              return;
+            }
+
+            const remoteAddress = req.socket.remoteAddress || '';
+            const isLoopback = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remoteAddress);
+            const origin = String(req.headers.origin || '');
+            const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+            if (!isLoopback || !isLocalOrigin) {
+              res.statusCode = 403;
+              res.end(JSON.stringify({ ok: false, error: 'localhost-only' }));
+              return;
+            }
+
+            try {
+              const chunks: Buffer[] = [];
+              let size = 0;
+              for await (const chunk of req) {
+                const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                size += buffer.length;
+                if (size > 64 * 1024) throw new Error('payload-too-large');
+                chunks.push(buffer);
+              }
+              const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+              if (!body?.event || typeof body.event !== 'object' || Array.isArray(body.event)) {
+                res.statusCode = 400;
+                res.end(JSON.stringify({ ok: false, error: 'invalid-event' }));
+                return;
+              }
+
+              const configDir = path.join(homedir(), '.alphatrade');
+              const fastConfig = path.join(configDir, 'tradecopia-fast-events.json');
+              const legacyConfig = path.join(configDir, 'tradecopia-sync.json');
+              const configPath = existsSync(fastConfig) ? fastConfig : legacyConfig;
+              const config = JSON.parse(readFileSync(configPath, 'utf8'));
+              if (typeof config.importToken !== 'string' || config.importToken.length < 32) {
+                throw new Error('missing-import-token');
+              }
+
+              const upstream = await fetch('https://alphatrade-mentor-15.vercel.app/api/tradecopia-events', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-import-token': config.importToken,
+                },
+                body: JSON.stringify({
+                  agentVersion: 'localhost-alert-lab',
+                  capturedAt: new Date().toISOString(),
+                  events: [body.event],
+                }),
+                signal: AbortSignal.timeout(10_000),
+              });
+              const result = await upstream.json().catch(() => ({ ok: false, error: `HTTP ${upstream.status}` }));
+              res.statusCode = upstream.status;
+              res.end(JSON.stringify(result));
+            } catch (error) {
+              res.statusCode = 500;
+              const message = error instanceof Error ? error.message : 'alert-lab-failed';
+              res.end(JSON.stringify({ ok: false, error: message }));
+            }
+          });
+        },
+      },
       {
         name: 'native-build-cleanup',
         transformIndexHtml(html) {

@@ -5,6 +5,7 @@ import { normalizeTrades, calculateStats } from './services/analysis';
 import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, type LeakFinding } from './services/labAnalytics';
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
+import { persistBacktestTradeReview } from './services/backtestTradeReview';
 import { safeSetItem } from './utils/safeStorage';
 import { businessDataFingerprint, mergePayoutImages, stripPayoutImagesForCache } from './utils/businessPayoutSync';
 import { clearAppStorage } from './utils/appStorage';
@@ -3105,6 +3106,22 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const handleBacktestTradeReviewSave = useCallback(async (
+    tradeId: string,
+    updates: Partial<Trade>,
+    snapshotDataUrl?: string,
+  ) => {
+    const payload = await persistBacktestTradeReview(
+      storageService,
+      tradeId,
+      updates,
+      snapshotDataUrl,
+    );
+    setTrades(current => current.map(trade => (
+      String(trade.id) === tradeId ? { ...trade, ...payload } : trade
+    )));
+  }, []);
+
   const handleDeletePrep = useCallback(async (date: string) => {
     try {
       await storageService.deleteDailyPrep(date);
@@ -3438,6 +3455,8 @@ const App: React.FC = () => {
               window.dispatchEvent(new CustomEvent('alphatrade:backtest-run-saved', { detail: savedRun.id }));
             }}
             onTradeClosed={handleManualTrade}
+            journalTrades={trades}
+            onTradeReviewSave={handleBacktestTradeReviewSave}
           />
         </React.Suspense>
       )}

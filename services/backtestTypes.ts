@@ -1,8 +1,10 @@
+import type { ChartAppearanceState } from './chartAppearanceScope';
 import type { ChartReplayState } from './chartReplay';
 import type { WorkspaceSnapshot } from './chartWorkspaceHistory';
 import type { ChartWorkspaceSyncSettings } from './chartWorkspaceSync';
 import type { ChartWorkspaceLayoutId } from './chartWorkspaceLayouts';
 import type { PositionDrawing } from './chartPositionDrawing';
+import { DEFAULT_BACKTEST_FLAT_BY_MINUTE, DEFAULT_BACKTEST_FLAT_TIME_ZONE } from './backtestSessionClose';
 
 export type BacktestRunStatus = 'draft' | 'active' | 'paused' | 'completed' | 'archived';
 export type BacktestInstrument = 'MNQ' | 'NQ';
@@ -21,6 +23,9 @@ export interface BacktestRunConfig {
   defaultStopPoints?: number;
   defaultTargetPoints?: number;
   contractPolicy: 'continuous';
+  /** Denní prop-firm cutoff. Pozice ani čekající příkazy přes něj nepokračují. */
+  flatTimeZone?: string;
+  flatByMinute?: number;
 }
 
 export interface BacktestWorkspaceState {
@@ -29,6 +34,8 @@ export interface BacktestWorkspaceState {
   layoutId?: ChartWorkspaceLayoutId;
   activePanelId?: string;
   syncSettings?: Partial<ChartWorkspaceSyncSettings>;
+  /** Vzhled grafu vázaný na session — nastavení grafu, indikátorů a stylů kreseb. */
+  appearance?: ChartAppearanceState;
 }
 
 export interface BacktestOrder {
@@ -62,7 +69,7 @@ export interface BacktestFill {
   commission: number;
   realizedPnl: number;
   filledAt: number;
-  reason: 'entry' | 'manual' | 'stop-loss' | 'take-profit' | 'order';
+  reason: 'entry' | 'manual' | 'stop-loss' | 'take-profit' | 'session-close' | 'order';
 }
 
 export interface BacktestPosition {
@@ -134,6 +141,12 @@ export interface BacktestClosedTrade {
   /** Totéž v R — jen když je známý `riskAmount`. */
   mfeR?: number;
   maeR?: number;
+  /**
+   * Svíčka trefila stopku i target najednou. Engine v takovém případě volí
+   * stopku, ale výsledek je z minutových dat neurčitelný a analytika o tom
+   * musí vědět.
+   */
+  outcomeAmbiguous?: boolean;
 }
 
 export type BacktestOrderEventKind =
@@ -223,4 +236,6 @@ export const DEFAULT_BACKTEST_CONFIG: BacktestRunConfig = {
   slippageTicks: { MNQ: 0, NQ: 0 },
   defaultQuantity: 1,
   contractPolicy: 'continuous',
+  flatTimeZone: DEFAULT_BACKTEST_FLAT_TIME_ZONE,
+  flatByMinute: DEFAULT_BACKTEST_FLAT_BY_MINUTE,
 };

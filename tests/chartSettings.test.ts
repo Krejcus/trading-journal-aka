@@ -18,13 +18,21 @@ const settings = () => defaultChartSettings(true);
 
 describe('model nastavení grafu', () => {
   it('slévá uložené nastavení po sekcích, aby nová volba nezneplatnila zbytek', () => {
-    const merged = mergeChartSettings({ symbol: { precision: 4 }, canvas: { gridLines: 'both' } }, true);
+    const merged = mergeChartSettings({
+      symbol: { precision: 4 },
+      canvas: { gridLines: 'both' },
+      trading: { executionMarkers: false, executionMarkerSize: 'large' },
+    }, true);
 
     expect(merged.symbol.precision).toBe(4);
     expect(merged.symbol.bodyVisible).toBe(true);
     expect(merged.canvas.gridLines).toBe('both');
     expect(merged.canvas.marginTop).toBe(defaultChartSettings(true).canvas.marginTop);
     expect(merged.scales.symbolLabel.appearance?.color).toBe('#2962ff');
+    expect(merged.trading.executionMarkers).toBe(false);
+    expect(merged.trading.executionMarkerSize).toBe('large');
+    expect(merged.trading.quickOrderButton).toBe(true);
+    expect(merged.trading.positionBoxes).toBe(true);
   });
 
   it('poškozené nebo chybějící nastavení vrátí výchozí', () => {

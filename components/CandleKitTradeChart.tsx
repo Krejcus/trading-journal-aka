@@ -71,7 +71,11 @@ import {
   type MarketStructureAccumulator,
   type MarketTimeframe,
 } from '../services/marketData';
-import { calculateLiquidityLevels, type LiquidityLevelsResult } from '../services/liquidityLevels';
+import {
+  calculateLiquidityLevels,
+  EMPTY_LIQUIDITY_DAY_CONTEXT,
+  type LiquidityLevelsResult,
+} from '../services/liquidityLevels';
 import {
   createDrawingMagnetResolver,
   getDrawingMagnetSettings,
@@ -108,6 +112,21 @@ import FibDrawingSettingsDialog, {
 import GenericDrawingFloatingToolbar from './GenericDrawingFloatingToolbar';
 import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
 import { installDrawingStyleDefaults } from '../services/chartDrawingStyleDefaults';
+import {
+  CHART_APPEARANCE_STORAGE_KEYS,
+  onChartAppearanceScopeBroadcast,
+  onChartAppearanceScopeReset,
+  readChartAppearance,
+  writeChartAppearance,
+} from '../services/chartAppearanceScope';
+import {
+  DEFAULT_CHART_PANEL_ID,
+  panelSettingsTargetMatches,
+  readPanelSettings,
+  writeAllPanelSettings,
+  writePanelSettings,
+  type PanelSettingsTarget,
+} from '../services/chartPanelSettings';
 import {
   calculatePositionMetrics,
   applyPositionRuntimeInterval,
@@ -176,6 +195,11 @@ interface CandleKitTradeChartProps {
   showStructure: boolean;
   isDark: boolean;
   drawingScope?: string;
+  /**
+   * Panel, na který se váže nastavení grafu a indikátorů. Bez něj spadne graf
+   * pod společný výchozí panel — to sedí grafům mimo workspace.
+   */
+  settingsPanelId?: string;
   compactToolbar?: boolean;
   showIndicatorPicker?: boolean;
   indicatorController?: IndicatorController | null;
@@ -198,6 +222,8 @@ interface CandleKitTradeChartProps {
   onReplaySelectionTimeChange?: (time: number | null) => void;
   onReplayStart?: (time: number) => void;
   managedPositionBoxes?: BacktestManagedPositionBox[];
+  /** Viditelnost automatických position boxů řídí nadřazený workspace. */
+  showManagedPositionBoxes?: boolean;
   /** Počet kontraktů z obchodního panelu pro objednávku z pravého kliku. */
   chartOrderQuantity?: number;
   /** Rychlá objednávka z vybraného position boxu — totéž co tlačítko s bleskem. */
@@ -559,6 +585,7 @@ const EMPTY_LIQUIDITY_LEVELS: LiquidityLevelsResult = {
   upper2: [],
   lower2: [],
   biasRows: [],
+  dayContext: EMPTY_LIQUIDITY_DAY_CONTEXT,
 };
 
 const INITIAL_WINDOW_BARS: Record<MarketTimeframe, { before: number; after: number; chunk: number }> = {
@@ -1524,7 +1551,7 @@ const colorWithOpacity = (hex: string, opacity: number): string => {
   return `rgba(${red},${green},${blue},${Math.max(0, Math.min(1, opacity))})`;
 };
 
-const SHARED_INDICATOR_SETTINGS_KEY = 'alphatrade:chart-indicators:shared';
+const SHARED_INDICATOR_SETTINGS_KEY = CHART_APPEARANCE_STORAGE_KEYS.indicatorSettings;
 const SHARED_INDICATOR_SETTINGS_EVENT = 'alphatrade:chart-indicators-change';
 const sharedIndicatorSettingsCache = new Map<string, AlphaTradeIndicatorSettings>();
 
@@ -1558,22 +1585,53 @@ const mergeIndicatorSettings = (saved: string | null): AlphaTradeIndicatorSettin
   }
 };
 
-const loadSharedIndicatorSettings = (legacyKey: string): AlphaTradeIndicatorSettings => {
-  const cached = sharedIndicatorSettingsCache.get(SHARED_INDICATOR_SETTINGS_KEY);
-  if (cached) return structuredClone(cached);
-  let shared: string | null = null;
-  let legacy: string | null = null;
+/** Uložená obálka — buď z backtest session, nebo z globálního localStorage. */
+const storedIndicatorEnvelope = (legacyKey: string): unknown => {
+  const scoped = readChartAppearance('indicatorSettings');
+  if (scoped !== undefined) return scoped;
   try {
-    shared = window.localStorage.getItem(SHARED_INDICATOR_SETTINGS_KEY);
-    legacy = shared ? null : window.localStorage.getItem(legacyKey);
-  } catch { /* private storage */ }
-  const settings = mergeIndicatorSettings(shared ?? legacy);
-  sharedIndicatorSettingsCache.set(SHARED_INDICATOR_SETTINGS_KEY, settings);
-  if (!shared) {
-    try { window.localStorage.setItem(SHARED_INDICATOR_SETTINGS_KEY, JSON.stringify(settings)); } catch { /* private storage */ }
+    const shared = window.localStorage.getItem(SHARED_INDICATOR_SETTINGS_KEY);
+    if (shared) return JSON.parse(shared) as unknown;
+    const legacy = window.localStorage.getItem(legacyKey);
+    return legacy ? JSON.parse(legacy) as unknown : undefined;
+  } catch {
+    return undefined;
   }
+};
+
+const loadPanelIndicatorSettings = (panelId: string, legacyKey: string): AlphaTradeIndicatorSettings => {
+  const cached = sharedIndicatorSettingsCache.get(panelId);
+  if (cached) return structuredClone(cached);
+  const stored = readPanelSettings(storedIndicatorEnvelope(legacyKey), panelId);
+  const settings = mergeIndicatorSettings(stored === undefined ? null : JSON.stringify(stored));
+  sharedIndicatorSettingsCache.set(panelId, settings);
   return structuredClone(settings);
 };
+
+const persistPanelIndicatorSettings = (
+  settings: AlphaTradeIndicatorSettings,
+  target: PanelSettingsTarget,
+  legacyKey: string,
+) => {
+  const envelope = target.allPanels
+    ? writeAllPanelSettings(settings)
+    : writePanelSettings(storedIndicatorEnvelope(legacyKey), target.panelId, settings);
+  if (target.allPanels) sharedIndicatorSettingsCache.clear();
+  sharedIndicatorSettingsCache.set(target.panelId, structuredClone(settings));
+  if (writeChartAppearance('indicatorSettings', envelope)) return;
+  try { window.localStorage.setItem(SHARED_INDICATOR_SETTINGS_KEY, JSON.stringify(envelope)); } catch { /* private storage */ }
+};
+
+// Otevření i zavření session mění platný zdroj nastavení. Cache musí padnout a
+// namontované grafy se to dozvědí stejnou cestou jako při běžné úpravě.
+onChartAppearanceScopeReset(() => sharedIndicatorSettingsCache.clear());
+onChartAppearanceScopeBroadcast(() => {
+  // Každý panel si po přepnutí session načte vlastní hodnotu sám; událost je
+  // jen pokyn „přečti si to znovu".
+  window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, {
+    detail: { source: Symbol('chart-appearance-scope'), reload: true },
+  }));
+});
 
 const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   trade,
@@ -1587,6 +1645,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   showStructure,
   isDark,
   drawingScope,
+  settingsPanelId = DEFAULT_CHART_PANEL_ID,
   compactToolbar = false,
   showIndicatorPicker = false,
   indicatorController: suppliedIndicatorController,
@@ -1609,6 +1668,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   onReplaySelectionTimeChange,
   onReplayStart,
   managedPositionBoxes = [],
+  showManagedPositionBoxes = true,
   chartOrderQuantity,
   onChartOrder,
   onPositionQuickOrder,
@@ -1653,6 +1713,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const structurePrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
   const positionProgressPrimitiveRequestUpdateRef = useRef<(() => void) | null>(null);
   const positionProgressUnsubscribeRef = useRef<(() => void) | null>(null);
+  const showManagedPositionBoxesRef = useRef(showManagedPositionBoxes);
+  showManagedPositionBoxesRef.current = showManagedPositionBoxes;
   const replayViewportFrameRef = useRef<number | null>(null);
   const replayViewportTargetRef = useRef<{ from: number; to: number } | null>(null);
   const replayPriceRangeTargetRef = useRef<{ from: number; to: number } | null>(null);
@@ -1661,13 +1723,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     cutRatio: number;
     logicalSpan: number;
   } | null>(null);
-  const settingsStorageKey = SHARED_INDICATOR_SETTINGS_KEY;
   const legacySettingsStorageKey = `alphatrade:chart-indicators:${drawingScope || trade.id}`;
   const resolvedInstrumentRoot = resolveNasdaqFuturesRoot(instrumentRoot, trade.symbol || trade.instrument);
   const instrumentLegend = chartInstrumentLegend(resolvedInstrumentRoot, timeframe);
   const [indicatorSettings, setIndicatorSettings] = useState<AlphaTradeIndicatorSettings>(() => {
     if (typeof window === 'undefined') return structuredClone(DEFAULT_INDICATOR_SETTINGS);
-    return loadSharedIndicatorSettings(legacySettingsStorageKey);
+    return loadPanelIndicatorSettings(settingsPanelId, legacySettingsStorageKey);
   });
   const settingsSyncSourceRef = useRef(Symbol('chart-indicator-settings'));
   const [selectedFib, setSelectedFib] = useState<{ engine: CandleKitDrawingEngine; drawing: FibDrawing } | null>(null);
@@ -1702,22 +1763,40 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     element: HTMLDivElement;
   } | null>(null);
   const replaySelectionRefreshFrameRef = useRef<number | null>(null);
-  const updateSharedIndicatorSettings = useCallback((next: AlphaTradeIndicatorSettings) => {
-    sharedIndicatorSettingsCache.set(settingsStorageKey, next);
+  /**
+   * Náhled i potvrzení míří jen na tenhle panel. Ostatní grafy se dozvědí o
+   * změně teprve tehdy, když uživatel zvolí „Na všechny grafy".
+   */
+  const updateIndicatorSettings = useCallback((
+    next: AlphaTradeIndicatorSettings,
+    allPanels = false,
+  ) => {
+    const target: PanelSettingsTarget = { panelId: settingsPanelId, allPanels };
+    sharedIndicatorSettingsCache.set(settingsPanelId, next);
     setIndicatorSettings(next);
     window.dispatchEvent(new CustomEvent(SHARED_INDICATOR_SETTINGS_EVENT, {
-      detail: { key: settingsStorageKey, settings: next, source: settingsSyncSourceRef.current },
+      detail: { settings: next, source: settingsSyncSourceRef.current, target },
     }));
-  }, [settingsStorageKey]);
+  }, [settingsPanelId]);
   useEffect(() => {
     const sync = (event: Event) => {
-      const detail = (event as CustomEvent<{ key: string; settings: AlphaTradeIndicatorSettings; source: symbol }>).detail;
-      if (!detail || detail.key !== settingsStorageKey || detail.source === settingsSyncSourceRef.current) return;
+      const detail = (event as CustomEvent<{
+        settings?: AlphaTradeIndicatorSettings;
+        source: symbol;
+        target?: PanelSettingsTarget;
+        reload?: boolean;
+      }>).detail;
+      if (!detail || detail.source === settingsSyncSourceRef.current) return;
+      if (detail.reload) {
+        setIndicatorSettings(loadPanelIndicatorSettings(settingsPanelId, legacySettingsStorageKey));
+        return;
+      }
+      if (!detail.settings || !panelSettingsTargetMatches(detail.target, settingsPanelId)) return;
       setIndicatorSettings(structuredClone(detail.settings));
     };
     window.addEventListener(SHARED_INDICATOR_SETTINGS_EVENT, sync);
     return () => window.removeEventListener(SHARED_INDICATOR_SETTINGS_EVENT, sync);
-  }, [settingsStorageKey]);
+  }, [legacySettingsStorageKey, settingsPanelId]);
   const indicatorSettingsRef = useRef(indicatorSettings);
   indicatorSettingsRef.current = indicatorSettings;
   const [settingsDialogIndicator, setSettingsDialogIndicator] = useState<AlphaTradeIndicatorId | null>(null);
@@ -1733,7 +1812,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   // --- Nastavení grafu (pravé tlačítko → Nastavení) ---------------------------
   const chartSettingsSourceRef = useRef(Symbol('chart-settings'));
-  const [chartSettings, setChartSettings] = useState<ChartSettings>(() => loadChartSettings(isDark));
+  const [chartSettings, setChartSettings] = useState<ChartSettings>(() => loadChartSettings(isDark, settingsPanelId));
   const chartSettingsRef = useRef(chartSettings);
   chartSettingsRef.current = chartSettings;
   const [chartSettingsOpen, setChartSettingsOpen] = useState(false);
@@ -1750,21 +1829,36 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const [sessionBreakOffsets, setSessionBreakOffsets] = useState<number[]>([]);
   const [pricePointer, setPricePointer] = useState<{ y: number; price: number } | null>(null);
 
-  const updateChartSettings = useCallback((next: ChartSettings, persist: boolean) => {
+  const updateChartSettings = useCallback((
+    next: ChartSettings,
+    persist: boolean,
+    allPanels = false,
+  ) => {
+    const target: PanelSettingsTarget = { panelId: settingsPanelId, allPanels };
     setChartSettings(next);
-    if (persist) saveChartSettings(next, chartSettingsSourceRef.current);
-    else broadcastChartSettings(next, chartSettingsSourceRef.current);
-  }, []);
+    if (persist) saveChartSettings(next, chartSettingsSourceRef.current, target);
+    else broadcastChartSettings(next, chartSettingsSourceRef.current, target);
+  }, [settingsPanelId]);
 
   useEffect(() => {
     const sync = (event: Event) => {
-      const detail = (event as CustomEvent<{ settings: ChartSettings; source: symbol }>).detail;
+      const detail = (event as CustomEvent<{
+        settings?: ChartSettings;
+        source: symbol;
+        target?: PanelSettingsTarget;
+        reload?: boolean;
+      }>).detail;
       if (!detail || detail.source === chartSettingsSourceRef.current) return;
+      if (detail.reload) {
+        setChartSettings(loadChartSettings(isDark, settingsPanelId));
+        return;
+      }
+      if (!detail.settings || !panelSettingsTargetMatches(detail.target, settingsPanelId)) return;
       setChartSettings(structuredClone(detail.settings));
     };
     window.addEventListener(CHART_SETTINGS_EVENT, sync);
     return () => window.removeEventListener(CHART_SETTINGS_EVENT, sync);
-  }, []);
+  }, [isDark, settingsPanelId]);
   const [hiddenCustomIndicators, setHiddenCustomIndicators] = useState<Set<AlphaTradeIndicatorId>>(new Set());
   const setCustomIndicatorHidden = useCallback((id: AlphaTradeIndicatorId, hidden: boolean) => {
     setHiddenCustomIndicators(current => {
@@ -3108,7 +3202,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           draw: target => {
             target.useMediaCoordinateSpace(({ context }) => {
               const replayCandles = visibleCandlesRef.current;
-              if (!replayCandles.length) return;
+              if (!replayCandles.length || !showManagedPositionBoxesRef.current) return;
               context.save();
               engine.getDrawings().filter(isPositionDrawing).forEach(drawing => {
                 const progress = calculatePositionProgress(drawing, replayCandles);
@@ -3129,13 +3223,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
                   Math.max(1, Math.abs(currentX - startX)),
                   Math.max(1, Math.abs(currentY - entryY)),
                 );
-                context.beginPath();
-                context.moveTo(startX, entryY);
-                context.lineTo(currentX, currentY);
-                context.strokeStyle = isDark ? 'rgba(255,255,255,.78)' : 'rgba(51,65,85,.72)';
-                context.lineWidth = 1;
-                context.setLineDash([3, 4]);
-                context.stroke();
+                if (chartSettingsRef.current.trading.tradeLines) {
+                  context.beginPath();
+                  context.moveTo(startX, entryY);
+                  context.lineTo(currentX, currentY);
+                  context.strokeStyle = isDark ? 'rgba(255,255,255,.78)' : 'rgba(51,65,85,.72)';
+                  context.lineWidth = 1;
+                  context.setLineDash([3, 4]);
+                  context.stroke();
+                }
               });
               context.restore();
             });
@@ -3559,7 +3655,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   useLayoutEffect(() => {
     positionProgressPrimitiveRequestUpdateRef.current?.();
-  }, [replayActive, replayCursorTime, visibleCandles]);
+  }, [chartSettings.trading.tradeLines, replayActive, replayCursorTime, showManagedPositionBoxes, visibleCandles]);
 
   useLayoutEffect(() => {
     const engine = apiRef.current?.drawing?.engine;
@@ -4424,9 +4520,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             chartSettingsBackupRef.current = null;
             setChartSettingsOpen(false);
           }}
-          onApply={next => {
+          onApply={(next, allPanels) => {
             chartSettingsBackupRef.current = null;
-            updateChartSettings(next, true);
+            updateChartSettings(next, true, allPanels);
             setChartSettingsOpen(false);
           }}
         />,
@@ -4436,15 +4532,19 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         <ChartIndicatorSettingsDialog
           indicator={settingsDialogIndicator}
           settings={indicatorSettings}
-          onPreview={updateSharedIndicatorSettings}
+          onPreview={next => updateIndicatorSettings(next)}
           onCancel={() => {
-            if (settingsBackupRef.current) updateSharedIndicatorSettings(settingsBackupRef.current);
+            if (settingsBackupRef.current) updateIndicatorSettings(settingsBackupRef.current);
             settingsBackupRef.current = null;
             setSettingsDialogIndicator(null);
           }}
-          onApply={next => {
-            updateSharedIndicatorSettings(next);
-            try { window.localStorage.setItem(settingsStorageKey, JSON.stringify(next)); } catch { /* private storage */ }
+          onApply={(next, allPanels) => {
+            updateIndicatorSettings(next, allPanels);
+            persistPanelIndicatorSettings(
+              next,
+              { panelId: settingsPanelId, allPanels },
+              legacySettingsStorageKey,
+            );
             settingsBackupRef.current = null;
             setSettingsDialogIndicator(null);
           }}
@@ -4474,6 +4574,23 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           onContextMenu={event => event.preventDefault()}
           onKeyDown={handleContextMenuKeyDown}
         >
+          <button
+            type="button"
+            role="menuitem"
+            aria-keyshortcuts="Alt+R"
+            className={`group flex h-9 w-full items-center px-2 text-left outline-none transition-colors ${isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
+            onClick={() => {
+              resetChartView(apiRef.current);
+              setContextMenu(null);
+            }}
+          >
+            <span className="mr-2 flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden="true">
+              <RotateCcw size={15} strokeWidth={1.55} />
+            </span>
+            <span>Reset chart view</span>
+            <kbd className="ml-auto text-[10px] font-normal text-[#787b86]">⌥ R</kbd>
+          </button>
+          <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
           {contextMenu.positionSelected && onPositionQuickOrder && <>
             <button
               type="button"
@@ -4510,23 +4627,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             ))}
             <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
           </>}
-          <button
-            type="button"
-            role="menuitem"
-            aria-keyshortcuts="Alt+R"
-            className={`group flex h-9 w-full items-center px-2 text-left outline-none transition-colors ${isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
-            onClick={() => {
-              resetChartView(apiRef.current);
-              setContextMenu(null);
-            }}
-          >
-            <span className="mr-2 flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden="true">
-              <RotateCcw size={15} strokeWidth={1.55} />
-            </span>
-            <span>Reset chart view</span>
-            <kbd className="ml-auto text-[10px] font-normal text-[#787b86]">⌥ R</kbd>
-          </button>
-          <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
           <button
             type="button"
             role="menuitem"

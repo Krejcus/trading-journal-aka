@@ -28,6 +28,11 @@ import type {
   BacktestRuntimeState,
   BacktestWorkspaceState,
 } from '../services/backtestTypes';
+import {
+  closeChartAppearanceScope,
+  inheritGlobalAppearance,
+  openChartAppearanceScope,
+} from '../services/chartAppearanceScope';
 import type { ChartReplayState } from '../services/chartReplay';
 import { backtestQuickOrderLabel, createBacktestQuickOrderDraft } from '../services/backtestQuickOrder';
 import { createManagedPositionPlan, managedPositionBoxes } from '../services/backtestManagedPosition';
@@ -68,9 +73,29 @@ interface Props {
   isDark: boolean;
   onClose: (run: BacktestRun) => void;
   onTradeClosed?: (trade: Trade) => void;
+  journalTrades?: Trade[];
+  onTradeReviewSave?: (tradeId: string, updates: Partial<Trade>, snapshotDataUrl?: string) => Promise<void>;
 }
 
-const BacktestWorkspace: React.FC<Props> = ({ run: initialRun, isDark, onClose, onTradeClosed }) => {
+const BacktestWorkspace: React.FC<Props> = ({
+  run: initialRun,
+  isDark,
+  onClose,
+  onTradeClosed,
+  journalTrades = [],
+  onTradeReviewSave,
+}) => {
+  // Scope se musí otevřít dřív, než se namontuje první graf — proto v těle
+  // komponenty, ne v efektu. Sloty, které session ještě nemá, zdědí globální
+  // nastavení, takže se existující sessions vizuálně nezmění. Rozhoduje uložený
+  // stav při otevření; pozdější checkpointy scope znovu neotevírají.
+  const savedAppearance = useRef(initialRun.workspaceState?.appearance).current;
+  useMemo(
+    () => openChartAppearanceScope(`backtest:${initialRun.id}`, savedAppearance, inheritGlobalAppearance),
+    [initialRun.id, savedAppearance],
+  );
+  useEffect(() => () => closeChartAppearanceScope(`backtest:${initialRun.id}`), [initialRun.id]);
+
   const [run, setRun] = useState(initialRun);
   const runRef = useRef(initialRun);
   const [candlesByRoot, setCandlesByRoot] = useState<Partial<Record<MarketRoot, MarketCandle[]>>>({});
@@ -195,6 +220,25 @@ const BacktestWorkspace: React.FC<Props> = ({ run: initialRun, isDark, onClose, 
     void loadSegment(contextStart);
   }, [initialRun.cursorAt, initialRun.startAt, loadSegment]);
 
+  // Dotažení dalšího segmentu, když kurzor dojel na poslední načtenou svíčku.
+  //
+  // Prefetch v `handleReplayChange` se řídí hodinami — spustí se, až je kurzor
+  // den od konce načteného okna. Přes víkend to selže: okno sahá do neděle,
+  // ale svíčky končí pátkem na zavíračce trhu, takže kurzor je od `loadedUntil`
+  // pořád „den daleko" a přitom už nemá kam jet. Tlačítka se zamknou,
+  // `handleReplayChange` se znovu nespustí a s ním ani prefetch — session
+  // uvízne. Tahle podmínka se ptá na svíčky, ne na čas, takže díru v datech
+  // překlene.
+  useEffect(() => {
+    const replay = run.runtimeState.replay;
+    if (replay.phase !== 'active' || replay.cursorTime === null) return;
+    if (loadedUntilRef.current >= run.endAt) return;
+    const executionCandles = candlesByRoot[run.executionSymbol] ?? [];
+    const lastLoaded = executionCandles[executionCandles.length - 1];
+    if (!lastLoaded || replay.cursorTime < lastLoaded.time) return;
+    void loadSegment(loadedUntilRef.current);
+  }, [candlesByRoot, loadSegment, run.endAt, run.executionSymbol, run.runtimeState.replay]);
+
   const emitClosedTrades = useCallback((runtime: BacktestRuntimeState) => {
     const pending = runtime.closedTrades.filter(closed => !emittedTradesRef.current.has(closed.id));
     if (pending.length === 0) return;
@@ -223,6 +267,8 @@ const BacktestWorkspace: React.FC<Props> = ({ run: initialRun, isDark, onClose, 
         candles: candlesByRoot[closed.instrument] ?? [],
         orderEvents: runtime.orderEvents ?? [],
         timeZone: current.config.timezone,
+        flatTimeZone: current.config.flatTimeZone,
+        flatByMinute: current.config.flatByMinute,
         strategy: current.config.strategy,
         contextSource: contextFor(closed.instrument),
       }));
@@ -526,6 +572,29 @@ const BacktestWorkspace: React.FC<Props> = ({ run: initialRun, isDark, onClose, 
     [run.runtimeState],
   );
 
+  const recalculateTrade = useCallback((tradeId: string): Trade => {
+    const current = runRef.current;
+    const closed = current.runtimeState.closedTrades.find(candidate => candidate.id === tradeId);
+    if (!closed) throw new Error('Původní replay obchod už v této session není dostupný.');
+    const candles = candlesByRoot[closed.instrument] ?? [];
+    if (!candles.length) throw new Error(`Pro ${closed.instrument} nejsou načtené replay svíčky.`);
+    const contextSource = createBacktestContextSource({
+      candles,
+      htfCandles: historyCandlesByRoot[closed.instrument]?.['ohlcv-1h'],
+      timeZone: current.config.timezone,
+    });
+    return backtestClosedTradeToTrade(closed, {
+      accountId: current.accountId,
+      candles,
+      orderEvents: current.runtimeState.orderEvents ?? [],
+      timeZone: current.config.timezone,
+      flatTimeZone: current.config.flatTimeZone,
+      flatByMinute: current.config.flatByMinute,
+      strategy: current.config.strategy,
+      contextSource,
+    });
+  }, [candlesByRoot, historyCandlesByRoot]);
+
   // Množství drží workspace, ne jen obchodní panel: objednávka z pravého kliku
   // do grafu musí použít přesně to číslo, které uživatel vidí vedle typu.
   const [orderQuantity, setOrderQuantity] = useState(run.config.defaultQuantity || 1);
@@ -553,6 +622,12 @@ const BacktestWorkspace: React.FC<Props> = ({ run: initialRun, isDark, onClose, 
     managedPositionBoxes: managedBoxes,
     fills: run.runtimeState.fills.filter(fill => fill.instrument === run.executionSymbol),
     closedTrades: run.runtimeState.closedTrades.filter(trade => trade.instrument === run.executionSymbol),
+    journalTrades: journalTrades.filter(trade => (
+      trade.backtestRunId === run.id
+      || run.runtimeState.closedTrades.some(closed => closed.id === String(trade.id))
+    )),
+    onTradeRecalculate: recalculateTrade,
+    onTradeReviewSave,
     onOrderLineChange: changeOrderLine,
     onOrderLineCancel: cancelOrderLine,
     onOrderLineAddBracket: addPositionBracketLine,
@@ -569,7 +644,7 @@ const BacktestWorkspace: React.FC<Props> = ({ run: initialRun, isDark, onClose, 
         onChangeBracket={changeBracket}
       />
     ),
-  }), [addPositionBracketLine, candlesByRoot, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, loadOlderHistory, managedBoxes, orderLines, orderQuantity, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
+  }), [addPositionBracketLine, candlesByRoot, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, journalTrades, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
 
   const syntheticTrade = useMemo<Trade>(() => ({
     id: `backtest-${run.id}`,
@@ -619,16 +694,37 @@ const BacktestWorkspace: React.FC<Props> = ({ run: initialRun, isDark, onClose, 
     </div>
   );
 
-  return <AlphaTradeChartWorkspace
-    trade={syntheticTrade}
-    entryMs={run.startAt}
-    exitMs={run.endAt}
-    initialRoot="MNQ"
-    initialCandles={initialCandles}
-    isDark={isDark}
-    onClose={() => void closeWorkspace()}
-    backtestSession={bridge}
-  />;
+  return (
+    <>
+      <AlphaTradeChartWorkspace
+        trade={syntheticTrade}
+        entryMs={run.startAt}
+        exitMs={run.endAt}
+        initialRoot="MNQ"
+        initialCandles={initialCandles}
+        isDark={isDark}
+        onClose={() => void closeWorkspace()}
+        backtestSession={bridge}
+      />
+      {/* Selhání dalšího segmentu se dřív jen zapsalo do stavu a nikde
+          neukázalo — chart už svíčky měl, takže chybová obrazovka výš se
+          nespustila a uživatel viděl jen zamčené přehrávání bez vysvětlení. */}
+      {error && initialCandles.length > 0 && (
+        <div className="fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 backdrop-blur">
+          <span className="text-xs font-bold text-rose-500">{error}</span>
+          <button
+            onClick={() => void loadSegment(loadedUntilRef.current)}
+            className="rounded-md bg-rose-500 px-2.5 py-1 text-[11px] font-black text-white hover:bg-rose-400"
+          >Zkusit znovu</button>
+          <button
+            onClick={() => setError(null)}
+            className="text-[11px] font-bold text-rose-500/70 hover:text-rose-500"
+            aria-label="Skrýt hlášku"
+          >Skrýt</button>
+        </div>
+      )}
+    </>
+  );
 };
 
 interface TradingPanelProps {
