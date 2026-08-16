@@ -476,6 +476,41 @@ export const processBacktestCandle = (
   return markToMarket(next, instrument, candle.close);
 };
 
+/**
+ * Dávkové zpracování odhalených svíček — jeden tick přehrávání jich při
+ * dotahování skluzu předá až sto najednou.
+ *
+ * Klíčové pozorování: svíčka, při které neexistuje pozice ani čekající
+ * objednávka na instrumentu, nemůže změnit nic než mark-to-market. Expirace
+ * čekajících vstupů je podmnožina čekajících objednávek, cutoff i bracket
+ * vyžadují pozici, plnění vyžaduje čekající objednávku. Takové svíčky se tedy
+ * přeskočí úplně a mark-to-market se udělá jednou, z poslední z nich — mezi
+ * nečinnými svíčkami ho stejně každá další přepisuje. Aktivní svíčky jdou
+ * beze změny přes `processBacktestCandle`, ať existuje jediná implementace
+ * pravidel. Ekvivalenci se sekvenčním zpracováním drží property test.
+ */
+export const processBacktestCandles = (
+  runtime: BacktestRuntimeState,
+  runId: string,
+  instrument: BacktestInstrument,
+  candles: readonly MarketCandle[],
+  config: BacktestRunConfig,
+): BacktestRuntimeState => {
+  let next = runtime;
+  let idleMark: MarketCandle | null = null;
+  for (const candle of candles) {
+    const idle = !next.positions.some(position => position.instrument === instrument)
+      && !next.orders.some(order => order.status === 'pending' && order.instrument === instrument);
+    if (idle) {
+      idleMark = candle;
+      continue;
+    }
+    idleMark = null;
+    next = processBacktestCandle(next, runId, instrument, candle, config);
+  }
+  return idleMark ? markToMarket(next, instrument, idleMark.close) : next;
+};
+
 export const enqueueBacktestOrder = (
   runtime: BacktestRuntimeState,
   order: BacktestOrder,

@@ -15,6 +15,7 @@ import {
   createBacktestOrder,
   enqueueBacktestOrder,
   processBacktestCandle,
+  processBacktestCandles,
   updatePendingBacktestOrder,
   updatePositionBracket,
 } from '../services/backtestEngine';
@@ -338,7 +339,7 @@ const BacktestWorkspace: React.FC<Props> = ({
     const previous = lastProcessedCursorRef.current;
     if (replay.phase === 'active' && replay.cursorTime !== null && (previous === null || replay.cursorTime > previous)) {
       const revealed = executionCandles.filter(candle => candle.time > (previous ?? replay.cursorTime - 1) && candle.time <= replay.cursorTime!);
-      revealed.forEach(candle => { runtime = processBacktestCandle(runtime, runRef.current.id, executionInstrument, candle, runRef.current.config); });
+      runtime = processBacktestCandles(runtime, runRef.current.id, executionInstrument, revealed, runRef.current.config);
       lastProcessedCursorRef.current = replay.cursorTime;
     } else if (replay.cursorTime !== null) {
       lastProcessedCursorRef.current = replay.cursorTime;
