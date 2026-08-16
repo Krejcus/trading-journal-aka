@@ -105,17 +105,39 @@ const noteCloudError = (error: any) => {
   if (isCloudUnavailable(error)) cloudTablesAvailable = false;
 };
 
-const syncLedger = async (run: BacktestRun, userId: string) => {
-  if (run.runtimeState.orders.length) {
-    const { error } = await supabase.from('backtest_orders').upsert(run.runtimeState.orders.map(order => orderToDb(order, userId)));
+/**
+ * Kurzor přírůstkového ledgeru: co už cloud jednou přijal, znovu neposíláme.
+ * Fills jsou neměnné (stačí id), orders se mění — pamatujeme si `updatedAt`,
+ * pod kterým byl řádek naposledy synchronizovaný. Kurzor drží workspace po
+ * dobu otevřené session; po chybě se prostě neposune a další pokus pošle
+ * tytéž řádky znovu (upsert je idempotentní).
+ */
+export interface BacktestLedgerCursor {
+  fillIds: Set<string>;
+  orderStamps: Map<string, number>;
+}
+
+export const createBacktestLedgerCursor = (): BacktestLedgerCursor => ({
+  fillIds: new Set(),
+  orderStamps: new Map(),
+});
+
+const syncLedger = async (run: BacktestRun, userId: string, cursor?: BacktestLedgerCursor) => {
+  const orders = run.runtimeState.orders
+    .filter(order => cursor?.orderStamps.get(order.id) !== order.updatedAt);
+  if (orders.length) {
+    const { error } = await supabase.from('backtest_orders').upsert(orders.map(order => orderToDb(order, userId)));
     if (error && !isCloudUnavailable(error)) throw error;
+    if (!error && cursor) orders.forEach(order => cursor.orderStamps.set(order.id, order.updatedAt));
   }
-  if (run.runtimeState.fills.length) {
+  const fills = run.runtimeState.fills.filter(fill => !cursor?.fillIds.has(fill.id));
+  if (fills.length) {
     const { error } = await supabase.from('backtest_fills').upsert(
-      run.runtimeState.fills.map(fill => fillToDb(fill, userId)),
+      fills.map(fill => fillToDb(fill, userId)),
       { onConflict: 'id', ignoreDuplicates: true },
     );
     if (error && !isCloudUnavailable(error)) throw error;
+    if (!error && cursor) fills.forEach(fill => cursor.fillIds.add(fill.id));
   }
 };
 
@@ -202,35 +224,65 @@ export const getBacktestRun = async (id: string): Promise<BacktestRun | null> =>
   return selected;
 };
 
-export const saveBacktestRun = async (
+export type BacktestRunChanges =
+  Partial<Pick<BacktestRun, 'name' | 'status' | 'cursorAt' | 'config' | 'workspaceState' | 'runtimeState' | 'lastOpenedAt'>>;
+
+/**
+ * Rychlý lokální checkpoint — jen IndexedDB, žádná síť. Crash-recovery vrstva,
+ * kterou workspace volá každých pár sekund; cloud má vlastní, řidší kadenci
+ * přes `syncBacktestRunToCloud`.
+ */
+export const saveBacktestRunLocal = async (
   run: BacktestRun,
-  changes: Partial<Pick<BacktestRun, 'name' | 'status' | 'cursorAt' | 'config' | 'workspaceState' | 'runtimeState' | 'lastOpenedAt'>>,
+  changes: BacktestRunChanges,
 ): Promise<BacktestRun> => {
   const next: BacktestRun = { ...run, ...clone(changes), revision: run.revision + 1, updatedAt: Date.now() };
   await saveLocal(next);
+  return next;
+};
+
+/**
+ * Cloudová polovina checkpointu. `expectedCloudRevision` je revize, kterou má
+ * cloudový řádek od posledního úspěšného syncu — lokální revize mezitím klidně
+ * poskočila o desítky (lokální checkpointy jedou častěji). Nesedne-li, řádek
+ * přepsala jiná záložka a fallback upsert rozhodne last-write-wins jako dosud.
+ */
+export const syncBacktestRunToCloud = async (
+  run: BacktestRun,
+  expectedCloudRevision: number,
+  cursor?: BacktestLedgerCursor,
+): Promise<BacktestRun> => {
   const userId = await getUserId();
-  if (!userId || cloudTablesAvailable === false) return next;
-  const payload = toDb(next, userId);
+  if (!userId || cloudTablesAvailable === false) return run;
+  const payload = toDb(run, userId);
   const { data, error } = await supabase.from('backtest_runs')
     .update(payload)
     .eq('id', run.id)
-    .eq('revision', run.revision)
+    .eq('revision', expectedCloudRevision)
     .select()
     .maybeSingle();
   if (error) {
     noteCloudError(error);
     if (!isCloudUnavailable(error)) console.error('[Backtest] Cloud checkpoint failed, local checkpoint is safe:', error);
-    return next;
+    return run;
   }
   cloudTablesAvailable = true;
-  let saved = data ? fromDb(data) : next;
+  let saved = data ? fromDb(data) : run;
   if (!data) {
     const { data: inserted, error: insertError } = await supabase.from('backtest_runs').upsert(payload).select().single();
     if (!insertError && inserted) saved = fromDb(inserted);
   }
-  await syncLedger(saved, userId);
+  await syncLedger(saved, userId, cursor);
   await saveLocal(saved);
   return saved;
+};
+
+export const saveBacktestRun = async (
+  run: BacktestRun,
+  changes: BacktestRunChanges,
+): Promise<BacktestRun> => {
+  const next = await saveBacktestRunLocal(run, changes);
+  return syncBacktestRunToCloud(next, run.revision);
 };
 
 export const archiveBacktestRun = async (run: BacktestRun) => saveBacktestRun(run, { status: 'archived' });

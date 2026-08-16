@@ -20,7 +20,11 @@ import {
 } from '../services/backtestEngine';
 import { backtestClosedTradeToTrade } from '../services/backtestIntel';
 import { createBacktestContextSource } from '../services/backtestEntryContext';
-import { saveBacktestRun } from '../services/backtestRunService';
+import {
+  createBacktestLedgerCursor,
+  saveBacktestRunLocal,
+  syncBacktestRunToCloud,
+} from '../services/backtestRunService';
 import type {
   BacktestInstrument,
   BacktestOrderType,
@@ -51,6 +55,8 @@ import {
 // cursor reaches the edge.
 const SEGMENT_MS = 3 * 24 * 60 * 60 * 1_000;
 const PREFETCH_MS = 24 * 60 * 60 * 1_000;
+/** Jak často jde plný stav do Supabase; lokální checkpoint běží každých 1,5 s. */
+const CLOUD_SYNC_INTERVAL_MS = 60_000;
 // Deep context is requested in the native provider resolution needed by the
 // panel. Intraday charts stay on bounded 1m chunks; HTF charts can jump a year
 // at a time with hourly bars instead of downloading and aggregating hundreds
@@ -108,7 +114,12 @@ const BacktestWorkspace: React.FC<Props> = ({
   const [error, setError] = useState<string | null>(null);
   const loadingSegmentRef = useRef(false);
   const dirtyRef = useRef(false);
+  const cloudDirtyRef = useRef(false);
   const persistedRevisionRef = useRef(initialRun.revision);
+  /** Revize, kterou má cloudový řádek — lokální mezitím běží napřed. */
+  const cloudRevisionRef = useRef(initialRun.revision);
+  const lastCloudSyncRef = useRef(Date.now());
+  const ledgerCursorRef = useRef(createBacktestLedgerCursor());
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const emittedTradesRef = useRef(new Set(initialRun.runtimeState.closedTrades.map(trade => trade.id)));
   const lastProcessedCursorRef = useRef<number | null>(initialRun.runtimeState.replay.cursorTime);
@@ -118,22 +129,47 @@ const BacktestWorkspace: React.FC<Props> = ({
     runRef.current = next;
     setRun(next);
     dirtyRef.current = true;
+    cloudDirtyRef.current = true;
   }, []);
 
-  const flush = useCallback(() => {
-    if (!dirtyRef.current) return saveChainRef.current;
+  /**
+   * Checkpoint má dvě kadence. Lokální (IndexedDB) běží každých 1,5 s a nic
+   * nestojí — to je crash-recovery. Cloud dostává celý ~400KB stav, takže jede
+   * jen jednou za minutu a při pauze/zavření/schování záložky; ledger se navíc
+   * posílá přírůstkově přes kurzor. Dřív šel celý stav + všechny orders a fills
+   * do Supabase každých 1,5 s — ~1 GB uploadu za hodinu přehrávání.
+   */
+  const flush = useCallback((options?: { cloud?: boolean }) => {
+    const wantsCloud = cloudDirtyRef.current
+      && (options?.cloud === true || Date.now() - lastCloudSyncRef.current >= CLOUD_SYNC_INTERVAL_MS);
+    if (!dirtyRef.current && !wantsCloud) return saveChainRef.current;
+    const locallyDirty = dirtyRef.current;
     dirtyRef.current = false;
+    if (wantsCloud) cloudDirtyRef.current = false;
     const snapshot = runRef.current;
     saveChainRef.current = saveChainRef.current.then(async () => {
-      const saved = await saveBacktestRun({ ...snapshot, revision: persistedRevisionRef.current }, {
-        status: snapshot.status,
-        cursorAt: snapshot.cursorAt,
-        config: snapshot.config,
-        workspaceState: snapshot.workspaceState,
-        runtimeState: snapshot.runtimeState,
-        lastOpenedAt: snapshot.lastOpenedAt,
-      });
+      let saved = locallyDirty
+        ? await saveBacktestRunLocal({ ...snapshot, revision: persistedRevisionRef.current }, {
+          status: snapshot.status,
+          cursorAt: snapshot.cursorAt,
+          config: snapshot.config,
+          workspaceState: snapshot.workspaceState,
+          runtimeState: snapshot.runtimeState,
+          lastOpenedAt: snapshot.lastOpenedAt,
+        })
+        : { ...snapshot, revision: persistedRevisionRef.current };
       persistedRevisionRef.current = saved.revision;
+      if (wantsCloud) {
+        try {
+          saved = await syncBacktestRunToCloud(saved, cloudRevisionRef.current, ledgerCursorRef.current);
+          persistedRevisionRef.current = saved.revision;
+          cloudRevisionRef.current = saved.revision;
+          lastCloudSyncRef.current = Date.now();
+        } catch (reason) {
+          cloudDirtyRef.current = true;
+          console.error('[Backtest] cloud checkpoint failed, local checkpoint is safe:', reason);
+        }
+      }
       if (runRef.current.updatedAt <= snapshot.updatedAt) {
         runRef.current = saved;
         setRun(saved);
@@ -143,6 +179,7 @@ const BacktestWorkspace: React.FC<Props> = ({
     }).catch(reason => {
       console.error('[Backtest] checkpoint failed:', reason);
       dirtyRef.current = true;
+      cloudDirtyRef.current = true;
     });
     return saveChainRef.current;
   }, []);
@@ -151,6 +188,25 @@ const BacktestWorkspace: React.FC<Props> = ({
     const timer = window.setInterval(() => void flush(), 1_500);
     return () => window.clearInterval(timer);
   }, [flush]);
+
+  // Schování záložky (zavření, přepnutí) je poslední spolehlivá šance dostat
+  // stav do cloudu — beforeunload už na síťový zápis čekat neumí.
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') void flush({ cloud: true });
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [flush]);
+
+  // Pauza přehrávání = přirozený commit point: uživatel se zastavil, stav je
+  // stabilní a cloud si zaslouží čerstvou kopii hned, ne až za minutu.
+  const wasPlayingRef = useRef(initialRun.runtimeState.replay.playing);
+  useEffect(() => {
+    const playing = run.runtimeState.replay.playing;
+    if (wasPlayingRef.current && !playing) void flush({ cloud: true });
+    wasPlayingRef.current = playing;
+  }, [flush, run.runtimeState.replay.playing]);
 
   const loadSegment = useCallback(async (requestedStart: number) => {
     if (loadingSegmentRef.current || requestedStart >= runRef.current.endAt) return;
