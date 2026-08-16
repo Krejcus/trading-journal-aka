@@ -236,6 +236,25 @@ describe('backtestCounterfactual', () => {
     expect(fixed3r).toMatchObject({ outcome: 'sl', realizedR: -1 });
     expect(fixed3r?.deltaR).toBeCloseTo(-2);
   });
+
+  it('pohyblivý VWAP target aktivuje novou hodnotu až na dalším baru', () => {
+    const candles = [
+      // Hodnota 101 vznikne z tohoto baru, jeho knot 102 ji ještě nesmí trefit.
+      bar(1_060, 100, 102, 99.5, 101),
+      bar(1_120, 101, 101.5, 100.5, 101.25),
+    ];
+    const result = backtestCounterfactual(candles, longTrade(), [], {
+      dynamicTargets: [{
+        label: 'VWAP +1σ', kind: 'dynamic',
+        points: [{ time: 900, price: 105 }, { time: 1_060, price: 101 }],
+      }],
+    });
+    const dynamic = result.tpTargets?.find(target => target.kind === 'dynamic');
+    expect(dynamic).toMatchObject({
+      label: 'VWAP +1σ', outcome: 'WIN', bars: 2,
+      price: 105, exitTargetPrice: 101, updates: 1,
+    });
+  });
 });
 
 describe('backtestClosedTradeToTrade', () => {
@@ -322,7 +341,7 @@ describe('backtestClosedTradeToTrade — parita s AlphaBridge', () => {
 
   it('doplní pole, která AlphaBridge plní u každého obchodu', () => {
     const trade = map();
-    expect(trade.schemaVersion).toBe(4);
+    expect(trade.schemaVersion).toBe(7);
     expect(trade.source).toBe('backtest-replay');
     expect(trade.outcomeAmbiguous).toBe(false);
     // 1970-01-01 01:16 UTC → Praha je UTC+1 v zimě.

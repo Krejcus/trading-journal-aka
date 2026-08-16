@@ -241,6 +241,8 @@ export interface Trade {
   planAdherence?: 'Yes' | 'No' | 'Partial';
   isValid?: boolean;
   executionStatus?: 'Valid' | 'Invalid' | 'Missed';
+  /** Ruční význam setupu. Automatický přepočet jej nesmí měnit. */
+  setupType?: 'reaction' | 'break' | 'unclear';
   tags?: string[];
   session?: string;
   htfConfluence?: string[];

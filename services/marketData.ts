@@ -70,6 +70,9 @@ export interface MarketStructureEvent {
   breakTime: number;
   price: number;
   labelPrice: number;
+  /** Chraneny protilehly pivot znamy v okamziku zlomu. */
+  protectedPrice?: number | null;
+  protectedTime?: number | null;
 }
 
 export function findEntryFairValueGap(
@@ -776,6 +779,8 @@ export function calculateMarketStructure(candles: MarketCandle[]): MarketStructu
         breakTime: current.time,
         price: lastPivotHigh.price,
         labelPrice: lastPivotHigh.price + offset,
+        protectedPrice: lastPivotLow?.price ?? null,
+        protectedTime: lastPivotLow?.time ?? null,
       });
       trend = 'bullish';
       lastPivotHigh = null;
@@ -789,6 +794,8 @@ export function calculateMarketStructure(candles: MarketCandle[]): MarketStructu
         breakTime: current.time,
         price: lastPivotLow.price,
         labelPrice: lastPivotLow.price + offset,
+        protectedPrice: lastPivotHigh?.price ?? null,
+        protectedTime: lastPivotHigh?.time ?? null,
       });
       trend = 'bearish';
       lastPivotLow = null;
@@ -845,6 +852,8 @@ const appendMarketStructureCandle = (
       type: state.trend === 'bullish' ? 'BOS' : 'CHoCH', direction: 'bullish',
       pivotTime: state.lastPivotHigh.time, breakTime: current.time,
       price: state.lastPivotHigh.price, labelPrice: state.lastPivotHigh.price + offset,
+      protectedPrice: state.lastPivotLow?.price ?? null,
+      protectedTime: state.lastPivotLow?.time ?? null,
     });
     state.trend = 'bullish';
     state.lastPivotHigh = null;
@@ -854,6 +863,8 @@ const appendMarketStructureCandle = (
       type: state.trend === 'bearish' ? 'BOS' : 'CHoCH', direction: 'bearish',
       pivotTime: state.lastPivotLow.time, breakTime: current.time,
       price: state.lastPivotLow.price, labelPrice: state.lastPivotLow.price + offset,
+      protectedPrice: state.lastPivotHigh?.price ?? null,
+      protectedTime: state.lastPivotHigh?.time ?? null,
     });
     state.trend = 'bearish';
     state.lastPivotLow = null;

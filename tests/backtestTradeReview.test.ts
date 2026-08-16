@@ -8,6 +8,7 @@ describe('buildBacktestTradeReviewUpdates', () => {
       htfConfluence: 'PDH, 1H FVG, ',
       ltfConfluence: 'MSS, displacement',
       isValid: true,
+      setupType: 'reaction',
     })).toEqual({
       notes: 'Čekal jsem na sweep.',
       htfConfluence: ['PDH', '1H FVG'],
@@ -15,16 +16,18 @@ describe('buildBacktestTradeReviewUpdates', () => {
       isValid: true,
       executionStatus: 'Valid',
       planAdherence: 'Yes',
+      setupType: 'reaction',
     });
   });
 
   it('keeps every invalidity field consistent', () => {
     expect(buildBacktestTradeReviewUpdates({
-      notes: '', htfConfluence: '', ltfConfluence: '', isValid: false,
+      notes: '', htfConfluence: '', ltfConfluence: '', isValid: false, setupType: 'unclear',
     })).toMatchObject({
       isValid: false,
       executionStatus: 'Invalid',
       planAdherence: 'No',
+      setupType: 'unclear',
     });
   });
 });

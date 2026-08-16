@@ -162,6 +162,15 @@ export interface HtfContextSource {
   monthlyLevels(entryTime: number): MonthlyMagnet[];
   /** Wilderovo denní ATR(14) pouze z dokončených CME obchodních dnů. */
   dailyAtr(entryTime: number): number | null;
+  /** Denní a týdenní kotvy z plné hodinové historie, ne z krátkého 1m okna. */
+  liquidityAnchors(entryTime: number): HtfLiquidityAnchor[];
+}
+
+export interface HtfLiquidityAnchor {
+  label: 'PDH' | 'PDL' | 'PDC' | 'PD MID' | 'PWH' | 'PWL' | 'DO' | 'WO';
+  price: number;
+  startTime: number;
+  swept: boolean;
 }
 
 export interface MonthlyMagnet {
@@ -235,7 +244,89 @@ export const createHtfContextSource = (input: HtfContextInput): HtfContextSource
     monthlyLevels: entryTime => monthlyMagnets(candles60, entryTime),
 
     dailyAtr: entryTime => dailyAtrFromHourly(candles60, entryTime),
+
+    liquidityAnchors: entryTime => liquidityAnchorsFromHourly(candles60, input.candles, entryTime),
   };
+};
+
+const isoWeekKey = (dayKey: string) => {
+  const date = new Date(`${dayKey}T00:00:00Z`);
+  const weekday = date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() + (weekday === 0 ? -6 : 1 - weekday));
+  return date.toISOString().slice(0, 10);
+};
+
+interface AnchorPeriod {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  startTime: number;
+}
+
+/**
+ * Kotvy, které nelze spolehlivě vytvořit z třídenního minutového výřezu.
+ * Open právě běžící hodiny je známý od jejího začátku; high/low/close se do
+ * uzavřených období započítají až po close hodinové svíčky.
+ */
+export const liquidityAnchorsFromHourly = (
+  hourly: readonly MarketCandle[],
+  minuteCandles: readonly MarketCandle[],
+  entryTime: number,
+): HtfLiquidityAnchor[] => {
+  const known = hourly.filter(candle => candle.time <= entryTime);
+  const completed = known.filter(candle => candle.time + 3_600 <= entryTime);
+  if (!known.length) return [];
+  const entryDay = tradingDayKey(entryTime);
+  const entryWeek = isoWeekKey(entryDay);
+  const aggregate = (keyOf: (candle: MarketCandle) => string) => {
+    const map = new Map<string, AnchorPeriod>();
+    completed.forEach(candle => {
+      const key = keyOf(candle);
+      const current = map.get(key);
+      if (!current) {
+        map.set(key, {
+          open: candle.open, high: candle.high, low: candle.low,
+          close: candle.close, startTime: candle.time,
+        });
+      } else {
+        current.high = Math.max(current.high, candle.high);
+        current.low = Math.min(current.low, candle.low);
+        current.close = candle.close;
+      }
+    });
+    return map;
+  };
+  const days = aggregate(candle => tradingDayKey(candle.time));
+  const weeks = aggregate(candle => isoWeekKey(tradingDayKey(candle.time)));
+  const previous = <T>(map: Map<string, T>, currentKey: string): T | null => {
+    const keys = [...map.keys()].filter(key => key < currentKey).sort();
+    return keys.length ? map.get(keys[keys.length - 1]) ?? null : null;
+  };
+  const previousDay = previous(days, entryDay);
+  const previousWeek = previous(weeks, entryWeek);
+  const currentDayFirst = known.find(candle => tradingDayKey(candle.time) === entryDay);
+  const currentWeekFirst = known.find(candle => isoWeekKey(tradingDayKey(candle.time)) === entryWeek);
+  const currentMinutes = minuteCandles.filter(candle => candle.time < entryTime);
+  const dayMinutes = currentMinutes.filter(candle => tradingDayKey(candle.time) === entryDay);
+  const weekMinutes = currentMinutes.filter(candle => isoWeekKey(tradingDayKey(candle.time)) === entryWeek);
+  const result: HtfLiquidityAnchor[] = [];
+  const add = (label: HtfLiquidityAnchor['label'], price: number | undefined, startTime: number | undefined, swept = false) => {
+    if (Number.isFinite(price) && Number.isFinite(startTime)) result.push({ label, price: Number(price), startTime: Number(startTime), swept });
+  };
+  if (previousDay && currentDayFirst) {
+    add('PDH', previousDay.high, currentDayFirst.time, dayMinutes.some(candle => candle.high > previousDay.high));
+    add('PDL', previousDay.low, currentDayFirst.time, dayMinutes.some(candle => candle.low < previousDay.low));
+    add('PDC', previousDay.close, currentDayFirst.time);
+    add('PD MID', (previousDay.high + previousDay.low) / 2, currentDayFirst.time);
+  }
+  if (previousWeek && currentWeekFirst) {
+    add('PWH', previousWeek.high, currentWeekFirst.time, weekMinutes.some(candle => candle.high > previousWeek.high));
+    add('PWL', previousWeek.low, currentWeekFirst.time, weekMinutes.some(candle => candle.low < previousWeek.low));
+  }
+  add('DO', currentDayFirst?.open, currentDayFirst?.time);
+  add('WO', currentWeekFirst?.open, currentWeekFirst?.time);
+  return result;
 };
 
 const monthKey = (unixSeconds: number) => tradingDayKey(unixSeconds).slice(0, 7);

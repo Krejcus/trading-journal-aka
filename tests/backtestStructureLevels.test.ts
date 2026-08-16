@@ -33,36 +33,24 @@ const FVG_ENTRY_TIME = 1_000 + 7 * 60;
 
 describe('readBacktestStructure', () => {
   it('najde býčí zlom a jeho chráněné dno jako swing', () => {
-    const read = readBacktestStructure(bullBreakSeries(), ENTRY_TIME, 100.5, true, 0.25);
+    const read = readBacktestStructure(bullBreakSeries(), FVG_ENTRY_TIME, 100.5, true, 0.25);
     expect(read.available).toBe(true);
     expect(read.swing).toBe(98);
   });
 
-  it('první zlom v sérii je CHoCH, druhý už BoS', () => {
-    const first = readBacktestStructure(bullBreakSeries(), ENTRY_TIME, 100.5, true, 0.25);
+  it('FVG přebírá typ a pořadí svého rodičovského zlomu', () => {
+    const first = readBacktestStructure(bullBreakSeries(), FVG_ENTRY_TIME, 100.5, true, 0.25);
     expect(first).toMatchObject({ structureType: 'CHoCH', structureOrder: 1 });
-
-    // Druhý pivot high a druhý průraz → série o dvou zlomech mým směrem.
-    const extended = [
-      ...bullBreakSeries(),
-      bar(8, 101, 104.5, 100.8, 104.0),
-      bar(9, 104, 104.2, 103.0, 103.5),
-      bar(10, 103.5, 103.8, 102.0, 102.5),
-      bar(11, 102.5, 105.5, 102.3, 105.0),
-      bar(12, 105, 105.2, 104.0, 104.5),
-    ];
-    const second = readBacktestStructure(extended, 1_000 + 12 * 60, 104.5, true, 0.25);
-    expect(second.structureOrder).toBeGreaterThanOrEqual(2);
-    expect(second.structureType).toBe('BoS');
+    expect(first.entryFvg).toMatchObject({ parentStructureType: 'CHoCH', parentStructureOrder: 1 });
   });
 
-  it('odraz je chráněný extrém PRVNÍHO zlomu série, ne posledního', () => {
-    const read = readBacktestStructure(bullBreakSeries(), ENTRY_TIME, 100.5, true, 0.25);
+  it('odraz je chráněný extrém rodiče vybraného FVG', () => {
+    const read = readBacktestStructure(bullBreakSeries(), FVG_ENTRY_TIME, 100.5, true, 0.25);
     expect(read.odrazPrice).toBe(98);
   });
 
   it('OTE leží na 0,79 impulzní nohy', () => {
-    const read = readBacktestStructure(bullBreakSeries(), ENTRY_TIME, 100.5, true, 0.25);
+    const read = readBacktestStructure(bullBreakSeries(), FVG_ENTRY_TIME, 100.5, true, 0.25);
     // Noha 98 → 103.5; 103.5 − 0.79 × 5.5 = 99.155, na tick 0.25 → 99.25.
     expect(read.ote).toBe(99.25);
   });

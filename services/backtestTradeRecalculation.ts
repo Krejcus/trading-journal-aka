@@ -1,6 +1,6 @@
 import type { Trade } from '../types';
 
-const GENERATED_LTF_TAG = /^(?:1m (?:BoS|CHoCH)(?: \(|$)|vstup ve FVG$|odraz od |(?:nad|pod) VWAP$|VWAP [+-]?\d+(?:\.\d+)?σ$)/i;
+const GENERATED_LTF_TAG = /^(?:1m (?:BoS|CHoCH)(?: \(|$)|vstup(?:: (?:untouched FVG|ihned po potvrzení)| ve FVG)$|odraz od |(?:nad|pod) VWAP$|VWAP [+-]?\d+(?:\.\d+)?σ$)/i;
 const GENERATED_HTF_TAG = /^(?:(?:1h|15m) (?:BoS|CHoCH)(?: |$)|u |v (?:15m|1h) FVG$|(?:nad|pod) (?:Day|Week) Open$)/i;
 
 const DERIVED_FIELDS = [

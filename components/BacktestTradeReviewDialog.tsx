@@ -117,11 +117,13 @@ export const buildBacktestTradeReviewUpdates = ({
   htfConfluence,
   ltfConfluence,
   isValid,
+  setupType,
 }: {
   notes: string;
   htfConfluence: string;
   ltfConfluence: string;
   isValid: boolean;
+  setupType: NonNullable<Trade['setupType']>;
 }): Partial<Trade> => ({
   notes: notes.trim(),
   htfConfluence: splitTags(htfConfluence),
@@ -129,6 +131,7 @@ export const buildBacktestTradeReviewUpdates = ({
   isValid,
   executionStatus: isValid ? 'Valid' : 'Invalid',
   planAdherence: isValid ? 'Yes' : 'No',
+  setupType,
 });
 
 const BacktestTradeReviewDialog: React.FC<Props> = ({
@@ -143,6 +146,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
   const [htfConfluence, setHtfConfluence] = useState(joinTags(trade.htfConfluence));
   const [ltfConfluence, setLtfConfluence] = useState(joinTags(trade.ltfConfluence));
   const [isValid, setIsValid] = useState(trade.isValid !== false && trade.executionStatus !== 'Invalid');
+  const [setupType, setSetupType] = useState<NonNullable<Trade['setupType']>>(trade.setupType ?? 'unclear');
   const [snapshot, setSnapshot] = useState<string>();
   const [snapshotZoomOpen, setSnapshotZoomOpen] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -159,6 +163,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
     setHtfConfluence(joinTags(trade.htfConfluence));
     setLtfConfluence(joinTags(trade.ltfConfluence));
     setIsValid(trade.isValid !== false && trade.executionStatus !== 'Invalid');
+    setSetupType(trade.setupType ?? 'unclear');
     setSnapshot(undefined);
     setSnapshotZoomOpen(false);
     setCapturing(false);
@@ -224,7 +229,18 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
     const context = displayTrade.entryContext as any;
     const placement = context?.placement as any;
     const odrazLabels = Array.isArray(entryMap?.odrazLevels) ? entryMap.odrazLevels : [];
-    const odrazKnown = entryMap?.odrazPrice != null;
+    const reaction = entryMap?.reaction;
+    const reactionStatus = reaction?.status as 'confirmed' | 'rejected' | 'unmatched' | 'unavailable' | undefined;
+    const reactionValue = reactionStatus === 'confirmed'
+      ? odrazLabels.join(' + ') || reaction?.level || 'Potvrzený level'
+      : reactionStatus === 'rejected'
+        ? `Odmítnuto · ${reaction?.level ?? 'kandidát'}`
+        : reactionStatus === 'unmatched'
+          ? 'Bez potvrzeného levelu'
+          : entryMap?.odrazPrice != null ? 'Chráněný extrém bez auditu' : 'Nenalezen';
+    const reactionDetail = reactionStatus
+      ? `${reaction.reason === 'confirmed-hold' ? 'Level vydržel do potvrzení struktury' : reaction.reason === 'failed-reclaim' ? 'Close prošel levelem před potvrzením struktury' : reaction.reason === 'no-level-at-origin' ? 'V okamžiku otočky u extrému žádný level neležel' : 'Struktura neurčila původ pohybu'} · extrém ${formatAuditPrice(reaction.extremePrice ?? entryMap?.odrazPrice)}${reaction.levelPrice != null ? ` · level ${formatAuditPrice(reaction.levelPrice)}` : ''}`
+      : `Chráněný extrém ${formatAuditPrice(entryMap?.odrazPrice)}${entryMap?.odrazLevelPrice != null ? ` · level ${formatAuditPrice(entryMap.odrazLevelPrice)}` : ''}`;
 
     const fvgHasAudit = entryMap?.entryFvgValid !== undefined;
     const fvgValid = entryMap?.entryFvgValid === true && entryMap?.entryFvgTimeframe === '1m';
@@ -235,6 +251,17 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
     const fvgDistance = entryMap?.entryFvgDistanceTicks != null
       ? `${Number(entryMap.entryFvgDistanceTicks).toFixed(1)} ticku od hrany`
       : 'vzdálenost —';
+    const entryModel = entryMap?.entryModel === 'fvg_edge'
+      ? 'vstup na proximální hraně 1m FVG'
+      : entryMap?.entryFvg
+        ? 'FVG nalezeno, rodičovský impuls nepotvrzen'
+        : 'FVG k entry nenalezeno';
+    const parentStructure = entryMap?.entryFvgParentType
+      ? `${entryMap.entryFvgParentType} #${entryMap.entryFvgParentOrder || '—'}`
+      : 'rodičovský CHoCH/BoS —';
+    const fvgPosition = entryMap?.entryFvgCountInImpulse
+      ? `FVG ${entryMap.entryFvgIndexInImpulse}/${entryMap.entryFvgCountInImpulse} v impulsu`
+      : 'pořadí FVG —';
 
     const slType = placement?.slPlacement ?? displayTrade.slPlacement;
     const slCandidate = slType && placement?.slCandidates?.[slType];
@@ -250,36 +277,43 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
       : '';
 
     const policy = placement?.targetPolicy;
-    const targetKnown = Boolean(policy || displayTrade.targetType || displayTrade.targetLevel);
+    const targetMatch = placement?.targetMatch;
+    const targetKnown = Boolean(policy || targetMatch || displayTrade.targetType || displayTrade.targetLevel);
     const targetValid = policy?.valid === true;
     const targetValue = policy?.expected === 'session_close' || displayTrade.targetType === 'session_close'
       ? 'EOD / konec session'
-      : policy?.valid === false
-        ? 'Bez potvrzené shody'
-        : policy?.nearestLevel
-          ? displayTrade.targetType === 'deviation'
-            ? `Deviace ${policy.nearestLevel}`
-            : `Nejbližší ${policy.nearestLevel}`
+      : targetMatch?.matched
+        ? targetMatch.type === 'deviation'
+          ? `Deviace ${targetMatch.level}`
+          : `Level ${targetMatch.level}`
+        : policy?.valid === false
+          ? 'Bez potvrzené shody'
+          : policy?.nearestLevel
+            ? `Nejbližší ${policy.nearestLevel}`
         : displayTrade.targetLevel
           ? `Level ${displayTrade.targetLevel}`
           : displayTrade.targetType ?? 'Přepočítat';
-    const targetDetail = policy?.expected === 'session_close'
+    const matchDetail = targetMatch?.matched
+      ? `Skutečný cíl ${targetMatch.level} ${formatAuditPrice(targetMatch.levelPrice)} · TP ${formatAuditPrice(targetMatch.actualPrice)}${targetMatch.offsetTicks != null ? ` · odchylka ${Number(targetMatch.offsetTicks).toFixed(1)} ticku` : ''}`
+      : null;
+    const policyDetail = policy?.expected === 'session_close'
       ? 'Bez pevného TP · engine vynutí session close'
       : policy
-        ? `${policy.valid === false ? 'Nejbližší kandidát' : 'Level'} ${policy.nearestLevel ?? '—'} ${formatAuditPrice(policy.nearestPrice)} · TP ${formatAuditPrice(policy.actualPrice)}${policy.distanceTicks != null ? ` · odchylka ${Number(policy.distanceTicks).toFixed(1)} ticku` : ''}`
+        ? `Pravidlo nejbližšího levelu: ${policy.nearestLevel ?? '—'} ${formatAuditPrice(policy.nearestPrice)} · ${policy.valid ? 'splněno' : 'nesplněno'}${policy.distanceTicks != null ? ` · ${Number(policy.distanceTicks).toFixed(1)} ticku` : ''}`
         : 'Přepočítej pro nejbližší netknutý level a odchylku';
+    const targetDetail = [matchDetail, policyDetail].filter(Boolean).join(' · ');
 
     return [
       {
         label: 'Odraz',
-        value: odrazKnown ? (odrazLabels.length ? odrazLabels.join(' + ') : 'Bez shody s levelem') : 'Nenalezen',
-        detail: odrazKnown ? `Chráněný extrém ${formatAuditPrice(entryMap.odrazPrice)}${entryMap.odrazLevelPrice != null ? ` · level ${formatAuditPrice(entryMap.odrazLevelPrice)}` : ''}` : 'Struktura před vstupem nedala chráněný extrém',
-        tone: odrazKnown ? 'info' : 'missing',
+        value: reactionValue,
+        detail: reactionDetail,
+        tone: reactionStatus === 'confirmed' ? 'pass' : reactionStatus === 'rejected' ? 'fail' : 'missing',
       },
       {
         label: 'Entry',
         value: !fvgHasAudit ? 'Starší data · přepočítat' : fvgValid ? '1m FVG · proximální hrana' : '1m FVG nepotvrzeno',
-        detail: `${fvgRange} · ${fvgDistance}`,
+        detail: `${entryModel} · ${parentStructure} · ${fvgPosition} · ${fvgRange} · ${fvgDistance}`,
         tone: !fvgHasAudit ? 'missing' : fvgValid ? 'pass' : 'fail',
       },
       {
@@ -351,6 +385,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
           htfConfluence,
           ltfConfluence,
           isValid,
+          setupType,
         }),
       }, snapshot);
       onClose();
@@ -426,6 +461,24 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" onClick={() => setIsValid(true)} className={`h-10 rounded border text-[10px] font-black uppercase tracking-wide ${isValid ? 'border-emerald-500 bg-emerald-500 text-white' : field}`}>Validní / podle plánu</button>
                 <button type="button" onClick={() => setIsValid(false)} className={`h-10 rounded border text-[10px] font-black uppercase tracking-wide ${!isValid ? 'border-rose-500 bg-rose-500 text-white' : field}`}>Nevalidní / mimo plán</button>
+              </div>
+              <div className={`my-3 border-t ${isDark ? 'border-white/10' : 'border-slate-200'}`} />
+              <div className="mb-2 flex items-center gap-2"><Waves size={14} className="text-blue-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Typ setupu — ručně</h3></div>
+              <p className="mb-2 text-[9px] font-semibold text-slate-500">Jediná ruční interpretace. Přepočet ji nikdy nepřepíše.</p>
+              <div className="grid grid-cols-3 gap-2" data-backtest-setup-type>
+                {([
+                  ['reaction', 'Odraz'],
+                  ['break', 'Průraz'],
+                  ['unclear', 'Nejasné'],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setSetupType(value)}
+                    aria-pressed={setupType === value}
+                    className={`h-9 rounded border text-[9px] font-black uppercase tracking-wide ${setupType === value ? 'border-blue-600 bg-blue-600 text-white' : field}`}
+                  >{label}</button>
+                ))}
               </div>
             </section>
 

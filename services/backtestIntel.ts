@@ -5,6 +5,7 @@ import { tradeManagementStats, type TradeManagementStats } from './backtestOrder
 import {
   createBacktestContextSource,
   type BacktestContextSource,
+  type BacktestDynamicTargetCurve,
   type BacktestEntryContext,
   type BacktestEntryMap,
   type BacktestHtfContext,
@@ -429,6 +430,9 @@ export interface BacktestSlVariant {
 export interface BacktestTpTarget {
   label: string;
   price: number;
+  kind?: 'static' | 'dynamic';
+  exitTargetPrice?: number | null;
+  updates?: number;
   outcome: string;
   bars: number | null;
   rr: number | null;
@@ -547,6 +551,9 @@ const backtestTpTargets = (
       return {
         label: level.label,
         price: level.price,
+        kind: 'static' as const,
+        exitTargetPrice: level.price,
+        updates: 0,
         outcome,
         bars,
         rr,
@@ -556,14 +563,90 @@ const backtestTpTargets = (
     .sort((left, right) => (left.rr ?? 0) - (right.rr ?? 0));
 };
 
+/**
+ * VWAP/deviation target se mění jen po dokončení baru. Na baru `t` je proto
+ * aktivní hodnota z posledního bodu `< t`; hodnota spočítaná z baru `t` začne
+ * platit až na baru následujícím. Tím se křivka nemůže posunout zpětně před
+ * knot, který ji právě vytvořil.
+ */
+const backtestDynamicTpTarget = (
+  candles: readonly MarketCandle[],
+  trade: BacktestClosedTrade,
+  long: boolean,
+  stop: number,
+  curve: BacktestDynamicTargetCurve,
+): BacktestTpTarget | null => {
+  const riskDistance = long ? trade.entryPrice - stop : stop - trade.entryPrice;
+  if (!(riskDistance > 0)) return null;
+  let pointIndex = -1;
+  for (let index = 0; index < curve.points.length; index += 1) {
+    if (curve.points[index].time >= trade.entryTime) break;
+    pointIndex = index;
+  }
+  if (pointIndex < 0) return null;
+  const initialTarget = curve.points[pointIndex].price;
+  if (long ? initialTarget <= trade.entryPrice : initialTarget >= trade.entryPrice) return null;
+
+  let activeTarget = initialTarget;
+  let updates = 0;
+  let outcome = 'OPEN';
+  let bars: number | null = null;
+  let exitTargetPrice: number | null = null;
+  for (let index = 0; index < candles.length; index += 1) {
+    const candle = candles[index];
+    const targetIsValid = long ? activeTarget > trade.entryPrice : activeTarget < trade.entryPrice;
+    const hitStop = long ? candle.low <= stop : candle.high >= stop;
+    const hitTarget = targetIsValid && (long ? candle.high >= activeTarget : candle.low <= activeTarget);
+    if (hitStop || hitTarget) {
+      outcome = hitStop ? 'LOSS' : 'WIN';
+      bars = index + 1;
+      exitTargetPrice = hitTarget && !hitStop ? activeTarget : null;
+      break;
+    }
+    // Teprve po vyhodnocení celého baru se aktivuje jeho nová hodnota.
+    while (pointIndex + 1 < curve.points.length && curve.points[pointIndex + 1].time <= candle.time) {
+      pointIndex += 1;
+    }
+    const nextTarget = curve.points[pointIndex]?.price;
+    if (Number.isFinite(nextTarget) && nextTarget !== activeTarget) {
+      activeTarget = nextTarget;
+      updates += 1;
+    }
+  }
+  const rr = exitTargetPrice === null ? null : round2(Math.abs(exitTargetPrice - trade.entryPrice) / riskDistance);
+  return {
+    label: curve.label,
+    price: initialTarget,
+    kind: 'dynamic',
+    exitTargetPrice,
+    updates,
+    outcome,
+    bars,
+    rr,
+    realizedR: outcome === 'WIN' ? rr : outcome === 'LOSS' ? -1 : null,
+  };
+};
+
+export interface BacktestCounterfactualOptions {
+  dynamicTargets?: readonly BacktestDynamicTargetCurve[];
+  flatByMinute?: number;
+  flatTimeZone?: string;
+}
+
 export const backtestCounterfactual = (
   candles: readonly MarketCandle[],
   trade: BacktestClosedTrade,
   namedLevels: readonly { label: string; price: number }[] = [],
+  options: BacktestCounterfactualOptions = {},
 ): BacktestCounterfactual => {
   const risk = riskDistanceOf(trade);
   if (risk === null) return { available: false, reason: 'no-initial-stop' };
-  const following = barsAfterEntry(candles, trade.entryTime);
+  const cutoff = backtestSessionCutoffSeconds(
+    trade.entryTime,
+    options.flatTimeZone ?? DEFAULT_BACKTEST_FLAT_TIME_ZONE,
+    options.flatByMinute ?? DEFAULT_BACKTEST_FLAT_BY_MINUTE,
+  );
+  const following = barsAfterEntry(candles, trade.entryTime).filter(candle => candle.time <= cutoff);
   if (following.length === 0) return { available: false, reason: 'no-bars-after-entry' };
 
   const long = trade.direction === 'Long';
@@ -626,7 +709,13 @@ export const backtestCounterfactual = (
     swing: scanSlVariant(candles, trade, structure.swing, long, initialTarget),
     ote: scanSlVariant(candles, trade, structure.ote, long, initialTarget),
     fvg: scanSlVariant(candles, trade, structure.fvg, long, initialTarget),
-    tpTargets: backtestTpTargets(candles, trade, long, structure.swing ?? initialStop, namedLevels),
+    tpTargets: [
+      ...backtestTpTargets(following, trade, long, structure.swing ?? initialStop, namedLevels),
+      ...(options.dynamicTargets ?? []).flatMap(curve => {
+        const result = backtestDynamicTpTarget(following, trade, long, structure.swing ?? initialStop, curve);
+        return result ? [result] : [];
+      }),
+    ],
     realizedR,
     variants,
     best: best ? { label: best.label, r: best.realizedR as number } : null,
@@ -847,7 +936,11 @@ export const backtestTradeIntel = (
       namedLevels: context.favorableLevels(trade),
     }),
     executionPath: backtestExecutionPath(options.candles, trade),
-    counterfactual: backtestCounterfactual(options.candles, trade, context.favorableLevels(trade)),
+    counterfactual: backtestCounterfactual(options.candles, trade, context.favorableLevels(trade), {
+      dynamicTargets: context.dynamicTargets(trade),
+      flatByMinute: options.flatByMinute,
+      flatTimeZone: options.flatTimeZone,
+    }),
     entryContext: context.entryContext(trade),
     entryMap: context.entryMap(trade),
     htfContext: context.htfContext(trade),
@@ -866,7 +959,7 @@ export interface BacktestTradeMappingOptions extends BacktestIntelOptions {
 }
 
 /** Verze data blobu; drží krok s AlphaBridge, ať AI ví, co kde čekat. */
-export const BACKTEST_TRADE_SCHEMA_VERSION = 4;
+export const BACKTEST_TRADE_SCHEMA_VERSION = 7;
 
 /** HH:MM v zóně session — AlphaBridge i importy tohle pole plní. */
 const clockTime = (unixSeconds: number, timeZone: string): string => {

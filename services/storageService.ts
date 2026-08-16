@@ -141,6 +141,7 @@ export const storageService = {
         htfConfluence: d.htfConfluence, ltfConfluence: d.ltfConfluence,
         mistakes: d.mistakes, emotions: d.emotions,
         planAdherence: d.planAdherence, executionStatus: d.executionStatus,
+        setupType: d.setupType,
         screenshot: t.screenshot_url || undefined,
         screenshots: t.screenshots_urls || undefined,
         miniViewRange: d.miniViewRange, miniViewLayout: d.miniViewLayout,
@@ -438,6 +439,7 @@ export const storageService = {
         emotions:data->emotions,
         planAdherence:data->>planAdherence,
         executionStatus:data->>executionStatus,
+        setupType:data->>setupType,
         miniViewRange:data->>miniViewRange,
         miniViewLayout:data->>miniViewLayout,
         miniViewSecondaryRange:data->>miniViewSecondaryRange,
@@ -535,6 +537,7 @@ export const storageService = {
       emotions: t.emotions,
       planAdherence: t.planAdherence,
       executionStatus: t.executionStatus,
+      setupType: t.setupType,
       // Include screenshot URLs (small strings, not base64 blobs — safe to include always)
       screenshot: t.screenshot && !String(t.screenshot).startsWith('data:') ? t.screenshot : undefined,
       screenshots: t.screenshots?.filter((s: string) => s && !String(s).startsWith('data:')) || undefined,

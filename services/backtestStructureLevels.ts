@@ -1,21 +1,11 @@
-import type { MarketCandle } from './marketData';
+import { calculateMarketStructure, type MarketCandle, type MarketStructureEvent } from './marketData';
 
 /**
- * Struktura a tři SL úrovně přesně tak, jak je počítá AlphaBridge.
- *
- * Záměrně se **nepoužívá** `calculateMarketStructure` z `marketData.ts`. Ten
- * pracuje s ATR filtrem a vrací jiné zlomy než extension — a když by jedno
- * pole `Trade.slPlacement` nebo `entryMap.structureType` znamenalo u živého
- * obchodu něco jiného než u backtestového, agregáty v Labu by míchaly dvě
- * různé definice a nikdo by si toho nevšiml.
- *
- * Zdroj pravdy je proto extension: pivoty 1/1, zlom se registruje na close
- * přes poslední pivot, swing je chráněný extrém posledního zlomu, OTE je
- * 0,79 impulzní nohy a FVG je vzdálená hrana tříswíčkové mezery u vstupu.
+ * Struktura a tři SL úrovně ze stejného zdroje, který kreslí replay graf.
+ * `calculateMarketStructure` nese i chraneny protilehly pivot, takže CHoCH,
+ * BoS, odraz, swing a OTE uz nemaji druhou paralelni implementaci.
  */
 
-/** Okno barů před vstupem, ve kterém se hledají pivoty. Stejné jako v extension. */
-const STRUCTURE_LOOKBACK_BARS = 200;
 /** Entry musí ležet na proximální hraně FVG, ne pouze někde poblíž zóny. */
 const FVG_ENTRY_TOLERANCE_TICKS = 1;
 /** Kolik barů zpět od vstupu se mezery hledají. */
@@ -24,6 +14,8 @@ const FVG_LOOKBACK_BARS = 40;
 const OTE_RATIO = 0.79;
 
 export interface BacktestStructureEvent {
+  id: string;
+  type: 'CHoCH' | 'BoS';
   direction: 'bull' | 'bear';
   /** Cena pivotu, který close prorazil. */
   broken: number;
@@ -31,6 +23,7 @@ export interface BacktestStructureEvent {
   protectedPrice: number | null;
   protectedIndex: number | null;
   atIndex: number;
+  breakTime: number;
 }
 
 export interface BacktestEntryFvgRead {
@@ -44,6 +37,16 @@ export interface BacktestEntryFvgRead {
   /** Chráněná vzdálená hrana — kandidát na FVG stop. */
   distal: number;
   entryDistanceTicks: number;
+  /** Stabilní vazba na CHoCH/BoS, jehož displacement FVG vytvořil. */
+  parentStructureId: string | null;
+  parentStructureType: 'CHoCH' | 'BoS' | null;
+  parentStructureOrder: number;
+  parentBreakTime: number | null;
+  parentProtectedPrice: number | null;
+  parentImpulseExtreme: number | null;
+  /** Pořadí vybraného FVG mezi FVG stejného rodiče, počítané od 1. */
+  fvgIndexInImpulse: number;
+  fvgCountInImpulse: number;
 }
 
 export interface BacktestStructureRead {
@@ -82,101 +85,78 @@ export const readBacktestStructure = (
   entryPrice: number,
   long: boolean,
   tickSize: number,
+  sharedEvents?: readonly MarketStructureEvent[],
 ): BacktestStructureRead => {
-  const entryIndex = backtestEntryIndex(candles, entryTime);
+  // OHLC vstupni minuty jeste pri fillu neni zname. Sdileny zdroj proto vidi
+  // jen dokoncene bary striktne pred entry timestampem.
+  const history = candles.filter(candle => candle.time < entryTime);
+  const entryIndex = history.length;
   if (entryIndex < 3) return emptyRead();
-  const windowStart = Math.max(1, entryIndex - STRUCTURE_LOOKBACK_BARS);
-
-  // ── pivoty 1/1 do vstupu ──
-  const pivotHighs: { index: number; price: number }[] = [];
-  const pivotLows: { index: number; price: number }[] = [];
-  // Vstupní 1m bar není v okamžiku fillu hotový. Ani jeho close, ani jeho použití
-  // jako pravé strany pivotu proto nesmí rozhodovat o kontextu vstupu.
-  for (let index = windowStart; index <= entryIndex - 2; index += 1) {
-    const current = candles[index];
-    const previous = candles[index - 1];
-    const next = candles[index + 1];
-    if (!current || !previous || !next) continue;
-    if (current.high > previous.high && current.high > next.high) pivotHighs.push({ index, price: current.high });
-    if (current.low < previous.low && current.low < next.low) pivotLows.push({ index, price: current.low });
-  }
-
-  // ── zlomy: close přes poslední pivot, každá cena se registruje jen jednou ──
-  const events: BacktestStructureEvent[] = [];
-  let lastBrokenHigh: number | null = null;
-  let lastBrokenLow: number | null = null;
-  let lastBull: BacktestStructureEvent | null = null;
-  let lastBear: BacktestStructureEvent | null = null;
-  const latestBefore = (pivots: { index: number; price: number }[], limit: number) => {
-    for (let k = pivots.length - 1; k >= 0; k -= 1) if (pivots[k].index <= limit) return pivots[k];
-    return null;
-  };
-  for (let index = windowStart + 2; index <= entryIndex - 1; index += 1) {
-    const candle = candles[index];
-    if (!candle) continue;
-    const high = latestBefore(pivotHighs, index - 1);
-    const low = latestBefore(pivotLows, index - 1);
-    if (high && candle.close > high.price && high.price !== lastBrokenHigh) {
-      lastBrokenHigh = high.price;
-      lastBull = {
-        direction: 'bull', broken: high.price,
-        protectedPrice: low?.price ?? null, protectedIndex: low?.index ?? null, atIndex: index,
-      };
-      events.push(lastBull);
-    }
-    if (low && candle.close < low.price && low.price !== lastBrokenLow) {
-      lastBrokenLow = low.price;
-      lastBear = {
-        direction: 'bear', broken: low.price,
-        protectedPrice: high?.price ?? null, protectedIndex: high?.index ?? null, atIndex: index,
-      };
-      events.push(lastBear);
-    }
-  }
+  const indexByTime = new Map(history.map((candle, index) => [candle.time, index]));
+  const canonicalEvents = sharedEvents ? [...sharedEvents] : calculateMarketStructure(history);
+  const events: BacktestStructureEvent[] = canonicalEvents
+    .filter(event => event.breakTime < entryTime && indexByTime.has(event.breakTime))
+    .map(event => ({
+    id: `${event.direction}:${event.breakTime}:${event.price}`,
+    type: event.type === 'BOS' ? 'BoS' : 'CHoCH',
+    direction: event.direction === 'bullish' ? 'bull' : 'bear',
+    broken: event.price,
+    protectedPrice: event.protectedPrice ?? null,
+    protectedIndex: event.protectedTime == null ? null : indexByTime.get(event.protectedTime) ?? null,
+    atIndex: indexByTime.get(event.breakTime) as number,
+    breakTime: event.breakTime,
+  }));
 
   const roundTick = (price: number | null) => price === null || !(tickSize > 0)
     ? price
     : Math.round(price / tickSize) * tickSize;
 
-  // ── swing = chráněný extrém posledního zlomu ve směru obchodu ──
-  const directional = long ? lastBull : lastBear;
-  const swing = directional?.protectedPrice ?? null;
+  type FvgCandidate = Omit<BacktestEntryFvgRead,
+    'parentStructureId' | 'parentStructureType' | 'parentStructureOrder'
+    | 'parentBreakTime' | 'parentProtectedPrice' | 'parentImpulseExtreme'
+    | 'fvgIndexInImpulse' | 'fvgCountInImpulse'> & {
+      bornIndex: number;
+      middleIndex: number;
+      parent: BacktestStructureEvent | null;
+    };
+  const fvgCandidates: FvgCandidate[] = [];
+  const parentForGap = (middleIndex: number, bornIndex: number): BacktestStructureEvent | null => {
+    const myDirection = long ? 'bull' : 'bear';
+    const sameDirection = events.filter(event => event.direction === myDirection && event.protectedIndex !== null);
+    // Nejpřesnější případ: prostřední displacement svíčka patří přímo do nohy
+    // od chráněného pivotu po potvrzující close CHoCH/BoS.
+    const containing = sameDirection
+      .filter(event => (event.protectedIndex as number) <= middleIndex && middleIndex <= event.atIndex)
+      .sort((left, right) => left.atIndex - right.atIndex)[0];
+    if (containing) return containing;
 
-  // ── OTE = 0,79 impulzní nohy od chráněného extrému k dosaženému vrcholu ──
-  let ote: number | null = null;
-  if (directional?.protectedPrice != null && directional.protectedIndex != null) {
-    if (long) {
-      let peak = -Infinity;
-      for (let index = directional.protectedIndex; index <= entryIndex - 1; index += 1) {
-        const candle = candles[index];
-        if (candle && candle.high > peak) peak = candle.high;
-      }
-      const base = directional.protectedPrice;
-      if (peak > base && peak !== -Infinity) ote = peak - OTE_RATIO * (peak - base);
-    } else {
-      let trough = Infinity;
-      for (let index = directional.protectedIndex; index <= entryIndex - 1; index += 1) {
-        const candle = candles[index];
-        if (candle && candle.low < trough) trough = candle.low;
-      }
-      const base = directional.protectedPrice;
-      if (trough < base && trough !== Infinity) ote = trough + OTE_RATIO * (base - trough);
-    }
-  }
+    // FVG může být potvrzeno třetí svíčkou těsně po breaku. Vezmeme poslední
+    // stejnosměrný event pouze pokud mezi ním a FVG nevznikl opačný zlom.
+    const preceding = [...sameDirection]
+      .filter(event => event.atIndex <= bornIndex)
+      .sort((left, right) => right.atIndex - left.atIndex)[0] ?? null;
+    if (!preceding) return null;
+    const contradicted = events.some(event => (
+      event.direction !== myDirection
+      && event.atIndex > preceding.atIndex
+      && event.atIndex <= bornIndex
+    ));
+    return contradicted ? null : preceding;
+  };
 
-  // ── FVG = vzdálená hrana mezery, jejíž bližší hrana leží u vstupu ──
-  let entryFvg: BacktestEntryFvgRead | null = null;
-  let bestDistance = Infinity;
+  // ── Najdi všechna do vstupu aktivní FVG a přivaž je k rodičovské struktuře ──
   for (let index = Math.max(1, entryIndex - FVG_LOOKBACK_BARS); index <= entryIndex - 2; index += 1) {
-    const before = candles[index - 1];
-    const after = candles[index + 1];
+    const before = history[index - 1];
+    const after = history[index + 1];
     if (!before || !after) continue;
     const bornIndex = index + 1;
     const activeUntilEntry = (direction: 'bull' | 'bear', top: number, bottom: number) => {
       for (let scan = bornIndex + 1; scan < entryIndex; scan += 1) {
-        const candle = candles[scan];
+        const candle = history[scan];
         if (!candle) continue;
-        if (direction === 'bull' ? candle.low <= bottom : candle.high >= top) return false;
+        // Entry model je návrat na dosud netknutou proximální hranu. Jakýkoli
+        // dřívější dotyk už by limit vyplnil a gap pro pozdější entry neplatí.
+        if (direction === 'bull' ? candle.low <= top : candle.high >= bottom) return false;
       }
       return true;
     };
@@ -187,58 +167,113 @@ export const readBacktestStructure = (
         const top = after.low;
         const bottom = before.high;
         const distance = Math.abs(entryPrice - top);
-        if (bottom < entryPrice
-          && activeUntilEntry('bull', top, bottom)
-          && distance < bestDistance
-          && distance <= tickSize * FVG_ENTRY_TOLERANCE_TICKS) {
-          bestDistance = distance;
-          entryFvg = {
+        if (activeUntilEntry('bull', top, bottom)) {
+          fvgCandidates.push({
             timeframe: '1m', direction: 'bull', bornTime: after.time,
             top, bottom, proximal: top, distal: bottom,
             entryDistanceTicks: tickSize > 0 ? distance / tickSize : 0,
-          };
+            bornIndex, middleIndex: index,
+            parent: parentForGap(index, bornIndex),
+          });
         }
       }
     } else if (after.high < before.low) {
       const top = before.low;
       const bottom = after.high;
       const distance = Math.abs(entryPrice - bottom);
-      if (top > entryPrice
-        && activeUntilEntry('bear', top, bottom)
-        && distance < bestDistance
-        && distance <= tickSize * FVG_ENTRY_TOLERANCE_TICKS) {
-        bestDistance = distance;
-        entryFvg = {
+      if (activeUntilEntry('bear', top, bottom)) {
+        fvgCandidates.push({
           timeframe: '1m', direction: 'bear', bornTime: after.time,
           top, bottom, proximal: bottom, distal: top,
           entryDistanceTicks: tickSize > 0 ? distance / tickSize : 0,
-        };
+          bornIndex, middleIndex: index,
+          parent: parentForGap(index, bornIndex),
+        });
       }
     }
   }
 
-  // ── série zlomů mým směrem, na jejímž konci vstup leží ──
+  const selectedCandidate = fvgCandidates
+    .filter(candidate => candidate.entryDistanceTicks <= FVG_ENTRY_TOLERANCE_TICKS)
+    .sort((left, right) => (
+      left.entryDistanceTicks - right.entryDistanceTicks
+      || Number(Boolean(right.parent)) - Number(Boolean(left.parent))
+      || right.bornTime - left.bornTime
+    ))[0] ?? null;
+  const parent = selectedCandidate?.parent ?? null;
+
+  const siblings = parent
+    ? fvgCandidates
+      .filter(candidate => candidate.parent?.id === parent.id)
+      .sort((left, right) => left.bornTime - right.bornTime)
+    : [];
+  const selectedSiblingIndex = selectedCandidate && parent
+    ? siblings.findIndex(candidate => candidate.bornTime === selectedCandidate.bornTime
+      && candidate.top === selectedCandidate.top && candidate.bottom === selectedCandidate.bottom)
+    : -1;
+
+  // Swing i OTE se počítají výhradně z rodiče vybraného FVG. Nikdy už se
+  // nesmí smíchat gap jednoho impulsu s poslední, ale nesouvisející strukturou.
+  const swing = parent?.protectedPrice ?? null;
+  let impulseExtreme: number | null = null;
+  let ote: number | null = null;
+  if (parent?.protectedPrice != null && parent.protectedIndex != null) {
+    const leg = history.slice(parent.protectedIndex, parent.atIndex + 1);
+    if (long) {
+      const peak = leg.reduce((value, candle) => Math.max(value, candle.high), -Infinity);
+      if (peak > parent.protectedPrice && peak !== -Infinity) {
+        impulseExtreme = peak;
+        ote = peak - OTE_RATIO * (peak - parent.protectedPrice);
+      }
+    } else {
+      const trough = leg.reduce((value, candle) => Math.min(value, candle.low), Infinity);
+      if (trough < parent.protectedPrice && trough !== Infinity) {
+        impulseExtreme = trough;
+        ote = trough + OTE_RATIO * (parent.protectedPrice - trough);
+      }
+    }
+  }
+
+  // Pořadí rodiče v nepřerušené sérii stejnosměrných zlomů.
   const myDirection = long ? 'bull' : 'bear';
-  let lastMine = -1;
-  for (let k = events.length - 1; k >= 0; k -= 1) if (events[k].direction === myDirection) { lastMine = k; break; }
-  let runStart = lastMine;
-  if (lastMine >= 0) {
-    for (let k = lastMine; k >= 0; k -= 1) {
-      if (events[k].direction === myDirection) runStart = k;
+  const parentEventIndex = parent ? events.findIndex(event => event.id === parent.id) : -1;
+  let runStart = parentEventIndex;
+  if (parentEventIndex >= 0) {
+    for (let index = parentEventIndex; index >= 0; index -= 1) {
+      if (events[index].direction === myDirection) runStart = index;
       else break;
     }
   }
-  const run = lastMine >= 0 ? events.slice(runStart, lastMine + 1) : [];
+  const run = parentEventIndex >= 0 ? events.slice(runStart, parentEventIndex + 1) : [];
   const structureOrder = run.length;
 
+  const entryFvg: BacktestEntryFvgRead | null = selectedCandidate ? {
+    timeframe: selectedCandidate.timeframe,
+    direction: selectedCandidate.direction,
+    bornTime: selectedCandidate.bornTime,
+    top: selectedCandidate.top,
+    bottom: selectedCandidate.bottom,
+    proximal: selectedCandidate.proximal,
+    distal: selectedCandidate.distal,
+    entryDistanceTicks: selectedCandidate.entryDistanceTicks,
+    parentStructureId: parent?.id ?? null,
+    parentStructureType: parent?.type ?? null,
+    parentStructureOrder: structureOrder,
+    parentBreakTime: parent?.breakTime ?? null,
+    parentProtectedPrice: parent?.protectedPrice ?? null,
+    parentImpulseExtreme: impulseExtreme,
+    fvgIndexInImpulse: selectedSiblingIndex >= 0 ? selectedSiblingIndex + 1 : 0,
+    fvgCountInImpulse: siblings.length,
+  } : null;
+
   return {
-    available: events.length > 0,
+    available: events.length > 0 || entryFvg !== null,
     events,
     // První zlom v sérii je změna charakteru, každý další už jen pokračování.
-    structureType: structureOrder >= 1 ? (structureOrder === 1 ? 'CHoCH' : 'BoS') : null,
+    structureType: parent?.type ?? null,
     structureOrder,
-    odrazPrice: run.length ? roundTick(run[0].protectedPrice) : null,
-    odrazIndex: run.length ? run[0].protectedIndex : null,
+    odrazPrice: roundTick(parent?.protectedPrice ?? null),
+    odrazIndex: parent?.protectedIndex ?? null,
     swing: roundTick(swing),
     ote: roundTick(ote),
     fvg: roundTick(entryFvg?.distal ?? null),

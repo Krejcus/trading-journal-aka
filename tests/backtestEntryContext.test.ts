@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { createBacktestContextSource } from '../services/backtestEntryContext';
+import {
+  classifyBacktestReactionCandidates,
+  createBacktestContextSource,
+} from '../services/backtestEntryContext';
 import type { BacktestClosedTrade } from '../services/backtestTypes';
 import {
+  calculateMarketStructure,
   type MarketCandle,
+  type MarketStructureEvent,
 } from '../services/marketData';
 import { readBacktestStructure } from '../services/backtestStructureLevels';
 
@@ -70,6 +75,38 @@ describe('entryContext', () => {
       .toBeGreaterThanOrEqual(both.entryContext(early).sweptLevels.length);
   });
 
+  it('nepoužije budoucí high/low vstupní minuty', () => {
+    const candles = twoDaySeries();
+    const entryTime = DAY_START + 1_800 * MINUTE;
+    const mutated = candles.map(candle => candle.time === entryTime
+      ? { ...candle, high: candle.high + 500, low: candle.low - 500, close: candle.close + 250 }
+      : candle);
+    const original = source(candles).entryContext(trade({ entryTime }));
+    const changed = source(mutated).entryContext(trade({ entryTime }));
+    expect(changed.levelDist).toEqual(original.levelDist);
+    expect(changed.sweptLevels).toEqual(original.sweptLevels);
+    expect(changed.vwapDistSigma).toBe(original.vwapDistSigma);
+    expect(changed.provenance).toMatchObject({
+      entryBarPolicy: 'completed-before-entry',
+      lastCompletedMinute: entryTime - MINUTE,
+    });
+  });
+
+  it('bere PWH a PWL z plné hodinové historie, ne z 3denního 1m okna', () => {
+    const priorWeekStart = DAY_START - 7 * 24 * 3_600;
+    const hourly: MarketCandle[] = [];
+    for (let hour = 0; hour < 5 * 24; hour += 1) {
+      const base = 120 + Math.sin(hour / 5) * 5;
+      hourly.push(bar(priorWeekStart + hour * 3_600, base, hour === 12 ? 150 : base + 1, hour === 24 ? 70 : base - 1, base));
+    }
+    for (let hour = 0; hour < 36; hour += 1) {
+      hourly.push(bar(DAY_START + hour * 3_600, 100, 102, 98, 100));
+    }
+    const context = source(twoDaySeries(), hourly).entryContext(trade());
+    expect(context.levelDist.PWH).toBe(50);
+    expect(context.levelDist.PWL).toBe(-30);
+  });
+
   it('bez dost historie se kontext označí za nedostupný místo dohadování', () => {
     const short = twoDaySeries().slice(0, 30);
     const context = createBacktestContextSource({ candles: short, timeZone: 'Europe/Prague' })
@@ -85,7 +122,34 @@ describe('entryContext', () => {
 });
 
 describe('entryMap', () => {
-  it('rozpozná zlom struktury a jeho pořadí v sérii', () => {
+  it('odmítne level, pod který long zavře ještě před potvrzením struktury', () => {
+    const candles = [
+      bar(1, 100, 101, 99.75, 100.5),
+      bar(2, 100.5, 100.75, 98.5, 99),
+      bar(3, 99, 103, 99, 102.5),
+    ];
+    expect(classifyBacktestReactionCandidates(candles, true, 0, 2, 0.25, [{
+      label: 'VWAP -1σ', price: 100, invalidationPrice: 100,
+    }])).toEqual([expect.objectContaining({
+      label: 'VWAP -1σ', status: 'rejected',
+      reason: 'closed-through-before-confirmation', invalidatedAt: 2,
+    })]);
+  });
+
+  it('potvrdí level, který vydrží až do CHoCH/BoS', () => {
+    const candles = [
+      bar(1, 100, 101, 99.75, 100.25),
+      bar(2, 100.25, 101, 99.9, 100.5),
+      bar(3, 100.5, 103, 100.25, 102.5),
+    ];
+    expect(classifyBacktestReactionCandidates(candles, true, 0, 2, 0.25, [{
+      label: 'PDL', price: 100, invalidationPrice: 100,
+    }])).toEqual([expect.objectContaining({
+      label: 'PDL', status: 'confirmed', reason: 'held-until-structure-break', invalidatedAt: null,
+    })]);
+  });
+
+  it('bez entry FVG nespojí poslední nesouvisející zlom se setupem', () => {
     const candles = twoDaySeries();
     const last = candles[candles.length - 1];
     // Pivot high, pivot low, průraz zavíračkou → jeden zlom vzhůru.
@@ -99,16 +163,20 @@ describe('entryMap', () => {
     const structure = readBacktestStructure(candles, entryTime, 104.5, true, 0.25);
     expect(map.available).toBe(true);
     expect(map.structureType).toBe(structure.structureType);
-    expect(map.structureOrder).toBeGreaterThanOrEqual(1);
-    expect(map.structureBarsAgo).not.toBeNull();
-    // Odraz = chráněný protilehlý pivot prvního zlomu série.
+    expect(map.structureOrder).toBe(0);
+    expect(map.structureBarsAgo).toBeNull();
+    // Bez FVG rodiče se odraz ani struktura nesmí domyslet z posledního eventu.
     expect(map.odrazPrice).toBe(structure.odrazPrice);
-    // Název levelu se přidá jen při shodě s už potvrzeným levelem. Probíhající
-    // session H/L se sem záměrně nesmí propsat.
-    if (map.odrazLevelPrice !== null) {
-      expect(map.odrazLevels.length).toBeGreaterThan(0);
-      expect(Math.abs(Number(map.odrazLevelPrice) - Number(structure.odrazPrice))).toBeLessThanOrEqual(0.75);
-    }
+    const graphEvent = calculateMarketStructure(candles.filter(candle => candle.time < entryTime))
+      .filter(event => event.direction === 'bullish').at(-1);
+    expect(graphEvent).toBeTruthy();
+    expect(map.structureType).toBeNull();
+    expect(map.reaction.status).toBe('unavailable');
+    // Každý zveřejněný odraz je potvrzený kandidát; odmítnutý level se nesmí
+    // potichu propsat do confluence jen kvůli cenové blízkosti.
+    map.odrazLevels.forEach(label => {
+      expect(map.reaction.candidates).toContainEqual(expect.objectContaining({ label, status: 'confirmed' }));
+    });
   });
 
   it('pozná vstup na hraně fair value gapu a uloží chráněnou stranu', () => {
@@ -123,11 +191,37 @@ describe('entryMap', () => {
     const map = source(candles).entryMap(trade({ entryTime, entryPrice: 103, initialStopLoss: 99 }));
     expect(map.entryFvg).toBe(true);
     expect(map).toMatchObject({
-      entryFvgValid: true,
       entryFvgTimeframe: '1m',
       entryFvgEdge: 'proximal',
       entryFvgDistanceTicks: 0,
       entryFvgSpan: { bottom: 101, top: 103 },
+    });
+  });
+
+  it('vybere správné FVG z více mezer jednoho impulsu a všechny SL odvodí ze stejného rodiče', () => {
+    const candles = [
+      bar(1, 100, 101, 99, 100.5),
+      bar(2, 100.5, 105, 100.5, 104.5),
+      bar(3, 104, 104, 103, 104),
+      bar(4, 104, 108, 103.5, 107.5),
+      bar(5, 107.5, 109, 106, 108),
+      bar(6, 108, 108.5, 105.5, 106),
+    ];
+    const parent: MarketStructureEvent = {
+      type: 'CHoCH', direction: 'bullish', pivotTime: 4, breakTime: 5,
+      price: 107, labelPrice: 107.25, protectedPrice: 99, protectedTime: 1,
+    };
+    const read = readBacktestStructure(candles, 6, 106, true, 0.25, [parent]);
+
+    expect(read).toMatchObject({
+      structureType: 'CHoCH', structureOrder: 1,
+      swing: 99, ote: 101, fvg: 104,
+      entryFvg: {
+        proximal: 106, distal: 104,
+        parentStructureType: 'CHoCH', parentProtectedPrice: 99,
+        parentImpulseExtreme: 109,
+        fvgIndexInImpulse: 2, fvgCountInImpulse: 2,
+      },
     });
   });
 
@@ -182,8 +276,9 @@ describe('placement', () => {
   it('rozpozná TP na VWAP deviaci v okamžiku vstupu místo vzdáleného statického levelu', () => {
     const shared = source();
     const baseTrade = trade({ entryPrice: 100, initialStopLoss: 96 });
-    const deviation = shared.favorableLevels(baseTrade)
+    const curve = shared.dynamicTargets(baseTrade)
       .find(level => /^VWAP [+-][12]σ$/.test(level.label));
+    const deviation = curve && [...curve.points].reverse().find(point => point.time < baseTrade.entryTime);
     expect(deviation).toBeTruthy();
 
     const read = shared.placement(trade({
@@ -193,10 +288,10 @@ describe('placement', () => {
     }));
     expect(read).toMatchObject({
       targetType: 'deviation',
-      targetLevel: deviation?.label,
+      targetLevel: curve?.label,
       targetPolicy: {
         expected: 'nearest_level',
-        nearestLevel: deviation?.label,
+        nearestLevel: curve?.label,
         actualPrice: deviation?.price,
         distanceTicks: 0,
         valid: true,
@@ -210,6 +305,27 @@ describe('placement', () => {
     expect(read.targetPolicy).toMatchObject({ expected: 'nearest_level', actualPrice: 108, valid: false });
   });
 
+  it('pojmenuje skutečně trefený TP nezávisle na pravidle nejbližšího levelu', () => {
+    const shared = source();
+    const base = trade({ entryPrice: 100, initialStopLoss: 99 });
+    const levels = [
+      ...shared.favorableLevels(base),
+      ...shared.dynamicTargets(base).flatMap(curve => {
+        const point = [...curve.points].reverse().find(item => item.time < base.entryTime);
+        return point ? [{ label: curve.label, price: point.price }] : [];
+      }),
+    ].filter(level => level.price > base.entryPrice);
+    const nearest = levels.reduce((best, item) => (
+      Math.abs(item.price - 100) < Math.abs(best.price - 100) ? item : best
+    ));
+    const actual = levels.find(item => item.label !== nearest.label && Math.abs(item.price - nearest.price) > 0.5);
+    expect(actual).toBeTruthy();
+    const read = shared.placement({ ...base, initialTakeProfit: actual?.price });
+    expect(read.targetMatch).toMatchObject({ matched: true, level: actual?.label, actualPrice: actual?.price });
+    expect(read.targetLevel).toBe(actual?.label);
+    expect(read.targetPolicy).toMatchObject({ nearestLevel: nearest.label, valid: false });
+  });
+
   it('obchod bez pevného TP sbírá jako plánovaný výstup na konci session', () => {
     const read = source().placement(trade({ initialStopLoss: 96, initialTakeProfit: undefined }));
     expect(read).toMatchObject({
@@ -218,7 +334,7 @@ describe('placement', () => {
     });
   });
 
-  it('SL přesně na chráněném swingu označí jako swing', () => {
+  it('bez FVG rodiče nedohaduje swing z poslední nesouvisející struktury', () => {
     const candles = twoDaySeries();
     const last = candles[candles.length - 1];
     candles.push(bar(last.time + MINUTE, 100, 104, 99.75, 103));
@@ -230,8 +346,8 @@ describe('placement', () => {
     const entryTime = last.time + 6 * MINUTE;
     const structure = readBacktestStructure(candles, entryTime, 104, true, 0.25);
     const read = source(candles).placement(trade({ entryTime, entryPrice: 104, initialStopLoss: structure.swing ?? undefined }));
-    expect(read.slPlacement).toBe('swing');
-    expect(read.slCandidates.swing.matched).toBe(true);
+    expect(read.slPlacement).toBeNull();
+    expect(read.slCandidates.swing.price).toBeNull();
   });
 
   it('stopka uvnitř mezery, ale daleko od její hrany, není FVG placement', () => {

@@ -44,6 +44,7 @@ describe('backtest trade recalculation', () => {
       isValid: false,
       executionStatus: 'Invalid',
       screenshots: ['saved.png'],
+      setupType: 'reaction',
       ltfConfluence: ['1m BoS', 'Ruční LTF'],
       htfConfluence: ['1h BoS bullish', 'Ruční HTF'],
       entryMap: { structureType: 'BoS' },
@@ -58,6 +59,7 @@ describe('backtest trade recalculation', () => {
       notes: 'Automatická poznámka se nesmí použít',
       isValid: true,
       screenshots: ['wrong.png'],
+      setupType: 'break',
     });
 
     const updates = buildBacktestTradeRecalculationUpdates(current, fresh);
@@ -74,6 +76,7 @@ describe('backtest trade recalculation', () => {
     expect(updates).not.toHaveProperty('isValid');
     expect(updates).not.toHaveProperty('executionStatus');
     expect(updates).not.toHaveProperty('screenshots');
+    expect(updates).not.toHaveProperty('setupType');
   });
 
   it('creates a readable before/after preview', () => {
