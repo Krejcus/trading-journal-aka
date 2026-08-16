@@ -620,6 +620,41 @@ const LEVEL_CONTEXT_BARS: Record<MarketTimeframe, number> = {
 
 const STRUCTURE_CONTEXT_BARS = 2_400;
 
+/** Jak často se za přehrávání přepočítávají levely (plný průchod bez akumulátoru). */
+const REPLAY_LEVELS_THROTTLE_MS = 250;
+
+/**
+ * Vrací poslední „propuštěnou" identitu vstupu — mimo throttling ji propouští
+ * hned, při něm nejvýš jednou za `intervalMs` s trailing doběhem, takže
+ * poslední změna vždy dorazí, i když ticky ustanou.
+ */
+const useThrottledIdentity = <T,>(input: T, throttled: boolean, intervalMs: number): T => {
+  const [tracked, setTracked] = useState(input);
+  const lastBumpRef = useRef(0);
+  const timerRef = useRef<number | null>(null);
+  const latestRef = useRef(input);
+  latestRef.current = input;
+  useEffect(() => {
+    if (input === tracked) return;
+    const elapsed = performance.now() - lastBumpRef.current;
+    if (!throttled || elapsed >= intervalMs) {
+      lastBumpRef.current = performance.now();
+      setTracked(input);
+      return;
+    }
+    if (timerRef.current !== null) return;
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      lastBumpRef.current = performance.now();
+      setTracked(latestRef.current);
+    }, intervalMs - elapsed);
+  }, [input, throttled, tracked, intervalMs]);
+  useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+  }, []);
+  return tracked;
+};
+
 interface CandleWindow {
   start: number;
   end: number;
@@ -2414,14 +2449,23 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       ? current
       : hit);
   }, [managedPositionBoxes, replayActive, replaySelecting, visibleCandles]);
+  // Levely jsou jediný indikátor bez inkrementálního akumulátoru — jeden
+  // výpočet projde až 12 000 barů (~3–10 ms). Za přehrávání se proto počítají
+  // nejvýš 4× za sekundu: úrovně se mění jen průlomem extrému nebo novou
+  // session, takže čtvrtsekundové zpoždění není vidět, ale tik kurzoru
+  // přestane platit plný průchod v každém panelu. Mimo replay se epoch bumpá
+  // synchronně a chování je stejné jako dřív.
+  const levelsEpoch = useThrottledIdentity(candles, replayActive, REPLAY_LEVELS_THROTTLE_MS);
   const liquidityLevels = useMemo(
     () => {
       if (!visibleLevels) return EMPTY_LIQUIDITY_LEVELS;
-      const end = renderedCandleWindow.end;
+      const source = candlesRef.current;
+      const end = renderedCandleWindowRef.current.end;
       const start = Math.max(0, end - LEVEL_CONTEXT_BARS[timeframe]);
-      return calculateLiquidityLevels(candleWindowSlice(candles, { start, end }), indicatorSettings.levels);
+      return calculateLiquidityLevels(candleWindowSlice(source, { start, end }), indicatorSettings.levels);
     },
-    [candles, renderedCandleWindow.end, indicatorSettings.levels, timeframe, visibleLevels],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- candles/okno se čtou z refů; přepočet řídí levelsEpoch
+    [levelsEpoch, indicatorSettings.levels, timeframe, visibleLevels],
   );
   const liquidityLevelsRef = useRef(liquidityLevels);
   liquidityLevelsRef.current = liquidityLevels;
