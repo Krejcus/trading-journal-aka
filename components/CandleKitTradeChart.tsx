@@ -624,35 +624,32 @@ const STRUCTURE_CONTEXT_BARS = 2_400;
 const REPLAY_LEVELS_THROTTLE_MS = 250;
 
 /**
- * Vrací poslední „propuštěnou" identitu vstupu — mimo throttling ji propouští
- * hned, při něm nejvýš jednou za `intervalMs` s trailing doběhem, takže
- * poslední změna vždy dorazí, i když ticky ustanou.
+ * Epocha pro škrcené přepočty za přehrávání: mění se nejvýš jednou za
+ * `intervalMs`, s trailing doběhem, takže poslední změna vstupu vždy dorazí.
+ *
+ * Mimo throttling se NIC neděje — hook nesmí zrcadlit identitu vstupu do
+ * stavu, protože rodič, který pole skládá inline (nová identita každý
+ * render), by přes setState roztočil nekonečnou smyčku. Memo volajícího proto
+ * mimo replay závisí na vstupu přímo a tady se jen vrací konstanta.
  */
-const useThrottledIdentity = <T,>(input: T, throttled: boolean, intervalMs: number): T => {
-  const [tracked, setTracked] = useState(input);
+const useThrottledEpoch = (input: unknown, throttled: boolean, intervalMs: number): number => {
+  const [epoch, setEpoch] = useState(0);
   const lastBumpRef = useRef(0);
-  const timerRef = useRef<number | null>(null);
-  const latestRef = useRef(input);
-  latestRef.current = input;
   useEffect(() => {
-    if (input === tracked) return;
+    if (!throttled) return;
     const elapsed = performance.now() - lastBumpRef.current;
-    if (!throttled || elapsed >= intervalMs) {
+    if (elapsed >= intervalMs) {
       lastBumpRef.current = performance.now();
-      setTracked(input);
+      setEpoch(current => current + 1);
       return;
     }
-    if (timerRef.current !== null) return;
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null;
+    const timer = window.setTimeout(() => {
       lastBumpRef.current = performance.now();
-      setTracked(latestRef.current);
+      setEpoch(current => current + 1);
     }, intervalMs - elapsed);
-  }, [input, throttled, tracked, intervalMs]);
-  useEffect(() => () => {
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-  }, []);
-  return tracked;
+    return () => window.clearTimeout(timer);
+  }, [input, throttled, intervalMs]);
+  return epoch;
 };
 
 interface CandleWindow {
@@ -2455,7 +2452,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // session, takže čtvrtsekundové zpoždění není vidět, ale tik kurzoru
   // přestane platit plný průchod v každém panelu. Mimo replay se epoch bumpá
   // synchronně a chování je stejné jako dřív.
-  const levelsEpoch = useThrottledIdentity(candles, replayActive, REPLAY_LEVELS_THROTTLE_MS);
+  const levelsEpoch = useThrottledEpoch(candles, replayActive, REPLAY_LEVELS_THROTTLE_MS);
   const liquidityLevels = useMemo(
     () => {
       if (!visibleLevels) return EMPTY_LIQUIDITY_LEVELS;
@@ -2464,8 +2461,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       const start = Math.max(0, end - LEVEL_CONTEXT_BARS[timeframe]);
       return calculateLiquidityLevels(candleWindowSlice(source, { start, end }), indicatorSettings.levels);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- candles/okno se čtou z refů; přepočet řídí levelsEpoch
-    [levelsEpoch, indicatorSettings.levels, timeframe, visibleLevels],
+    // Mimo replay řídí přepočet přímo identita candles (jako dřív); za
+    // přehrávání ho přebírá škrcená epocha a data se čtou z refů.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [replayActive ? levelsEpoch : candles, replayActive ? null : renderedCandleWindow.end, indicatorSettings.levels, timeframe, visibleLevels],
   );
   const liquidityLevelsRef = useRef(liquidityLevels);
   liquidityLevelsRef.current = liquidityLevels;
