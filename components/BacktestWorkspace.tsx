@@ -56,6 +56,11 @@ import {
 // cursor reaches the edge.
 const SEGMENT_MS = 3 * 24 * 60 * 60 * 1_000;
 const PREFETCH_MS = 24 * 60 * 60 * 1_000;
+/**
+ * Prefetch se spustí, jakmile kurzoru zbývá méně než tolik načtených barů.
+ * Čtyři hodiny 1m barů = ~24 s předstihu při nejvyšší rychlosti přehrávání.
+ */
+const PREFETCH_MIN_BARS = 240;
 /** Jak často jde plný stav do Supabase; lokální checkpoint běží každých 1,5 s. */
 const CLOUD_SYNC_INTERVAL_MS = 60_000;
 // Deep context is requested in the native provider resolution needed by the
@@ -112,6 +117,8 @@ const BacktestWorkspace: React.FC<Props> = ({
   const historyLoadingRef = useRef(new Set<string>());
   const loadedUntilRef = useRef(initialRun.startAt);
   const [loading, setLoading] = useState(true);
+  /** Dotahování dalších dat za běhu — pill místo tichého ztuhnutí na hraně. */
+  const [loadingAhead, setLoadingAhead] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loadingSegmentRef = useRef(false);
   const dirtyRef = useRef(false);
@@ -209,12 +216,18 @@ const BacktestWorkspace: React.FC<Props> = ({
     wasPlayingRef.current = playing;
   }, [flush, run.runtimeState.replay.playing]);
 
-  const loadSegment = useCallback(async (requestedStart: number) => {
+  /**
+   * Dotáhne svíčky od `requestedStart`. Standardně jeden segment; `targetEndMs`
+   * okno natáhne — po Go To skoku se tak celá mezera stáhne jedním voláním
+   * (denní kbelíky uvnitř chybějící dny stejně paralelizují a platí se jen ty).
+   */
+  const loadSegment = useCallback(async (requestedStart: number, targetEndMs?: number) => {
     if (loadingSegmentRef.current || requestedStart >= runRef.current.endAt) return;
     loadingSegmentRef.current = true;
+    setLoadingAhead(true);
     setError(null);
     const start = Math.max(runRef.current.startAt, requestedStart);
-    const end = Math.min(runRef.current.endAt, start + SEGMENT_MS);
+    const end = Math.min(runRef.current.endAt, Math.max(start + SEGMENT_MS, targetEndMs ?? 0));
     try {
       const roots = runRef.current.config.instruments;
       const responses = await Promise.all(roots.map(async root => ({
@@ -232,6 +245,7 @@ const BacktestWorkspace: React.FC<Props> = ({
     } finally {
       loadingSegmentRef.current = false;
       setLoading(false);
+      setLoadingAhead(false);
     }
   }, []);
 
@@ -277,24 +291,36 @@ const BacktestWorkspace: React.FC<Props> = ({
     void loadSegment(contextStart);
   }, [initialRun.cursorAt, initialRun.startAt, loadSegment]);
 
-  // Dotažení dalšího segmentu, když kurzor dojel na poslední načtenou svíčku.
-  //
-  // Prefetch v `handleReplayChange` se řídí hodinami — spustí se, až je kurzor
-  // den od konce načteného okna. Přes víkend to selže: okno sahá do neděle,
-  // ale svíčky končí pátkem na zavíračce trhu, takže kurzor je od `loadedUntil`
-  // pořád „den daleko" a přitom už nemá kam jet. Tlačítka se zamknou,
-  // `handleReplayChange` se znovu nespustí a s ním ani prefetch — session
-  // uvízne. Tahle podmínka se ptá na svíčky, ne na čas, takže díru v datech
-  // překlene.
+  /**
+   * Prefetch podle svíček, ne podle hodin. Časová vzdálenost od `loadedUntil`
+   * přes víkend lže (okno sahá do neděle, bary končí pátkem); počet načtených
+   * barů před kurzorem ne. Načítá se s předstihem — dřív, než kurzor narazí
+   * do zdi — a po Go To skoku se celá mezera stáhne jedním voláním.
+   */
+  const maybePrefetch = useCallback((cursorTime: number | null, executionCandles: MarketCandle[]) => {
+    if (cursorTime === null || loadedUntilRef.current >= runRef.current.endAt) return;
+    const lastLoaded = executionCandles[executionCandles.length - 1];
+    if (!lastLoaded || cursorTime >= lastLoaded.time) {
+      void loadSegment(loadedUntilRef.current, cursorTime * 1_000 + PREFETCH_MS);
+      return;
+    }
+    let low = 0;
+    let high = executionCandles.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (executionCandles[mid].time <= cursorTime) low = mid + 1;
+      else high = mid;
+    }
+    if (executionCandles.length - low < PREFETCH_MIN_BARS) void loadSegment(loadedUntilRef.current);
+  }, [loadSegment]);
+
+  // Záchytná síť pro stavy, které neprojdou přes handleReplayChange — otevření
+  // session s kurzorem přímo na hraně dat nebo obnova po chybě načítání.
   useEffect(() => {
     const replay = run.runtimeState.replay;
     if (replay.phase !== 'active' || replay.cursorTime === null) return;
-    if (loadedUntilRef.current >= run.endAt) return;
-    const executionCandles = candlesByRoot[run.executionSymbol] ?? [];
-    const lastLoaded = executionCandles[executionCandles.length - 1];
-    if (!lastLoaded || replay.cursorTime < lastLoaded.time) return;
-    void loadSegment(loadedUntilRef.current);
-  }, [candlesByRoot, loadSegment, run.endAt, run.executionSymbol, run.runtimeState.replay]);
+    maybePrefetch(replay.cursorTime, candlesByRoot[run.executionSymbol] ?? []);
+  }, [candlesByRoot, maybePrefetch, run.executionSymbol, run.runtimeState.replay]);
 
   const emitClosedTrades = useCallback((runtime: BacktestRuntimeState) => {
     const pending = runtime.closedTrades.filter(closed => !emittedTradesRef.current.has(closed.id));
@@ -352,11 +378,9 @@ const BacktestWorkspace: React.FC<Props> = ({
       updatedAt: Date.now(),
       lastOpenedAt: Date.now(),
     }));
-    if (replay.cursorTime && (replay.cursorTime * 1_000) >= loadedUntilRef.current - PREFETCH_MS && loadedUntilRef.current < runRef.current.endAt) {
-      void loadSegment(loadedUntilRef.current);
-    }
+    maybePrefetch(replay.cursorTime, executionCandles);
     emitClosedTrades(runtime);
-  }, [candlesByRoot, emitClosedTrades, loadSegment, updateRun]);
+  }, [candlesByRoot, emitClosedTrades, maybePrefetch, updateRun]);
 
   const handleWorkspaceChange = useCallback((workspaceState: BacktestWorkspaceState) => {
     updateRun(current => ({ ...current, workspaceState, updatedAt: Date.now() }));
@@ -766,6 +790,14 @@ const BacktestWorkspace: React.FC<Props> = ({
       {/* Selhání dalšího segmentu se dřív jen zapsalo do stavu a nikde
           neukázalo — chart už svíčky měl, takže chybová obrazovka výš se
           nespustila a uživatel viděl jen zamčené přehrávání bez vysvětlení. */}
+      {/* Dotahování dat za běhu bylo dřív neviditelné — kurzor na hraně vypadal
+          jako zamrznutí. Pill říká, že se pracuje. */}
+      {loadingAhead && !error && initialCandles.length > 0 && (
+        <div className="fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3.5 py-1.5 backdrop-blur">
+          <Loader2 size={12} className="animate-spin text-blue-400" />
+          <span className="text-[11px] font-bold text-blue-400">Načítám další data…</span>
+        </div>
+      )}
       {error && initialCandles.length > 0 && (
         <div className="fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 backdrop-blur">
           <span className="text-xs font-bold text-rose-500">{error}</span>
