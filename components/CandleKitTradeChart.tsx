@@ -1765,6 +1765,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   const settingsSyncSourceRef = useRef(Symbol('chart-indicator-settings'));
   const [selectedFib, setSelectedFib] = useState<{ engine: CandleKitDrawingEngine; drawing: FibDrawing } | null>(null);
   const [selectedDrawing, setSelectedDrawing] = useState<{ engine: CandleKitDrawingEngine; drawing: Drawing } | null>(null);
+  /** Trailing překreslení výběru po zklidnění tažení (plovoucí toolbar). */
+  const selectionRefreshTimerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (selectionRefreshTimerRef.current !== null) window.clearTimeout(selectionRefreshTimerRef.current);
+  }, []);
   const [fibSettingsOpen, setFibSettingsOpen] = useState(false);
   const [drawingSettingsOpen, setDrawingSettingsOpen] = useState(false);
   const [managedPositionHover, setManagedPositionHover] = useState<{
@@ -3268,17 +3273,45 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (engine) {
       drawingSelectionUnsubscribeRef.current?.();
       if (!hideDrawingToolbar) {
+        // Engine emituje change na KAŽDÝ pohyb tažené kresby a tenhle sync
+        // dřív pokaždé vyrobil nový objekt `{engine, drawing}` → setState →
+        // re-render celé komponenty grafu na každý pohyb myši (naměřeno:
+        // ~1 commit/pohyb à 15 ms — hlavní zdroj sekání při tažení). Engine
+        // kresbu mutuje na místě, takže dokud výběr ukazuje na tentýž objekt,
+        // stav se nemění; plovoucí toolbar se na novou pozici přesune jedním
+        // trailing překreslením po zklidnění gesta.
+        const scheduleSelectionRefresh = () => {
+          if (selectionRefreshTimerRef.current !== null) window.clearTimeout(selectionRefreshTimerRef.current);
+          selectionRefreshTimerRef.current = window.setTimeout(() => {
+            selectionRefreshTimerRef.current = null;
+            setSelectedDrawing(current => (current ? { ...current } : current));
+            setSelectedFib(current => (current ? { ...current } : current));
+          }, 160);
+        };
         const syncSelectedDrawing = () => {
           const selectedId = engine.getSelectedId();
           const selected = selectedId ? engine.getById(selectedId) : undefined;
           if (selected?.tool === 'FibRetracement') {
-            setSelectedFib({ engine, drawing: selected as FibDrawing });
+            setSelectedFib(current => {
+              if (current && current.engine === engine && current.drawing === selected) {
+                scheduleSelectionRefresh();
+                return current;
+              }
+              return { engine, drawing: selected as FibDrawing };
+            });
             setSelectedDrawing(null);
             setDrawingSettingsOpen(false);
           } else {
             setSelectedFib(null);
             setFibSettingsOpen(false);
-            setSelectedDrawing(selected && !selected.id.startsWith('auto-') ? { engine, drawing: selected } : null);
+            setSelectedDrawing(current => {
+              if (!selected || selected.id.startsWith('auto-')) return null;
+              if (current && current.engine === engine && current.drawing === selected) {
+                scheduleSelectionRefresh();
+                return current;
+              }
+              return { engine, drawing: selected };
+            });
             if (!selected || selected.id.startsWith('auto-')) setDrawingSettingsOpen(false);
             else if (selected.tool === 'Text' && !selected.style.text?.trim()) setDrawingSettingsOpen(true);
           }
