@@ -160,6 +160,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   });
   // Výchozí strop ARM z konfigurace gate; per-ARM ttl ho smí jen zkrátit.
   const defaultArmTtlMs = gate.armTtlMs;
+  /** Do kdy je po zavření pozice blokovaný ostrý ARM (anti-revenge). */
+  let entryCooldownUntil = 0;
   let stopped = false;
   let positionCheckComplete = false;
   let workingOrderAccounts = new Set<number>();
@@ -303,7 +305,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (event.type === 'position') {
       if (event.position.accountId === group.leaderAccountId) {
+        const previousNet = leaderPositions.get(event.position.symbol) ?? 0;
         leaderPositions.set(event.position.symbol, event.position.netQuantity);
+        // Anti-revenge cooldown: návrat leadera na flat odzbrojí copier a
+        // zablokuje ostrý re-ARM. Obě strany jsou flat, divergence nevzniká;
+        // blokuje se rozhodnutí člověka, ne správa běžících objednávek.
+        const cooldownMinutes = group.safety?.entryCooldownMinutes ?? 0;
+        if (cooldownMinutes > 0 && previousNet !== 0 && event.position.netQuantity === 0) {
+          entryCooldownUntil = now + cooldownMinutes * 60_000;
+          if (gate.armed && !gate.shadowMode) {
+            gate = { ...gate, armed: false };
+            options.onAudit?.([{
+              at: now, leaderEventId: `cooldown-${event.position.symbol}`, kind: 'blocked',
+              reason: `entry-cooldown ${cooldownMinutes}min po zavření ${event.position.symbol}`,
+            }]);
+          }
+        }
       }
       return;
     }
@@ -517,6 +534,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const now = clock();
       if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
       if (source.needsReconciliation()) throw new Error('Po reconnectu je nutná kontrola pozic');
+      if (!shadowMode && now < entryCooldownUntil) {
+        const remainingMin = Math.ceil((entryCooldownUntil - now) / 60_000);
+        throw new Error(`ARM blokován anti-revenge cooldownem ještě ${remainingMin} min`);
+      }
       if (!shadowMode && !positionCheckComplete) throw new Error('Před live dispatch je nutné potvrdit kontrolu pozic');
       if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
       if (gate.divergentAccounts.size > 0) throw new Error('Pozice leader/follower se rozcházejí');

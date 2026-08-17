@@ -156,6 +156,9 @@ function loadTemplates(): CopyGroupTemplate[] {
           disableReplicationOnBreach: true,
           autoCloseFollowerPositions: typeof safety.autoCloseFollowerPositions === 'boolean' ? safety.autoCloseFollowerPositions : DEFAULT_COPY_GROUP_SAFETY.autoCloseFollowerPositions,
           preventHedging: typeof safety.preventHedging === 'boolean' ? safety.preventHedging : DEFAULT_COPY_GROUP_SAFETY.preventHedging,
+          entryCooldownMinutes: typeof safety.entryCooldownMinutes === 'number' && Number.isFinite(safety.entryCooldownMinutes) && safety.entryCooldownMinutes >= 0
+            ? Math.min(720, Math.floor(safety.entryCooldownMinutes))
+            : DEFAULT_COPY_GROUP_SAFETY.entryCooldownMinutes,
         },
       }];
     });

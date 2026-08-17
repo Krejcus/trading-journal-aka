@@ -688,4 +688,66 @@ describe('bootstrapCopierRuntime', () => {
     expect(controller.status()).toMatchObject({ armed: false, connected: false, stuckOutbox: true });
     controller.stop();
   });
+
+  it('anti-revenge cooldown po zavření pozice odzbrojí a blokuje ostrý re-ARM', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const cooldownGroup: CopyGroupConfig = {
+      ...group,
+      safety: {
+        positionReconciler: true, disableReplicationOnBreach: true,
+        autoCloseFollowerPositions: true, preventHedging: true,
+        entryCooldownMinutes: 10,
+      },
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: cooldownGroup, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    expect(controller.status().armed).toBe(true);
+
+    // Otevření pozice cooldown nespouští.
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(true);
+
+    // Návrat na flat = okamžitý DISARM a blokovaný ostrý re-ARM.
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(false);
+    await controller.reconcile();
+    expect(() => controller.arm()).toThrow('cooldown');
+
+    // Shadow režim zůstává dostupný — pozorování není obchodování.
+    controller.arm({ shadowMode: true });
+    expect(controller.status()).toMatchObject({ armed: true, shadowMode: true });
+    controller.stop();
+  });
+
+  it('flat událost followera cooldown nespouští', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const cooldownGroup: CopyGroupConfig = {
+      ...group,
+      safety: {
+        positionReconciler: true, disableReplicationOnBreach: true,
+        autoCloseFollowerPositions: true, preventHedging: true,
+        entryCooldownMinutes: 10,
+      },
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: cooldownGroup, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(true);
+    controller.stop();
+  });
 });

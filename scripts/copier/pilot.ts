@@ -21,7 +21,7 @@ import {
   percentile,
   type CopierAuditEntry,
 } from '../../services/copierRunner';
-import type { CopyFollowerConfig, CopyGroupConfig } from '../../services/liveCopyTrading';
+import { DEFAULT_COPY_GROUP_SAFETY, type CopyFollowerConfig, type CopyGroupConfig } from '../../services/liveCopyTrading';
 import type { TradovateAccountDataAccount } from '../../lib/tradovateAccountDataTypes';
 import {
   createTradovatePilotKeyPair,
@@ -154,12 +154,19 @@ async function runLocalAgent(
     accountSpecsByAccountId,
     getAccessToken: context.getAccessToken,
   });
+  const cooldownMinutes = numberFlag('cooldown-min', false) ?? 0;
+  if (!Number.isFinite(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 720) {
+    throw new Error('--cooldown-min musí být v rozsahu 0–720');
+  }
   const group: CopyGroupConfig = {
     id: `agent-${leaderId}-${followerIdsKey}`,
     name: 'Lokální DEMO agent',
     enabled: true,
     leaderAccountId: leaderId,
     followers,
+    ...(cooldownMinutes > 0 ? {
+      safety: { ...DEFAULT_COPY_GROUP_SAFETY, entryCooldownMinutes: Math.floor(cooldownMinutes) },
+    } : {}),
     localOnly: true,
   };
   let auditTail = Promise.resolve();

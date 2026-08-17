@@ -18,6 +18,13 @@ export interface CopyGroupSafetySettings {
   disableReplicationOnBreach: boolean;
   autoCloseFollowerPositions: boolean;
   preventHedging: boolean;
+  /**
+   * Anti-revenge cooldown: po návratu leadera na flat se copier sám
+   * odzbrojí a ostrý re-ARM je blokovaný tolik minut. 0 = vypnuto.
+   * Blokuje se ARM, ne jednotlivé objednávky — obě strany jsou flat,
+   * takže nevzniká záměrná divergence.
+   */
+  entryCooldownMinutes: number;
 }
 
 export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
@@ -27,6 +34,7 @@ export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
   disableReplicationOnBreach: true,
   autoCloseFollowerPositions: true,
   preventHedging: true,
+  entryCooldownMinutes: 0,
 };
 
 export interface CopyGroupConfig {
@@ -186,6 +194,12 @@ function sanitizeSafety(value: unknown): CopyGroupSafetySettings {
     disableReplicationOnBreach: true,
     autoCloseFollowerPositions: typeof raw.autoCloseFollowerPositions === 'boolean' ? raw.autoCloseFollowerPositions : DEFAULT_COPY_GROUP_SAFETY.autoCloseFollowerPositions,
     preventHedging: typeof raw.preventHedging === 'boolean' ? raw.preventHedging : DEFAULT_COPY_GROUP_SAFETY.preventHedging,
+    entryCooldownMinutes:
+      typeof raw.entryCooldownMinutes === 'number'
+        && Number.isFinite(raw.entryCooldownMinutes)
+        && raw.entryCooldownMinutes >= 0
+        ? Math.min(720, Math.floor(raw.entryCooldownMinutes))
+        : DEFAULT_COPY_GROUP_SAFETY.entryCooldownMinutes,
   };
 }
 
