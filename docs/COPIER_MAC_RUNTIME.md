@@ -38,7 +38,9 @@ npm run copier:mac -- install \
 
 Instalátor:
 
-- zkopíruje bootstrap lease do `.copier-pilot/bootstrap-lease.json`,
+- zkopíruje bootstrap lease, privátní pilotní klíč a samostatně zabalený runtime
+  do `~/Library/Application Support/AlphaTrade/copier`, aby background proces
+  nebyl blokovaný macOS ochranou složky Downloads,
 - vytvoří RSA klíče a secret v Keychainu,
 - nainstaluje `~/Library/LaunchAgents/com.alphatrade.copier.plist`,
 - spustí agenta přes `caffeinate`,
@@ -81,4 +83,3 @@ Mac musí být zapnutý, přihlášený k uživatelskému účtu, online a nesm�
 tvrdě uspán. Je to plně použitelný první produkční krok pro řízené DEMO testy,
 ale neřeší objednávky z mobilu ve chvíli, kdy je Mac offline. Pro skutečný
 provoz 24/7 je později vhodný jeden fenced worker na VPS.
-

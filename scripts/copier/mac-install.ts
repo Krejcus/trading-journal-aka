@@ -8,7 +8,7 @@ import { createMacCopierDevice, loadMacCopierDevice } from '../../server/macCopi
 const execFileAsync = promisify(execFile);
 const LABEL = 'com.alphatrade.copier';
 const projectRoot = resolve(new URL('../..', import.meta.url).pathname);
-const pilotRoot = resolve(projectRoot, '.copier-pilot');
+const pilotRoot = resolve(homedir(), 'Library/Application Support/AlphaTrade/copier');
 const launchAgents = resolve(homedir(), 'Library/LaunchAgents');
 const plistPath = resolve(launchAgents, `${LABEL}.plist`);
 const deviceConfigPath = resolve(pilotRoot, 'mac-device.json');
@@ -65,8 +65,27 @@ async function install(): Promise<void> {
   await mkdir(pilotRoot, { recursive: true, mode: 0o700 });
   await mkdir(launchAgents, { recursive: true, mode: 0o700 });
   const stableLease = resolve(pilotRoot, 'bootstrap-lease.json');
+  const stablePilotPrivateKey = resolve(pilotRoot, 'pilot-private.pem');
+  const runtimePath = resolve(pilotRoot, 'copier-agent.mjs');
   await copyFile(sourceLease, stableLease);
-  await chmod(stableLease, 0o600);
+  await copyFile(
+    resolve(flags.get('private-key')?.trim() || resolve(projectRoot, '.copier-pilot/pilot-private.pem')),
+    stablePilotPrivateKey,
+  );
+  await Promise.all([chmod(stableLease, 0o600), chmod(stablePilotPrivateKey, 0o600)]);
+
+  const esbuild = resolve(projectRoot, 'node_modules/.bin/esbuild');
+  const pilotSource = resolve(projectRoot, 'scripts/copier/pilot.ts');
+  await Promise.all([access(esbuild), access(pilotSource)]);
+  await execFileAsync(esbuild, [
+    pilotSource,
+    '--bundle',
+    '--platform=node',
+    '--format=esm',
+    '--target=node20',
+    `--outfile=${runtimePath}`,
+  ]);
+  await chmod(runtimePath, 0o700);
 
   let device;
   try {
@@ -84,13 +103,10 @@ async function install(): Promise<void> {
     });
   }
 
-  const tsx = resolve(projectRoot, 'node_modules/.bin/tsx');
-  const pilot = resolve(projectRoot, 'scripts/copier/pilot.ts');
-  await Promise.all([access(tsx), access(pilot)]);
   const stdout = resolve(pilotRoot, 'mac-agent.stdout.log');
   const stderr = resolve(pilotRoot, 'mac-agent.stderr.log');
   const programArguments = [
-    '/usr/bin/caffeinate', '-dimsu', tsx, pilot, 'agent',
+    '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
     '--follower', String(follower),
     '--multiplier', flags.get('multiplier')?.trim() || '1',
@@ -98,14 +114,14 @@ async function install(): Promise<void> {
     '--port', flags.get('port')?.trim() || '3211',
     '--device-config', deviceConfigPath,
     '--lease', stableLease,
-    '--private-key', resolve(pilotRoot, 'pilot-private.pem'),
+    '--private-key', stablePilotPrivateKey,
   ];
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key><array>${programArguments.map(value => `<string>${xml(value)}</string>`).join('')}</array>
-  <key>WorkingDirectory</key><string>${xml(projectRoot)}</string>
+  <key>WorkingDirectory</key><string>${xml(pilotRoot)}</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
@@ -136,7 +152,21 @@ async function status(): Promise<void> {
     const response = await fetch('http://127.0.0.1:3211/v1/status', {
       headers: { Origin: 'https://alphatrade-mentor-15.vercel.app' },
     });
-    console.log(JSON.stringify(await response.json(), null, 2));
+    const body = await response.json() as Record<string, unknown>;
+    const device = body.device && typeof body.device === 'object'
+      ? body.device as Record<string, unknown>
+      : null;
+    console.log(JSON.stringify({
+      ...body,
+      ...(device ? {
+        device: {
+          state: device.state,
+          deviceId: device.deviceId,
+          connectionId: device.connectionId,
+          deviceName: device.deviceName,
+        },
+      } : {}),
+    }, null, 2));
   } catch (error) {
     console.error(`Loopback agent neodpovídá: ${error instanceof Error ? error.message : String(error)}`);
     console.error(`Zkontroluj ${resolve(pilotRoot, 'mac-agent.stderr.log')}`);

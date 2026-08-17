@@ -213,7 +213,17 @@ async function runLocalAgent(
 
 async function pilotContext(): Promise<PilotContext> {
   const deviceConfigPath = stringFlag('device-config', false);
-  const deviceConfig = deviceConfigPath ? await loadMacCopierDevice(deviceConfigPath) : null;
+  let deviceConfig = deviceConfigPath ? await loadMacCopierDevice(deviceConfigPath) : null;
+  if (deviceConfig && !deviceConfig.paired && deviceConfigPath) {
+    const pendingProvider = createMacCopierDeviceTokenProvider({ config: deviceConfig });
+    try {
+      await pendingProvider.refresh();
+      deviceConfig = await markMacCopierDevicePaired(deviceConfigPath);
+    } catch {
+      // The server has not approved this device yet. Continue with the one-time
+      // bootstrap lease and expose the pairing request to the operator.
+    }
+  }
   if (deviceConfig?.paired) {
     const provider = createMacCopierDeviceTokenProvider({ config: deviceConfig });
     const payload = await provider.refresh();

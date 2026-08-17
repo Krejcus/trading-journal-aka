@@ -90,6 +90,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
+  const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const agentClient = useMemo(() => createLocalCopierAgentClient(), []);
   const live = useTradovateLiveData(userId);
   const selectedAccount = live.data?.accounts.find(account => account.id === selectedAccountId) ?? null;
@@ -143,6 +144,42 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
     };
   }, [agentClient]);
 
+  useEffect(() => {
+    const prefix = '#copier-pair=';
+    if (!window.location.hash.startsWith(prefix)) return;
+    const encoded = window.location.hash.slice(prefix.length);
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    void (async () => {
+      const base64 = encoded.replaceAll('-', '+').replaceAll('_', '/');
+      const decoded = JSON.parse(new TextDecoder().decode(Uint8Array.from(
+        atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')),
+        character => character.charCodeAt(0),
+      ))) as Partial<NonNullable<LocalCopierAgentStatus['device']>>;
+      if (
+        decoded.state !== 'pairing-required'
+        || !decoded.deviceId
+        || !decoded.connectionId
+        || !decoded.deviceName
+        || !decoded.deviceSecret
+        || !decoded.publicKey
+      ) throw new Error('Neplatná Mac worker pairing žádost');
+      if (!window.confirm(`Spárovat ${decoded.deviceName} s DEMO připojením? Zařízení získá pouze odvolatelnou obnovu krátkého copier lease.`)) {
+        setPairingNotice('Párování Mac workeru bylo zrušeno.');
+        return;
+      }
+      await pairTradovateCopierDevice({
+        connectionId: decoded.connectionId,
+        deviceId: decoded.deviceId,
+        deviceSecret: decoded.deviceSecret,
+        publicKey: decoded.publicKey,
+        deviceName: decoded.deviceName,
+      });
+      setPairingNotice('Mac worker je spárovaný. Po bezpečném restartu zůstane DISARMED.');
+    })().catch(error => {
+      live.setError(error instanceof Error ? error.message : String(error));
+    });
+  }, []);
+
   const tabs: Array<{ id: LiveTab; label: string; icon: React.ElementType }> = [
     { id: 'connections', label: 'Connections', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
@@ -167,6 +204,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
         <div className="flex items-center gap-3 rounded-md border border-rose-500/30 bg-rose-500/10 p-4 text-rose-500">
           <AlertTriangle size={18} className="shrink-0" /><span className="flex-1 text-sm font-semibold">{live.error}</span>
           <button type="button" onClick={() => void live.refreshStatus()} className="text-xs font-black uppercase">Zkusit znovu</button>
+        </div>
+      )}
+
+      {pairingNotice && (
+        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs font-bold text-emerald-600">
+          {pairingNotice}
         </div>
       )}
 
