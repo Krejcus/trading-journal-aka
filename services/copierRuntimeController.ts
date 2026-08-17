@@ -39,7 +39,11 @@ export interface CopierControllerStatus {
 }
 
 export interface CopierRuntimeController {
-  arm(options?: { shadowMode?: boolean }): void;
+  /**
+   * `ttlMs` omezí platnost tohoto ARM (typicky do konce broker session).
+   * Bez něj platí výchozí TTL z risk gate. Expirace pozice nezavírá.
+   */
+  arm(options?: { shadowMode?: boolean; ttlMs?: number }): void;
   disarm(): void;
   /** Jednosměrná nouzová západka pro aktuální runtime session. */
   engageKillSwitch(reason?: string): void;
@@ -154,6 +158,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     armed: false,
     connected: false,
   });
+  // Výchozí strop ARM z konfigurace gate; per-ARM ttl ho smí jen zkrátit.
+  const defaultArmTtlMs = gate.armTtlMs;
   let stopped = false;
   let positionCheckComplete = false;
   let workingOrderAccounts = new Set<number>();
@@ -502,9 +508,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   });
 
   return {
-    arm({ shadowMode = false } = {}) {
+    arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {
       if (stopped) throw new Error('Copier runtime is stopped');
       if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
+      if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
+        throw new Error('ARM TTL musí být kladný počet milisekund');
+      }
       const now = clock();
       if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
       if (source.needsReconciliation()) throw new Error('Po reconnectu je nutná kontrola pozic');
@@ -512,7 +521,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
       if (gate.divergentAccounts.size > 0) throw new Error('Pozice leader/follower se rozcházejí');
       if (workingOrderAccounts.size > 0) throw new Error('Před ARM musí být všechny účty bez pracovních příkazů');
-      gate = { ...gate, armed: true, armedAt: now, now, shadowMode };
+      // Kratší z limitů vyhrává: session TTL nesmí ARM prodloužit za výchozí strop.
+      const armTtlMs = ttlMs != null ? Math.min(ttlMs, defaultArmTtlMs) : defaultArmTtlMs;
+      gate = { ...gate, armed: true, armedAt: now, now, shadowMode, armTtlMs };
     },
     disarm() {
       gate = { ...gate, armed: false };
@@ -566,7 +577,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         );
         const symbols = new Set([...leaderPositions.keys(), ...followerPositions.keys()]);
         for (const symbol of symbols) {
-          const expected = Math.trunc((leaderPositions.get(symbol) ?? 0) * follower.multiplier);
+          let expected = Math.trunc((leaderPositions.get(symbol) ?? 0) * follower.multiplier);
+          // maxContracts řeže i očekávanou pozici, jinak by strop při
+          // reconciliation vypadal jako divergence. Krátká pozice symetricky.
+          if (follower.maxContracts != null && follower.maxContracts >= 1) {
+            const cap = Math.floor(follower.maxContracts);
+            expected = Math.max(-cap, Math.min(cap, expected));
+          }
           if ((followerPositions.get(symbol) ?? 0) !== expected) {
             divergent.add(follower.accountId);
             break;

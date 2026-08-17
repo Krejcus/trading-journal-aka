@@ -8,6 +8,7 @@ import {
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
+import { msUntilTradovateSessionEnd } from '../services/copierArmSession';
 import type { CopierRuntimeController } from '../services/copierRuntimeController';
 import {
   normalizeMultiplier,
@@ -164,7 +165,9 @@ export async function startLocalCopierExecutionAgent(
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
         }
-        options.controller.arm({ shadowMode: false });
+        // Ostrý ARM končí nejpozději s broker session (17:00 CT). Zapomenutý
+        // ARM tak nepřežije do dalšího dne; pozice expirace nezavírá.
+        options.controller.arm({ shadowMode: false, ttlMs: msUntilTradovateSessionEnd(Date.now()) });
         return;
       }
       case 'shadow':
