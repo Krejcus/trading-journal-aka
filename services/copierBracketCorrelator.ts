@@ -57,6 +57,14 @@ export class CopierBracketCorrelator {
   private readonly entries = new Map<string, EntryCandidate>();
   private readonly legsByEntry = new Map<string, Map<string, LegCandidate>>();
   private readonly emittedEntries = new Set<string>();
+  /**
+   * Entry, u kterých už dorazil protective leg, ale pár se nesešel.
+   *
+   * Vede se schválně mimo dosah `prune()`. Controller na tuhle množinu
+   * věší fail-closed timer, a pojistka nesmí sdílet životní cyklus s tím,
+   * co hlídá — jinak ji úklid cache tiše odzbrojí.
+   */
+  private readonly awaitingPair = new Set<string>();
 
   constructor(options: CopierBracketCorrelatorOptions = {}) {
     this.inferenceWindowMs = options.inferenceWindowMs ?? 1_500;
@@ -112,11 +120,13 @@ export class CopierBracketCorrelator {
       exactParent: exact != null,
     });
     this.legsByEntry.set(entry.orderId, legs);
+    this.awaitingPair.add(entry.orderId);
     const stops = [...legs.values()].filter(item => item.type === 'stop');
     const targets = [...legs.values()].filter(item => item.type === 'target');
     if (stops.length !== 1 || targets.length !== 1 || legs.size !== 2) return null;
 
     this.emittedEntries.add(entry.orderId);
+    this.awaitingPair.delete(entry.orderId);
     return {
       entryOrderId: entry.orderId,
       stopOrderId: stops[0].orderId,
@@ -143,7 +153,7 @@ export class CopierBracketCorrelator {
   }
 
   hasPendingPair(entryOrderId: string): boolean {
-    return this.legsByEntry.has(entryOrderId) && !this.emittedEntries.has(entryOrderId);
+    return this.awaitingPair.has(entryOrderId);
   }
 
   pendingTimeoutMs(): number {
