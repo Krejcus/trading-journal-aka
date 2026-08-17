@@ -106,6 +106,7 @@ import {
 } from '../services/chartSettings';
 import { chartAppearanceSnapshot, type ChartAppearanceState } from '../services/chartAppearanceScope';
 import { panelSettingsTargetMatches, type PanelSettingsTarget } from '../services/chartPanelSettings';
+import { installDevDragProfiler, recordDragProfilerCommit } from '../services/devDragProfiler';
 import {
   DEFAULT_REPLAY_GO_TO_TIME_ZONE,
   loadReplayGoToSettings,
@@ -353,6 +354,14 @@ const loadSyncSettings = (): ChartWorkspaceSyncSettings => {
 };
 
 const panelOrder = (id: string) => Number(id.replace(PANEL_ID_PREFIX, '')) || Number.MAX_SAFE_INTEGER;
+
+// Dev-only profiler skutečného tažení: React commity se počítají jen během
+// aktivního drag gestu a záznam jde do localStorage (sdílený origin →
+// čitelný z diagnostické záložky). V produkci je callback prázdný no-op.
+const devWorkspaceProfilerOnRender: React.ProfilerOnRenderCallback = import.meta.env.DEV
+  ? (_id, _phase, actualDuration) => recordDragProfilerCommit(actualDuration)
+  : () => undefined;
+if (import.meta.env.DEV && typeof window !== 'undefined') installDevDragProfiler();
 
 interface WorkspacePanelProps {
   instance: PanelInstance<WorkspacePanelConfig>;
@@ -1011,9 +1020,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     () => [...new Set([...panelControls.values()].map(control => control.drawingEngine).filter((engine): engine is CandleKitDrawingEngine => Boolean(engine)))],
     [panelControls],
   );
-  // Dev diagnostika: přístup k enginům z konzole pro měření sync cesty.
+  // Dev diagnostika: přístup k enginům a panelům z konzole pro měření
+  // sync a pointer cesty.
   if (import.meta.env.DEV) {
-    (window as unknown as { __atDrawingEngines?: unknown }).__atDrawingEngines = drawingEngines;
+    const dev = window as unknown as { __atDrawingEngines?: unknown; __atPanels?: unknown };
+    dev.__atDrawingEngines = drawingEngines;
+    dev.__atPanels = [...panelControls.values()];
   }
   const [workspaceHistoryState, setWorkspaceHistoryState] = useState<ChartWorkspaceHistoryState>({ canUndo: false, canRedo: false });
   const [selectedFib, setSelectedFib] = useState<{ engine: CandleKitDrawingEngine; drawing: FibDrawing } | null>(null);
@@ -1425,6 +1437,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   };
   positionQuickOrderRef.current = submitSelectedPositionQuickOrder;
   return (
+    <React.Profiler id="chart-workspace" onRender={devWorkspaceProfilerOnRender}>
     <div className={`fixed inset-0 z-[300] flex flex-col ${isDark ? 'dark bg-[#070a0f] text-slate-100' : 'bg-[#f4f6f8] text-slate-900'}`}>
       <div className={`h-12 shrink-0 flex items-center gap-1 px-2 border-b ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
         <div className="flex items-center gap-2 mr-1 min-w-0">
@@ -1688,6 +1701,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         </div>
       </WorkspaceDataContext.Provider>
     </div>
+    </React.Profiler>
   );
 };
 
