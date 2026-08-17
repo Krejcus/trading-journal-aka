@@ -77,14 +77,35 @@ const mergedInitialManualDrawings = (engines: readonly DrawingSyncEngine[]) => {
  * řetěz posluchačů na cílových enginech dvakrát častěji, než je vidět.
  * V prohlížeči se proto reakce koalescuje na jeden snímek (zrcadlí se vždy
  * poslední stav); bez `requestAnimationFrame` (testy v node) běží hned.
+ *
+ * Samotný rAF ale nestačí: Chromium ho v zakrytém či pozadovém okně škrtí
+ * klidně na nulu, a protože další flush se plánuje až po doběhnutí toho
+ * předchozího, jediný nevyřízený rAF držel celé zrcadlení zamrzlé — náhled
+ * kresby na ostatních panelech zůstal viset v bodě prvního kliknutí.
+ * Časovač je pojistka, která flush pustí, i když snímky nechodí.
  */
 const defaultSyncSchedule = (flush: () => void): (() => void) => {
   if (typeof requestAnimationFrame !== 'function') {
     flush();
     return () => undefined;
   }
-  const frame = requestAnimationFrame(flush);
-  return () => cancelAnimationFrame(frame);
+  let settled = false;
+  let frame = 0;
+  let timer = 0;
+  const run = () => {
+    if (settled) return;
+    settled = true;
+    cancelAnimationFrame(frame);
+    window.clearTimeout(timer);
+    flush();
+  };
+  frame = requestAnimationFrame(run);
+  timer = window.setTimeout(run, 32);
+  return () => {
+    settled = true;
+    cancelAnimationFrame(frame);
+    window.clearTimeout(timer);
+  };
 };
 
 export const installWorkspaceDrawingSync = (
