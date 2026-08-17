@@ -37,6 +37,7 @@ import {
   macCopierDevicePairing,
   markMacCopierDevicePaired,
 } from '../../server/macCopierDevice';
+import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 
 type Command = 'keygen' | 'mac-device-init' | 'accounts' | 'preflight' | 'dry-run' | 'shadow' | 'live' | 'agent';
 
@@ -57,6 +58,7 @@ interface PilotContext {
   getAccessToken: () => Promise<string>;
   device?: NonNullable<Parameters<typeof startLocalCopierExecutionAgent>[0]['device']>;
   onDevicePaired?: (deviceId: string) => Promise<void>;
+  relay?: { apiOrigin: string; authorizationHeader: () => Promise<string> };
 }
 
 const flags = parseFlags(process.argv.slice(3));
@@ -155,6 +157,7 @@ async function runLocalAgent(
   let auditTail = Promise.resolve();
   let controller: CopierRuntimeController | null = null;
   let agent: Awaited<ReturnType<typeof startLocalCopierExecutionAgent>> | null = null;
+  let relay: MacCopierCommandRelay | null = null;
   let stopPromise: Promise<void> | null = null;
   const writeAudit = async (entries: readonly CopierAuditEntry[]) => {
     if (entries.length === 0) return;
@@ -167,6 +170,7 @@ async function runLocalAgent(
     if (stopPromise) return stopPromise;
     stopPromise = (async () => {
       controller?.disarm();
+      await relay?.close();
       await controller?.waitForIdle();
       await auditTail;
       await agent?.close();
@@ -199,6 +203,7 @@ async function runLocalAgent(
       device: context.device,
       onDevicePaired: context.onDevicePaired,
     });
+    if (context.relay) relay = startMacCopierCommandRelay({ ...context.relay, agent });
     console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} follower=${followerId} multiplier=${multiplierValue}`);
     console.log('Stav je DISARMED. ARM, Flatten, Flatten All a násobek vyžadují explicitní akci v AlphaTrade LIVE UI.');
     const deadline = Date.now() + Number(minutesValue) * 60_000;
@@ -234,6 +239,7 @@ async function pilotContext(): Promise<PilotContext> {
       expiresAt: payload.expiresAt,
       renewable: true,
       getAccessToken: provider.getAccessToken,
+      relay: { apiOrigin: deviceConfig.apiOrigin, authorizationHeader: provider.authorizationHeader },
       device: {
         state: 'paired',
         deviceId: deviceConfig.deviceId,

@@ -173,6 +173,10 @@ export function createMacCopierDeviceTokenProvider(options: {
 
   return {
     refresh,
+    async authorizationHeader(): Promise<string> {
+      const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
+      return `Device ${options.config.deviceId}.${secret}`;
+    },
     async getAccessToken(): Promise<string> {
       if (!payload || Date.parse(payload.expiresAt) - clock() <= minimumValidityMs) await refresh();
       if (!payload) throw new Error('mac-copier-lease-unavailable');

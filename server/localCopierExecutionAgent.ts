@@ -37,6 +37,7 @@ interface LocalCopierExecutionAgentOptions {
 export interface LocalCopierExecutionAgent {
   origin: string;
   status(): LocalCopierAgentStatus;
+  execute(command: LocalCopierAgentCommand): Promise<LocalCopierAgentCommandResult>;
   close(): Promise<void>;
 }
 
@@ -246,6 +247,23 @@ export async function startLocalCopierExecutionAgent(
   return {
     origin: `http://${host}:${address.port}`,
     status,
+    execute: async command => {
+      let resolveResult!: (value: LocalCopierAgentCommandResult) => void;
+      let rejectResult!: (reason: unknown) => void;
+      const resultPromise = new Promise<LocalCopierAgentCommandResult>((resolve, reject) => {
+        resolveResult = resolve;
+        rejectResult = reject;
+      });
+      tail = tail.then(async () => {
+        try {
+          const result = await execute(command);
+          resolveResult({ ok: true, status: status(), ...(result == null ? {} : { result: result as LiveCopyTradingCommandResult }) });
+        } catch (error) {
+          rejectResult(error);
+        }
+      });
+      return resultPromise;
+    },
     async close() {
       await tail;
       await new Promise<void>((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));

@@ -18,6 +18,7 @@ import {
   beginTradovateApiRequest,
   finishTradovateApiRequest,
 } from '../lib/tradovateApiTelemetry';
+import type { LocalCopierAgentCommand, LocalCopierAgentCommandResult, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 
 export interface TradovateOAuthConnectionStatus {
   id: string;
@@ -202,6 +203,35 @@ export function revokeTradovateCopierDevice(deviceId: string): Promise<{ revoked
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ deviceId }),
   });
+}
+
+export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
+  status: LocalCopierAgentStatus;
+  lastSeenAt: string;
+  connected: boolean;
+} | null> {
+  return authenticatedRequest(`/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}`);
+}
+
+export async function executeTradovateCopierRelayCommand(
+  connectionId: string,
+  command: LocalCopierAgentCommand,
+): Promise<LocalCopierAgentCommandResult> {
+  const idempotencyKey = crypto.randomUUID();
+  const queued = await authenticatedRequest<{ id: string; expiresAt: string }>('/api/tradovate/oauth/copier-relay', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId, command, idempotencyKey }),
+  });
+  const deadline = Math.min(Date.parse(queued.expiresAt) + 5_000, Date.now() + 35_000);
+  while (Date.now() < deadline) {
+    const result = await authenticatedRequest<{ status: string; result?: LocalCopierAgentCommandResult; error?: string }>(
+      `/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}&commandId=${encodeURIComponent(queued.id)}`,
+    );
+    if (result.status === 'succeeded' && result.result) return result.result;
+    if (result.status === 'rejected' || result.status === 'expired') throw new Error(result.error || `Copier příkaz skončil stavem ${result.status}`);
+    await new Promise(resolve => window.setTimeout(resolve, 400));
+  }
+  throw new Error('Mac worker příkaz včas nepotvrdil. Příkaz expiroval a nebude automaticky opakován.');
 }
 
 export function runTradovateLivePnlTick(

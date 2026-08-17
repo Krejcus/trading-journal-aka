@@ -32,6 +32,8 @@ import {
 } from '../lib/tradovateLiveView';
 import {
   createTradovatePilotLease,
+  executeTradovateCopierRelayCommand,
+  loadTradovateCopierRelayStatus,
   pairTradovateCopierDevice,
   type TradovateOAuthStatus,
   type TradovatePreflightResult,
@@ -90,9 +92,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
+  const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const agentClient = useMemo(() => createLocalCopierAgentClient(), []);
   const live = useTradovateLiveData(userId);
+  const relayConnectionId = live.status?.connections.find(connection => connection.connected)?.id ?? null;
   const selectedAccount = live.data?.accounts.find(account => account.id === selectedAccountId) ?? null;
   const copyTradeSnapshot = useMemo(
     () => live.data ? tradovateCopyTradeSnapshot(live.data, live.profiles) : null,
@@ -106,9 +110,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
     if (!agentStatus) return null;
     return copyGroups.find(group => sameCopyGroupAccounts(group, agentStatus.group)) ?? null;
   }, [agentStatus, copyGroups]);
+  const executeAgent = async (command: Parameters<typeof agentClient.execute>[0]) => {
+    if (agentTransport === 'local') return agentClient.execute(command);
+    if (!relayConnectionId) throw new Error('Chybí aktivní Tradovate připojení pro Mac worker relay.');
+    const result = await executeTradovateCopierRelayCommand(relayConnectionId, command);
+    setAgentStatus(result.status);
+    return result;
+  };
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
-    const adapter = agentClient.adapter();
     return {
       async execute(command) {
         const groupId = command.type === 'create-group' || command.type === 'update-group'
@@ -117,12 +127,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
         if (groupId !== executionGroup.id) {
           throw new Error('Příkaz nemíří na skupinu připojenou k lokálnímu execution agentovi');
         }
-        const result = await adapter.execute(command);
-        setAgentStatus(await agentClient.status());
-        return result;
+        const payload = await executeAgent({ type: 'copy-command', command });
+        return payload.result;
       },
     };
-  }, [agentClient, executionGroup]);
+  }, [agentClient, agentTransport, executionGroup, relayConnectionId]);
 
   useEffect(() => {
     let stopped = false;
@@ -130,9 +139,17 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
     const poll = async () => {
       try {
         const next = await agentClient.status();
-        if (!stopped) setAgentStatus(next);
+        if (!stopped) { setAgentStatus(next); setAgentTransport('local'); }
       } catch {
-        if (!stopped) setAgentStatus(null);
+        try {
+          const remote = relayConnectionId ? await loadTradovateCopierRelayStatus(relayConnectionId) : null;
+          if (!stopped) {
+            setAgentStatus(remote?.connected ? remote.status : null);
+            setAgentTransport(remote?.connected ? 'relay' : null);
+          }
+        } catch {
+          if (!stopped) { setAgentStatus(null); setAgentTransport(null); }
+        }
       } finally {
         if (!stopped) timer = window.setTimeout(poll, 2_000);
       }
@@ -142,7 +159,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
       stopped = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [agentClient]);
+  }, [agentClient, relayConnectionId]);
 
   useEffect(() => {
     const prefix = '#copier-pair=';
@@ -283,15 +300,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
                 // UI je autoritativní pro aktuální násobky/módy. Před každým
                 // ARM je nejdřív durable runtime synchronizujeme; update-group
                 // sám DISARMuje a teprve následující ARM provede reconciliation.
-                await agentClient.execute({
+                await executeAgent({
                   type: 'copy-command',
                   command: { type: 'update-group', group: executionGroup },
                 });
-                setAgentStatus((await agentClient.execute({ type: 'arm-live' })).status);
+                setAgentStatus((await executeAgent({ type: 'arm-live' })).status);
               } : undefined}
-              onShadowMode={executionGroup ? async () => setAgentStatus((await agentClient.execute({ type: 'shadow' })).status) : undefined}
-              onDisarm={async () => setAgentStatus((await agentClient.execute({ type: 'disarm' })).status)}
-              onEmergencyStop={async () => setAgentStatus((await agentClient.execute({ type: 'kill-switch' })).status)}
+              onShadowMode={executionGroup ? async () => setAgentStatus((await executeAgent({ type: 'shadow' })).status) : undefined}
+              onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
+              onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
             />
           ) : null}
           {tab === 'accounts' ? <Accounts data={live.data} profiles={live.profiles} onAccount={setSelectedAccountId} /> : null}

@@ -62,6 +62,7 @@ describe('mac copier device', () => {
       fetchImpl: fetchImpl as typeof fetch,
       clock: () => now,
     });
+    expect(await provider.authorizationHeader()).toBe(`Device ${config.deviceId}.${secrets.get(config.deviceId)}`);
     expect(await provider.getAccessToken()).toBe('short-lived-access-token');
     expect(await provider.getAccessToken()).toBe('short-lived-access-token');
     expect(fetchImpl).toHaveBeenCalledTimes(1);

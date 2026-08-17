@@ -146,6 +146,15 @@ describe('local copier execution agent', () => {
     expect(runtime.arm).not.toHaveBeenCalled();
   });
 
+  it('executes the same serialized command path for the authenticated server relay', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const result = await running.execute({ type: 'shadow' });
+    expect(result.ok).toBe(true);
+    expect(result.status.controller).toMatchObject({ armed: true, shadowMode: true });
+    expect(runtime.arm).toHaveBeenCalledWith({ shadowMode: true });
+  });
+
   it('exposes a pending Mac pairing only until the authenticated UI confirms it', async () => {
     const runtime = controller();
     const onDevicePaired = vi.fn(async () => undefined);
