@@ -21,7 +21,7 @@ import {
   percentile,
   type CopierAuditEntry,
 } from '../../services/copierRunner';
-import type { CopyGroupConfig } from '../../services/liveCopyTrading';
+import type { CopyFollowerConfig, CopyGroupConfig } from '../../services/liveCopyTrading';
 import type { TradovateAccountDataAccount } from '../../lib/tradovateAccountDataTypes';
 import {
   createTradovatePilotKeyPair,
@@ -105,7 +105,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
   }
 
   if (selected === 'agent') {
-    await runLocalAgent(context, leaderId, followerId, accountSpecsByAccountId);
+    await runLocalAgent(context, leaderId, followerId, accountSpecsByAccountId, accounts);
     return;
   }
 
@@ -118,6 +118,7 @@ async function runLocalAgent(
   leaderId: number,
   followerId: number,
   accountSpecsByAccountId: Readonly<Record<number, string>>,
+  accounts: TradovateAccountDataAccount[],
 ): Promise<void> {
   const portValue = numberFlag('port', false) ?? LOCAL_COPIER_AGENT_PORT;
   const minutesValue = numberFlag('minutes', false) ?? 480;
@@ -131,13 +132,20 @@ async function runLocalAgent(
   if (!Number.isFinite(multiplierValue) || Number(multiplierValue) <= 0 || Number(multiplierValue) > 100) {
     throw new Error('--multiplier musí být větší než 0 a nejvýše 100');
   }
+  // `--followers` rozšiřuje agenta na víc účtů s vlastními parametry;
+  // bez něj platí původní dvojice `--follower/--multiplier` (mac-install).
+  const followersFlag = stringFlag('followers', false);
+  const followers: CopyFollowerConfig[] = followersFlag
+    ? parseFollowersFlag(followersFlag, leaderId, accounts)
+    : [{ accountId: followerId, mode: 'on-submit', multiplier: Number(multiplierValue) }];
   if (!context.renewable && context.expiresAt && Date.parse(context.expiresAt) - Date.now() <= (Number(minutesValue) + 5) * 60_000) {
     throw new Error(`Pilot lease nevydrží celý ${minutesValue}min běh a 5min rezervu; stáhni nový lease`);
   }
 
   const root = resolve('.copier-pilot');
   await mkdir(root, { recursive: true, mode: 0o700 });
-  const key = `${context.connectionId}-${leaderId}-${followerId}`;
+  const followerIdsKey = followers.map(item => item.accountId).join('-');
+  const key = `${context.connectionId}-${leaderId}-${followerIdsKey}`;
   const releaseLock = await acquireProcessLock(resolve(root, `${key}.lock`));
   const auditPath = resolve(root, `${key}.audit.jsonl`);
   const broker = createTradovateBroker({
@@ -147,11 +155,11 @@ async function runLocalAgent(
     getAccessToken: context.getAccessToken,
   });
   const group: CopyGroupConfig = {
-    id: `agent-${leaderId}-${followerId}`,
+    id: `agent-${leaderId}-${followerIdsKey}`,
     name: 'Lokální DEMO agent',
     enabled: true,
     leaderAccountId: leaderId,
-    followers: [{ accountId: followerId, mode: 'on-submit', multiplier: Number(multiplierValue) }],
+    followers,
     localOnly: true,
   };
   let auditTail = Promise.resolve();
@@ -204,7 +212,7 @@ async function runLocalAgent(
       onDevicePaired: context.onDevicePaired,
     });
     if (context.relay) relay = startMacCopierCommandRelay({ ...context.relay, agent });
-    console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} follower=${followerId} multiplier=${multiplierValue}`);
+    console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} followers=${followers.map(item => `${item.accountId}@${item.multiplier}${item.maxContracts != null ? `@max${item.maxContracts}` : ''}`).join(',')}`);
     console.log('Stav je DISARMED. ARM, Flatten, Flatten All a násobek vyžadují explicitní akci v AlphaTrade LIVE UI.');
     const deadline = Date.now() + Number(minutesValue) * 60_000;
     while (Date.now() < deadline && !stopPromise) await delay(1_000);
@@ -337,6 +345,55 @@ function validatePair(
     return account;
   });
   return selected;
+}
+
+/**
+ * Parsování `--followers "id@multiplier[@maxContracts],..."` pro agent mode.
+ *
+ * Původní `--follower/--multiplier` dvojice zůstává platná (mac-install ji
+ * generuje); tenhle flag ji rozšiřuje na víc účtů s vlastními parametry.
+ * Příklad: `--followers "61887493@1,61887495@0.5@3"`.
+ */
+function parseFollowersFlag(
+  raw: string,
+  leaderId: number,
+  accounts: TradovateAccountDataAccount[],
+): CopyFollowerConfig[] {
+  const followers = raw.split(',').map(part => part.trim()).filter(Boolean).map(part => {
+    const [idPart, multiplierPart, maxPart, ...rest] = part.split('@');
+    if (rest.length > 0) throw new Error(`--followers: nesrozumitelný zápis „${part}"`);
+    const accountId = Number(idPart);
+    if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+      throw new Error(`--followers: „${idPart}" není platné ID účtu`);
+    }
+    const multiplier = multiplierPart == null ? 1 : Number(multiplierPart);
+    if (!Number.isFinite(multiplier) || multiplier <= 0 || multiplier > 100) {
+      throw new Error(`--followers: multiplier účtu ${accountId} musí být větší než 0 a nejvýše 100`);
+    }
+    const maxContracts = maxPart == null ? undefined : Number(maxPart);
+    if (maxContracts != null && (!Number.isSafeInteger(maxContracts) || maxContracts < 1)) {
+      throw new Error(`--followers: maxContracts účtu ${accountId} musí být celé číslo alespoň 1`);
+    }
+    return {
+      accountId,
+      mode: 'on-submit' as const,
+      multiplier,
+      ...(maxContracts != null ? { maxContracts } : {}),
+    };
+  });
+  if (followers.length === 0) throw new Error('--followers je prázdný');
+  const seen = new Set<number>();
+  for (const follower of followers) {
+    if (follower.accountId === leaderId) throw new Error('Leader nemůže být zároveň follower');
+    if (seen.has(follower.accountId)) throw new Error(`Follower ${follower.accountId} je uveden vícekrát`);
+    seen.add(follower.accountId);
+    const account = accounts.find(item => item.id === follower.accountId);
+    if (!account) throw new Error(`Tradovate účet ${follower.accountId} nebyl nalezen`);
+    if (!account.active || !account.canTrade) {
+      throw new Error(`Účet ${account.name} není aktivní pro execution`);
+    }
+  }
+  return followers;
 }
 
 async function runPreflight(
@@ -716,6 +773,7 @@ Ranní Tradovate copier pilot (vždy DEMO)
   npm run copier:pilot -- shadow --leader ID --follower ID --minutes 30
   npm run copier:pilot -- live --leader ID --follower ID --minutes 15 --approval POTVRZUJI_1_MNQ_DEMO_WRITE
   npm run copier:pilot -- agent --leader ID --follower ID --lease LEASE_JSON --device-config .copier-pilot/mac-device.json --minutes 480
+  npm run copier:pilot -- agent --leader ID --follower ID --followers "ID@MULT,ID@MULT@MAXKONTRAKTU" ... (vice followeru; --followers ma prednost)
 
 Volitelné: --connection-id UUID, --account-spec USERNAME
 Lokální lease: --lease /cesta/k/pilot-lease.json [--private-key /cesta/pilot-private.pem]
