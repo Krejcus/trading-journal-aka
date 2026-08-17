@@ -3,6 +3,7 @@ import {
   copyGroupsFromSnapshot,
   createLocalCopyGroupId,
   mergeCopyGroups,
+  DEFAULT_COPY_GROUP_SAFETY,
   normalizeMultiplier,
   sanitizeCopyGroups,
   validateCopyGroup,
@@ -19,10 +20,14 @@ const snapshot = {
 } as LiveSnapshot;
 
 describe('liveCopyTrading', () => {
+  it('fail-closes replication on divergence by default', () => {
+    expect(DEFAULT_COPY_GROUP_SAFETY.disableReplicationOnBreach).toBe(true);
+  });
   it('převede živou skupinu na editovatelnou konfiguraci', () => {
     expect(copyGroupsFromSnapshot(snapshot)).toEqual([{
       id: 'group-1', name: 'Hlavní', enabled: true, leaderAccountId: 1,
       followers: [{ accountId: 2, mode: 'on-submit', multiplier: 2 }],
+      safety: DEFAULT_COPY_GROUP_SAFETY,
     }]);
   });
 
@@ -59,7 +64,16 @@ describe('sanitizeCopyGroups', () => {
       followers: [{ accountId: 2, mode: 'on-fill', multiplier: 1000 }], localOnly: true,
     }]))?.toEqual([{
       id: 'local-1', name: 'Draft', enabled: true, leaderAccountId: 1,
-      followers: [{ accountId: 2, mode: 'on-fill', multiplier: 100 }], localOnly: true,
+      followers: [{ accountId: 2, mode: 'on-fill', multiplier: 100 }], safety: DEFAULT_COPY_GROUP_SAFETY, localOnly: true,
     }]);
+  });
+
+  it('migrates an older unsafe divergence setting to fail-closed', () => {
+    const groups = sanitizeCopyGroups([{
+      id: 'legacy', name: 'Legacy', enabled: true, leaderAccountId: 1,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
+      safety: { positionReconciler: true, disableReplicationOnBreach: false, autoCloseFollowerPositions: true, preventHedging: true },
+    }]);
+    expect(groups?.[0].safety?.disableReplicationOnBreach).toBe(true);
   });
 });

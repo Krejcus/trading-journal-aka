@@ -2,22 +2,44 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
-  RefreshCw, Inbox, Check, Columns3, RotateCcw, X, Save, Trash2, Power,
-  EyeOff, AlertTriangle, CheckCircle2, Users, SlidersHorizontal,
+  RefreshCw, Inbox, Check, RotateCcw, X, Save, Trash2, Power,
+  EyeOff, AlertTriangle, CheckCircle2, SlidersHorizontal,
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
+import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
+import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
   copyGroupsFromSnapshot,
   createLocalCopyGroupId,
+  DEFAULT_COPY_GROUP_SAFETY,
   mergeCopyGroups,
   normalizeMultiplier,
   sanitizeCopyGroups,
   validateCopyGroup,
   type CopyGroupConfig,
+  type CopyFollowerConfig,
+  type CopyGroupSafetySettings,
   type CopyReplicationMode,
   type LiveCopyTradingAdapter,
   type LiveCopyTradingCommand,
 } from '../services/liveCopyTrading';
+
+const GROUP_COLORS = ['#4f6df5', '#f97316', '#d946ef', '#84cc16', '#06b6d4', '#ec4899', '#8b5cf6', '#64748b'];
+
+interface CopyGroupTemplate {
+  id: string;
+  name: string;
+  leaderAccountId: number | null;
+  followers: CopyFollowerConfig[];
+  safety: CopyGroupSafetySettings;
+}
+
+interface RedactionSettings {
+  visibleStart: number;
+  visibleEnd: number;
+}
+
+const DEFAULT_REDACTION: RedactionSettings = { visibleStart: 4, visibleEnd: 4 };
 
 // Přehled kopírování 1:1 podle obrazovky Copy Trade v Tradecopii — stejné rozvržení,
 // stejné sloupce, stejné akce. Dokud nejsou účty připojené přes OAuth, jsou řádky
@@ -47,26 +69,108 @@ interface ColumnDef {
   label: string;
   align?: 'right';
   locked?: boolean;
-  width?: string;
+  widthPx: number;
 }
 
+type GroupColumnKey = 'status' | 'leader' | 'firm' | 'followers' | 'capital' | 'daily' | 'unreal';
+type OrderColumnKey = 'account' | 'broker' | 'symbol' | 'action' | 'type' | 'qty' | 'limit' | 'stop' | 'status' | 'timestamp' | 'orderId';
+const GROUP_COLUMN_OPTIONS: Array<{ key: GroupColumnKey; label: string }> = [
+  { key: 'status', label: 'Status' }, { key: 'leader', label: 'Leader' }, { key: 'firm', label: 'Firm' },
+  { key: 'followers', label: 'Followers' }, { key: 'capital', label: 'Capital' }, { key: 'daily', label: 'Daily P&L' }, { key: 'unreal', label: 'Unreal P&L' },
+];
+const ORDER_COLUMN_OPTIONS: Array<{ key: OrderColumnKey; label: string }> = [
+  { key: 'account', label: 'Account' }, { key: 'broker', label: 'Broker' }, { key: 'symbol', label: 'Symbol' }, { key: 'action', label: 'Action' },
+  { key: 'type', label: 'Type' }, { key: 'qty', label: 'Qty' }, { key: 'limit', label: 'Limit Price' },
+  { key: 'stop', label: 'Stop Price' }, { key: 'status', label: 'Status' }, { key: 'timestamp', label: 'Timestamp' }, { key: 'orderId', label: 'Order ID' },
+];
+
 const ACCOUNT_COLUMNS: ColumnDef[] = [
-  { key: 'replication', label: 'Replication', width: 'w-[130px]' },
-  { key: 'account', label: 'Account', locked: true },
-  { key: 'broker', label: 'Broker' },
-  { key: 'firm', label: 'Firm' },
-  { key: 'balance', label: 'Balance', align: 'right' },
-  { key: 'positions', label: 'Positions', align: 'right' },
-  { key: 'daily', label: 'Daily P&L', align: 'right' },
-  { key: 'unreal', label: 'Unreal P&L', align: 'right' },
-  { key: 'distDd', label: 'Dist DD', align: 'right' },
-  { key: 'execLimit', label: 'Exec/Limit', align: 'right' },
-  { key: 'qtyMult', label: 'Qty/Mult', align: 'right' },
-  { key: 'actions', label: 'Akce', align: 'right' },
+  { key: 'replication', label: 'Replication', widthPx: 132 },
+  { key: 'account', label: 'Account', locked: true, widthPx: 190 },
+  { key: 'broker', label: 'Broker', widthPx: 72 },
+  { key: 'firm', label: 'Firm', widthPx: 120 },
+  { key: 'balance', label: 'Balance', align: 'right', widthPx: 112 },
+  { key: 'positions', label: 'Positions', align: 'right', widthPx: 82 },
+  { key: 'daily', label: 'Daily P&L', align: 'right', widthPx: 96 },
+  { key: 'unreal', label: 'Unreal P&L', align: 'right', widthPx: 104 },
+  { key: 'distDd', label: 'Dist DD', align: 'right', widthPx: 76 },
+  { key: 'execLimit', label: 'Exec/Limit', align: 'right', widthPx: 88 },
+  { key: 'qtyMult', label: 'Násobek', align: 'right', widthPx: 96 },
+  { key: 'actions', label: 'Akce', align: 'right', widthPx: 78 },
 ];
 
 const COLUMNS_STORAGE_KEY = 'alphatrade_live_copytrade_columns';
+const GROUP_COLUMNS_STORAGE_KEY = 'alphatrade_live_copytrade_group_columns';
+const ORDER_COLUMNS_STORAGE_KEY = 'alphatrade_live_copytrade_order_columns';
+const VIEW_SETTINGS_STORAGE_KEY = 'alphatrade_live_copytrade_view_settings';
 const GROUPS_STORAGE_KEY = 'alphatrade_live_copytrade_draft_groups';
+const TEMPLATES_STORAGE_KEY = 'alphatrade_live_copytrade_templates';
+const TRADOVATE_OFFICIAL_LOGO = 'https://www.tradovate.com/favicon-48.png';
+const manualOperationId = () => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+  ? crypto.randomUUID()
+  : `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+const TradovateMark = ({ size = 'h-6 w-6' }: { size?: string }) => (
+  <span className={`relative inline-flex ${size} shrink-0 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-white shadow-sm`} title="Tradovate">
+    <img src={TRADOVATE_OFFICIAL_LOGO} alt="Tradovate" className="h-[76%] w-[76%] object-contain" />
+  </span>
+);
+
+const FirmMark = ({ firm, withLabel = false }: { firm: string; withLabel?: boolean }) => {
+  const key = firm.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const logo = FIRM_LOGOS[key];
+  return <span className="inline-flex min-w-0 items-center gap-1.5">
+    {logo
+      ? <img src={logo} alt="" className="h-6 w-6 shrink-0 rounded-full border border-black/10 bg-white object-cover" />
+      : <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[8px] font-black text-white" style={{ background: firmColor(key || firm).bg }}>{firmInitials(firm)}</span>}
+    {withLabel ? <span className="truncate text-xs leading-none">{firm}</span> : null}
+  </span>;
+};
+
+function loadTemplates(): CopyGroupTemplate[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TEMPLATES_STORAGE_KEY) ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((candidate, index): CopyGroupTemplate[] => {
+      if (!candidate || typeof candidate !== 'object') return [];
+      const record = candidate as Partial<CopyGroupTemplate>;
+      const safety = record.safety && typeof record.safety === 'object'
+        ? record.safety as Partial<CopyGroupSafetySettings>
+        : {};
+      const followers = Array.isArray(record.followers)
+        ? record.followers.flatMap((follower): CopyFollowerConfig[] => {
+            if (!follower || typeof follower !== 'object') return [];
+            const entry = follower as Partial<CopyFollowerConfig>;
+            if (!Number.isFinite(entry.accountId)) return [];
+            const mode = entry.mode === 'on-fill' || entry.mode === 'off' ? entry.mode : 'on-submit';
+            return [{ accountId: Number(entry.accountId), mode, multiplier: normalizeMultiplier(Number(entry.multiplier ?? 1)) }];
+          })
+        : [];
+      return [{
+        id: typeof record.id === 'string' && record.id ? record.id : `template-${index}`,
+        name: typeof record.name === 'string' ? record.name : '',
+        leaderAccountId: Number.isFinite(record.leaderAccountId) ? Number(record.leaderAccountId) : null,
+        followers,
+        safety: {
+          positionReconciler: typeof safety.positionReconciler === 'boolean' ? safety.positionReconciler : DEFAULT_COPY_GROUP_SAFETY.positionReconciler,
+          disableReplicationOnBreach: true,
+          autoCloseFollowerPositions: typeof safety.autoCloseFollowerPositions === 'boolean' ? safety.autoCloseFollowerPositions : DEFAULT_COPY_GROUP_SAFETY.autoCloseFollowerPositions,
+          preventHedging: typeof safety.preventHedging === 'boolean' ? safety.preventHedging : DEFAULT_COPY_GROUP_SAFETY.preventHedging,
+        },
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+const redactAccountName = (name: string, active: boolean, settings = DEFAULT_REDACTION) => {
+  if (!active) return name;
+  const visibleStart = Math.max(0, Math.min(settings.visibleStart, name.length));
+  const visibleEnd = Math.max(0, Math.min(settings.visibleEnd, name.length - visibleStart));
+  if (visibleStart + visibleEnd >= name.length) return name;
+  return `${name.slice(0, visibleStart)}••••${visibleEnd > 0 ? name.slice(-visibleEnd) : ''}`;
+};
 
 function loadHiddenColumns(): Set<AccountColumnKey> {
   try {
@@ -79,12 +183,50 @@ function loadHiddenColumns(): Set<AccountColumnKey> {
   }
 }
 
+function loadHiddenColumnSet<T extends string>(key: string): Set<T> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) ?? '[]');
+    return new Set(Array.isArray(parsed) ? parsed.filter(value => typeof value === 'string') as T[] : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function loadViewSettings(): { density: number; redaction: RedactionSettings; confirmDisableAfterFlatten: boolean } {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(VIEW_SETTINGS_STORAGE_KEY) ?? '{}') as Partial<{
+      density: number;
+      redaction: Partial<RedactionSettings>;
+      confirmDisableAfterFlatten: boolean;
+    }>;
+    const density = [80, 90, 100, 110].includes(parsed.density ?? 0) ? parsed.density as number : 100;
+    return {
+      density,
+      redaction: {
+        visibleStart: Number.isFinite(parsed.redaction?.visibleStart) ? Math.max(0, Number(parsed.redaction?.visibleStart)) : DEFAULT_REDACTION.visibleStart,
+        visibleEnd: Number.isFinite(parsed.redaction?.visibleEnd) ? Math.max(0, Number(parsed.redaction?.visibleEnd)) : DEFAULT_REDACTION.visibleEnd,
+      },
+      confirmDisableAfterFlatten: typeof parsed.confirmDisableAfterFlatten === 'boolean' ? parsed.confirmDisableAfterFlatten : true,
+    };
+  } catch {
+    return { density: 100, redaction: DEFAULT_REDACTION, confirmDisableAfterFlatten: true };
+  }
+}
+
 interface Props {
   snapshot: LiveSnapshot;
   orders?: LiveOrder[];
   onAccount?: (account: LiveAccount) => void;
   onRefreshOrders?: () => Promise<void> | void;
   commandAdapter?: LiveCopyTradingAdapter;
+  copierArmed?: boolean;
+  apiTelemetry?: TradovateApiTelemetrySnapshot;
+  onArmLive?: () => Promise<void> | void;
+  onShadowMode?: () => Promise<void> | void;
+  onDisarm?: () => Promise<void> | void;
+  onEmergencyStop?: () => Promise<void> | void;
+  executionGroupId?: string | null;
+  onGroupsChange?: (groups: CopyGroupConfig[]) => void;
 }
 
 interface PendingAction {
@@ -112,18 +254,37 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onAccount,
   onRefreshOrders,
   commandAdapter,
+  copierArmed = false,
+  apiTelemetry,
+  onArmLive,
+  onShadowMode,
+  onDisarm,
+  onEmergencyStop,
+  executionGroupId = null,
+  onGroupsChange,
 }) => {
+  const [initialViewSettings] = useState(loadViewSettings);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(snapshot.groups.map(g => g.id)));
   const [groupTab, setGroupTab] = useState<Record<string, 'accounts' | 'orders'>>({});
-  const [apiPanelOpen, setApiPanelOpen] = useState(true);
+  const [apiPanelOpen, setApiPanelOpen] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumnKey>>(loadHiddenColumns);
+  const [hiddenGroupColumns, setHiddenGroupColumns] = useState<Set<GroupColumnKey>>(() => loadHiddenColumnSet<GroupColumnKey>(GROUP_COLUMNS_STORAGE_KEY));
+  const [hiddenOrderColumns, setHiddenOrderColumns] = useState<Set<OrderColumnKey>>(() => loadHiddenColumnSet<OrderColumnKey>(ORDER_COLUMNS_STORAGE_KEY));
   const [groups, setGroups] = useState<CopyGroupConfig[]>(() => loadDraftGroups(snapshot));
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [hideOffline, setHideOffline] = useState(false);
+  const [tableSettingsOpen, setTableSettingsOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [redactNames, setRedactNames] = useState(false);
+  const [redaction, setRedaction] = useState<RedactionSettings>(initialViewSettings.redaction);
+  const [confirmDisableAfterFlatten, setConfirmDisableAfterFlatten] = useState(initialViewSettings.confirmDisableAfterFlatten);
+  const [density, setDensity] = useState(initialViewSettings.density);
+  const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
   const [busyCommand, setBusyCommand] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string } | null>(null);
+  const [shadowSession, setShadowSession] = useState(false);
+  const [killSwitch, setKillSwitch] = useState(false);
 
   // Volba sloupců přežívá reload — je to nastavení pohledu, ne stav relace.
   useEffect(() => {
@@ -133,6 +294,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   }, [hiddenColumns]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(GROUP_COLUMNS_STORAGE_KEY, JSON.stringify([...hiddenGroupColumns]));
+      localStorage.setItem(ORDER_COLUMNS_STORAGE_KEY, JSON.stringify([...hiddenOrderColumns]));
+      localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ density, redaction, confirmDisableAfterFlatten }));
+    } catch { /* private mode */ }
+  }, [confirmDisableAfterFlatten, density, hiddenGroupColumns, hiddenOrderColumns, redaction]);
+
+  useEffect(() => {
     setGroups(current => mergeCopyGroups(current, snapshot));
   }, [snapshot]);
 
@@ -140,7 +309,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     try {
       localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(groups));
     } catch { /* private mode */ }
-  }, [groups]);
+    onGroupsChange?.(groups);
+  }, [groups, onGroupsChange]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(templates));
+    } catch { /* private mode */ }
+  }, [templates]);
 
   useEffect(() => {
     if (!toast) return;
@@ -156,7 +332,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const toggleColumn = (key: AccountColumnKey) =>
     setHiddenColumns(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
 
@@ -180,14 +357,43 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     const key = command.type === 'flatten-account' || command.type === 'set-replication' || command.type === 'set-multiplier'
       ? `${command.type}-${command.accountId}`
       : 'groupId' in command ? `${command.type}-${command.groupId}` : command.type;
+    const brokerWrite = command.type === 'flatten-account' || command.type === 'flatten-group' || command.type === 'cancel-order';
+    const requiresArmed = command.type === 'cancel-order';
+    const commandGroupId = command.type === 'create-group' || command.type === 'update-group'
+      ? command.group.id
+      : 'groupId' in command ? command.groupId : null;
+    const targetsExecutionRuntime = commandGroupId != null && commandGroupId === executionGroupId;
     if (busyCommand) return;
     setBusyCommand(key);
     try {
-      if (commandAdapter) await commandAdapter.execute(command);
+      if (brokerWrite && killSwitch) {
+        setToast({ tone: 'error', text: 'Kill switch je aktivní. Brokerový příkaz byl zablokován.' });
+        return;
+      }
+      if (brokerWrite && (!commandAdapter || !targetsExecutionRuntime || (requiresArmed && !copierArmed))) {
+        update?.();
+        setToast({ tone: 'info', text: 'Preview pouze: tato skupina není připojená k připravenému execution runtime.' });
+        return;
+      }
+      const result = commandAdapter && targetsExecutionRuntime
+        ? await commandAdapter.execute(command)
+        : undefined;
+      if (result && result.type === 'flatten' && !result.flat) {
+        throw new Error(
+          `Flatten není potvrzen jako flat: positions=${result.remainingPositionAccounts.join(',') || 'none'} working=${result.workingOrderAccounts.join(',') || 'none'}`,
+        );
+      }
       update?.();
+      const successText = result && result.type === 'flatten'
+        ? `Flatten potvrzen: ${result.accountIds.length} účtů je flat, zrušeno ${result.canceledOrders} příkazů, odesláno ${result.submittedClosures} close příkazů.`
+        : command.type === 'set-multiplier'
+          ? `Násobek ${normalizeMultiplier(command.multiplier)} byl potvrzen lokálním execution runtime. Runtime zůstává DISARMED do nového ARM.`
+          : 'Změna byla potvrzena přes execution adaptér.';
       setToast({
-        tone: commandAdapter ? 'success' : 'info',
-        text: commandAdapter ? 'Změna byla potvrzena přes API.' : 'Změna je připravená lokálně. Po OAuth se odešle přes stejné rozhraní.',
+        tone: commandAdapter && targetsExecutionRuntime ? 'success' : 'info',
+        text: commandAdapter && targetsExecutionRuntime
+          ? successText
+          : 'Konfigurace byla uložena pouze lokálně. Tato skupina není připojená k execution runtime.',
       });
     } catch (reason) {
       setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Akci se nepodařilo dokončit.' });
@@ -220,37 +426,69 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const toggleGroup = (id: string) =>
     setExpanded(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" style={{ fontSize: `${density}%` }}>
       <LivePnlPanel
         open={apiPanelOpen}
         onToggle={() => setApiPanelOpen(v => !v)}
         dataActive={anyLive}
         apiReady={!!commandAdapter}
         onHelp={() => setHelpOpen(true)}
+        telemetry={apiTelemetry}
+      />
+
+      <CopierSessionPanel
+        apiReady={!!commandAdapter}
+        armed={copierArmed && !killSwitch}
+        shadow={shadowSession && !killSwitch}
+        killSwitch={killSwitch}
+        onShadow={() => {
+          setKillSwitch(false);
+          setShadowSession(true);
+          void onShadowMode?.();
+          setToast({ tone: 'info', text: 'Shadow režim aktivní: události se mohou vyhodnocovat, ale nic se neodesílá.' });
+        }}
+        onArm={onArmLive ? async () => {
+          setShadowSession(false);
+          setKillSwitch(false);
+          await onArmLive();
+        } : undefined}
+        onDisarm={async () => {
+          setShadowSession(false);
+          await onDisarm?.();
+          setToast({ tone: 'info', text: 'Copier je DISARMED.' });
+        }}
+        onKill={async () => {
+          setKillSwitch(true);
+          setShadowSession(false);
+          await onEmergencyStop?.();
+          await onDisarm?.();
+          setToast({ tone: 'error', text: 'Kill switch aktivován. Všechny brokerové akce z tohoto panelu jsou zablokované.' });
+        }}
       />
 
       <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
         <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 flex-wrap">
-          <h3 className="text-lg font-black text-[var(--text-primary)]">Copy Trading Groups</h3>
+          <h3 className="text-lg font-black text-[var(--text-primary)]">Kopírovací skupiny</h3>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setEditorGroup({
                 id: createLocalCopyGroupId(), name: '', enabled: true, leaderAccountId: null,
-                followers: [], localOnly: true,
+                followers: [], color: GROUP_COLORS[0], safety: { ...DEFAULT_COPY_GROUP_SAFETY }, localOnly: true,
               })}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500 transition-colors"
             >
-              <Plus size={14} /> Add Trading Group
+              <Plus size={14} /> Přidat skupinu
             </button>
             <button onClick={() => setHelpOpen(true)} title="Nápověda" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center"><HelpCircle size={14} /></button>
-            <button onClick={() => setHiddenColumns(new Set())} title="Obnovit sloupce" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center"><Settings2 size={14} /></button>
-            <button onClick={() => setHideOffline(value => !value)} title={hideOffline ? 'Zobrazit offline skupiny' : 'Skrýt offline skupiny'} className={`w-8 h-8 rounded-lg border border-[var(--border-subtle)] flex items-center justify-center ${hideOffline ? 'bg-indigo-500/10 text-indigo-500' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>{hideOffline ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-            <button onClick={() => setExpanded(new Set(groups.map(group => group.id)))} title="Rozbalit vše" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center"><MoreVertical size={14} /></button>
+            <button onClick={() => setTableSettingsOpen(true)} title="Table settings" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center"><Settings2 size={14} /></button>
+            <button onClick={() => setRedactNames(value => !value)} title={redactNames ? 'No redaction' : 'Redact account names'} className={`w-8 h-8 rounded-lg border border-[var(--border-subtle)] flex items-center justify-center ${redactNames ? 'bg-indigo-500/10 text-indigo-500' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>{redactNames ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+            <TopActionsMenu onTemplates={() => setTemplatesOpen(true)} />
           </div>
         </header>
 
@@ -261,7 +499,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             </div>
             <p className="text-sm font-bold text-[var(--text-primary)]">Žádné kopírovací skupiny</p>
             <p className="text-xs text-[var(--text-secondary)] mt-1 max-w-md mx-auto">
-              Skupiny se načtou z Tradecopie, jakmile budou účty připojené.
+              Přidej skupinu, vyber leader účet, followery a bezpečnostní pravidla.
             </p>
           </div>
         ) : (
@@ -271,51 +509,62 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 <tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-y border-[var(--border-subtle)]">
                   <th className="w-8" />
                   <th className="px-3 py-2.5">Group</th>
-                  <th className="px-3 py-2.5">Status</th>
-                  <th className="px-3 py-2.5">Leader</th>
-                  <th className="px-3 py-2.5">Firm</th>
-                  <th className="px-3 py-2.5 text-right">Followers</th>
-                  <th className="px-3 py-2.5 text-right">Capital</th>
-                  <th className="px-3 py-2.5 text-right">Daily P&amp;L</th>
-                  <th className="px-3 py-2.5 text-right">Unreal P&amp;L</th>
+                  {!hiddenGroupColumns.has('status') && <th className="px-3 py-2.5">Status</th>}
+                  {!hiddenGroupColumns.has('leader') && <th className="px-3 py-2.5">Leader</th>}
+                  {!hiddenGroupColumns.has('firm') && <th className="px-3 py-2.5">Firm</th>}
+                  {!hiddenGroupColumns.has('followers') && <th className="px-3 py-2.5 text-right">Followers</th>}
+                  {!hiddenGroupColumns.has('capital') && <th className="px-3 py-2.5 text-right">Capital</th>}
+                  {!hiddenGroupColumns.has('daily') && <th className="px-3 py-2.5 text-right">Daily P&amp;L</th>}
+                  {!hiddenGroupColumns.has('unreal') && <th className="px-3 py-2.5 text-right">Unreal P&amp;L</th>}
                   <th className="px-3 py-2.5" />
                 </tr>
               </thead>
               <tbody>
                 {groups.map(group => {
                   const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id));
-                  const live = group.enabled && rows.some(r => isLive(r.account));
-                  if (hideOffline && !live) return null;
+                  const connected = rows.some(r => isLive(r.account));
+                  const armed = connected && group.enabled && !!commandAdapter && copierArmed;
                   const tab = groupTab[group.id] || 'accounts';
                   return (
                     <React.Fragment key={group.id}>
                       <GroupRow
-                        group={group} rows={rows} live={live}
+                        group={group} rows={rows} connected={connected} armed={armed}
                         open={expanded.has(group.id)}
                         onToggle={() => toggleGroup(group.id)}
-                        hiddenColumns={hiddenColumns}
-                        onToggleColumn={toggleColumn}
-                        onResetColumns={() => setHiddenColumns(new Set())}
                         onEdit={() => setEditorGroup(structuredClone(group))}
+                        templates={templates}
+                        onApplyTemplate={template => {
+                          const updated: CopyGroupConfig = {
+                            ...group,
+                            leaderAccountId: template.leaderAccountId ?? group.leaderAccountId,
+                            followers: template.followers.filter(follower => follower.accountId !== (template.leaderAccountId ?? group.leaderAccountId)),
+                            safety: { ...template.safety },
+                          };
+                          void saveGroup(updated);
+                        }}
                         onToggleEnabled={() => setPendingAction({
                           title: group.enabled ? 'Vypnout kopírování skupiny?' : 'Zapnout kopírování skupiny?',
-                          detail: group.enabled ? 'Nové příkazy leadera se followerům nezkopírují.' : 'Po připojení API se nové příkazy leadera začnou kopírovat.',
+                          detail: group.enabled ? 'Nové příkazy leadera se followerům nezkopírují.' : 'Kopírování začne až po připojení execution adaptéru a explicitním ARM.',
                           confirmLabel: group.enabled ? 'Vypnout' : 'Zapnout',
                           danger: group.enabled,
                           command: { type: 'set-group-enabled', groupId: group.id, enabled: !group.enabled },
                         })}
                         onFlatten={() => setPendingAction({
                           title: 'Flatten All?', detail: `Připraví uzavření všech otevřených pozic ve skupině ${group.name}.`,
-                          confirmLabel: 'Flatten All', danger: true, command: { type: 'flatten-group', groupId: group.id },
+                          confirmLabel: 'Flatten All', danger: true, command: {
+                            type: 'flatten-group', groupId: group.id, operationId: manualOperationId(),
+                          },
                         })}
+                        redactNames={redactNames}
+                        redaction={redaction}
+                        hiddenGroupColumns={hiddenGroupColumns}
                       />
-                      {expanded.has(group.id) && (
-                        <tr>
-                          <td colSpan={10} className="p-0">
-                            <GroupDetail
+                      <tr aria-hidden={!expanded.has(group.id)}>
+                        <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">
+                          <div className={`grid overflow-hidden transition-all duration-300 ease-out ${expanded.has(group.id) ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0'}`}>
+                            <div className="min-h-0 overflow-hidden"><GroupDetail
                               rows={rows} tab={tab} isLive={isLive} onAccount={onAccount}
                               columns={visibleColumns}
-                              groupId={group.id}
                               orders={orders}
                               busyCommand={busyCommand}
                               onRefreshOrders={onRefreshOrders}
@@ -327,17 +576,22 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               }}
                               onFlattenAccount={accountId => setPendingAction({
                                 title: 'Flatten účet?', detail: 'Připraví uzavření všech otevřených pozic pouze na tomto účtu.',
-                                confirmLabel: 'Flatten', danger: true, command: { type: 'flatten-account', groupId: group.id, accountId },
+                                confirmLabel: 'Flatten', danger: true, command: {
+                                  type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId(),
+                                },
                               })}
                               onCancelOrder={orderId => setPendingAction({
                                 title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
                                 confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
                               })}
                               onTab={t => setGroupTab(prev => ({ ...prev, [group.id]: t }))}
-                            />
-                          </td>
-                        </tr>
-                      )}
+                              redactNames={redactNames}
+                              redaction={redaction}
+                              hiddenOrderColumns={hiddenOrderColumns}
+                            /></div>
+                          </div>
+                        </td>
+                      </tr>
                     </React.Fragment>
                   );
                 })}
@@ -354,6 +608,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       {editorGroup && (
         <GroupEditorDialog
           group={editorGroup}
+          isNew={!groups.some(group => group.id === editorGroup.id)}
           accounts={snapshot.accounts}
           onClose={() => setEditorGroup(null)}
           onSave={group => void saveGroup(group)}
@@ -371,6 +626,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         <ConfirmActionDialog
           action={pendingAction}
           busy={busyCommand != null}
+          apiReady={!!commandAdapter}
           onClose={() => setPendingAction(null)}
           onConfirm={() => {
             const action = pendingAction;
@@ -383,12 +639,23 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 const { groupId } = command;
                 setGroups(current => current.filter(group => group.id !== groupId));
               }
-              setPendingAction(null);
+              if (command.type === 'flatten-group' && confirmDisableAfterFlatten) {
+                setPendingAction({
+                  title: 'Vypnout replikaci skupiny?',
+                  detail: 'Flatten byl potvrzen. Vypnout nyní replikaci této skupiny, aby další leader příkaz nevytvořil novou pozici?',
+                  confirmLabel: 'Vypnout replikaci',
+                  command: { type: 'set-group-enabled', groupId: command.groupId, enabled: false },
+                });
+              } else {
+                setPendingAction(null);
+              }
             });
           }}
         />
       )}
       {helpOpen && <CopyTradingHelpDialog onClose={() => setHelpOpen(false)} apiReady={!!commandAdapter} />}
+      {tableSettingsOpen && <TableSettingsDialog hiddenColumns={hiddenColumns} hiddenGroupColumns={hiddenGroupColumns} hiddenOrderColumns={hiddenOrderColumns} density={density} redaction={redaction} confirmDisableAfterFlatten={confirmDisableAfterFlatten} onDensity={setDensity} onRedaction={setRedaction} onConfirmDisableAfterFlatten={setConfirmDisableAfterFlatten} onToggleColumn={toggleColumn} onToggleGroupColumn={key => setHiddenGroupColumns(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onToggleOrderColumn={key => setHiddenOrderColumns(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onReset={() => { setHiddenColumns(new Set()); setHiddenGroupColumns(new Set()); setHiddenOrderColumns(new Set()); setDensity(100); setRedaction(DEFAULT_REDACTION); setConfirmDisableAfterFlatten(true); }} onClose={() => setTableSettingsOpen(false)} />}
+      {templatesOpen && <GroupTemplatesDialog templates={templates} accounts={snapshot.accounts} onChange={setTemplates} onClose={() => setTemplatesOpen(false)} />}
       {toast && <StatusToast tone={toast.tone} text={toast.text} />}
     </div>
   );
@@ -396,13 +663,23 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
 // ─── Live P&L & API Usage ────────────────────────────────────────────────────
 
-const API_LIMITS = [
-  { label: 'Per Minute', used: 0, limit: 80, reset: 'Resets every min' },
-  { label: 'Hourly', used: 0, limit: 5000, reset: 'Resets 7:00 AM' },
-  { label: 'Daily', used: 0, limit: 120000, reset: 'Resets 5:00 PM' },
-];
+const EMPTY_API_TELEMETRY: TradovateApiTelemetrySnapshot = {
+  minute: { requests: 0, failures: 0, rateLimited: 0 },
+  hour: { requests: 0, failures: 0, rateLimited: 0 },
+  day: { requests: 0, failures: 0, rateLimited: 0 },
+  inFlight: 0,
+  lastStatus: null,
+  lastUpdatedAt: null,
+  rateLimitedUntil: null,
+};
 
-const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp }: { open: boolean; onToggle: () => void; dataActive: boolean; apiReady: boolean; onHelp: () => void }) => (
+const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry = EMPTY_API_TELEMETRY }: { open: boolean; onToggle: () => void; dataActive: boolean; apiReady: boolean; onHelp: () => void; telemetry?: TradovateApiTelemetrySnapshot }) => {
+  const rows = [
+    { label: 'Za minutu', usage: telemetry.minute },
+    { label: 'Za hodinu', usage: telemetry.hour },
+    { label: 'Za 24 hodin', usage: telemetry.day },
+  ];
+  return (
   <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
     <header className="flex items-center justify-between px-5 lg:px-6 py-4">
       <h3 className="font-black text-[var(--text-primary)]">Live P&amp;L &amp; API Usage</h3>
@@ -426,36 +703,70 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp }: { open: 
             <span className="text-sm font-bold text-[var(--text-primary)]">Live P&amp;L</span>
           </div>
           <p className={`text-xs font-bold ${dataActive ? 'text-emerald-500' : 'text-[var(--text-muted)]'}`}>
-            {dataActive ? 'Živá data aktivní' : 'Živá data nepřipojena'}
+            {dataActive ? 'Broker snapshot aktivní' : 'Broker data nepřipojena'}
           </p>
           <p className="text-[11px] text-[var(--text-secondary)] mt-1.5 leading-snug">
             {dataActive
-              ? apiReady ? 'Real-time P&L i OAuth ovládání jsou aktivní.' : 'Real-time P&L běží. Ovládací OAuth adaptér zatím není připojen.'
-              : 'Po připojení účtů poběží real-time P&L a hlídání rizika pro všechny skupiny.'}
+              ? apiReady ? 'Read-only broker data i execution adaptér jsou připojené.' : 'Read-only broker snapshot je dostupný. Copier zůstává DISARMED.'
+              : 'Po připojení účtů se zobrazí read-only broker snapshot pro všechny skupiny.'}
           </p>
         </div>
 
         <div>
           <p className="text-[11px] font-bold text-[var(--text-secondary)] mb-2">tradovate</p>
           <div className="space-y-2.5">
-            {API_LIMITS.map(row => (
+            {rows.map(row => (
               <div key={row.label} className="flex items-center gap-3">
                 <span className="text-xs text-[var(--text-secondary)] w-20 shrink-0">{row.label}</span>
-                <div className="flex-1 h-1 rounded-full bg-[var(--border-subtle)] overflow-hidden">
-                  <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, (row.used / row.limit) * 100)}%` }} />
-                </div>
+                <div className="flex-1 text-[10px] text-[var(--text-muted)]">Klientské OAuth/API požadavky</div>
                 <span className="text-xs font-bold tabular-nums text-[var(--text-primary)] w-24 text-right shrink-0">
-                  {apiReady ? `${row.used}/${plain.format(row.limit)}` : `—/${plain.format(row.limit)}`}
+                  {row.usage.requests} požadavků
                 </span>
-                <span className="text-[10px] text-[var(--text-muted)] w-28 text-right shrink-0 hidden sm:block">{apiReady ? row.reset : 'Čeká na OAuth'}</span>
+                <span className={`text-[10px] w-28 text-right shrink-0 hidden sm:block ${row.usage.failures > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  {row.usage.rateLimited > 0 ? `${row.usage.rateLimited}× rate limit` : row.usage.failures > 0 ? `${row.usage.failures} chyb` : 'bez chyb'}
+                </span>
               </div>
             ))}
           </div>
+          <p className="mt-3 text-[10px] leading-relaxed text-[var(--text-muted)]">
+            Jde o přesný počet požadavků z této otevřené aplikace na AlphaTrade Tradovate proxy. Tradovate neposkytuje autoritativní procento vyčerpaného limitu; odpovědi 429 evidujeme zvlášť.
+            {telemetry.inFlight > 0 ? ` Právě probíhá: ${telemetry.inFlight}.` : ''}
+          </p>
         </div>
       </div>
     )}
   </section>
-);
+  );
+};
+
+const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, onShadow, onArm, onDisarm, onKill }: {
+  apiReady: boolean;
+  armed: boolean;
+  shadow: boolean;
+  killSwitch: boolean;
+  onShadow: () => void;
+  onArm?: () => Promise<void> | void;
+  onDisarm: () => Promise<void> | void;
+  onKill: () => Promise<void> | void;
+}) => {
+  const status = killSwitch ? 'KILL SWITCH' : armed ? 'ARMED' : shadow ? 'SHADOW' : 'DISARMED';
+  const color = killSwitch ? 'text-rose-500 bg-rose-500/10' : armed ? 'text-emerald-500 bg-emerald-500/10' : shadow ? 'text-indigo-500 bg-indigo-500/10' : 'text-amber-600 bg-amber-500/10';
+  return <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-3">
+    <div className="flex min-w-0 items-center gap-3">
+      <span className={`rounded-md px-2.5 py-1 text-[10px] font-black tracking-wide ${color}`}>{status}</span>
+      <div className="min-w-0">
+        <b className="block text-xs text-[var(--text-primary)]">Session řízení copieru</b>
+        <span className="block truncate text-[10px] text-[var(--text-secondary)]">{apiReady ? 'Execution runtime připojen. Live ARM vyžaduje reconciliation a ruční potvrzení.' : 'Execution runtime zatím není připojen; dostupný je pouze bezpečný shadow režim.'}</span>
+      </div>
+    </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <button type="button" onClick={onShadow} disabled={killSwitch || shadow || armed} className="h-8 rounded-md border border-indigo-500/25 px-3 text-[10px] font-black text-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"><Eye size={12} className="mr-1.5 inline" />Shadow</button>
+      <button type="button" onClick={() => void onArm?.()} disabled={!apiReady || !onArm || killSwitch || armed} title={!apiReady || !onArm ? 'ARM bude dostupný až po napojení runtime controlleru a úspěšné reconciliation.' : 'ARM LIVE session'} className="h-8 rounded-md bg-emerald-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-35"><Power size={12} className="mr-1.5 inline" />ARM LIVE</button>
+      <button type="button" onClick={() => void onDisarm()} disabled={killSwitch || (!armed && !shadow)} className="h-8 rounded-md border border-[var(--border-subtle)] px-3 text-[10px] font-black text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">DISARM</button>
+      <button type="button" onClick={() => void onKill()} disabled={killSwitch} className="h-8 rounded-md bg-rose-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-55"><AlertTriangle size={12} className="mr-1.5 inline" />Kill switch</button>
+    </div>
+  </section>;
+};
 
 // ─── Řádek skupiny ───────────────────────────────────────────────────────────
 
@@ -495,186 +806,130 @@ function groupRows(group: CopyGroupConfig, byId: Map<number, LiveAccount>, sourc
   return rows;
 }
 
-const GroupRow = ({ group, rows, live, open, onToggle, hiddenColumns, onToggleColumn, onResetColumns, onEdit, onToggleEnabled, onFlatten }: {
-  group: CopyGroupConfig; rows: Row[]; live: boolean; open: boolean; onToggle: () => void;
-  hiddenColumns: Set<AccountColumnKey>;
-  onToggleColumn: (key: AccountColumnKey) => void;
-  onResetColumns: () => void;
+const GroupRow = ({ group, rows, connected, armed, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns }: {
+  group: CopyGroupConfig; rows: Row[]; connected: boolean; armed: boolean; open: boolean; onToggle: () => void;
   onEdit: () => void;
   onToggleEnabled: () => void;
   onFlatten: () => void;
+  redactNames: boolean;
+  redaction: RedactionSettings;
+  templates: CopyGroupTemplate[];
+  onApplyTemplate: (template: CopyGroupTemplate) => void;
+  hiddenGroupColumns: Set<GroupColumnKey>;
 }) => {
   const capital = rows.reduce((s, r) => s + (r.account?.balance || 0), 0);
   const daily = rows.reduce((s, r) => s + (r.account?.realizedPnl || 0), 0);
   const unreal = rows.reduce((s, r) => s + (r.account?.unrealizedPnl || 0), 0);
+  const unrealSource = rows.some(row => row.account?.unrealizedPnlSource === 'stale')
+    ? 'stale'
+    : rows.some(row => row.account?.unrealizedPnlSource === 'estimated') ? 'estimated' : 'broker';
   const firm = rows.find(r => r.isLeader)?.account?.firm;
 
   return (
-    <tr className={`border-b border-[var(--border-subtle)] ${live ? '' : 'opacity-60'}`}>
+    <tr onClick={onToggle} className={`h-10 cursor-pointer border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--bg-page)] ${connected ? '' : 'opacity-60'}`}>
       <td className="pl-3">
-        <button onClick={onToggle} className="w-6 h-6 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center transition-colors">
-          {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+        <button onClick={event => { event.stopPropagation(); onToggle(); }} className="w-6 h-6 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center transition-colors">
+          <ChevronRight size={14} className={`transition-transform duration-300 ${open ? 'rotate-90' : ''}`} />
         </button>
       </td>
-      <td className="px-3 py-3">
-        <span className="text-sm font-bold text-indigo-500">{group.name}</span>
+      <td className="px-3 py-1.5">
+        <span className="flex items-center gap-2 text-xs font-bold" style={{ color: group.color ?? GROUP_COLORS[0] }}><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: group.color ?? GROUP_COLORS[0] }} />{group.name}</span>
       </td>
-      <td className="px-3 py-3">
-        <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wide ${live ? 'bg-emerald-500/12 text-emerald-500' : 'bg-[var(--border-subtle)] text-[var(--text-muted)]'}`}>
-          {live ? 'Active' : 'Offline'}
+      {!hiddenGroupColumns.has('status') && <td className="px-3 py-1.5">
+        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wide ${armed ? 'bg-emerald-500/12 text-emerald-500' : connected ? 'bg-amber-500/10 text-amber-500' : 'bg-[var(--border-subtle)] text-[var(--text-muted)]'}`}>
+          {armed ? 'Active' : connected ? 'Disarmed' : 'Offline'}
         </span>
-      </td>
-      <td className="px-3 py-3">
-        <span className="flex items-center gap-1.5 text-sm text-[var(--text-primary)]">
+      </td>}
+      {!hiddenGroupColumns.has('leader') && <td className="px-3 py-1.5">
+        <span className="flex items-center gap-1.5 text-xs text-[var(--text-primary)]">
           <Crown size={13} className="text-amber-400 shrink-0" />
-          <span className="truncate max-w-[180px]">{rows.find(r => r.isLeader)?.name}</span>
+          <span className="truncate max-w-[180px]">{redactAccountName(rows.find(r => r.isLeader)?.name ?? '—', redactNames, redaction)}</span>
         </span>
-      </td>
-      <td className="px-3 py-3 text-xs text-[var(--text-secondary)] truncate max-w-[110px]">{firm || '—'}</td>
-      <td className="px-3 py-3 text-right text-sm tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>
-      <td className="px-3 py-3 text-right text-sm tabular-nums text-[var(--text-primary)]">{money.format(capital)}</td>
-      <td className={`px-3 py-3 text-right text-sm tabular-nums font-bold ${pnlClass(daily)}`}>{money.format(daily)}</td>
-      <td className={`px-3 py-3 text-right text-sm tabular-nums font-bold ${pnlClass(unreal)}`}>{money.format(unreal)}</td>
-      <td className="px-3 py-3">
-        <div className="flex items-center justify-end gap-1.5">
+      </td>}
+      {!hiddenGroupColumns.has('firm') && <td className="max-w-[150px] px-3 py-1.5 text-[11px] text-[var(--text-secondary)]">{firm ? <FirmMark firm={firm} withLabel /> : '—'}</td>}
+      {!hiddenGroupColumns.has('followers') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>}
+      {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{money.format(capital)}</td>}
+      {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(daily)}`}>{money.format(daily)}</td>}
+      {!hiddenGroupColumns.has('unreal') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'estimated' ? <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" /> : null}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
+      <td className="px-3 py-1.5">
+        <div className="flex items-center justify-end gap-1.5" onClick={event => event.stopPropagation()}>
           <button onClick={onToggleEnabled} title={group.enabled ? 'Vypnout kopírování' : 'Zapnout kopírování'}
-            className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-colors ${group.enabled ? 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-amber-500' : 'border-emerald-500/25 text-emerald-500 bg-emerald-500/5'}`}>
+            className={`h-7 rounded-md border px-2.5 text-[10px] font-bold transition-colors ${group.enabled ? 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-amber-500' : 'border-emerald-500/25 text-emerald-500 bg-emerald-500/5'}`}>
             {group.enabled ? 'Disable' : 'Enable'}
           </button>
           <button onClick={onFlatten} title="Uzavřít všechny pozice ve skupině"
-            className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold transition-colors">
+            className="h-7 whitespace-nowrap rounded-md bg-rose-600 px-2.5 text-[10px] font-bold text-white transition-colors hover:bg-rose-500">
             Flatten All
           </button>
-          <button onClick={onEdit} title="Upravit skupinu" className="w-7 h-7 rounded-lg text-[var(--text-secondary)] hover:text-indigo-500 hover:bg-indigo-500/10 flex items-center justify-center"><Settings2 size={14} /></button>
-          <ColumnMenu
-            hiddenColumns={hiddenColumns}
-            onToggleColumn={onToggleColumn}
-            onReset={onResetColumns}
-          />
+          <GroupActionMenu onEdit={onEdit} templates={templates} onApplyTemplate={onApplyTemplate} />
         </div>
       </td>
     </tr>
   );
 };
 
-// ─── Menu pro skrývání sloupců ───────────────────────────────────────────────
-
-const ColumnMenu = ({ hiddenColumns, onToggleColumn, onReset }: {
-  hiddenColumns: Set<AccountColumnKey>;
-  onToggleColumn: (key: AccountColumnKey) => void;
-  onReset: () => void;
+const GroupActionMenu = ({ onEdit, templates, onApplyTemplate }: {
+  onEdit: () => void;
+  templates: CopyGroupTemplate[];
+  onApplyTemplate: (template: CopyGroupTemplate) => void;
 }) => {
   const [open, setOpen] = useState(false);
-  // Pozice se počítá z tlačítka a menu se vykresluje portálem do body — uvnitř
-  // tabulky ho ořezával kontejner s horizontálním scrollem.
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const btnRef = useRef<HTMLButtonElement>(null);
-
-  const openMenu = () => {
-    const r = btnRef.current?.getBoundingClientRect();
-    if (r) setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
-    setOpen(true);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPosition({ top: rect.bottom + 6, left: Math.max(8, rect.right - 208) });
+    }
+    setOpen(value => !value);
   };
+  return <div className="relative">
+    <button ref={triggerRef} onClick={toggle} title="More actions" className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)]"><MoreVertical size={14} /></button>
+    {open ? createPortal(<>
+      <button aria-label="Close group actions" className="fixed inset-0 z-[139] cursor-default" onClick={() => setOpen(false)} />
+      <div className="fixed z-[140] w-52 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] py-1 shadow-xl" style={position}>
+        <button onClick={() => { setOpen(false); onEdit(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]"><Settings2 size={13} />Edit group</button>
+        {templates.length ? <>
+          <div className="my-1 border-t border-[var(--border-subtle)]" />
+          <div className="px-3 pb-1 pt-1 text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Apply template</div>
+          {templates.map(template => <button key={template.id} onClick={() => { setOpen(false); onApplyTemplate(template); }} className="w-full truncate px-3 py-2 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]">{template.name}</button>)}
+        </> : null}
+      </div>
+    </>, document.body) : null}
+  </div>;
+};
 
-  // Zavření kliknutím mimo — menu je uvnitř řádku tabulky, takže bez toho
-  // by zůstávalo otevřené i po kliknutí jinam.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return;
-      setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    const onScroll = () => setOpen(false);
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', onScroll, true);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', onScroll, true);
-    };
-  }, [open]);
-
-  const hiddenCount = hiddenColumns.size;
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        ref={btnRef}
-        onClick={e => { e.stopPropagation(); open ? setOpen(false) : openMenu(); }}
-        title="Nastavení sloupců"
-        className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${open || hiddenCount > 0
-          ? 'text-indigo-500 bg-indigo-500/10'
-          : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
-      >
-        <MoreVertical size={14} />
-      </button>
-
-      {open && pos && createPortal(
-        <div
-          ref={menuRef}
-          onClick={e => e.stopPropagation()}
-          style={{ position: 'fixed', top: pos.top, right: pos.right }}
-          className="z-[120] w-60 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-xl overflow-hidden"
-        >
-          <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[var(--border-subtle)]">
-            <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">
-              <Columns3 size={12} /> Sloupce
-            </span>
-            {hiddenCount > 0 && (
-              <button
-                onClick={onReset}
-                className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-400 transition-colors"
-              >
-                <RotateCcw size={10} /> Obnovit
-              </button>
-            )}
-          </div>
-
-          <div className="py-1 max-h-80 overflow-y-auto">
-            {ACCOUNT_COLUMNS.map(col => {
-              const hidden = hiddenColumns.has(col.key);
-              return (
-                <button
-                  key={col.key}
-                  disabled={col.locked}
-                  onClick={() => onToggleColumn(col.key)}
-                  title={col.locked ? 'Název účtu nelze skrýt' : undefined}
-                  className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-xs font-bold transition-colors ${col.locked
-                    ? 'text-[var(--text-muted)] cursor-not-allowed'
-                    : 'text-[var(--text-primary)] hover:bg-[var(--bg-app)]'}`}
-                >
-                  <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${hidden || col.locked
-                    ? col.locked ? 'bg-[var(--border-subtle)] border-[var(--border-subtle)]' : 'border-[var(--border-subtle)]'
-                    : 'bg-indigo-600 border-indigo-600'}`}>
-                    {(!hidden || col.locked) && <Check size={11} className="text-white" strokeWidth={3} />}
-                  </span>
-                  {col.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>,
-        document.body,
-      )}
-    </div>
-  );
+const TopActionsMenu = ({ onTemplates }: { onTemplates: () => void }) => {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPosition({ top: rect.bottom + 6, left: Math.max(8, rect.right - 192) });
+    }
+    setOpen(value => !value);
+  };
+  return <div>
+    <button ref={triggerRef} onClick={toggle} title="More actions" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center"><MoreVertical size={14} /></button>
+    {open ? createPortal(<>
+      <button aria-label="Close more actions" className="fixed inset-0 z-[139] cursor-default" onClick={() => setOpen(false)} />
+      <div className="fixed z-[140] w-48 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] py-1 shadow-xl" style={position}>
+        <button onClick={() => { setOpen(false); onTemplates(); }} className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]"><Save size={13} />Group Templates</button>
+      </div>
+    </>, document.body) : null}
+  </div>;
 };
 
 // ─── Detail skupiny: Accounts / Orders ───────────────────────────────────────
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, groupId, orders, busyCommand, onRefreshOrders, onReplication, onMultiplier, onFlattenAccount, onCancelOrder }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, busyCommand, onRefreshOrders, onReplication, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
   onTab: (t: 'accounts' | 'orders') => void;
   onAccount?: (a: LiveAccount) => void;
   columns: ColumnDef[];
-  groupId: string;
   orders: LiveOrder[];
   busyCommand: string | null;
   onRefreshOrders?: () => Promise<void> | void;
@@ -682,17 +937,20 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, groupId, or
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlattenAccount: (accountId: number) => void;
   onCancelOrder: (orderId: number) => void;
+  redactNames: boolean;
+  redaction: RedactionSettings;
+  hiddenOrderColumns: Set<OrderColumnKey>;
 }) => {
   const accountIds = new Set(rows.flatMap(row => row.account ? [row.account.id] : []));
   const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
   return (
-  <div className="bg-[var(--bg-app)]/40 border-b border-[var(--border-subtle)] px-3 lg:px-5 pb-4">
-    <div className="flex items-center justify-between gap-3 pt-3">
+  <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/40 px-3 pb-2 lg:px-4">
+    <div className="flex items-center justify-between gap-3 pt-1.5">
       <div className="flex items-center gap-1">
         {(['accounts', 'orders'] as const).map(t => (
           <button
             key={t} onClick={() => onTab(t)}
-            className={`px-3 py-2 text-xs font-bold border-b-2 transition-colors ${tab === t
+            className={`border-b-2 px-3 py-1.5 text-[11px] font-bold transition-colors ${tab === t
               ? 'border-indigo-500 text-indigo-500'
               : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
           >
@@ -710,13 +968,19 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, groupId, or
 
     {tab === 'accounts' ? (
       <div className="overflow-x-auto">
-        <table className="w-full text-left" style={{ minWidth: `${Math.max(420, columns.length * 92)}px` }}>
+        <table
+          className="w-full table-fixed text-left"
+          style={{ minWidth: `${columns.reduce((total, column) => total + column.widthPx, 0)}px` }}
+        >
+          <colgroup>
+            {columns.map(column => <col key={column.key} style={{ width: `${column.widthPx}px` }} />)}
+          </colgroup>
           <thead>
             <tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-b border-[var(--border-subtle)]">
               {columns.map(col => (
                 <th
                   key={col.key}
-                  className={`px-3 py-2 whitespace-nowrap ${col.align === 'right' ? 'text-right' : ''} ${col.width || ''}`}
+                  className={`px-3 py-1.5 whitespace-nowrap ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''}`}
                 >
                   {col.key === 'actions' ? '' : col.label}
                 </th>
@@ -729,6 +993,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, groupId, or
                 key={`${row.name}-${i}`} row={row} live={isLive(row.account)} onAccount={onAccount} columns={columns}
                 busyCommand={busyCommand}
                 onReplication={onReplication} onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
+                redactNames={redactNames} redaction={redaction}
               />
             ))}
           </tbody>
@@ -745,17 +1010,21 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, groupId, or
         <div className="overflow-x-auto pt-2">
           <table className="w-full min-w-[760px] text-left">
             <thead><tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-b border-[var(--border-subtle)]">
-              <th className="px-3 py-2">Account</th><th className="px-3 py-2">Symbol</th><th className="px-3 py-2">Side</th><th className="px-3 py-2">Type</th><th className="px-3 py-2 text-right">Qty</th><th className="px-3 py-2 text-right">Price</th><th className="px-3 py-2">Status</th><th className="px-3 py-2" />
+              {!hiddenOrderColumns.has('account') && <th className="px-3 py-2">Account</th>}{!hiddenOrderColumns.has('broker') && <th className="px-3 py-2">Broker</th>}{!hiddenOrderColumns.has('symbol') && <th className="px-3 py-2">Symbol</th>}{!hiddenOrderColumns.has('action') && <th className="px-3 py-2">Action</th>}{!hiddenOrderColumns.has('type') && <th className="px-3 py-2">Type</th>}{!hiddenOrderColumns.has('qty') && <th className="px-3 py-2 text-right">Qty</th>}{!hiddenOrderColumns.has('limit') && <th className="px-3 py-2 text-right">Limit Price</th>}{!hiddenOrderColumns.has('stop') && <th className="px-3 py-2 text-right">Stop Price</th>}{!hiddenOrderColumns.has('status') && <th className="px-3 py-2">Status</th>}{!hiddenOrderColumns.has('timestamp') && <th className="px-3 py-2">Timestamp</th>}{!hiddenOrderColumns.has('orderId') && <th className="px-3 py-2 text-right">Order ID</th>}<th className="px-3 py-2" />
             </tr></thead>
             <tbody>{groupOrders.map(order => (
               <tr key={`${order.accountId}-${order.id}`} className="border-b border-[var(--border-subtle)] last:border-0 text-xs">
-                <td className="px-3 py-2.5 font-bold text-[var(--text-primary)]">{order.accountName}</td>
-                <td className="px-3 py-2.5 text-[var(--text-secondary)]">{order.symbol}</td>
-                <td className={`px-3 py-2.5 font-bold ${order.action.toLowerCase().includes('buy') ? 'text-emerald-500' : 'text-rose-500'}`}>{order.action}</td>
-                <td className="px-3 py-2.5 text-[var(--text-secondary)]">{order.orderType}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums">{order.quantity}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums">{order.stopPrice ?? order.price ?? '—'}</td>
-                <td className="px-3 py-2.5"><span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span></td>
+                {!hiddenOrderColumns.has('account') && <td className="px-3 py-2.5 font-bold text-[var(--text-primary)]">{redactAccountName(order.accountName, redactNames, redaction)}</td>}
+                {!hiddenOrderColumns.has('broker') && <td className="px-3 py-2.5"><TradovateMark size="h-5 w-5" /></td>}
+                {!hiddenOrderColumns.has('symbol') && <td className="px-3 py-2.5 text-[var(--text-secondary)]">{order.symbol}</td>}
+                {!hiddenOrderColumns.has('action') && <td className={`px-3 py-2.5 font-bold ${order.action.toLowerCase().includes('buy') ? 'text-emerald-500' : 'text-rose-500'}`}>{order.action}</td>}
+                {!hiddenOrderColumns.has('type') && <td className="px-3 py-2.5 text-[var(--text-secondary)]">{order.orderType}</td>}
+                {!hiddenOrderColumns.has('qty') && <td className="px-3 py-2.5 text-right tabular-nums">{order.quantity}</td>}
+                {!hiddenOrderColumns.has('limit') && <td className="px-3 py-2.5 text-right tabular-nums">{order.price ?? '—'}</td>}
+                {!hiddenOrderColumns.has('stop') && <td className="px-3 py-2.5 text-right tabular-nums">{order.stopPrice ?? '—'}</td>}
+                {!hiddenOrderColumns.has('status') && <td className="px-3 py-2.5"><span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span></td>}
+                {!hiddenOrderColumns.has('timestamp') && <td className="px-3 py-2.5 text-[var(--text-secondary)]">{order.placedAt ? new Date(order.placedAt).toLocaleString() : '—'}</td>}
+                {!hiddenOrderColumns.has('orderId') && <td className="px-3 py-2.5 text-right tabular-nums text-[var(--text-secondary)]">{order.id}</td>}
                 <td className="px-3 py-2.5 text-right"><button disabled={!order.working || busyCommand != null} onClick={() => onCancelOrder(order.id)} className="px-2.5 py-1.5 rounded-lg border border-rose-500/20 text-rose-500 font-bold disabled:opacity-35">Cancel</button></td>
               </tr>
             ))}</tbody>
@@ -767,12 +1036,14 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, groupId, or
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication, onMultiplier, onFlatten }: {
+const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication, onMultiplier, onFlatten, redactNames, redaction }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   busyCommand: string | null;
   onReplication: (accountId: number, mode: ReplicationMode) => void;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlatten: (accountId: number) => void;
+  redactNames: boolean;
+  redaction: RedactionSettings;
 }) => {
   const a = row.account;
   const cushion = a?.cushion ?? null;
@@ -783,7 +1054,7 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
         return row.isLeader || !a ? (
           <Crown size={15} className="text-amber-400" />
         ) : (
-          <label onClick={event => event.stopPropagation()} className={`relative inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-bold whitespace-nowrap ${live ? 'border-[var(--border-subtle)] text-[var(--text-primary)]' : 'border-[var(--border-subtle)] text-[var(--text-muted)]'}`}>
+          <label onClick={event => event.stopPropagation()} className={`relative inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-[10px] font-bold ${live ? 'border-[var(--border-subtle)] text-[var(--text-primary)]' : 'border-[var(--border-subtle)] text-[var(--text-muted)]'}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${row.mode === 'off' ? 'bg-slate-400' : 'bg-rose-500'}`} />
             <select
               aria-label={`Replication ${row.name}`}
@@ -806,14 +1077,14 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
               <Crown size={12} className="text-amber-400 shrink-0" />
             )}
             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-            <span className={`truncate max-w-[190px] ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>{row.name}</span>
+            <span className={`truncate max-w-[190px] ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>{redactAccountName(row.name, redactNames, redaction)}</span>
             {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
           </span>
         );
       case 'broker':
-        return <span className="text-[11px] text-[var(--text-secondary)]">Tradovate</span>;
+        return <TradovateMark size="h-5 w-5" />;
       case 'firm':
-        return <span className="text-[11px] text-[var(--text-secondary)] truncate max-w-[110px] inline-block align-middle">{a?.firm || '—'}</span>;
+        return a?.firm ? <FirmMark firm={a.firm} withLabel /> : <span className="text-[11px] text-[var(--text-secondary)]">—</span>;
       case 'balance':
         return <span className="text-xs tabular-nums text-[var(--text-primary)]">{a ? money.format(a.balance) : '—'}</span>;
       case 'positions':
@@ -821,25 +1092,33 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
       case 'daily':
         return <span className={`text-xs tabular-nums ${a ? pnlClass(a.realizedPnl) : ''}`}>{a ? money.format(a.realizedPnl) : '—'}</span>;
       case 'unreal':
-        return <span className={`text-xs tabular-nums ${a?.unrealizedPnl ? pnlClass(a.unrealizedPnl) : 'text-[var(--text-secondary)]'}`}>{a?.unrealizedPnl ? money.format(a.unrealizedPnl) : '—'}</span>;
+        return a ? <span
+          className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(a.unrealizedPnl)}`}
+          title={a.unrealizedPnlSource === 'estimated'
+            ? 'Live odhad podle skutečné vstupní ceny účtu a posledního broker snapshotu.'
+            : a.unrealizedPnlSource === 'stale' ? 'Čeká na nový broker snapshot.' : 'Potvrzeno broker snapshotem.'}
+        >
+          {money.format(a.unrealizedPnl)}
+          {a.unrealizedPnlSource === 'estimated' ? <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" aria-label="Live odhad" /> : null}
+          {a.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
+        </span> : <span className="text-xs text-[var(--text-secondary)]">—</span>;
       case 'distDd':
         return <span className={`text-xs tabular-nums font-bold ${cushionClass(cushion)}`}>{cushion != null ? plain.format(cushion) : '—'}</span>;
       case 'execLimit':
-        return <span className="text-[11px] tabular-nums text-[var(--text-secondary)]">0/∞</span>;
+        return <span className="text-[11px] tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'qtyMult':
         return row.isLeader || !a
-          ? <span className="text-[11px] text-[var(--text-secondary)]">—</span>
+          ? <span className="mx-auto flex w-full items-center justify-center text-center text-[11px] text-[var(--text-secondary)]">—</span>
           : <label onClick={event => event.stopPropagation()} className="inline-flex items-center justify-end gap-1 text-[11px] text-[var(--text-secondary)]">
               <input
-                aria-label={`Multiplier ${row.name}`}
+                aria-label={`Násobek ${row.name}`}
                 key={`${a.id}-${row.scale}`}
                 type="number" min="0.01" max="100" step="0.25" defaultValue={row.scale}
                 disabled={busyCommand != null}
                 onBlur={event => onMultiplier(a.id, Number(event.target.value))}
                 onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-                className="w-14 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-1.5 py-1 text-right tabular-nums outline-none focus:border-indigo-500"
+                className="w-14 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-1.5 py-1 text-center tabular-nums outline-none focus:border-indigo-500"
               />
-              <span className="text-[9px] uppercase tracking-wide opacity-70">Standard</span>
             </label>;
       case 'actions':
         return null;
@@ -852,12 +1131,12 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
       className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''} ${live ? '' : 'opacity-55'}`}
     >
       {columns.map(col => (
-        <td key={col.key} className={`px-3 py-2.5 ${col.align === 'right' ? 'text-right' : ''}`}>
+        <td key={col.key} className={`px-3 py-1.5 ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''}`}>
           {col.key === 'actions' && a ? (
             <button
               disabled={busyCommand != null}
               onClick={event => { event.stopPropagation(); onFlatten(a.id); }}
-              className="px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] text-[11px] font-bold text-[var(--text-secondary)] hover:text-rose-500 hover:border-rose-500/25 disabled:opacity-40"
+              className="h-7 rounded-md border border-[var(--border-subtle)] px-2.5 text-[10px] font-bold text-[var(--text-secondary)] hover:border-rose-500/25 hover:text-rose-500 disabled:opacity-40"
             >Flatten</button>
           ) : cell(col.key)}
         </td>
@@ -868,15 +1147,21 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
 
 // ─── Dialogy a lokální command režim ────────────────────────────────────────
 
-const GroupEditorDialog = ({ group, accounts, saving, onClose, onSave, onDelete }: {
+const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, onDelete }: {
   group: CopyGroupConfig;
+  isNew: boolean;
   accounts: LiveAccount[];
   saving: boolean;
   onClose: () => void;
   onSave: (group: CopyGroupConfig) => void;
   onDelete?: () => void;
 }) => {
-  const [draft, setDraft] = useState<CopyGroupConfig>(() => structuredClone(group));
+  const [draft, setDraft] = useState<CopyGroupConfig>(() => ({
+    ...structuredClone(group),
+    color: group.color ?? GROUP_COLORS[0],
+    safety: group.safety ?? { ...DEFAULT_COPY_GROUP_SAFETY },
+  }));
+  const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
 
   useEffect(() => {
@@ -886,12 +1171,28 @@ const GroupEditorDialog = ({ group, accounts, saving, onClose, onSave, onDelete 
   }, [onClose, saving]);
 
   const followerById = new Map(draft.followers.map(follower => [follower.accountId, follower]));
+  const followerCandidates = accounts.filter(account => account.id !== draft.leaderAccountId);
+  const allFollowersSelected = followerCandidates.length > 0
+    && followerCandidates.every(account => followerById.has(account.id));
   const toggleFollower = (accountId: number) => {
     setDraft(current => ({
       ...current,
       followers: current.followers.some(follower => follower.accountId === accountId)
         ? current.followers.filter(follower => follower.accountId !== accountId)
         : [...current.followers, { accountId, mode: 'on-submit', multiplier: 1 }],
+    }));
+  };
+  const toggleAllFollowers = () => {
+    const candidateIds = new Set(followerCandidates.map(account => account.id));
+    setDraft(current => ({
+      ...current,
+      followers: allFollowersSelected
+        ? current.followers.filter(follower => !candidateIds.has(follower.accountId))
+        : [
+            ...current.followers.filter(follower => !candidateIds.has(follower.accountId)),
+            ...followerCandidates.map(account => current.followers.find(follower => follower.accountId === account.id)
+              ?? { accountId: account.id, mode: 'on-submit' as const, multiplier: 1 }),
+          ],
     }));
   };
 
@@ -904,42 +1205,53 @@ const GroupEditorDialog = ({ group, accounts, saving, onClose, onSave, onDelete 
     onSave({ ...draft, name: draft.name.trim() });
   };
 
+  const next = () => {
+    if (step === 0 && !draft.name.trim()) return setErrors(['Zadej název skupiny.']);
+    if (step === 1 && draft.leaderAccountId == null) return setErrors(['Vyber leader účet.']);
+    if (step === 2 && draft.followers.length === 0) return setErrors(['Vyber alespoň jeden follower účet.']);
+    setErrors([]);
+    setStep(current => Math.min(3, current + 1));
+  };
+
+  const steps = ['Identita', 'Leader', 'Followeři', 'Nastavení'];
+  const safety = draft.safety ?? DEFAULT_COPY_GROUP_SAFETY;
+  const updateSafety = (key: keyof typeof safety, value: boolean) => setDraft(current => ({
+    ...current,
+    safety: { ...(current.safety ?? DEFAULT_COPY_GROUP_SAFETY), [key]: value },
+  }));
+
   return createPortal(
     <div className="fixed inset-0 z-[150] bg-slate-950/35 flex items-center justify-center p-4" onMouseDown={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
       <section role="dialog" aria-modal="true" aria-label="Nastavení kopírovací skupiny" className="w-full max-w-3xl max-h-[92vh] overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl flex flex-col">
         <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--border-subtle)]">
-          <div><div className="text-[10px] uppercase tracking-[0.18em] font-black text-indigo-500">Copy Trading Group</div><h3 className="text-lg font-black text-[var(--text-primary)] mt-1">{group.localOnly ? 'Nová skupina' : 'Upravit skupinu'}</h3></div>
+          <h3 className="text-lg font-black text-[var(--text-primary)]">{isNew ? 'Vytvořit kopírovací skupinu' : 'Upravit kopírovací skupinu'}</h3>
           <button onClick={onClose} disabled={saving} className="w-9 h-9 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] flex items-center justify-center disabled:opacity-40"><X size={18} /></button>
         </header>
 
-        <div className="p-5 overflow-y-auto custom-scrollbar space-y-5">
-          <div className="grid sm:grid-cols-[1fr_210px] gap-4">
-            <label className="space-y-1.5"><span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Název skupiny</span><input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} placeholder="Např. Hlavní NQ" className="w-full h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-sm font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500" /></label>
-            <label className="space-y-1.5"><span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Stav</span><button type="button" onClick={() => setDraft(current => ({ ...current, enabled: !current.enabled }))} className={`w-full h-11 rounded-xl border px-3 flex items-center justify-between text-sm font-bold ${draft.enabled ? 'border-emerald-500/25 bg-emerald-500/8 text-emerald-500' : 'border-[var(--border-subtle)] text-[var(--text-secondary)]'}`}><span>{draft.enabled ? 'Enabled' : 'Disabled'}</span><span className={`w-9 h-5 rounded-full p-0.5 flex ${draft.enabled ? 'bg-emerald-500 justify-end' : 'bg-[var(--border-subtle)] justify-start'}`}><span className="w-4 h-4 rounded-full bg-white shadow" /></span></button></label>
-          </div>
+        <div className="grid grid-cols-4 border-b border-[var(--border-subtle)] px-5">
+          {steps.map((label, index) => <button key={label} type="button" onClick={() => index <= step && setStep(index)} className={`relative flex items-center justify-center gap-2 py-3 text-[11px] font-black ${index === step ? 'text-indigo-500' : index < step ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}><span className={`flex h-5 w-5 items-center justify-center rounded-full border text-[9px] ${index <= step ? 'border-indigo-500 bg-indigo-500/10' : 'border-[var(--border-subtle)]'}`}>{index + 1}</span>{label}{index === step ? <span className="absolute inset-x-0 bottom-0 h-0.5 bg-indigo-500" /> : null}</button>)}
+        </div>
 
-          <label className="space-y-1.5 block"><span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Leader účet</span><select value={draft.leaderAccountId ?? ''} onChange={event => { const leaderAccountId = event.target.value ? Number(event.target.value) : null; setDraft(current => ({ ...current, leaderAccountId, followers: current.followers.filter(follower => follower.accountId !== leaderAccountId) })); }} className="w-full h-11 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-sm font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500"><option value="">Vyber leader účet</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}</select></label>
+        <div className="p-5 overflow-y-auto custom-scrollbar min-h-[360px]">
+          {step === 0 ? <div className="mx-auto max-w-xl space-y-6"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Pojmenuj skupinu</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Zvol název, který snadno poznáš v tabulce kopírování. Později ho můžeš změnit.</p></div><label className="block space-y-2"><span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Název skupiny</span><input autoFocus value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} placeholder="např. Tradeify 50K" className="h-11 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-sm font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500" /></label><div><div className="mb-2 text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Barva</div><div className="flex flex-wrap gap-2.5">{GROUP_COLORS.map(color => <button key={color} type="button" aria-label={`Barva ${color}`} onClick={() => setDraft(current => ({ ...current, color }))} className={`h-8 w-8 rounded-full border-4 transition-transform ${draft.color === color ? 'scale-110 border-[var(--text-primary)]' : 'border-transparent'}`} style={{ backgroundColor: color }} />)}</div><p className="mt-2 text-[11px] text-[var(--text-muted)]">Pomůže ti rychle rozlišit jednotlivé skupiny.</p></div></div> : null}
 
-          <div>
-            <div className="flex items-center justify-between gap-3 mb-2"><div><div className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Follower účty</div><div className="text-[11px] text-[var(--text-muted)] mt-0.5">Vyber účty, režim kopírování a velikost.</div></div><span className="text-[10px] font-black text-indigo-500">{draft.followers.length} vybráno</span></div>
-            <div className="rounded-md border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)] overflow-hidden">
-              {accounts.filter(account => account.id !== draft.leaderAccountId).map(account => {
-                const follower = followerById.get(account.id);
-                return <div key={account.id} className={`p-3 grid sm:grid-cols-[minmax(0,1fr)_145px_105px] gap-3 items-center ${follower ? 'bg-indigo-500/[0.035]' : ''}`}>
-                  <label className="flex items-center gap-2.5 min-w-0 cursor-pointer"><input type="checkbox" checked={!!follower} onChange={() => toggleFollower(account.id)} className="accent-indigo-600" /><span className="min-w-0"><span className="block text-xs font-bold text-[var(--text-primary)] truncate">{account.name}</span><span className="block text-[10px] text-[var(--text-secondary)] truncate">{account.firm} · {money.format(account.balance)}</span></span></label>
-                  <select disabled={!follower} value={follower?.mode ?? 'on-submit'} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, mode: event.target.value as ReplicationMode } : item) }))} className="h-9 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-xs font-bold text-[var(--text-primary)] disabled:opacity-35"><option value="off">Off</option><option value="on-submit">On Submit</option><option value="on-fill">On Fill</option></select>
-                  <label className="flex items-center gap-1"><input disabled={!follower} type="number" min="0.01" max="100" step="0.25" value={follower?.multiplier ?? 1} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, multiplier: Number(event.target.value) } : item) }))} className="w-full h-9 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-xs font-bold text-[var(--text-primary)] disabled:opacity-35" /><span className="text-[10px] text-[var(--text-muted)]">×</span></label>
-                </div>;
-              })}
-            </div>
-          </div>
+          {step === 1 ? <div className="space-y-4"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber leader účet</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Obchody leadera se budou kopírovat na všechny followery v této skupině.</p></div><div className="grid gap-2 sm:grid-cols-2">{accounts.map(account => { const active = draft.leaderAccountId === account.id; return <button key={account.id} type="button" onClick={() => setDraft(current => ({ ...current, leaderAccountId: account.id, followers: current.followers.filter(follower => follower.accountId !== account.id) }))} className={`flex items-center gap-3 rounded-lg border p-3 text-left ${active ? 'border-indigo-500 bg-indigo-500/[0.06]' : 'border-[var(--border-subtle)] hover:bg-[var(--bg-page)]'}`}><span className={`flex h-9 w-9 items-center justify-center rounded-full ${active ? 'bg-indigo-600 text-white' : 'bg-[var(--bg-page)] text-[var(--text-secondary)]'}`}><Crown size={16} /></span><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="mt-0.5 block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span>{active ? <Check size={16} className="ml-auto text-indigo-500" /> : null}</button>; })}</div></div> : null}
+
+          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={followerCandidates.length === 0} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div><div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]"><div className="grid grid-cols-[minmax(0,1fr)_130px_100px] gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span></div>{followerCandidates.map(account => { const follower = followerById.get(account.id); return <div key={account.id} className={`grid grid-cols-[minmax(0,1fr)_130px_100px] items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}><label className="flex min-w-0 cursor-pointer items-center gap-2.5"><input type="checkbox" checked={!!follower} onChange={() => toggleFollower(account.id)} className="accent-indigo-600" /><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span></label><select disabled={!follower} value={follower?.mode ?? 'on-submit'} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, mode: event.target.value as ReplicationMode } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35"><option value="off">Vypnuto</option><option value="on-submit">Při zadání</option><option value="on-fill">Při vyplnění</option></select><input aria-label={`Násobek ${account.name}`} disabled={!follower} type="number" min="0.01" max="100" step="0.25" value={follower?.multiplier ?? 1} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, multiplier: Number(event.target.value) } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /></div>; })}</div></div> : null}
+
+          {step === 3 ? <div className="space-y-4"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Nastavení skupiny</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Nastav ochrany kopírování pro tuto skupinu.</p></div><div className="overflow-hidden rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">{([
+            ['positionReconciler', 'Kontrola shody pozic', 'Po každém vyplnění followera ověří, že nová pozice odpovídá směru a symbolu leadera.'],
+            ['disableReplicationOnBreach', 'Zastavit skupinu při nesouladu', 'Povinná fail-closed ochrana: rozdíl na jediném followerovi okamžitě zastaví replikaci celé skupiny.'],
+            ['autoCloseFollowerPositions', 'Automaticky zavřít pozice followerů', 'Jakmile se zavře pozice leadera, automaticky zavře odpovídající pozice followerů.'],
+            ['preventHedging', 'Zabránit opačné pozici', 'Nedovolí opačnému příkazu překlopit follower účet do obráceného směru.'],
+          ] as const).map(([key, title, detail]) => { const mandatory = key === 'disableReplicationOnBreach'; return <label key={key} className={`flex items-start gap-3 px-4 py-3.5 ${mandatory ? 'cursor-not-allowed bg-emerald-500/[0.025]' : 'cursor-pointer'}`}><input type="checkbox" checked={mandatory ? true : safety[key]} disabled={mandatory} onChange={event => updateSafety(key, event.target.checked)} className="mt-1 accent-indigo-600" /><span><b className="block text-xs text-[var(--text-primary)]">{title}{mandatory ? <span className="ml-2 text-[9px] uppercase text-emerald-600">Povinné</span> : null}</b><span className="mt-0.5 block text-[11px] leading-relaxed text-[var(--text-secondary)]">{detail}</span></span></label>; })}</div><label className="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] px-4 py-3"><span><b className="block text-xs text-[var(--text-primary)]">Skupina povolena</b><span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Určuje, zda se skupina po aktivaci copieru může replikovat.</span></span><input type="checkbox" checked={draft.enabled} onChange={event => setDraft(current => ({ ...current, enabled: event.target.checked }))} className="accent-indigo-600" /></label></div> : null}
 
           {errors.length > 0 && <div className="rounded-md border border-rose-500/25 bg-rose-500/8 p-3.5 flex gap-2.5"><AlertTriangle size={17} className="text-rose-500 shrink-0 mt-0.5" /><div className="space-y-1">{errors.map(error => <div key={error} className="text-xs font-bold text-rose-500">{error}</div>)}</div></div>}
         </div>
 
         <footer className="px-5 py-4 border-t border-[var(--border-subtle)] flex items-center justify-between gap-3">
-          <div>{onDelete && <button onClick={onDelete} disabled={saving} className="h-10 px-3 rounded-xl text-xs font-bold text-rose-500 hover:bg-rose-500/10 flex items-center gap-1.5"><Trash2 size={14} /> Smazat</button>}</div>
-          <div className="flex gap-2"><button onClick={onClose} disabled={saving} className="h-10 px-4 rounded-xl border border-[var(--border-subtle)] text-xs font-bold text-[var(--text-secondary)]">Zrušit</button><button onClick={submit} disabled={saving} className="h-10 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50"><Save size={14} /> {saving ? 'Ukládám…' : 'Uložit skupinu'}</button></div>
+          <div>{onDelete ? <button onClick={onDelete} disabled={saving} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10"><Trash2 size={14} /> Smazat</button> : <button onClick={onClose} disabled={saving} className="h-9 rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zrušit</button>}</div>
+          <div className="flex gap-2">{step > 0 ? <button onClick={() => { setErrors([]); setStep(current => current - 1); }} disabled={saving} className="h-9 rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zpět</button> : null}{step < 3 ? <button onClick={next} disabled={saving} className="h-9 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white hover:bg-indigo-500">Další</button> : <button onClick={submit} disabled={saving} className="flex h-9 items-center gap-1.5 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50"><Save size={14} /> {saving ? 'Ukládám…' : isNew ? 'Vytvořit skupinu' : 'Uložit změny'}</button>}</div>
         </footer>
       </section>
     </div>,
@@ -947,12 +1259,207 @@ const GroupEditorDialog = ({ group, accounts, saving, onClose, onSave, onDelete 
   );
 };
 
-const ConfirmActionDialog = ({ action, busy, onClose, onConfirm }: { action: PendingAction; busy: boolean; onClose: () => void; onConfirm: () => void }) => createPortal(
+const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenOrderColumns, density, redaction, confirmDisableAfterFlatten, onDensity, onRedaction, onConfirmDisableAfterFlatten, onToggleColumn, onToggleGroupColumn, onToggleOrderColumn, onReset, onClose }: {
+  hiddenColumns: Set<AccountColumnKey>;
+  hiddenGroupColumns: Set<GroupColumnKey>;
+  hiddenOrderColumns: Set<OrderColumnKey>;
+  density: number;
+  redaction: RedactionSettings;
+  confirmDisableAfterFlatten: boolean;
+  onDensity: (value: number) => void;
+  onRedaction: (value: RedactionSettings) => void;
+  onConfirmDisableAfterFlatten: (value: boolean) => void;
+  onToggleColumn: (key: AccountColumnKey) => void;
+  onToggleGroupColumn: (key: GroupColumnKey) => void;
+  onToggleOrderColumn: (key: OrderColumnKey) => void;
+  onReset: () => void;
+  onClose: () => void;
+}) => createPortal(
+  <div className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <section role="dialog" aria-modal="true" aria-label="Table Settings" className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
+      <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-5 py-4"><h3 className="text-lg font-black text-[var(--text-primary)]">Table Settings</h3><button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-page)]"><X size={17} /></button></header>
+      <div className="space-y-5 overflow-y-auto p-5">
+        <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Appearance</div><label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-3 py-2.5"><span className="text-xs font-bold text-[var(--text-primary)]">Table density</span><select value={density} onChange={event => onDensity(Number(event.target.value))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]"><option value={80}>80%</option><option value={90}>90%</option><option value={100}>100%</option><option value={110}>110%</option></select></label></div>
+        <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Groups columns</div><div className="rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]"><label className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-[var(--text-muted)]"><input type="checkbox" checked disabled className="accent-indigo-600" />Group · Pinned</label>{GROUP_COLUMN_OPTIONS.map(column => <label key={column.key} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={!hiddenGroupColumns.has(column.key)} onChange={() => onToggleGroupColumn(column.key)} className="accent-indigo-600" />{column.label}</label>)}</div></div>
+        <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Orders columns</div><div className="grid grid-cols-2 overflow-hidden rounded-lg border border-[var(--border-subtle)]">{ORDER_COLUMN_OPTIONS.map(column => <label key={column.key} className="flex items-center gap-2 border-b border-r border-[var(--border-subtle)] px-3 py-2 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={!hiddenOrderColumns.has(column.key)} onChange={() => onToggleOrderColumn(column.key)} className="accent-indigo-600" />{column.label}</label>)}</div></div>
+        <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Accounts columns</div><div className="grid grid-cols-2 overflow-hidden rounded-lg border border-[var(--border-subtle)]">{ACCOUNT_COLUMNS.map(column => { const pinned = column.key === 'replication' || column.key === 'actions' || column.locked; return <label key={column.key} className={`flex items-center gap-2 border-b border-r border-[var(--border-subtle)] px-3 py-2 text-xs font-bold ${pinned ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'}`}><input type="checkbox" checked={pinned || !hiddenColumns.has(column.key)} disabled={pinned} onChange={() => onToggleColumn(column.key)} className="accent-indigo-600" />{column.label}{pinned ? ' · Pinned' : ''}</label>; })}</div></div>
+        <div>
+          <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Account name redaction</div>
+          <div className="grid grid-cols-2 gap-3 rounded-lg border border-[var(--border-subtle)] p-3">
+            <label className="space-y-1.5"><span className="block text-[10px] font-bold text-[var(--text-secondary)]">Visible first characters</span><input aria-label="Visible first account characters" type="number" min="0" max="12" value={redaction.visibleStart} onChange={event => onRedaction({ ...redaction, visibleStart: Math.max(0, Number(event.target.value)) })} className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]" /></label>
+            <label className="space-y-1.5"><span className="block text-[10px] font-bold text-[var(--text-secondary)]">Visible last characters</span><input aria-label="Visible last account characters" type="number" min="0" max="12" value={redaction.visibleEnd} onChange={event => onRedaction({ ...redaction, visibleEnd: Math.max(0, Number(event.target.value)) })} className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]" /></label>
+          </div>
+        </div>
+        <label className="flex items-center gap-2.5 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={confirmDisableAfterFlatten} onChange={event => onConfirmDisableAfterFlatten(event.target.checked)} className="accent-indigo-600" />Confirm disabling replication after flatten</label>
+      </div>
+      <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-5 py-4"><button onClick={onReset} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-page)]"><RotateCcw size={13} /> Reset to default</button><button onClick={onClose} className="h-9 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white">Done</button></footer>
+    </section>
+  </div>, document.body,
+);
+
+const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
+  templates: CopyGroupTemplate[];
+  accounts: LiveAccount[];
+  onChange: (templates: CopyGroupTemplate[]) => void;
+  onClose: () => void;
+}) => {
+  const [draft, setDraft] = useState<CopyGroupTemplate | null>(null);
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const toggleFollower = (accountId: number) => setDraft(current => current ? ({
+    ...current,
+    followers: current.followers.some(follower => follower.accountId === accountId)
+      ? current.followers.filter(follower => follower.accountId !== accountId)
+      : [...current.followers, { accountId, mode: 'on-submit', multiplier: 1 }],
+  }) : current);
+  const save = () => {
+    if (!draft?.name.trim()) return setError('Zadej název šablony.');
+    onChange(templates.some(template => template.id === draft.id)
+      ? templates.map(template => template.id === draft.id ? { ...draft, name: draft.name.trim() } : template)
+      : [...templates, { ...draft, name: draft.name.trim() }]);
+    setDraft(null);
+    setError('');
+  };
+
+  const updateFollower = (accountId: number, patch: Partial<Pick<CopyFollowerConfig, 'mode' | 'multiplier'>>) => {
+    setDraft(current => current ? ({
+      ...current,
+      followers: current.followers.map(follower => follower.accountId === accountId
+        ? { ...follower, ...patch }
+        : follower),
+    }) : current);
+  };
+
+  const updateSafety = (key: keyof CopyGroupSafetySettings, value: boolean) => {
+    setDraft(current => current ? ({
+      ...current,
+      safety: { ...current.safety, [key]: value },
+    }) : current);
+  };
+
+  const visibleFollowerAccounts = accounts.filter(account =>
+    account.id !== draft?.leaderAccountId
+      && `${account.name} ${account.firm}`.toLowerCase().includes(search.trim().toLowerCase()));
+
+  const selectVisibleFollowers = () => {
+    setDraft(current => current ? ({
+      ...current,
+      followers: [
+        ...current.followers,
+        ...visibleFollowerAccounts
+          .filter(account => !current.followers.some(follower => follower.accountId === account.id))
+          .map(account => ({ accountId: account.id, mode: 'on-submit' as const, multiplier: 1 })),
+      ],
+    }) : current);
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <section role="dialog" aria-modal="true" aria-label="Group Templates" className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl">
+        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-5 py-4">
+          <div>
+            <h3 className="text-lg font-black text-[var(--text-primary)]">Group Templates</h3>
+            <p className="mt-1 text-[11px] text-[var(--text-secondary)]">Reusable leader, follower and protection settings.</p>
+          </div>
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-page)]"><X size={17} /></button>
+        </header>
+        <div className="overflow-y-auto p-5">
+          {!draft ? (
+            <>
+              <button onClick={() => setDraft({ id: `template-${Date.now()}`, name: '', leaderAccountId: null, followers: [], safety: { ...DEFAULT_COPY_GROUP_SAFETY } })} className="mb-4 h-9 rounded-lg bg-indigo-600 px-4 text-xs font-bold text-white"><Plus size={13} className="mr-1.5 inline" />New Template</button>
+              {templates.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-[var(--border-subtle)] py-12 text-center">
+                  <Inbox size={22} className="mx-auto text-[var(--text-muted)]" />
+                  <p className="mt-3 text-sm font-bold text-[var(--text-primary)]">No templates yet</p>
+                  <p className="mt-1 text-xs text-[var(--text-secondary)]">Click New Template above to build one.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {templates.map(template => (
+                    <div key={template.id} className="flex items-center gap-3 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <b className="block truncate text-sm text-[var(--text-primary)]">{template.name}</b>
+                        <span className="text-[11px] text-[var(--text-secondary)]">{template.leaderAccountId == null ? 'Keeps target leader' : accounts.find(account => account.id === template.leaderAccountId)?.name ?? 'Leader'} · {template.followers.length} followers</span>
+                      </div>
+                      <button onClick={() => setDraft(structuredClone(template))} className="h-8 rounded-lg border border-[var(--border-subtle)] px-3 text-[11px] font-bold text-[var(--text-secondary)]">Edit</button>
+                      <button aria-label={`Delete template ${template.name}`} onClick={() => onChange(templates.filter(item => item.id !== template.id))} className="flex h-8 w-8 items-center justify-center rounded-lg text-rose-500 hover:bg-rose-500/10"><Trash2 size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="space-y-5">
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Template name</span>
+                <input autoFocus value={draft.name} onChange={event => setDraft(current => current ? { ...current, name: event.target.value } : current)} placeholder="e.g. Scalp set-up" className="h-10 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-sm font-bold text-[var(--text-primary)]" />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Leader (optional)</span>
+                <select value={draft.leaderAccountId ?? ''} onChange={event => setDraft(current => current ? { ...current, leaderAccountId: event.target.value ? Number(event.target.value) : null, followers: current.followers.filter(follower => follower.accountId !== Number(event.target.value)) } : current)} className="h-10 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-xs font-bold text-[var(--text-primary)]">
+                  <option value="">No leader · keep target group leader</option>
+                  {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+                </select>
+              </label>
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3"><span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Followers</span><button type="button" onClick={selectVisibleFollowers} className="text-[10px] font-black text-indigo-500 hover:underline">Select all</button></div>
+                <input aria-label="Search followers" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search accounts" className="mb-2 h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-xs text-[var(--text-primary)] outline-none focus:border-indigo-500" />
+                <div className="max-h-64 overflow-y-auto rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
+                  {visibleFollowerAccounts.map(account => {
+                    const follower = draft.followers.find(item => item.accountId === account.id);
+                    return (
+                      <div key={account.id} className="grid grid-cols-[minmax(0,1fr)_118px_78px] items-center gap-2 px-3 py-2.5">
+                        <label className="flex min-w-0 cursor-pointer items-center gap-2.5">
+                          <input type="checkbox" checked={!!follower} onChange={() => toggleFollower(account.id)} className="accent-indigo-600" />
+                          <span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span>
+                        </label>
+                        <select disabled={!follower} value={follower?.mode ?? 'on-submit'} onChange={event => updateFollower(account.id, { mode: event.target.value as ReplicationMode })} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-[10px] font-bold text-[var(--text-primary)] disabled:opacity-35">
+                          <option value="off">Off</option><option value="on-submit">On Submit</option><option value="on-fill">On Fill</option>
+                        </select>
+                        <input aria-label={`Násobek ${account.name}`} disabled={!follower} type="number" min="0.01" max="100" step="0.25" value={follower?.multiplier ?? 1} onChange={event => updateFollower(account.id, { multiplier: normalizeMultiplier(Number(event.target.value)) })} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-[10px] font-bold text-[var(--text-primary)] disabled:opacity-35" />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <div className="mb-2 text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Group safety</div>
+                <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
+                  {([
+                    ['positionReconciler', 'Position reconciler'],
+                    ['disableReplicationOnBreach', 'Disable replication on breach'],
+                    ['autoCloseFollowerPositions', 'Auto-close follower positions'],
+                    ['preventHedging', 'Prevent hedging'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-xs font-bold text-[var(--text-primary)]">
+                      {label}<input type="checkbox" checked={draft.safety[key]} onChange={event => updateSafety(key, event.target.checked)} className="accent-indigo-600" />
+                    </label>
+                  ))}
+                </div>
+              </div>
+              {error ? <p className="text-xs font-bold text-rose-500">{error}</p> : null}
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setDraft(null)} className="h-9 rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Cancel</button>
+                <button onClick={save} className="h-9 rounded-lg bg-indigo-600 px-4 text-xs font-bold text-white">Save Template</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>, document.body,
+  );
+};
+
+const ConfirmActionDialog = ({ action, busy, apiReady, onClose, onConfirm }: { action: PendingAction; busy: boolean; apiReady: boolean; onClose: () => void; onConfirm: () => void }) => createPortal(
   <div className="fixed inset-0 z-[160] bg-slate-950/35 flex items-center justify-center p-4" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <section role="alertdialog" aria-modal="true" className="w-full max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl p-5">
       <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${action.danger ? 'bg-rose-500/10 text-rose-500' : 'bg-indigo-500/10 text-indigo-500'}`}>{action.danger ? <AlertTriangle size={21} /> : <Power size={21} />}</div>
       <h3 className="text-lg font-black text-[var(--text-primary)] mt-4">{action.title}</h3><p className="text-sm text-[var(--text-secondary)] mt-1.5 leading-relaxed">{action.detail}</p>
-      <div className="rounded-xl bg-blue-500/[0.055] border border-blue-500/15 px-3 py-2.5 text-[11px] text-blue-500 font-bold mt-4">Bez OAuth se akce pouze připraví lokálně a žádný brokerový příkaz se neodešle.</div>
+      <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
+        {apiReady
+          ? 'Execution adaptér je připojen. Potvrzená akce bude předána lokálnímu DEMO runtime.'
+          : 'Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.'}
+      </div>
       <div className="flex justify-end gap-2 mt-5"><button onClick={onClose} disabled={busy} className="h-10 px-4 rounded-xl border border-[var(--border-subtle)] text-xs font-bold text-[var(--text-secondary)]">Zrušit</button><button onClick={onConfirm} disabled={busy} className={`h-10 px-4 rounded-xl text-white text-xs font-bold disabled:opacity-50 ${action.danger ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{busy ? 'Připravuji…' : action.confirmLabel}</button></div>
     </section>
   </div>, document.body,
@@ -964,7 +1471,7 @@ const CopyTradingHelpDialog = ({ onClose, apiReady }: { onClose: () => void; api
       <header className="p-5 border-b border-[var(--border-subtle)] flex items-center justify-between"><div><div className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">LIVE CONTROL</div><h3 className="text-lg font-black text-[var(--text-primary)] mt-1">Připravenost funkcí</h3></div><button onClick={onClose} className="w-9 h-9 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-page)] flex items-center justify-center"><X size={18} /></button></header>
       <div className="p-5 space-y-3">
         {[['Skupiny a účty', 'Vytvoření, leader, followeři, režim On Submit / On Fill a multiplier.'], ['Řízení rizika', 'Enable/Disable, Flatten účtu a Flatten All s povinným potvrzením.'], ['Příkazy', 'Skupinové ordery, refresh a příprava zrušení pracovního příkazu.'], ['Pohled', 'Skrývání sloupců, offline skupin, rozbalení a lokální uložení konfigurace.']].map(([title, detail]) => <div key={title} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3.5 flex gap-3"><CheckCircle2 size={17} className="text-emerald-500 shrink-0 mt-0.5" /><div><div className="text-xs font-black text-[var(--text-primary)]">{title}</div><div className="text-[11px] text-[var(--text-secondary)] mt-1 leading-relaxed">{detail}</div></div></div>)}
-        <div className={`rounded-md border p-3.5 flex gap-3 ${apiReady ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-amber-500/20 bg-amber-500/5'}`}><SlidersHorizontal size={17} className={apiReady ? 'text-emerald-500' : 'text-amber-500'} /><div><div className="text-xs font-black text-[var(--text-primary)]">{apiReady ? 'OAuth adapter připojen' : 'Lokální přípravný režim'}</div><div className="text-[11px] text-[var(--text-secondary)] mt-1">{apiReady ? 'Příkazy se předávají připojenému API adaptéru.' : 'UI je kompletní, ale žádné akce se neposílají brokerovi.'}</div></div></div>
+        <div className={`rounded-md border p-3.5 flex gap-3 ${apiReady ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-amber-500/20 bg-amber-500/5'}`}><SlidersHorizontal size={17} className={apiReady ? 'text-emerald-500' : 'text-amber-500'} /><div><div className="text-xs font-black text-[var(--text-primary)]">{apiReady ? 'Execution adapter připojen' : 'Lokální přípravný režim'}</div><div className="text-[11px] text-[var(--text-secondary)] mt-1">{apiReady ? 'Příkazy lze předat připojenému broker adaptéru až po explicitním ARM.' : 'UI je kompletní, ale žádné akce se neposílají brokerovi.'}</div></div></div>
       </div>
     </section>
   </div>, document.body,

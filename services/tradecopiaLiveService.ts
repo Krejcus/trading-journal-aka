@@ -53,6 +53,8 @@ export interface LiveAccount {
   realizedPnl: number;
   weekRealizedPnl: number;
   unrealizedPnl: number;
+  unrealizedPnlSource?: 'broker' | 'estimated' | 'stale';
+  unrealizedPnlUpdatedAt?: string | null;
   peakEquity: number | null;
   drawdownFloor: number | null;
   cushion: number | null;
