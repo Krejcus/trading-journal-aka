@@ -67,11 +67,9 @@ async function install(): Promise<void> {
   const stableLease = resolve(pilotRoot, 'bootstrap-lease.json');
   const stablePilotPrivateKey = resolve(pilotRoot, 'pilot-private.pem');
   const runtimePath = resolve(pilotRoot, 'copier-agent.mjs');
-  await copyFile(sourceLease, stableLease);
-  await copyFile(
-    resolve(flags.get('private-key')?.trim() || resolve(projectRoot, '.copier-pilot/pilot-private.pem')),
-    stablePilotPrivateKey,
-  );
+  if (sourceLease !== stableLease) await copyFile(sourceLease, stableLease);
+  const sourcePrivateKey = resolve(flags.get('private-key')?.trim() || resolve(projectRoot, '.copier-pilot/pilot-private.pem'));
+  if (sourcePrivateKey !== stablePilotPrivateKey) await copyFile(sourcePrivateKey, stablePilotPrivateKey);
   await Promise.all([chmod(stableLease, 0o600), chmod(stablePilotPrivateKey, 0o600)]);
 
   const esbuild = resolve(projectRoot, 'node_modules/.bin/esbuild');
