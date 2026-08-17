@@ -1,0 +1,405 @@
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
+import type { TradovateSourceCoverage } from '../lib/tradovateAccountDataTypes';
+import type { TradovateHistorySnapshot } from '../lib/tradovateHistoricalTypes';
+import { mergeTradovateHistoricalSnapshot } from '../lib/tradovateHistoricalMerge';
+import {
+  applyTradovateLivePnlTick,
+  tradovateLiveTickClosedLastPosition,
+  type TradovateContractMarkMap,
+} from '../lib/tradovateLivePnl';
+import {
+  beginTradovateOAuth,
+  disconnectTradovateOAuth,
+  loadTradovateAccountProfiles,
+  loadTradovateOAuthStatus,
+  runTradovateReadOnlyPreflight,
+  runTradovateHistoricalBackfill,
+  runTradovateLivePnlTick,
+  TradovateRequestError,
+  type TradovateOAuthStatus,
+  type TradovatePreflightResult,
+} from '../services/tradovateOAuthConnection';
+import {
+  buildTradovateConnectionSummaries,
+  readTradovateConnectionShell,
+  writeTradovateConnectionShell,
+} from '../lib/tradovateLiveConnectionCache';
+import {
+  getTradovateApiTelemetrySnapshot,
+  refreshTradovateApiTelemetry,
+  subscribeTradovateApiTelemetry,
+} from '../lib/tradovateApiTelemetry';
+
+type BusyState = 'status' | 'connect' | 'data' | 'disconnect' | null;
+
+interface TradovateLiveCacheEntry {
+  status: TradovateOAuthStatus | null;
+  connectionData: Record<string, TradovatePreflightResult>;
+  profiles: TradovateAccountProfile[];
+  historySnapshots: Record<string, TradovateHistorySnapshot>;
+}
+
+// SPA navigation unmounts the LIVE page. Keep the last confirmed read model in
+// memory, keyed by AlphaTrade user, so remounting never flashes a false
+// disconnected state. Nothing sensitive (OAuth tokens) is stored here.
+const tradovateLiveCache = new Map<string, TradovateLiveCacheEntry>();
+
+const mergeCoverage = (values: TradovateSourceCoverage[]): TradovateSourceCoverage => {
+  const rank = { unavailable: 0, denied: 1, empty: 2, partial: 3, available: 4 } as const;
+  const availability = values.reduce<TradovateSourceCoverage['availability']>(
+    (current, value) => rank[value.availability] < rank[current] ? value.availability : current,
+    'available',
+  );
+  return {
+    availability,
+    count: values.reduce((sum, value) => sum + value.count, 0),
+    httpStatus: values.find(value => value.httpStatus != null)?.httpStatus ?? null,
+  };
+};
+
+const mergePreflights = (datasets: TradovatePreflightResult[]): TradovatePreflightResult | null => {
+  if (datasets.length === 0) return null;
+  const contracts = new Map(datasets.flatMap(dataset => dataset.contracts).map(contract => [contract.id, contract]));
+  const coverageKeys = Object.keys(datasets[0].coverage) as Array<keyof TradovatePreflightResult['coverage']>;
+  return {
+    connectionId: 'all',
+    environment: datasets[0].environment,
+    capturedAt: datasets.map(dataset => dataset.capturedAt).sort().at(-1) ?? new Date().toISOString(),
+    accounts: datasets.flatMap(dataset => dataset.accounts),
+    contracts: [...contracts.values()],
+    historicalSync: datasets.find(dataset => dataset.historicalSync.status === 'available')?.historicalSync
+      ?? datasets[0].historicalSync,
+    coverage: Object.fromEntries(coverageKeys.map(key => [
+      key,
+      mergeCoverage(datasets.map(dataset => dataset.coverage[key])),
+    ])) as TradovatePreflightResult['coverage'],
+  };
+};
+
+const ACTIVE_PNL_INTERVAL_MS = 2_000;
+const IDLE_POSITION_INTERVAL_MS = 5_000;
+// At 20 accounts the full preflight is expensive (risk, history, fees, etc.).
+// Ten minutes keeps it useful for reconciliation without consuming the budget
+// reserved for the 2-second position/P&L read model.
+const FULL_REFRESH_INTERVAL_MS = 10 * 60_000;
+
+export function useTradovateLiveData(userId: string) {
+  const apiTelemetry = useSyncExternalStore(
+    subscribeTradovateApiTelemetry,
+    getTradovateApiTelemetrySnapshot,
+    getTradovateApiTelemetrySnapshot,
+  );
+  useEffect(() => {
+    refreshTradovateApiTelemetry();
+    const timer = window.setInterval(refreshTradovateApiTelemetry, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const persisted = useMemo(
+    () => readTradovateConnectionShell(userId, typeof window === 'undefined' ? undefined : window.sessionStorage),
+    [userId],
+  );
+  const cached = userId ? tradovateLiveCache.get(userId) : undefined;
+  const [status, setStatus] = useState<TradovateOAuthStatus | null>(() => cached?.status ?? persisted?.status ?? null);
+  const [connectionData, setConnectionData] = useState<Record<string, TradovatePreflightResult>>(() => cached?.connectionData ?? {});
+  const [profiles, setProfiles] = useState<TradovateAccountProfile[]>(() => cached?.profiles ?? []);
+  const [historySnapshots, setHistorySnapshots] = useState<Record<string, TradovateHistorySnapshot>>(() => cached?.historySnapshots ?? {});
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const historyBusyRef = useRef(false);
+  const livePnlBusyRef = useRef(false);
+  const connectionDataRef = useRef(connectionData);
+  const livePnlCursorsRef = useRef<Record<string, number>>({});
+  const livePnlMarksRef = useRef<Record<string, TradovateContractMarkMap>>({});
+  const rateLimitUntilRef = useRef(0);
+  const [busy, setBusy] = useState<BusyState>('status');
+  const [error, setError] = useState<string | null>(null);
+  const [profileSetupOpen, setProfileSetupOpen] = useState(false);
+
+  useEffect(() => {
+    connectionDataRef.current = connectionData;
+  }, [connectionData]);
+
+  useEffect(() => {
+    if (!userId) return;
+    tradovateLiveCache.set(userId, { status, connectionData, profiles, historySnapshots });
+  }, [connectionData, historySnapshots, profiles, status, userId]);
+
+  const data = useMemo(() => {
+    const merged = mergePreflights(Object.values(connectionData));
+    return merged ? {
+      ...merged,
+      accounts: merged.accounts.map(account => mergeTradovateHistoricalSnapshot(
+        account,
+        historySnapshots[String(account.id)],
+      )),
+    } : null;
+  }, [connectionData, historySnapshots]);
+
+  const connectionSummaries = useMemo(
+    () => buildTradovateConnectionSummaries(
+      status,
+      connectionData,
+      profiles,
+      persisted?.summaries,
+    ),
+    [connectionData, persisted?.summaries, profiles, status],
+  );
+
+  useEffect(() => {
+    writeTradovateConnectionShell(
+      userId,
+      status,
+      connectionSummaries,
+      typeof window === 'undefined' ? undefined : window.sessionStorage,
+    );
+  }, [connectionSummaries, status, userId]);
+
+  const advanceHistoricalBackfill = useCallback(async (datasets: TradovatePreflightResult[]) => {
+    if (historyBusyRef.current || datasets.length === 0) return;
+    historyBusyRef.current = true;
+    try {
+      const results = await Promise.allSettled(datasets.flatMap(dataset => dataset.accounts.map(account =>
+        runTradovateHistoricalBackfill({
+          connectionId: dataset.connectionId,
+          accountId: account.id,
+        }),
+      )));
+      const successful = results
+        .filter((result): result is PromiseFulfilledResult<TradovateHistorySnapshot> => result.status === 'fulfilled')
+        .map(result => result.value);
+      if (successful.length > 0) {
+        setHistorySnapshots(current => ({
+          ...current,
+          ...Object.fromEntries(successful
+            .filter(snapshot => snapshot.sync)
+            .map(snapshot => [String(snapshot.sync!.accountId), snapshot])),
+        }));
+        setHistoryError(null);
+      }
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failed && successful.length === 0) {
+        setHistoryError(failed.reason instanceof Error ? failed.reason.message : 'Historický sync se nepodařilo spustit.');
+      }
+    } finally {
+      historyBusyRef.current = false;
+    }
+  }, []);
+
+  const refreshData = useCallback(async (connectionIds: string[], quiet = false) => {
+    if (!quiet) setBusy('data');
+    setError(null);
+    try {
+      const [datasets, stored] = await Promise.all([
+        Promise.all(connectionIds.map(connectionId => runTradovateReadOnlyPreflight(connectionId))),
+        loadTradovateAccountProfiles().catch(() => null),
+      ]);
+      setConnectionData(Object.fromEntries(datasets.map(dataset => [dataset.connectionId, dataset])));
+      if (stored) {
+        setProfiles(stored.profiles);
+        const storedIds = new Set(stored.profiles.map(profile => profile.externalAccountId));
+        if (datasets.flatMap(dataset => dataset.accounts).some(account => !storedIds.has(String(account.id)))) {
+          setProfileSetupOpen(true);
+        }
+      }
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Tradovate data se nepodařilo načíst.');
+      return false;
+    } finally {
+      if (!quiet) setBusy(null);
+    }
+  }, []);
+
+  const refreshStatus = useCallback(async () => {
+    setBusy('status');
+    setError(null);
+    try {
+      const nextStatus = await loadTradovateOAuthStatus();
+      setStatus(nextStatus);
+      const activeConnectionIds = nextStatus.connections.filter(connection => connection.connected).map(connection => connection.id);
+      if (activeConnectionIds.length > 0) {
+        await refreshData(activeConnectionIds, true);
+      } else {
+        setConnectionData({});
+        const stored = await loadTradovateAccountProfiles().catch(() => null);
+        setProfiles(stored?.profiles ?? []);
+      }
+      return nextStatus;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Stav Tradovate OAuth se nepodařilo načíst.');
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  }, [refreshData]);
+
+  const connect = useCallback(async (connectionId?: string) => {
+    setBusy('connect');
+    setError(null);
+    try {
+      await beginTradovateOAuth(connectionId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Tradovate OAuth se nepodařilo spustit.');
+      setBusy(null);
+    }
+  }, []);
+
+  const disconnect = useCallback(async (connectionId: string) => {
+    setBusy('disconnect');
+    setError(null);
+    try {
+      await disconnectTradovateOAuth(connectionId);
+      await refreshStatus();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Připojení se nepodařilo odpojit.');
+      setBusy(null);
+    }
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    void refreshStatus();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('tradovate') === 'error') setError('Tradovate OAuth připojení se nepodařilo dokončit.');
+    if (params.has('tradovate')) {
+      params.delete('tradovate');
+      params.delete('reason');
+      params.delete('page');
+      const suffix = params.toString();
+      window.history.replaceState({}, '', `${window.location.pathname}${suffix ? `?${suffix}` : ''}${window.location.hash}`);
+    }
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    const ids = status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [];
+    if (ids.length === 0) return;
+    const interval = window.setInterval(() => void refreshData(ids, true), FULL_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [refreshData, status?.connections]);
+
+  useEffect(() => {
+    const ids = status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [];
+    if (ids.length === 0) return;
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const schedule = (delay: number) => {
+      if (!cancelled) timer = window.setTimeout(() => void poll(), delay);
+    };
+    const poll = async () => {
+      if (cancelled) return;
+      if (document.visibilityState === 'hidden') {
+        schedule(IDLE_POSITION_INTERVAL_MS);
+        return;
+      }
+      if (Date.now() < rateLimitUntilRef.current) {
+        schedule(Math.min(IDLE_POSITION_INTERVAL_MS, rateLimitUntilRef.current - Date.now()));
+        return;
+      }
+      if (livePnlBusyRef.current) {
+        schedule(ACTIVE_PNL_INTERVAL_MS);
+        return;
+      }
+      const available = ids.filter(id => connectionDataRef.current[id]);
+      if (available.length === 0) {
+        schedule(1_000);
+        return;
+      }
+
+      livePnlBusyRef.current = true;
+      try {
+        const results = await Promise.allSettled(available.map(async connectionId => ({
+          connectionId,
+          tick: await runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0),
+        })));
+        const successful = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+        const becameFlat = successful
+          .filter(({ connectionId, tick }) => {
+            const previous = connectionDataRef.current[connectionId];
+            return previous ? tradovateLiveTickClosedLastPosition(previous, tick) : false;
+          })
+          .map(({ connectionId }) => connectionId);
+        if (successful.length > 0) {
+          setConnectionData(current => {
+            const next = { ...current };
+            for (const { connectionId, tick } of successful) {
+              const dataset = next[connectionId];
+              if (!dataset) continue;
+              const applied = applyTradovateLivePnlTick(
+                dataset,
+                tick,
+                livePnlMarksRef.current[connectionId] ?? {},
+              );
+              next[connectionId] = applied.data as TradovatePreflightResult;
+              livePnlMarksRef.current[connectionId] = applied.marks;
+              livePnlCursorsRef.current[connectionId] = tick.nextContractCursor;
+            }
+            connectionDataRef.current = next;
+            return next;
+          });
+        }
+        // A flat live tick has no cash anchor by design. Refresh exactly once
+        // after the close so balance, realized daily P&L, fills and orders do
+        // not remain stale until the ten-minute reconciliation or page reload.
+        if (becameFlat.length > 0) {
+          await refreshData(becameFlat, true);
+        }
+        const rateLimited = results.find(result =>
+          result.status === 'rejected'
+          && result.reason instanceof TradovateRequestError
+          && result.reason.status === 429);
+        if (rateLimited?.status === 'rejected' && rateLimited.reason instanceof TradovateRequestError) {
+          rateLimitUntilRef.current = Date.now() + (rateLimited.reason.retryAfterMs ?? 3_600_000);
+        }
+      } finally {
+        livePnlBusyRef.current = false;
+      }
+      const hasOpenPosition = Object.values(connectionDataRef.current)
+        .some(dataset => dataset.accounts.some(account => account.netPositionCount > 0));
+      schedule(hasOpenPosition ? ACTIVE_PNL_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS);
+    };
+
+    schedule(1_000);
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [refreshData, status?.connections]);
+
+  useEffect(() => {
+    if (historyError) return;
+    const datasets = Object.values(connectionData);
+    if (datasets.length === 0) return;
+    const accounts = datasets.flatMap(dataset => dataset.accounts);
+    // Trading-state reads have priority over historical backfill. This keeps
+    // the authenticated-user request budget available for positions and P&L.
+    if (accounts.some(account => account.netPositionCount > 0)) return;
+    const needsWork = accounts.some(account => {
+      const sync = historySnapshots[String(account.id)]?.sync;
+      return !sync || sync.status === 'pending' || sync.status === 'running';
+    });
+    if (!needsWork) return;
+    const timeout = window.setTimeout(() => void advanceHistoricalBackfill(datasets), 1_500);
+    return () => window.clearTimeout(timeout);
+  }, [advanceHistoricalBackfill, connectionData, historyError, historySnapshots]);
+
+  return {
+    status,
+    data,
+    connectionData,
+    connectionSummaries,
+    profiles,
+    historySnapshots,
+    historyError,
+    apiTelemetry,
+    busy,
+    error,
+    profileSetupOpen,
+    setError,
+    setProfiles,
+    setProfileSetupOpen,
+    refreshStatus,
+    refreshData: (quiet = false) => refreshData(status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [], quiet),
+    connect,
+    disconnect,
+  };
+}
