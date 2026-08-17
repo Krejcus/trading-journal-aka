@@ -2079,6 +2079,55 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       logicalSpan,
     };
   }, []);
+  /**
+   * Doplutí viewportu na cílový logický rozsah stejnou křivkou jako střihová
+   * animace nového startu (ease-out cubic, 220 ms). Bez výchozího rozsahu
+   * nebo s reduced motion se cíl nastaví rovnou.
+   */
+  const animateReplayViewportTo = useCallback((
+    chart: IChartApi,
+    initialRange: { from: number; to: number } | null,
+    targetRange: { from: number; to: number },
+  ) => {
+    if (replayStartAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(replayStartAnimationFrameRef.current);
+      replayStartAnimationFrameRef.current = null;
+    }
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    if (!initialRange || reducedMotion) {
+      chart.timeScale().setVisibleLogicalRange(targetRange);
+      replayViewportTargetRef.current = null;
+      return;
+    }
+    chart.timeScale().setVisibleLogicalRange(initialRange);
+    replayViewportTargetRef.current = targetRange;
+    const durationMs = 220;
+    let startedAt: number | null = null;
+    chartRootRef.current?.setAttribute('data-replay-start-transition', 'animating');
+    const animate = (now: number) => {
+      if (startedAt === null) startedAt = now;
+      const progress = Math.min(1, (now - startedAt) / durationMs);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      try {
+        chart.timeScale().setVisibleLogicalRange({
+          from: initialRange.from + (targetRange.from - initialRange.from) * eased,
+          to: initialRange.to + (targetRange.to - initialRange.to) * eased,
+        });
+      } catch {
+        // Graf mezitím zanikl (přepnutí timeframe/layoutu) — animace končí.
+        replayStartAnimationFrameRef.current = null;
+        return;
+      }
+      if (progress < 1) {
+        replayStartAnimationFrameRef.current = window.requestAnimationFrame(animate);
+      } else {
+        replayStartAnimationFrameRef.current = null;
+        replayViewportTargetRef.current = null;
+        chartRootRef.current?.setAttribute('data-replay-start-transition', 'complete');
+      }
+    };
+    replayStartAnimationFrameRef.current = window.requestAnimationFrame(animate);
+  }, []);
   const updateReplaySelectionPreview = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!replaySelecting) return;
     replaySelectionPointerRef.current = {
@@ -2693,16 +2742,48 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       && (firstControllerTime !== firstVisibleTime
         || (lastControllerTime !== undefined && lastControllerTime > lastVisibleTime));
     if (requiresDataReplacement) {
+      // Skok kurzoru ZPĚT (nový Bar Replay start, Go To do minulosti) versus
+      // dotažení starší historie zepředu — dva různé důvody výměny dat se
+      // dvěma různými viewporty: skok ukotvuje na kurzor, prepend drží místo.
+      const backwardJump = lastControllerTime !== undefined && lastControllerTime > lastVisibleTime;
       // Viewport obnovujeme přes LOGICKÉ indexy, ne přes časy. setVisibleRange
       // vyžaduje, aby hraniční čas padl na existující bar; časová osa je ale
       // děravá (víkendy, pauzy), takže si knihovna rozsah upravila po svém —
       // jednou o hodiny doleva, jindy rovnou na poslední svíčku. Posun přitom
       // známe přesně: o kolik barů přibylo před dosavadní první bar.
-      const prependedBarCount = firstControllerTime > firstVisibleTime
+      const prependedBarCount = !backwardJump && firstControllerTime > firstVisibleTime
         ? candleIndexAtOrAfter(visibleCandles, firstControllerTime / 1000)
         : 0;
 
       controller.setData(visibleCandles.map(candleKitBar));
+
+      if (backwardJump) {
+        // Po výběru nového startu doplují VŠECHNY panely na kurzor ukotvený
+        // vpravo — stejný cílový pohled jako „Reset chart view" (autoscale
+        // ceny + výchozí šířka), stejnou animací jako střih na kliknutém
+        // panelu. Dřív se obnovil starý viewport, takže ostatní panely
+        // zůstaly koukat do budoucnosti, která už v datech nebyla.
+        const newestLogicalIndex = visibleCandles.length - 1;
+        const transition = replayStartTransitionRef.current;
+        replayStartTransitionRef.current = null;
+        const replayBars = compactMode ? 90 : 130;
+        const targetRange = transition
+          ? { from: newestLogicalIndex + 6 - transition.logicalSpan, to: newestLogicalIndex + 6 }
+          : { from: Math.max(0, visibleCandles.length - replayBars), to: visibleCandles.length + 6 };
+        const initialRange = transition
+          ? {
+            from: newestLogicalIndex - transition.logicalSpan * transition.cutRatio,
+            to: newestLogicalIndex + transition.logicalSpan * (1 - transition.cutRatio),
+          }
+          : actualViewportBeforeUpdate;
+        try { chart.priceScale('right').setAutoScale(true); } catch { /* osa není v grafu */ }
+        animateReplayViewportTo(chart, initialRange, targetRange);
+        pendingVisibleRangeRef.current = null;
+        expandingWindowRef.current = false;
+        replayPriceRangeTargetRef.current = null;
+        chartRootRef.current?.setAttribute('data-replay-update-mode', 'start-anchor');
+        return;
+      }
 
       // Kotvou musí být SKUTEČNÝ viewport, ne `replayViewportTargetRef`.
       // Ten drží cíl pro sledování aktuální replay svíčky; při scrollu do
@@ -2792,7 +2873,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       chartRootRef.current?.removeAttribute('data-replay-price-range');
     }
     chartRootRef.current?.setAttribute('data-replay-update-mode', 'incremental');
-  }, [replayActive, replayCursorTime, timeframe, visibleCandles]);
+  }, [animateReplayViewportTo, compactMode, replayActive, replayCursorTime, timeframe, visibleCandles]);
   const drawingOptions = useMemo(() => ({
     storageKey: `alphatrade:candlekit:${trade.id}:${drawingScope || timeframe}`,
   }), [drawingScope, trade.id, timeframe]);
