@@ -1,3 +1,5 @@
+import { DRAFT_PREVIEW_ID } from './chartDrawingSync';
+
 interface ProtectedDrawing {
   id: string;
   points: Array<{ time: number; price: number }>;
@@ -16,7 +18,12 @@ interface DrawingEngineLike {
 export function protectGeneratedDrawings(engine: DrawingEngineLike, prefix = 'auto-'): () => void {
   const protectedPoints = new Map(
     engine.getDrawings()
-      .filter(drawing => drawing.id.startsWith(prefix))
+      // Náhled cizí rozkreslené kresby má auto- prefix, ale hýbat se MUSÍ —
+      // synchronizace mu posouvá body při každém pohybu kreslící myši. Když ho
+      // ochrana jednou vyfotila (snapshot se obnovuje při každém replay ticku),
+      // každý posun okamžitě vracela zpět a náhled na ostatních panelech
+      // zůstal zamrzlý v bodě prvního kliknutí.
+      .filter(drawing => drawing.id.startsWith(prefix) && drawing.id !== DRAFT_PREVIEW_ID)
       .map(drawing => [drawing.id, drawing.points.map(point => ({ ...point }))]),
   );
   let restoring = false;
