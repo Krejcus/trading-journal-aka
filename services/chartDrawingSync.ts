@@ -136,8 +136,11 @@ export const installWorkspaceDrawingSync = (
   const initial = mergedInitialManualDrawings(engines);
   const initialSignatures = signaturesOf(initial);
   synchronizing = true;
-  engines.forEach(engine => applyManualDrawings(engine, initial, initialSignatures));
-  synchronizing = false;
+  try {
+    engines.forEach(engine => applyManualDrawings(engine, initial, initialSignatures));
+  } finally {
+    synchronizing = false;
+  }
   engines.forEach(engine => previous.set(engine, signaturesOf(manualDrawings(engine))));
 
   // Kdo právě kreslí. Bez toho by panel s náhledem sám hlásil „žádný draft"
@@ -151,13 +154,16 @@ export const installWorkspaceDrawingSync = (
     const draft = source.getDraft?.() ?? null;
     if (draft || draftOwner === source) {
       synchronizing = true;
-      draftOwner = draft ? source : null;
-      engines.forEach(target => {
-        if (target === source) return;
-        if (draft) applyDraftPreview(target, draft);
-        else clearDraftPreview(target);
-      });
-      synchronizing = false;
+      try {
+        draftOwner = draft ? source : null;
+        engines.forEach(target => {
+          if (target === source) return;
+          if (draft) applyDraftPreview(target, draft);
+          else clearDraftPreview(target);
+        });
+      } finally {
+        synchronizing = false;
+      }
     }
 
     const sourceDrawings = manualDrawings(source);
@@ -180,13 +186,16 @@ export const installWorkspaceDrawingSync = (
             && changed.every(item => target.getById!(item.id))));
         if (applicable) {
           synchronizing = true;
-          changed.forEach(item => {
-            const points = cloneDrawings([item])[0].points;
-            engines.forEach(target => {
-              if (target !== source) target.setPoints!(item.id, points);
+          try {
+            changed.forEach(item => {
+              const points = cloneDrawings([item])[0].points;
+              engines.forEach(target => {
+                if (target !== source) target.setPoints!(item.id, points);
+              });
             });
-          });
-          synchronizing = false;
+          } finally {
+            synchronizing = false;
+          }
           engines.forEach(engine => previous.set(engine, new Map(nextSignatures)));
           return;
         }
@@ -194,11 +203,14 @@ export const installWorkspaceDrawingSync = (
     }
 
     synchronizing = true;
-    engines.forEach(target => {
-      if (target !== source) applyManualDrawings(target, sourceDrawings, nextSignatures);
-    });
-    engines.forEach(engine => previous.set(engine, signaturesOf(manualDrawings(engine))));
-    synchronizing = false;
+    try {
+      engines.forEach(target => {
+        if (target !== source) applyManualDrawings(target, sourceDrawings, nextSignatures);
+      });
+      engines.forEach(engine => previous.set(engine, signaturesOf(manualDrawings(engine))));
+    } finally {
+      synchronizing = false;
+    }
   };
 
   const cleanups = engines.map(source => source.onChange(() => {
@@ -213,7 +225,15 @@ export const installWorkspaceDrawingSync = (
       cancelScheduled = null;
       const sources = [...queued];
       queued.clear();
-      sources.forEach(handleChange);
+      sources.forEach(item => {
+        // Výjimka z jednoho zdroje nesmí zabít zrcadlení ostatních ani celou
+        // instanci — bez záchytu by zůstala synchronizace navždy mrtvá.
+        try {
+          handleChange(item);
+        } catch (error) {
+          console.error('[DrawingSync] zrcadlení selhalo', error);
+        }
+      });
     });
     cancelScheduled = finished ? null : cancel;
   }));
