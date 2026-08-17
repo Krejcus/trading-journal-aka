@@ -208,8 +208,60 @@ describe('workspace drawing sync', () => {
     (second.import as ReturnType<typeof vi.fn>).mockClear();
     first.mutate([positionAt(250)]);
 
-    expect(second.import).toHaveBeenCalled();
+    // Kontrakt je propagace, ne mechanismus: posun bodů smí jet i levnou
+    // cestou přes setPoints místo plného importu.
     expect(second.getDrawings()[0].points[0].price).toBe(250);
+    cleanup();
+  });
+});
+describe('rychlá cesta pro tažení', () => {
+  it('posun bodů existující kresby zrcadlí přes setPoints, ne plným importem', () => {
+    const first = engine([drawing('shared')]);
+    const second = engine([drawing('shared')]);
+    const cleanup = installWorkspaceDrawingSync([first, second]);
+    first.import.mockClear();
+    second.import.mockClear();
+    second.setPoints.mockClear();
+
+    // Simulace tažení: 30 pohybů myši, mění se jen body.
+    for (let step = 1; step <= 30; step += 1) {
+      first.mutate([drawing('shared', 100 + step)]);
+    }
+
+    expect(second.getDrawings()[0].points[0].price).toBe(130);
+    expect(second.import).not.toHaveBeenCalled();
+    expect(second.setPoints).toHaveBeenCalledTimes(30);
+    cleanup();
+  });
+
+  it('změna stylu nebo přidání kresby jde dál plným importem', () => {
+    const first = engine([drawing('shared')]);
+    const second = engine([drawing('shared')]);
+    const cleanup = installWorkspaceDrawingSync([first, second]);
+    second.import.mockClear();
+
+    const restyled = drawing('shared');
+    restyled.style = { ...restyled.style, color: '#ff0000' };
+    first.mutate([restyled]);
+    expect(second.import).toHaveBeenCalledTimes(1);
+    expect(second.getDrawings()[0].style.color).toBe('#ff0000');
+
+    first.mutate([restyled, drawing('another')]);
+    expect(second.import).toHaveBeenCalledTimes(2);
+    expect(second.getDrawings().map(item => item.id)).toEqual(['shared', 'another']);
+    cleanup();
+  });
+
+  it('kresba chybějící v cílovém panelu vynutí plný import, ne ztracený setPoints', () => {
+    const first = engine([drawing('shared')]);
+    const second = engine([drawing('shared')]);
+    const cleanup = installWorkspaceDrawingSync([first, second]);
+    // Cíl o kresbu přišel mimo sync (např. neúspěšný import) — fast path nesmí
+    // poslat setPoints do prázdna.
+    second.mutate?.([]);
+    second.import.mockClear();
+    first.mutate([drawing('shared', 111)]);
+    expect(second.getDrawings().map(item => item.id)).toEqual(['shared']);
     cleanup();
   });
 });

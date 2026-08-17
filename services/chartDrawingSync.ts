@@ -22,15 +22,36 @@ const isManualDrawing = (drawing: Drawing) => !drawing.id.startsWith('auto-');
 const manualDrawings = (engine: DrawingSyncEngine) => engine.getDrawings().filter(isManualDrawing);
 const automaticDrawings = (engine: DrawingSyncEngine) => engine.getDrawings().filter(drawing => !isManualDrawing(drawing));
 /**
- * `intervalSeconds` u pozic je vlastnost panelu, ne kresby — každý si ji
- * srovnává na svůj timeframe (viz `applyPositionRuntimeInterval`). Kdyby ji
- * otisk zahrnoval, panely by si tu úpravu donekonečna přeposílaly a přepisovaly
- * jeden druhému.
+ * Otisk kresby je rozdělený na body a zbytek: tažení mění jen body, a přesně
+ * to rozhoduje mezi levným `setPoints` a plným importem. `intervalSeconds`
+ * u pozic je vlastnost panelu, ne kresby — každý si ji srovnává na svůj
+ * timeframe (viz `applyPositionRuntimeInterval`). Kdyby ji otisk zahrnoval,
+ * panely by si tu úpravu donekonečna přeposílaly a přepisovaly jeden druhému.
  */
-const fingerprint = (drawings: readonly Drawing[]) => JSON.stringify(
-  drawings,
-  (key, value) => key === 'intervalSeconds' ? undefined : value,
-);
+interface DrawingSignature {
+  points: string;
+  rest: string;
+}
+
+type SignatureMap = Map<string, DrawingSignature>;
+
+const signatureOf = (drawing: Drawing): DrawingSignature => {
+  const { points, ...rest } = drawing;
+  return {
+    points: JSON.stringify(points),
+    rest: JSON.stringify(rest, (key, value) => key === 'intervalSeconds' ? undefined : value),
+  };
+};
+
+const signaturesOf = (drawings: readonly Drawing[]): SignatureMap =>
+  new Map(drawings.map(drawing => [drawing.id, signatureOf(drawing)]));
+
+const sameSignatures = (left: SignatureMap, right: SignatureMap): boolean =>
+  left.size === right.size && [...left].every(([id, signature]) => {
+    const other = right.get(id);
+    return Boolean(other) && other!.points === signature.points && other!.rest === signature.rest;
+  });
+
 const cloneDrawings = (drawings: readonly Drawing[]): Drawing[] => JSON.parse(JSON.stringify(drawings)) as Drawing[];
 
 const mergedInitialManualDrawings = (engines: readonly DrawingSyncEngine[]) => {
@@ -57,11 +78,10 @@ export const installWorkspaceDrawingSync = (
   if (engines.length < 2) return () => undefined;
 
   let synchronizing = false;
-  const previous = new Map<DrawingSyncEngine, string>();
+  const previous = new Map<DrawingSyncEngine, SignatureMap>();
 
-  const applyManualDrawings = (target: DrawingSyncEngine, drawings: readonly Drawing[]) => {
-    const targetManual = manualDrawings(target);
-    if (fingerprint(targetManual) === fingerprint(drawings)) return;
+  const applyManualDrawings = (target: DrawingSyncEngine, drawings: readonly Drawing[], sourceSignatures: SignatureMap) => {
+    if (sameSignatures(signaturesOf(manualDrawings(target)), sourceSignatures)) return;
     target.import(JSON.stringify([
       ...cloneDrawings(automaticDrawings(target)),
       ...cloneDrawings(drawings),
@@ -97,10 +117,11 @@ export const installWorkspaceDrawingSync = (
   // je to `auto-` kresba, takže by ji jinak žádná další synchronizace neuklidila.
   engines.forEach(clearDraftPreview);
   const initial = mergedInitialManualDrawings(engines);
+  const initialSignatures = signaturesOf(initial);
   synchronizing = true;
-  engines.forEach(engine => applyManualDrawings(engine, initial));
+  engines.forEach(engine => applyManualDrawings(engine, initial, initialSignatures));
   synchronizing = false;
-  engines.forEach(engine => previous.set(engine, fingerprint(manualDrawings(engine))));
+  engines.forEach(engine => previous.set(engine, signaturesOf(manualDrawings(engine))));
 
   // Kdo právě kreslí. Bez toho by panel s náhledem sám hlásil „žádný draft"
   // a náhledy by si panely navzájem mazaly.
@@ -122,14 +143,43 @@ export const installWorkspaceDrawingSync = (
     }
 
     const sourceDrawings = manualDrawings(source);
-    const nextFingerprint = fingerprint(sourceDrawings);
-    if (previous.get(source) === nextFingerprint) return;
+    const nextSignatures = signaturesOf(sourceDrawings);
+    const previousSignatures = previous.get(source);
+    if (previousSignatures && sameSignatures(previousSignatures, nextSignatures)) return;
+
+    // Tažení kresby emituje change na každý pohyb myši a mění JEN body.
+    // Plný import do všech ostatních panelů (serializace kompletní sady +
+    // rebuild engine) na každý pohyb byl hlavní zdroj sekání — `setPoints`
+    // je O(kresba), nechá cílovému panelu výběr i pořadí a stojí zlomek.
+    if (previousSignatures && previousSignatures.size === nextSignatures.size) {
+      const restUnchanged = [...nextSignatures]
+        .every(([id, signature]) => previousSignatures.get(id)?.rest === signature.rest);
+      if (restUnchanged) {
+        const changed = sourceDrawings
+          .filter(item => previousSignatures.get(item.id)!.points !== nextSignatures.get(item.id)!.points);
+        const applicable = changed.length > 0 && engines.every(target => target === source
+          || (Boolean(target.setPoints) && Boolean(target.getById)
+            && changed.every(item => target.getById!(item.id))));
+        if (applicable) {
+          synchronizing = true;
+          changed.forEach(item => {
+            const points = cloneDrawings([item])[0].points;
+            engines.forEach(target => {
+              if (target !== source) target.setPoints!(item.id, points);
+            });
+          });
+          synchronizing = false;
+          engines.forEach(engine => previous.set(engine, new Map(nextSignatures)));
+          return;
+        }
+      }
+    }
 
     synchronizing = true;
     engines.forEach(target => {
-      if (target !== source) applyManualDrawings(target, sourceDrawings);
+      if (target !== source) applyManualDrawings(target, sourceDrawings, nextSignatures);
     });
-    engines.forEach(engine => previous.set(engine, fingerprint(manualDrawings(engine))));
+    engines.forEach(engine => previous.set(engine, signaturesOf(manualDrawings(engine))));
     synchronizing = false;
   }));
 
