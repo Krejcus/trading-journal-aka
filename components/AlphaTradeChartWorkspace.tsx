@@ -354,10 +354,68 @@ const loadSyncSettings = (): ChartWorkspaceSyncSettings => {
 
 const panelOrder = (id: string) => Number(id.replace(PANEL_ID_PREFIX, '')) || Number.MAX_SAFE_INTEGER;
 
-const AlphaTradeWorkspacePanel: React.FC<{
+interface WorkspacePanelProps {
   instance: PanelInstance<WorkspacePanelConfig>;
   updateConfig: (next: Partial<WorkspacePanelConfig>) => void;
-}> = ({ instance, updateConfig }) => {
+}
+
+interface ResilientPanelState {
+  caught: boolean;
+  exhausted: boolean;
+  attempt: number;
+  failedAt: number[];
+}
+
+/**
+ * Panel občas shodí přechodová chyba grafu — typicky volání na sérii právě
+ * rušeného chartu při remountu, nebo závod při mountu tří panelů najednou.
+ * FlexLayout má vlastní boundary s ručním Retry (a jedno kliknutí panel vždy
+ * spolehlivě oživilo); tenhle obal udělá totéž sám. Přechodný závod je pak
+ * mrknutí místo mrtvého panelu. Tři pády během minuty znamenají skutečnou
+ * chybu — pak se ukáže ruční Retry, ať se smyčka netočí donekonečna.
+ */
+class ResilientWorkspacePanel extends React.Component<WorkspacePanelProps, ResilientPanelState> {
+  state: ResilientPanelState = { caught: false, exhausted: false, attempt: 0, failedAt: [] };
+
+  static getDerivedStateFromError(): Partial<ResilientPanelState> {
+    return { caught: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    const now = Date.now();
+    const recent = this.state.failedAt.filter(at => now - at < 60_000);
+    console.warn('[Workspace] Panel spadl na přechodovou chybu, zkouším automatickou obnovu:', error);
+    if (recent.length >= 2) {
+      this.setState({ caught: false, exhausted: true, failedAt: [...recent, now] });
+      return;
+    }
+    this.setState(current => ({
+      caught: false,
+      exhausted: false,
+      attempt: current.attempt + 1,
+      failedAt: [...recent, now],
+    }));
+  }
+
+  render() {
+    if (this.state.caught) return null;
+    if (this.state.exhausted) {
+      return (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-sm">
+          <span>Panel se opakovaně nepodařilo obnovit.</span>
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 px-4 py-1.5 text-xs font-bold hover:bg-slate-100"
+            onClick={() => this.setState({ caught: false, exhausted: false, attempt: this.state.attempt + 1, failedAt: [] })}
+          >Zkusit znovu</button>
+        </div>
+      );
+    }
+    return <AlphaTradeWorkspacePanel key={this.state.attempt} {...this.props} />;
+  }
+}
+
+const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, updateConfig }) => {
   const context = useContext(WorkspaceDataContext);
   if (!context) throw new Error('AlphaTrade workspace panel is missing its data context.');
 
@@ -886,7 +944,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     });
     manager.registerPanel({
       kind: WORKSPACE_KIND,
-      component: AlphaTradeWorkspacePanel,
+      component: ResilientWorkspacePanel,
       displayName: 'MNQ / NQ graf',
       defaultConfig: () => panelConfig(initialRoot, '1m'),
     });

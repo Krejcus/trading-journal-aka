@@ -4035,7 +4035,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
       FUTURE_AXIS_BARS,
     );
-    series.setData(times.map(time => ({ time: time as UTCTimestamp })));
+    try {
+      series.setData(times.map(time => ({ time: time as UTCTimestamp })));
+    } catch {
+      // Ref může na jeden commit ukazovat na sérii právě rušeného grafu
+      // (remount při přepnutí timeframe/layoutu). Neošetřený throw tady
+      // shazoval celý panel do error boundary; nový graf si osu budoucnosti
+      // založí sám v efektu nad tím.
+    }
   }, [timeframe, visibleCandles]);
 
   /**
@@ -4187,26 +4194,32 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     let frame: number | null = null;
     const refresh = () => {
       frame = null;
-      setSessionBreakOffsets(sessionBreakTimesValue
-        .map(time => timeScale.timeToCoordinate(time as UTCTimestamp))
-        .filter((coordinate): coordinate is NonNullable<typeof coordinate> => coordinate !== null)
-        .map(Number));
-      applyManagedPriceLines();
-      const range = timeScale.getVisibleRange();
-      const logical = timeScale.getVisibleLogicalRange();
-      if (keepLeftEdgeOnIntervalChange && range && logical) {
-        leftEdgeRef.current = { time: Number(range.from), span: logical.to - logical.from };
+      // Odběr i rAF můžou doběhnout na grafu, který layout/timeframe switch
+      // právě ruší — každé čtení by pak vyhodilo výjimku a shodilo panel.
+      try {
+        setSessionBreakOffsets(sessionBreakTimesValue
+          .map(time => timeScale.timeToCoordinate(time as UTCTimestamp))
+          .filter((coordinate): coordinate is NonNullable<typeof coordinate> => coordinate !== null)
+          .map(Number));
+        applyManagedPriceLines();
+        const range = timeScale.getVisibleRange();
+        const logical = timeScale.getVisibleLogicalRange();
+        if (keepLeftEdgeOnIntervalChange && range && logical) {
+          leftEdgeRef.current = { time: Number(range.from), span: logical.to - logical.from };
+        }
+        if (!lockPriceToBarRatio) return;
+        const priceScale = chart.priceScale(placement === 'left' ? 'left' : 'right');
+        const current = priceScale.getVisibleRange();
+        const locked = lockedPriceRange({
+          ratio: priceToBarRatio,
+          barSpacing: timeScale.options().barSpacing,
+          paneHeight: chart.paneSize().height,
+          center: current ? (current.from + current.to) / 2 : Number.NaN,
+        });
+        if (locked) priceScale.setVisibleRange(locked);
+      } catch {
+        // Rušený graf — nový mount si předěly i zamčený poměr dopočítá sám.
       }
-      if (!lockPriceToBarRatio) return;
-      const priceScale = chart.priceScale(placement === 'left' ? 'left' : 'right');
-      const current = priceScale.getVisibleRange();
-      const locked = lockedPriceRange({
-        ratio: priceToBarRatio,
-        barSpacing: timeScale.options().barSpacing,
-        paneHeight: chart.paneSize().height,
-        center: current ? (current.from + current.to) / 2 : Number.NaN,
-      });
-      if (locked) priceScale.setVisibleRange(locked);
     };
     const schedule = () => {
       if (frame !== null) return;
@@ -4230,10 +4243,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const api = apiRef.current;
     if (!chartSettings.scales.keepLeftEdgeOnIntervalChange || !edge || !api) return;
     const index = candleIndexAtOrAfter(candlesRef.current, edge.time);
-    api.controller.getChart().timeScale().setVisibleLogicalRange({
-      from: index,
-      to: index + edge.span,
-    });
+    try {
+      api.controller.getChart().timeScale().setVisibleLogicalRange({
+        from: index,
+        to: index + edge.span,
+      });
+    } catch { /* graf mezitím zanikl — nový mount se postaví na výchozím výřezu */ }
   }, [chartApiEpoch, chartSettings.scales.keepLeftEdgeOnIntervalChange, timeframe, visibleCandles]);
 
   // Tlačítka A/L přepínají režim osy; stav se drží tady, ne v nastavení, aby
@@ -4242,9 +4257,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const api = apiRef.current;
     if (!api) return;
     const scaleId = chartSettings.scales.placement === 'left' ? 'left' : 'right';
-    const priceScale = api.controller.getChart().priceScale(scaleId);
-    priceScale.applyOptions({ mode: chartPriceScaleMode(priceScaleMode) });
-    priceScale.setAutoScale(priceScaleAuto);
+    try {
+      const priceScale = api.controller.getChart().priceScale(scaleId);
+      priceScale.applyOptions({ mode: chartPriceScaleMode(priceScaleMode) });
+      priceScale.setAutoScale(priceScaleAuto);
+    } catch { /* graf mezitím zanikl */ }
   }, [chartApiEpoch, chartSettings.scales.placement, priceScaleAuto, priceScaleMode]);
 
 
