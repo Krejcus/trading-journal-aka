@@ -108,12 +108,38 @@ const defaultSyncSchedule = (flush: () => void): (() => void) => {
   };
 };
 
+/**
+ * Dev diagnostika zrcadlení. Sekání a zamrzlé náhledy se projevují jen při
+ * skutečném kreslení uživatele, takže se počítadla ukládají do localStorage —
+ * origin je sdílený a jde je přečíst z jiné záložky bez zásahu do testu.
+ */
+const syncDiag = {
+  installs: 0,
+  engines: 0,
+  enginesWithGetDraft: 0,
+  flushes: 0,
+  draftMirrors: 0,
+  draftClears: 0,
+  manualMirrors: 0,
+  errors: [] as string[],
+};
+const persistSyncDiag = () => {
+  if (typeof window === 'undefined' || !import.meta.env?.DEV) return;
+  try {
+    window.localStorage.setItem('at:dev:drawing-sync', JSON.stringify({ ...syncDiag, at: new Date().toISOString() }));
+  } catch { /* plná/blokovaná storage nesmí nic rozbít */ }
+};
+
 export const installWorkspaceDrawingSync = (
   sourceEngines: readonly DrawingSyncEngine[],
   schedule: (flush: () => void) => (() => void) = defaultSyncSchedule,
 ): (() => void) => {
   const engines = [...new Set(sourceEngines)];
   if (engines.length < 2) return () => undefined;
+  syncDiag.installs += 1;
+  syncDiag.engines = engines.length;
+  syncDiag.enginesWithGetDraft = engines.filter(engine => typeof engine.getDraft === 'function').length;
+  persistSyncDiag();
 
   let synchronizing = false;
   const previous = new Map<DrawingSyncEngine, SignatureMap>();
@@ -182,6 +208,8 @@ export const installWorkspaceDrawingSync = (
           if (draft) applyDraftPreview(target, draft);
           else clearDraftPreview(target);
         });
+        if (draft) syncDiag.draftMirrors += 1;
+        else syncDiag.draftClears += 1;
       } finally {
         synchronizing = false;
       }
@@ -229,6 +257,7 @@ export const installWorkspaceDrawingSync = (
         if (target !== source) applyManualDrawings(target, sourceDrawings, nextSignatures);
       });
       engines.forEach(engine => previous.set(engine, signaturesOf(manualDrawings(engine))));
+      syncDiag.manualMirrors += 1;
     } finally {
       synchronizing = false;
     }
@@ -246,6 +275,7 @@ export const installWorkspaceDrawingSync = (
       cancelScheduled = null;
       const sources = [...queued];
       queued.clear();
+      syncDiag.flushes += 1;
       sources.forEach(item => {
         // Výjimka z jednoho zdroje nesmí zabít zrcadlení ostatních ani celou
         // instanci — bez záchytu by zůstala synchronizace navždy mrtvá.
@@ -253,8 +283,10 @@ export const installWorkspaceDrawingSync = (
           handleChange(item);
         } catch (error) {
           console.error('[DrawingSync] zrcadlení selhalo', error);
+          if (syncDiag.errors.length < 10) syncDiag.errors.push(String(error).slice(0, 200));
         }
       });
+      persistSyncDiag();
     });
     cancelScheduled = finished ? null : cancel;
   }));
