@@ -4,6 +4,7 @@ import {
   applyLeaderProgress,
   applyFollowerFillResolution,
   classifySequence,
+  followerQuantity,
   linkFollowerOrder,
   planCancel,
   planModify,
@@ -377,7 +378,8 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
       });
       return [];
     }
-    const quantity = Math.trunc(pair.quantity * follower.multiplier);
+    // Jednotny vypocet s maxContracts stropem — stejne pro standard, OCO i OSO.
+    const quantity = followerQuantity(pair.quantity, follower.multiplier, follower.maxContracts);
     if (quantity <= 0) {
       audit.push({
         at: clock(), leaderEventId: event.id, kind: 'skipped', accountId: follower.accountId,
@@ -612,7 +614,8 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       });
       continue;
     }
-    const quantity = Math.trunc(pair.quantity * follower.multiplier);
+    // Jednotny vypocet s maxContracts stropem — stejne pro standard, OCO i OSO.
+    const quantity = followerQuantity(pair.quantity, follower.multiplier, follower.maxContracts);
     if (quantity <= 0) {
       audit.push({
         at: clock(), leaderEventId: event.id, kind: 'skipped', accountId: follower.accountId,

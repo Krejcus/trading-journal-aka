@@ -184,7 +184,7 @@ export function planModify(
   return links.flatMap(link => {
     const follower = group.followers.find(item => item.accountId === link.accountId);
     if (!follower || follower.mode !== 'on-submit') return [];
-    const quantity = followerQuantity(event.quantity, follower.multiplier);
+    const quantity = followerQuantity(event.quantity, follower.multiplier, follower.maxContracts);
     if (quantity <= 0) return [];
     return [{
       key: `mx:${link.key}:${event.id}`,
@@ -221,9 +221,19 @@ export function planCancel(event: LeaderEvent, state: CopierState): CancelComman
  * neodeslat — což je správně. Zaokrouhlení nahoru by na malém prop účtu
  * tiše zvětšilo riziko.
  */
-export function followerQuantity(leaderQuantity: number, multiplier: number): number {
+export function followerQuantity(
+  leaderQuantity: number,
+  multiplier: number,
+  maxContracts?: number,
+): number {
   if (!Number.isFinite(leaderQuantity) || !Number.isFinite(multiplier)) return 0;
-  return Math.max(0, Math.floor(leaderQuantity * multiplier));
+  const scaled = Math.max(0, Math.floor(leaderQuantity * multiplier));
+  // Tvrdý prop-risk strop: multiplier škáluje, strop řeže. Platí i pro
+  // on-fill kumulativní cíl, takže follower pozice strop nikdy nepřekročí.
+  if (maxContracts != null && Number.isFinite(maxContracts) && maxContracts >= 1) {
+    return Math.min(scaled, Math.floor(maxContracts));
+  }
+  return scaled;
 }
 
 export type SequenceVerdict = 'expected' | 'duplicate' | 'gap' | 'out-of-order';
@@ -298,7 +308,7 @@ export function planReplication(
       continue;
     }
 
-    let quantity = followerQuantity(event.quantity, follower.multiplier);
+    let quantity = followerQuantity(event.quantity, follower.multiplier, follower.maxContracts);
     if (event.kind === 'filled' && follower.mode === 'on-fill') {
       const cumulative = event.cumulativeQuantity ?? event.quantity;
       const previousCumulative = state.leaderCumQty.get(event.orderId) ?? 0;
@@ -309,7 +319,10 @@ export function planReplication(
       const previousTarget = state.followerFillTargets.get(
         fillTargetKey(event.orderId, follower.accountId),
       ) ?? 0;
-      quantity = followerQuantity(cumulative, follower.multiplier) - previousTarget;
+      // Strop se aplikuje na kumulativní cíl — jakmile ho follower dosáhne,
+      // další přírůstky fillů se už nereplikují.
+      quantity = followerQuantity(cumulative, follower.multiplier, follower.maxContracts)
+        - previousTarget;
     }
     if (quantity <= 0) {
       skip('zero-quantity');

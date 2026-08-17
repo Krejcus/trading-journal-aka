@@ -6,6 +6,11 @@ export interface CopyFollowerConfig {
   accountId: number;
   mode: CopyReplicationMode;
   multiplier: number;
+  /**
+   * Tvrdý strop kontraktů na jednu follower objednávku (prop risk limit).
+   * Multiplier škáluje, strop řeže. Bez hodnoty se nic neomezuje.
+   */
+  maxContracts?: number;
 }
 
 export interface CopyGroupSafetySettings {
@@ -119,6 +124,10 @@ export function validateCopyGroup(
     if (!Number.isFinite(follower.multiplier) || follower.multiplier <= 0 || follower.multiplier > 100) {
       errors.push('Multiplier musí být větší než 0 a nejvýše 100.');
     }
+    if (follower.maxContracts != null
+      && (!Number.isSafeInteger(follower.maxContracts) || follower.maxContracts < 1)) {
+      errors.push('Max kontrakty musí být celé číslo alespoň 1.');
+    }
   }
   return { valid: errors.length === 0, errors: [...new Set(errors)] };
 }
@@ -144,10 +153,13 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
       if (typeof follower.accountId !== 'number') return null;
       if (follower.mode !== 'off' && follower.mode !== 'on-submit' && follower.mode !== 'on-fill') return null;
       if (typeof follower.multiplier !== 'number') return null;
+      const maxContracts = follower.maxContracts;
+      if (maxContracts != null && (!Number.isSafeInteger(maxContracts) || maxContracts < 1)) return null;
       followers.push({
         accountId: follower.accountId,
         mode: follower.mode,
         multiplier: normalizeMultiplier(follower.multiplier),
+        ...(maxContracts != null ? { maxContracts } : {}),
       });
     }
     groups.push({

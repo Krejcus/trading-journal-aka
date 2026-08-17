@@ -52,6 +52,17 @@ describe('followerQuantity', () => {
     expect(followerQuantity(Number.NaN, 1)).toBe(0);
     expect(followerQuantity(1, Number.NaN)).toBe(0);
   });
+
+  it('maxContracts řeže výsledek po multiplieru', () => {
+    expect(followerQuantity(10, 2, 5)).toBe(5);
+    expect(followerQuantity(2, 1, 5)).toBe(2);
+    expect(followerQuantity(10, 0.5, 3)).toBe(3);
+  });
+
+  it('nesmyslný strop se ignoruje', () => {
+    expect(followerQuantity(10, 1, 0)).toBe(10);
+    expect(followerQuantity(10, 1, Number.NaN)).toBe(10);
+  });
 });
 
 describe('brokerTag', () => {
@@ -166,6 +177,30 @@ describe('planReplication', () => {
       limitPrice: 29_500,
       stopPrice: 29_400,
     });
+  });
+
+  it('maxContracts omezí vstupní objednávku', () => {
+    const config = group({
+      followers: [{ accountId: 200, mode: 'on-submit', multiplier: 2, maxContracts: 3 }],
+    });
+    const plan = planReplication(event({ quantity: 4 }), config, createCopierState());
+    expect(plan.orders[0].request.quantity).toBe(3);
+  });
+
+  it('on-fill přestane replikovat po dosažení maxContracts cíle', () => {
+    const config = group({
+      followers: [{ accountId: 200, mode: 'on-fill', multiplier: 1, maxContracts: 2 }],
+    });
+    let state = createCopierState();
+    const first = event({ id: 'f1', kind: 'filled', cumulativeQuantity: 2, quantity: 2 });
+    expect(planReplication(first, config, state).orders[0].request.quantity).toBe(2);
+    state = applyLeaderProgress(state, first, config);
+    state = applyFollowerFillResolution(state, 'o1', 200, 2);
+    // Leader pokračuje na 3 kontrakty, follower cíl je ustřižený na 2.
+    const second = event({ id: 'f2', kind: 'filled', cumulativeQuantity: 3, quantity: 3, sequence: 2 });
+    const plan = planReplication(second, config, state);
+    expect(plan.orders).toHaveLength(0);
+    expect(plan.skipped).toEqual([{ followerAccountId: 200, reason: 'zero-quantity' }]);
   });
 
   it('on-fill replikuje přírůstek kumulativního fillu bez dvojího započtení', () => {
