@@ -83,3 +83,16 @@ Mac musí být zapnutý, přihlášený k uživatelskému účtu, online a nesm�
 tvrdě uspán. Je to plně použitelný první produkční krok pro řízené DEMO testy,
 ale neřeší objednávky z mobilu ve chvíli, kdy je Mac offline. Pro skutečný
 provoz 24/7 je později vhodný jeden fenced worker na VPS.
+
+## Zaparkované pro VPS fázi
+
+Migrace `20260817140000_copier_worker_lease.sql`, `services/copierWorkerLease.ts`
+a fence parametr `startTradovateCopier` jsou připravené pro VPS fázi a Mac
+runtime je zatím NEPOUŽÍVÁ — jede na `fileCopierStore` a procesovém locku,
+což na jediném stroji stačí. Fencing řeší riziko dvou souběžných instancí
+(překryv při deployi, restart hostitele), které vzniká až na VPS.
+
+Důsledek k zapamatování: po nasazení lease migrace vyžaduje
+`commit_copier_runtime_state` platný fence. Zápis přes `supabaseCopierStore`
+bez drženého lease skončí `COPIER_LEASE_MISSING` — to je záměr (fail-closed),
+ne chyba. Plán VPS fáze: `docs/COPIER_VPS_PLAN.md`.
