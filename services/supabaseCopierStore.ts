@@ -147,12 +147,31 @@ function asSnapshot(value: unknown, revision: number): CopierSnapshot {
 }
 
 /**
+ * Zápis odmítnut, protože worker přišel o leadership.
+ *
+ * Na rozdíl od konfliktu revize NENÍ opakovatelný. Znamená, že stav mezitím
+ * převzala jiná instance a tenhle worker pracuje se zastaralým světem —
+ * jediná správná reakce je okamžitý fail-closed.
+ */
+export class CopierFenceStaleError extends Error {
+  constructor(message: string) {
+    super(`Copier worker ztratil právo zápisu: ${message}`);
+    this.name = 'CopierFenceStaleError';
+  }
+}
+
+/**
  * Durable store přes uživatelskou Supabase session. Nepoužívá service-role
  * klíč; vlastnictví řádku vynucuje RLS a CAS provádí jediná DB funkce.
+ *
+ * `fence` dodává držený worker lease. Předkládá se u každého commitu a
+ * kontroluje ho databáze — worker, který o leadership přišel, tudy neprojde
+ * ani tehdy, když o tom sám ještě neví.
  */
 export function createSupabaseCopierStore(
   client: SupabaseClient,
   runtimeId: string,
+  fence: () => number,
 ): CopierStore {
   if (!uuidPattern.test(runtimeId)) throw new Error('Copier runtimeId must be a UUID');
   return {
@@ -173,11 +192,19 @@ export function createSupabaseCopierStore(
         p_runtime_id: runtimeId,
         p_expected_revision: expectedRevision,
         p_snapshot: payload,
+        p_fence: fence(),
       });
       if (error) {
         if (error.message.includes('COPIER_REVISION_CONFLICT')) {
           const actual = Number(error.message.match(/actual=([0-9]+)/)?.[1] ?? -1);
           throw new CopierStoreConflictError(expectedRevision, actual);
+        }
+        if (
+          error.message.includes('COPIER_FENCE_STALE')
+          || error.message.includes('COPIER_LEASE_EXPIRED')
+          || error.message.includes('COPIER_LEASE_MISSING')
+        ) {
+          throw new CopierFenceStaleError(error.message);
         }
         throw new Error(`Copier state commit failed: ${error.message}`);
       }

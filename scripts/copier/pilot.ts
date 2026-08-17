@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
+import { access, appendFile, chmod, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -30,8 +30,15 @@ import {
 } from '../../server/tradovatePilotLease';
 import { startLocalCopierExecutionAgent } from '../../server/localCopierExecutionAgent';
 import { LOCAL_COPIER_AGENT_PORT } from '../../lib/localCopierAgentProtocol';
+import {
+  createMacCopierDevice,
+  createMacCopierDeviceTokenProvider,
+  loadMacCopierDevice,
+  macCopierDevicePairing,
+  markMacCopierDevicePaired,
+} from '../../server/macCopierDevice';
 
-type Command = 'keygen' | 'accounts' | 'preflight' | 'dry-run' | 'shadow' | 'live' | 'agent';
+type Command = 'keygen' | 'mac-device-init' | 'accounts' | 'preflight' | 'dry-run' | 'shadow' | 'live' | 'agent';
 
 interface ConnectionRow {
   id: string;
@@ -46,17 +53,21 @@ interface PilotContext {
   connectionId: string;
   accountSpec?: string;
   expiresAt: string | null;
+  renewable: boolean;
   getAccessToken: () => Promise<string>;
+  device?: NonNullable<Parameters<typeof startLocalCopierExecutionAgent>[0]['device']>;
+  onDevicePaired?: (deviceId: string) => Promise<void>;
 }
 
 const flags = parseFlags(process.argv.slice(3));
 const command = process.argv[2] as Command | undefined;
 
-if (!command || !['keygen', 'accounts', 'preflight', 'dry-run', 'shadow', 'live', 'agent'].includes(command)) {
+if (!command || !['keygen', 'mac-device-init', 'accounts', 'preflight', 'dry-run', 'shadow', 'live', 'agent'].includes(command)) {
   usage(command ? `Neznámý příkaz: ${command}` : undefined);
   process.exitCode = command ? 1 : 0;
 } else {
   if (command === 'keygen') await generatePilotKeys();
+  else if (command === 'mac-device-init') await generateMacDevice();
   else await main(command);
 }
 
@@ -118,7 +129,7 @@ async function runLocalAgent(
   if (!Number.isFinite(multiplierValue) || Number(multiplierValue) <= 0 || Number(multiplierValue) > 100) {
     throw new Error('--multiplier musí být větší než 0 a nejvýše 100');
   }
-  if (context.expiresAt && Date.parse(context.expiresAt) - Date.now() <= (Number(minutesValue) + 5) * 60_000) {
+  if (!context.renewable && context.expiresAt && Date.parse(context.expiresAt) - Date.now() <= (Number(minutesValue) + 5) * 60_000) {
     throw new Error(`Pilot lease nevydrží celý ${minutesValue}min běh a 5min rezervu; stáhni nový lease`);
   }
 
@@ -181,7 +192,13 @@ async function runLocalAgent(
       onError: error => console.error(`FAIL-CLOSED ${error.message}`),
     });
     await waitUntil(() => controller?.status().connected === true, 15_000, 'WebSocket sync timeout');
-    agent = await startLocalCopierExecutionAgent({ controller, group, port: Number(portValue) });
+    agent = await startLocalCopierExecutionAgent({
+      controller,
+      group,
+      port: Number(portValue),
+      device: context.device,
+      onDevicePaired: context.onDevicePaired,
+    });
     console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} follower=${followerId} multiplier=${multiplierValue}`);
     console.log('Stav je DISARMED. ARM, Flatten, Flatten All a násobek vyžadují explicitní akci v AlphaTrade LIVE UI.');
     const deadline = Date.now() + Number(minutesValue) * 60_000;
@@ -195,24 +212,71 @@ async function runLocalAgent(
 }
 
 async function pilotContext(): Promise<PilotContext> {
+  const deviceConfigPath = stringFlag('device-config', false);
+  const deviceConfig = deviceConfigPath ? await loadMacCopierDevice(deviceConfigPath) : null;
+  if (deviceConfig?.paired) {
+    const provider = createMacCopierDeviceTokenProvider({ config: deviceConfig });
+    const payload = await provider.refresh();
+    return {
+      environment: 'demo',
+      connectionId: payload.connectionId,
+      accountSpec: payload.accountSpec,
+      expiresAt: payload.expiresAt,
+      renewable: true,
+      getAccessToken: provider.getAccessToken,
+      device: {
+        state: 'paired',
+        deviceId: deviceConfig.deviceId,
+        connectionId: deviceConfig.connectionId,
+        deviceName: deviceConfig.deviceName,
+      },
+    };
+  }
   const leasePath = stringFlag('lease', false);
   if (leasePath) {
     const privateKeyPath = stringFlag('private-key', false) || resolve('.copier-pilot/pilot-private.pem');
     const envelope = JSON.parse(await readFile(resolve(leasePath), 'utf8')) as TradovatePilotLeaseEnvelope;
     const privateKey = await readFile(resolve(privateKeyPath), 'utf8');
     const payload = openTradovatePilotLease(envelope, privateKey);
+    let paired = false;
+    const provider = deviceConfig ? createMacCopierDeviceTokenProvider({ config: deviceConfig }) : null;
+    if (deviceConfig && payload.connectionId !== deviceConfig.connectionId) {
+      throw new Error('Mac device a pilot lease míří na rozdílné Tradovate připojení');
+    }
     const getAccessToken = async () => {
+      if (paired && provider) return provider.getAccessToken();
       if (Date.parse(payload.expiresAt) - Date.now() <= 120_000) throw new Error('pilot-lease-expired');
       return payload.accessToken;
     };
+    const pairing = deviceConfig ? await macCopierDevicePairing({ config: deviceConfig }) : null;
     return {
       environment: 'demo',
       connectionId: payload.connectionId,
       accountSpec: payload.accountSpec,
       expiresAt: payload.expiresAt,
+      renewable: Boolean(deviceConfig),
       getAccessToken,
+      ...(pairing ? {
+        device: {
+          state: 'pairing-required' as const,
+          deviceId: pairing.deviceId,
+          connectionId: pairing.connectionId,
+          deviceName: pairing.deviceName,
+          deviceSecret: pairing.deviceSecret,
+          publicKey: pairing.publicKey,
+        },
+        onDevicePaired: async (deviceId: string) => {
+          if (deviceId !== pairing.deviceId || !deviceConfigPath || !provider) {
+            throw new Error('Neplatné potvrzení Mac device párování');
+          }
+          await provider.refresh();
+          await markMacCopierDevicePaired(deviceConfigPath);
+          paired = true;
+        },
+      } : {}),
     };
   }
+  if (deviceConfig) throw new Error('Nespárovaný Mac device potřebuje při prvním startu --lease');
   const config = readTradovateServerConfig();
   if (config.environment !== 'demo') {
     throw new Error('Pilot odmítá start: TRADOVATE_ENVIRONMENT musí být demo');
@@ -241,7 +305,7 @@ async function pilotContext(): Promise<PilotContext> {
     userId: connection.user_id,
     connectionId: connection.id,
   })).accessToken;
-  return { environment: 'demo', connectionId: connection.id, accountSpec, expiresAt: null, getAccessToken };
+  return { environment: 'demo', connectionId: connection.id, accountSpec, expiresAt: null, renewable: true, getAccessToken };
 }
 
 function validatePair(
@@ -548,6 +612,23 @@ async function generatePilotKeys(): Promise<void> {
   console.log(`Pilot private key: ${privatePath} (nikam neposílat)`);
 }
 
+async function generateMacDevice(): Promise<void> {
+  const configPath = resolve(stringFlag('device-config', false) || '.copier-pilot/mac-device.json');
+  try {
+    await access(configPath);
+    throw new Error(`Mac device konfigurace už existuje: ${configPath}`);
+  } catch (error) {
+    if (!isCode(error, 'ENOENT')) throw error;
+  }
+  const connectionId = stringFlag('connection-id');
+  const apiOrigin = stringFlag('api-origin', false) || 'https://alphatrade-mentor-15.vercel.app';
+  const deviceName = stringFlag('device-name', false) || undefined;
+  const config = await createMacCopierDevice({ configPath, connectionId, apiOrigin, deviceName });
+  console.log(`Mac device: ${config.deviceName}`);
+  console.log(`Konfigurace: ${configPath}`);
+  console.log('Secret je uložen pouze v macOS Keychainu. První agent start ještě vyžaduje krátký pilot lease; potom se zařízení spáruje jedním kliknutím v LIVE UI.');
+}
+
 function parseFlags(args: string[]): Map<string, string> {
   const parsed = new Map<string, string>();
   for (let index = 0; index < args.length; index += 1) {
@@ -612,15 +693,17 @@ function usage(error?: string): void {
 Ranní Tradovate copier pilot (vždy DEMO)
 
   npm run copier:pilot -- keygen
+  npm run copier:pilot -- mac-device-init --connection-id UUID [--api-origin https://alphatrade-mentor-15.vercel.app]
   npm run copier:pilot -- accounts
   npm run copier:pilot -- preflight --leader ID --follower ID
   npm run copier:pilot -- dry-run --leader ID --follower ID --symbol MNQU6 --side Buy --quantity 1 --order-type Limit --price PRICE
   npm run copier:pilot -- shadow --leader ID --follower ID --minutes 30
   npm run copier:pilot -- live --leader ID --follower ID --minutes 15 --approval POTVRZUJI_1_MNQ_DEMO_WRITE
-  npm run copier:pilot -- agent --leader ID --follower ID --lease LEASE_JSON --minutes 480
+  npm run copier:pilot -- agent --leader ID --follower ID --lease LEASE_JSON --device-config .copier-pilot/mac-device.json --minutes 480
 
 Volitelné: --connection-id UUID, --account-spec USERNAME
 Lokální lease: --lease /cesta/k/pilot-lease.json [--private-key /cesta/pilot-private.pem]
+Spárovaný Mac: --device-config /cesta/mac-device.json (další starty už --lease nepotřebují)
 Live příkaz se nesmí spustit bez bezprostředního potvrzení uživatele.
 Agent vždy startuje DISARMED, poslouchá pouze na 127.0.0.1 a brokerové akce přijímá až z potvrzeného LIVE UI.
 `);

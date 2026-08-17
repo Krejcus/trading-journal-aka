@@ -12,6 +12,8 @@ import type { CopyGroupConfig } from './liveCopyTrading';
 export interface StartTradovateCopierOptions {
   supabase: SupabaseClient;
   runtimeId: string;
+  /** Aktuální fencing token drženého worker lease; bez něj se nesmí zapisovat. */
+  fence: () => number;
   environment: BrokerEnvironment;
   accountSpec: string;
   group: CopyGroupConfig;
@@ -32,7 +34,7 @@ export async function startTradovateCopier(
   if (!options.runtimeId) throw new Error('Copier runtimeId is required');
   const accountSpec = options.accountSpec.trim();
   if (!accountSpec) throw new Error('Tradovate accountSpec is required');
-  const store = createSupabaseCopierStore(options.supabase, options.runtimeId);
+  const store = createSupabaseCopierStore(options.supabase, options.runtimeId, options.fence);
   const broker = createTradovateBroker({
     environment: options.environment,
     accountSpec,

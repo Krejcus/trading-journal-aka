@@ -30,6 +30,8 @@ interface LocalCopierExecutionAgentOptions {
   host?: '127.0.0.1';
   allowedOrigins?: ReadonlySet<string>;
   startedAt?: string;
+  device?: NonNullable<LocalCopierAgentStatus['device']>;
+  onDevicePaired?: (deviceId: string) => Promise<void>;
 }
 
 export interface LocalCopierExecutionAgent {
@@ -82,6 +84,7 @@ export async function startLocalCopierExecutionAgent(
   const nonce = randomUUID();
   const startedAt = options.startedAt ?? new Date().toISOString();
   let group = structuredClone(options.group);
+  let device = options.device ? structuredClone(options.device) : undefined;
   let tail = Promise.resolve();
 
   const status = (): LocalCopierAgentStatus => ({
@@ -91,6 +94,7 @@ export async function startLocalCopierExecutionAgent(
     group: structuredClone(group),
     controller: options.controller.status(),
     startedAt,
+    ...(device ? { device: structuredClone(device) } : {}),
   });
 
   const configurationResult = (): LiveCopyTradingCommandResult => ({
@@ -171,6 +175,19 @@ export async function startLocalCopierExecutionAgent(
       case 'kill-switch':
         options.controller.engageKillSwitch('Kill switch z AlphaTrade LIVE UI');
         return;
+      case 'device-paired': {
+        if (!device || device.state !== 'pairing-required' || command.deviceId !== device.deviceId) {
+          throw new Error('Lokální Mac zařízení nečeká na toto párování');
+        }
+        await options.onDevicePaired?.(command.deviceId);
+        device = {
+          state: 'paired',
+          deviceId: device.deviceId,
+          connectionId: device.connectionId,
+          deviceName: device.deviceName,
+        };
+        return;
+      }
     }
   };
 

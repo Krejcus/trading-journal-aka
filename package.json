@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "copier:pilot": "tsx scripts/copier/pilot.ts"
+    "copier:pilot": "tsx scripts/copier/pilot.ts",
+    "copier:mac": "tsx scripts/copier/mac-install.ts"
   },
   "dependencies": {
     "@getcandlekit/charts": "0.1.0",

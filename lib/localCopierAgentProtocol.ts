@@ -15,6 +15,15 @@ export interface LocalCopierAgentStatus {
   group: CopyGroupConfig;
   controller: CopierControllerStatus;
   startedAt: string;
+  device?: {
+    state: 'pairing-required' | 'paired';
+    deviceId: string;
+    connectionId: string;
+    deviceName: string;
+    /** Present only until the authenticated AlphaTrade UI confirms pairing. */
+    deviceSecret?: string;
+    publicKey?: string;
+  };
 }
 
 export type LocalCopierAgentCommand =
@@ -22,7 +31,8 @@ export type LocalCopierAgentCommand =
   | { type: 'arm-live' }
   | { type: 'shadow' }
   | { type: 'disarm' }
-  | { type: 'kill-switch' };
+  | { type: 'kill-switch' }
+  | { type: 'device-paired'; deviceId: string };
 
 export interface LocalCopierAgentCommandResult {
   ok: true;

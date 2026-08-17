@@ -7,6 +7,7 @@ import {
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
 import { sealTradovatePilotLease } from '../../../server/tradovatePilotLease.js';
+import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierDevice.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -14,11 +15,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const config = readTradovateServerConfig();
     if (config.environment !== 'demo') return res.status(409).json({ error: 'pilot-demo-only' });
-    const userId = await requireSupabaseUserId(req.headers.authorization, config);
-    const connectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId.trim() : '';
-    const publicKey = typeof req.body?.publicKey === 'string' ? req.body.publicKey.trim() : '';
-    if (!connectionId || !publicKey) return res.status(400).json({ error: 'missing-pilot-lease-input' });
     const db = createTradovateAdminClient(config);
+    const deviceAuthorization = req.headers.authorization?.startsWith('Device ');
+    const device = deviceAuthorization
+      ? await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization })
+      : null;
+    const userId = device?.userId ?? await requireSupabaseUserId(req.headers.authorization, config);
+    const connectionId = device?.connectionId
+      ?? (typeof req.body?.connectionId === 'string' ? req.body.connectionId.trim() : '');
+    const publicKey = device?.publicKey
+      ?? (typeof req.body?.publicKey === 'string' ? req.body.publicKey.trim() : '');
+    if (!connectionId || !publicKey) return res.status(400).json({ error: 'missing-pilot-lease-input' });
     const connection = (await listTradovateConnectionStatuses(db, userId, 'demo'))
       .find(item => item.id === connectionId && item.connected);
     if (!connection) return res.status(404).json({ error: 'tradovate-connection-not-found' });
@@ -42,7 +49,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ envelope, expiresAt: token.expiresAt, issuedAt });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message === 'missing-auth-token' || message === 'invalid-auth-token') {
+    if (message === 'missing-auth-token' || message === 'invalid-auth-token' || message === 'invalid-copier-device-auth') {
       return res.status(401).json({ error: message });
     }
     if (message.includes('public-key') || message.includes('PEM')) {

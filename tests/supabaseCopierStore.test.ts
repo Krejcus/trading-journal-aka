@@ -32,23 +32,23 @@ function fakeClient(options: {
 
 describe('createSupabaseCopierStore', () => {
   it('odmítne runtime id, které PostgreSQL UUID parametr nemůže přijmout', () => {
-    expect(() => createSupabaseCopierStore(fakeClient({}), 'not-a-uuid')).toThrow('UUID');
+    expect(() => createSupabaseCopierStore(fakeClient({}), 'not-a-uuid', () => 1)).toThrow('UUID');
   });
 
   it('prázdný runtime načte jako bezpečný revision 0 snapshot', async () => {
-    const store = createSupabaseCopierStore(fakeClient({ row: null }), crypto.randomUUID());
+    const store = createSupabaseCopierStore(fakeClient({ row: null }), crypto.randomUUID(), () => 1);
     expect(await store.load()).toEqual(emptySnapshot());
   });
 
   it('commit vrátí novou CAS revision', async () => {
-    const store = createSupabaseCopierStore(fakeClient({ rpcData: 1 }), crypto.randomUUID());
+    const store = createSupabaseCopierStore(fakeClient({ rpcData: 1 }), crypto.randomUUID(), () => 1);
     expect((await store.commit(emptySnapshot(), 0)).revision).toBe(1);
   });
 
   it('poškozený snapshot failne zavřeně místo návratu prázdného stavu', async () => {
     const store = createSupabaseCopierStore(fakeClient({
       row: { revision: 4, snapshot: { lastSequence: 10 } },
-    }), crypto.randomUUID());
+    }), crypto.randomUUID(), () => 1);
     await expect(store.load()).rejects.toThrow('Invalid copier snapshot');
   });
 
@@ -60,14 +60,14 @@ describe('createSupabaseCopierStore', () => {
     };
     const store = createSupabaseCopierStore(fakeClient({
       row: { revision: 4, snapshot: malformed },
-    }), crypto.randomUUID());
+    }), crypto.randomUUID(), () => 1);
     await expect(store.load()).rejects.toThrow('Invalid copier snapshot');
   });
 
   it('přeloží databázový CAS konflikt na doménovou chybu', async () => {
     const store = createSupabaseCopierStore(fakeClient({
       rpcError: { message: 'COPIER_REVISION_CONFLICT expected=2 actual=3' },
-    }), crypto.randomUUID());
+    }), crypto.randomUUID(), () => 1);
     await expect(store.commit({ ...emptySnapshot(), revision: 2 }, 2))
       .rejects.toBeInstanceOf(CopierStoreConflictError);
   });

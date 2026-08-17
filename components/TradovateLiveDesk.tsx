@@ -32,6 +32,7 @@ import {
 } from '../lib/tradovateLiveView';
 import {
   createTradovatePilotLease,
+  pairTradovateCopierDevice,
   type TradovateOAuthStatus,
   type TradovatePreflightResult,
 } from '../services/tradovateOAuthConnection';
@@ -192,7 +193,26 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
             }
           }}
           onReconnect={connectionId => void live.connect(connectionId)}
-          onPilotLease={connectionId => void downloadPilotLease(connectionId).catch(error => {
+          pilotDevice={agentStatus?.device}
+          onPilotLease={connectionId => void (async () => {
+            const device = agentStatus?.device;
+            if (device?.state === 'pairing-required') {
+              if (device.connectionId !== connectionId || !device.deviceSecret || !device.publicKey) {
+                throw new Error('Mac worker čeká na jiné Tradovate připojení nebo má neúplnou pairing žádost.');
+              }
+              if (!window.confirm(`Spárovat ${device.deviceName} s tímto DEMO připojením? Zařízení dostane pouze odvolatelný přístup k obnově krátkého copier lease.`)) return;
+              await pairTradovateCopierDevice({
+                connectionId,
+                deviceId: device.deviceId,
+                deviceSecret: device.deviceSecret,
+                publicKey: device.publicKey,
+                deviceName: device.deviceName,
+              });
+              setAgentStatus((await agentClient.execute({ type: 'device-paired', deviceId: device.deviceId })).status);
+              return;
+            }
+            await downloadPilotLease(connectionId);
+          })().catch(error => {
             live.setError(error instanceof Error ? error.message : String(error));
           })}
         />
@@ -255,7 +275,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   );
 };
 
-const Connections = ({ status, connectionData, connectionSummaries, profiles, busy, onAdd, onRefreshStatus, onProfiles, onDisconnect, onReconnect, onPilotLease }: {
+const Connections = ({ status, connectionData, connectionSummaries, profiles, busy, onAdd, onRefreshStatus, onProfiles, onDisconnect, onReconnect, onPilotLease, pilotDevice }: {
   status: TradovateOAuthStatus | null;
   connectionData: Record<string, TradovatePreflightResult>;
   connectionSummaries: Record<string, TradovateConnectionSummary>;
@@ -267,6 +287,7 @@ const Connections = ({ status, connectionData, connectionSummaries, profiles, bu
   onDisconnect: (connectionId: string) => void;
   onReconnect: (connectionId: string) => void;
   onPilotLease: (connectionId: string) => void;
+  pilotDevice?: LocalCopierAgentStatus['device'];
 }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const profilesById = profileMap(profiles);
@@ -311,7 +332,12 @@ const Connections = ({ status, connectionData, connectionSummaries, profiles, bu
                 {connection.connected ? <>
                   <button type="button" onClick={() => onDisconnect(connection.id)} disabled={busy != null} className="h-7 shrink-0 whitespace-nowrap rounded-md border border-[var(--border-subtle)] px-2 text-[10px] font-bold leading-none text-[var(--text-primary)] disabled:opacity-50">Disconnect</button>
                   <button type="button" disabled title="Flatten All bude aktivní až po samostatném schválení DEMO execution testu." className="h-7 shrink-0 cursor-not-allowed whitespace-nowrap rounded-md bg-rose-500 px-2 text-[10px] font-black leading-none text-white opacity-45">Flatten All</button>
-                  <IconButton label="Připravit lokální pilot lease" onClick={() => onPilotLease(connection.id)} disabled={busy != null} small><KeyRound size={13} /></IconButton>
+                  <IconButton
+                    label={pilotDevice?.state === 'pairing-required' && pilotDevice.connectionId === connection.id ? 'Spárovat tento Mac worker' : 'Připravit lokální pilot lease'}
+                    onClick={() => onPilotLease(connection.id)}
+                    disabled={busy != null}
+                    small
+                  ><KeyRound size={13} /></IconButton>
                   <IconButton label="Nastavit účty" onClick={onProfiles} disabled={!dataset?.accounts.length} small><Settings2 size={13} /></IconButton>
                 </> : <button type="button" onClick={() => onReconnect(connection.id)} disabled={busy != null} className="flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-indigo-600 px-3 text-[10px] font-black leading-none text-white disabled:opacity-50"><RotateCcw size={12} /> Reconnect</button>}
                 </div>

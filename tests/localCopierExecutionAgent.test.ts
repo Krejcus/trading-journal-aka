@@ -146,6 +146,41 @@ describe('local copier execution agent', () => {
     expect(runtime.arm).not.toHaveBeenCalled();
   });
 
+  it('exposes a pending Mac pairing only until the authenticated UI confirms it', async () => {
+    const runtime = controller();
+    const onDevicePaired = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      device: {
+        state: 'pairing-required',
+        deviceId: '00000000-0000-4000-8000-000000000001',
+        connectionId: '00000000-0000-4000-8000-000000000002',
+        deviceName: 'Filipův Mac',
+        deviceSecret: 'secret-only-before-pairing',
+        publicKey: 'public-key',
+      },
+      onDevicePaired,
+    });
+    expect(running.status().device).toMatchObject({
+      state: 'pairing-required',
+      deviceSecret: 'secret-only-before-pairing',
+    });
+    const response = await post(running, running.status().nonce, {
+      type: 'device-paired',
+      deviceId: '00000000-0000-4000-8000-000000000001',
+    });
+    expect(response.status).toBe(200);
+    expect(onDevicePaired).toHaveBeenCalledTimes(1);
+    expect((await response.json()).status.device).toEqual({
+      state: 'paired',
+      deviceId: '00000000-0000-4000-8000-000000000001',
+      connectionId: '00000000-0000-4000-8000-000000000002',
+      deviceName: 'Filipův Mac',
+    });
+  });
+
   it('drives 2x replication, Flatten and Flatten All through HTTP into the real durable runtime', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
     const store = createMemoryCopierStore();

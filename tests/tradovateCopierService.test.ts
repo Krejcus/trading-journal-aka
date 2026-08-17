@@ -31,6 +31,7 @@ describe('startTradovateCopier', () => {
     const controller = await startTradovateCopier({
       supabase: emptySupabase,
       runtimeId: '11111111-1111-4111-8111-111111111111',
+      fence: () => 1,
       environment: 'demo',
       accountSpec: 'DEMO123',
       group,
@@ -58,12 +59,14 @@ describe('startTradovateCopier', () => {
 
   it('odmítne chybějící runtime nebo account identitu před vytvořením spojení', async () => {
     await expect(startTradovateCopier({
-      supabase: emptySupabase, runtimeId: '', environment: 'demo', accountSpec: 'DEMO123', group,
+      supabase: emptySupabase, runtimeId: '', fence: () => 1,
+      environment: 'demo', accountSpec: 'DEMO123', group,
       getAccessToken: async () => 'token',
     })).rejects.toThrow('runtimeId');
     await expect(startTradovateCopier({
       supabase: emptySupabase, runtimeId: '11111111-1111-4111-8111-111111111111',
-      environment: 'demo', accountSpec: '', group, getAccessToken: async () => 'token',
+      fence: () => 1, environment: 'demo', accountSpec: '', group,
+      getAccessToken: async () => 'token',
     })).rejects.toThrow('accountSpec');
   });
 });

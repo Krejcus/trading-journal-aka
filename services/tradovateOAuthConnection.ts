@@ -182,6 +182,28 @@ export function createTradovatePilotLease(
   });
 }
 
+export function pairTradovateCopierDevice(input: {
+  connectionId: string;
+  deviceId: string;
+  deviceSecret: string;
+  publicKey: string;
+  deviceName: string;
+}): Promise<{ paired: true }> {
+  return authenticatedRequest('/api/tradovate/oauth/copier-device', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export function revokeTradovateCopierDevice(deviceId: string): Promise<{ revoked: true }> {
+  return authenticatedRequest('/api/tradovate/oauth/copier-device', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId }),
+  });
+}
+
 export function runTradovateLivePnlTick(
   connectionId: string,
   contractCursor = 0,
