@@ -20,7 +20,10 @@ describe('backtest chart order lines', () => {
     expect(source).toContain("'border-emerald-700 bg-emerald-600");
     expect(source).toContain('items-center gap-[3px]');
     expect(source).toContain('items-center overflow-hidden rounded-[3px] border shadow-sm');
-    expect(source).toContain('onAddBracket?.(line, dragging.bracketKind, snapped)');
+    // Tažení commitne do enginu až při puštění (jinak se celý workspace
+    // překresloval na každý pixel); během tahu žije cena jen v overlay.
+    expect(source).toContain('onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice)');
+    expect(source).toContain('setDragOverride({ lineId: line.id, top: Math.round(top * 2) / 2, price: snapped })');
     expect(source).toContain('data-backtest-bracket-drag-preview');
     expect(source).toContain("'rgba(16, 185, 129, 0.10)'");
     expect(source).toContain("'rgba(244, 63, 94, 0.10)'");

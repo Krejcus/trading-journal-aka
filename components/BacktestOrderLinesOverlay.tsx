@@ -22,10 +22,12 @@ const sameCoordinates = (left: Record<string, number>, right: Record<string, num
 const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, onChange, onCancel, onAddBracket }) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const linesRef = useRef(lines);
+  const lineElementsRef = useRef(new Map<string, HTMLDivElement>());
   const dragRef = useRef<{
     id: string;
     bracketKind?: Exclude<BacktestChartOrderLineKind, 'entry'>;
     moved?: boolean;
+    lastPrice?: number;
   } | null>(null);
   const suppressBracketClickRef = useRef<Exclude<BacktestChartOrderLineKind, 'entry'> | null>(null);
   const refreshRef = useRef<(() => void) | null>(null);
@@ -36,6 +38,10 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, onChange, onCa
     kind: Exclude<BacktestChartOrderLineKind, 'entry'>;
     top: number;
   } | null>(null);
+  // Tažení čáry žije jen v overlays — commit do enginu (a render celého
+  // workspace) proběhne jednou při puštění. Změna stavu enginu na každý pixel
+  // znamenala překreslení všech panelů na každý pohyb myši.
+  const [dragOverride, setDragOverride] = useState<{ lineId: string; top: number; price: number } | null>(null);
   linesRef.current = lines;
 
   useEffect(() => {
@@ -58,8 +64,24 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, onChange, onCa
     const schedule = () => {
       if (!frame) frame = window.requestAnimationFrame(update);
     };
+    // Posun/zoom grafu překresluje canvas synchronně; kdyby čáry čekaly na
+    // React render, viditelně by za position boxem zaostávaly. Proto se top
+    // nastaví přímo na DOM hned v handleru a React stav jen dorovná stejné
+    // hodnoty.
+    const positionNow = () => {
+      linesRef.current.forEach(line => {
+        if (dragRef.current && !dragRef.current.bracketKind && dragRef.current.id === line.id) return;
+        const element = lineElementsRef.current.get(line.id);
+        if (!element) return;
+        const coordinate = series.priceToCoordinate(line.price);
+        if (coordinate !== null) element.style.top = `${Math.round(coordinate * 2) / 2}px`;
+      });
+    };
     refreshRef.current = schedule;
-    const rangeHandler = () => schedule();
+    const rangeHandler = () => {
+      positionNow();
+      schedule();
+    };
     chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
     const observer = new ResizeObserver(schedule);
     if (rootRef.current?.parentElement) observer.observe(rootRef.current.parentElement);
@@ -89,35 +111,43 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, onChange, onCa
       const raw = api.controller.getSeries().coordinateToPrice(event.clientY - root.getBoundingClientRect().top);
       if (raw === null || !Number.isFinite(raw)) return;
       const snapped = Math.round(raw / 0.25) * 0.25;
+      const top = api.controller.getSeries().priceToCoordinate(snapped);
+      dragging.moved = true;
+      dragging.lastPrice = snapped;
       const previewKind = dragging.bracketKind ?? (line.kind === 'entry' ? undefined : line.kind);
-      if (previewKind) {
+      if (previewKind && top !== null) {
         const anchor = linesRef.current.find(item =>
           item.ownerId === line.ownerId && item.ownerType === line.ownerType && item.kind === 'entry');
-        const previewTop = api.controller.getSeries().priceToCoordinate(snapped);
-        if (anchor && previewTop !== null) {
-          setBracketDragPreview({ anchorLineId: anchor.id, kind: previewKind, top: previewTop });
-        }
+        if (anchor) setBracketDragPreview({ anchorLineId: anchor.id, kind: previewKind, top });
       }
-      if (dragging.bracketKind) {
-        dragging.moved = true;
-        onAddBracket?.(line, dragging.bracketKind, snapped);
-      } else {
-        onChange(line, line.kind, snapped);
+      if (!dragging.bracketKind && top !== null) {
+        setDragOverride({ lineId: line.id, top: Math.round(top * 2) / 2, price: snapped });
       }
     };
-    const stop = () => {
+    const finish = (commit: boolean) => {
       const dragging = dragRef.current;
-      if (dragging?.bracketKind && dragging.moved) suppressBracketClickRef.current = dragging.bracketKind;
       dragRef.current = null;
       setBracketDragPreview(null);
+      setDragOverride(null);
+      if (!dragging || !commit || !dragging.moved || dragging.lastPrice === undefined) return;
+      const line = linesRef.current.find(item => item.id === dragging.id);
+      if (!line) return;
+      if (dragging.bracketKind) {
+        suppressBracketClickRef.current = dragging.bracketKind;
+        onAddBracket?.(line, dragging.bracketKind, dragging.lastPrice);
+      } else {
+        onChange(line, line.kind, dragging.lastPrice);
+      }
     };
+    const stop = () => finish(true);
+    const cancel = () => finish(false);
     window.addEventListener('pointermove', move, { capture: true, passive: false });
     window.addEventListener('pointerup', stop, true);
-    window.addEventListener('pointercancel', stop, true);
+    window.addEventListener('pointercancel', cancel, true);
     return () => {
       window.removeEventListener('pointermove', move, true);
       window.removeEventListener('pointerup', stop, true);
-      window.removeEventListener('pointercancel', stop, true);
+      window.removeEventListener('pointercancel', cancel, true);
     };
   }, [api, onAddBracket, onChange]);
 
@@ -138,11 +168,21 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, onChange, onCa
         />
       )}
       {lines.map(line => {
-        const top = coordinates[line.id];
+        const dragged = dragOverride?.lineId === line.id;
+        const top = dragged ? dragOverride.top : coordinates[line.id];
+        const shownPrice = dragged ? dragOverride.price : line.price;
         if (!Number.isFinite(top)) return null;
         const filledLabel = line.filledLabel === true;
         return (
-          <div key={line.id} className="absolute left-0 h-0" style={{ right: priceScaleWidth, top }}>
+          <div
+            key={line.id}
+            ref={element => {
+              if (element) lineElementsRef.current.set(line.id, element);
+              else lineElementsRef.current.delete(line.id);
+            }}
+            className="absolute left-0 h-0"
+            style={{ right: priceScaleWidth, top }}
+          >
             <div className="absolute inset-x-0 top-0 border-t border-dashed opacity-90" style={{ borderColor: line.color }} />
             <div
               role={line.draggable ? 'button' : undefined}
@@ -218,7 +258,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, onChange, onCa
                 style={{ left: '100%', width: priceScaleWidth, backgroundColor: line.color }}
                 data-backtest-order-price-label
               >
-                {line.price.toFixed(2)}
+                {shownPrice.toFixed(2)}
               </div>
             )}
           </div>
