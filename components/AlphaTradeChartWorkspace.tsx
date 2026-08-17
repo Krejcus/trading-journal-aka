@@ -1043,6 +1043,25 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     return () => window.clearTimeout(timer);
   }, [quickOrderFeedback]);
 
+  // Engine mutuje kresby na místě a při tažení emituje change na každý pohyb
+  // myši. Tenhle stav sedí na kořeni workspace — nový wrapper objekt za emit by
+  // znamenal překreslení všech panelů za každý pohyb. Výběr proto drží identitu,
+  // dokud se nezmění vybraná kresba, a překreslení toolbaru (změněný styl) se
+  // doplní jedním trailing refreshem po konci bursty.
+  const selectionRefreshTimerRef = useRef<number | null>(null);
+  const scheduleSelectionRefresh = useCallback(() => {
+    if (selectionRefreshTimerRef.current !== null) window.clearTimeout(selectionRefreshTimerRef.current);
+    selectionRefreshTimerRef.current = window.setTimeout(() => {
+      selectionRefreshTimerRef.current = null;
+      setSelectedFib(current => (current ? { ...current } : current));
+      setSelectedPosition(current => (current ? { ...current } : current));
+      setSelectedDrawing(current => (current ? { ...current } : current));
+    }, 160);
+  }, []);
+  useEffect(() => () => {
+    if (selectionRefreshTimerRef.current !== null) window.clearTimeout(selectionRefreshTimerRef.current);
+  }, []);
+
   useEffect(() => {
     const engine = activeControl?.drawingEngine;
     if (!engine) {
@@ -1058,14 +1077,26 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       const selectedId = engine.getSelectedId();
       const drawing = selectedId ? engine.getById(selectedId) : undefined;
       if (drawing?.tool === 'FibRetracement') {
-        setSelectedFib({ engine, drawing: drawing as FibDrawing });
+        setSelectedFib(current => {
+          if (current && current.engine === engine && current.drawing === drawing) {
+            scheduleSelectionRefresh();
+            return current;
+          }
+          return { engine, drawing: drawing as FibDrawing };
+        });
         setSelectedPosition(null);
         setSelectedDrawing(null);
         setPositionSettingsOpen(false);
         setDrawingSettingsOpen(false);
       } else if (isPositionDrawing(drawing)) {
         setSelectedFib(null);
-        setSelectedPosition({ engine, drawing });
+        setSelectedPosition(current => {
+          if (current && current.engine === engine && current.drawing === drawing) {
+            scheduleSelectionRefresh();
+            return current;
+          }
+          return { engine, drawing };
+        });
         setSelectedDrawing(null);
         setFibSettingsOpen(false);
         setDrawingSettingsOpen(false);
@@ -1074,14 +1105,21 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         setSelectedPosition(null);
         setFibSettingsOpen(false);
         setPositionSettingsOpen(false);
-        setSelectedDrawing(drawing && !drawing.id.startsWith('auto-') ? { engine, drawing } : null);
+        setSelectedDrawing(current => {
+          if (!drawing || drawing.id.startsWith('auto-')) return null;
+          if (current && current.engine === engine && current.drawing === drawing) {
+            scheduleSelectionRefresh();
+            return current;
+          }
+          return { engine, drawing };
+        });
         if (!drawing || drawing.id.startsWith('auto-')) setDrawingSettingsOpen(false);
         else if (drawing.tool === 'Text' && !drawing.style.text?.trim()) setDrawingSettingsOpen(true);
       }
     };
     sync();
     return engine.onChange(sync);
-  }, [activeControl?.drawingEngine]);
+  }, [activeControl?.drawingEngine, scheduleSelectionRefresh]);
 
   useEffect(() => {
     workspaceHistory.updatePanels(panelControls);
