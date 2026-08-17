@@ -71,8 +71,25 @@ const mergedInitialManualDrawings = (engines: readonly DrawingSyncEngine[]) => {
  * Drawing points are stored in timestamp/price space, so the same drawing can
  * be rendered correctly on panels with different timeframes or symbols.
  */
+/**
+ * Plánovač sync reakce. Pointer generuje až 120 událostí za sekundu, ale
+ * obrazovka jich zobrazí nejvýš 60 — zrcadlit každou znamená platit celý
+ * řetěz posluchačů na cílových enginech dvakrát častěji, než je vidět.
+ * V prohlížeči se proto reakce koalescuje na jeden snímek (zrcadlí se vždy
+ * poslední stav); bez `requestAnimationFrame` (testy v node) běží hned.
+ */
+const defaultSyncSchedule = (flush: () => void): (() => void) => {
+  if (typeof requestAnimationFrame !== 'function') {
+    flush();
+    return () => undefined;
+  }
+  const frame = requestAnimationFrame(flush);
+  return () => cancelAnimationFrame(frame);
+};
+
 export const installWorkspaceDrawingSync = (
   sourceEngines: readonly DrawingSyncEngine[],
+  schedule: (flush: () => void) => (() => void) = defaultSyncSchedule,
 ): (() => void) => {
   const engines = [...new Set(sourceEngines)];
   if (engines.length < 2) return () => undefined;
@@ -127,9 +144,10 @@ export const installWorkspaceDrawingSync = (
   // a náhledy by si panely navzájem mazaly.
   let draftOwner: DrawingSyncEngine | null = null;
 
-  const cleanups = engines.map(source => source.onChange(() => {
-    if (synchronizing) return;
+  let cancelScheduled: (() => void) | null = null;
+  const queued = new Set<DrawingSyncEngine>();
 
+  const handleChange = (source: DrawingSyncEngine) => {
     const draft = source.getDraft?.() ?? null;
     if (draft || draftOwner === source) {
       synchronizing = true;
@@ -181,9 +199,29 @@ export const installWorkspaceDrawingSync = (
     });
     engines.forEach(engine => previous.set(engine, signaturesOf(manualDrawings(engine))));
     synchronizing = false;
+  };
+
+  const cleanups = engines.map(source => source.onChange(() => {
+    if (synchronizing) return;
+    queued.add(source);
+    if (cancelScheduled !== null) return;
+    // Synchronní plánovač (testy) spustí flush ještě před přiřazením —
+    // příznak drží rozlišení, jestli se cancel má vůbec uložit.
+    let finished = false;
+    const cancel = schedule(() => {
+      finished = true;
+      cancelScheduled = null;
+      const sources = [...queued];
+      queued.clear();
+      sources.forEach(handleChange);
+    });
+    cancelScheduled = finished ? null : cancel;
   }));
 
   return () => {
+    cancelScheduled?.();
+    cancelScheduled = null;
+    queued.clear();
     cleanups.forEach(cleanup => cleanup());
     engines.forEach(clearDraftPreview);
   };

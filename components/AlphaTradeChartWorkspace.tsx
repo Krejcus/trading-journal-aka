@@ -1011,6 +1011,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     () => [...new Set([...panelControls.values()].map(control => control.drawingEngine).filter((engine): engine is CandleKitDrawingEngine => Boolean(engine)))],
     [panelControls],
   );
+  // Dev diagnostika: přístup k enginům z konzole pro měření sync cesty.
+  if (import.meta.env.DEV) {
+    (window as unknown as { __atDrawingEngines?: unknown }).__atDrawingEngines = drawingEngines;
+  }
   const [workspaceHistoryState, setWorkspaceHistoryState] = useState<ChartWorkspaceHistoryState>({ canUndo: false, canRedo: false });
   const [selectedFib, setSelectedFib] = useState<{ engine: CandleKitDrawingEngine; drawing: FibDrawing } | null>(null);
   const [selectedPosition, setSelectedPosition] = useState<{ engine: CandleKitDrawingEngine; drawing: PositionDrawing } | null>(null);
