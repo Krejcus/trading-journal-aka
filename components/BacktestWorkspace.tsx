@@ -65,6 +65,8 @@ const PREFETCH_MIN_BARS = 240;
 const CLOUD_SYNC_INTERVAL_MS = 60_000;
 /** Nejdelší doba, po kterou smí React při přehrávání ukazovat starší equity. */
 const RUNTIME_RENDER_INTERVAL_MS = 500;
+/** Trailing doběh po tiché sérii kroků — poslední stav vždy dorazí. */
+const RUNTIME_RENDER_TRAILING_MS = 180;
 // Deep context is requested in the native provider resolution needed by the
 // panel. Intraday charts stay on bounded 1m chunks; HTF charts can jump a year
 // at a time with hourly bars instead of downloading and aggregating hundreds
@@ -75,6 +77,18 @@ const HISTORY_SEGMENT_MS: Record<MarketDataSchema, number> = {
 };
 
 type HistoricalCandlesByRoot = Partial<Record<MarketRoot, Partial<Record<MarketDataSchema, MarketCandle[]>>>>;
+
+/** První index svíčky s časem > `time` (pole je seřazené podle času). */
+const candleIndexAfter = (candles: MarketCandle[], time: number): number => {
+  let low = 0;
+  let high = candles.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (candles[mid].time <= time) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+};
 
 const mergeCandles = (current: MarketCandle[], incoming: MarketCandle[]) => {
   const byTime = new Map(current.map(candle => [candle.time, candle]));
@@ -134,6 +148,10 @@ const BacktestWorkspace: React.FC<Props> = ({
   const emittedTradesRef = useRef(new Set(initialRun.runtimeState.closedTrades.map(trade => trade.id)));
   const lastProcessedCursorRef = useRef<number | null>(initialRun.runtimeState.replay.cursorTime);
   const lastRuntimeRenderRef = useRef(0);
+  const trailingRenderRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (trailingRenderRef.current !== null) window.clearTimeout(trailingRenderRef.current);
+  }, []);
 
   /**
    * `render: false` aktualizuje jen ref a dirty flagy — checkpoint i engine
@@ -379,7 +397,11 @@ const BacktestWorkspace: React.FC<Props> = ({
     let runtime: BacktestRuntimeState = { ...runRef.current.runtimeState, replay: { ...replay, playing: replay.playing } };
     const previous = lastProcessedCursorRef.current;
     if (replay.phase === 'active' && replay.cursorTime !== null && (previous === null || replay.cursorTime > previous)) {
-      const revealed = executionCandles.filter(candle => candle.time > (previous ?? replay.cursorTime - 1) && candle.time <= replay.cursorTime!);
+      // Binary search místo filtru: filtr skenoval celé pole načtených svíček
+      // (po delší session desítky tisíc) při každém kroku kurzoru.
+      const fromIndex = candleIndexAfter(executionCandles, previous ?? replay.cursorTime - 1);
+      const toIndex = candleIndexAfter(executionCandles, replay.cursorTime);
+      const revealed = executionCandles.slice(fromIndex, toIndex);
       runtime = processBacktestCandles(runtime, runRef.current.id, executionInstrument, revealed, runRef.current.config);
       lastProcessedCursorRef.current = replay.cursorTime;
     } else if (replay.cursorTime !== null) {
@@ -388,15 +410,17 @@ const BacktestWorkspace: React.FC<Props> = ({
     // Tik, který nezměnil nic než kurzor a mark-to-market, nemusí překreslit
     // workspace: graf posouvá kurzor vlastní cestou (setReplay) a runtime tu
     // čte checkpoint i engine z refu. React dostane stav při událostech
-    // enginu (fill, objednávka, pozice), pauze a nejméně dvakrát za sekundu,
-    // aby equity v panelu neujížděla.
+    // enginu (fill, objednávka, pozice), nejméně dvakrát za sekundu kvůli
+    // equity, a trailing doběh zaručí, že poslední stav dorazí i po sérii
+    // tichých kroků — držená šipka tak neplatí render za každý keydown.
     const previousRuntime = runRef.current.runtimeState;
     const engineChanged = runtime.orders !== previousRuntime.orders
       || runtime.fills !== previousRuntime.fills
       || runtime.positions !== previousRuntime.positions
       || runtime.closedTrades !== previousRuntime.closedTrades;
+    const wasPlaying = previousRuntime.replay.playing;
     const render = engineChanged
-      || !replay.playing
+      || replay.playing !== wasPlaying
       || performance.now() - lastRuntimeRenderRef.current >= RUNTIME_RENDER_INTERVAL_MS;
     updateRun(current => ({
       ...current,
@@ -406,6 +430,19 @@ const BacktestWorkspace: React.FC<Props> = ({
       updatedAt: Date.now(),
       lastOpenedAt: Date.now(),
     }), { render });
+    if (render) {
+      if (trailingRenderRef.current !== null) {
+        window.clearTimeout(trailingRenderRef.current);
+        trailingRenderRef.current = null;
+      }
+    } else {
+      if (trailingRenderRef.current !== null) window.clearTimeout(trailingRenderRef.current);
+      trailingRenderRef.current = window.setTimeout(() => {
+        trailingRenderRef.current = null;
+        lastRuntimeRenderRef.current = performance.now();
+        setRun(runRef.current);
+      }, RUNTIME_RENDER_TRAILING_MS);
+    }
     maybePrefetch(replay.cursorTime, executionCandles);
     emitClosedTrades(runtime);
   }, [candlesByRoot, emitClosedTrades, maybePrefetch, updateRun]);

@@ -134,9 +134,13 @@ describe('chart workspace history', () => {
     expect(drawingReads).not.toHaveBeenCalled();
     vi.advanceTimersByTime(159);
     expect(drawingReads).not.toHaveBeenCalled();
+    // Zklidnění gesta (160 ms) jen zaregistruje rozpracovanou změnu; jediný
+    // drahý snapshot proběhne až s commitem po COMMIT_DELAY_MS.
     vi.advanceTimersByTime(1);
-    expect(drawingReads).toHaveBeenCalledTimes(1);
+    expect(drawingReads).not.toHaveBeenCalled();
     expect(stateListener).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(120);
+    expect(drawingReads).toHaveBeenCalledTimes(1);
 
     history.undo();
     expect(first.getLogicalRange()).toEqual({ from: 0, to: 10 });

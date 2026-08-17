@@ -60,6 +60,19 @@ interface HistoryEntry {
   label: string;
 }
 
+/**
+ * Rozpracované gesto. Snapshot je záměrně líný (`null` = spočítat až při
+ * commitu): tažení kresby emituje change na každý pohyb myši a replay
+ * re-registruje panely na každý tik — okamžitý snapshot celého workspace
+ * s JSON porovnáním v obou případech platil O(události × velikost workspace).
+ * `label: null` znamená „odvoď z diffu při commitu", ať přesné popisky Undo
+ * (kresby vs. indikátory) zůstanou zachované.
+ */
+interface PendingGesture {
+  snapshot: WorkspaceSnapshot | null;
+  label: string | null;
+}
+
 export interface ChartWorkspaceHistoryState {
   canUndo: boolean;
   canRedo: boolean;
@@ -113,7 +126,7 @@ export class ChartWorkspaceHistory {
   private panels = new Map<string, WorkspaceHistoryPanel>();
   private subscriptions = new Map<string, () => void>();
   private current: WorkspaceSnapshot = {};
-  private pending: HistoryEntry | null = null;
+  private pending: PendingGesture | null = null;
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -139,30 +152,15 @@ export class ChartWorkspaceHistory {
     this.panels = new Map(panels);
     if (!sameRuntime) this.subscribePanels();
 
-    const next = this.snapshot();
     if (!sameRuntime || this.applying) {
       // Panel creation/remount establishes the baseline for the new chart API;
       // already committed workspace history remains intact.
-      this.current = next;
-    } else if (!sameSnapshot(next, this.pending?.snapshot ?? this.current)) {
-      const drawingsChanged = JSON.stringify(
-        Object.fromEntries(Object.entries(this.current).map(([id, state]) => [id, state.drawings])),
-      ) !== JSON.stringify(
-        Object.fromEntries(Object.entries(next).map(([id, state]) => [id, state.drawings])),
-      );
-      const indicatorsChanged = JSON.stringify(
-        Object.fromEntries(Object.entries(this.current).map(([id, state]) => [id, state.indicators])),
-      ) !== JSON.stringify(
-        Object.fromEntries(Object.entries(next).map(([id, state]) => [id, state.indicators])),
-      );
-      this.pending = {
-        snapshot: next,
-        label: drawingsChanged && indicatorsChanged
-          ? 'odstranění kreseb a indikátorů'
-          : indicatorsChanged
-            ? 'změnu indikátorů'
-            : this.pending?.label ?? 'změnu workspace',
-      };
+      this.current = this.snapshot();
+    } else {
+      // Běžná re-registrace (React ji hlásí i na každý replay tik) jen natáhne
+      // levný timer; jestli se něco doopravdy změnilo, zjistí jediný snapshot
+      // při commitu. Label se tam odvodí z diffu, proto tu zůstává `null`.
+      this.pending = { snapshot: null, label: this.pending?.label ?? null };
       if (this.timer !== null) clearTimeout(this.timer);
       this.timer = setTimeout(this.flush, COMMIT_DELAY_MS);
     }
@@ -171,10 +169,9 @@ export class ChartWorkspaceHistory {
 
   capture = (label: string) => {
     if (this.applying) return;
-    const next = this.snapshot();
-    const unchanged = sameSnapshot(next, this.pending?.snapshot ?? this.current);
-    if (unchanged) return;
-    this.pending = { snapshot: next, label };
+    // Snapshot se tady záměrně nepočítá — tažení kresby volá capture na každý
+    // pohyb myši. Commit po zklidnění gesta si stav přečte jednou.
+    this.pending = { snapshot: null, label };
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = setTimeout(this.flush, COMMIT_DELAY_MS);
     this.emit();
@@ -190,7 +187,7 @@ export class ChartWorkspaceHistory {
   getState = (): ChartWorkspaceHistoryState => ({
     canUndo: this.pending !== null || this.undoStack.length > 0,
     canRedo: this.redoStack.length > 0,
-    undoLabel: this.pending?.label ?? this.undoStack.at(-1)?.label,
+    undoLabel: this.pending ? (this.pending.label ?? 'změnu workspace') : this.undoStack.at(-1)?.label,
     redoLabel: this.redoStack.at(-1)?.label,
   });
 
@@ -331,15 +328,35 @@ export class ChartWorkspaceHistory {
       this.timer = null;
     }
     if (!this.pending) return;
-    const next = this.pending;
+    const entry = this.pending;
     this.pending = null;
-    if (!sameSnapshot(next.snapshot, this.current)) {
-      this.undoStack.push({ snapshot: cloneSnapshot(this.current), label: next.label });
+    const next = entry.snapshot ?? this.snapshot();
+    if (!sameSnapshot(next, this.current)) {
+      this.undoStack.push({
+        snapshot: cloneSnapshot(this.current),
+        label: this.labelFromDiff(next, entry.label),
+      });
       if (this.undoStack.length > MAX_HISTORY) this.undoStack.shift();
-      this.current = cloneSnapshot(next.snapshot);
+      this.current = cloneSnapshot(next);
       this.redoStack = [];
     }
     this.emit();
+  };
+
+  /**
+   * Popisek Undo odvozený z diffu při commitu — stejná pravidla, jaká dřív
+   * počítal updatePanels na každou registraci. Explicitní label gesta
+   * („změnu kresby", „posun…") je fallback, když diff nic přesnějšího neřekne.
+   */
+  private labelFromDiff = (next: WorkspaceSnapshot, explicit: string | null): string => {
+    const section = (source: WorkspaceSnapshot, key: 'drawings' | 'indicators') => JSON.stringify(
+      Object.fromEntries(Object.entries(source).map(([id, state]) => [id, state[key]])),
+    );
+    const drawingsChanged = section(this.current, 'drawings') !== section(next, 'drawings');
+    const indicatorsChanged = section(this.current, 'indicators') !== section(next, 'indicators');
+    if (drawingsChanged && indicatorsChanged) return 'odstranění kreseb a indikátorů';
+    if (indicatorsChanged) return 'změnu indikátorů';
+    return explicit ?? 'změnu workspace';
   };
 
   private apply = (snapshot: WorkspaceSnapshot) => {

@@ -797,6 +797,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     });
   }, [activePanelId, backtestSession?.candlesByRoot.MNQ]);
   const advanceReplay = useCallback(() => advanceReplayBy(1), [advanceReplayBy]);
+  /** Koalescence držené šipky: kroky se sbírají a aplikují jednou za snímek. */
+  const pendingStepsRef = useRef(0);
+  const stepFrameRef = useRef<number | null>(null);
   const replayGoTo = useCallback((request: ReplayGoToRequest) => {
     if (replay.phase !== 'active') return;
     const source = backtestSession?.candlesByRoot.MNQ
@@ -1094,7 +1097,19 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       // Mezerník jinak odscrolluje stránku, šipka posune časovou osu grafu.
       event.preventDefault();
       if (shortcut === 'step-forward') {
-        advanceReplay();
+        // Držená šipka opakuje keydown až 30× za sekundu — víc, než stihne
+        // jeden render cyklus. Kroky se proto sbírají a aplikují jednou za
+        // snímek; při zdravém frameratu je to pořád krok na stisk, při
+        // pomalém se slijí do jednoho posunu místo fronty trhaných renderů.
+        pendingStepsRef.current += 1;
+        if (stepFrameRef.current === null) {
+          stepFrameRef.current = window.requestAnimationFrame(() => {
+            stepFrameRef.current = null;
+            const steps = pendingStepsRef.current;
+            pendingStepsRef.current = 0;
+            if (steps > 0) advanceReplayBy(steps);
+          });
+        }
         return;
       }
       setReplay(current => current.phase === 'active'
@@ -1102,8 +1117,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         : current);
     };
     window.addEventListener('keydown', handleReplayKey);
-    return () => window.removeEventListener('keydown', handleReplayKey);
-  }, [advanceReplay, replay.phase]);
+    return () => {
+      window.removeEventListener('keydown', handleReplayKey);
+      if (stepFrameRef.current !== null) {
+        window.cancelAnimationFrame(stepFrameRef.current);
+        stepFrameRef.current = null;
+        pendingStepsRef.current = 0;
+      }
+    };
+  }, [advanceReplayBy, replay.phase]);
 
   const updateSyncSetting = useCallback((key: keyof ChartWorkspaceSyncSettings, value: boolean) => {
     setSyncSettings(current => {
