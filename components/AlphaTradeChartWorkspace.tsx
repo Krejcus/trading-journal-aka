@@ -544,7 +544,16 @@ const AlphaTradeWorkspacePanel: React.FC<{
             hideFocusButton
             hideDrawingToolbar
             keyboardShortcutsActive={isActive}
-            replayActive={context.replay.phase === 'active'}
+            // Výběr nového startu v backtest session je overlay nad ZMRAZENÝM
+            // replay pohledem: graf zůstává, kde je, a uživatel táhne odtud.
+            // Přepnutí do ne-replay režimu (dřívější chování) resetovalo okno
+            // na initialWindow — u backtest pseudo-obchodu ukotvené na začátek
+            // session, takže graf odskočil — a dávkově přepočítalo indikátory
+            // přes celé pole, což byl ten zásek. Standalone graf obchodu
+            // (mimo session) si nechává původní chování: tam výběr záměrně
+            // ukazuje celou historii.
+            replayActive={context.replay.phase === 'active'
+              || (Boolean(context.backtestSession) && context.replay.phase === 'selecting')}
             replayCursorTime={context.replay.cursorTime}
             replaySelecting={context.replay.phase === 'selecting'}
             replaySelectionCandles={rawCandles}
