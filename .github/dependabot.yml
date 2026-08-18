@@ -18,14 +18,20 @@ updates:
           - "version-update:semver-minor"
           - "version-update:semver-major"
       # Stejný důvod — candlekit váže i tyto balíky na konkrétní rozsahy
-      # (lightweight-charts@^5.0.0) a patch v patches/ cílí na jeho dist.
+      # (lightweight-charts@^5.0.0). Navíc patches/ obsahuje patch-package
+      # diff na PŘESNOU verzi (lightweight-charts+5.2.0.patch), takže i
+      # minor/patch bump shodí postinstall a celý build. Bump = ručně:
+      # zvednout verzi + přegenerovat patch.
       - dependency-name: "lightweight-charts"
         update-types:
           - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
       - dependency-name: "@getcandlekit/charts"
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
+          - "version-update:semver-patch"
   - package-ecosystem: "npm"
     directory: "/extension"
     schedule:
