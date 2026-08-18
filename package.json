@@ -38,7 +38,7 @@
     "idb-keyval": "^6.2.2",
     "lightweight-charts": "5.2.0",
     "lightweight-charts-drawing": "^0.1.1",
-    "lucide-react": "^0.555.0",
+    "lucide-react": "^1.31.0",
     "papaparse": "^5.5.3",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
