@@ -69,6 +69,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-18 (Claude, vzdálený copier watchdog)
+Podle auditu GPT (PWA push na iPhonu funguje — 320 doručení/týden — ale
+copier do něj nic neposílá) doplněn chybějící článek: serverový watchdog
+v cronu send-alerts (`f7eb18d4`). Čte heartbeat z device_runtime, hlásí
+worker-offline / fail-closed / kill-switch / stuck-outbox /
+broker-disconnected + zotavení, jednorázově tichý konec ostrého ARM.
+Dedupe přes novou tabulku copier_alert_state (migrace
+20260818200000_copier_alert_state.sql — JEŠTĚ NEAPLIKOVANÁ na produkci!).
+Vyhodnocení = čistá funkce s 12 testy. Rozhodnutí: placený Apple účet
+zatím NE — PWA push stačí; koupit až kvůli jedné ikoně/TestFlightu.
+K nasazení zbývá: aplikovat migraci + deploy na Vercel (jde spolu).
+
 ### 2026-08-18 (Claude, sjednocení repozitářů)
 Odhalena a vyřešena dvojí pracovní kopie: hlavní appka (Documents,
 kresby/charty/Capacitor iOS) vs. klon v ~/Downloads (celý copier vývoj).
