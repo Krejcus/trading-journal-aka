@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { apiUrl } from '../utils/runtimeConfig';
 import type {
   TradovateAccountDataAccount,
   TradovateAccountDataResult,
@@ -111,7 +112,10 @@ const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Pr
   const telemetry = beginTradovateApiRequest();
   let completed = false;
   try {
-    const response = await fetch(path, {
+    // V Capacitor buildu je origin capacitor://localhost — relativní /api/
+    // cesta by skončila v bundlu (vrátí index.html místo API odpovědi).
+    // apiUrl() ji v nativním buildu přesměruje na Vercel; web nechává být.
+    const response = await fetch(apiUrl(path), {
       ...init,
       credentials: 'same-origin',
       headers: {
