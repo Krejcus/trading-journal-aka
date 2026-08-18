@@ -97,7 +97,12 @@ const INCIDENTS: IncidentSpec[] = [
   },
   {
     key: 'fail-closed',
-    present: status => asText(status.lastError) != null && !asBool(status.killSwitch),
+    // Samotný lastError nestačí — přechodná transportní chyba, ze které se
+    // runtime zotavil a dál běží ARMED, není incident. Skutečný fail-closed
+    // = chyba, která runtime nechala odzbrojený.
+    present: status => asText(status.lastError) != null
+      && !asBool(status.killSwitch)
+      && !asBool(status.armed),
     detail: status => asText(status.lastError),
     openTitle: 'Copier: FAIL-CLOSED',
     openBody: detail => detail ?? 'Runtime se bezpečně zastavil kvůli chybě.',

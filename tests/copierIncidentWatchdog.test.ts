@@ -70,6 +70,16 @@ describe('stavové incidenty', () => {
     })]);
   });
 
+  it('přechodná chyba u běžícího ARMED runtime není fail-closed incident', () => {
+    const result = evaluate([runtime({
+      status: {
+        armed: true, shadowMode: false, connected: true,
+        lastError: 'Tradovate WebSocket transport error',
+      },
+    })]);
+    expect(result.notifications.filter(item => item.incidentKey === 'fail-closed')).toHaveLength(0);
+  });
+
   it('kill switch má přednost před fail-closed (jedna zpráva, ne dvě)', () => {
     const result = evaluate([runtime({
       status: { killSwitch: true, lastError: 'Ruční nouzové zastavení', connected: true },
