@@ -69,6 +69,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-18 (Claude, Git checkpoint)
+Checkpoint práce GPT z 18. 8.: quality gate (1029/1029 testů, typecheck,
+produkční build, sken tajemství) a commit `5765f6b7` (broker router,
+exposureCappedBroker, cancel lifecycle po fail-closed, day-lock UI).
+`copytrade-preview.*` commitnut jako dev nástroj (`a3c21b71`) — otázka
+uzavřena. Strom je čistý. Další krok dle plánu: ARM-expiry risk-reducing
+close (samostatná cesta jako Flatten + invariantní test), potom jeden
+deploy a aktualizace Mac workeru ze stejné verze.
+
 ### 2026-08-18 (Claude, review stavu a repriorizace)
 Review reportu GPT: cross-firm fan-out (broker router + connection manifest)
 uzavírá poslední mezeru jádra. Přepis maxContracts na exposureCappedBroker
