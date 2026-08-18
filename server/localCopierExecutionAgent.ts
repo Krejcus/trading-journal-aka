@@ -3,7 +3,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import {
   copyGroupAccountIds,
-  sameCopyGroupAccounts,
   type LocalCopierAgentCommand,
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
@@ -32,7 +31,10 @@ interface LocalCopierExecutionAgentOptions {
   allowedOrigins?: ReadonlySet<string>;
   startedAt?: string;
   device?: NonNullable<LocalCopierAgentStatus['device']>;
+  devices?: NonNullable<LocalCopierAgentStatus['devices']>;
   onDevicePaired?: (deviceId: string) => Promise<void>;
+  /** Crash-safe persistence hook. A failed save rolls the runtime back DISARMED. */
+  onGroupChanged?: (group: CopyGroupConfig) => Promise<void>;
 }
 
 export interface LocalCopierExecutionAgent {
@@ -68,9 +70,12 @@ const assertMember = (group: CopyGroupConfig, accountId: number): void => {
 };
 
 const mappedGroup = (runtimeGroup: CopyGroupConfig, incoming: CopyGroupConfig): CopyGroupConfig => {
-  if (!sameCopyGroupAccounts(runtimeGroup, incoming)) {
-    throw new Error('UI skupina neodpovídá leader/follower topologii lokálního execution agenta');
+  if (runtimeGroup.leaderAccountId !== incoming.leaderAccountId) {
+    throw new Error('Leader běžícího execution agenta se nesmí změnit');
   }
+  // Followery se smějí přidat/odebrat za běhu. Controller změnu vždy
+  // odzbrojí a před dalším ARM vyžaduje OAuth capability preflight,
+  // pozice i working orders celé nové topologie.
   return {
     ...incoming,
     id: runtimeGroup.id,
@@ -86,7 +91,13 @@ export async function startLocalCopierExecutionAgent(
   const nonce = randomUUID();
   const startedAt = options.startedAt ?? new Date().toISOString();
   let group = structuredClone(options.group);
-  let device = options.device ? structuredClone(options.device) : undefined;
+  let devices = (options.devices ?? (options.device ? [options.device] : [])).map(item => structuredClone(item));
+  if (new Set(devices.map(item => item.deviceId)).size !== devices.length) {
+    throw new Error('Lokální execution agent dostal duplicitní deviceId');
+  }
+  if (new Set(devices.map(item => item.connectionId)).size !== devices.length) {
+    throw new Error('Lokální execution agent dostal více zařízení pro stejné OAuth připojení');
+  }
   let tail = Promise.resolve();
 
   const status = (): LocalCopierAgentStatus => ({
@@ -96,7 +107,8 @@ export async function startLocalCopierExecutionAgent(
     group: structuredClone(group),
     controller: options.controller.status(),
     startedAt,
-    ...(device ? { device: structuredClone(device) } : {}),
+    ...(devices[0] ? { device: structuredClone(devices[0]) } : {}),
+    ...(devices.length > 0 ? { devices: structuredClone(devices) } : {}),
   });
 
   const configurationResult = (): LiveCopyTradingCommandResult => ({
@@ -104,43 +116,50 @@ export async function startLocalCopierExecutionAgent(
     group: structuredClone(group),
   });
 
+  const applyGroup = async (next: CopyGroupConfig): Promise<LiveCopyTradingCommandResult> => {
+    const previous = group;
+    options.controller.updateGroup(next);
+    try {
+      await options.onGroupChanged?.(structuredClone(next));
+      group = next;
+    } catch (error) {
+      // updateGroup always DISARMs. Roll back the in-memory/runtime topology as
+      // well, so a failed disk write can never acknowledge a volatile config.
+      options.controller.updateGroup(previous);
+      throw error;
+    }
+    return configurationResult();
+  };
+
   const executeCopyCommand = async (command: LiveCopyTradingCommand): Promise<LiveCopyTradingCommandResult> => {
     switch (command.type) {
       case 'update-group': {
         const next = mappedGroup(group, command.group);
-        options.controller.updateGroup(next);
-        group = next;
-        return configurationResult();
+        return applyGroup(next);
       }
       case 'set-group-enabled': {
-        group = { ...group, enabled: command.enabled };
-        options.controller.updateGroup(group);
-        return configurationResult();
+        return applyGroup({ ...group, enabled: command.enabled });
       }
       case 'set-replication': {
         assertMember(group, command.accountId);
-        group = {
+        return applyGroup({
           ...group,
           followers: group.followers.map(follower => follower.accountId === command.accountId
             ? { ...follower, mode: command.mode }
             : follower),
-        };
-        options.controller.updateGroup(group);
-        return configurationResult();
+        });
       }
       case 'set-multiplier': {
         assertMember(group, command.accountId);
         if (!group.followers.some(follower => follower.accountId === command.accountId)) {
           throw new Error('Násobek lze změnit pouze follower účtu');
         }
-        group = {
+        return applyGroup({
           ...group,
           followers: group.followers.map(follower => follower.accountId === command.accountId
             ? { ...follower, multiplier: normalizeMultiplier(command.multiplier) }
             : follower),
-        };
-        options.controller.updateGroup(group);
-        return configurationResult();
+        });
       }
       case 'flatten-account':
         assertMember(group, command.accountId);
@@ -170,21 +189,43 @@ export async function startLocalCopierExecutionAgent(
         options.controller.arm({ shadowMode: false, ttlMs: msUntilTradovateSessionEnd(Date.now()) });
         return;
       }
-      case 'shadow':
+      case 'shadow': {
+        const reconciliation = await options.controller.reconcile();
+        if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
+          throw new Error('SHADOW odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
+        }
         options.controller.arm({ shadowMode: true });
         return;
+      }
       case 'disarm':
         options.controller.disarm();
         return;
       case 'kill-switch':
         options.controller.engageKillSwitch('Kill switch z AlphaTrade LIVE UI');
         return;
+      case 'reconcile':
+        return options.controller.reconcile();
+      case 'resolve-stuck-operation':
+        await options.controller.waiveStuckOperation({
+          kind: command.kind,
+          key: command.key,
+          reason: command.reason,
+        });
+        return;
+      case 'lock-until-session-end':
+        await options.controller.lockUntil(
+          Date.now() + msUntilTradovateSessionEnd(Date.now()),
+          command.reason,
+        );
+        return;
       case 'device-paired': {
-        if (!device || device.state !== 'pairing-required' || command.deviceId !== device.deviceId) {
+        const index = devices.findIndex(item => item.deviceId === command.deviceId);
+        const device = index >= 0 ? devices[index] : undefined;
+        if (!device || device.state !== 'pairing-required') {
           throw new Error('Lokální Mac zařízení nečeká na toto párování');
         }
         await options.onDevicePaired?.(command.deviceId);
-        device = {
+        devices[index] = {
           state: 'paired',
           deviceId: device.deviceId,
           connectionId: device.connectionId,

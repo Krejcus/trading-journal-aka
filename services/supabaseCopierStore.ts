@@ -101,6 +101,13 @@ function validNumberTuple(value: unknown): boolean {
   return Array.isArray(value) && value.length === 2 && string(value[0]) && finite(value[1]) && value[1] >= 0;
 }
 
+function validSafety(value: unknown): boolean {
+  return value == null || (isRecord(value)
+    && finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
+    && finite(value.dayLockUntil) && Number(value.dayLockUntil) >= 0
+    && optionalString(value.dayLockReason));
+}
+
 const unique = (values: readonly string[]) => new Set(values).size === values.length;
 
 function asSnapshot(value: unknown, revision: number): CopierSnapshot {
@@ -129,6 +136,7 @@ function asSnapshot(value: unknown, revision: number): CopierSnapshot {
     || !unique(candidate.leaderCumQty.map(item => String((item as unknown[])[0])))
     || !Array.isArray(candidate.followerFillTargets) || !candidate.followerFillTargets.every(validNumberTuple)
     || !unique(candidate.followerFillTargets.map(item => String((item as unknown[])[0])))
+    || !validSafety(candidate.safety)
   ) {
     throw new Error('Invalid copier snapshot: required fields are missing or malformed');
   }
@@ -143,6 +151,7 @@ function asSnapshot(value: unknown, revision: number): CopierSnapshot {
     links: candidate.links,
     leaderCumQty: candidate.leaderCumQty,
     followerFillTargets: candidate.followerFillTargets,
+    safety: candidate.safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 },
   };
 }
 

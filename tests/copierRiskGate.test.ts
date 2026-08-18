@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BrokerOrderRequest } from '../services/brokerPort';
 import {
+  cancelLifecycleHaltReason,
   createRiskGateContext,
   evaluateRiskGate,
   haltReason,
@@ -79,6 +80,27 @@ describe('haltReason', () => {
 
   it('otevřená brána nevrací důvod', () => {
     expect(haltReason(openGate())).toBeNull();
+  });
+});
+
+describe('cancelLifecycleHaltReason', () => {
+  it.each([
+    ['DISARM', { armed: false }],
+    ['expirovaný ARM', { armedAt: 0, now: 10_000, armTtlMs: 100, lastHeartbeatAt: 10_000 }],
+    ['kill switch', { killSwitch: true }],
+    ['divergence', { divergentAccounts: new Set([200]) }],
+    ['nejasný outbox', { stuckOutbox: true }],
+    ['rozbitá sekvence', { sequenceBroken: true }],
+  ])('dovolí risk-redukující cancel známého orderu přes %s', (_label, overrides) => {
+    expect(cancelLifecycleHaltReason(openGate(overrides as Partial<RiskGateContext>))).toBeNull();
+  });
+
+  it.each([
+    ['odpojený broker', { connected: false }, 'disconnected'],
+    ['zastaralý heartbeat', { now: 30_000, lastHeartbeatAt: 0 }, 'stale-heartbeat'],
+    ['jiné prostředí', { brokerEnvironment: 'live', expectedEnvironment: 'demo' }, 'environment-mismatch'],
+  ] as const)('zablokuje cancel při problému: %s', (_label, overrides, expected) => {
+    expect(cancelLifecycleHaltReason(openGate(overrides))).toBe(expected);
   });
 });
 

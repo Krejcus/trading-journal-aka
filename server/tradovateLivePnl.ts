@@ -1,5 +1,6 @@
 import type {
   TradovateLivePnlAnchor,
+  TradovateLiveOrder,
   TradovateLivePnlPosition,
   TradovateLivePnlTick,
 } from '../lib/tradovateLivePnlTypes.js';
@@ -18,6 +19,23 @@ interface SnapshotEntity {
   openPnL?: number;
   netLiq?: number;
   totalCashValue?: number;
+}
+
+interface OrderEntity {
+  id?: number;
+  accountId?: number;
+  contractId?: number;
+  timestamp?: string;
+  action?: 'Buy' | 'Sell';
+  orderType?: string;
+  orderQty?: number;
+  price?: number;
+  stopPrice?: number;
+  ordStatus?: string;
+  admin?: boolean;
+  ocoId?: number;
+  parentId?: number;
+  linkedId?: number;
 }
 
 export class TradovateLivePnlError extends Error {
@@ -78,10 +96,37 @@ const normalizePositions = (value: unknown): TradovateLivePnlPosition[] => {
   });
 };
 
+const normalizeOrders = (value: unknown): TradovateLiveOrder[] => {
+  if (!Array.isArray(value)) throw new TradovateLivePnlError('Tradovate returned invalid orders');
+  return value.flatMap((candidate): TradovateLiveOrder[] => {
+    if (!candidate || typeof candidate !== 'object') return [];
+    const raw = candidate as OrderEntity;
+    const id = finite(raw.id);
+    const accountId = finite(raw.accountId);
+    if (id == null || accountId == null) return [];
+    return [{
+      id,
+      accountId,
+      contractId: finite(raw.contractId),
+      timestamp: timestamp(raw.timestamp),
+      action: raw.action === 'Buy' || raw.action === 'Sell' ? raw.action : null,
+      orderType: typeof raw.orderType === 'string' ? raw.orderType : null,
+      quantity: finite(raw.orderQty),
+      price: finite(raw.price),
+      stopPrice: finite(raw.stopPrice),
+      status: typeof raw.ordStatus === 'string' ? raw.ordStatus : null,
+      admin: typeof raw.admin === 'boolean' ? raw.admin : null,
+      ocoId: finite(raw.ocoId),
+      parentId: finite(raw.parentId),
+      linkedId: finite(raw.linkedId),
+    }];
+  });
+};
+
 /**
- * One cheap read model tick. It always refreshes positions and takes at most
- * one cash snapshot, rotating contracts so request volume is bounded even if
- * several instruments are open at once.
+ * One cheap read model tick. It always refreshes positions and orders and
+ * takes at most one cash snapshot, rotating contracts so request volume is
+ * bounded even if several instruments are open at once.
  */
 export async function loadTradovateLivePnlTick(options: {
   baseUrl: string;
@@ -93,11 +138,18 @@ export async function loadTradovateLivePnlTick(options: {
   now?: number;
 }): Promise<TradovateLivePnlTick> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const positions = normalizePositions(await tradovateRequest<PositionEntity[]>({
-    ...options,
-    path: '/position/list',
-    fetchImpl,
-  }));
+  const [positions, orders] = await Promise.all([
+    tradovateRequest<PositionEntity[]>({
+      ...options,
+      path: '/position/list',
+      fetchImpl,
+    }).then(normalizePositions),
+    tradovateRequest<OrderEntity[]>({
+      ...options,
+      path: '/order/list',
+      fetchImpl,
+    }).then(normalizeOrders),
+  ]);
   const open = positions.filter(position => position.netPosition !== 0);
   const openCountByAccount = new Map<number, number>();
   for (const position of open) {
@@ -138,6 +190,7 @@ export async function loadTradovateLivePnlTick(options: {
     environment: options.environment,
     capturedAt: new Date(options.now ?? Date.now()).toISOString(),
     positions,
+    orders,
     anchor,
     activeContractCount: contractIds.length,
     nextContractCursor: contractIds.length > 0 ? (cursor + 1) % contractIds.length : 0,

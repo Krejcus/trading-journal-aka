@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { WebSocketLike } from '../services/tradovateBroker';
-import { startTradovateCopier } from '../services/tradovateCopierService';
+import { startMultiTradovateCopier, startTradovateCopier } from '../services/tradovateCopierService';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 
 const group: CopyGroupConfig = {
@@ -68,5 +68,60 @@ describe('startTradovateCopier', () => {
       fence: () => 1, environment: 'demo', accountSpec: '', group,
       getAccessToken: async () => 'token',
     })).rejects.toThrow('accountSpec');
+  });
+
+  it('validates complete and unique account routing across OAuth connections', async () => {
+    const base = {
+      supabase: emptySupabase,
+      runtimeId: '11111111-1111-4111-8111-111111111111',
+      fence: () => 1,
+      environment: 'demo' as const,
+      group,
+    };
+    await expect(startMultiTradovateCopier({
+      ...base,
+      connections: [{ id: 'leader', accountIds: [100], getAccessToken: async () => 'a' }],
+    })).rejects.toThrow('200 has no OAuth');
+    await expect(startMultiTradovateCopier({
+      ...base,
+      connections: [
+        { id: 'leader', accountIds: [100, 200], getAccessToken: async () => 'a' },
+        { id: 'duplicate', accountIds: [200], getAccessToken: async () => 'b' },
+      ],
+    })).rejects.toThrow('multiple OAuth');
+  });
+
+  it('opens one authoritative sync stream per OAuth connection', async () => {
+    const sockets: WebSocketLike[] = [];
+    const connection = (id: string, accountIds: number[], token: string) => ({
+      id,
+      accountIds,
+      getAccessToken: async () => token,
+      transport: {
+        webSocketFactory: () => {
+          const socket: WebSocketLike = {
+            readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+            send() {}, close() {},
+          };
+          sockets.push(socket);
+          return socket;
+        },
+        setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+        clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+        setTimeoutImpl: (() => 1) as unknown as typeof setTimeout,
+        clearTimeoutImpl: (() => undefined) as unknown as typeof clearTimeout,
+      },
+    });
+    const runtime = await startMultiTradovateCopier({
+      supabase: emptySupabase,
+      runtimeId: '11111111-1111-4111-8111-111111111111',
+      fence: () => 1,
+      environment: 'demo',
+      group,
+      connections: [connection('leader', [100], 'a'), connection('follower', [200], 'b')],
+    });
+    expect(sockets).toHaveLength(2);
+    expect(runtime.status().connected).toBe(false);
+    runtime.stop();
   });
 });

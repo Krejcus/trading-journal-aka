@@ -3,12 +3,14 @@ import { createPortal } from 'react-dom';
 import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
   RefreshCw, Inbox, Check, RotateCcw, X, Save, Trash2, Power,
-  EyeOff, AlertTriangle, CheckCircle2, SlidersHorizontal,
+  EyeOff, AlertTriangle, CheckCircle2, SlidersHorizontal, ShieldAlert,
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
+import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
+  adoptRuntimeCopyGroup,
   copyGroupsFromSnapshot,
   createLocalCopyGroupId,
   DEFAULT_COPY_GROUP_SAFETY,
@@ -143,7 +145,15 @@ function loadTemplates(): CopyGroupTemplate[] {
             const entry = follower as Partial<CopyFollowerConfig>;
             if (!Number.isFinite(entry.accountId)) return [];
             const mode = entry.mode === 'on-fill' || entry.mode === 'off' ? entry.mode : 'on-submit';
-            return [{ accountId: Number(entry.accountId), mode, multiplier: normalizeMultiplier(Number(entry.multiplier ?? 1)) }];
+            const maxContracts = entry.maxContracts;
+            return [{
+              accountId: Number(entry.accountId),
+              mode,
+              multiplier: normalizeMultiplier(Number(entry.multiplier ?? 1)),
+              ...(Number.isSafeInteger(maxContracts) && Number(maxContracts) >= 1
+                ? { maxContracts: Number(maxContracts) }
+                : {}),
+            }];
           })
         : [];
       return [{
@@ -218,17 +228,23 @@ function loadViewSettings(): { density: number; redaction: RedactionSettings; co
 
 interface Props {
   snapshot: LiveSnapshot;
+  accountProfiles?: TradovateAccountProfile[];
   orders?: LiveOrder[];
   onAccount?: (account: LiveAccount) => void;
   onRefreshOrders?: () => Promise<void> | void;
   commandAdapter?: LiveCopyTradingAdapter;
   copierArmed?: boolean;
+  copierShadow?: boolean;
+  copierKillSwitch?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
   onArmLive?: () => Promise<void> | void;
   onShadowMode?: () => Promise<void> | void;
   onDisarm?: () => Promise<void> | void;
   onEmergencyStop?: () => Promise<void> | void;
+  onDayLock?: () => Promise<void> | void;
+  dayLockUntil?: number;
   executionGroupId?: string | null;
+  runtimeGroup?: CopyGroupConfig | null;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
 }
 
@@ -253,17 +269,23 @@ function loadDraftGroups(snapshot: LiveSnapshot): CopyGroupConfig[] {
 
 export const LiveCopyTradeOverview: React.FC<Props> = ({
   snapshot,
+  accountProfiles = [],
   orders = [],
   onAccount,
   onRefreshOrders,
   commandAdapter,
   copierArmed = false,
+  copierShadow = false,
+  copierKillSwitch = false,
   apiTelemetry,
   onArmLive,
   onShadowMode,
   onDisarm,
   onEmergencyStop,
+  onDayLock,
+  dayLockUntil = 0,
   executionGroupId = null,
+  runtimeGroup = null,
   onGroupsChange,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
@@ -286,8 +308,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
   const [busyCommand, setBusyCommand] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string } | null>(null);
-  const [shadowSession, setShadowSession] = useState(false);
-  const [killSwitch, setKillSwitch] = useState(false);
 
   // Volba sloupců přežívá reload — je to nastavení pohledu, ne stav relace.
   useEffect(() => {
@@ -305,8 +325,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   }, [confirmDisableAfterFlatten, density, hiddenGroupColumns, hiddenOrderColumns, redaction]);
 
   useEffect(() => {
-    setGroups(current => mergeCopyGroups(current, snapshot));
-  }, [snapshot]);
+    setGroups(current => {
+      const merged = mergeCopyGroups(current, snapshot);
+      return runtimeGroup
+        ? adoptRuntimeCopyGroup(merged, snapshot.accounts.map(account => account.id), runtimeGroup)
+        : merged;
+    });
+  }, [runtimeGroup, snapshot]);
 
   useEffect(() => {
     try {
@@ -344,6 +369,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => new Map(snapshot.accounts.map(a => [a.id, a])),
     [snapshot.accounts],
   );
+  const profilesById = useMemo(() => {
+    const next = new Map<number, TradovateAccountProfile>();
+    for (const profile of accountProfiles) {
+      const accountId = Number(profile.externalAccountId);
+      if (Number.isSafeInteger(accountId)) next.set(accountId, profile);
+    }
+    return next;
+  }, [accountProfiles]);
   const connectionByFirm = useMemo(
     () => new Map(snapshot.connections.map(c => [c.firm, c])),
     [snapshot.connections],
@@ -369,7 +402,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     if (busyCommand) return;
     setBusyCommand(key);
     try {
-      if (brokerWrite && killSwitch) {
+      if (brokerWrite && copierKillSwitch) {
         setToast({ tone: 'error', text: 'Kill switch je aktivní. Brokerový příkaz byl zablokován.' });
         return;
       }
@@ -447,32 +480,49 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
       <CopierSessionPanel
         apiReady={!!commandAdapter}
-        armed={copierArmed && !killSwitch}
-        shadow={shadowSession && !killSwitch}
-        killSwitch={killSwitch}
-        onShadow={() => {
-          setKillSwitch(false);
-          setShadowSession(true);
-          void onShadowMode?.();
-          setToast({ tone: 'info', text: 'Shadow režim aktivní: události se mohou vyhodnocovat, ale nic se neodesílá.' });
-        }}
-        onArm={onArmLive ? async () => {
-          setShadowSession(false);
-          setKillSwitch(false);
-          await onArmLive();
+        armed={copierArmed && !copierKillSwitch}
+        shadow={copierShadow && !copierKillSwitch}
+        killSwitch={copierKillSwitch}
+        dayLocked={dayLockUntil > Date.now()}
+        onShadow={onShadowMode ? async () => {
+          try {
+            await onShadowMode();
+            setToast({ tone: 'info', text: 'Shadow režim potvrdil execution runtime: události se vyhodnocují, ale nic se neodesílá.' });
+          } catch (reason) {
+            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Shadow režim se nepodařilo zapnout.' });
+          }
         } : undefined}
-        onDisarm={async () => {
-          setShadowSession(false);
-          await onDisarm?.();
-          setToast({ tone: 'info', text: 'Copier je DISARMED.' });
-        }}
-        onKill={async () => {
-          setKillSwitch(true);
-          setShadowSession(false);
-          await onEmergencyStop?.();
-          await onDisarm?.();
-          setToast({ tone: 'error', text: 'Kill switch aktivován. Všechny brokerové akce z tohoto panelu jsou zablokované.' });
-        }}
+        onArm={onArmLive ? async () => {
+          try {
+            await onArmLive();
+          } catch (reason) {
+            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'ARM LIVE se nepodařilo zapnout.' });
+          }
+        } : undefined}
+        onDisarm={onDisarm ? async () => {
+          try {
+            await onDisarm();
+            setToast({ tone: 'info', text: 'Execution runtime potvrdil DISARM.' });
+          } catch (reason) {
+            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'DISARM se nepodařilo potvrdit.' });
+          }
+        } : undefined}
+        onKill={onEmergencyStop ? async () => {
+          try {
+            await onEmergencyStop();
+            setToast({ tone: 'error', text: 'Execution runtime potvrdil kill switch. Brokerové akce copieru jsou zablokované.' });
+          } catch (reason) {
+            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Kill switch se nepodařilo potvrdit.' });
+          }
+        } : undefined}
+        onDayLock={onDayLock ? async () => {
+          try {
+            await onDayLock();
+            setToast({ tone: 'info', text: 'Execution runtime potvrdil zámek do konce aktuální broker session.' });
+          } catch (reason) {
+            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Denní zámek se nepodařilo potvrdit.' });
+          }
+        } : undefined}
       />
 
       <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
@@ -524,7 +574,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               </thead>
               <tbody>
                 {groups.map(group => {
-                  const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id));
+                  const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id), profilesById);
                   const connected = rows.some(r => isLive(r.account));
                   const armed = connected && group.enabled && !!commandAdapter && copierArmed;
                   const tab = groupTab[group.id] || 'accounts';
@@ -742,31 +792,34 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
   );
 };
 
-const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, onShadow, onArm, onDisarm, onKill }: {
+const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, dayLocked, onShadow, onArm, onDisarm, onKill, onDayLock }: {
   apiReady: boolean;
   armed: boolean;
   shadow: boolean;
   killSwitch: boolean;
-  onShadow: () => void;
+  dayLocked: boolean;
+  onShadow?: () => Promise<void> | void;
   onArm?: () => Promise<void> | void;
-  onDisarm: () => Promise<void> | void;
-  onKill: () => Promise<void> | void;
+  onDisarm?: () => Promise<void> | void;
+  onKill?: () => Promise<void> | void;
+  onDayLock?: () => Promise<void> | void;
 }) => {
-  const status = killSwitch ? 'KILL SWITCH' : armed ? 'ARMED' : shadow ? 'SHADOW' : 'DISARMED';
-  const color = killSwitch ? 'text-rose-500 bg-rose-500/10' : armed ? 'text-emerald-500 bg-emerald-500/10' : shadow ? 'text-indigo-500 bg-indigo-500/10' : 'text-amber-600 bg-amber-500/10';
+  const status = killSwitch ? 'KILL SWITCH' : dayLocked ? 'LOCKED' : armed ? 'ARMED' : shadow ? 'SHADOW' : 'DISARMED';
+  const color = killSwitch || dayLocked ? 'text-rose-500 bg-rose-500/10' : armed ? 'text-emerald-500 bg-emerald-500/10' : shadow ? 'text-indigo-500 bg-indigo-500/10' : 'text-amber-600 bg-amber-500/10';
   return <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-3">
     <div className="flex min-w-0 items-center gap-3">
       <span className={`rounded-md px-2.5 py-1 text-[10px] font-black tracking-wide ${color}`}>{status}</span>
       <div className="min-w-0">
         <b className="block text-xs text-[var(--text-primary)]">Session řízení copieru</b>
-        <span className="block truncate text-[10px] text-[var(--text-secondary)]">{apiReady ? 'Execution runtime připojen. Live ARM vyžaduje reconciliation a ruční potvrzení.' : 'Execution runtime zatím není připojen; dostupný je pouze bezpečný shadow režim.'}</span>
+        <span className="block truncate text-[10px] text-[var(--text-secondary)]">{apiReady ? 'Execution runtime připojen. Live ARM vyžaduje reconciliation a ruční potvrzení.' : 'Execution runtime není připojen. Shadow ani live příkazy nejsou aktivní.'}</span>
       </div>
     </div>
     <div className="flex flex-wrap items-center gap-2">
-      <button type="button" onClick={onShadow} disabled={killSwitch || shadow || armed} className="h-8 rounded-md border border-indigo-500/25 px-3 text-[10px] font-black text-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"><Eye size={12} className="mr-1.5 inline" />Shadow</button>
-      <button type="button" onClick={() => void onArm?.()} disabled={!apiReady || !onArm || killSwitch || armed} title={!apiReady || !onArm ? 'ARM bude dostupný až po napojení runtime controlleru a úspěšné reconciliation.' : 'ARM LIVE session'} className="h-8 rounded-md bg-emerald-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-35"><Power size={12} className="mr-1.5 inline" />ARM LIVE</button>
-      <button type="button" onClick={() => void onDisarm()} disabled={killSwitch || (!armed && !shadow)} className="h-8 rounded-md border border-[var(--border-subtle)] px-3 text-[10px] font-black text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">DISARM</button>
-      <button type="button" onClick={() => void onKill()} disabled={killSwitch} className="h-8 rounded-md bg-rose-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-55"><AlertTriangle size={12} className="mr-1.5 inline" />Kill switch</button>
+      <button type="button" onClick={() => void onShadow?.()} disabled={!apiReady || !onShadow || killSwitch || dayLocked || shadow || armed} title={!apiReady || !onShadow ? 'Shadow vyžaduje připojený execution runtime.' : 'Bezpečný shadow režim bez brokerových zápisů'} className="h-8 rounded-md border border-indigo-500/25 px-3 text-[10px] font-black text-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"><Eye size={12} className="mr-1.5 inline" />Shadow</button>
+      <button type="button" onClick={() => void onArm?.()} disabled={!apiReady || !onArm || killSwitch || dayLocked || armed} title={!apiReady || !onArm ? 'ARM bude dostupný až po napojení runtime controlleru a úspěšné reconciliation.' : 'ARM LIVE session'} className="h-8 rounded-md bg-emerald-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-35"><Power size={12} className="mr-1.5 inline" />ARM LIVE</button>
+      <button type="button" onClick={() => void onDisarm?.()} disabled={!apiReady || !onDisarm || killSwitch || (!armed && !shadow)} className="h-8 rounded-md border border-[var(--border-subtle)] px-3 text-[10px] font-black text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">DISARM</button>
+      <button type="button" onClick={() => void onKill?.()} disabled={!apiReady || !onKill || killSwitch} title={!apiReady || !onKill ? 'Kill switch vyžaduje připojený execution runtime.' : 'Okamžitě zablokovat copier'} className="h-8 rounded-md bg-rose-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-55"><AlertTriangle size={12} className="mr-1.5 inline" />Kill switch</button>
+      <button type="button" onClick={() => void onDayLock?.()} disabled={!apiReady || !onDayLock || killSwitch || dayLocked} title="Zablokovat nový ARM až do konce broker session" className="h-8 rounded-md border border-rose-500/25 px-3 text-[10px] font-black text-rose-500 disabled:cursor-not-allowed disabled:opacity-40"><ShieldAlert size={12} className="mr-1.5 inline" />Zamknout den</button>
     </div>
   </section>;
 };
@@ -775,7 +828,9 @@ const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, onShadow, onA
 
 interface Row {
   account?: LiveAccount;
+  accountId: number | null;
   name: string;
+  firm?: string;
   isLeader: boolean;
   mode: ReplicationMode;
   scale: number;
@@ -783,12 +838,20 @@ interface Row {
 }
 
 /** Poskládá leadera a followery do pořadí, v jakém je zobrazuje Tradecopia. */
-function groupRows(group: CopyGroupConfig, byId: Map<number, LiveAccount>, source?: LiveGroup): Row[] {
+function groupRows(
+  group: CopyGroupConfig,
+  byId: Map<number, LiveAccount>,
+  source?: LiveGroup,
+  profilesById = new Map<number, TradovateAccountProfile>(),
+): Row[] {
   const rows: Row[] = [];
   const leader = group.leaderAccountId != null ? byId.get(group.leaderAccountId) : undefined;
+  const leaderProfile = group.leaderAccountId != null ? profilesById.get(group.leaderAccountId) : undefined;
   rows.push({
     account: leader,
-    name: leader?.name || source?.leaderName || 'Bez leadera',
+    accountId: group.leaderAccountId,
+    name: leader?.name || leaderProfile?.displayName || leaderProfile?.accountName || source?.leaderName || 'Bez leadera',
+    firm: leader?.firm || leaderProfile?.propFirm || undefined,
     isLeader: true,
     mode: 'off',
     scale: 1,
@@ -796,10 +859,13 @@ function groupRows(group: CopyGroupConfig, byId: Map<number, LiveAccount>, sourc
   });
   for (const follower of group.followers) {
     const acc = byId.get(follower.accountId);
+    const profile = profilesById.get(follower.accountId);
     const sourceFollower = source?.followers.find(candidate => candidate.accountId === follower.accountId);
     rows.push({
       account: acc,
-      name: acc?.name || sourceFollower?.accountName || `Účet ${follower.accountId}`,
+      accountId: follower.accountId,
+      name: acc?.name || profile?.displayName || profile?.accountName || sourceFollower?.accountName || `Účet ${follower.accountId}`,
+      firm: acc?.firm || profile?.propFirm || undefined,
       isLeader: false,
       mode: follower.mode,
       scale: follower.multiplier,
@@ -826,7 +892,7 @@ const GroupRow = ({ group, rows, connected, armed, open, onToggle, onEdit, onTog
   const unrealSource = rows.some(row => row.account?.unrealizedPnlSource === 'stale')
     ? 'stale'
     : rows.some(row => row.account?.unrealizedPnlSource === 'estimated') ? 'estimated' : 'broker';
-  const firm = rows.find(r => r.isLeader)?.account?.firm;
+  const firm = rows.find(r => r.isLeader)?.firm;
 
   return (
     <tr onClick={onToggle} className={`h-10 cursor-pointer border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--bg-page)] ${connected ? '' : 'opacity-60'}`}>
@@ -944,7 +1010,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
   redaction: RedactionSettings;
   hiddenOrderColumns: Set<OrderColumnKey>;
 }) => {
-  const accountIds = new Set(rows.flatMap(row => row.account ? [row.account.id] : []));
+  const accountIds = new Set(rows.flatMap(row => row.accountId != null ? [row.accountId] : []));
   const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
   return (
   <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/40 px-3 pb-2 lg:px-4">
@@ -1049,12 +1115,13 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
   redaction: RedactionSettings;
 }) => {
   const a = row.account;
+  const accountId = row.accountId;
   const cushion = a?.cushion ?? null;
 
   const cell = (key: AccountColumnKey): React.ReactNode => {
     switch (key) {
       case 'replication':
-        return row.isLeader || !a ? (
+        return row.isLeader ? (
           <Crown size={15} className="text-amber-400" />
         ) : (
           <label onClick={event => event.stopPropagation()} className={`relative inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-[10px] font-bold ${live ? 'border-[var(--border-subtle)] text-[var(--text-primary)]' : 'border-[var(--border-subtle)] text-[var(--text-muted)]'}`}>
@@ -1062,8 +1129,8 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
             <select
               aria-label={`Replication ${row.name}`}
               value={row.mode}
-              disabled={busyCommand != null}
-              onChange={event => onReplication(a.id, event.target.value as ReplicationMode)}
+              disabled={busyCommand != null || accountId == null}
+              onChange={event => accountId != null && onReplication(accountId, event.target.value as ReplicationMode)}
               className="appearance-none bg-transparent pr-3 outline-none cursor-pointer disabled:cursor-wait"
             >
               {Object.entries(REPLICATION_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -1087,7 +1154,7 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
       case 'broker':
         return <TradovateMark size="h-5 w-5" />;
       case 'firm':
-        return a?.firm ? <FirmMark firm={a.firm} withLabel /> : <span className="text-[11px] text-[var(--text-secondary)]">—</span>;
+        return row.firm ? <FirmMark firm={row.firm} withLabel /> : <span className="text-[11px] text-[var(--text-secondary)]">—</span>;
       case 'balance':
         return <span className="text-xs tabular-nums text-[var(--text-primary)]">{a ? money.format(a.balance) : '—'}</span>;
       case 'positions':
@@ -1110,15 +1177,15 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
       case 'execLimit':
         return <span className="text-[11px] tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'qtyMult':
-        return row.isLeader || !a
+        return row.isLeader || accountId == null
           ? <span className="mx-auto flex w-full items-center justify-center text-center text-[11px] text-[var(--text-secondary)]">—</span>
           : <label onClick={event => event.stopPropagation()} className="inline-flex items-center justify-end gap-1 text-[11px] text-[var(--text-secondary)]">
               <input
                 aria-label={`Násobek ${row.name}`}
-                key={`${a.id}-${row.scale}`}
+                key={`${accountId}-${row.scale}`}
                 type="number" min="0.01" max="100" step="0.25" defaultValue={row.scale}
                 disabled={busyCommand != null}
-                onBlur={event => onMultiplier(a.id, Number(event.target.value))}
+                onBlur={event => onMultiplier(accountId, Number(event.target.value))}
                 onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
                 className="w-14 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-1.5 py-1 text-center tabular-nums outline-none focus:border-indigo-500"
               />
@@ -1218,7 +1285,7 @@ const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, on
 
   const steps = ['Identita', 'Leader', 'Followeři', 'Nastavení'];
   const safety = draft.safety ?? DEFAULT_COPY_GROUP_SAFETY;
-  const updateSafety = (key: keyof typeof safety, value: boolean) => setDraft(current => ({
+  const updateSafety = <K extends keyof CopyGroupSafetySettings>(key: K, value: CopyGroupSafetySettings[K]) => setDraft(current => ({
     ...current,
     safety: { ...(current.safety ?? DEFAULT_COPY_GROUP_SAFETY), [key]: value },
   }));
@@ -1240,14 +1307,61 @@ const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, on
 
           {step === 1 ? <div className="space-y-4"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber leader účet</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Obchody leadera se budou kopírovat na všechny followery v této skupině.</p></div><div className="grid gap-2 sm:grid-cols-2">{accounts.map(account => { const active = draft.leaderAccountId === account.id; return <button key={account.id} type="button" onClick={() => setDraft(current => ({ ...current, leaderAccountId: account.id, followers: current.followers.filter(follower => follower.accountId !== account.id) }))} className={`flex items-center gap-3 rounded-lg border p-3 text-left ${active ? 'border-indigo-500 bg-indigo-500/[0.06]' : 'border-[var(--border-subtle)] hover:bg-[var(--bg-page)]'}`}><span className={`flex h-9 w-9 items-center justify-center rounded-full ${active ? 'bg-indigo-600 text-white' : 'bg-[var(--bg-page)] text-[var(--text-secondary)]'}`}><Crown size={16} /></span><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="mt-0.5 block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span>{active ? <Check size={16} className="ml-auto text-indigo-500" /> : null}</button>; })}</div></div> : null}
 
-          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={followerCandidates.length === 0} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div><div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]"><div className="grid grid-cols-[minmax(0,1fr)_130px_84px_64px] gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span><span className="text-right" title="Tvrdý strop kontraktů na objednávku">Max</span></div>{followerCandidates.map(account => { const follower = followerById.get(account.id); return <div key={account.id} className={`grid grid-cols-[minmax(0,1fr)_130px_84px_64px] items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}><label className="flex min-w-0 cursor-pointer items-center gap-2.5"><input type="checkbox" checked={!!follower} onChange={() => toggleFollower(account.id)} className="accent-indigo-600" /><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span></label><select disabled={!follower} value={follower?.mode ?? 'on-submit'} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, mode: event.target.value as ReplicationMode } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35"><option value="off">Vypnuto</option><option value="on-submit">Při zadání</option><option value="on-fill">Při vyplnění</option></select><input aria-label={`Násobek ${account.name}`} disabled={!follower} type="number" min="0.01" max="100" step="0.25" value={follower?.multiplier ?? 1} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, multiplier: Number(event.target.value) } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /><input aria-label={`Max kontrakty ${account.name}`} title="Tvrdý strop kontraktů na objednávku; prázdné = bez limitu" disabled={!follower} type="number" min="1" step="1" placeholder="∞" value={follower?.maxContracts ?? ''} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, maxContracts: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /></div>; })}</div></div> : null}
+          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={followerCandidates.length === 0} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div><div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]"><div className="grid grid-cols-[minmax(0,1fr)_130px_84px_64px] gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span><span className="text-right" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</span></div>{followerCandidates.map(account => { const follower = followerById.get(account.id); return <div key={account.id} className={`grid grid-cols-[minmax(0,1fr)_130px_84px_64px] items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}><label className="flex min-w-0 cursor-pointer items-center gap-2.5"><input type="checkbox" checked={!!follower} onChange={() => toggleFollower(account.id)} className="accent-indigo-600" /><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span></label><select disabled={!follower} value={follower?.mode ?? 'on-submit'} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, mode: event.target.value as ReplicationMode } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35"><option value="off">Vypnuto</option><option value="on-submit">Při zadání</option><option value="on-fill">Při vyplnění</option></select><input aria-label={`Násobek ${account.name}`} disabled={!follower} type="number" min="0.01" max="100" step="0.25" value={follower?.multiplier ?? 1} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, multiplier: Number(event.target.value) } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /><input aria-label={`Max kontrakty ${account.name}`} title="Tvrdý strop expozice na symbol; překročení odmítne celý příkaz a odzbrojí copier; prázdné = bez limitu" disabled={!follower} type="number" min="1" step="1" placeholder="∞" value={follower?.maxContracts ?? ''} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, maxContracts: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /></div>; })}</div></div> : null}
 
-          {step === 3 ? <div className="space-y-4"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Nastavení skupiny</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Nastav ochrany kopírování pro tuto skupinu.</p></div><div className="overflow-hidden rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">{([
-            ['positionReconciler', 'Kontrola shody pozic', 'Po každém vyplnění followera ověří, že nová pozice odpovídá směru a symbolu leadera.'],
-            ['disableReplicationOnBreach', 'Zastavit skupinu při nesouladu', 'Povinná fail-closed ochrana: rozdíl na jediném followerovi okamžitě zastaví replikaci celé skupiny.'],
-            ['autoCloseFollowerPositions', 'Automaticky zavřít pozice followerů', 'Jakmile se zavře pozice leadera, automaticky zavře odpovídající pozice followerů.'],
-            ['preventHedging', 'Zabránit opačné pozici', 'Nedovolí opačnému příkazu překlopit follower účet do obráceného směru.'],
-          ] as const).map(([key, title, detail]) => { const mandatory = key === 'disableReplicationOnBreach'; return <label key={key} className={`flex items-start gap-3 px-4 py-3.5 ${mandatory ? 'cursor-not-allowed bg-emerald-500/[0.025]' : 'cursor-pointer'}`}><input type="checkbox" checked={mandatory ? true : safety[key]} disabled={mandatory} onChange={event => updateSafety(key, event.target.checked)} className="mt-1 accent-indigo-600" /><span><b className="block text-xs text-[var(--text-primary)]">{title}{mandatory ? <span className="ml-2 text-[9px] uppercase text-emerald-600">Povinné</span> : null}</b><span className="mt-0.5 block text-[11px] leading-relaxed text-[var(--text-secondary)]">{detail}</span></span></label>; })}</div><label className="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] px-4 py-3"><span><b className="block text-xs text-[var(--text-primary)]">Skupina povolena</b><span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Určuje, zda se skupina po aktivaci copieru může replikovat.</span></span><input type="checkbox" checked={draft.enabled} onChange={event => setDraft(current => ({ ...current, enabled: event.target.checked }))} className="accent-indigo-600" /></label></div> : null}
+          {step === 3 ? (
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-xl font-black text-[var(--text-primary)]">Nastavení skupiny</h4>
+                <p className="mt-1.5 text-sm text-[var(--text-secondary)]">Nastav ochrany kopírování pro tuto skupinu.</p>
+              </div>
+              <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
+                {([
+                  ['positionReconciler', 'Kontrola shody pozic', 'Po každém vyplnění followera ověří, že nová pozice odpovídá směru a symbolu leadera.'],
+                  ['disableReplicationOnBreach', 'Zastavit skupinu při nesouladu', 'Povinná fail-closed ochrana: rozdíl na jediném followerovi okamžitě zastaví replikaci celé skupiny.'],
+                  ['autoCloseFollowerPositions', 'Automaticky zavřít pozice followerů', 'Jakmile se zavře pozice leadera, automaticky zavře odpovídající pozice followerů.'],
+                  ['preventHedging', 'Zabránit opačné pozici', 'Nedovolí opačnému příkazu překlopit follower účet do obráceného směru.'],
+                ] as const).map(([key, title, detail]) => {
+                  const mandatory = key === 'disableReplicationOnBreach';
+                  return (
+                    <label key={key} className={`flex items-start gap-3 px-4 py-3.5 ${mandatory ? 'cursor-not-allowed bg-emerald-500/[0.025]' : 'cursor-pointer'}`}>
+                      <input type="checkbox" checked={mandatory ? true : safety[key]} disabled={mandatory} onChange={event => updateSafety(key, event.target.checked)} className="mt-1 accent-indigo-600" />
+                      <span>
+                        <b className="block text-xs text-[var(--text-primary)]">{title}{mandatory ? <span className="ml-2 text-[9px] uppercase text-emerald-600">Povinné</span> : null}</b>
+                        <span className="mt-0.5 block text-[11px] leading-relaxed text-[var(--text-secondary)]">{detail}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
+                <span>
+                  <b className="block text-xs text-[var(--text-primary)]">Pauza po uzavření pozice</b>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Po potvrzeném zploštění celé skupiny zablokuje ostrý ARM. Nula znamená vypnuto.</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <input
+                    aria-label="Cooldown po uzavření v minutách"
+                    type="number"
+                    min="0"
+                    max="720"
+                    step="1"
+                    value={safety.entryCooldownMinutes}
+                    onChange={event => updateSafety('entryCooldownMinutes', Math.min(720, Math.max(0, Math.floor(Number(event.target.value) || 0))))}
+                    className="h-9 w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
+                  />
+                  <span className="text-[11px] font-bold text-[var(--text-secondary)]">min</span>
+                </span>
+              </label>
+              <label className="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] px-4 py-3">
+                <span>
+                  <b className="block text-xs text-[var(--text-primary)]">Skupina povolena</b>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Určuje, zda se skupina po aktivaci copieru může replikovat.</span>
+                </span>
+                <input type="checkbox" checked={draft.enabled} onChange={event => setDraft(current => ({ ...current, enabled: event.target.checked }))} className="accent-indigo-600" />
+              </label>
+            </div>
+          ) : null}
 
           {errors.length > 0 && <div className="rounded-md border border-rose-500/25 bg-rose-500/8 p-3.5 flex gap-2.5"><AlertTriangle size={17} className="text-rose-500 shrink-0 mt-0.5" /><div className="space-y-1">{errors.map(error => <div key={error} className="text-xs font-bold text-rose-500">{error}</div>)}</div></div>}
         </div>
@@ -1333,7 +1447,7 @@ const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
     }) : current);
   };
 
-  const updateSafety = (key: keyof CopyGroupSafetySettings, value: boolean) => {
+  const updateSafety = <K extends keyof CopyGroupSafetySettings>(key: K, value: CopyGroupSafetySettings[K]) => {
     setDraft(current => current ? ({
       ...current,
       safety: { ...current.safety, [key]: value },
@@ -1420,7 +1534,7 @@ const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
                           <option value="off">Off</option><option value="on-submit">On Submit</option><option value="on-fill">On Fill</option>
                         </select>
                         <input aria-label={`Násobek ${account.name}`} disabled={!follower} type="number" min="0.01" max="100" step="0.25" value={follower?.multiplier ?? 1} onChange={event => updateFollower(account.id, { multiplier: normalizeMultiplier(Number(event.target.value)) })} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-[10px] font-bold text-[var(--text-primary)] disabled:opacity-35" />
-                        <input aria-label={`Max kontrakty ${account.name}`} title="Tvrdý strop kontraktů na objednávku; prázdné = bez limitu" disabled={!follower} type="number" min="1" step="1" placeholder="∞" value={follower?.maxContracts ?? ''} onChange={event => updateFollower(account.id, { maxContracts: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined })} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-[10px] font-bold text-[var(--text-primary)] disabled:opacity-35" />
+                        <input aria-label={`Max kontrakty ${account.name}`} title="Tvrdý strop expozice na symbol; překročení odmítne celý příkaz a odzbrojí copier; prázdné = bez limitu" disabled={!follower} type="number" min="1" step="1" placeholder="∞" value={follower?.maxContracts ?? ''} onChange={event => updateFollower(account.id, { maxContracts: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined })} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-[10px] font-bold text-[var(--text-primary)] disabled:opacity-35" />
                       </div>
                     );
                   })}
@@ -1440,6 +1554,22 @@ const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
                     </label>
                   ))}
                 </div>
+                <label className="mt-3 flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-3 py-2.5">
+                  <span className="text-xs font-bold text-[var(--text-primary)]">Cooldown po uzavření</span>
+                  <span className="flex items-center gap-2">
+                    <input
+                      aria-label="Cooldown šablony v minutách"
+                      type="number"
+                      min="0"
+                      max="720"
+                      step="1"
+                      value={draft.safety.entryCooldownMinutes}
+                      onChange={event => updateSafety('entryCooldownMinutes', Math.min(720, Math.max(0, Math.floor(Number(event.target.value) || 0))))}
+                      className="h-8 w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
+                    />
+                    <span className="text-[10px] font-bold text-[var(--text-secondary)]">min</span>
+                  </span>
+                </label>
               </div>
               {error ? <p className="text-xs font-bold text-rose-500">{error}</p> : null}
               <div className="flex justify-end gap-2">

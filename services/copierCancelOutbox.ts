@@ -81,7 +81,7 @@ export function resolveCancelLookup(
       && order.stopPrice === changes.stopPrice;
     return matches
       ? { ...entry, status: 'confirmed', outcome: 'working', reason: undefined, updatedAt: now }
-      : markCancelUnknown(entry, 'změna zatím není potvrzena order streamem', now);
+      : markCancelUnknown(entry, entry.reason ?? 'změna zatím není potvrzena order streamem', now);
   }
   if (order.status === 'canceled') {
     return { ...entry, status: 'confirmed', outcome: 'canceled', reason: undefined, updatedAt: now };
@@ -95,7 +95,7 @@ export function resolveCancelLookup(
       updatedAt: now,
     };
   }
-  return markCancelUnknown(entry, 'cancel zatím není potvrzen order streamem', now);
+  return markCancelUnknown(entry, entry.reason ?? 'cancel zatím není potvrzen order streamem', now);
 }
 
 export function stuckCancelEntries(entries: Iterable<CancelOutboxEntry>): CancelOutboxEntry[] {

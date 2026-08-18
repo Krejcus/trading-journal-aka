@@ -12,6 +12,7 @@ const status = (partial: Partial<CopierControllerStatus> = {}): CopierController
   divergentAccounts: [],
   workingOrderAccounts: [],
   stuckOutbox: false,
+  stuckOperations: [],
   lastError: null,
   revision: 1,
   lastSequence: 0,

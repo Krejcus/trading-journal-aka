@@ -36,6 +36,11 @@ export class CopierLeaderEventSource {
     this.reconciliationRequired = false;
   }
 
+  /** Konfigurace účtů se změnila; další live ARM musí znovu ověřit realitu. */
+  requireReconciliation(): void {
+    this.reconciliationRequired = true;
+  }
+
   observe(event: BrokerEvent, leaderAccountId: number, sequence: number, receivedAt: number): LeaderEvent | null {
     if (event.type === 'connection') {
       this.connection(event.connected);

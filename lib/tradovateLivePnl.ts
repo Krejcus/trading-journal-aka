@@ -1,6 +1,8 @@
 import type { TradovateAccountDataResult, TradovateAccountPosition } from './tradovateAccountDataTypes';
 import type { TradovateLivePnlTick } from './tradovateLivePnlTypes';
 
+const terminalOrderStatuses = new Set(['filled', 'canceled', 'cancelled', 'rejected', 'expired', 'completed']);
+
 export interface TradovateContractMark {
   contractId: number;
   price: number;
@@ -70,6 +72,12 @@ export function applyTradovateLivePnlTick(
     rows.push(position);
     positionsByAccount.set(position.accountId, rows);
   }
+  const ordersByAccount = new Map<number, TradovateLivePnlTick['orders']>();
+  for (const order of tick.orders) {
+    const rows = ordersByAccount.get(order.accountId) ?? [];
+    rows.push(order);
+    ordersByAccount.set(order.accountId, rows);
+  }
 
   const marks = { ...previousMarks };
   if (tick.anchor) {
@@ -98,6 +106,24 @@ export function applyTradovateLivePnlTick(
       position,
       contractSymbols.get(position.contractId) ?? null,
     ));
+    const orders = (ordersByAccount.get(account.id) ?? []).map(order => ({
+      id: order.id,
+      contractId: order.contractId,
+      symbol: order.contractId == null ? null : contractSymbols.get(order.contractId) ?? null,
+      timestamp: order.timestamp,
+      action: order.action,
+      orderType: order.orderType,
+      quantity: order.quantity,
+      price: order.price,
+      stopPrice: order.stopPrice,
+      status: order.status,
+      admin: order.admin,
+      ocoId: order.ocoId,
+      parentId: order.parentId,
+      linkedId: order.linkedId,
+    })).sort((a, b) => Date.parse(b.timestamp ?? '') - Date.parse(a.timestamp ?? ''));
+    const workingOrderCount = orders.filter(order =>
+      !terminalOrderStatuses.has((order.status ?? '').toLowerCase())).length;
     const openPositions = positions.filter(position => position.netPosition !== 0);
     const exact = tick.anchor?.accountId === account.id ? tick.anchor : null;
     const estimatedParts = openPositions.map(position => {
@@ -115,7 +141,14 @@ export function applyTradovateLivePnlTick(
     return {
       ...account,
       netPositionCount: openPositions.length,
+      workingOrderCount,
       positions,
+      orders,
+      activity: {
+        ...account.activity,
+        workingOrderCount,
+        orderCount: orders.length,
+      },
       balance: {
         ...account.balance,
         ...(exact?.totalCashValue != null ? { totalCashValue: exact.totalCashValue } : {}),
@@ -130,7 +163,15 @@ export function applyTradovateLivePnlTick(
   });
 
   return {
-    data: { ...data, capturedAt: tick.capturedAt, accounts },
+    data: {
+      ...data,
+      capturedAt: tick.capturedAt,
+      accounts,
+      coverage: {
+        ...data.coverage,
+        orders: { availability: tick.orders.length > 0 ? 'available' : 'empty', count: tick.orders.length, httpStatus: 200 },
+      },
+    },
     marks,
   };
 }

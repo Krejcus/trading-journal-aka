@@ -46,10 +46,10 @@ import TradovateAddConnectionModal from './TradovateAddConnectionModal';
 import { useTradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
 import {
-  sameCopyGroupAccounts,
+  resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
-import { createLocalCopierAgentClient } from '../services/localCopierAgentClient';
+import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
 import type { CopyGroupConfig, LiveCopyTradingAdapter } from '../services/liveCopyTrading';
 
 type LiveTab = 'connections' | 'overview' | 'accounts' | 'orders' | 'events';
@@ -93,10 +93,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
   const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
+  const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const agentClient = useMemo(() => createLocalCopierAgentClient(), []);
   const live = useTradovateLiveData(userId);
-  const relayConnectionId = live.status?.connections.find(connection => connection.connected)?.id ?? null;
+  const connectedConnectionIds = useMemo(
+    () => live.status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [],
+    [live.status?.connections],
+  );
+  const pilotDevices = useMemo(
+    () => agentStatus?.devices ?? (agentStatus?.device ? [agentStatus.device] : []),
+    [agentStatus],
+  );
   const selectedAccount = live.data?.accounts.find(account => account.id === selectedAccountId) ?? null;
   const copyTradeSnapshot = useMemo(
     () => live.data ? tradovateCopyTradeSnapshot(live.data, live.profiles) : null,
@@ -108,7 +116,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   );
   const executionGroup = useMemo(() => {
     if (!agentStatus) return null;
-    return copyGroups.find(group => sameCopyGroupAccounts(group, agentStatus.group)) ?? null;
+    return resolveLocalExecutionGroup(copyGroups, agentStatus.group);
   }, [agentStatus, copyGroups]);
   const executeAgent = async (command: Parameters<typeof agentClient.execute>[0]) => {
     if (agentTransport === 'local') return agentClient.execute(command);
@@ -137,19 +145,33 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
     let stopped = false;
     let timer: number | undefined;
     const poll = async () => {
-      try {
-        const next = await agentClient.status();
-        if (!stopped) { setAgentStatus(next); setAgentTransport('local'); }
-      } catch {
+      if (canUseDirectLocalCopierAgent(window.location)) {
         try {
-          const remote = relayConnectionId ? await loadTradovateCopierRelayStatus(relayConnectionId) : null;
+          const next = await agentClient.status();
           if (!stopped) {
-            setAgentStatus(remote?.connected ? remote.status : null);
-            setAgentTransport(remote?.connected ? 'relay' : null);
+            setAgentStatus(next);
+            setAgentTransport('local');
+            setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
+            timer = window.setTimeout(poll, 2_000);
           }
+          return;
         } catch {
-          if (!stopped) { setAgentStatus(null); setAgentTransport(null); }
+          // Lokální dev může pokračovat přes relay, pokud přímý agent neběží.
         }
+      }
+      try {
+        const candidates = await Promise.all(connectedConnectionIds.map(async connectionId => ({
+          connectionId,
+          remote: await loadTradovateCopierRelayStatus(connectionId).catch(() => null),
+        })));
+        const active = candidates.find(candidate => candidate.remote?.connected) ?? null;
+        if (!stopped) {
+          setAgentStatus(active?.remote?.status ?? null);
+          setAgentTransport(active ? 'relay' : null);
+          setRelayConnectionId(active?.connectionId ?? null);
+        }
+      } catch {
+        if (!stopped) { setAgentStatus(null); setAgentTransport(null); setRelayConnectionId(null); }
       } finally {
         if (!stopped) timer = window.setTimeout(poll, 2_000);
       }
@@ -159,7 +181,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
       stopped = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [agentClient, relayConnectionId]);
+  }, [agentClient, connectedConnectionIds]);
 
   useEffect(() => {
     const prefix = '#copier-pair=';
@@ -253,9 +275,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
             }
           }}
           onReconnect={connectionId => void live.connect(connectionId)}
-          pilotDevice={agentStatus?.device}
+          pilotDevices={pilotDevices}
           onPilotLease={connectionId => void (async () => {
-            const device = agentStatus?.device;
+            const device = pilotDevices.find(item => item.connectionId === connectionId);
             if (device?.state === 'pairing-required') {
               if (device.connectionId !== connectionId || !device.deviceSecret || !device.publicKey) {
                 throw new Error('Mac worker čeká na jiné Tradovate připojení nebo má neúplnou pairing žádost.');
@@ -287,13 +309,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
           {tab === 'overview' && copyTradeSnapshot ? (
             <LiveCopyTradeOverview
               snapshot={copyTradeSnapshot}
+              accountProfiles={live.profiles}
               orders={copyTradeOrders}
               onRefreshOrders={async () => { await live.refreshData(); }}
               onAccount={account => setSelectedAccountId(account.id)}
               apiTelemetry={live.apiTelemetry}
               commandAdapter={commandAdapter}
               copierArmed={agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === false}
+              copierShadow={agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
+              copierKillSwitch={agentStatus?.controller.killSwitch === true}
+              dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
               executionGroupId={executionGroup?.id ?? null}
+              runtimeGroup={agentStatus?.group ?? null}
               onGroupsChange={setCopyGroups}
               onArmLive={executionGroup ? async () => {
                 if (!window.confirm(`ARM LIVE skupinu ${executionGroup.name}? Runtime nejdřív provede reconciliation a při jakémkoli rozdílu ARM odmítne.`)) return;
@@ -309,6 +336,13 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
               onShadowMode={executionGroup ? async () => setAgentStatus((await executeAgent({ type: 'shadow' })).status) : undefined}
               onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
               onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
+              onDayLock={async () => {
+                if (!window.confirm('Opravdu zablokovat ostrý ARM až do konce aktuální broker session? Restart Mac workeru tento lock nezruší.')) return;
+                setAgentStatus((await executeAgent({
+                  type: 'lock-until-session-end',
+                  reason: 'Ruční denní lock z AlphaTrade LIVE UI',
+                })).status);
+              }}
             />
           ) : null}
           {tab === 'accounts' ? <Accounts data={live.data} profiles={live.profiles} onAccount={setSelectedAccountId} /> : null}
@@ -335,7 +369,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   );
 };
 
-const Connections = ({ status, connectionData, connectionSummaries, profiles, busy, onAdd, onRefreshStatus, onProfiles, onDisconnect, onReconnect, onPilotLease, pilotDevice }: {
+const Connections = ({ status, connectionData, connectionSummaries, profiles, busy, onAdd, onRefreshStatus, onProfiles, onDisconnect, onReconnect, onPilotLease, pilotDevices }: {
   status: TradovateOAuthStatus | null;
   connectionData: Record<string, TradovatePreflightResult>;
   connectionSummaries: Record<string, TradovateConnectionSummary>;
@@ -347,7 +381,7 @@ const Connections = ({ status, connectionData, connectionSummaries, profiles, bu
   onDisconnect: (connectionId: string) => void;
   onReconnect: (connectionId: string) => void;
   onPilotLease: (connectionId: string) => void;
-  pilotDevice?: LocalCopierAgentStatus['device'];
+  pilotDevices: NonNullable<LocalCopierAgentStatus['devices']>;
 }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const profilesById = profileMap(profiles);
@@ -367,6 +401,7 @@ const Connections = ({ status, connectionData, connectionSummaries, profiles, bu
         <div className="hidden grid-cols-[48px_90px_90px_1.15fr_1fr_130px_180px] gap-3 bg-[var(--bg-page)] px-4 py-2.5 text-[9px] font-black uppercase tracking-[0.13em] text-[var(--text-secondary)] lg:grid"><span /><span>Broker</span><span>Type</span><span>Connection</span><span>Organization</span><span>Status</span><span /></div>
         {connections.length === 0 && busy !== 'status' ? <EmptyConnection onAdd={onAdd} /> : connections.length > 0 ? (
           connections.map(connection => {
+            const pilotDevice = pilotDevices.find(device => device.connectionId === connection.id);
             const dataset = connectionData[connection.id];
             const summary = connectionSummaries[connection.id];
             const accountIds = new Set(dataset?.accounts.map(account => String(account.id)) ?? []);

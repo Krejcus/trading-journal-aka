@@ -32,6 +32,7 @@ export interface CopierSnapshot {
   links: [string, FollowerOrderLink[]][];
   leaderCumQty: [string, number][];
   followerFillTargets: [string, number][];
+  safety?: CopierState['safety'];
 }
 
 export interface CopierStore {
@@ -58,6 +59,7 @@ export function emptySnapshot(): CopierSnapshot {
     links: [],
     leaderCumQty: [],
     followerFillTargets: [],
+    safety: { entryCooldownUntil: 0, dayLockUntil: 0 },
   };
 }
 
@@ -68,6 +70,7 @@ export function snapshotToState(snapshot: CopierSnapshot): CopierState {
     snapshot.links,
     snapshot.leaderCumQty,
     snapshot.followerFillTargets,
+    snapshot.safety,
   );
 }
 
@@ -123,6 +126,7 @@ function cloneSnapshot(snapshot: CopierSnapshot): CopierSnapshot {
     links: snapshot.links.map(([orderId, links]) => [orderId, links.map(link => ({ ...link }))]),
     leaderCumQty: snapshot.leaderCumQty.map(item => [...item]),
     followerFillTargets: snapshot.followerFillTargets.map(item => [...item]),
+    safety: { ...(snapshot.safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 }) },
   };
 }
 
@@ -152,5 +156,6 @@ export function toSnapshot(
     links: [...state.links].map(([orderId, links]) => [orderId, [...links]]),
     leaderCumQty: [...state.leaderCumQty],
     followerFillTargets: [...state.followerFillTargets],
+    safety: { ...state.safety },
   };
 }

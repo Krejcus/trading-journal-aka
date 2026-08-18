@@ -12,6 +12,16 @@ export interface LocalCopierAgentClient {
   adapter(): LiveCopyTradingAdapter;
 }
 
+/**
+ * Přímé HTTP spojení na loopback používáme jen z lokálně servírovaného UI.
+ * Produkční HTTPS stránka musí použít zabezpečený relay; běžné prohlížeče
+ * mohou mixed-content/PNA požadavek na 127.0.0.1 zablokovat nebo nechat viset.
+ */
+export function canUseDirectLocalCopierAgent(location: Pick<Location, 'protocol' | 'hostname'>): boolean {
+  return location.protocol === 'http:'
+    && (location.hostname === '127.0.0.1' || location.hostname === 'localhost');
+}
+
 export function createLocalCopierAgentClient(baseUrl = LOCAL_COPIER_AGENT_BASE_URL): LocalCopierAgentClient {
   let current: LocalCopierAgentStatus | null = null;
 

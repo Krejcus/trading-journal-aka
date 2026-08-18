@@ -136,6 +136,23 @@ export function haltReason(context: RiskGateContext): RiskBlockReason | null {
   return null;
 }
 
+/**
+ * Gate pro risk-redukující cancel už známé follower objednávky.
+ *
+ * DISARM/Kill switch/TTL zastavují NOVOU expozici. Nesmějí ale osiřet už
+ * zkopírovanou pracovní objednávku poté, co ji leader zrušil. Cancel proto
+ * vyžaduje pouze živé, čerstvé spojení do správného prostředí. Konkrétní
+ * brokerOrderId musí přijít z durable `links`; nic se nehledá odhadem.
+ */
+export function cancelLifecycleHaltReason(
+  context: RiskGateContext,
+): RiskBlockReason | null {
+  if (!context.connected) return 'disconnected';
+  if (context.now - context.lastHeartbeatAt > context.maxHeartbeatAgeMs) return 'stale-heartbeat';
+  if (context.brokerEnvironment !== context.expectedEnvironment) return 'environment-mismatch';
+  return null;
+}
+
 function requestBlockReason(
   request: BrokerOrderRequest,
   context: RiskGateContext,

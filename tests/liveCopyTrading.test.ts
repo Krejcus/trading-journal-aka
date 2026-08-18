@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  adoptRuntimeCopyGroup,
   copyGroupsFromSnapshot,
   createLocalCopyGroupId,
   mergeCopyGroups,
@@ -37,6 +38,53 @@ describe('liveCopyTrading', () => {
     edited.push({ id: 'local-1', name: 'Nová', enabled: false, leaderAccountId: 3, followers: [], localOnly: true });
     const merged = mergeCopyGroups(edited, snapshot);
     expect(merged.map(group => group.name)).toEqual(['Upravená', 'Nová']);
+  });
+
+  it('nahradí zastaralý lokální draft autoritativní skupinou runtime', () => {
+    const stale: CopyGroupConfig = {
+      id: 'test', name: 'test', enabled: true, leaderAccountId: 61887494,
+      followers: [{ accountId: 61887493, mode: 'on-submit', multiplier: 2 }], localOnly: true,
+    };
+    const runtime: CopyGroupConfig = {
+      id: 'agent-62364058-62364553', name: 'Lokální DEMO agent', enabled: true, leaderAccountId: 62364058,
+      followers: [{ accountId: 62364553, mode: 'on-submit', multiplier: 1 }], localOnly: true,
+    };
+    expect(adoptRuntimeCopyGroup([stale], [62364058, 62364553], runtime)).toEqual([runtime]);
+  });
+
+  it('zachová název přesně odpovídající UI skupiny, ale převezme runtime topologii', () => {
+    const ui: CopyGroupConfig = {
+      id: 'local-main', name: 'Hlavní', enabled: false, leaderAccountId: 62364058,
+      followers: [{ accountId: 62364553, mode: 'off', multiplier: 3 }], localOnly: true,
+    };
+    const runtime: CopyGroupConfig = {
+      id: 'agent-main', name: 'Lokální DEMO agent', enabled: true, leaderAccountId: 62364058,
+      followers: [{ accountId: 62364553, mode: 'on-submit', multiplier: 1 }], localOnly: true,
+    };
+    expect(adoptRuntimeCopyGroup([ui], [62364058, 62364553], runtime)).toMatchObject([{
+      id: 'agent-main', name: 'Hlavní', enabled: true,
+      followers: [{ accountId: 62364553, mode: 'on-submit', multiplier: 1 }],
+    }]);
+  });
+
+  it('nezahodí runtime followera, který dočasně chybí v broker snapshotu', () => {
+    const ui: CopyGroupConfig = {
+      id: 'agent-main', name: 'Hlavní', enabled: true, leaderAccountId: 62364058,
+      followers: [{ accountId: 62364057, mode: 'on-submit', multiplier: 1 }], localOnly: true,
+    };
+    const runtime: CopyGroupConfig = {
+      id: 'agent-main', name: 'Runtime', enabled: true, leaderAccountId: 62364058,
+      followers: [
+        { accountId: 62364057, mode: 'on-submit', multiplier: 1 },
+        { accountId: 62364553, mode: 'on-submit', multiplier: 1 },
+      ],
+      localOnly: true,
+    };
+
+    const [adopted] = adoptRuntimeCopyGroup([ui], [62364058, 62364057], runtime);
+
+    expect(adopted.name).toBe('Hlavní');
+    expect(adopted.followers.map(follower => follower.accountId)).toEqual([62364057, 62364553]);
   });
 
   it('validuje leadera, followery a multiplier', () => {

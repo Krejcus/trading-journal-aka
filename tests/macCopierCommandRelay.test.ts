@@ -6,7 +6,7 @@ import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 const status = (): LocalCopierAgentStatus => ({
   version: 1, environment: 'demo', nonce: 'local-only', startedAt: '2026-08-17T08:00:00.000Z',
   group: { id: 'g', name: 'test', enabled: true, leaderAccountId: 1, followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }], localOnly: true },
-  controller: { started: true, armed: false, killSwitch: false, shadowMode: true, connected: true, reconciliationRequired: false, divergentAccounts: [], workingOrderAccounts: [], stuckOutbox: false, lastError: null, revision: 1, lastSequence: 0 },
+  controller: { started: true, armed: false, killSwitch: false, shadowMode: true, connected: true, reconciliationRequired: false, divergentAccounts: [], workingOrderAccounts: [], stuckOutbox: false, stuckOperations: [], lastError: null, revision: 1, lastSequence: 0 },
 });
 
 describe('Mac copier command relay', () => {

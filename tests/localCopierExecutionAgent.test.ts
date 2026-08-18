@@ -27,6 +27,7 @@ const controller = () => {
     divergentAccounts: [],
     workingOrderAccounts: [],
     stuckOutbox: false,
+    stuckOperations: [],
     lastError: null,
     revision: 1,
     lastSequence: 0,
@@ -137,6 +138,54 @@ describe('local copier execution agent', () => {
     expect(runtime.updateGroup).not.toHaveBeenCalled();
   });
 
+  it('allows changing follower topology but keeps the runtime leader fixed', async () => {
+    const runtime = controller();
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, onGroupChanged });
+    const expanded = {
+      ...group(),
+      id: 'ui-test',
+      followers: [
+        { accountId: 22, mode: 'on-submit' as const, multiplier: 1 },
+        { accountId: 33, mode: 'on-fill' as const, multiplier: 0.5 },
+      ],
+    };
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command', command: { type: 'update-group', group: expanded },
+    });
+    expect(response.status).toBe(200);
+    expect(runtime.updateGroup).toHaveBeenCalledWith(expect.objectContaining({
+      leaderAccountId: 11,
+      followers: expect.arrayContaining([expect.objectContaining({ accountId: 33 })]),
+    }));
+    expect(running.status().group.followers).toHaveLength(2);
+    expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({
+      followers: expect.arrayContaining([expect.objectContaining({ accountId: 33 })]),
+    }));
+  });
+
+  it('rolls configuration back and remains disarmed when persistence fails', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onGroupChanged: async () => { throw new Error('disk-full'); },
+    });
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: { type: 'set-multiplier', groupId: 'runtime-test', accountId: 22, multiplier: 2 },
+    });
+    expect(response.status).toBe(409);
+    expect(running.status().group.followers[0].multiplier).toBe(1);
+    expect(runtime.updateGroup).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      followers: [expect.objectContaining({ multiplier: 2 })],
+    }));
+    expect(runtime.updateGroup).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      followers: [expect.objectContaining({ multiplier: 1 })],
+    }));
+  });
+
   it('reconciles before ARM and remains disarmed when reconciliation fails', async () => {
     const runtime = controller();
     vi.mocked(runtime.reconcile).mockResolvedValueOnce({ divergentAccounts: [22], workingOrderAccounts: [] });
@@ -152,7 +201,37 @@ describe('local copier execution agent', () => {
     const result = await running.execute({ type: 'shadow' });
     expect(result.ok).toBe(true);
     expect(result.status.controller).toMatchObject({ armed: true, shadowMode: true });
+    expect(runtime.reconcile).toHaveBeenCalledTimes(1);
     expect(runtime.arm).toHaveBeenCalledWith({ shadowMode: true });
+  });
+
+  it('exposes read-only reconciliation and audited stuck resolution as separate commands', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+    expect((await post(running, running.status().nonce, { type: 'reconcile' })).status).toBe(200);
+    expect(runtime.reconcile).toHaveBeenCalledTimes(1);
+
+    expect((await post(running, running.status().nonce, {
+      type: 'resolve-stuck-operation',
+      kind: 'cancel-or-modify',
+      key: 'cm:test:22',
+      reason: 'ručně ověřeno proti brokerovi',
+    })).status).toBe(200);
+    expect(runtime.waiveStuckOperation).toHaveBeenCalledWith({
+      kind: 'cancel-or-modify',
+      key: 'cm:test:22',
+      reason: 'ručně ověřeno proti brokerovi',
+    });
+  });
+
+  it('keeps SHADOW disarmed when reconciliation finds divergence or working orders', async () => {
+    const runtime = controller();
+    vi.mocked(runtime.reconcile).mockResolvedValueOnce({ divergentAccounts: [], workingOrderAccounts: [22] });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+    await expect(running.execute({ type: 'shadow' })).rejects.toThrow('SHADOW odmítnut');
+    expect(runtime.arm).not.toHaveBeenCalled();
   });
 
   it('exposes a pending Mac pairing only until the authenticated UI confirms it', async () => {
@@ -188,6 +267,33 @@ describe('local copier execution agent', () => {
       connectionId: '00000000-0000-4000-8000-000000000002',
       deviceName: 'Filipův Mac',
     });
+  });
+
+  it('pairs multiple OAuth devices independently and keeps the primary compatibility field', async () => {
+    const runtime = controller();
+    const onDevicePaired = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      devices: [
+        {
+          state: 'paired', deviceId: 'device-one', connectionId: 'connection-one', deviceName: 'Primary Mac',
+        },
+        {
+          state: 'pairing-required', deviceId: 'device-two', connectionId: 'connection-two', deviceName: 'Second OAuth',
+          deviceSecret: 'pair-secret', publicKey: 'pair-key',
+        },
+      ],
+      onDevicePaired,
+    });
+    expect(running.status().device).toMatchObject({ deviceId: 'device-one' });
+    expect(running.status().devices).toHaveLength(2);
+    const result = await running.execute({ type: 'device-paired', deviceId: 'device-two' });
+    expect(result.status.devices?.[1]).toEqual({
+      state: 'paired', deviceId: 'device-two', connectionId: 'connection-two', deviceName: 'Second OAuth',
+    });
+    expect(onDevicePaired).toHaveBeenCalledWith('device-two');
   });
 
   it('drives 2x replication, Flatten and Flatten All through HTTP into the real durable runtime', async () => {

@@ -10,9 +10,12 @@ import type {
 } from '../lib/tradovateAccountProfileTypes';
 import {
   findTradovatePropPlanPreset,
+  inferTradovatePropIdentity,
+  LUCID_FLEX_SOURCE,
   TRADOVATE_PROP_PLAN_PRESETS,
   type TradovatePropPlanPreset,
 } from '../lib/tradovatePropPlanCatalog';
+import { FIRM_LOGOS } from '../utils/accountFirm';
 
 type FormProfile = Omit<TradovateAccountProfileInput,
   'accountSize' | 'maxLoss' | 'dailyLossLimit' | 'consistencyPct' | 'profitTarget' | 'maxMini' | 'maxMicro'> & {
@@ -60,12 +63,13 @@ const fromAccount = (
   account: TradovatePreflightAccount,
   profile: TradovateAccountProfile | undefined,
 ): FormProfile => {
+  const inferred = inferTradovatePropIdentity(account.name);
   const result: FormProfile = {
     externalAccountId: String(account.id),
     accountName: account.name,
     displayName: profile?.displayName ?? account.name,
-    propFirm: profile?.propFirm ?? null,
-    planName: profile?.planName ?? null,
+    propFirm: profile?.propFirm ?? inferred?.propFirm ?? null,
+    planName: profile?.planName ?? inferred?.planName ?? null,
     accountType: profile?.accountType ?? null,
     accountSize: numberText(profile?.accountSize),
     drawdownType: profile?.drawdownType ?? null,
@@ -128,6 +132,15 @@ const text = (value: string | null, setter: (value: string | null) => void, plac
   <input className={inputClass} value={value ?? ''} placeholder={placeholder} list={list} onChange={event => setter(event.target.value || null)} />
 );
 
+const PropFirmInput = ({ value, onChange }: { value: string | null; onChange: (value: string | null) => void }) => {
+  const key = (value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const logo = FIRM_LOGOS[key];
+  return <div className="relative">
+    {logo ? <img src={logo} alt="" className="pointer-events-none absolute left-2 top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border border-black/10 bg-white object-cover" /> : null}
+    <input className={`${inputClass} ${logo ? 'pl-8' : ''}`} value={value ?? ''} placeholder="Tradeify nebo Lucid" list="tradovate-prop-firms" onChange={event => onChange(event.target.value || null)} />
+  </div>;
+};
+
 const numberInput = (value: string, setter: (value: string) => void, placeholder = '0') => (
   <input className={inputClass} inputMode="decimal" value={value} placeholder={placeholder} onChange={event => setter(event.target.value)} />
 );
@@ -158,8 +171,8 @@ const ProfileRow = ({
       {accountId ? <div className="mt-0.5 font-mono text-[9px] text-[var(--text-secondary)]">ID {accountId}</div> : <button type="button" onClick={bulkAction} className="mt-1 h-7 rounded-md bg-indigo-600 px-2.5 text-[9px] font-black uppercase text-white">Použít na všechny</button>}
     </div>
     {'displayName' in profile ? text(profile.displayName, displayName => onChange({ displayName }), 'Vlastní název') : <span className="text-[10px] text-[var(--text-secondary)]">Ponechá individuální názvy</span>}
-    {text(profile.propFirm, propFirm => changeIdentity({ propFirm }), 'Tradeify', 'tradovate-prop-firms')}
-    {text(profile.planName, planName => changeIdentity({ planName }), 'Growth 50K', 'tradovate-prop-plans')}
+    <PropFirmInput value={profile.propFirm} onChange={propFirm => changeIdentity({ propFirm })} />
+    {text(profile.planName, planName => changeIdentity({ planName }), 'Growth 50K / LucidFlex 50K', 'tradovate-prop-plans')}
     <label>
       <span className="sr-only">Typ účtu</span>
       <select className={inputClass} value={profile.accountType ?? ''} onChange={event => onChange({ accountType: (event.target.value || null) as TradovateProfileAccountType | null })}>
@@ -227,8 +240,8 @@ export default function TradovateAccountProfileSetup({
   return (
     <div className="fixed inset-0 z-[500] flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Nastavení Tradovate účtů">
       <section className="max-h-[94vh] w-full max-w-[1500px] overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl">
-        <datalist id="tradovate-prop-firms"><option value="Tradeify" /></datalist>
-        <datalist id="tradovate-prop-plans">{TRADOVATE_PROP_PLAN_PRESETS.map(preset => <option key={preset.planName} value={preset.planName} />)}</datalist>
+        <datalist id="tradovate-prop-firms"><option value="Tradeify" /><option value="Lucid" /></datalist>
+        <datalist id="tradovate-prop-plans">{TRADOVATE_PROP_PLAN_PRESETS.map(preset => <option key={`${preset.propFirm}-${preset.planName}`} value={preset.planName} />)}</datalist>
         <header className="flex items-start justify-between gap-4 border-b border-[var(--border-subtle)] bg-[var(--bg-card)] px-5 py-4">
           <div>
             <div className="flex items-center gap-2 text-[var(--text-primary)]"><Layers3 size={18} className="text-indigo-500" /><h2 className="text-base font-black">Nastavit detekované účty</h2></div>
@@ -241,7 +254,7 @@ export default function TradovateAccountProfileSetup({
           <p className="mb-3 text-xs text-[var(--text-secondary)]">Každý účet je jeden řádek. Společný řádek vyplň jen tam, kde chceš hodnotu propsat do všech {rows.length} účtů.</p>
           <div className="mb-3 flex items-start gap-2 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.06] px-3 py-2.5 text-[11px] leading-5 text-[var(--text-secondary)]">
             <Sparkles size={15} className="mt-0.5 shrink-0 text-indigo-500" />
-            <span>Po zadání <b className="text-[var(--text-primary)]">Tradeify + Growth/Select + velikost</b> se pravidla automaticky doplní z oficiálního katalogu (ověřeno 15. 8. 2026). Hodnoty můžeš dál ručně upravit. <a className="inline-flex items-center gap-1 font-bold text-indigo-500 hover:underline" href="https://help.tradeify.co/en/articles/10495915-growth-evaluation-accounts" target="_blank" rel="noreferrer">Zdroj <ExternalLink size={11} /></a></span>
+            <span>Po zadání firmy a přesného plánu se pravidla automaticky doplní z oficiálního katalogu (ověřeno 18. 8. 2026). Podporujeme <b className="text-[var(--text-primary)]">Tradeify Growth/Select</b> a <b className="text-[var(--text-primary)]">LucidFlex, LucidPro, LucidDaily a legacy LucidBlack</b>. LucidDaily vyber včetně EOD/Intraday a DLL ON/OFF; aplikace tuto volbu záměrně nehádá. Hodnoty můžeš dál ručně upravit. <a className="inline-flex items-center gap-1 font-bold text-indigo-500 hover:underline" href={LUCID_FLEX_SOURCE} target="_blank" rel="noreferrer">Lucid zdroj <ExternalLink size={11} /></a></span>
           </div>
           <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-sm">
             <div className="sticky top-0 z-10 grid min-w-[2100px] grid-cols-[210px_190px_150px_150px_140px_120px_150px_120px_120px_120px_120px_100px_100px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2.5 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]">

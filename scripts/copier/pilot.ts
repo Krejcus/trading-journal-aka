@@ -1,4 +1,4 @@
-import { access, appendFile, chmod, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
+import { access, appendFile, chmod, copyFile, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -10,7 +10,10 @@ import {
   readTradovateServerConfig,
 } from '../../server/tradovateOAuthStore';
 import { createFileCopierStore } from '../../services/fileCopierStore';
+import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
 import { createTradovateBroker } from '../../services/tradovateBroker';
+import { createBrokerRouter } from '../../services/brokerRouter';
+import type { BrokerPort } from '../../services/brokerPort';
 import { dryRunTradovateOrder } from '../../services/tradovateDryRun';
 import {
   bootstrapCopierRuntime,
@@ -21,7 +24,12 @@ import {
   percentile,
   type CopierAuditEntry,
 } from '../../services/copierRunner';
-import { DEFAULT_COPY_GROUP_SAFETY, type CopyFollowerConfig, type CopyGroupConfig } from '../../services/liveCopyTrading';
+import {
+  DEFAULT_COPY_GROUP_SAFETY,
+  validateCopyGroup,
+  type CopyFollowerConfig,
+  type CopyGroupConfig,
+} from '../../services/liveCopyTrading';
 import type { TradovateAccountDataAccount } from '../../lib/tradovateAccountDataTypes';
 import {
   createTradovatePilotKeyPair,
@@ -38,6 +46,7 @@ import {
   markMacCopierDevicePaired,
 } from '../../server/macCopierDevice';
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
+import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
 
 type Command = 'keygen' | 'mac-device-init' | 'accounts' | 'preflight' | 'dry-run' | 'shadow' | 'live' | 'agent';
 
@@ -61,6 +70,14 @@ interface PilotContext {
   relay?: { apiOrigin: string; authorizationHeader: () => Promise<string> };
 }
 
+interface PilotContextOptions {
+  deviceConfigPath?: string;
+  leasePath?: string;
+  privateKeyPath?: string;
+  connectionId?: string;
+  accountSpec?: string;
+}
+
 const flags = parseFlags(process.argv.slice(3));
 const command = process.argv[2] as Command | undefined;
 
@@ -74,6 +91,10 @@ if (!command || !['keygen', 'mac-device-init', 'accounts', 'preflight', 'dry-run
 }
 
 async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
+  if (selected === 'agent' && stringFlag('connections-manifest', false)) {
+    await runMultiConnectionAgent();
+    return;
+  }
   const context = await pilotContext();
   const accessToken = await context.getAccessToken();
   const accountResult = await loadTradovateAccountData({
@@ -105,7 +126,13 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
   }
 
   if (selected === 'agent') {
-    await runLocalAgent(context, leaderId, followerId, accountSpecsByAccountId, accounts);
+    const broker = createTradovateBroker({
+      environment: 'demo',
+      accountSpec: context.accountSpec,
+      accountSpecsByAccountId,
+      getAccessToken: context.getAccessToken,
+    });
+    await runLocalAgent([context], leaderId, followerId, accounts, broker);
     return;
   }
 
@@ -113,13 +140,55 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
   await runRuntime(selected, context, leaderId, followerId, accountSpecsByAccountId);
 }
 
+async function runMultiConnectionAgent(): Promise<void> {
+  const manifest = await loadMacCopierConnectionManifest(stringFlag('connections-manifest'));
+  const loaded = await Promise.all(manifest.connections.map(async entry => {
+    const context = await pilotContext({
+      deviceConfigPath: entry.deviceConfigPath,
+      leasePath: entry.leasePath,
+      privateKeyPath: entry.privateKeyPath,
+      connectionId: entry.connectionId,
+    });
+    if (context.connectionId !== entry.connectionId) {
+      throw new Error(`Manifest connection ${entry.connectionId} neodpovídá device/lease ${context.connectionId}`);
+    }
+    const data = await loadTradovateAccountData({
+      baseUrl: tradovateApiBaseUrl(context.environment),
+      accessToken: await context.getAccessToken(),
+    });
+    const visible = new Map(data.accounts.map(account => [account.id, account]));
+    const accounts = entry.accountIds.map(accountId => {
+      const account = visible.get(accountId);
+      if (!account) throw new Error(`OAuth ${entry.connectionId} nevidí routovaný účet ${accountId}`);
+      if (!account.active || !account.canTrade) throw new Error(`Routovaný účet ${account.name} není aktivní pro execution`);
+      return account;
+    });
+    const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
+    const broker = createTradovateBroker({
+      environment: 'demo',
+      accountSpec: context.accountSpec,
+      accountSpecsByAccountId,
+      getAccessToken: context.getAccessToken,
+    });
+    return { context, accountIds: entry.accountIds, accounts, accountSpecsByAccountId, broker };
+  }));
+  const accounts = loaded.flatMap(item => item.accounts);
+  const leaderId = integerFlag('leader');
+  const followerId = integerFlag('follower');
+  validatePair(accounts, leaderId, followerId);
+  const broker = createBrokerRouter(loaded.map(item => ({ broker: item.broker, accountIds: item.accountIds })));
+  await runLocalAgent(loaded.map(item => item.context), leaderId, followerId, accounts, broker);
+}
+
 async function runLocalAgent(
-  context: PilotContext,
+  contexts: PilotContext[],
   leaderId: number,
   followerId: number,
-  accountSpecsByAccountId: Readonly<Record<number, string>>,
   accounts: TradovateAccountDataAccount[],
+  baseBroker: BrokerPort,
 ): Promise<void> {
+  const context = contexts[0];
+  if (!context) throw new Error('Lokální agent potřebuje alespoň jedno OAuth spojení');
   const portValue = numberFlag('port', false) ?? LOCAL_COPIER_AGENT_PORT;
   const minutesValue = numberFlag('minutes', false) ?? 480;
   const multiplierValue = numberFlag('multiplier', false) ?? 1;
@@ -138,27 +207,26 @@ async function runLocalAgent(
   const followers: CopyFollowerConfig[] = followersFlag
     ? parseFollowersFlag(followersFlag, leaderId, accounts)
     : [{ accountId: followerId, mode: 'on-submit', multiplier: Number(multiplierValue) }];
-  if (!context.renewable && context.expiresAt && Date.parse(context.expiresAt) - Date.now() <= (Number(minutesValue) + 5) * 60_000) {
-    throw new Error(`Pilot lease nevydrží celý ${minutesValue}min běh a 5min rezervu; stáhni nový lease`);
+  for (const candidate of contexts) {
+    if (!candidate.renewable && candidate.expiresAt && Date.parse(candidate.expiresAt) - Date.now() <= (Number(minutesValue) + 5) * 60_000) {
+      throw new Error(`Pilot lease spojení ${candidate.connectionId} nevydrží celý ${minutesValue}min běh a 5min rezervu; stáhni nový lease`);
+    }
   }
 
   const root = resolve('.copier-pilot');
   await mkdir(root, { recursive: true, mode: 0o700 });
   const followerIdsKey = followers.map(item => item.accountId).join('-');
-  const key = `${context.connectionId}-${leaderId}-${followerIdsKey}`;
-  const releaseLock = await acquireProcessLock(resolve(root, `${key}.lock`));
+  // Durable stav patří leaderovi/runtime, ne konkrétnímu seznamu followerů.
+  // Jinak by pouhé přidání účtu založilo nový outbox a ztratilo recovery.
+  const key = `${context.connectionId}-${leaderId}`;
+  await migrateLegacyPilotState(root, `${key}-${followerIdsKey}`, key);
   const auditPath = resolve(root, `${key}.audit.jsonl`);
-  const broker = createTradovateBroker({
-    environment: 'demo',
-    accountSpec: context.accountSpec,
-    accountSpecsByAccountId,
-    getAccessToken: context.getAccessToken,
-  });
+  const groupStore = createFileCopyGroupStore(resolve(root, `${key}.group.json`));
   const cooldownMinutes = numberFlag('cooldown-min', false) ?? 0;
   if (!Number.isFinite(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 720) {
     throw new Error('--cooldown-min musí být v rozsahu 0–720');
   }
-  const group: CopyGroupConfig = {
+  const fallbackGroup: CopyGroupConfig = {
     id: `agent-${leaderId}-${followerIdsKey}`,
     name: 'Lokální DEMO agent',
     enabled: true,
@@ -169,6 +237,23 @@ async function runLocalAgent(
     } : {}),
     localOnly: true,
   };
+  const persistedGroup = await groupStore.load();
+  if (persistedGroup?.leaderAccountId !== undefined && persistedGroup.leaderAccountId !== leaderId) {
+    throw new Error('Uložená copy group má jiného leadera než tento Mac agent');
+  }
+  const group = persistedGroup ?? fallbackGroup;
+  const broker = baseBroker;
+  const validation = validateCopyGroup(group, accounts.map(account => account.id));
+  if (!validation.valid) {
+    throw new Error(`Uložená copy group není bezpečně použitelná: ${validation.errors.join(' ')}`);
+  }
+  for (const accountId of [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]) {
+    const account = accounts.find(candidate => candidate.id === accountId);
+    if (!account?.active || !account.canTrade) {
+      throw new Error(`Účet ${accountId} z uložené copy group není aktivní pro execution`);
+    }
+  }
+  const releaseLock = await acquireProcessLock(resolve(root, `${key}.lock`));
   let auditTail = Promise.resolve();
   let controller: CopierRuntimeController | null = null;
   let agent: Awaited<ReturnType<typeof startLocalCopierExecutionAgent>> | null = null;
@@ -215,11 +300,18 @@ async function runLocalAgent(
       controller,
       group,
       port: Number(portValue),
-      device: context.device,
-      onDevicePaired: context.onDevicePaired,
+      devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
+      onDevicePaired: async deviceId => {
+        const owner = contexts.find(candidate => candidate.device?.deviceId === deviceId);
+        if (!owner?.onDevicePaired) throw new Error('Párované zařízení nemá vlastní OAuth pairing callback');
+        await owner.onDevicePaired(deviceId);
+      },
+      onGroupChanged: async changed => {
+        await groupStore.save(changed);
+      },
     });
     if (context.relay) relay = startMacCopierCommandRelay({ ...context.relay, agent });
-    console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} followers=${followers.map(item => `${item.accountId}@${item.multiplier}${item.maxContracts != null ? `@max${item.maxContracts}` : ''}`).join(',')}`);
+    console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} followers=${group.followers.map(item => `${item.accountId}@${item.multiplier}${item.maxContracts != null ? `@max${item.maxContracts}` : ''}`).join(',')}`);
     console.log('Stav je DISARMED. ARM, Flatten, Flatten All a násobek vyžadují explicitní akci v AlphaTrade LIVE UI.');
     const deadline = Date.now() + Number(minutesValue) * 60_000;
     while (Date.now() < deadline && !stopPromise) await delay(1_000);
@@ -231,8 +323,28 @@ async function runLocalAgent(
   }
 }
 
-async function pilotContext(): Promise<PilotContext> {
-  const deviceConfigPath = stringFlag('device-config', false);
+async function migrateLegacyPilotState(root: string, legacyKey: string, stableKey: string): Promise<void> {
+  if (legacyKey === stableKey) return;
+  for (const suffix of ['group.json', 'snapshot.json', 'audit.jsonl']) {
+    const source = resolve(root, `${legacyKey}.${suffix}`);
+    const target = resolve(root, `${stableKey}.${suffix}`);
+    try {
+      await access(target);
+      continue;
+    } catch (error) {
+      if (!isCode(error, 'ENOENT')) throw error;
+    }
+    try {
+      await copyFile(source, target);
+      await chmod(target, 0o600);
+    } catch (error) {
+      if (!isCode(error, 'ENOENT')) throw error;
+    }
+  }
+}
+
+async function pilotContext(options: PilotContextOptions = {}): Promise<PilotContext> {
+  const deviceConfigPath = options.deviceConfigPath ?? stringFlag('device-config', false);
   let deviceConfig = deviceConfigPath ? await loadMacCopierDevice(deviceConfigPath) : null;
   if (deviceConfig && !deviceConfig.paired && deviceConfigPath) {
     const pendingProvider = createMacCopierDeviceTokenProvider({ config: deviceConfig });
@@ -263,9 +375,10 @@ async function pilotContext(): Promise<PilotContext> {
       },
     };
   }
-  const leasePath = stringFlag('lease', false);
+  const leasePath = options.leasePath ?? stringFlag('lease', false);
   if (leasePath) {
-    const privateKeyPath = stringFlag('private-key', false) || resolve('.copier-pilot/pilot-private.pem');
+    const privateKeyPath = options.privateKeyPath
+      ?? (stringFlag('private-key', false) || deviceConfig?.privateKeyPath || resolve('.copier-pilot/pilot-private.pem'));
     const envelope = JSON.parse(await readFile(resolve(leasePath), 'utf8')) as TradovatePilotLeaseEnvelope;
     const privateKey = await readFile(resolve(privateKeyPath), 'utf8');
     const payload = openTradovatePilotLease(envelope, privateKey);
@@ -318,7 +431,7 @@ async function pilotContext(): Promise<PilotContext> {
     .select('id,user_id,tradovate_email,environment,connection_status')
     .eq('environment', 'demo')
     .eq('connection_status', 'connected');
-  const connectionId = stringFlag('connection-id', false);
+  const connectionId = options.connectionId ?? stringFlag('connection-id', false);
   if (connectionId) query = query.eq('id', connectionId);
   const { data, error } = await query.order('connected_at', { ascending: true });
   if (error) throw new Error(`OAuth connection lookup failed: ${error.message}`);
@@ -328,7 +441,8 @@ async function pilotContext(): Promise<PilotContext> {
     throw new Error('Je připojeno více OAuth účtů; použij --connection-id');
   }
   const connection = rows[0];
-  const accountSpec = stringFlag('account-spec', false) || connection.tradovate_email?.trim() || '';
+  const accountSpec = options.accountSpec
+    ?? (stringFlag('account-spec', false) || connection.tradovate_email?.trim() || '');
   if (!accountSpec) throw new Error('Chybí Tradovate accountSpec; použij --account-spec');
   const getAccessToken = async () => (await getValidTradovateAccessToken({
     db,
@@ -781,10 +895,12 @@ Ranní Tradovate copier pilot (vždy DEMO)
   npm run copier:pilot -- live --leader ID --follower ID --minutes 15 --approval POTVRZUJI_1_MNQ_DEMO_WRITE
   npm run copier:pilot -- agent --leader ID --follower ID --lease LEASE_JSON --device-config .copier-pilot/mac-device.json --minutes 480
   npm run copier:pilot -- agent --leader ID --follower ID --followers "ID@MULT,ID@MULT@MAXKONTRAKTU" ... (vice followeru; --followers ma prednost)
+  npm run copier:pilot -- agent --connections-manifest /cesta/connections.json --leader ID --follower ID --followers "ID@MULT,..."
 
 Volitelné: --connection-id UUID, --account-spec USERNAME
 Lokální lease: --lease /cesta/k/pilot-lease.json [--private-key /cesta/pilot-private.pem]
 Spárovaný Mac: --device-config /cesta/mac-device.json (další starty už --lease nepotřebují)
+Více OAuth: manifest přiřadí každý accountId právě jednomu device-config; primární connection obsluhuje UI relay.
 Live příkaz se nesmí spustit bez bezprostředního potvrzení uživatele.
 Agent vždy startuje DISARMED, poslouchá pouze na 127.0.0.1 a brokerové akce přijímá až z potvrzeného LIVE UI.
 `);

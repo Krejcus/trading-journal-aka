@@ -32,6 +32,7 @@ import {
   markCancelUnknown,
   resolveCancelLookup,
   stuckCancelEntries,
+  waiveCancelEntry,
   type CancelOutboxEntry,
 } from './copierCancelOutbox';
 import {
@@ -60,7 +61,12 @@ import {
 } from './copierOsoOutbox';
 import type { LeaderOsoPair } from './copierOsoCorrelator';
 import { brokerTag } from './copierKeys';
-import { evaluateRiskGate, haltReason, type RiskGateContext } from './copierRiskGate';
+import {
+  cancelLifecycleHaltReason,
+  evaluateRiskGate,
+  haltReason,
+  type RiskGateContext,
+} from './copierRiskGate';
 import { snapshotToState, toSnapshot, type CopierSnapshot, type CopierStore } from './copierStore';
 import type { CopyGroupConfig } from './liveCopyTrading';
 
@@ -216,6 +222,28 @@ export function createRuntime(
     shadowLinks: new Map(),
     revision,
   };
+}
+
+function waiveSupersededModifications(
+  cancelOutbox: Map<string, CancelOutboxEntry>,
+  confirmedCancel: CancelOutboxEntry,
+  clock: () => number,
+): void {
+  if (confirmedCancel.operation !== 'cancel') return;
+  for (const [key, prior] of cancelOutbox) {
+    if (
+      prior.operation === 'modify'
+      && prior.accountId === confirmedCancel.accountId
+      && prior.brokerOrderId === confirmedCancel.brokerOrderId
+      && stuckCancelEntries([prior]).length > 0
+    ) {
+      cancelOutbox.set(key, waiveCancelEntry(
+        prior,
+        `nahrazeno potvrzeným cancellem ${confirmedCancel.key}`,
+        clock(),
+      ));
+    }
+  }
 }
 
 export function runtimeFromSnapshot(snapshot: CopierSnapshot): CopierRuntime {
@@ -378,8 +406,9 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
       });
       return [];
     }
-    // Jednotny vypocet s maxContracts stropem — stejne pro standard, OCO i OSO.
-    const quantity = followerQuantity(pair.quantity, follower.multiplier, follower.maxContracts);
+    // MaxContracts se nesmi aplikovat tichym zkracenim mnozstvi. Plny
+    // prepocitany prikaz overi exposure-capped broker tesne pred side effectem.
+    const quantity = followerQuantity(pair.quantity, follower.multiplier);
     if (quantity <= 0) {
       audit.push({
         at: clock(), leaderEventId: event.id, kind: 'skipped', accountId: follower.accountId,
@@ -417,16 +446,19 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
     startedAt: number;
   }> = [];
   const resolvedKeys: string[] = [];
+  // Posuzuj bezpečnost proti stavu před začátkem celé fan-out dávky.
+  // Nové `sending` položky dřívějších followerů stejné dávky nejsou stuck.
+  const hadUnsafeOutboxAtBatchStart = context.stuckOutbox
+    || stuckEntries(outbox.values()).length > 0
+    || stuckBracketEntries(bracketOutbox.values()).length > 0
+    || stuckOsoEntries(osoOutbox.values()).length > 0
+    || stuckCancelEntries(cancelOutbox.values()).length > 0;
 
   for (const job of jobs) {
     const decision = evaluateRiskGate(job.gateRequests, {
       ...context,
       sequenceBroken: context.sequenceBroken || sequenceBroken,
-      stuckOutbox: context.stuckOutbox
-        || stuckEntries(outbox.values()).length > 0
-        || stuckBracketEntries(bracketOutbox.values()).length > 0
-        || stuckOsoEntries(osoOutbox.values()).length > 0
-        || stuckCancelEntries(cancelOutbox.values()).length > 0,
+      stuckOutbox: hadUnsafeOutboxAtBatchStart,
     });
     if (decision.blocked.length > 0 || decision.allowed.length !== 2) {
       audit.push({
@@ -605,6 +637,13 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
 
   const dispatchable: OsoOutboxEntry[] = [];
   const resolvedKeys: string[] = [];
+  // Stejné pravidlo jako u OCO: sourozenci v jedné atomické dávce se
+  // navzájem neblokují, ale starší nevyřešený outbox blokuje všechny.
+  const hadUnsafeOutboxAtBatchStart = context.stuckOutbox
+    || stuckEntries(outbox.values()).length > 0
+    || stuckBracketEntries(bracketOutbox.values()).length > 0
+    || stuckOsoEntries(osoOutbox.values()).length > 0
+    || stuckCancelEntries(cancelOutbox.values()).length > 0;
   for (const follower of group.followers) {
     if (follower.mode === 'off') continue;
     if (follower.mode !== 'on-submit') {
@@ -614,8 +653,9 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       });
       continue;
     }
-    // Jednotny vypocet s maxContracts stropem — stejne pro standard, OCO i OSO.
-    const quantity = followerQuantity(pair.quantity, follower.multiplier, follower.maxContracts);
+    // MaxContracts se nesmi aplikovat tichym zkracenim mnozstvi. Plny
+    // prepocitany prikaz overi exposure-capped broker tesne pred side effectem.
+    const quantity = followerQuantity(pair.quantity, follower.multiplier);
     if (quantity <= 0) {
       audit.push({
         at: clock(), leaderEventId: event.id, kind: 'skipped', accountId: follower.accountId,
@@ -642,10 +682,7 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
     ];
     const decision = evaluateRiskGate(gateRequests, {
       ...context,
-      stuckOutbox: context.stuckOutbox || stuckEntries(outbox.values()).length > 0
-        || stuckBracketEntries(bracketOutbox.values()).length > 0
-        || stuckOsoEntries(osoOutbox.values()).length > 0
-        || stuckCancelEntries(cancelOutbox.values()).length > 0,
+      stuckOutbox: hadUnsafeOutboxAtBatchStart,
     });
     if (decision.blocked.length > 0 || decision.allowed.length !== 3) {
       audit.push({
@@ -781,7 +818,15 @@ export async function processLeaderEvent(
 
   // Zrušení u leadera se řeší zvlášť — není to odvozená objednávka, ale
   // příkaz na konkrétní `brokerOrderId`, který známe z vazeb.
-  const planningState = context.shadowMode ? { ...state, links: shadowLinks } : state;
+  // Po restartu controller záměrně startuje v SHADOW/DISARMED. Reálné vazby
+  // z durable store ale stále představují pracovní follower objednávky. Když
+  // leader takovou objednávku ukončí, musíme použít právě durable link a cancel
+  // dokončit; shadow mapa slouží jen událostem, které nikdy broker side effect
+  // neměly.
+  const durableCancels = planCancel(event, state);
+  const planningState = context.shadowMode && durableCancels.length === 0
+    ? { ...state, links: shadowLinks }
+    : state;
   const cancels = planCancel(event, planningState);
   const modifications = planModify(event, planningState, group);
   const commands = [
@@ -789,15 +834,18 @@ export async function processLeaderEvent(
     ...modifications.map(command => ({ ...command, operation: 'modify' as const })),
   ];
   if (commands.length > 0) {
-    const commandHalt = haltReason({
-      ...context,
-      sequenceBroken: context.sequenceBroken || sequenceBroken,
-      stuckOutbox: context.stuckOutbox
-        || stuckEntries(outbox.values()).length > 0
-        || stuckBracketEntries(bracketOutbox.values()).length > 0
-        || stuckOsoEntries(osoOutbox.values()).length > 0
-        || stuckCancelEntries(cancelOutbox.values()).some(entry => entry.leaderEventId !== event.id),
-    });
+    const isTerminalCancel = durableCancels.length > 0 && modifications.length === 0;
+    const commandHalt = isTerminalCancel
+      ? cancelLifecycleHaltReason(context)
+      : haltReason({
+          ...context,
+          sequenceBroken: context.sequenceBroken || sequenceBroken,
+          stuckOutbox: context.stuckOutbox
+            || stuckEntries(outbox.values()).length > 0
+            || stuckBracketEntries(bracketOutbox.values()).length > 0
+            || stuckOsoEntries(osoOutbox.values()).length > 0
+            || stuckCancelEntries(cancelOutbox.values()).some(entry => entry.leaderEventId !== event.id),
+        });
     if (commandHalt || (broker.environment === 'live' && !store)) {
       const reason = commandHalt ?? 'durable-store-required';
       for (const command of commands) {
@@ -811,7 +859,7 @@ export async function processLeaderEvent(
         plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
       };
     }
-    if (context.shadowMode) {
+    if (context.shadowMode && !isTerminalCancel) {
       for (const command of commands) {
         audit.push({
           at: clock(), leaderEventId: event.id, kind: 'shadow', accountId: command.accountId,
@@ -895,6 +943,7 @@ export async function processLeaderEvent(
       const resolved = resolveCancelLookup(entry, lookup.order, lookup.completeness, clock());
       cancelOutbox.set(entry.key, resolved);
       if (resolved.status === 'confirmed') {
+        waiveSupersededModifications(cancelOutbox, resolved, clock);
         audit.push({
           at: clock(), leaderEventId: event.id,
           kind: entry.operation === 'cancel' ? 'canceled' : 'modified', accountId: entry.accountId,
@@ -1430,14 +1479,16 @@ export async function recoverOutbox(options: RecoverOutboxOptions): Promise<Copi
     }
   }
 
+  const recoveredLifecycleEvents = new Map<string, number>();
   for (const entry of [...cancelOutbox.values()]) {
     if (entry.status !== 'sending' && entry.status !== 'unknown') continue;
+    recoveredLifecycleEvents.set(entry.leaderEventId, entry.leaderSequence);
     const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
     const at = clock();
     const resolved = resolveCancelLookup(entry, lookup.order, lookup.completeness, at);
     cancelOutbox.set(entry.key, resolved);
     if (resolved.status === 'confirmed') {
-      state = applyResolved(state, [], resolved.leaderSequence);
+      waiveSupersededModifications(cancelOutbox, resolved, clock);
       metrics.recovered += 1;
       audit.push({
         at,
@@ -1452,6 +1503,20 @@ export async function recoverOutbox(options: RecoverOutboxOptions): Promise<Copi
         at, leaderEventId: resolved.leaderEventId, kind: 'abandoned', accountId: resolved.accountId,
         key: resolved.key, brokerOrderId: resolved.brokerOrderId, reason: resolved.reason,
       });
+    }
+  }
+
+  // Jedna leader lifecycle událost může mít cancel/modify pro více followerů.
+  // Sekvence je hotová až tehdy, když jsou bezpečně uzavřené všechny její
+  // větve. Posun po prvním potvrzeném followerovi by po restartu skryl druhý
+  // účet ve stavu unknown/abandoned a dovolil zpracovat další leader event.
+  for (const [leaderEventId, leaderSequence] of recoveredLifecycleEvents) {
+    const entries = [...cancelOutbox.values()].filter(entry => entry.leaderEventId === leaderEventId);
+    if (
+      entries.length > 0
+      && entries.every(entry => entry.status === 'confirmed' || entry.status === 'waived')
+    ) {
+      state = applyResolved(state, [], leaderSequence);
     }
   }
 

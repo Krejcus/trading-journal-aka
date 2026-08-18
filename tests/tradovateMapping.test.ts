@@ -663,7 +663,11 @@ describe('createTradovateBroker WebSocket', () => {
     const fetchImpl: typeof fetch = async input => {
       const url = String(input);
       if (url.endsWith('/order/cancelorder')) return jsonResponse({ commandId: 9, failureReason: 'Success' });
+      if (url.includes('/order/item')) return jsonResponse({
+        id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Canceled',
+      });
       if (url.includes('/order/list') || url.includes('/orderVersion/list') || url.includes('/command/list') || url.includes('/fill/list')) return jsonResponse([]);
+      if (url.includes('/fill/deps')) return jsonResponse([]);
       if (url.includes('/orderVersion/deps')) return jsonResponse([{
         id: 11, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
       }]);
@@ -692,6 +696,104 @@ describe('createTradovateBroker WebSocket', () => {
       order: { status: 'canceled', brokerOrderId: '42' },
       completeness: 'authoritative',
     });
+    unsubscribe();
+  });
+
+  it('lookup po modify obnoví nový OrderVersion a nevrátí starý stream cache', async () => {
+    const observedPrices: number[] = [];
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes('/order/item')) return jsonResponse({
+        id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working',
+      });
+      if (url.includes('/orderVersion/deps')) return jsonResponse([{
+        id: 12, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_501,
+      }]);
+      if (url.includes('/command/list') || url.includes('/fill/deps')) return jsonResponse([]);
+      if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+    });
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'order' && event.order.limitPrice != null) {
+        observedPrices.push(event.order.limitPrice);
+      }
+    });
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [
+      { entityType: 'OrderVersion', entity: {
+        id: 11, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
+      } },
+      { entityType: 'Order', entity: {
+        id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working',
+      } },
+    ] })}]` });
+    await expect.poll(() => observedPrices.at(-1)).toBe(29_500);
+
+    await expect(broker.findOrderById(200, '42')).resolves.toMatchObject({
+      order: { brokerOrderId: '42', limitPrice: 29_501, status: 'working' },
+      completeness: 'authoritative',
+    });
+    unsubscribe();
+  });
+
+  it('modify timeout dohledá CommandReport a zachová broker rejection i commandId', async () => {
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/order/modifyorder')) {
+        return jsonResponse({ commandId: 91, failureReason: 'Success' });
+      }
+      if (url.includes('/commandReport/deps?masterid=91')) {
+        return jsonResponse([{
+          id: 92,
+          commandId: 91,
+          commandStatus: 'ExecutionRejected',
+          ordStatus: 'Rejected',
+          rejectReason: 'InvalidPrice',
+          text: 'Order rejected due to invalid price.',
+        }]);
+      }
+      if (
+        url.includes('/order/list')
+        || url.includes('/orderVersion/list')
+        || url.includes('/command/list')
+        || url.includes('/fill/list')
+      ) {
+        return jsonResponse([]);
+      }
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+      commandConfirmationTimeoutMs: 1,
+    });
+    let connected = false;
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'connection') connected = event.connected;
+    });
+    socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
+    await expect.poll(() => connected).toBe(true);
+
+    await expect(broker.modifyOrder(200, '42', {
+      quantity: 1,
+      orderType: 'Limit',
+      limitPrice: 29_501,
+    })).rejects.toThrow('modifyOrder command 91 rejected: Order rejected due to invalid price.');
     unsubscribe();
   });
 });

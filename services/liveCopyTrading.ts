@@ -7,7 +7,7 @@ export interface CopyFollowerConfig {
   mode: CopyReplicationMode;
   multiplier: number;
   /**
-   * Tvrdý strop kontraktů na jednu follower objednávku (prop risk limit).
+   * Tvrdý strop absolutní otevřené expozice follower účtu na jeden symbol.
    * Multiplier škáluje, strop řeže. Bez hodnoty se nic neomezuje.
    */
   maxContracts?: number;
@@ -111,6 +111,48 @@ export function mergeCopyGroups(
     if (group.localOnly && !merged.some(candidate => candidate.id === group.id)) merged.push(group);
   }
   return merged;
+}
+
+const copyGroupAccountKey = (group: CopyGroupConfig): string => {
+  const leader = Number.isSafeInteger(group.leaderAccountId) ? Number(group.leaderAccountId) : 0;
+  const followers = group.followers.map(item => item.accountId).sort((a, b) => a - b);
+  return `${leader}:${followers.join(',')}`;
+};
+
+/**
+ * Běžící execution runtime je autoritativní pro topologii a násobky skupiny.
+ * Aktuální broker snapshot může být dočasně neúplný, proto dostupnost účtu
+ * nesmí měnit topologii runtime ani mazat lokální skupiny. Zachováme její
+ * uživatelský název/vzhled podle stabilního id (nebo přesné shody účtů).
+ */
+export function adoptRuntimeCopyGroup(
+  current: CopyGroupConfig[],
+  availableAccountIds: Iterable<number>,
+  runtimeGroup: CopyGroupConfig,
+): CopyGroupConfig[] {
+  const available = new Set(availableAccountIds);
+  const runtimeIds = [runtimeGroup.leaderAccountId, ...runtimeGroup.followers.map(item => item.accountId)];
+  if (runtimeIds.some(accountId => !Number.isSafeInteger(accountId))) {
+    return current;
+  }
+
+  const runtimeKey = copyGroupAccountKey(runtimeGroup);
+  const matching = current.find(group => group.id === runtimeGroup.id)
+    ?? current.find(group => copyGroupAccountKey(group) === runtimeKey);
+  const authoritative: CopyGroupConfig = {
+    ...runtimeGroup,
+    ...(matching?.name ? { name: matching.name } : {}),
+    ...(matching?.color ? { color: matching.color } : {}),
+    ...(matching?.safety ? { safety: matching.safety } : {}),
+  };
+  const retained = current.filter(group => {
+    if (group.id === runtimeGroup.id || copyGroupAccountKey(group) === runtimeKey) return false;
+    if (!group.localOnly) return true;
+    const ids = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
+    return ids.every(accountId => Number.isSafeInteger(accountId) && available.has(Number(accountId)));
+  });
+  const next = [authoritative, ...retained];
+  return JSON.stringify(next) === JSON.stringify(current) ? current : next;
 }
 
 export function validateCopyGroup(

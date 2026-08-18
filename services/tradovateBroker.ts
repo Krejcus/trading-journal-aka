@@ -273,7 +273,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     body: JSON.stringify(body),
   });
 
-  const assertCommandAccepted = (result: TradovateCommandResult | null, operation: string) => {
+  const assertCommandAccepted = (result: TradovateCommandResult | null, operation: string): number => {
     if (!result) throw new TradovateTransportError(`${operation} returned an empty response`);
     if (result.failureReason && result.failureReason !== 'Success') {
       throw new TradovateTransportError(`${operation} rejected: ${result.failureText ?? result.failureReason}`);
@@ -281,6 +281,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     if (result.commandId == null) {
       throw new TradovateTransportError(`${operation} returned an ambiguous response`);
     }
+    return result.commandId;
+  };
+
+  const commandRejection = async (commandId: number): Promise<string | null> => {
+    const reports = await request<TradovateCommandReportEntity[]>(
+      `/commandReport/deps?masterid=${commandId}`,
+    );
+    const rejected = (reports ?? []).find(report =>
+      report.ordStatus === 'Rejected'
+      || report.commandStatus === 'ExecutionRejected'
+      || report.commandStatus === 'RiskRejected');
+    if (!rejected) return null;
+    return rejected.text?.trim() || rejected.rejectReason || 'Tradovate command rejected';
   };
 
   const hydrateContracts = async (ids: readonly number[]) => {
@@ -743,9 +756,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
         orderId,
         isAutomated: true,
       });
-      assertCommandAccepted(result, 'cancelOrder');
-      await waitForOrder(orderId, order =>
+      const commandId = assertCommandAccepted(result, 'cancelOrder');
+      const confirmed = await waitForOrder(orderId, order =>
         order.status === 'canceled' || order.status === 'filled' || order.status === 'rejected');
+      if (syncReady && !confirmed) {
+        const rejection = await commandRejection(commandId);
+        if (rejection) throw new TradovateTransportError(`cancelOrder command ${commandId} rejected: ${rejection}`);
+        throw new TradovateTransportError(`cancelOrder command ${commandId} was not confirmed by the order stream`);
+      }
     },
     async modifyOrder(_accountId, brokerOrderId, changes) {
       const orderId = numberId(brokerOrderId);
@@ -757,13 +775,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
         ...(changes.stopPrice != null ? { stopPrice: changes.stopPrice } : {}),
         isAutomated: true,
       });
-      assertCommandAccepted(result, 'modifyOrder');
-      await waitForOrder(orderId, order =>
+      const commandId = assertCommandAccepted(result, 'modifyOrder');
+      const confirmed = await waitForOrder(orderId, order =>
         order.status === 'working'
         && order.quantity === changes.quantity
         && order.orderType === changes.orderType
         && order.limitPrice === changes.limitPrice
         && order.stopPrice === changes.stopPrice);
+      if (syncReady && !confirmed) {
+        const rejection = await commandRejection(commandId);
+        if (rejection) throw new TradovateTransportError(`modifyOrder command ${commandId} rejected: ${rejection}`);
+        throw new TradovateTransportError(`modifyOrder command ${commandId} was not confirmed by the order stream`);
+      }
     },
     async listAccountCapabilities(accountIds): Promise<BrokerAccountCapability[]> {
       const entities = await request<TradovateAccountEntity[]>('/account/list');
@@ -802,12 +825,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     },
     async findOrderById(accountId, brokerOrderId) {
       const orderId = numberId(brokerOrderId);
-      // Order ze synchronizačního streamu je čerstvější než REST replika a je
-      // právě potvrzením, na které po cancel/modify čekáme.
-      const streamed = orders.get(brokerOrderId);
-      if (streamed?.accountId === accountId) {
-        return { order: streamed, completeness: 'authoritative', observedAt: clock() };
-      }
+      // Po vypršení čekání na sync stream nesmíme vrátit starý cache
+      // snapshot jako autoritativní. To je zvlášť důležité u nativního OSO,
+      // kde Tradovate nemusí doručit nový OrderVersion ve stejném okně jako
+      // command ACK. Vždy proto obnovíme Order + nejnovější OrderVersion z
+      // REST grafu; prázdný nebo neúplný výsledek zůstává fail-closed.
       const rawList = await loadOrderGraph(orderId);
       const raw = rawList[0];
       if (!raw || raw.accountId !== accountId) {

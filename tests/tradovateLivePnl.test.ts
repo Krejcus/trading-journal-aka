@@ -23,6 +23,7 @@ describe('Tradovate lightweight live P&L reader', () => {
         { id: 2, accountId: 11, contractId: 7, netPos: 1, netPrice: 20_000.25 },
         { id: 3, accountId: 12, contractId: 7, netPos: 2, netPrice: 20_001 },
       ]);
+      if (path.endsWith('/order/list')) return json([]);
       if (path.endsWith('/cashBalance/getcashbalancesnapshot')) {
         return json({ openPnL: 20, netLiq: 50_020, totalCashValue: 50_000 });
       }
@@ -40,7 +41,7 @@ describe('Tradovate lightweight live P&L reader', () => {
 
     expect(tick.anchor).toMatchObject({ accountId: 10, contractId: 7, openPnl: 20 });
     expect(tick.activeContractCount).toBe(1);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it('rotates contracts and never takes more than one snapshot per tick', async () => {
@@ -51,6 +52,7 @@ describe('Tradovate lightweight live P&L reader', () => {
         { accountId: 10, contractId: 7, netPos: 1, netPrice: 20_000 },
         { accountId: 11, contractId: 8, netPos: 1, netPrice: 6_000 },
       ]);
+      if (path.endsWith('/order/list')) return json([]);
       const body = JSON.parse(String(init?.body)) as { accountId: number };
       snapshotAccounts.push(body.accountId);
       return json({ openPnL: 0 });
@@ -67,7 +69,7 @@ describe('Tradovate lightweight live P&L reader', () => {
 
     expect(snapshotAccounts).toEqual([10, 11]);
     expect(second.nextContractCursor).toBe(0);
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
   });
 });
 
@@ -118,7 +120,7 @@ describe('Tradovate follower live P&L estimation', () => {
   it('detects only the first open to flat transition that needs a full refresh', () => {
     const flatTick: TradovateLivePnlTick = {
       connectionId: 'c', environment: 'demo', capturedAt: '2026-08-15T10:01:00.000Z',
-      positions: [], anchor: null, activeContractCount: 0, nextContractCursor: 0,
+      positions: [], orders: [], anchor: null, activeContractCount: 0, nextContractCursor: 0,
     };
     const stillOpenTick: TradovateLivePnlTick = {
       ...flatTick,
@@ -143,6 +145,7 @@ describe('Tradovate follower live P&L estimation', () => {
         { id: 11, accountId: 11, contractId: 7, netPosition: 1, averagePrice: 20_000.25, timestamp: null },
         { id: 12, accountId: 12, contractId: 7, netPosition: 2, averagePrice: 20_001, timestamp: null },
       ],
+      orders: [],
       anchor: { accountId: 10, contractId: 7, openPnl: 20, netLiq: 50_020, totalCashValue: 50_000 },
       activeContractCount: 1, nextContractCursor: 0,
     };
@@ -152,6 +155,26 @@ describe('Tradovate follower live P&L estimation', () => {
     expect(result.data.accounts.map(value => value.balance.openPnL)).toEqual([20, 19.5, 36]);
     expect(result.data.accounts.map(value => value.balance.openPnlSource)).toEqual(['broker', 'estimated', 'estimated']);
     expect(result.data.accounts.map(value => value.balance.netLiq)).toEqual([50_020, 50_019.5, 50_036]);
+  });
+
+  it('refreshes working orders in the lightweight tick', () => {
+    const tick: TradovateLivePnlTick = {
+      connectionId: 'c', environment: 'demo', capturedAt: '2026-08-15T10:00:00.000Z',
+      positions: [],
+      orders: [{
+        id: 91, accountId: 10, contractId: 7, timestamp: '2026-08-15T10:00:00.000Z',
+        action: 'Buy', orderType: 'Limit', quantity: 1, price: 31_500, stopPrice: null,
+        status: 'Working', admin: false, ocoId: null, parentId: null, linkedId: null,
+      }],
+      anchor: null, activeContractCount: 0, nextContractCursor: 0,
+    };
+
+    const result = applyTradovateLivePnlTick(dataset, tick);
+
+    expect(result.data.accounts[0].orders).toEqual([expect.objectContaining({ id: 91, symbol: 'MNQZ6', status: 'Working' })]);
+    expect(result.data.accounts[0].workingOrderCount).toBe(1);
+    expect(result.data.accounts[0].activity).toMatchObject({ workingOrderCount: 1, orderCount: 1 });
+    expect(result.data.coverage.orders).toEqual({ availability: 'available', count: 1, httpStatus: 200 });
   });
 
   it('supports only explicitly verified contract values', () => {
