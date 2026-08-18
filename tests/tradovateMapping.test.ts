@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { BrokerOrderRequest } from '../services/brokerPort';
+import type { BrokerOrderRequest, BrokerOsoRequest } from '../services/brokerPort';
 import {
   fillIncrement,
   fromOrderEntity,
+  fromPlaceOcoResult,
+  fromPlaceOsoResult,
   fromPlaceOrderResult,
   toOrderStatus,
+  toPlaceOcoPayload,
+  toPlaceOsoPayload,
   toPlaceOrderPayload,
   TRADOVATE_HEARTBEAT_MS,
   TRADOVATE_HOSTS,
@@ -21,10 +25,11 @@ const request = (partial: Partial<BrokerOrderRequest> = {}): BrokerOrderRequest 
 });
 
 describe('toPlaceOrderPayload', () => {
-  it('přenese tag, accountSpec a automated flag', () => {
+  it('přenese tag jako clOrdId, accountSpec a automated flag bez customTag50', () => {
     expect(toPlaceOrderPayload(request(), 'DEMO123')).toMatchObject({
-      customTag50: 'cpabc123', accountSpec: 'DEMO123', isAutomated: true,
+      clOrdId: 'cpabc123', accountSpec: 'DEMO123', isAutomated: true,
     });
+    expect(toPlaceOrderPayload(request(), 'DEMO123')).not.toHaveProperty('customTag50');
   });
   it('u market objednávky neposílá cenu', () => {
     expect(toPlaceOrderPayload(request(), 'DEMO123')).not.toHaveProperty('price');
@@ -39,6 +44,63 @@ describe('toPlaceOrderPayload', () => {
     }), 'DEMO123')).toMatchObject({
       orderType: 'StopLimit', price: 29_505, stopPrice: 29_500,
     });
+  });
+});
+
+describe('OCO mapping', () => {
+  const ocoRequest = {
+    tag: 'cpoco123', accountId: 200, symbol: 'MNQU6', quantity: 1,
+    first: { side: 'Buy' as const, orderType: 'Stop' as const, stopPrice: 30_315 },
+    second: { side: 'Buy' as const, orderType: 'Limit' as const, limitPrice: 30_272 },
+  };
+
+  it('mapuje dvě legs do nativního placeOCO payloadu', () => {
+    expect(toPlaceOcoPayload(ocoRequest, 'DEMO123')).toEqual({
+      accountId: 200, accountSpec: 'DEMO123', symbol: 'MNQU6', orderQty: 1,
+      action: 'Buy', orderType: 'Stop', stopPrice: 30_315,
+      clOrdId: 'cpoco123', isAutomated: true,
+      other: { action: 'Buy', orderType: 'Limit', price: 30_272, clOrdId: 'cpoco123b' },
+    });
+  });
+
+  it('přijme jen odpověď s oběma OCO order ID', () => {
+    expect(fromPlaceOcoResult({ orderId: 10, ocoId: 11, failureReason: 'Success' }))
+      .toEqual({ firstBrokerOrderId: '10', secondBrokerOrderId: '11', accepted: true, definitive: true });
+    expect(fromPlaceOcoResult({ orderId: 10, failureReason: 'Success' }))
+      .toMatchObject({ accepted: false, definitive: false });
+  });
+});
+
+describe('OSO mapping', () => {
+  const osoRequest: BrokerOsoRequest = {
+    tag: 'cposo123', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 1,
+    orderType: 'Limit', limitPrice: 30_250,
+    first: { side: 'Sell', orderType: 'Stop', stopPrice: 30_220 },
+    second: { side: 'Sell', orderType: 'Limit', limitPrice: 30_310 },
+  };
+
+  it('mapuje čekající entry a oba bracket legs do jednoho placeOSO payloadu', () => {
+    expect(toPlaceOsoPayload(osoRequest, 'DEMO123')).toEqual({
+      accountId: 200, accountSpec: 'DEMO123', symbol: 'MNQU6', orderQty: 1,
+      action: 'Buy', orderType: 'Limit', price: 30_250,
+      clOrdId: 'cposo123', isAutomated: true,
+      bracket1: {
+        action: 'Sell', orderType: 'Stop', stopPrice: 30_220, clOrdId: 'cposo123s',
+      },
+      bracket2: {
+        action: 'Sell', orderType: 'Limit', price: 30_310, clOrdId: 'cposo123t',
+      },
+    });
+  });
+
+  it('přijme jen odpověď se všemi třemi order ID', () => {
+    expect(fromPlaceOsoResult({ orderId: 10, oso1Id: 11, oso2Id: 12, failureReason: 'Success' }))
+      .toEqual({
+        entryBrokerOrderId: '10', firstBrokerOrderId: '11', secondBrokerOrderId: '12',
+        accepted: true, definitive: true,
+      });
+    expect(fromPlaceOsoResult({ orderId: 10, oso1Id: 11, failureReason: 'Success' }))
+      .toMatchObject({ accepted: false, definitive: false });
   });
 });
 
@@ -73,6 +135,18 @@ describe('mapping výsledků a entit', () => {
     }, 'MNQU6')).toMatchObject({
       brokerOrderId: '42', symbol: 'MNQU6', orderType: 'Limit', quantity: 3,
       filledQuantity: 1, limitPrice: 29_500, status: 'working',
+    });
+  });
+  it('zachová nativní parent/OCO/linked vazby order strategie', () => {
+    expect(fromOrderEntity({
+      id: 43, accountId: 200, contractId: 7, action: 'Sell', orderType: 'Stop',
+      ordStatus: 'Working', orderQty: 1, stopPrice: 29_450,
+      parentId: 42, ocoId: 99, linkedId: 44,
+    }, 'MNQU6')).toMatchObject({
+      brokerOrderId: '43',
+      parentOrderId: '42',
+      ocoId: '99',
+      linkedOrderId: '44',
     });
   });
 });
@@ -124,25 +198,66 @@ describe('createTradovateBroker REST', () => {
     expect(calls).toBe(0);
   });
 
-  it('place/cancel/modify používají správné endpointy a automated flag', async () => {
+  it('place/OSO/cancel/modify používají správné endpointy a automated flag', async () => {
     const calls: Array<{ url: string; body?: Record<string, unknown> }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-      return url.endsWith('/order/placeorder')
-        ? jsonResponse({ orderId: 42, failureReason: 'Success' })
-        : jsonResponse({ commandId: 9, failureReason: 'Success' });
+      if (url.endsWith('/order/placeorder')) return jsonResponse({ orderId: 42, failureReason: 'Success' });
+      if (url.endsWith('/order/placeoso')) {
+        return jsonResponse({ orderId: 50, oso1Id: 51, oso2Id: 52, failureReason: 'Success' });
+      }
+      return jsonResponse({ commandId: 9, failureReason: 'Success' });
     };
     const broker = createTradovateBroker({
       environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
     });
     await expect(broker.placeOrder(request())).resolves.toMatchObject({ accepted: true, brokerOrderId: '42' });
+    await expect(broker.placeOso?.({
+      ...request({ orderType: 'Limit', limitPrice: 30_250 }),
+      first: { side: 'Sell', orderType: 'Stop', stopPrice: 30_220 },
+      second: { side: 'Sell', orderType: 'Limit', limitPrice: 30_310 },
+    })).resolves.toMatchObject({
+      accepted: true,
+      entryBrokerOrderId: '50',
+      firstBrokerOrderId: '51',
+      secondBrokerOrderId: '52',
+    });
     await broker.cancelOrder(200, '42');
     await broker.modifyOrder(200, '42', { quantity: 3, orderType: 'Limit', limitPrice: 29_600 });
     expect(calls.map(call => call.url.split('/v1')[1])).toEqual([
-      '/order/placeorder', '/order/cancelorder', '/order/modifyorder',
+      '/order/placeorder', '/order/placeoso', '/order/cancelorder', '/order/modifyorder',
     ]);
     expect(calls.every(call => call.body?.isAutomated === true)).toBe(true);
+  });
+
+  it('pro multi-account příkaz použije Account.name odpovídající accountId', async () => {
+    let body: Record<string, unknown> | undefined;
+    const broker = createTradovateBroker({
+      environment: 'demo',
+      accessToken: 'test-token',
+      accountSpec: 'legacy-wrong-value',
+      accountSpecsByAccountId: { 200: 'TDFYG50534566527' },
+      fetchImpl: async (_input, init) => {
+        body = init?.body ? JSON.parse(String(init.body)) : undefined;
+        return jsonResponse({ orderId: 42, failureReason: 'Success' });
+      },
+    });
+
+    await broker.placeOrder(request({ accountId: 200 }));
+    expect(body).toMatchObject({ accountId: 200, accountSpec: 'TDFYG50534566527' });
+  });
+
+  it('fail-closed odmítne příkaz bez Account.name pro dané accountId', async () => {
+    const broker = createTradovateBroker({
+      environment: 'demo',
+      accessToken: 'test-token',
+      accountSpecsByAccountId: { 201: 'OTHER' },
+      fetchImpl: async () => jsonResponse({ orderId: 42 }),
+    });
+
+    await expect(broker.placeOrder(request({ accountId: 200 })))
+      .rejects.toThrow('accountSpec is missing for account 200');
   });
 
   it('recovery lookup hydratuje symbol, ale prázdno nepovažuje za cross-session autoritu', async () => {
@@ -155,7 +270,7 @@ describe('createTradovateBroker REST', () => {
         id: 101, orderId: 42, orderType: 'Limit', orderQty: 2,
       }]);
       if (url.includes('/command/list')) return jsonResponse([{
-        id: 102, orderId: 42, commandType: 'New', customTag50: 'cpabc123',
+        id: 102, orderId: 42, commandType: 'New', clOrdId: 'cpabc123',
       }]);
       if (url.includes('/fill/list')) return jsonResponse([]);
       if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
@@ -277,7 +392,7 @@ describe('createTradovateBroker WebSocket', () => {
     });
     const unsubscribe = broker.subscribe(event => events.push(event));
     const props = [
-      { entityType: 'Command', entity: { id: 10, orderId: 42, commandType: 'New', customTag50: 'cpabc123' } },
+      { entityType: 'Command', entity: { id: 10, orderId: 42, commandType: 'New', clOrdId: 'cpabc123' } },
       { entityType: 'OrderVersion', entity: { id: 11, orderId: 42, orderQty: 3, orderType: 'Limit', price: 29500 } },
       { entityType: 'Order', entity: { id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working' } },
       { entityType: 'Fill', entity: { id: 12, orderId: 42, accountId: 200, contractId: 7, action: 'Buy', qty: 1, price: 29500 } },
@@ -356,7 +471,7 @@ describe('createTradovateBroker WebSocket', () => {
         ordStatus: 'Rejected', rejectReason: 'InvalidPrice', text: 'Price is invalid',
       } },
       { entityType: 'Command', entity: {
-        id: 10, orderId: 42, commandType: 'New', customTag50: 'cpabc123',
+        id: 10, orderId: 42, commandType: 'New', clOrdId: 'cpabc123',
       } },
       { entityType: 'Order', entity: {
         id: 42, accountId: 100, contractId: 7, action: 'Buy', ordStatus: 'Working',
@@ -536,6 +651,149 @@ describe('createTradovateBroker WebSocket', () => {
     expect(timeoutCallback).not.toBeNull();
     (timeoutCallback as unknown as () => void)();
     expect(closed).toBe(1);
+    unsubscribe();
+  });
+
+  it('cancel po command ACK počká na Order update ze sync streamu a lookup použije tento stav', async () => {
+    const sent: string[] = [];
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send: value => sent.push(value), close() {},
+    };
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.endsWith('/order/cancelorder')) return jsonResponse({ commandId: 9, failureReason: 'Success' });
+      if (url.includes('/order/item')) return jsonResponse({
+        id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Canceled',
+      });
+      if (url.includes('/order/list') || url.includes('/orderVersion/list') || url.includes('/command/list') || url.includes('/fill/list')) return jsonResponse([]);
+      if (url.includes('/fill/deps')) return jsonResponse([]);
+      if (url.includes('/orderVersion/deps')) return jsonResponse([{
+        id: 11, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
+      }]);
+      if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+    });
+    const unsubscribe = broker.subscribe(() => undefined);
+    socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
+    await expect.poll(() => sent.length).toBe(0);
+
+    const cancel = broker.cancelOrder(200, '42');
+    await Promise.resolve();
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'Order', entity: {
+        id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Canceled',
+      },
+    }] })}]` });
+    await cancel;
+    await expect(broker.findOrderById(200, '42')).resolves.toMatchObject({
+      order: { status: 'canceled', brokerOrderId: '42' },
+      completeness: 'authoritative',
+    });
+    unsubscribe();
+  });
+
+  it('lookup po modify obnoví nový OrderVersion a nevrátí starý stream cache', async () => {
+    const observedPrices: number[] = [];
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes('/order/item')) return jsonResponse({
+        id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working',
+      });
+      if (url.includes('/orderVersion/deps')) return jsonResponse([{
+        id: 12, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_501,
+      }]);
+      if (url.includes('/command/list') || url.includes('/fill/deps')) return jsonResponse([]);
+      if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+    });
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'order' && event.order.limitPrice != null) {
+        observedPrices.push(event.order.limitPrice);
+      }
+    });
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [
+      { entityType: 'OrderVersion', entity: {
+        id: 11, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
+      } },
+      { entityType: 'Order', entity: {
+        id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working',
+      } },
+    ] })}]` });
+    await expect.poll(() => observedPrices.at(-1)).toBe(29_500);
+
+    await expect(broker.findOrderById(200, '42')).resolves.toMatchObject({
+      order: { brokerOrderId: '42', limitPrice: 29_501, status: 'working' },
+      completeness: 'authoritative',
+    });
+    unsubscribe();
+  });
+
+  it('modify timeout dohledá CommandReport a zachová broker rejection i commandId', async () => {
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/order/modifyorder')) {
+        return jsonResponse({ commandId: 91, failureReason: 'Success' });
+      }
+      if (url.includes('/commandReport/deps?masterid=91')) {
+        return jsonResponse([{
+          id: 92,
+          commandId: 91,
+          commandStatus: 'ExecutionRejected',
+          ordStatus: 'Rejected',
+          rejectReason: 'InvalidPrice',
+          text: 'Order rejected due to invalid price.',
+        }]);
+      }
+      if (
+        url.includes('/order/list')
+        || url.includes('/orderVersion/list')
+        || url.includes('/command/list')
+        || url.includes('/fill/list')
+      ) {
+        return jsonResponse([]);
+      }
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+      commandConfirmationTimeoutMs: 1,
+    });
+    let connected = false;
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'connection') connected = event.connected;
+    });
+    socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
+    await expect.poll(() => connected).toBe(true);
+
+    await expect(broker.modifyOrder(200, '42', {
+      quantity: 1,
+      orderType: 'Limit',
+      limitPrice: 29_501,
+    })).rejects.toThrow('modifyOrder command 91 rejected: Order rejected due to invalid price.');
     unsubscribe();
   });
 });

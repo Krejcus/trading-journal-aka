@@ -3,7 +3,7 @@ import type { BrokerOrderRequest } from './brokerPort';
 /**
  * Outbox odeslaných objednávek.
  *
- * Existuje proto, že Tradovate NENÍ idempotentní. `customTag50` je jen
+ * Existuje proto, že Tradovate NENÍ idempotentní. `clOrdId` je jen
  * volitelné textové pole — broker podle něj druhou objednávku neodmítne.
  * Když se odeslání zvrtne v timeout, prosté zopakování by založilo druhý
  * obchod.

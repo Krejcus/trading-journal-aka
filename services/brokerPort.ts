@@ -6,8 +6,9 @@
  * se měnit nebude. Do té doby jede všechno proti `createMockBroker()`.
  *
  * DŮLEŽITÉ: port záměrně NESLIBUJE idempotenci odeslání. Tradovate ji
- * nemá — `customTag50` je jen volitelný textový tag, podle kterého broker
- * druhou objednávku neodmítne. Proto je tu `findOrdersByTag()`: po
+ * nemá — Tradovate `clOrdId` používáme jen jako dohledávací identifikátor a
+ * broker podle něj nemusí druhou objednávku odmítnout. Proto je tu
+ * `findOrdersByTag()`: po
  * nejasném konci se osud objednávky musí dohledat, ne uhodnout.
  *
  * Záměrně tu NENÍ nic o market datech. Copier se obejde bez kotací
@@ -52,6 +53,10 @@ export interface BrokerOrder {
   filledQuantity: number;
   limitPrice?: number;
   stopPrice?: number;
+  /** Broker vazby order strategie. Nutné pro bezpečné rozlišení entry vs. SL/TP. */
+  parentOrderId?: string;
+  ocoId?: string;
+  linkedOrderId?: string;
   status: OrderStatus;
   /** Stabilní revize zdrojové broker entity pro deduplikaci lifecycle eventů. */
   sourceVersion?: string;
@@ -110,6 +115,45 @@ export interface BrokerOrderAck {
   rejectReason?: string;
 }
 
+export interface BrokerOcoLeg {
+  side: OrderSide;
+  orderType: Extract<OrderType, 'Limit' | 'Stop' | 'StopLimit'>;
+  limitPrice?: number;
+  stopPrice?: number;
+}
+
+export interface BrokerOcoRequest {
+  tag: string;
+  accountId: number;
+  symbol: string;
+  quantity: number;
+  first: BrokerOcoLeg;
+  second: BrokerOcoLeg;
+}
+
+export interface BrokerOcoAck {
+  firstBrokerOrderId: string;
+  secondBrokerOrderId: string;
+  accepted: boolean;
+  definitive: boolean;
+  rejectReason?: string;
+}
+
+/** Atomický entry + ochranný SL/TP (Tradovate placeOSO). */
+export interface BrokerOsoRequest extends BrokerOrderRequest {
+  first: BrokerOcoLeg;
+  second: BrokerOcoLeg;
+}
+
+export interface BrokerOsoAck {
+  entryBrokerOrderId: string;
+  firstBrokerOrderId: string;
+  secondBrokerOrderId: string;
+  accepted: boolean;
+  definitive: boolean;
+  rejectReason?: string;
+}
+
 export interface BrokerOrderLookup {
   orders: BrokerOrder[];
   /** Jen autoritativní prázdný výsledek dovoluje nový pokus. */
@@ -126,6 +170,10 @@ export interface BrokerOrderStateLookup {
 export interface BrokerPort {
   readonly environment: BrokerEnvironment;
   placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderAck>;
+  /** Nativní atomický OCO pár. Chybějící implementace znamená fail-closed. */
+  placeOco?(request: BrokerOcoRequest): Promise<BrokerOcoAck>;
+  /** Nativní atomický entry + bracket. Chybějící implementace znamená fail-closed. */
+  placeOso?(request: BrokerOsoRequest): Promise<BrokerOsoAck>;
   cancelOrder(accountId: number, brokerOrderId: string): Promise<void>;
   modifyOrder(
     accountId: number,

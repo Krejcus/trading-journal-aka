@@ -1,6 +1,27 @@
 import { supabase } from './supabase';
+import type {
+  TradovateAccountDataAccount,
+  TradovateAccountDataResult,
+  TradovateHistoricalSyncCapability,
+  TradovateSourceCoverage,
+} from '../lib/tradovateAccountDataTypes';
+import type {
+  TradovateAccountProfileInput,
+  TradovateAccountProfilesResult,
+} from '../lib/tradovateAccountProfileTypes';
+import type {
+  TradovateHistorySnapshot,
+  TradovateHistorySyncResult,
+} from '../lib/tradovateHistoricalTypes';
+import type { TradovateLivePnlTick } from '../lib/tradovateLivePnlTypes';
+import {
+  beginTradovateApiRequest,
+  finishTradovateApiRequest,
+} from '../lib/tradovateApiTelemetry';
+import type { LocalCopierAgentCommand, LocalCopierAgentCommandResult, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 
-export interface TradovateOAuthStatus {
+export interface TradovateOAuthConnectionStatus {
+  id: string;
   connected: boolean;
   environment: 'demo' | 'live';
   expiresAt: string | null;
@@ -9,71 +30,49 @@ export interface TradovateOAuthStatus {
   refreshedAt: string | null;
   tradovateUserId: number | null;
   tradovateEmail: string | null;
+  organizationName: string | null;
+  disconnectedAt: string | null;
+  disconnectReason: string | null;
 }
 
-export interface TradovatePreflightAccount {
-  id: number;
-  name: string;
-  active: boolean;
-  canTrade: boolean;
-  netPositionCount: number;
-  workingOrderCount: number;
-  balance: {
-    coverage: TradovateSourceCoverage;
-    totalCashValue: number | null;
-    netLiq: number | null;
-    netLiqSOD: number | null;
-    openPnL: number | null;
-    realizedPnL: number | null;
-    weekRealizedPnL: number | null;
-    initialMargin: number | null;
-    maintenanceMargin: number | null;
-    autoLiqLevel: number | null;
-  };
-  activity: {
-    positionCount: number;
-    netPositionCount: number;
-    workingOrderCount: number;
-    orderCount: number;
-    fillCount: number;
-    fillPairCount: number;
-    knownFees: number;
-    firstFillAt: string | null;
-    lastFillAt: string | null;
-  };
-  history: {
-    coverage: TradovateSourceCoverage;
-    entryCount: number;
-    firstEntryAt: string | null;
-    lastEntryAt: string | null;
-    realizedBalanceDrawdown: number | null;
-  };
-  risk: {
-    statusCoverage: TradovateSourceCoverage;
-    limitsCoverage: TradovateSourceCoverage;
-    adminAction: string | null;
-    maxNetLiq: number | null;
-    minNetLiq: number | null;
-    dailyLossAutoLiq: number | null;
-    weeklyLossAutoLiq: number | null;
-    trailingMaxDrawdown: number | null;
-    trailingMaxDrawdownLimit: number | null;
-    trailingMaxDrawdownMode: string | null;
-    changesLocked: boolean | null;
-  };
-}
-
-export interface TradovateSourceCoverage {
-  availability: 'available' | 'empty' | 'denied' | 'unavailable';
-  count: number;
-  httpStatus: number | null;
-}
-
-export interface TradovatePreflightResult {
+export interface TradovateOAuthStatus {
+  connected: boolean;
   environment: 'demo' | 'live';
-  capturedAt: string;
-  accounts: TradovatePreflightAccount[];
-  coverage: Record<'accounts' | 'positions' | 'orders' | 'fills' | 'fillPairs' | 'fillFees', TradovateSourceCoverage>;
+  connections: TradovateOAuthConnectionStatus[];
+}
+
+export type TradovatePreflightAccount = TradovateAccountDataAccount;
+export type { TradovateSourceCoverage };
+
+export interface TradovatePreflightResult extends TradovateAccountDataResult {
+  connectionId: string;
+  environment: 'demo' | 'live';
+  historicalSync: TradovateHistoricalSyncCapability;
+}
+
+export interface TradovateHistoricalReportResult {
+  status: 'available' | 'unauthorized' | 'forbidden' | 'invalid-response' | 'unavailable';
+  httpStatus: number | null;
+  reportName: 'Performance';
+  accountId: number;
+  startDate: string;
+  endDate: string;
+  contentType: string | null;
+  byteLength: number;
+  columns: string[];
+  rowCount: number;
+  rows: string[][];
+  truncated: boolean;
+  diagnostic: string | null;
+}
+
+export interface TradovatePilotLeaseEnvelope {
+  version: 1;
+  algorithm: 'RSA-OAEP-256+A256GCM';
+  encryptedKey: string;
+  iv: string;
+  tag: string;
+  ciphertext: string;
 }
 
 const authorization = async (): Promise<string> => {
@@ -82,25 +81,73 @@ const authorization = async (): Promise<string> => {
   return `Bearer ${data.session.access_token}`;
 };
 
-const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json',
-      Authorization: await authorization(),
-      ...init.headers,
-    },
-  });
-  const body = await response.json().catch(() => ({})) as { error?: string } & T;
-  if (!response.ok) throw new Error(body.error || `Tradovate request failed (${response.status})`);
-  return body;
+export class TradovateRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly retryAfterMs: number | null = null,
+  ) {
+    super(message);
+    this.name = 'TradovateRequestError';
+  }
+}
+
+export const parseTradovateOAuthStatus = (value: unknown): TradovateOAuthStatus => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Tradovate API vrátilo neplatný stav připojení. Spusť localhost přes Vercel dev.');
+  }
+  const candidate = value as Partial<TradovateOAuthStatus>;
+  if (
+    typeof candidate.connected !== 'boolean'
+    || (candidate.environment !== 'demo' && candidate.environment !== 'live')
+    || !Array.isArray(candidate.connections)
+  ) {
+    throw new Error('Tradovate API vrátilo neplatný stav připojení. Spusť localhost přes Vercel dev.');
+  }
+  return candidate as TradovateOAuthStatus;
 };
 
-export async function beginTradovateOAuth(): Promise<void> {
+const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
+  const telemetry = beginTradovateApiRequest();
+  let completed = false;
+  try {
+    const response = await fetch(path, {
+      ...init,
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        Authorization: await authorization(),
+        ...init.headers,
+      },
+    });
+    const body = await response.json().catch(() => ({})) as { error?: string; retryAfterMs?: number } & T;
+    const retryAfterMs = typeof body.retryAfterMs === 'number' ? body.retryAfterMs : null;
+    finishTradovateApiRequest(telemetry, response.status, retryAfterMs);
+    completed = true;
+    if (!response.ok) {
+      throw new TradovateRequestError(
+        body.error || `Tradovate request failed (${response.status})`,
+        response.status,
+        retryAfterMs,
+      );
+    }
+    return body;
+  } catch (reason) {
+    if (!completed) finishTradovateApiRequest(telemetry, 0);
+    throw reason;
+  }
+};
+
+export async function beginTradovateOAuth(connectionId?: string): Promise<void> {
   const { authorizationUrl } = await authenticatedRequest<{ authorizationUrl: string }>(
     '/api/tradovate/oauth/start',
-    { method: 'POST' },
+    {
+      method: 'POST',
+      ...(connectionId ? {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId }),
+      } : {}),
+    },
   );
   const url = new URL(authorizationUrl);
   if (url.origin !== 'https://trader.tradovate.com' || url.pathname !== '/oauth') {
@@ -109,14 +156,138 @@ export async function beginTradovateOAuth(): Promise<void> {
   window.location.assign(url.toString());
 }
 
-export function loadTradovateOAuthStatus(): Promise<TradovateOAuthStatus> {
-  return authenticatedRequest('/api/tradovate/oauth/status');
+export async function loadTradovateOAuthStatus(): Promise<TradovateOAuthStatus> {
+  return parseTradovateOAuthStatus(await authenticatedRequest<unknown>('/api/tradovate/oauth/status'));
 }
 
-export function disconnectTradovateOAuth(): Promise<{ connected: false }> {
-  return authenticatedRequest('/api/tradovate/oauth/status', { method: 'DELETE' });
+export function disconnectTradovateOAuth(connectionId: string): Promise<{ connected: false }> {
+  return authenticatedRequest(`/api/tradovate/oauth/status?connectionId=${encodeURIComponent(connectionId)}`, { method: 'DELETE' });
 }
 
-export function runTradovateReadOnlyPreflight(): Promise<TradovatePreflightResult> {
-  return authenticatedRequest('/api/tradovate/oauth/preflight', { method: 'POST' });
+export function runTradovateReadOnlyPreflight(connectionId: string): Promise<TradovatePreflightResult> {
+  return authenticatedRequest('/api/tradovate/oauth/preflight', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId }),
+  });
+}
+
+export function createTradovatePilotLease(
+  connectionId: string,
+  publicKey: string,
+): Promise<{ envelope: TradovatePilotLeaseEnvelope; expiresAt: string; issuedAt: string }> {
+  return authenticatedRequest('/api/tradovate/oauth/pilot-lease', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId, publicKey }),
+  });
+}
+
+export function pairTradovateCopierDevice(input: {
+  connectionId: string;
+  deviceId: string;
+  deviceSecret: string;
+  publicKey: string;
+  deviceName: string;
+}): Promise<{ paired: true }> {
+  return authenticatedRequest('/api/tradovate/oauth/copier-device', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export function revokeTradovateCopierDevice(deviceId: string): Promise<{ revoked: true }> {
+  return authenticatedRequest('/api/tradovate/oauth/copier-device', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId }),
+  });
+}
+
+export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
+  status: LocalCopierAgentStatus;
+  lastSeenAt: string;
+  connected: boolean;
+} | null> {
+  return authenticatedRequest(`/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}`);
+}
+
+export async function executeTradovateCopierRelayCommand(
+  connectionId: string,
+  command: LocalCopierAgentCommand,
+): Promise<LocalCopierAgentCommandResult> {
+  const idempotencyKey = crypto.randomUUID();
+  const queued = await authenticatedRequest<{ id: string; expiresAt: string }>('/api/tradovate/oauth/copier-relay', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId, command, idempotencyKey }),
+  });
+  const deadline = Math.min(Date.parse(queued.expiresAt) + 5_000, Date.now() + 35_000);
+  while (Date.now() < deadline) {
+    const result = await authenticatedRequest<{ status: string; result?: LocalCopierAgentCommandResult; error?: string }>(
+      `/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}&commandId=${encodeURIComponent(queued.id)}`,
+    );
+    if (result.status === 'succeeded' && result.result) return result.result;
+    if (result.status === 'rejected' || result.status === 'expired') throw new Error(result.error || `Copier příkaz skončil stavem ${result.status}`);
+    await new Promise(resolve => window.setTimeout(resolve, 400));
+  }
+  throw new Error('Mac worker příkaz včas nepotvrdil. Příkaz expiroval a nebude automaticky opakován.');
+}
+
+export function runTradovateLivePnlTick(
+  connectionId: string,
+  contractCursor = 0,
+): Promise<TradovateLivePnlTick> {
+  return authenticatedRequest('/api/tradovate/oauth/live-pnl', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId, contractCursor }),
+  });
+}
+
+export function runTradovatePerformanceHistory(options: {
+  connectionId: string;
+  accountId: number;
+  startDate: string;
+  endDate: string;
+}): Promise<TradovateHistoricalReportResult> {
+  return authenticatedRequest('/api/tradovate/oauth/history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+}
+
+export function runTradovateHistoricalBackfill(options: {
+  connectionId: string;
+  accountId: number;
+  startDate?: string;
+  endDate?: string;
+}): Promise<TradovateHistorySnapshot & { sync: TradovateHistorySyncResult }> {
+  return authenticatedRequest('/api/tradovate/oauth/history-sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+}
+
+export function loadTradovateHistoricalSnapshot(
+  accountId: number,
+  limit = 500,
+): Promise<TradovateHistorySnapshot> {
+  return authenticatedRequest(`/api/tradovate/oauth/history-sync?accountId=${encodeURIComponent(accountId)}&limit=${encodeURIComponent(limit)}`);
+}
+
+export function loadTradovateAccountProfiles(): Promise<TradovateAccountProfilesResult> {
+  return authenticatedRequest('/api/tradovate/account-profiles');
+}
+
+export function saveTradovateAccountProfiles(
+  profiles: TradovateAccountProfileInput[],
+): Promise<TradovateAccountProfilesResult> {
+  return authenticatedRequest('/api/tradovate/account-profiles', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profiles }),
+  });
 }

@@ -28,7 +28,7 @@ const BacktestSessionsManager = React.lazy(() => import('./components/BacktestSe
 const BacktestWorkspace = React.lazy(() => import('./components/BacktestWorkspace'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
-const LiveDesk = React.lazy(() => import('./components/LiveDesk'));
+const LiveDesk = React.lazy(() => import('./components/TradovateLiveDesk'));
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
@@ -88,7 +88,7 @@ import {
   Sparkles
 } from 'lucide-react';
 
-import { supabase } from './services/supabase';
+import { isSupabaseConfigured, supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
 import { playNativeHapticIfAvailable, type NativeTradeDraft } from './services/nativeCapabilities';
@@ -955,10 +955,10 @@ const App: React.FC = () => {
   // Defense-in-depth: kdyby se non-owner role pokusila dostat na uzamčenou page
   // přes přímou state mutaci nebo router redirect → přesměrovat na dashboard.
   useEffect(() => {
-    if (!canAccess(activePage, currentUser.role)) {
+    if (isUserFromDb && !canAccess(activePage, currentUser.role)) {
       setActivePage('dashboard');
     }
-  }, [activePage, currentUser.role]);
+  }, [activePage, currentUser.role, isUserFromDb]);
 
   // Nativní iOS shell nahrazuje BottomNav systémovým TabView a přepíná sekce
   // přes tento most — bez reloadu, takže session i stav zůstávají.
@@ -1994,6 +1994,10 @@ const App: React.FC = () => {
 
   const isSyncingAccounts = React.useRef(false);
   useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setSyncError(null);
+      return;
+    }
     if (!sharedTrade && session && isInitialLoadDone && accounts.length > 0 && !isSyncingAccounts.current) {
       const timer = setTimeout(() => {
         isSyncingAccounts.current = true;
@@ -4203,7 +4207,7 @@ const App: React.FC = () => {
                     />
                   )}
                   {activePage === 'live' && (
-                    <LiveDesk theme={theme} />
+                    <LiveDesk key={currentUser.id} theme={theme} userId={currentUser.id} />
                   )}
 
                   {activePage === 'settings' && (

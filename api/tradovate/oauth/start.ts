@@ -1,10 +1,22 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { randomUUID } from 'node:crypto';
 import {
   buildTradovateAuthorizationUrl,
   buildTradovateStateCookie,
   createTradovateOAuthState,
 } from '../../../server/tradovateOAuth.js';
-import { readTradovateServerConfig, requireSupabaseUserId } from '../../../server/tradovateOAuthStore.js';
+import {
+  createTradovateAdminClient,
+  readTradovateServerConfig,
+  requireReconnectableTradovateConnection,
+  requireSupabaseUserId,
+} from '../../../server/tradovateOAuthStore.js';
+
+const requestedConnectionId = (body: unknown): string | undefined => {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const value = (body as Record<string, unknown>).connectionId;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+};
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Cache-Control', 'no-store');
@@ -12,7 +24,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const config = readTradovateServerConfig();
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
-    const state = createTradovateOAuthState(userId, config.stateSecret);
+    const connectionId = requestedConnectionId(req.body);
+    if (connectionId) {
+      await requireReconnectableTradovateConnection({
+        db: createTradovateAdminClient(config),
+        userId,
+        connectionId,
+        environment: config.environment,
+      });
+    }
+    const state = createTradovateOAuthState(userId, config.stateSecret, Date.now(), undefined, connectionId ?? randomUUID());
     res.setHeader('Set-Cookie', buildTradovateStateCookie(state));
     return res.status(200).json({
       authorizationUrl: buildTradovateAuthorizationUrl({

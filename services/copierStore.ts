@@ -1,5 +1,7 @@
 import type { OutboxEntry } from './copierOutbox';
 import type { CancelOutboxEntry } from './copierCancelOutbox';
+import type { BracketOutboxEntry } from './copierBracketOutbox';
+import type { OsoOutboxEntry } from './copierOsoOutbox';
 import { createCopierState, type CopierState, type FollowerOrderLink } from './copierEngine';
 
 /**
@@ -21,11 +23,16 @@ export interface CopierSnapshot {
   replicated: string[];
   lastSequence: number;
   outbox: OutboxEntry[];
+  /** Atomické OCO páry mají vlastní outbox; nesmí se obnovovat jako dva ordery. */
+  bracketOutbox?: BracketOutboxEntry[];
+  /** Atomické čekající entry + SL/TP. */
+  osoOutbox?: OsoOutboxEntry[];
   cancelOutbox: CancelOutboxEntry[];
   /** Vazby leader objednávka → follower objednávky, aby šlo po restartu rušit. */
   links: [string, FollowerOrderLink[]][];
   leaderCumQty: [string, number][];
   followerFillTargets: [string, number][];
+  safety?: CopierState['safety'];
 }
 
 export interface CopierStore {
@@ -46,10 +53,13 @@ export function emptySnapshot(): CopierSnapshot {
     replicated: [],
     lastSequence: 0,
     outbox: [],
+    bracketOutbox: [],
+    osoOutbox: [],
     cancelOutbox: [],
     links: [],
     leaderCumQty: [],
     followerFillTargets: [],
+    safety: { entryCooldownUntil: 0, dayLockUntil: 0 },
   };
 }
 
@@ -60,6 +70,7 @@ export function snapshotToState(snapshot: CopierSnapshot): CopierState {
     snapshot.links,
     snapshot.leaderCumQty,
     snapshot.followerFillTargets,
+    snapshot.safety,
   );
 }
 
@@ -92,6 +103,22 @@ function cloneSnapshot(snapshot: CopierSnapshot): CopierSnapshot {
     revision: snapshot.revision,
     lastSequence: snapshot.lastSequence,
     outbox: snapshot.outbox.map(entry => ({ ...entry, request: { ...entry.request } })),
+    bracketOutbox: (snapshot.bracketOutbox ?? []).map(entry => ({
+      ...entry,
+      request: {
+        ...entry.request,
+        first: { ...entry.request.first },
+        second: { ...entry.request.second },
+      },
+    })),
+    osoOutbox: (snapshot.osoOutbox ?? []).map(entry => ({
+      ...entry,
+      request: {
+        ...entry.request,
+        first: { ...entry.request.first },
+        second: { ...entry.request.second },
+      },
+    })),
     cancelOutbox: snapshot.cancelOutbox.map(entry => ({
       ...entry,
       ...(entry.changes ? { changes: { ...entry.changes } } : {}),
@@ -99,6 +126,7 @@ function cloneSnapshot(snapshot: CopierSnapshot): CopierSnapshot {
     links: snapshot.links.map(([orderId, links]) => [orderId, links.map(link => ({ ...link }))]),
     leaderCumQty: snapshot.leaderCumQty.map(item => [...item]),
     followerFillTargets: snapshot.followerFillTargets.map(item => [...item]),
+    safety: { ...(snapshot.safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 }) },
   };
 }
 
@@ -114,15 +142,20 @@ export function toSnapshot(
   outbox: Iterable<OutboxEntry>,
   cancelOutbox: Iterable<CancelOutboxEntry> = [],
   revision = 0,
+  bracketOutbox: Iterable<BracketOutboxEntry> = [],
+  osoOutbox: Iterable<OsoOutboxEntry> = [],
 ): CopierSnapshot {
   return {
     revision,
     replicated: [...state.replicated],
     lastSequence: state.lastSequence,
     outbox: [...outbox],
+    bracketOutbox: [...bracketOutbox],
+    osoOutbox: [...osoOutbox],
     cancelOutbox: [...cancelOutbox],
     links: [...state.links].map(([orderId, links]) => [orderId, [...links]]),
     leaderCumQty: [...state.leaderCumQty],
     followerFillTargets: [...state.followerFillTargets],
+    safety: { ...state.safety },
   };
 }

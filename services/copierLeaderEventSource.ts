@@ -14,6 +14,7 @@ export class CopierLeaderEventSource {
   private connectedOnce = false;
   private reconciliationRequired = false;
   private readonly orderSignatures = new Map<string, string>();
+  private readonly orderShapes = new Map<string, string>();
   private readonly seenFillIds = new Set<string>();
   private readonly liveFillTotals = new Map<string, number>();
 
@@ -35,6 +36,11 @@ export class CopierLeaderEventSource {
     this.reconciliationRequired = false;
   }
 
+  /** Konfigurace účtů se změnila; další live ARM musí znovu ověřit realitu. */
+  requireReconciliation(): void {
+    this.reconciliationRequired = true;
+  }
+
   observe(event: BrokerEvent, leaderAccountId: number, sequence: number, receivedAt: number): LeaderEvent | null {
     if (event.type === 'connection') {
       this.connection(event.connected);
@@ -52,22 +58,36 @@ export class CopierLeaderEventSource {
     receivedAt: number,
   ): LeaderEvent | null {
     if (order.accountId !== leaderAccountId) return null;
-    const signature = [
-      order.sourceVersion ?? order.updatedAt,
-      order.status,
+    const shape = [
       order.orderType,
       order.quantity,
       order.limitPrice ?? '',
       order.stopPrice ?? '',
+      order.parentOrderId ?? '',
+      order.ocoId ?? '',
+      order.linkedOrderId ?? '',
+    ].join(':');
+    const signature = [
+      order.sourceVersion ?? order.updatedAt,
+      order.status,
+      shape,
     ].join(':');
     const previous = this.orderSignatures.get(order.brokerOrderId);
+    const previousShape = this.orderShapes.get(order.brokerOrderId);
     this.orderSignatures.set(order.brokerOrderId, signature);
+    this.orderShapes.set(order.brokerOrderId, shape);
     if (!this.ready || previous === signature) return null;
 
     let kind: LeaderEventKind | null = null;
     if (order.status === 'canceled') kind = 'canceled';
     else if (order.status === 'rejected') kind = 'rejected';
-    else if (order.status === 'working') kind = previous == null ? 'submitted' : 'replaced';
+    else if (order.status === 'working') {
+      // PendingNew -> Working často přinese novou broker revizi, ale žádnou
+      // uživatelskou změnu objednávky. Modify posíláme jen při změně skutečných
+      // parametrů; potvrzení přijetí samo o sobě follower order nemění.
+      if (previous == null) kind = 'submitted';
+      else if (previousShape !== shape) kind = 'replaced';
+    }
     // `filled` vzniká výhradně z Fill entity, aby se partial fill nezapočítal dvakrát.
     if (!kind) return null;
 
@@ -82,6 +102,9 @@ export class CopierLeaderEventSource {
       orderType: order.orderType,
       ...(order.limitPrice != null ? { limitPrice: order.limitPrice } : {}),
       ...(order.stopPrice != null ? { stopPrice: order.stopPrice } : {}),
+      ...(order.parentOrderId ? { parentOrderId: order.parentOrderId } : {}),
+      ...(order.ocoId ? { ocoId: order.ocoId } : {}),
+      ...(order.linkedOrderId ? { linkedOrderId: order.linkedOrderId } : {}),
       sequence,
       receivedAt,
     };

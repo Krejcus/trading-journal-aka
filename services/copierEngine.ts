@@ -35,6 +35,10 @@ export interface LeaderEvent {
   orderType: OrderType;
   limitPrice?: number;
   stopPrice?: number;
+  /** Vazby nativní broker strategie; child order se nesmí kopírovat jako samostatný vstup. */
+  parentOrderId?: string;
+  ocoId?: string;
+  linkedOrderId?: string;
   /** Pořadí ve streamu leadera. Kontroluje ho `classifySequence()`. */
   sequence: number;
   /** Kdy událost dorazila k nám. Základ pro měření replikační latence. */
@@ -97,6 +101,15 @@ export interface CopierState {
   leaderCumQty: ReadonlyMap<string, number>;
   /** Již naplánovaný kumulativní cíl pro followera. */
   followerFillTargets: ReadonlyMap<string, number>;
+  /**
+   * Trvalé risk západky. Jsou součástí stejného CAS snapshotu jako outbox,
+   * takže restart workeru nesmí obejít cooldown ani ruční denní lock.
+   */
+  safety: {
+    entryCooldownUntil: number;
+    dayLockUntil: number;
+    dayLockReason?: string;
+  };
 }
 
 export function createCopierState(
@@ -105,6 +118,7 @@ export function createCopierState(
   links: Iterable<[string, readonly FollowerOrderLink[]]> = [],
   leaderCumQty: Iterable<[string, number]> = [],
   followerFillTargets: Iterable<[string, number]> = [],
+  safety: CopierState['safety'] = { entryCooldownUntil: 0, dayLockUntil: 0 },
 ): CopierState {
   return {
     replicated: new Set(replicated),
@@ -112,6 +126,7 @@ export function createCopierState(
     links: new Map(links),
     leaderCumQty: new Map(leaderCumQty),
     followerFillTargets: new Map(followerFillTargets),
+    safety: { ...safety },
   };
 }
 
@@ -217,7 +232,10 @@ export function planCancel(event: LeaderEvent, state: CopierState): CancelComman
  * neodeslat — což je správně. Zaokrouhlení nahoru by na malém prop účtu
  * tiše zvětšilo riziko.
  */
-export function followerQuantity(leaderQuantity: number, multiplier: number): number {
+export function followerQuantity(
+  leaderQuantity: number,
+  multiplier: number,
+): number {
   if (!Number.isFinite(leaderQuantity) || !Number.isFinite(multiplier)) return 0;
   return Math.max(0, Math.floor(leaderQuantity * multiplier));
 }
@@ -305,7 +323,8 @@ export function planReplication(
       const previousTarget = state.followerFillTargets.get(
         fillTargetKey(event.orderId, follower.accountId),
       ) ?? 0;
-      quantity = followerQuantity(cumulative, follower.multiplier) - previousTarget;
+      quantity = followerQuantity(cumulative, follower.multiplier)
+        - previousTarget;
     }
     if (quantity <= 0) {
       skip('zero-quantity');

@@ -36,6 +36,40 @@ describe('CopierLeaderEventSource', () => {
       .toMatchObject({ kind: 'canceled' });
   });
 
+  it('PendingNew -> Working bez změny parametrů neposílá redundantní replace', () => {
+    const source = new CopierLeaderEventSource();
+    source.connection(true);
+    expect(source.observe({ type: 'order', order: order({ sourceVersion: 'v1:PendingNew' }) }, 100, 1, 10))
+      .toMatchObject({ kind: 'submitted' });
+    expect(source.observe({ type: 'order', order: order({ sourceVersion: 'v1:Working' }) }, 100, 2, 11))
+      .toBeNull();
+    expect(source.observe({
+      type: 'order',
+      order: order({ sourceVersion: 'v2:Working', limitPrice: 29_500.25 }),
+    }, 100, 2, 12)).toMatchObject({ kind: 'replaced', limitPrice: 29_500.25 });
+  });
+
+  it('zachová parent/OCO/linked vazby bracket orderu', () => {
+    const source = new CopierLeaderEventSource();
+    source.connection(true);
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'sl-1',
+      side: 'Sell',
+      orderType: 'Stop',
+      limitPrice: undefined,
+      stopPrice: 29_450,
+      parentOrderId: 'entry-1',
+      ocoId: 'oco-1',
+      linkedOrderId: 'tp-1',
+    }) }, 100, 1, 10)).toMatchObject({
+      kind: 'submitted',
+      parentOrderId: 'entry-1',
+      ocoId: 'oco-1',
+      linkedOrderId: 'tp-1',
+      stopPrice: 29_450,
+    });
+  });
+
   it('po reconnectu vyžaduje reconciliation a nový sync znovu bere jen jako baseline', () => {
     const source = new CopierLeaderEventSource();
     source.connection(true);

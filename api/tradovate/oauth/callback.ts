@@ -1,10 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { randomUUID } from 'node:crypto';
 import {
   clearTradovateStateCookie,
   exchangeTradovateAuthorizationCode,
+  normalizeTradovateOAuthIdentity,
   parseCookies,
   TRADOVATE_OAUTH_COOKIE,
+  tradovateOAuthResultLocation,
   verifyTradovateOAuthState,
+  tradovateApiBaseUrl,
 } from '../../../server/tradovateOAuth.js';
 import {
   createTradovateAdminClient,
@@ -15,10 +19,13 @@ import {
 const queryValue = (value: string | string[] | undefined): string =>
   Array.isArray(value) ? value[0] ?? '' : value ?? '';
 
-const resultLocation = (result: 'connected' | 'error', reason?: string): string => {
-  const params = new URLSearchParams({ tradovate: result });
-  if (reason) params.set('reason', reason);
-  return `/?${params.toString()}`;
+const loadOAuthIdentity = async (accessToken: string, environment: 'demo' | 'live') => {
+  const response = await fetch(`${tradovateApiBaseUrl(environment)}/auth/me`, {
+    headers: { Accept: 'application/json', Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`oauth-identity-failed-${response.status}`);
+  return normalizeTradovateOAuthIdentity(await response.json());
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -41,16 +48,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       redirectUri: config.redirectUri,
       environment: config.environment,
     });
+    const identity = await loadOAuthIdentity(token.accessToken, config.environment);
     await saveTradovateConnection({
       db: createTradovateAdminClient(config),
       config,
       userId: claims.sub,
       token,
+      connectionId: claims.connectionId ?? randomUUID(),
+      tradovateUserId: identity.userId ?? null,
+      tradovateEmail: identity.email ?? identity.name ?? null,
+      organizationName: identity.organizationName ?? null,
     });
-    return res.redirect(302, resultLocation('connected'));
+    return res.redirect(302, tradovateOAuthResultLocation('connected'));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[tradovate-oauth-callback] Connection failed without exposing code/token:', message);
-    return res.redirect(302, resultLocation('error', message === 'oauth-denied' ? 'denied' : 'callback-failed'));
+    return res.redirect(302, tradovateOAuthResultLocation('error', message === 'oauth-denied' ? 'denied' : 'callback-failed'));
   }
 }

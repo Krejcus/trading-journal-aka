@@ -2,6 +2,10 @@ import type {
   BrokerEnvironment,
   BrokerOrder,
   BrokerOrderAck,
+  BrokerOcoAck,
+  BrokerOcoRequest,
+  BrokerOsoAck,
+  BrokerOsoRequest,
   BrokerOrderRequest,
   OrderStatus,
 } from './brokerPort';
@@ -47,11 +51,12 @@ export interface TradovatePlaceOrderPayload {
   price?: number;
   stopPrice?: number;
   /**
-   * Náš dohledávací tag. Tradovate ho bere jako volitelný text a NEPOUŽÍVÁ
-   * ho k odmítnutí duplicit — slouží nám jen k tomu, abychom objednávku
-   * po timeoutu našli.
+   * Náš dohledávací identifikátor. `customTag50` na běžném OAuth účtu může
+   * skončit execution rejectem "Unregisted Tag50", proto používáme standardní
+   * client-order ID. Ani `clOrdId` není idempotency garance; po timeoutu podle
+   * něj pouze dohledáváme Command/Order a nikdy slepě neposíláme znovu.
    */
-  customTag50: string;
+  clOrdId: string;
   /**
    * Musí být true — objednávku odesílá software, ne člověk klikající v UI.
    * Tvrdit opak by bylo nepravdivé prohlášení vůči brokerovi.
@@ -72,7 +77,7 @@ export function toPlaceOrderPayload(
     orderType: request.orderType,
     ...(request.limitPrice != null ? { price: request.limitPrice } : {}),
     ...(request.stopPrice != null ? { stopPrice: request.stopPrice } : {}),
-    customTag50: request.tag,
+    clOrdId: request.tag,
     isAutomated: true,
   };
 }
@@ -105,6 +110,140 @@ export function fromPlaceOrderResult(result: TradovatePlaceOrderResult): BrokerO
     accepted: false,
     definitive: reason != null,
     rejectReason: reason ?? 'nejednoznačná odpověď bez orderId a failure reason',
+  };
+}
+
+export interface TradovatePlaceOcoPayload {
+  accountId: number;
+  accountSpec: string;
+  action: 'Buy' | 'Sell';
+  symbol: string;
+  orderQty: number;
+  orderType: 'Limit' | 'Stop' | 'StopLimit';
+  price?: number;
+  stopPrice?: number;
+  clOrdId: string;
+  isAutomated: true;
+  other: {
+    action: 'Buy' | 'Sell';
+    orderType: 'Limit' | 'Stop' | 'StopLimit';
+    price?: number;
+    stopPrice?: number;
+    clOrdId: string;
+  };
+}
+
+const ocoLegPayload = (leg: BrokerOcoRequest['first']) => ({
+  action: leg.side,
+  orderType: leg.orderType,
+  ...(leg.limitPrice != null ? { price: leg.limitPrice } : {}),
+  ...(leg.stopPrice != null ? { stopPrice: leg.stopPrice } : {}),
+});
+
+export function toPlaceOcoPayload(request: BrokerOcoRequest, accountSpec: string): TradovatePlaceOcoPayload {
+  return {
+    accountId: request.accountId,
+    accountSpec,
+    symbol: request.symbol,
+    orderQty: request.quantity,
+    ...ocoLegPayload(request.first),
+    clOrdId: request.tag,
+    isAutomated: true,
+    other: {
+      ...ocoLegPayload(request.second),
+      clOrdId: `${request.tag}b`,
+    },
+  };
+}
+
+export interface TradovatePlaceOcoResult {
+  orderId?: number;
+  ocoId?: number;
+  failureReason?: string;
+  failureText?: string;
+}
+
+export function fromPlaceOcoResult(result: TradovatePlaceOcoResult): BrokerOcoAck {
+  if (result.orderId != null && result.ocoId != null && result.ocoId !== 0) {
+    return {
+      firstBrokerOrderId: String(result.orderId),
+      secondBrokerOrderId: String(result.ocoId),
+      accepted: true,
+      definitive: true,
+    };
+  }
+  const failureText = result.failureText?.trim();
+  const failureReason = result.failureReason && result.failureReason !== 'Success'
+    ? result.failureReason
+    : undefined;
+  const reason = failureText || failureReason;
+  return {
+    firstBrokerOrderId: result.orderId != null ? String(result.orderId) : '',
+    secondBrokerOrderId: result.ocoId != null && result.ocoId !== 0 ? String(result.ocoId) : '',
+    accepted: false,
+    definitive: reason != null,
+    rejectReason: reason ?? 'nejednoznačná OCO odpověď bez obou order ID',
+  };
+}
+
+export interface TradovatePlaceOsoPayload extends TradovatePlaceOrderPayload {
+  bracket1: TradovatePlaceOcoPayload['other'];
+  bracket2: TradovatePlaceOcoPayload['other'];
+}
+
+export function toPlaceOsoPayload(
+  request: BrokerOsoRequest,
+  accountSpec: string,
+): TradovatePlaceOsoPayload {
+  return {
+    ...toPlaceOrderPayload(request, accountSpec),
+    bracket1: {
+      ...ocoLegPayload(request.first),
+      clOrdId: `${request.tag}s`,
+    },
+    bracket2: {
+      ...ocoLegPayload(request.second),
+      clOrdId: `${request.tag}t`,
+    },
+  };
+}
+
+export interface TradovatePlaceOsoResult {
+  orderId?: number;
+  oso1Id?: number;
+  oso2Id?: number;
+  failureReason?: string;
+  failureText?: string;
+}
+
+export function fromPlaceOsoResult(result: TradovatePlaceOsoResult): BrokerOsoAck {
+  if (
+    result.orderId != null
+    && result.oso1Id != null
+    && result.oso1Id !== 0
+    && result.oso2Id != null
+    && result.oso2Id !== 0
+  ) {
+    return {
+      entryBrokerOrderId: String(result.orderId),
+      firstBrokerOrderId: String(result.oso1Id),
+      secondBrokerOrderId: String(result.oso2Id),
+      accepted: true,
+      definitive: true,
+    };
+  }
+  const failureText = result.failureText?.trim();
+  const failureReason = result.failureReason && result.failureReason !== 'Success'
+    ? result.failureReason
+    : undefined;
+  const reason = failureText || failureReason;
+  return {
+    entryBrokerOrderId: result.orderId != null ? String(result.orderId) : '',
+    firstBrokerOrderId: result.oso1Id != null && result.oso1Id !== 0 ? String(result.oso1Id) : '',
+    secondBrokerOrderId: result.oso2Id != null && result.oso2Id !== 0 ? String(result.oso2Id) : '',
+    accepted: false,
+    definitive: reason != null,
+    rejectReason: reason ?? 'nejednoznačná OSO odpověď bez všech tří order ID',
   };
 }
 
@@ -143,6 +282,9 @@ export interface TradovateOrderEntity {
   cumQty?: number;
   price?: number;
   stopPrice?: number;
+  ocoId?: number;
+  parentId?: number;
+  linkedId?: number;
   customTag50?: string;
   rejectReason?: string;
   timestamp?: string;
@@ -165,6 +307,9 @@ export function fromOrderEntity(
     filledQuantity: entity.cumQty ?? 0,
     ...(entity.price != null ? { limitPrice: entity.price } : {}),
     ...(entity.stopPrice != null ? { stopPrice: entity.stopPrice } : {}),
+    ...(entity.parentId != null && entity.parentId !== 0 ? { parentOrderId: String(entity.parentId) } : {}),
+    ...(entity.ocoId != null && entity.ocoId !== 0 ? { ocoId: String(entity.ocoId) } : {}),
+    ...(entity.linkedId != null && entity.linkedId !== 0 ? { linkedOrderId: String(entity.linkedId) } : {}),
     status,
     ...(status === 'rejected' && entity.rejectReason ? { rejectReason: entity.rejectReason } : {}),
     updatedAt: entity.timestamp ? Date.parse(entity.timestamp) : 0,

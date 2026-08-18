@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
-import { createMemoryCopierStore } from '../services/copierStore';
+import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
 import { createOutboxEntry, markUnknown } from '../services/copierOutbox';
+import { createModifyEntry, markCancelUnknown } from '../services/copierCancelOutbox';
+import { createOsoOutboxEntry, markOsoRejected } from '../services/copierOsoOutbox';
 import { createMockBroker } from '../services/mockBroker';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 
@@ -55,6 +57,91 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('ostrý ARM nikdy nepřežije restart runtime ani se neobnoví z durable snapshotu', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const first = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await first.waitForIdle();
+    await first.reconcile();
+    first.arm();
+    expect(first.status()).toMatchObject({ armed: true, shadowMode: false });
+    first.stop();
+
+    broker.setConnected(false);
+    const restarted = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(),
+    });
+
+    // ARM je výhradně session state. Durable store smí obnovit outbox a safety
+    // locky, ale nikdy oprávnění odesílat nové broker příkazy.
+    expect(restarted.status()).toMatchObject({
+      armed: false,
+      shadowMode: true,
+      connected: false,
+      reconciliationRequired: true,
+    });
+
+    broker.setConnected(true);
+    await restarted.waitForIdle();
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ brokerOrderId: 'leader-after-restart', sourceVersion: '2:Working' }),
+    });
+    await restarted.waitForIdle();
+
+    expect(restarted.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      reconciliationRequired: true,
+    });
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(() => restarted.arm()).toThrow('kontrolu pozic');
+    restarted.stop();
+  });
+
+  it('autoritativní reconciliation odblokuje konečný OSO reject bez broker side effectu', async () => {
+    const rejected = markOsoRejected(createOsoOutboxEntry({
+      key: 'oso:g1:leader-rejected:200',
+      tag: 'rejected-oso',
+      leaderEntryOrderId: 'leader-rejected',
+      leaderStopOrderId: 'leader-stop',
+      leaderTargetOrderId: 'leader-target',
+      leaderEventId: 'event-rejected',
+      leaderSequence: 1,
+      request: {
+        tag: 'rejected-oso', accountId: 200, symbol: 'MNQU6', side: 'Buy',
+        quantity: 3, orderType: 'Limit', limitPrice: 30_000,
+        first: { side: 'Sell', orderType: 'Stop', stopPrice: 29_950 },
+        second: { side: 'Sell', orderType: 'Limit', limitPrice: 30_100 },
+      },
+      updatedAt: 1,
+    }), 'maxContracts blokoval request před odesláním', 2);
+    const store = createMemoryCopierStore({
+      ...emptySnapshot(),
+      lastSequence: 1,
+      osoOutbox: [rejected],
+    });
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    expect(controller.status().stuckOutbox).toBe(true);
+    await expect(controller.reconcile()).resolves.toEqual({
+      divergentAccounts: [], workingOrderAccounts: [],
+    });
+    expect(controller.status().stuckOutbox).toBe(false);
+    expect((await store.load()).osoOutbox[0]).toMatchObject({
+      status: 'waived',
+      reason: expect.stringContaining('autoritativní reconciliation'),
+    });
+    expect(() => controller.arm()).not.toThrow();
+    controller.stop();
+  });
+
   it('disconnect okamžitě zruší ARM a reconnect vyžaduje novou reconciliation', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({
@@ -93,6 +180,28 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('kill switch okamžitě disarmuje a v aktuální session už nedovolí nový ARM', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    controller.engageKillSwitch('Nouzové zastavení operátorem');
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      killSwitch: true,
+      reconciliationRequired: true,
+      lastError: 'Nouzové zastavení operátorem',
+    });
+    expect(() => controller.arm({ shadowMode: true })).toThrow('kill switch je aktivní');
+    controller.stop();
+  });
+
   it('změna konfigurace vždy disarmuje a neplatnou změnu vůbec nepřijme', async () => {
     const broker = createMockBroker();
     const controller = await bootstrapCopierRuntime({
@@ -112,6 +221,71 @@ describe('bootstrapCopierRuntime', () => {
       ...group, followers: [{ accountId: 200, mode: 'on-submit', multiplier: 0.5 }],
     });
     expect(controller.status().armed).toBe(false);
+    controller.stop();
+  });
+
+  it('odmítne neplatný maxContracts ještě před startem runtime', async () => {
+    const broker = createMockBroker();
+    await expect(bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: {
+        ...group,
+        followers: [{ accountId: 200, mode: 'on-submit', multiplier: 1, maxContracts: 1.5 }],
+      },
+    })).rejects.toThrow('maxContracts');
+  });
+
+  it('maxContracts odmítne celý přepočítaný příkaz a runtime fail-closed odzbrojí', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const cappedGroup: CopyGroupConfig = {
+      ...group,
+      followers: [{ accountId: 200, mode: 'on-submit', multiplier: 2, maxContracts: 3 }],
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: cappedGroup, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ quantity: 4 }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(controller.status()).toMatchObject({ armed: false });
+    expect(controller.status().lastError).toContain('maxContracts blokoval');
+    expect(controller.status()).toMatchObject({ connected: true, reconciliationRequired: true });
+    controller.stop();
+  });
+
+  it('reconciliation maxContracts neinterpretuje jako povolenou oříznutou pozici', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
+    await broker.placeOrder({
+      tag: 'leader-position', accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 4,
+      orderType: 'Market',
+    });
+    await broker.placeOrder({
+      tag: 'follower-position', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 3,
+      orderType: 'Market',
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: {
+        ...group,
+        followers: [{ accountId: 200, mode: 'on-submit', multiplier: 1, maxContracts: 3 }],
+      },
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconcile()).resolves.toEqual({
+      divergentAccounts: [200], workingOrderAccounts: [],
+    });
+    expect(() => controller.arm()).toThrow();
     controller.stop();
   });
 
@@ -148,6 +322,394 @@ describe('bootstrapCopierRuntime', () => {
     const reconciliation = await controller.reconcile();
     expect(reconciliation).toEqual({ divergentAccounts: [200], workingOrderAccounts: [200] });
     expect(() => controller.arm()).toThrow();
+    controller.stop();
+  });
+
+  it('pilot pustí lifecycle první objednávky, ale druhou novou leader objednávku fail-closed zablokuje', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const audits: Array<{ kind: string; reason?: string }> = [];
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      maxLeaderOrders: 1,
+      onAudit: entries => audits.push(...entries),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'leader-1' }) });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(1);
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-1', sourceVersion: '2:Canceled', status: 'canceled',
+    }) });
+    await controller.waitForIdle();
+    expect(controller.status().lastError).toBeNull();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-2', sourceVersion: '1:Working', status: 'working',
+    }) });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(1);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      reconciliationRequired: true,
+      lastError: 'Pilot limit nových leader objednávek byl překročen (1)',
+    });
+    expect(audits).toContainEqual(expect.objectContaining({
+      kind: 'blocked', reason: 'leader-order-session-limit',
+    }));
+    controller.stop();
+  });
+
+  it('pilot může povolit právě jeden opačný order, který přesně zavře známou leader pozici', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      maxLeaderOrders: 1,
+      allowSingleFlatExit: true,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.emitEvent({ type: 'position', position: {
+      accountId: 100, symbol: 'MNQU6', netQuantity: 1,
+    } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-exit', side: 'Sell', quantity: 1,
+      orderType: 'Market', limitPrice: undefined,
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(2);
+    expect(broker.placedRequests()[1]).toMatchObject({ accountId: 200, side: 'Sell', quantity: 1 });
+    expect(controller.status().lastError).toBeNull();
+
+    broker.emitEvent({ type: 'position', position: {
+      accountId: 100, symbol: 'MNQU6', netQuantity: 0,
+    } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-third', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(2);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      reconciliationRequired: true,
+    });
+    controller.stop();
+  });
+
+  it('protective TP+SL nepočítá jako nové entry a odešle je jedním OCO', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      maxLeaderOrders: 1,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'entry-1', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'fill-entry-1', tag: 'leader-entry-1', brokerOrderId: 'entry-1', accountId: 100,
+      symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 30_000, filledAt: 101,
+    } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'target-1', side: 'Sell', quantity: 1, orderType: 'Limit',
+      limitPrice: 30_100, sourceVersion: '1:Working',
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'stop-1', side: 'Sell', quantity: 1, orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_950, sourceVersion: '1:Working',
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(1);
+    expect(broker.placedOcoRequests()).toHaveLength(1);
+    expect(broker.placedOcoRequests()[0]).toMatchObject({
+      accountId: 200,
+      first: { orderType: 'Stop', stopPrice: 29_950 },
+      second: { orderType: 'Limit', limitPrice: 30_100 },
+    });
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'stop-1', side: 'Sell', quantity: 1, orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_960, sourceVersion: '2:Working',
+    }) });
+    await controller.waitForIdle();
+    expect(broker.orders().some(item => item.accountId === 200 && item.stopPrice === 29_960)).toBe(true);
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'target-1', side: 'Sell', quantity: 1, orderType: 'Limit',
+      limitPrice: 30_100, status: 'canceled', sourceVersion: '2:Canceled',
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'stop-1', side: 'Sell', quantity: 1, orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_960, status: 'canceled', sourceVersion: '3:Canceled',
+    }) });
+    await controller.waitForIdle();
+    const followerProtectiveOrders = broker.orders().filter(item => (
+      item.accountId === 200 && (item.orderType === 'Stop' || item.orderType === 'Limit')
+    ));
+    expect(followerProtectiveOrders).toHaveLength(2);
+    expect(followerProtectiveOrders.every(item => item.status === 'canceled')).toBe(true);
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
+
+  it('čekající entry + SL + TP odešle followerovi jedním nativním OSO a uloží všechny vazby', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(), maxLeaderOrders: 1,
+      osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'oso-entry', quantity: 1, limitPrice: 30_000,
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'oso-stop', parentOrderId: 'oso-entry', side: 'Sell', quantity: 1,
+      orderType: 'Stop', limitPrice: undefined, stopPrice: 29_950,
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'oso-target', parentOrderId: 'oso-entry', side: 'Sell', quantity: 1,
+      orderType: 'Limit', limitPrice: 30_100,
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(broker.placedOsoRequests()).toEqual([expect.objectContaining({
+      accountId: 200,
+      orderType: 'Limit',
+      limitPrice: 30_000,
+      first: expect.objectContaining({ orderType: 'Stop', stopPrice: 29_950 }),
+      second: expect.objectContaining({ orderType: 'Limit', limitPrice: 30_100 }),
+    })]);
+    const snapshot = await store.load();
+    expect(snapshot.osoOutbox).toEqual([expect.objectContaining({ status: 'acknowledged' })]);
+    expect(new Map(snapshot.links).get('oso-entry')).toHaveLength(1);
+    expect(new Map(snapshot.links).get('oso-stop')).toHaveLength(1);
+    expect(new Map(snapshot.links).get('oso-target')).toHaveLength(1);
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
+
+  it('po DISARM dokončí cancel už zkopírované follower objednávky', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'leader-disarm-cancel' }) });
+    await controller.waitForIdle();
+    const follower = broker.orders().find(order => order.accountId === 200);
+    expect(follower).toMatchObject({ status: 'working' });
+
+    controller.disarm();
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-disarm-cancel', sourceVersion: '2:Canceled', status: 'canceled',
+    }) });
+    await controller.waitForIdle();
+
+    expect((await broker.findOrderById(200, follower!.brokerOrderId)).order).toMatchObject({
+      status: 'canceled',
+    });
+    expect((await store.load()).cancelOutbox).toEqual([
+      expect.objectContaining({ operation: 'cancel', status: 'confirmed' }),
+    ]);
+    controller.stop();
+  });
+
+  it('po restartu v DISARMED obnoví durable link a dokončí pozdější leader cancel', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const first = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await first.waitForIdle();
+    await first.reconcile();
+    first.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'leader-restart-cancel' }) });
+    await first.waitForIdle();
+    const follower = broker.orders().find(order => order.accountId === 200);
+    expect(follower).toMatchObject({ status: 'working' });
+    first.stop();
+
+    const restarted = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await restarted.waitForIdle();
+    expect(restarted.status()).toMatchObject({ armed: false, connected: true });
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-restart-cancel', sourceVersion: '2:Canceled', status: 'canceled',
+    }) });
+    await restarted.waitForIdle();
+
+    expect((await broker.findOrderById(200, follower!.brokerOrderId)).order).toMatchObject({
+      status: 'canceled',
+    });
+    expect((await store.load()).cancelOutbox).toEqual([
+      expect.objectContaining({ operation: 'cancel', status: 'confirmed' }),
+    ]);
+    restarted.stop();
+  });
+
+  it('po nejasném modify fail-closed zachová spojení a pozdější leader cancel followera dokončí', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'leader-stuck-modify' }) });
+    await controller.waitForIdle();
+    const follower = broker.orders().find(order => order.accountId === 200)!;
+    const originalLookup = broker.findOrderById.bind(broker);
+    // Broker přijme HTTP modify bez chyby, ale autoritativní order projection
+    // se nezmění. To simuluje přesně produkční „modify není potvrzen streamem“.
+    broker.modifyOrder = async () => undefined;
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-stuck-modify', sourceVersion: '2:Working', limitPrice: 29_501,
+    }) });
+    await controller.waitForIdle();
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      reconciliationRequired: true,
+      stuckOutbox: true,
+    });
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-stuck-modify', sourceVersion: '3:Canceled', status: 'canceled',
+      limitPrice: 29_501,
+    }) });
+    await controller.waitForIdle();
+
+    expect((await originalLookup(200, follower.brokerOrderId)).order).toMatchObject({ status: 'canceled' });
+    expect((await store.load()).cancelOutbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operation: 'modify', status: 'waived' }),
+      expect.objectContaining({ operation: 'cancel', status: 'confirmed' }),
+    ]));
+    expect(controller.status()).toMatchObject({ connected: true, stuckOutbox: false });
+    controller.stop();
+  });
+
+  it('obyčejný limit po krátkém OSO okně odešle jednou a uvolní korelační stav', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+      osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'plain-limit' }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(1);
+    expect(broker.placedOsoRequests()).toHaveLength(0);
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
+
+  it('změna limitu během OSO okna nejdřív dokončí entry a až potom bezpečně změní follower order', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+      osoCorrelationWindowMs: 50,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'modified-during-window', limitPrice: 29_500,
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'modified-during-window', sourceVersion: '2:Working', limitPrice: 29_501,
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(1);
+    expect(broker.placedOsoRequests()).toHaveLength(0);
+    expect(broker.orders().find(order => order.accountId === 200)).toMatchObject({
+      status: 'working', limitPrice: 29_501,
+    });
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
+
+  it('pilot nepovolí domnělý exit, který by známou pozici přetočil nebo nezavřel přesně', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      maxLeaderOrders: 1,
+      allowSingleFlatExit: true,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'leader-entry', quantity: 1 }) });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-oversized-exit', side: 'Sell', quantity: 2,
+    }) });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(1);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      reconciliationRequired: true,
+    });
     controller.stop();
   });
 
@@ -199,5 +761,430 @@ describe('bootstrapCopierRuntime', () => {
     controller.arm();
     expect(controller.status().armed).toBe(true);
     controller.stop();
+  });
+
+  it('status bezpečně vypíše stuck modify a ruční resolution jej durable uzavře bez broker příkazu', async () => {
+    const broker = createMockBroker();
+    const modifySpy = vi.spyOn(broker, 'modifyOrder');
+    const store = createMemoryCopierStore();
+    const stuck = markCancelUnknown(createModifyEntry(
+      'cm:g1:leader-order:200',
+      'leader-event',
+      12,
+      200,
+      'follower-order',
+      { quantity: 1, orderType: 'Limit', limitPrice: 30_100 },
+      10,
+    ), 'modify timeout', 11);
+    await store.commit({
+      ...emptySnapshot(),
+      cancelOutbox: [stuck],
+    }, 0);
+    const controller = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    expect(controller.status().stuckOperations).toEqual([expect.objectContaining({
+      kind: 'cancel-or-modify',
+      key: stuck.key,
+      status: 'abandoned',
+      accountId: 200,
+      brokerOrderId: 'follower-order',
+      operation: 'modify',
+    })]);
+    expect(modifySpy).not.toHaveBeenCalled();
+
+    await controller.waiveStuckOperation({
+      kind: 'cancel-or-modify',
+      key: stuck.key,
+      reason: 'broker potvrzen flat bez pracovních příkazů',
+    });
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      stuckOutbox: false,
+      stuckOperations: [],
+      reconciliationRequired: true,
+    });
+    expect((await store.load()).cancelOutbox).toEqual([expect.objectContaining({ status: 'waived' })]);
+    expect(modifySpy).not.toHaveBeenCalled();
+    controller.stop();
+  });
+
+  it('ruční waive jedné větve víceúčtového cancelu neposune celou leader sekvenci', async () => {
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore();
+    const first = markCancelUnknown(createModifyEntry(
+      'cm:g1:leader-order:200', 'shared-leader-event', 12, 200, 'follower-order-200',
+      { quantity: 1, orderType: 'Limit', limitPrice: 30_100 }, 10,
+    ), 'modify timeout na prvním followerovi', 11);
+    const second = markCancelUnknown(createModifyEntry(
+      'cm:g1:leader-order:300', 'shared-leader-event', 12, 300, 'follower-order-300',
+      { quantity: 1, orderType: 'Limit', limitPrice: 30_100 }, 10,
+    ), 'modify timeout na druhém followerovi', 11);
+    await store.commit({
+      ...emptySnapshot(),
+      lastSequence: 11,
+      cancelOutbox: [first, second],
+    }, 0);
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store,
+      group: {
+        ...group,
+        followers: [
+          { accountId: 200, mode: 'on-submit', multiplier: 1 },
+          { accountId: 300, mode: 'on-submit', multiplier: 1 },
+        ],
+      },
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await controller.waiveStuckOperation({
+      kind: 'cancel-or-modify', key: first.key, reason: 'první účet ověřen ručně jako bezpečný',
+    });
+    expect((await store.load()).lastSequence).toBe(11);
+    expect(controller.status().stuckOperations).toHaveLength(1);
+
+    await controller.waiveStuckOperation({
+      kind: 'cancel-or-modify', key: second.key, reason: 'druhý účet ověřen ručně jako bezpečný',
+    });
+    expect((await store.load()).lastSequence).toBe(12);
+    expect(controller.status().stuckOperations).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('explicitní Flatten účtu nejdřív zruší working order a potom durable zavře pozici', async () => {
+    const broker = createMockBroker({
+      behavior: request => request.tag === 'seed-position' || request.tag.startsWith('fl')
+        ? { kind: 'fill', price: 30_000 }
+        : { kind: 'working' },
+    });
+    await broker.placeOrder({
+      tag: 'seed-position', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 2, orderType: 'Market',
+    });
+    const working = await broker.placeOrder({
+      tag: 'seed-working', accountId: 200, symbol: 'MNQU6', side: 'Sell', quantity: 2,
+      orderType: 'Limit', limitPrice: 31_000,
+    });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    const result = await controller.flattenAccount(200, 'manual-flat-account-001');
+
+    expect(result).toMatchObject({
+      accountIds: [200], canceledOrders: 1, submittedClosures: 1, flat: true,
+    });
+    expect((await broker.findOrderById(200, working.brokerOrderId)).order?.status).toBe('canceled');
+    expect(await broker.listPositions(200)).toEqual([expect.objectContaining({ netQuantity: 0 })]);
+    const saved = await store.load();
+    expect(saved.cancelOutbox).toEqual([expect.objectContaining({ status: 'confirmed' })]);
+    expect(saved.outbox).toEqual([expect.objectContaining({ status: 'acknowledged' })]);
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    controller.stop();
+  });
+
+  it('explicitní Flatten All zavře leadera i followery a neopakuje stejnou operaci', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
+    await broker.placeOrder({
+      tag: 'seed-leader', accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    await broker.placeOrder({
+      tag: 'seed-follower', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 2, orderType: 'Market',
+    });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    const first = await controller.flattenGroup('manual-flat-group-001');
+    const placedAfterFirst = broker.placedRequests().length;
+    const second = await controller.flattenGroup('manual-flat-group-001');
+
+    expect(first).toMatchObject({ accountIds: [100, 200], submittedClosures: 2, flat: true });
+    expect(second).toMatchObject({ submittedClosures: 0, flat: true });
+    expect(broker.placedRequests()).toHaveLength(placedAfterFirst);
+    expect((await store.load()).outbox).toHaveLength(2);
+    controller.stop();
+  });
+
+  it('Flatten čeká na opožděnou autoritativní Position projekci místo falešného ne-flat výsledku', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
+    await broker.placeOrder({
+      tag: 'seed-position-delayed', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    const originalPlace = broker.placeOrder.bind(broker);
+    const originalListPositions = broker.listPositions.bind(broker);
+    let closeSubmitted = false;
+    let staleReads = 2;
+    broker.placeOrder = async request => {
+      const ack = await originalPlace(request);
+      if (request.tag.startsWith('fl')) closeSubmitted = true;
+      return ack;
+    };
+    broker.listPositions = async accountId => {
+      const actual = await originalListPositions(accountId);
+      if (closeSubmitted && accountId === 200 && staleReads-- > 0) {
+        return [{ accountId: 200, symbol: 'MNQU6', netQuantity: 1 }];
+      }
+      return actual;
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      flattenConfirmationAttempts: 5,
+      flattenConfirmationPollMs: 0,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.flattenAccount(200, 'manual-flat-delayed-position-001')).resolves.toMatchObject({ flat: true });
+    expect(staleReads).toBeLessThan(0);
+    controller.stop();
+  });
+
+  it('Flatten čeká na opožděné autoritativní potvrzení cancelu bez druhého cancel requestu', async () => {
+    const broker = createMockBroker({
+      behavior: request => request.tag === 'seed-position-delayed-cancel' || request.tag.startsWith('fl')
+        ? { kind: 'fill', price: 30_000 }
+        : { kind: 'working' },
+    });
+    await broker.placeOrder({
+      tag: 'seed-position-delayed-cancel', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    const working = await broker.placeOrder({
+      tag: 'seed-working-delayed-cancel', accountId: 200, symbol: 'MNQU6', side: 'Sell', quantity: 1,
+      orderType: 'Limit', limitPrice: 31_000,
+    });
+    const originalLookup = broker.findOrderById.bind(broker);
+    const originalCancel = broker.cancelOrder.bind(broker);
+    let cancelCalls = 0;
+    let staleReads = 2;
+    broker.cancelOrder = async (accountId, brokerOrderId) => {
+      cancelCalls += 1;
+      return originalCancel(accountId, brokerOrderId);
+    };
+    broker.findOrderById = async (accountId, brokerOrderId) => {
+      const actual = await originalLookup(accountId, brokerOrderId);
+      if (brokerOrderId === working.brokerOrderId && staleReads-- > 0 && actual.order) {
+        return { ...actual, order: { ...actual.order, status: 'working' } };
+      }
+      return actual;
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      flattenConfirmationAttempts: 5,
+      flattenConfirmationPollMs: 0,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.flattenAccount(200, 'manual-flat-delayed-cancel-001')).resolves.toMatchObject({
+      canceledOrders: 1, flat: true,
+    });
+    expect(cancelCalls).toBe(1);
+    controller.stop();
+  });
+
+  it('Flatten timeout vrací chybu a failne runtime zavřeně místo falešného úspěchu', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
+    await broker.placeOrder({
+      tag: 'seed-position-stuck', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    const originalPlace = broker.placeOrder.bind(broker);
+    let closeSubmitted = false;
+    broker.placeOrder = async request => {
+      const ack = await originalPlace(request);
+      if (request.tag.startsWith('fl')) closeSubmitted = true;
+      return ack;
+    };
+    const originalListPositions = broker.listPositions.bind(broker);
+    broker.listPositions = async accountId => closeSubmitted && accountId === 200
+      ? [{ accountId: 200, symbol: 'MNQU6', netQuantity: 1 }]
+      : originalListPositions(accountId);
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      flattenConfirmationAttempts: 3,
+      flattenConfirmationPollMs: 0,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.flattenAccount(200, 'manual-flat-stuck-position-001')).rejects.toThrow('čeká na reconciliation');
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      reconciliationRequired: true,
+    });
+    controller.stop();
+  });
+
+  it('Flatten při nejasném cancelu failne zavřeně a neodešle close order', async () => {
+    const broker = createMockBroker({
+      behavior: request => request.tag === 'seed-position'
+        ? { kind: 'fill', price: 30_000 }
+        : { kind: 'working' },
+      cancelBehavior: () => 'timeout-before-cancel',
+      lookupCompleteness: 'eventual',
+    });
+    await broker.placeOrder({
+      tag: 'seed-position', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    await broker.placeOrder({
+      tag: 'seed-working', accountId: 200, symbol: 'MNQU6', side: 'Sell', quantity: 1,
+      orderType: 'Limit', limitPrice: 31_000,
+    });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store,
+      group,
+      clock: stepClock(),
+      flattenConfirmationAttempts: 2,
+      flattenConfirmationPollMs: 0,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.flattenAccount(200, 'manual-flat-unknown-001')).rejects.toThrow('není autoritativně potvrzen');
+    expect(broker.placedRequests().filter(request => request.tag.startsWith('fl'))).toHaveLength(0);
+    expect((await store.load()).cancelOutbox).toEqual([expect.objectContaining({ status: 'unknown' })]);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      reconciliationRequired: true,
+      stuckOutbox: true,
+    });
+    controller.stop();
+  });
+
+  it('anti-revenge cooldown po zavření pozice odzbrojí a blokuje ostrý re-ARM', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const cooldownGroup: CopyGroupConfig = {
+      ...group,
+      safety: {
+        positionReconciler: true, disableReplicationOnBreach: true,
+        autoCloseFollowerPositions: true, preventHedging: true,
+        entryCooldownMinutes: 10,
+      },
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: cooldownGroup, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    expect(controller.status().armed).toBe(true);
+
+    // Otevření pozice cooldown nespouští.
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(true);
+
+    // Návrat na flat = okamžitý DISARM a blokovaný ostrý re-ARM.
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(false);
+    await controller.reconcile();
+    expect(() => controller.arm()).toThrow('cooldown');
+
+    // Shadow režim zůstává dostupný — pozorování není obchodování.
+    controller.arm({ shadowMode: true });
+    expect(controller.status()).toMatchObject({ armed: true, shadowMode: true });
+    controller.stop();
+  });
+
+  it('flat událost followera cooldown nespouští', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const cooldownGroup: CopyGroupConfig = {
+      ...group,
+      safety: {
+        positionReconciler: true, disableReplicationOnBreach: true,
+        autoCloseFollowerPositions: true, preventHedging: true,
+        entryCooldownMinutes: 10,
+      },
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: cooldownGroup, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(true);
+    controller.stop();
+  });
+
+  it('cooldown přežije restart workeru ve stejném durable snapshotu', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const cooldownGroup: CopyGroupConfig = {
+      ...group,
+      safety: {
+        positionReconciler: true, disableReplicationOnBreach: true,
+        autoCloseFollowerPositions: true, preventHedging: true,
+        entryCooldownMinutes: 10,
+      },
+    };
+    const first = await bootstrapCopierRuntime({ broker, store, group: cooldownGroup, clock: stepClock() });
+    broker.setConnected(true);
+    await first.waitForIdle();
+    await first.reconcile();
+    first.arm();
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await first.waitForIdle();
+    expect((await store.load()).safety?.entryCooldownUntil).toBeGreaterThan(0);
+    first.stop();
+
+    broker.setConnected(false);
+    const restarted = await bootstrapCopierRuntime({ broker, store, group: cooldownGroup, clock: stepClock() });
+    broker.setConnected(true);
+    await restarted.waitForIdle();
+    await restarted.reconcile();
+    expect(() => restarted.arm()).toThrow('cooldown');
+    restarted.stop();
+  });
+
+  it('persistent day lock disarms and survives restart', async () => {
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore();
+    const first = await bootstrapCopierRuntime({ broker, store, group, clock: () => 1_000 });
+    broker.setConnected(true);
+    await first.waitForIdle();
+    await first.reconcile();
+    first.arm();
+    await first.lockUntil(20_000, 'ruční stop do konce session');
+    expect(first.status()).toMatchObject({ armed: false, dayLockUntil: 20_000 });
+    first.stop();
+
+    broker.setConnected(false);
+    const restarted = await bootstrapCopierRuntime({ broker, store, group, clock: () => 2_000 });
+    broker.setConnected(true);
+    await restarted.waitForIdle();
+    await restarted.reconcile();
+    expect(() => restarted.arm()).toThrow('denním lockem');
+    restarted.stop();
   });
 });

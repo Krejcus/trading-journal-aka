@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   createTradovateAdminClient,
-  deleteTradovateConnection,
-  getTradovateConnectionStatus,
+  disconnectTradovateConnection,
+  listTradovateConnectionStatuses,
   readTradovateServerConfig,
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
@@ -15,10 +15,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
     const db = createTradovateAdminClient(config);
     if (req.method === 'DELETE') {
-      await deleteTradovateConnection(db, userId);
+      const connectionId = typeof req.query.connectionId === 'string' ? req.query.connectionId : '';
+      if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
+      await disconnectTradovateConnection(db, userId, connectionId);
       return res.status(200).json({ connected: false });
     }
-    return res.status(200).json(await getTradovateConnectionStatus(db, userId, config.environment));
+    const connections = await listTradovateConnectionStatuses(db, userId, config.environment);
+    return res.status(200).json({
+      connected: connections.some(connection => connection.connected),
+      environment: config.environment,
+      connections,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') {

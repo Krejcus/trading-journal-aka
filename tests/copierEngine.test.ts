@@ -52,6 +52,7 @@ describe('followerQuantity', () => {
     expect(followerQuantity(Number.NaN, 1)).toBe(0);
     expect(followerQuantity(1, Number.NaN)).toBe(0);
   });
+
 });
 
 describe('brokerTag', () => {
@@ -166,6 +167,30 @@ describe('planReplication', () => {
       limitPrice: 29_500,
       stopPrice: 29_400,
     });
+  });
+
+  it('maxContracts objednávku potichu nezkrátí', () => {
+    const config = group({
+      followers: [{ accountId: 200, mode: 'on-submit', multiplier: 2, maxContracts: 3 }],
+    });
+    const plan = planReplication(event({ quantity: 4 }), config, createCopierState());
+    expect(plan.orders[0].request.quantity).toBe(8);
+  });
+
+  it('on-fill po dosažení maxContracts dál plánuje plný přírůstek pro fail-closed broker', () => {
+    const config = group({
+      followers: [{ accountId: 200, mode: 'on-fill', multiplier: 1, maxContracts: 2 }],
+    });
+    let state = createCopierState();
+    const first = event({ id: 'f1', kind: 'filled', cumulativeQuantity: 2, quantity: 2 });
+    expect(planReplication(first, config, state).orders[0].request.quantity).toBe(2);
+    state = applyLeaderProgress(state, first, config);
+    state = applyFollowerFillResolution(state, 'o1', 200, 2);
+    // Leader pokračuje na 3 kontrakty. Engine nesmí objednávku tiše oříznout;
+    // exposure-capped broker ji před side effectem celou odmítne.
+    const second = event({ id: 'f2', kind: 'filled', cumulativeQuantity: 3, quantity: 3, sequence: 2 });
+    const plan = planReplication(second, config, state);
+    expect(plan.orders[0].request.quantity).toBe(1);
   });
 
   it('on-fill replikuje přírůstek kumulativního fillu bez dvojího započtení', () => {

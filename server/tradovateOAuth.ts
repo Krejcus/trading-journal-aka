@@ -18,10 +18,20 @@ export const tradovateApiBaseUrl = (environment: TradovateEnvironment): string =
 export const tradovateOAuthTokenUrl = (environment: TradovateEnvironment): string =>
   `${tradovateApiBaseUrl(environment)}/auth/oauthtoken`;
 
+export function tradovateOAuthResultLocation(
+  result: 'connected' | 'error',
+  reason?: string,
+): string {
+  const params = new URLSearchParams({ page: 'live', tradovate: result });
+  if (reason) params.set('reason', reason);
+  return `/?${params.toString()}`;
+}
+
 export interface TradovateOAuthState {
   sub: string;
   nonce: string;
   exp: number;
+  connectionId?: string;
 }
 
 export interface TradovateTokenResponse {
@@ -30,6 +40,37 @@ export interface TradovateTokenResponse {
   expiresIn: number;
   tokenType: string;
   scope: string | null;
+}
+
+export interface TradovateOAuthIdentity {
+  userId: number | null;
+  email: string | null;
+  name: string | null;
+  organizationName: string | null;
+}
+
+const optionalText = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim() ? value.trim() : null;
+
+/**
+ * Tradovate documents a direct camelCase OAuthMeResponse, but accepting a
+ * numeric string and an optional REST envelope keeps identity metadata from
+ * turning an otherwise valid OAuth token into a failed connection.
+ */
+export function normalizeTradovateOAuthIdentity(value: unknown): TradovateOAuthIdentity {
+  const outer = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const body = outer.d && typeof outer.d === 'object' && !Array.isArray(outer.d)
+    ? outer.d as Record<string, unknown>
+    : outer;
+  const numericUserId = Number(body.userId ?? body.user_id);
+  return {
+    userId: Number.isSafeInteger(numericUserId) && numericUserId > 0 ? numericUserId : null,
+    email: optionalText(body.email),
+    name: optionalText(body.name ?? body.fullName),
+    organizationName: optionalText(body.organizationName ?? body.organization_name),
+  };
 }
 
 export class TradovateOAuthError extends Error {
@@ -62,6 +103,7 @@ export function createTradovateOAuthState(
   secret: string,
   now = Date.now(),
   nonce = randomBytes(24).toString('base64url'),
+  connectionId?: string,
 ): string {
   if (!userId.trim()) throw new TradovateOAuthError('Missing OAuth user', 'invalid-state-user');
   if (secret.length < 32) throw new TradovateOAuthError('OAuth state secret is too short', 'invalid-state-secret', 500);
@@ -69,6 +111,7 @@ export function createTradovateOAuthState(
     sub: userId,
     nonce,
     exp: Math.floor(now / 1_000) + TRADOVATE_OAUTH_STATE_TTL_SECONDS,
+    ...(connectionId ? { connectionId } : {}),
   };
   const payload = base64Url(JSON.stringify(claims));
   return `${payload}.${stateSignature(payload, secret)}`;
@@ -91,6 +134,9 @@ export function verifyTradovateOAuthState(
   const claims = parseJson<TradovateOAuthState>(Buffer.from(payload, 'base64url').toString('utf8'), 'invalid-state');
   if (!claims.sub || !claims.nonce || !Number.isSafeInteger(claims.exp)) {
     throw new TradovateOAuthError('OAuth state claims are incomplete', 'invalid-state');
+  }
+  if (claims.connectionId != null && !/^[0-9a-f-]{36}$/i.test(claims.connectionId)) {
+    throw new TradovateOAuthError('OAuth connection ID is invalid', 'invalid-state');
   }
   if (claims.exp < Math.floor(now / 1_000)) {
     throw new TradovateOAuthError('OAuth state expired', 'expired-state');

@@ -1,7 +1,7 @@
 /**
  * Krátké deterministické klíče pro brokerové tagy.
  *
- * `customTag50` má omezenou délku, takže se do něj plné `groupId` a
+ * Tradovate `clOrdId` má omezenou délku, takže se do něj plné `groupId` a
  * `leaderEventId` nevejdou — obojí může být UUID. Klíč se proto skládá
  * z krátkého prefixu a hashe, ne ze zřetězených identifikátorů.
  *
@@ -9,7 +9,7 @@
  * vyjít stejný, jinak ztratí smysl.
  */
 
-/** Konzervativní strop podle názvu pole `customTag50`. */
+/** Konzervativní strop pro broker correlation ID. */
 export const BROKER_TAG_MAX_LENGTH = 50;
 
 /**

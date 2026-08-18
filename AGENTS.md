@@ -1,5 +1,12 @@
 # AlphaTrade / AlphaBridge — pokyny pro Codex
 
+## Sdílená paměť AI asistentů
+
+Nejdřív si přečti `docs/PROJECT_LOG.md` — sdílený deník všech AI asistentů
+(Codex/GPT i Claude). Po významné práci do něj přidej datovaný zápis podle
+pravidel v jeho hlavičce. Je to jediné místo, kde si asistenti předávají
+kontext mezi sessions a nástroji.
+
 ## Struktura projektu
 
 - Kořen repozitáře obsahuje React/Vite aplikaci AlphaTrade.

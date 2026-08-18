@@ -4,6 +4,8 @@ import type {
   BrokerOrder,
   BrokerOrderAck,
   BrokerOrderRequest,
+  BrokerOcoRequest,
+  BrokerOsoRequest,
   BrokerPort,
   BrokerPosition,
   BrokerAccountCapability,
@@ -68,6 +70,8 @@ export interface MockBroker extends BrokerPort {
   emitEvent(event: BrokerEvent): void;
   /** Vše, co bylo skutečně odesláno — pro kontrolu duplicit v testech. */
   placedRequests(): readonly BrokerOrderRequest[];
+  placedOcoRequests(): readonly BrokerOcoRequest[];
+  placedOsoRequests(): readonly BrokerOsoRequest[];
   orders(): readonly BrokerOrder[];
   cancelRequestCount(brokerOrderId: string): number;
 }
@@ -86,6 +90,8 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
   const ordersById = new Map<string, BrokerOrder>();
   const positions = new Map<string, BrokerPosition>();
   const placed: BrokerOrderRequest[] = [];
+  const placedOco: BrokerOcoRequest[] = [];
+  const placedOso: BrokerOsoRequest[] = [];
   const attemptsByTag = new Map<string, number>();
   const cancelAttempts = new Map<string, number>();
   let tagLookupCount = 0;
@@ -198,6 +204,77 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
       return { brokerOrderId: order.brokerOrderId, accepted: true, definitive: true };
     },
 
+    async placeOco(request: BrokerOcoRequest) {
+      if (!connected) throw new MockBrokerTimeoutError('mock broker: disconnected');
+      placedOco.push(request);
+      const first = registerOrder({
+        tag: request.tag,
+        accountId: request.accountId,
+        symbol: request.symbol,
+        side: request.first.side,
+        quantity: request.quantity,
+        orderType: request.first.orderType,
+        ...(request.first.limitPrice != null ? { limitPrice: request.first.limitPrice } : {}),
+        ...(request.first.stopPrice != null ? { stopPrice: request.first.stopPrice } : {}),
+      });
+      const second = registerOrder({
+        tag: `${request.tag}b`,
+        accountId: request.accountId,
+        symbol: request.symbol,
+        side: request.second.side,
+        quantity: request.quantity,
+        orderType: request.second.orderType,
+        ...(request.second.limitPrice != null ? { limitPrice: request.second.limitPrice } : {}),
+        ...(request.second.stopPrice != null ? { stopPrice: request.second.stopPrice } : {}),
+      });
+      first.ocoId = second.brokerOrderId;
+      first.linkedOrderId = second.brokerOrderId;
+      second.ocoId = first.brokerOrderId;
+      second.linkedOrderId = first.brokerOrderId;
+      emit({ type: 'order', order: first });
+      emit({ type: 'order', order: second });
+      return {
+        firstBrokerOrderId: first.brokerOrderId,
+        secondBrokerOrderId: second.brokerOrderId,
+        accepted: true,
+        definitive: true,
+      };
+    },
+
+    async placeOso(request: BrokerOsoRequest) {
+      if (!connected) throw new MockBrokerTimeoutError('mock broker: disconnected');
+      placedOso.push(request);
+      const entry = registerOrder(request);
+      const first = registerOrder({
+        tag: `${request.tag}s`, accountId: request.accountId, symbol: request.symbol,
+        side: request.first.side, quantity: request.quantity, orderType: request.first.orderType,
+        ...(request.first.limitPrice != null ? { limitPrice: request.first.limitPrice } : {}),
+        ...(request.first.stopPrice != null ? { stopPrice: request.first.stopPrice } : {}),
+      });
+      const second = registerOrder({
+        tag: `${request.tag}t`, accountId: request.accountId, symbol: request.symbol,
+        side: request.second.side, quantity: request.quantity, orderType: request.second.orderType,
+        ...(request.second.limitPrice != null ? { limitPrice: request.second.limitPrice } : {}),
+        ...(request.second.stopPrice != null ? { stopPrice: request.second.stopPrice } : {}),
+      });
+      first.parentOrderId = entry.brokerOrderId;
+      second.parentOrderId = entry.brokerOrderId;
+      first.ocoId = second.brokerOrderId;
+      first.linkedOrderId = second.brokerOrderId;
+      second.ocoId = first.brokerOrderId;
+      second.linkedOrderId = first.brokerOrderId;
+      emit({ type: 'order', order: entry });
+      emit({ type: 'order', order: first });
+      emit({ type: 'order', order: second });
+      return {
+        entryBrokerOrderId: entry.brokerOrderId,
+        firstBrokerOrderId: first.brokerOrderId,
+        secondBrokerOrderId: second.brokerOrderId,
+        accepted: true,
+        definitive: true,
+      };
+    },
+
     async cancelOrder(_accountId: number, brokerOrderId: string): Promise<void> {
       const order = ordersById.get(brokerOrderId);
       const attempt = (cancelAttempts.get(brokerOrderId) ?? 0) + 1;
@@ -277,6 +354,8 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
     emitEvent: emit,
 
     placedRequests: () => placed,
+    placedOcoRequests: () => placedOco,
+    placedOsoRequests: () => placedOso,
     orders: () => [...ordersById.values()],
     cancelRequestCount: brokerOrderId => cancelAttempts.get(brokerOrderId) ?? 0,
   };

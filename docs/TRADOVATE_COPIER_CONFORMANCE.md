@@ -92,3 +92,4 @@ TradeCopia se nevypíná, dokud není splněno vše:
 - V Tradovate ručně ověřit working orders a pozice na všech účtech.
 - Nic automaticky nedorovnávat. Rozdíl řešit až po lidské kontrole.
 - Uchovat snapshot, audit a metriky; nemažou se kvůli „čistému restartu“.
+

@@ -42,6 +42,37 @@ function validOutbox(value: unknown): boolean {
     && optionalString(value.brokerOrderId) && optionalString(value.reason) && finite(value.updatedAt);
 }
 
+function validOcoLeg(value: unknown): boolean {
+  return isRecord(value) && sides.has(String(value.side))
+    && (value.orderType === 'Limit' || value.orderType === 'Stop' || value.orderType === 'StopLimit')
+    && (value.limitPrice == null || finite(value.limitPrice))
+    && (value.stopPrice == null || finite(value.stopPrice));
+}
+
+function validBracketOutbox(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.request)) return false;
+  const request = value.request;
+  return string(value.key) && string(value.tag)
+    && string(value.leaderEntryOrderId) && string(value.leaderStopOrderId)
+    && string(value.leaderTargetOrderId) && string(value.leaderEventId)
+    && integer(value.leaderSequence) && Number(value.leaderSequence) >= 0
+    && string(request.tag) && integer(request.accountId) && string(request.symbol)
+    && integer(request.quantity) && Number(request.quantity) > 0
+    && validOcoLeg(request.first) && validOcoLeg(request.second)
+    && outboxStatuses.has(String(value.status))
+    && integer(value.attempts) && Number(value.attempts) >= 0
+    && optionalString(value.firstBrokerOrderId) && optionalString(value.secondBrokerOrderId)
+    && optionalString(value.reason) && finite(value.updatedAt);
+}
+
+function validOsoOutbox(value: unknown): boolean {
+  if (!validBracketOutbox(value) || !isRecord(value) || !isRecord(value.request)) return false;
+  return validRequest(value.request)
+    && optionalString(value.entryBrokerOrderId)
+    && optionalString(value.firstBrokerOrderId)
+    && optionalString(value.secondBrokerOrderId);
+}
+
 function validCancelOutbox(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const changes = value.changes;
@@ -70,6 +101,13 @@ function validNumberTuple(value: unknown): boolean {
   return Array.isArray(value) && value.length === 2 && string(value[0]) && finite(value[1]) && value[1] >= 0;
 }
 
+function validSafety(value: unknown): boolean {
+  return value == null || (isRecord(value)
+    && finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
+    && finite(value.dayLockUntil) && Number(value.dayLockUntil) >= 0
+    && optionalString(value.dayLockReason));
+}
+
 const unique = (values: readonly string[]) => new Set(values).size === values.length;
 
 function asSnapshot(value: unknown, revision: number): CopierSnapshot {
@@ -77,6 +115,8 @@ function asSnapshot(value: unknown, revision: number): CopierSnapshot {
     throw new Error('Invalid copier snapshot: expected an object');
   }
   const candidate = value as Partial<CopierSnapshot>;
+  const bracketOutbox = candidate.bracketOutbox ?? [];
+  const osoOutbox = candidate.osoOutbox ?? [];
   if (
     !Number.isSafeInteger(candidate.lastSequence) || Number(candidate.lastSequence) < 0
     || !Array.isArray(candidate.replicated)
@@ -84,6 +124,10 @@ function asSnapshot(value: unknown, revision: number): CopierSnapshot {
     || !unique(candidate.replicated)
     || !Array.isArray(candidate.outbox) || !candidate.outbox.every(validOutbox)
     || !unique(candidate.outbox.map(item => (item as { key: string }).key))
+    || !Array.isArray(bracketOutbox) || !bracketOutbox.every(validBracketOutbox)
+    || !unique(bracketOutbox.map(item => item.key))
+    || !Array.isArray(osoOutbox) || !osoOutbox.every(validOsoOutbox)
+    || !unique(osoOutbox.map(item => item.key))
     || !Array.isArray(candidate.cancelOutbox) || !candidate.cancelOutbox.every(validCancelOutbox)
     || !unique(candidate.cancelOutbox.map(item => (item as { key: string }).key))
     || !Array.isArray(candidate.links) || !candidate.links.every(validLinkTuple)
@@ -92,6 +136,7 @@ function asSnapshot(value: unknown, revision: number): CopierSnapshot {
     || !unique(candidate.leaderCumQty.map(item => String((item as unknown[])[0])))
     || !Array.isArray(candidate.followerFillTargets) || !candidate.followerFillTargets.every(validNumberTuple)
     || !unique(candidate.followerFillTargets.map(item => String((item as unknown[])[0])))
+    || !validSafety(candidate.safety)
   ) {
     throw new Error('Invalid copier snapshot: required fields are missing or malformed');
   }
@@ -100,20 +145,42 @@ function asSnapshot(value: unknown, revision: number): CopierSnapshot {
     replicated: candidate.replicated,
     lastSequence: candidate.lastSequence as number,
     outbox: candidate.outbox,
+    bracketOutbox,
+    osoOutbox,
     cancelOutbox: candidate.cancelOutbox,
     links: candidate.links,
     leaderCumQty: candidate.leaderCumQty,
     followerFillTargets: candidate.followerFillTargets,
+    safety: candidate.safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 },
   };
+}
+
+/**
+ * Zápis odmítnut, protože worker přišel o leadership.
+ *
+ * Na rozdíl od konfliktu revize NENÍ opakovatelný. Znamená, že stav mezitím
+ * převzala jiná instance a tenhle worker pracuje se zastaralým světem —
+ * jediná správná reakce je okamžitý fail-closed.
+ */
+export class CopierFenceStaleError extends Error {
+  constructor(message: string) {
+    super(`Copier worker ztratil právo zápisu: ${message}`);
+    this.name = 'CopierFenceStaleError';
+  }
 }
 
 /**
  * Durable store přes uživatelskou Supabase session. Nepoužívá service-role
  * klíč; vlastnictví řádku vynucuje RLS a CAS provádí jediná DB funkce.
+ *
+ * `fence` dodává držený worker lease. Předkládá se u každého commitu a
+ * kontroluje ho databáze — worker, který o leadership přišel, tudy neprojde
+ * ani tehdy, když o tom sám ještě neví.
  */
 export function createSupabaseCopierStore(
   client: SupabaseClient,
   runtimeId: string,
+  fence: () => number,
 ): CopierStore {
   if (!uuidPattern.test(runtimeId)) throw new Error('Copier runtimeId must be a UUID');
   return {
@@ -134,11 +201,19 @@ export function createSupabaseCopierStore(
         p_runtime_id: runtimeId,
         p_expected_revision: expectedRevision,
         p_snapshot: payload,
+        p_fence: fence(),
       });
       if (error) {
         if (error.message.includes('COPIER_REVISION_CONFLICT')) {
           const actual = Number(error.message.match(/actual=([0-9]+)/)?.[1] ?? -1);
           throw new CopierStoreConflictError(expectedRevision, actual);
+        }
+        if (
+          error.message.includes('COPIER_FENCE_STALE')
+          || error.message.includes('COPIER_LEASE_EXPIRED')
+          || error.message.includes('COPIER_LEASE_MISSING')
+        ) {
+          throw new CopierFenceStaleError(error.message);
         }
         throw new Error(`Copier state commit failed: ${error.message}`);
       }

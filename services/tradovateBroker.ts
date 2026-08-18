@@ -6,6 +6,8 @@ import type {
   BrokerOrder,
   BrokerOrderAck,
   BrokerOrderRequest,
+  BrokerOcoRequest,
+  BrokerOsoRequest,
   BrokerPort,
   BrokerPosition,
   OrderSide,
@@ -15,10 +17,16 @@ import {
   TRADOVATE_HEARTBEAT_MS,
   TRADOVATE_HOSTS,
   fromOrderEntity,
+  fromPlaceOcoResult,
+  fromPlaceOsoResult,
   fromPlaceOrderResult,
+  toPlaceOcoPayload,
+  toPlaceOsoPayload,
   toPlaceOrderPayload,
   type TradovateOrderEntity,
   type TradovatePlaceOrderResult,
+  type TradovatePlaceOcoResult,
+  type TradovatePlaceOsoResult,
 } from './tradovateMapping';
 
 interface TradovateContractEntity { id: number; name: string }
@@ -30,6 +38,9 @@ interface TradovateRawOrderEntity {
   contractId: number;
   action: OrderSide;
   ordStatus: string;
+  ocoId?: number;
+  parentId?: number;
+  linkedId?: number;
   timestamp?: string;
 }
 interface TradovateOrderVersionEntity {
@@ -44,6 +55,7 @@ interface TradovateCommandEntity {
   id: number;
   orderId?: number;
   commandType?: 'New' | 'Cancel' | 'Modify';
+  clOrdId?: string;
   customTag50?: string;
 }
 interface TradovateCommandReportEntity {
@@ -63,6 +75,9 @@ interface TradovateExecutionReportEntity {
   timestamp?: string;
   ordStatus: string;
   action: OrderSide;
+  ocoId?: number;
+  parentId?: number;
+  linkedId?: number;
   rejectReason?: string;
   text?: string;
 }
@@ -92,7 +107,10 @@ export interface TradovateBrokerConfig {
   environment: BrokerEnvironment;
   accessToken?: string;
   getAccessToken?: () => Promise<string>;
-  accountSpec: string;
+  /** Legacy fallback for single-account connections. */
+  accountSpec?: string;
+  /** Exact Tradovate Account.name keyed by Account.id for multi-account connections. */
+  accountSpecsByAccountId?: Readonly<Record<number, string>>;
   fetchImpl?: typeof fetch;
   webSocketFactory?: (url: string) => WebSocketLike;
   clock?: () => number;
@@ -103,6 +121,8 @@ export interface TradovateBrokerConfig {
   reconnectDelayMs?: number;
   syncTimeoutMs?: number;
   socketIdleTimeoutMs?: number;
+  /** Jak dlouho po command ACK čekat na autoritativní Order update ze sync streamu. */
+  commandConfirmationTimeoutMs?: number;
 }
 
 export class TradovateTransportError extends Error {
@@ -157,6 +177,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
   const deliveredFillIds = new Set<number>();
   const pendingFills = new Map<number, TradovateFillEntity[]>();
   const orders = new Map<string, BrokerOrder>();
+  const orderWaiters = new Map<number, Set<(order: BrokerOrder) => void>>();
   let socket: WebSocketLike | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let reconnect: ReturnType<typeof setTimeout> | null = null;
@@ -168,6 +189,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
   let reconnectBackoffMs: number | null = null;
   let requestId = 2;
   let syncReady = false;
+  const commandCorrelationTag = (command: TradovateCommandEntity): string | undefined =>
+    command.clOrdId?.trim() || command.customTag50?.trim() || undefined;
   const syncRequestBody = {
     splitResponses: true,
     entityTypes: ['contract', 'order', 'fill', 'position', 'command', 'executionReport', 'commandReport'],
@@ -181,6 +204,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     const value = config.getAccessToken ? await config.getAccessToken() : config.accessToken;
     if (typeof value !== 'string' || value.trim().length === 0) {
       throw new TradovateTransportError('Tradovate access token is missing');
+    }
+    return value.trim();
+  };
+
+  const accountSpecFor = (accountId: number): string => {
+    const value = config.accountSpecsByAccountId?.[accountId] ?? config.accountSpec;
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new TradovateTransportError(`Tradovate accountSpec is missing for account ${accountId}`);
     }
     return value.trim();
   };
@@ -242,7 +273,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     body: JSON.stringify(body),
   });
 
-  const assertCommandAccepted = (result: TradovateCommandResult | null, operation: string) => {
+  const assertCommandAccepted = (result: TradovateCommandResult | null, operation: string): number => {
     if (!result) throw new TradovateTransportError(`${operation} returned an empty response`);
     if (result.failureReason && result.failureReason !== 'Success') {
       throw new TradovateTransportError(`${operation} rejected: ${result.failureText ?? result.failureReason}`);
@@ -250,6 +281,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     if (result.commandId == null) {
       throw new TradovateTransportError(`${operation} returned an ambiguous response`);
     }
+    return result.commandId;
+  };
+
+  const commandRejection = async (commandId: number): Promise<string | null> => {
+    const reports = await request<TradovateCommandReportEntity[]>(
+      `/commandReport/deps?masterid=${commandId}`,
+    );
+    const rejected = (reports ?? []).find(report =>
+      report.ordStatus === 'Rejected'
+      || report.commandStatus === 'ExecutionRejected'
+      || report.commandStatus === 'RiskRejected');
+    if (!rejected) return null;
+    return rejected.text?.trim() || rejected.rejectReason || 'Tradovate command rejected';
   };
 
   const hydrateContracts = async (ids: readonly number[]) => {
@@ -298,13 +342,47 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
       cumQty: fillTotals.get(orderId) ?? 0,
       price: version.price,
       stopPrice: version.stopPrice,
+      ocoId: raw.ocoId,
+      parentId: raw.parentId,
+      linkedId: raw.linkedId,
       customTag50: orderTags.get(orderId),
       rejectReason: orderRejectReasons.get(orderId),
     };
     const order = fromOrderEntity(entity, contracts.get(raw.contractId) as string);
     order.sourceVersion = `${version.id}:${raw.ordStatus}`;
     orders.set(order.brokerOrderId, order);
+    for (const waiter of orderWaiters.get(orderId) ?? []) waiter(order);
     return order;
+  };
+
+  const waitForOrder = async (
+    orderId: number,
+    predicate: (order: BrokerOrder) => boolean,
+  ): Promise<BrokerOrder | null> => {
+    const current = orders.get(String(orderId));
+    if (current && predicate(current)) return current;
+    // Bez dokončeného syncu nemáme autoritativní stream. REST lookup v runneru
+    // zůstává jediným bezpečným potvrzením a tady proto nečekáme.
+    if (!syncReady) return null;
+    return new Promise(resolveWait => {
+      const listeners = orderWaiters.get(orderId) ?? new Set<(order: BrokerOrder) => void>();
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      const finish = (order: BrokerOrder | null) => {
+        listeners.delete(onOrder);
+        if (listeners.size === 0) orderWaiters.delete(orderId);
+        if (timeoutHandle) clearTimeouts(timeoutHandle);
+        resolveWait(order);
+      };
+      const onOrder = (order: BrokerOrder) => {
+        if (predicate(order)) finish(order);
+      };
+      listeners.add(onOrder);
+      orderWaiters.set(orderId, listeners);
+      timeoutHandle = timeouts(
+        () => finish(null),
+        config.commandConfirmationTimeoutMs ?? 5_000,
+      );
+    });
   };
 
   const emitMappedFill = async (fill: TradovateFillEntity): Promise<boolean> => {
@@ -355,8 +433,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     for (const version of versionResult ?? []) rememberVersion(version);
     for (const command of commandResult ?? []) {
       commands.set(command.id, command);
-      if (command.orderId != null && command.commandType === 'New' && command.customTag50) {
-        orderTags.set(command.orderId, command.customTag50);
+      const correlationTag = commandCorrelationTag(command);
+      if (command.orderId != null && command.commandType === 'New' && correlationTag) {
+        orderTags.set(command.orderId, correlationTag);
       }
     }
     for (const fill of fillResult ?? []) rememberFill(fill);
@@ -411,8 +490,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
       } else if (entityType === 'command') {
         const command = item.entity as TradovateCommandEntity;
         commands.set(command.id, command);
-        if (command.orderId != null && command.commandType === 'New' && command.customTag50) {
-          orderTags.set(command.orderId, command.customTag50);
+        const correlationTag = commandCorrelationTag(command);
+        if (command.orderId != null && command.commandType === 'New' && correlationTag) {
+          orderTags.set(command.orderId, correlationTag);
           const order = await composeOrder(command.orderId);
           if (order) emit({ type: 'order', order });
         }
@@ -427,6 +507,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
           contractId: report.contractId,
           action: report.action,
           ordStatus: report.ordStatus,
+          ocoId: report.ocoId,
+          parentId: report.parentId,
+          linkedId: report.linkedId,
           timestamp: report.timestamp,
         });
         if (report.ordStatus === 'Rejected') {
@@ -649,27 +732,61 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     async placeOrder(requestBody: BrokerOrderRequest): Promise<BrokerOrderAck> {
       const result = await post<TradovatePlaceOrderResult>(
         '/order/placeorder',
-        toPlaceOrderPayload(requestBody, config.accountSpec),
+        toPlaceOrderPayload(requestBody, accountSpecFor(requestBody.accountId)),
       );
       return fromPlaceOrderResult(result ?? {});
     },
+    async placeOco(requestBody: BrokerOcoRequest) {
+      const result = await post<TradovatePlaceOcoResult>(
+        '/order/placeoco',
+        toPlaceOcoPayload(requestBody, accountSpecFor(requestBody.accountId)),
+      );
+      return fromPlaceOcoResult(result ?? {});
+    },
+    async placeOso(requestBody: BrokerOsoRequest) {
+      const result = await post<TradovatePlaceOsoResult>(
+        '/order/placeoso',
+        toPlaceOsoPayload(requestBody, accountSpecFor(requestBody.accountId)),
+      );
+      return fromPlaceOsoResult(result ?? {});
+    },
     async cancelOrder(_accountId, brokerOrderId) {
+      const orderId = numberId(brokerOrderId);
       const result = await post<TradovateCommandResult>('/order/cancelorder', {
-        orderId: numberId(brokerOrderId),
+        orderId,
         isAutomated: true,
       });
-      assertCommandAccepted(result, 'cancelOrder');
+      const commandId = assertCommandAccepted(result, 'cancelOrder');
+      const confirmed = await waitForOrder(orderId, order =>
+        order.status === 'canceled' || order.status === 'filled' || order.status === 'rejected');
+      if (syncReady && !confirmed) {
+        const rejection = await commandRejection(commandId);
+        if (rejection) throw new TradovateTransportError(`cancelOrder command ${commandId} rejected: ${rejection}`);
+        throw new TradovateTransportError(`cancelOrder command ${commandId} was not confirmed by the order stream`);
+      }
     },
     async modifyOrder(_accountId, brokerOrderId, changes) {
+      const orderId = numberId(brokerOrderId);
       const result = await post<TradovateCommandResult>('/order/modifyorder', {
-        orderId: numberId(brokerOrderId),
+        orderId,
         orderQty: changes.quantity,
         orderType: changes.orderType,
         ...(changes.limitPrice != null ? { price: changes.limitPrice } : {}),
         ...(changes.stopPrice != null ? { stopPrice: changes.stopPrice } : {}),
         isAutomated: true,
       });
-      assertCommandAccepted(result, 'modifyOrder');
+      const commandId = assertCommandAccepted(result, 'modifyOrder');
+      const confirmed = await waitForOrder(orderId, order =>
+        order.status === 'working'
+        && order.quantity === changes.quantity
+        && order.orderType === changes.orderType
+        && order.limitPrice === changes.limitPrice
+        && order.stopPrice === changes.stopPrice);
+      if (syncReady && !confirmed) {
+        const rejection = await commandRejection(commandId);
+        if (rejection) throw new TradovateTransportError(`modifyOrder command ${commandId} rejected: ${rejection}`);
+        throw new TradovateTransportError(`modifyOrder command ${commandId} was not confirmed by the order stream`);
+      }
     },
     async listAccountCapabilities(accountIds): Promise<BrokerAccountCapability[]> {
       const entities = await request<TradovateAccountEntity[]>('/account/list');
@@ -708,6 +825,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
     },
     async findOrderById(accountId, brokerOrderId) {
       const orderId = numberId(brokerOrderId);
+      // Po vypršení čekání na sync stream nesmíme vrátit starý cache
+      // snapshot jako autoritativní. To je zvlášť důležité u nativního OSO,
+      // kde Tradovate nemusí doručit nový OrderVersion ve stejném okně jako
+      // command ACK. Vždy proto obnovíme Order + nejnovější OrderVersion z
+      // REST grafu; prázdný nebo neúplný výsledek zůstává fail-closed.
       const rawList = await loadOrderGraph(orderId);
       const raw = rawList[0];
       if (!raw || raw.accountId !== accountId) {
@@ -731,6 +853,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
           syncRetry = null;
           if (heartbeat) clearIntervals(heartbeat);
           heartbeat = null;
+          orderWaiters.clear();
           socket?.close();
         }
       };
