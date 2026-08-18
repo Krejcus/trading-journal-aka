@@ -69,6 +69,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-18 (Claude, sjednocení repozitářů)
+Odhalena a vyřešena dvojí pracovní kopie: hlavní appka (Documents,
+kresby/charty/Capacitor iOS) vs. klon v ~/Downloads (celý copier vývoj).
+Copier větev pushnutá na GitHub a MERGNUTÁ do hlavního repa (`6af57be8`):
+copier soubory z klonu, App.tsx = native most + oprava deps, vite.config
+= unie. Gate: 1175/1175 testů (unie obou sad), typecheck, build. Od teď
+JEDNA pracovní kopie = Documents/trading-journal-aka; klon v Downloads
+je vyřazený — nepracovat v něm. Důležité opravy modelu: aktuální iOS
+appka je Capacitor s bundlovaným dist-native (deploy webu telefon
+NEaktualizuje; nutný rebuild appky) a Capacitor WKWebView nativní
+confirm() implementuje (modal je i tak lepší). Produkce: pozor, ruční
+vercel deploye z klonu končí — příští deploy musí jít z hlavního repa.
+
 ### 2026-08-18 (Claude, in-app confirm modal)
 Zjištěno v praxi: window.confirm nefunguje v Claude browser panelu a ověřeno
 ve zdrojáku shellu, že iOS WKWebView (bez WKUIDelegate) ho zahodí stejně —
