@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ConfirmActionDialog, { type ConfirmActionOptions } from './ConfirmActionDialog';
 import {
   Activity,
   AlertTriangle,
@@ -95,6 +96,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
   const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
+  // Nativní window.confirm ve WKWebView (iOS shell) tiše vrací false;
+  // potvrzení execution akcí proto kreslí aplikace sama.
+  const [confirmState, setConfirmState] = useState<(ConfirmActionOptions & { resolve: (confirmed: boolean) => void }) | null>(null);
+  const confirmAction = useCallback((options: ConfirmActionOptions) => new Promise<boolean>(resolve => {
+    setConfirmState(current => {
+      // Nový dotaz ruší případný předchozí — nikdy dva dialogy naráz.
+      current?.resolve(false);
+      return { ...options, resolve };
+    });
+  }), []);
   const agentClient = useMemo(() => createLocalCopierAgentClient(), []);
   const live = useTradovateLiveData(userId);
   const connectedConnectionIds = useMemo(
@@ -202,7 +213,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
         || !decoded.deviceSecret
         || !decoded.publicKey
       ) throw new Error('Neplatná Mac worker pairing žádost');
-      if (!window.confirm(`Spárovat ${decoded.deviceName} s DEMO připojením? Zařízení získá pouze odvolatelnou obnovu krátkého copier lease.`)) {
+      if (!(await confirmAction({
+        title: 'Spárovat Mac worker',
+        message: `Spárovat ${decoded.deviceName} s DEMO připojením? Zařízení získá pouze odvolatelnou obnovu krátkého copier lease.`,
+        confirmLabel: 'Spárovat',
+      }))) {
         setPairingNotice('Párování Mac workeru bylo zrušeno.');
         return;
       }
@@ -217,7 +232,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
     })().catch(error => {
       live.setError(error instanceof Error ? error.message : String(error));
     });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmAction]);
 
   const tabs: Array<{ id: LiveTab; label: string; icon: React.ElementType }> = [
     { id: 'connections', label: 'Connections', icon: Link2 },
@@ -269,11 +285,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
           onAdd={() => setAddConnectionOpen(true)}
           onRefreshStatus={() => void live.refreshStatus()}
           onProfiles={() => live.setProfileSetupOpen(true)}
-          onDisconnect={connectionId => {
-            if (window.confirm('Odpojit toto Tradovate připojení? Uložené názvy a pravidla účtů zůstanou zachované.')) {
+          onDisconnect={connectionId => void (async () => {
+            if (await confirmAction({
+              title: 'Odpojit Tradovate připojení',
+              message: 'Odpojit toto Tradovate připojení? Uložené názvy a pravidla účtů zůstanou zachované.',
+              confirmLabel: 'Odpojit',
+              tone: 'danger',
+            })) {
               void live.disconnect(connectionId);
             }
-          }}
+          })()}
           onReconnect={connectionId => void live.connect(connectionId)}
           pilotDevices={pilotDevices}
           onPilotLease={connectionId => void (async () => {
@@ -282,7 +303,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
               if (device.connectionId !== connectionId || !device.deviceSecret || !device.publicKey) {
                 throw new Error('Mac worker čeká na jiné Tradovate připojení nebo má neúplnou pairing žádost.');
               }
-              if (!window.confirm(`Spárovat ${device.deviceName} s tímto DEMO připojením? Zařízení dostane pouze odvolatelný přístup k obnově krátkého copier lease.`)) return;
+              if (!(await confirmAction({
+                title: 'Spárovat Mac worker',
+                message: `Spárovat ${device.deviceName} s tímto DEMO připojením? Zařízení dostane pouze odvolatelný přístup k obnově krátkého copier lease.`,
+                confirmLabel: 'Spárovat',
+              }))) return;
               await pairTradovateCopierDevice({
                 connectionId,
                 deviceId: device.deviceId,
@@ -323,7 +348,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
               runtimeGroup={agentStatus?.group ?? null}
               onGroupsChange={setCopyGroups}
               onArmLive={executionGroup ? async () => {
-                if (!window.confirm(`ARM LIVE skupinu ${executionGroup.name}? Runtime nejdřív provede reconciliation a při jakémkoli rozdílu ARM odmítne.`)) return;
+                if (!(await confirmAction({
+                  title: 'ARM LIVE',
+                  message: `ARM LIVE skupinu ${executionGroup.name}? Runtime nejdřív provede reconciliation a při jakémkoli rozdílu ARM odmítne. Platnost skončí nejpozději v 17:00 Chicago.`,
+                  confirmLabel: 'ARM LIVE',
+                }))) return;
                 // UI je autoritativní pro aktuální násobky/módy. Před každým
                 // ARM je nejdřív durable runtime synchronizujeme; update-group
                 // sám DISARMuje a teprve následující ARM provede reconciliation.
@@ -337,7 +366,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
               onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
               onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
               onDayLock={async () => {
-                if (!window.confirm('Opravdu zablokovat ostrý ARM až do konce aktuální broker session? Restart Mac workeru tento lock nezruší.')) return;
+                if (!(await confirmAction({
+                  title: 'Zamknout den',
+                  message: 'Opravdu zablokovat ostrý ARM až do konce aktuální broker session? Restart Mac workeru tento lock nezruší.',
+                  confirmLabel: 'Zamknout den',
+                  tone: 'danger',
+                }))) return;
                 setAgentStatus((await executeAgent({
                   type: 'lock-until-session-end',
                   reason: 'Ruční denní lock z AlphaTrade LIVE UI',
@@ -351,6 +385,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
         </>
       )}
 
+      {confirmState ? (
+        <ConfirmActionDialog
+          title={confirmState.title}
+          message={confirmState.message}
+          confirmLabel={confirmState.confirmLabel}
+          cancelLabel={confirmState.cancelLabel}
+          tone={confirmState.tone}
+          onResolve={confirmed => {
+            confirmState.resolve(confirmed);
+            setConfirmState(null);
+          }}
+        />
+      ) : null}
       {addConnectionOpen ? <TradovateAddConnectionModal environment={live.status?.environment ?? 'demo'} connecting={live.busy === 'connect'} onClose={() => setAddConnectionOpen(false)} onConnect={() => void live.connect()} /> : null}
       {live.profileSetupOpen && live.data ? (
         <TradovateAccountProfileSetup
