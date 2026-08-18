@@ -69,6 +69,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-18 (Claude, in-app confirm modal)
+Zjištěno v praxi: window.confirm nefunguje v Claude browser panelu a ověřeno
+ve zdrojáku shellu, že iOS WKWebView (bez WKUIDelegate) ho zahodí stejně —
+ARM z iPhonu by tiše nedělal nic. Všech 5 confirm() v TradovateLiveDesk
+nahrazeno promise-based ConfirmActionDialog (`02d6188f`); zbytek aplikace
+nativní dialogy nepoužívá. Také: worker přeinstalován z checkpointu
+`5765f6b7` poté, co starý build po fail-closed nechal umřít Tradovate WS
+(connected:false blokoval ARM) — nový build spojení drží. Rozhodnutí:
+VPS se zatím nestaví; Mac-only plán = modal ✓ -> deploy na Vercel ->
+watchdog push na telefon -> ARM-expiry close -> cooldown UI.
+
 ### 2026-08-18 (Claude, Git checkpoint)
 Checkpoint práce GPT z 18. 8.: quality gate (1029/1029 testů, typecheck,
 produkční build, sken tajemství) a commit `5765f6b7` (broker router,
