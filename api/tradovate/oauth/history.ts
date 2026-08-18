@@ -8,10 +8,14 @@ import {
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
 import { loadTradovateAccountData } from '../../../server/tradovateAccountData.js';
 import { requestTradovatePerformanceReport } from '../../../server/tradovateHistoricalReport.js';
+import { handleNativeCors } from '../../../server/nativeCors.js';
 
 const datePattern = /^\d{2}\/\d{2}\/\d{4}$/;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
+  // preflight odpovedi selze fetch jako 'Load failed'. Web je same-origin.
+  if (handleNativeCors(req, res, ['GET', 'POST', 'DELETE'])) return;
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
   try {

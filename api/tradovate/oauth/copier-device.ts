@@ -8,8 +8,12 @@ import {
   registerTradovateCopierDevice,
   revokeTradovateCopierDevice,
 } from '../../../server/tradovateCopierDevice.js';
+import { handleNativeCors } from '../../../server/nativeCors.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
+  // preflight odpovedi selze fetch jako 'Load failed'. Web je same-origin.
+  if (handleNativeCors(req, res, ['GET', 'POST', 'DELETE'])) return;
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST' && req.method !== 'DELETE') {
     return res.status(405).json({ error: 'method-not-allowed' });

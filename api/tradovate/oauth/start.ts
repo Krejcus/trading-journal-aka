@@ -11,6 +11,7 @@ import {
   requireReconnectableTradovateConnection,
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
+import { handleNativeCors } from '../../../server/nativeCors.js';
 
 const requestedConnectionId = (body: unknown): string | undefined => {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined;
@@ -19,6 +20,9 @@ const requestedConnectionId = (body: unknown): string | undefined => {
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
+  // preflight odpovedi selze fetch jako 'Load failed'. Web je same-origin.
+  if (handleNativeCors(req, res, ['GET', 'POST', 'DELETE'])) return;
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
   try {
