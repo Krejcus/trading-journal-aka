@@ -1,6 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import webpush from 'web-push';
 import { createClient } from '@supabase/supabase-js';
+import {
+    evaluateCopierIncidents,
+    type CopierAlertStateRow,
+    type CopierRuntimeRow,
+} from '../../server/copierIncidentWatchdog';
 
 // Init Supabase with Service Role Key to bypass RLS in Cron job
 // VITE_ prefix vars are only available at build time, not in serverless runtime
@@ -495,7 +500,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             `);
         }
 
-        console.log(`[Cron] Done: ${sentCount} sent, ${duplicateCount} deduped, ${pushJobs.length} total jobs, ${profiles.length} profiles, ${subsResult.data?.length || 0} devices`);
+        // --- COPIER REMOTE WATCHDOG ---------------------------------------
+        // Lokální watchdog hlásí na obrazovku Macu, tedy stroje, který právě
+        // umřel. Tady se heartbeat workera převádí na push do telefonu.
+        // Vyhodnocení je čistá funkce (server/copierIncidentWatchdog.ts),
+        // dedupe drží copier_alert_state — incident se hlásí jednou při
+        // vzniku a jednou při zotavení, ne každou minutu.
+        let copierAlertsSent = 0;
+        try {
+            const [runtimesResult, alertStatesResult] = await Promise.all([
+                supabase
+                    .from('tradovate_copier_device_runtime')
+                    .select('device_id, user_id, status, last_seen_at, started_at'),
+                supabase
+                    .from('copier_alert_state')
+                    .select('device_id, user_id, incident_key, active, detail'),
+            ]);
+            if (runtimesResult.error) throw new Error(runtimesResult.error.message);
+            if (alertStatesResult.error) throw new Error(alertStatesResult.error.message);
+
+            const evaluation = evaluateCopierIncidents({
+                runtimes: (runtimesResult.data ?? []) as CopierRuntimeRow[],
+                alertStates: (alertStatesResult.data ?? []) as CopierAlertStateRow[],
+                now: now.getTime(),
+            });
+
+            for (const notification of evaluation.notifications) {
+                const devices = devicesByUser.get(notification.userId) ?? [];
+                for (const device of devices) {
+                    const result = await sendPush(
+                        device.subscription,
+                        notification.title,
+                        notification.body,
+                        `copier-${notification.incidentKey}`,
+                    );
+                    if (result.status === 'sent') copierAlertsSent++;
+                    if (result.status === 'expired') {
+                        await supabase
+                            .from('push_subscriptions')
+                            .update({ expired_at: new Date().toISOString(), last_error: result.error ?? null })
+                            .eq('id', device.id);
+                    }
+                }
+            }
+
+            for (const upsert of evaluation.upserts) {
+                const nowIso = new Date().toISOString();
+                await supabase.from('copier_alert_state').upsert({
+                    user_id: upsert.userId,
+                    device_id: upsert.deviceId,
+                    incident_key: upsert.incidentKey,
+                    active: upsert.active,
+                    detail: upsert.detail,
+                    updated_at: nowIso,
+                    ...(upsert.active ? { detected_at: nowIso, resolved_at: null } : { resolved_at: nowIso }),
+                    ...(upsert.notified ? { notified_at: nowIso } : {}),
+                }, { onConflict: 'user_id,device_id,incident_key' });
+            }
+        } catch (copierWatchdogError) {
+            // Watchdog nesmí shodit zbytek alertů — selhání jen zalogovat.
+            console.error('[Cron] Copier watchdog failed:', copierWatchdogError);
+        }
+
+        console.log(`[Cron] Done: ${sentCount} sent, ${duplicateCount} deduped, ${pushJobs.length} total jobs, ${profiles.length} profiles, ${subsResult.data?.length || 0} devices, ${copierAlertsSent} copier alerts`);
         return res.status(200).json({
             success: true,
             sent: sentCount,
@@ -504,6 +571,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             devices: subsResult.data?.length || 0,
             time: pragueTime,
             profiles: profiles.length,
+            copierAlerts: copierAlertsSent,
         });
 
     } catch (err: any) {
