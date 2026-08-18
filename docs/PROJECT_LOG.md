@@ -69,6 +69,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-18 (Claude, migrace + první deploy z hlavního repa)
+Migrace copier_alert_state aplikovaná na produkční DB přes Supabase MCP;
+advisors bez nálezu na nové tabulce (RLS + (select auth.uid()), FK krytý
+PK). Větev fast-forward pushnutá na main (main neměl nic navíc) -> auto
+deploy na produkci. Tím KONČÍ ruční vercel deploye z klonu — od teď je
+jediný kanál push na main z Documents/trading-journal-aka. Vzdálený
+watchdog je tedy kompletní: heartbeat -> cron -> dedupe -> PWA push.
+
 ### 2026-08-18 (Claude, vzdálený copier watchdog)
 Podle auditu GPT (PWA push na iPhonu funguje — 320 doručení/týden — ale
 copier do něj nic neposílá) doplněn chybějící článek: serverový watchdog
