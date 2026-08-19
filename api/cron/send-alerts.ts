@@ -5,7 +5,7 @@ import {
     evaluateCopierIncidents,
     type CopierAlertStateRow,
     type CopierRuntimeRow,
-} from '../../server/copierIncidentWatchdog';
+} from '../../server/copierIncidentWatchdog.js';
 
 // Init Supabase with Service Role Key to bypass RLS in Cron job
 // VITE_ prefix vars are only available at build time, not in serverless runtime
