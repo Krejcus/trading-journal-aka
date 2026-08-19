@@ -69,6 +69,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-19 (Claude, „kopírka se furt vypíná" + parita kopií)
+Dvě příčiny z reálného obchodování (leader 4-8 MNQ):
+(1) maxContracts=1 z pilotní éry odmítal celé OSO -> fail-closed -> DISARM
+při každém vstupu; 5 stuck operací blokovalo re-ARM. Vyřešeno resolve-stuck
++ skupina bez stropu (rozhodnutí uživatele). POZOR: persistovaná skupina
+(.group.json, plněná update-group z UI) má přednost před CLI flagy —
+změna stropu vyžaduje úpravu UI konfigurace, jinak ji ARM vrátí.
+(2) Kopie se rozcházely v P&L i u limitů: fill analýza prokázala sériový
+dispatch (maxConcurrentDispatches:1, rozestupy ~150-180 ms v timestampech)
+— okamžitě vyplněné (marketable) limity trefily každá jiný tick. Restující
+limity = parita na cent vč. Lucid. Fix: paralelní dispatch (`ef91c543`),
+worker reinstalován. Zbývá ověřit příštím obchodem. Leader-vs-kopie gap
+(~0.8 s) zůstává — řeší až VPS u burzy.
+
 ### 2026-08-19 (Claude, nativní appka + noční výpadek cronu)
 Capacitor appka poprvé nese celý copier kokpit (instalace kabelem).
 Tři opravy po cestě: (1) relativní /api/ cesty z klonu -> apiUrl() pro
