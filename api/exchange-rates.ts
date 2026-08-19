@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { handleNativeCors } from '../server/nativeCors';
+import { handleNativeCors } from '../server/nativeCors.js';
 
 const FALLBACK = { USD: 1, CZK: 24.5, EUR: 0.92 };
 
