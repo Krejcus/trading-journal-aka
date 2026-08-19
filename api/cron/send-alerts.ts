@@ -3,6 +3,7 @@ import webpush from 'web-push';
 import { createClient } from '@supabase/supabase-js';
 import {
     evaluateCopierIncidents,
+    planCopyEventNotifications,
     type CopierAlertStateRow,
     type CopierRuntimeRow,
 } from '../../server/copierIncidentWatchdog.js';
@@ -544,7 +545,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
             }
 
-            for (const upsert of evaluation.upserts) {
+            // Trade notifikace (vstup/exit/otočka) — stejná data, vlastní marker.
+            const copyEvents = planCopyEventNotifications({
+                runtimes: (runtimesResult.data ?? []) as CopierRuntimeRow[],
+                alertStates: (alertStatesResult.data ?? []) as CopierAlertStateRow[],
+                now: now.getTime(),
+            });
+            for (const notification of copyEvents.notifications) {
+                const devices = devicesByUser.get(notification.userId) ?? [];
+                for (const device of devices) {
+                    const result = await sendPush(device.subscription, notification.title, notification.body, 'copier-trade');
+                    if (result.status === 'sent') copierAlertsSent++;
+                    if (result.status === 'expired') {
+                        await supabase
+                            .from('push_subscriptions')
+                            .update({ expired_at: new Date().toISOString(), last_error: result.error ?? null })
+                            .eq('id', device.id);
+                    }
+                }
+            }
+
+            for (const upsert of [...evaluation.upserts, ...copyEvents.markers]) {
                 const nowIso = new Date().toISOString();
                 await supabase.from('copier_alert_state').upsert({
                     user_id: upsert.userId,

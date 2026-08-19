@@ -61,6 +61,23 @@ export interface CopierControllerStatus {
    * plánuje deterministickou lokální notifikaci „ARM vypršel".
    */
   armExpiresAt?: number;
+  /**
+   * Posledních pár vstupů/exitů leadera (přechody přes flat) pro trade
+   * notifikace. Server je čte z heartbeat statusu, appka z pollu.
+   */
+  recentCopyEvents?: CopierCopyEvent[];
+}
+
+export interface CopierCopyEvent {
+  /** Monotónní v rámci běhu procesu (epoch ms + pořadí). */
+  id: string;
+  at: number;
+  kind: 'entry' | 'exit' | 'flip';
+  symbol: string;
+  /** Long/Short podle znaménka pozice PO události (u exitu PŘED ní). */
+  side: 'Long' | 'Short';
+  quantity: number;
+  followers: number;
 }
 
 export interface CopierRuntimeController {
@@ -195,6 +212,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   });
   // Výchozí strop ARM z konfigurace gate; per-ARM ttl ho smí jen zkrátit.
   const defaultArmTtlMs = gate.armTtlMs;
+  /** Deník vstupů/exitů pro notifikace; jen poslední položky, jen tento běh. */
+  const recentCopyEvents: CopierCopyEvent[] = [];
+  let copyEventCounter = 0;
+  const recordCopyEvent = (previousNet: number, nextNet: number, symbol: string, at: number): void => {
+    if (previousNet === nextNet) return;
+    const push = (kind: CopierCopyEvent['kind'], side: 'Long' | 'Short', quantity: number) => {
+      copyEventCounter += 1;
+      recentCopyEvents.push({
+        id: `${at}-${copyEventCounter}`,
+        at, kind, symbol, side, quantity,
+        followers: group.followers.filter(follower => follower.mode !== 'off').length,
+      });
+      if (recentCopyEvents.length > 10) recentCopyEvents.shift();
+    };
+    if (previousNet === 0 && nextNet !== 0) {
+      push('entry', nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet));
+    } else if (previousNet !== 0 && nextNet === 0) {
+      push('exit', previousNet > 0 ? 'Long' : 'Short', Math.abs(previousNet));
+    } else if (Math.sign(previousNet) !== Math.sign(nextNet)) {
+      push('flip', nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet));
+    }
+    // Scale-in/out (stejné znaménko, jiná velikost) schválně nehlásíme.
+  };
   let stopped = false;
   let positionCheckComplete = false;
   let workingOrderAccounts = new Set<number>();
@@ -512,6 +552,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (event.position.accountId === group.leaderAccountId) {
         const previousNet = leaderPositions.get(event.position.symbol) ?? 0;
         leaderPositions.set(event.position.symbol, event.position.netQuantity);
+        // Deník vstupů/exitů pro notifikace: jen přechody přes flat, jednotlivé
+        // nohy a scale-in/out schválně ne. Ring buffer čte server z heartbeat
+        // statusu (push do PWA) a appka z pollu — obchodní hot path se nemění.
+        recordCopyEvent(previousNet, event.position.netQuantity, event.position.symbol, now);
         const cooldownMinutes = group.safety?.entryCooldownMinutes ?? 0;
         if (
           cooldownMinutes > 0
@@ -951,6 +995,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         dayLockUntil: current.state.safety.dayLockUntil,
         dayLockReason: current.state.safety.dayLockReason ?? null,
         armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : 0,
+        recentCopyEvents: [...recentCopyEvents],
       };
     },
     async waitForIdle() {

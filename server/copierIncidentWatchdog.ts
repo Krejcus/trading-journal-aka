@@ -68,6 +68,90 @@ const BOOT_GRACE_MS = 120_000;
 /** Interní marker pro detekci hrany armed -> disarmed; nikdy nenotifikuje. */
 const ARMED_MARKER_KEY = 'state:armed';
 
+/** Interní marker: `detail` nese `at` posledního odeslaného copy eventu. */
+export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
+
+export interface CopierCopyEventRow {
+  id: string;
+  at: number;
+  kind: 'entry' | 'exit' | 'flip';
+  symbol: string;
+  side: 'Long' | 'Short';
+  quantity: number;
+  followers: number;
+}
+
+const COPY_KIND_LABEL: Record<CopierCopyEventRow['kind'], string> = {
+  entry: 'vstup',
+  exit: 'exit',
+  flip: 'otočka',
+};
+
+export function copyEventNotification(event: CopierCopyEventRow): { title: string; body: string } {
+  return {
+    title: `Copier: ${COPY_KIND_LABEL[event.kind]} zkopírován`,
+    body: `${event.side} ${event.quantity} ${event.symbol} → ${event.followers} follower${event.followers === 1 ? '' : 'ů'}.`,
+  };
+}
+
+/**
+ * Trade notifikace (vstupy/exity) — vedle incidentů, ale se stejnou kázní:
+ * každý event právě jednou. Worker drží ring buffer jen v paměti procesu,
+ * takže po jeho restartu začíná deník znovu — marker proto nese časovou
+ * hranici, ne id, a starší eventy se po restartu nikdy nepošlou dvakrát.
+ */
+export function planCopyEventNotifications(options: {
+  runtimes: readonly CopierRuntimeRow[];
+  alertStates: readonly CopierAlertStateRow[];
+  now: number;
+  staleAfterMs?: number;
+}): { notifications: Array<{ userId: string; deviceId: string; title: string; body: string }>; markers: AlertStateUpsert[] } {
+  const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
+  const notifications: Array<{ userId: string; deviceId: string; title: string; body: string }> = [];
+  const markers: AlertStateUpsert[] = [];
+  const markerFor = new Map(options.alertStates
+    .filter(row => row.incident_key === COPY_EVENTS_MARKER_KEY)
+    .map(row => [`${row.user_id}:${row.device_id}`, row]));
+
+  for (const runtime of options.runtimes) {
+    const lastSeen = Date.parse(runtime.last_seen_at);
+    if (!Number.isFinite(lastSeen) || options.now - lastSeen > staleAfterMs) continue;
+    const events = Array.isArray(runtime.status?.recentCopyEvents)
+      ? (runtime.status.recentCopyEvents as CopierCopyEventRow[])
+      : [];
+    if (events.length === 0) continue;
+
+    const marker = markerFor.get(`${runtime.user_id}:${runtime.device_id}`);
+    // Bez markeru (první běh) nehlásíme historii — jen posuneme hranici,
+    // stejné pravidlo jako u incidentů: start nesmí přehrát minulost.
+    const lastNotifiedAt = marker ? Number(marker.detail ?? 0) : Number.POSITIVE_INFINITY;
+    const fresh = Number.isFinite(lastNotifiedAt)
+      ? events.filter(event => Number.isFinite(event?.at) && event.at > lastNotifiedAt)
+      : [];
+    for (const event of fresh) {
+      const content = copyEventNotification(event);
+      notifications.push({
+        userId: runtime.user_id,
+        deviceId: runtime.device_id,
+        ...content,
+      });
+    }
+    const maxAt = Math.max(...events.map(event => (Number.isFinite(event?.at) ? event.at : 0)));
+    const nextBoundary = marker ? Math.max(Number(marker.detail ?? 0), maxAt) : maxAt;
+    if (!marker || fresh.length > 0 || Number(marker.detail ?? 0) !== nextBoundary) {
+      markers.push({
+        userId: runtime.user_id,
+        deviceId: runtime.device_id,
+        incidentKey: COPY_EVENTS_MARKER_KEY,
+        active: false,
+        detail: String(nextBoundary),
+        notified: fresh.length > 0,
+      });
+    }
+  }
+  return { notifications, markers };
+}
+
 interface IncidentSpec {
   key: string;
   /** Vyhodnocuje se jen na živém heartbeatu. */

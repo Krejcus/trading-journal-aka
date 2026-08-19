@@ -21,6 +21,8 @@ export interface CopierNotificationSnapshot {
   armExpiresAt: number;
   entryCooldownUntil: number;
   dayLockUntil: number;
+  /** Vstupy/exity leadera z runtime deníku (id, popisek). */
+  copyEvents: Array<{ id: string; title: string; body: string }>;
 }
 
 export type CopierSlotKey = 'arm-expiry' | 'cooldown-end' | 'daylock-end';
@@ -149,6 +151,12 @@ export function planCopierNotifications(options: {
         title: 'Copier: Tradovate odpojen',
         body: 'Spojení k brokerovi spadlo. Kopírování stojí; SL/TP u brokera zůstávají.',
       });
+    }
+    // Trade potvrzení: jen eventy, které v předchozím snapshotu nebyly.
+    // První sync (bez prev) historii nepřehrává — stejné pravidlo jako výše.
+    const known = new Set(previous.copyEvents.map(event => event.id));
+    for (const event of next.copyEvents) {
+      if (!known.has(event.id)) fireNow.push({ title: event.title, body: event.body });
     }
   }
 

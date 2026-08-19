@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  planCopyEventNotifications,
   DEFAULT_STALE_AFTER_MS,
   evaluateCopierIncidents,
   type CopierAlertStateRow,
@@ -152,5 +153,43 @@ describe('víc zařízení a uživatelů', () => {
       expect.objectContaining({ deviceId: 'dev-1', incidentKey: 'stuck-outbox' }),
       expect.objectContaining({ deviceId: 'dev-2', userId: 'user-2', incidentKey: 'worker-offline' }),
     ]);
+  });
+});
+
+describe('trade notifikace (planCopyEventNotifications)', () => {
+  const copyEvent = (at: number, id = `${at}-1`) => ({
+    id, at, kind: 'entry' as const, symbol: 'MNQU6', side: 'Long' as const, quantity: 4, followers: 5,
+  });
+  const marker = (detail: string): CopierAlertStateRow => ({
+    device_id: 'dev-1', user_id: 'user-1', incident_key: 'state:copy-events', active: false, detail,
+  });
+  const planEvents = (runtimes: CopierRuntimeRow[], alertStates: CopierAlertStateRow[] = []) =>
+    planCopyEventNotifications({ runtimes, alertStates, now: NOW });
+
+  it('první běh historii nepřehrává, jen posune hranici', () => {
+    const result = planEvents([runtime({ status: { recentCopyEvents: [copyEvent(NOW - 5_000)] } })]);
+    expect(result.notifications).toEqual([]);
+    expect(result.markers).toEqual([expect.objectContaining({
+      incidentKey: 'state:copy-events', detail: String(NOW - 5_000), notified: false,
+    })]);
+  });
+
+  it('event za hranicí markeru pošle notifikaci právě jednou', () => {
+    const status = { recentCopyEvents: [copyEvent(NOW - 5_000)] };
+    const first = planEvents([runtime({ status })], [marker(String(NOW - 60_000))]);
+    expect(first.notifications).toEqual([expect.objectContaining({
+      title: 'Copier: vstup zkopírován', body: 'Long 4 MNQU6 → 5 followerů.',
+    })]);
+    const second = planEvents([runtime({ status })], [marker(String(NOW - 5_000))]);
+    expect(second.notifications).toEqual([]);
+    expect(second.markers).toEqual([]);
+  });
+
+  it('offline worker se nevyhodnocuje', () => {
+    const result = planEvents([runtime({
+      status: { recentCopyEvents: [copyEvent(NOW - 5_000)] },
+      last_seen_at: iso(DEFAULT_STALE_AFTER_MS + 60_000),
+    })], [marker(String(NOW - 60_000))]);
+    expect(result.notifications).toEqual([]);
   });
 });

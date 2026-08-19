@@ -9,6 +9,7 @@ import {
   type CopierScheduledSlot,
 } from './nativeCopierNotificationPlan';
 import type { CopierControllerStatus } from './copierRuntimeController';
+import { copyEventNotification } from '../server/copierIncidentWatchdog';
 
 /**
  * Exekutor deterministických copier notifikací (viz plánovač).
@@ -59,6 +60,10 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
     armExpiresAt: status.armExpiresAt ?? 0,
     entryCooldownUntil: status.entryCooldownUntil ?? 0,
     dayLockUntil: status.dayLockUntil ?? 0,
+    copyEvents: (status.recentCopyEvents ?? []).map(event => ({
+      id: event.id,
+      ...copyEventNotification(event),
+    })),
   };
 }
 

@@ -18,6 +18,7 @@ const snapshot = (partial: Partial<CopierNotificationSnapshot> = {}): CopierNoti
   armExpiresAt: 0,
   entryCooldownUntil: 0,
   dayLockUntil: 0,
+  copyEvents: [],
   ...partial,
 });
 
@@ -95,6 +96,16 @@ describe('okamžité incidenty', () => {
   it('první sync po startu appky nehlásí staré stavy', () => {
     const result = plan(null, snapshot({ lastError: 'stará chyba', stuckOutbox: true }));
     expect(result.fireNow).toEqual([]);
+  });
+
+  it('nový copy event vystřelí hned; známý ani historie po startu ne', () => {
+    const event = { id: 'e1', title: 'Copier: vstup zkopírován', body: 'Long 4 MNQU6 → 5 followerů.' };
+    const fresh = plan(snapshot(), snapshot({ copyEvents: [event] }));
+    expect(fresh.fireNow).toEqual([expect.objectContaining({ title: event.title })]);
+    const steady = plan(snapshot({ copyEvents: [event] }), snapshot({ copyEvents: [event] }));
+    expect(steady.fireNow).toEqual([]);
+    const coldStart = plan(null, snapshot({ copyEvents: [event] }));
+    expect(coldStart.fireNow).toEqual([]);
   });
 
   it('pád spojení hlásí; návrat nehlásí (to řeší UI)', () => {
