@@ -1,0 +1,106 @@
+import { describe, expect, it } from 'vitest';
+import {
+  planCopierNotifications,
+  type CopierNotificationSnapshot,
+  type CopierScheduledSlot,
+} from '../services/nativeCopierNotificationPlan';
+
+const NOW = 1_000_000_000;
+const HOUR = 60 * 60 * 1000;
+
+const snapshot = (partial: Partial<CopierNotificationSnapshot> = {}): CopierNotificationSnapshot => ({
+  armed: false,
+  shadowMode: false,
+  killSwitch: false,
+  stuckOutbox: false,
+  connected: true,
+  lastError: null,
+  armExpiresAt: 0,
+  entryCooldownUntil: 0,
+  dayLockUntil: 0,
+  ...partial,
+});
+
+const plan = (
+  previous: CopierNotificationSnapshot | null,
+  next: CopierNotificationSnapshot | null,
+  slots: CopierScheduledSlot[] = [],
+) => planCopierNotifications({ previous, next, slots, now: NOW });
+
+describe('plánované sloty', () => {
+  it('ostrý ARM naplánuje notifikaci na armExpiresAt', () => {
+    const result = plan(null, snapshot({ armed: true, armExpiresAt: NOW + 8 * HOUR }));
+    expect(result.schedule).toEqual([expect.objectContaining({
+      key: 'arm-expiry', at: NOW + 8 * HOUR, title: 'Copier: ARM vypršel',
+    })]);
+    expect(result.cancel).toEqual([]);
+  });
+
+  it('shadow ARM nic neplánuje', () => {
+    const result = plan(null, snapshot({ armed: true, shadowMode: true, armExpiresAt: NOW + 8 * HOUR }));
+    expect(result.schedule).toEqual([]);
+  });
+
+  it('DISARM zruší naplánovaný slot', () => {
+    const result = plan(
+      snapshot({ armed: true, armExpiresAt: NOW + 8 * HOUR }),
+      snapshot(),
+      [{ key: 'arm-expiry', at: NOW + 8 * HOUR, id: 42 }],
+    );
+    expect(result.cancel).toEqual([42]);
+    expect(result.schedule).toEqual([]);
+  });
+
+  it('stejný cíl se nepřeplánovává, posunutý ano', () => {
+    const same = plan(null, snapshot({ armed: true, armExpiresAt: NOW + 8 * HOUR }),
+      [{ key: 'arm-expiry', at: NOW + 8 * HOUR + 5_000, id: 7 }]);
+    expect(same.cancel).toEqual([]);
+    expect(same.schedule).toEqual([]);
+
+    const moved = plan(null, snapshot({ armed: true, armExpiresAt: NOW + 4 * HOUR }),
+      [{ key: 'arm-expiry', at: NOW + 8 * HOUR, id: 7 }]);
+    expect(moved.cancel).toEqual([7]);
+    expect(moved.schedule).toEqual([expect.objectContaining({ key: 'arm-expiry', at: NOW + 4 * HOUR })]);
+  });
+
+  it('cooldown a day-lock dostanou vlastní sloty', () => {
+    const result = plan(null, snapshot({
+      entryCooldownUntil: NOW + 10 * 60_000,
+      dayLockUntil: NOW + 5 * HOUR,
+    }));
+    expect(result.schedule.map(item => item.key).sort()).toEqual(['cooldown-end', 'daylock-end']);
+  });
+
+  it('cíl v minulosti se neplánuje', () => {
+    const result = plan(null, snapshot({ armed: true, armExpiresAt: NOW - 1_000 }));
+    expect(result.schedule).toEqual([]);
+  });
+});
+
+describe('okamžité incidenty', () => {
+  it('hrana kill switch vystřelí hned; opakovaný stav ne', () => {
+    const edge = plan(snapshot(), snapshot({ killSwitch: true }));
+    expect(edge.fireNow).toEqual([expect.objectContaining({ title: 'Copier: KILL SWITCH' })]);
+    const steady = plan(snapshot({ killSwitch: true }), snapshot({ killSwitch: true }));
+    expect(steady.fireNow).toEqual([]);
+  });
+
+  it('nová chyba nese její text; kill switch ji nepřekrývá duplicitně', () => {
+    const error = plan(snapshot(), snapshot({ lastError: 'Divergence pozic' }));
+    expect(error.fireNow).toEqual([expect.objectContaining({ body: 'Divergence pozic' })]);
+    const both = plan(snapshot(), snapshot({ killSwitch: true, lastError: 'Ruční stop' }));
+    expect(both.fireNow.map(item => item.title)).toEqual(['Copier: KILL SWITCH']);
+  });
+
+  it('první sync po startu appky nehlásí staré stavy', () => {
+    const result = plan(null, snapshot({ lastError: 'stará chyba', stuckOutbox: true }));
+    expect(result.fireNow).toEqual([]);
+  });
+
+  it('pád spojení hlásí; návrat nehlásí (to řeší UI)', () => {
+    const down = plan(snapshot(), snapshot({ connected: false }));
+    expect(down.fireNow).toEqual([expect.objectContaining({ title: 'Copier: Tradovate odpojen' })]);
+    const up = plan(snapshot({ connected: false }), snapshot());
+    expect(up.fireNow).toEqual([]);
+  });
+});

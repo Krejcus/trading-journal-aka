@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ConfirmActionDialog, { type ConfirmActionOptions } from './ConfirmActionDialog';
+import { syncCopierNativeNotifications } from '../services/nativeCopierNotifications';
 import {
   Activity,
   AlertTriangle,
@@ -93,6 +94,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
+  // Deterministické copier notifikace v nativní appce: konec ARM/cooldownu/
+  // day-locku se plánuje dopředu (iOS doručí i zavřené appce), incidenty se
+  // hlásí hned, dokud appka běží. Mimo nativní build no-op.
+  useEffect(() => {
+    void syncCopierNativeNotifications(agentStatus?.controller ?? null);
+  }, [agentStatus]);
   const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
   const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);

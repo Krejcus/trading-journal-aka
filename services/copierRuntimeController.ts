@@ -56,6 +56,11 @@ export interface CopierControllerStatus {
   entryCooldownUntil?: number;
   dayLockUntil?: number;
   dayLockReason?: string | null;
+  /**
+   * Kdy aktuální ARM vyprší (epoch ms); 0 = neARMováno. Klient z něj
+   * plánuje deterministickou lokální notifikaci „ARM vypršel".
+   */
+  armExpiresAt?: number;
 }
 
 export interface CopierRuntimeController {
@@ -945,6 +950,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         entryCooldownUntil: current.state.safety.entryCooldownUntil,
         dayLockUntil: current.state.safety.dayLockUntil,
         dayLockReason: current.state.safety.dayLockReason ?? null,
+        armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : 0,
       };
     },
     async waitForIdle() {
