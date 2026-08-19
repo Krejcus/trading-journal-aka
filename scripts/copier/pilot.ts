@@ -289,7 +289,11 @@ async function runLocalAgent(
       store: createFileCopierStore(resolve(root, `${key}.snapshot.json`)),
       group,
       metrics: createCopierMetrics(),
-      maxConcurrentDispatches: 1,
+      // Všichni followeři musí odejít v JEDEN okamžik. Sériový dispatch
+      // (pilotní `1`) rozprostřel marketové nohy přes stovky ms — každá
+      // kopie pak trefila jinou cenu a P&L kopií se rozcházela. Limitů se
+      // to netýká (kniha čeká), marketů/flatten/close zásadně.
+      maxConcurrentDispatches: Math.max(4, group.followers.length),
       onAudit: entries => {
         auditTail = auditTail.then(() => writeAudit(entries));
       },
