@@ -69,6 +69,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-19 (Claude, nativní appka + noční výpadek cronu)
+Capacitor appka poprvé nese celý copier kokpit (instalace kabelem).
+Tři opravy po cestě: (1) relativní /api/ cesty z klonu -> apiUrl() pro
+nativní build; (2) CORS preflight pro capacitor://localhost do všech
+tradovate endpointů (handleNativeCors); (3) KRITICKÉ: extensionless ESM
+import v send-alerts shodil celý alertový cron přes noc (500/min) —
+Vercel runtime vyžaduje .js u relativních importů, TS/vitest to nechytí;
+opraveno i v push-test a exchange-rates. Watchdog poté ověřen e2e
+(reálný incident -> PWA push). Nové: deterministické lokální notifikace
+v hlavní appce (konec ARM/cooldownu/day-locku plánované dopředu — iOS
+doručí i zavřené appce; incidenty hned při běžící appce). Worker hlásí
+armExpiresAt (reinstalován). Limity: nepředvídatelné incidenty do
+zavřené Capacitor appky = jen APNs (placený účet) — do té doby PWA.
+Doporučení pro uživatele změněno na: Apple Developer účet koupit.
+
 ### 2026-08-18 (Claude, migrace + první deploy z hlavního repa)
 Migrace copier_alert_state aplikovaná na produkční DB přes Supabase MCP;
 advisors bez nálezu na nové tabulce (RLS + (select auth.uid()), FK krytý
