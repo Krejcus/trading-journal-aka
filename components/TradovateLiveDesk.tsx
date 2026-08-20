@@ -94,6 +94,34 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
+  // Dev háček (konvence at:dev:*): `localStorage['at:dev:copier-ui-demo']='1'`
+  // podstrčí běžící cooldown a dvě stuck operace, aby šly stavové UI prvky
+  // vidět bez čekání na reálnou situaci. Jen v dev buildu, prod ho neobsahuje.
+  const copierUiDemo = useMemo(() => {
+    if (!import.meta.env.DEV) return null;
+    try {
+      if (localStorage.getItem('at:dev:copier-ui-demo') !== '1') return null;
+    } catch {
+      return null;
+    }
+    return {
+      cooldownUntil: Date.now() + 6 * 60_000 + 24_000,
+      stuckOperations: [
+        {
+          kind: 'oso' as const, key: 'oso:demo:625378680572:62364057', status: 'rejected' as const,
+          leaderSequence: 112, updatedAt: Date.now() - 4 * 60_000, accountId: 62364057,
+          reason: 'maxContracts blokoval účet 62364057: request=Sell:4, cap=1',
+        },
+        {
+          kind: 'cancel-or-modify' as const, key: 'cm:demo:625378680560:62364060', status: 'unknown' as const,
+          leaderSequence: 113, updatedAt: Date.now() - 90_000, accountId: 62364060,
+          operation: 'cancel' as const,
+          reason: 'Cancel bez autoritativního potvrzení order streamem; čeká na dohledání',
+        },
+      ],
+    };
+  }, []);
+
   // Deterministické copier notifikace v nativní appce: konec ARM/cooldownu/
   // day-locku se plánuje dopředu (iOS doručí i zavřené appce), incidenty se
   // hlásí hned, dokud appka běží. Mimo nativní build no-op.
@@ -347,12 +375,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
               onAccount={account => setSelectedAccountId(account.id)}
               apiTelemetry={live.apiTelemetry}
               commandAdapter={commandAdapter}
-              copierArmed={agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === false}
+              copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === false}
               copierShadow={agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
-              cooldownUntil={agentStatus?.controller.entryCooldownUntil ?? 0}
-              stuckOperations={agentStatus?.controller.stuckOperations ?? []}
+              cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
+              stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
               onGroupsChange={setCopyGroups}

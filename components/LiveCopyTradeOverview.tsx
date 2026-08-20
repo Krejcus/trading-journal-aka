@@ -891,9 +891,13 @@ const CooldownRing = ({ until, totalMs }: { until: number; totalMs: number }) =>
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
+  // Bez známé celkové délky (starší worker) se kruh odvíjí od prvního
+  // pozorovaného zbytku — pořád viditelně ubývá.
+  const [initialRemaining] = useState(() => Math.max(1, until - Date.now()));
   const remaining = Math.max(0, until - now);
   if (remaining <= 0) return null;
-  const fraction = totalMs > 0 ? Math.min(1, remaining / totalMs) : 1;
+  const effectiveTotal = totalMs > 0 ? totalMs : initialRemaining;
+  const fraction = Math.min(1, remaining / effectiveTotal);
   const radius = 15;
   const circumference = 2 * Math.PI * radius;
   const minutes = Math.floor(remaining / 60_000);
