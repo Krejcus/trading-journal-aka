@@ -716,10 +716,22 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
 // ─── Live P&L & API Usage ────────────────────────────────────────────────────
 
+// „44 chyb" bez příčiny nic neříká — rozpad ukáže, jestli jde o síť
+// (klientovo prostředí), auth (session) nebo skutečné serverové chyby.
+const FAILURE_CAUSE_LABEL: Record<string, string> = {
+  network: 'síť', auth: 'auth', http4xx: '4xx', http5xx: '5xx',
+};
+const describeFailureCauses = (causes: Record<string, number>): string =>
+  Object.entries(causes)
+    .filter(([, count]) => count > 0)
+    .map(([cause, count]) => `${FAILURE_CAUSE_LABEL[cause] ?? cause} ${count}`)
+    .join(' · ') || '—';
+
+const EMPTY_USAGE_WINDOW = { requests: 0, failures: 0, rateLimited: 0, failureCauses: { network: 0, auth: 0, http4xx: 0, http5xx: 0 } };
 const EMPTY_API_TELEMETRY: TradovateApiTelemetrySnapshot = {
-  minute: { requests: 0, failures: 0, rateLimited: 0 },
-  hour: { requests: 0, failures: 0, rateLimited: 0 },
-  day: { requests: 0, failures: 0, rateLimited: 0 },
+  minute: { ...EMPTY_USAGE_WINDOW, failureCauses: { ...EMPTY_USAGE_WINDOW.failureCauses } },
+  hour: { ...EMPTY_USAGE_WINDOW, failureCauses: { ...EMPTY_USAGE_WINDOW.failureCauses } },
+  day: { ...EMPTY_USAGE_WINDOW, failureCauses: { ...EMPTY_USAGE_WINDOW.failureCauses } },
   inFlight: 0,
   lastStatus: null,
   lastUpdatedAt: null,
@@ -775,8 +787,8 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
                 <span className="text-xs font-bold tabular-nums text-[var(--text-primary)] w-24 text-right shrink-0">
                   {row.usage.requests} požadavků
                 </span>
-                <span className={`text-[10px] w-28 text-right shrink-0 hidden sm:block ${row.usage.failures > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                  {row.usage.rateLimited > 0 ? `${row.usage.rateLimited}× rate limit` : row.usage.failures > 0 ? `${row.usage.failures} chyb` : 'bez chyb'}
+                <span className={`text-[10px] w-40 text-right shrink-0 hidden sm:block ${row.usage.failures > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  {row.usage.rateLimited > 0 ? `${row.usage.rateLimited}× rate limit` : row.usage.failures > 0 ? `${row.usage.failures} chyb (${describeFailureCauses(row.usage.failureCauses)})` : 'bez chyb'}
                 </span>
               </div>
             ))}

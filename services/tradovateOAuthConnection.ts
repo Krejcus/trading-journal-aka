@@ -137,7 +137,12 @@ const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Pr
     }
     return body;
   } catch (reason) {
-    if (!completed) finishTradovateApiRequest(telemetry, 0);
+    if (!completed) {
+      // Rozliš, kde fetch umřel: chybějící session vs. síťová vrstva.
+      const message = reason instanceof Error ? reason.message : String(reason);
+      finishTradovateApiRequest(telemetry, 0, null, Date.now(),
+        message.includes('přihlas') ? 'auth' : 'network');
+    }
     throw reason;
   }
 };

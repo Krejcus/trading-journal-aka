@@ -1,7 +1,11 @@
+export type TradovateApiFailureCause = 'network' | 'auth' | 'http4xx' | 'http5xx';
+
 export interface TradovateApiUsageWindow {
   requests: number;
   failures: number;
   rateLimited: number;
+  /** Rozpad selhání podle příčiny — bez něj číslo „chyb" nic neříká. */
+  failureCauses: Record<TradovateApiFailureCause, number>;
 }
 
 export interface TradovateApiTelemetrySnapshot {
@@ -31,7 +35,8 @@ let lastStatus: number | null = null;
 let lastUpdatedAt: number | null = null;
 let rateLimitedUntil: number | null = null;
 
-const emptyWindow = (): TradovateApiUsageWindow => ({ requests: 0, failures: 0, rateLimited: 0 });
+const emptyCauses = (): Record<TradovateApiFailureCause, number> => ({ network: 0, auth: 0, http4xx: 0, http5xx: 0 });
+const emptyWindow = (): TradovateApiUsageWindow => ({ requests: 0, failures: 0, rateLimited: 0, failureCauses: emptyCauses() });
 const minuteStartOf = (at: number) => Math.floor(at / MINUTE_MS) * MINUTE_MS;
 
 const prune = (now: number) => {
@@ -47,6 +52,9 @@ const windowAt = (minutes: number, now: number): TradovateApiUsageWindow => {
     result.requests += bucket.requests;
     result.failures += bucket.failures;
     result.rateLimited += bucket.rateLimited;
+    for (const cause of Object.keys(result.failureCauses) as TradovateApiFailureCause[]) {
+      result.failureCauses[cause] += bucket.failureCauses[cause] ?? 0;
+    }
   }
   return result;
 };
@@ -91,9 +99,15 @@ export const finishTradovateApiRequest = (
   status: number,
   retryAfterMs: number | null = null,
   now = Date.now(),
+  /** Pro status 0 (fetch vyhodil výjimku): kde to umřelo. */
+  zeroCause: 'network' | 'auth' = 'network',
 ) => {
   const bucket = buckets.get(token.minuteStart) ?? { minuteStart: token.minuteStart, ...emptyWindow() };
-  if (status === 0 || status >= 400) bucket.failures += 1;
+  if (status === 0 || status >= 400) {
+    bucket.failures += 1;
+    const cause: TradovateApiFailureCause = status === 0 ? zeroCause : status >= 500 ? 'http5xx' : 'http4xx';
+    bucket.failureCauses[cause] += 1;
+  }
   if (status === 429) {
     bucket.rateLimited += 1;
     rateLimitedUntil = Math.max(rateLimitedUntil ?? 0, now + (retryAfterMs ?? 0));
