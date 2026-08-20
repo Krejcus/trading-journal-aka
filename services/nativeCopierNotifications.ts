@@ -60,6 +60,16 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
     armExpiresAt: status.armExpiresAt ?? 0,
     entryCooldownUntil: status.entryCooldownUntil ?? 0,
     dayLockUntil: status.dayLockUntil ?? 0,
+    dayLockReason: status.dayLockReason ?? null,
+    armExpiryClose: status.armExpiryClose
+      ? {
+        operationId: status.armExpiryClose.operationId,
+        flat: status.armExpiryClose.flat,
+        canceledOrders: status.armExpiryClose.canceledOrders,
+        submittedClosures: status.armExpiryClose.submittedClosures,
+        ...(status.armExpiryClose.error ? { error: status.armExpiryClose.error } : {}),
+      }
+      : null,
     copyEvents: (status.recentCopyEvents ?? []).map(event => ({
       id: event.id,
       ...copyEventNotification(event),

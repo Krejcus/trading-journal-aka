@@ -27,7 +27,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   neopravuje obchodem; kill switch = jednosměrná západka.
 - **Risk settings**: per-follower `maxContracts`; anti-revenge cooldown
   (flat leadera → DISARM + blokovaný re-ARM, `safety.entryCooldownMinutes`);
-  ARM expiruje nejpozději v 17:00 America/Chicago.
+  ARM expiruje nejpozději v 17:00 America/Chicago a otevřené kopie
+  risk-redukčně zavře (`safety.armExpiryFlatten`, default `followers`);
+  auto day-lock z denní ztráty leadera (`safety.dailyLossLimitUsd`,
+  `dailyMaxLosingTrades`) — zamyká až po flat, nikdy uprostřed obchodu.
 - **Další fáze**: přesun runtime na VPS/Fly — plán v `COPIER_VPS_PLAN.md`.
   Fencing lease (`copierWorkerLease.ts` + migrace) a `supabaseCopierStore`
   s fence jsou napsané a ČEKAJÍ na VPS worker entry — vědomě nezapojené,
@@ -68,6 +71,43 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-20 (Claude, bezpečnostní trojice: auto-flatten po ARM, auto day-lock, chaos testy)
+Uživatelův požadavek: „když jsem v obchodě a kopírka se vypne, mám všude
+otevřeno" — expirace ARM nechávala kopie viset bez dozoru (fail-open na risk).
+(1) **Auto-flatten po expiraci ARM** — VĚDOMÁ ZMĚNA POLITIKY „systém
+neobchoduje sám": expirace ARM teď smí spustit risk-redukující flatten
+(`safety.armExpiryFlatten`: default `followers` — leader je ruka uživatele
+a zůstává mu; volby `group`/`off`). Jde o JEDINOU automatickou broker akci:
+ruší working příkazy a market-close k nule, nikdy nezvětší |pozici| ani
+neotočí směr (planFlatten). Vyhodnocuje se event-driven na heartbeatu proti
+injektovaným hodinám (žádný setTimeout — deterministické testy). Shadow ARM
+nikdy nic neposílá; bez lokálně známé expozice se neposílá nic (výpadek
+spojení na hranici session nesmí vyrábět falešný FAIL-CLOSED). Selhání =
+fail-closed + `armExpiryClose.error` + notifikace „SELHAL, zkontroluj
+Tradovate". Výsledek hlásí watchdog (marker `state:arm-expiry-close`,
+per-operationId) i nativní appka.
+(2) **Auto day-lock z denní ztráty leadera** — `safety.dailyLossLimitUsd`
+a `dailyMaxLosingTrades` (0 = off). Worker počítá realizovaný denní P&L
+z leader fillů (avg-cost per symbol, `futuresContractSpecs.pointValueUsd`;
+neznámý symbol se do USD nepočítá a audit varuje — žádný tichý odhad).
+Počítadlo je v durable snapshotu (`state.safety.dailyStats`) — restart
+neodpustí ranní ztráty. Breach NIKDY nezasahuje uprostřed obchodu: nastaví
+pending a zamkne (`dayLockUntil` do 17:00 CT) až po flat celé skupiny,
+stejný vzor jako cooldown. Obchod rozjetý před startem počítadla se
+nepočítá (neznámá průměrná cena → konzervativní podpočet). Notifikace:
+watchdog marker `state:day-lock` per dayLockUntil; daylock-end lokální
+notifikace už existovala. UI: pole v editoru skupiny + denní P&L chip
+v session panelu + důvod locku v panelu.
+(3) **Chaos testy** (`tests/copierChaosScenarios.test.ts`) — end-to-end
+invarianty: pád workeru po přijetí objednávky → restart dohledá podle tagu,
+nikdy druhý send; duplicitní tag u brokera → abandoned + stuck, nikdy třetí
+pokus; WS výpadek → okamžitý DISARM, po reconnectu nic bez reconciliation.
+Gate: 1228 testů (+23), tsc čistý. NASAZENÍ: web jde s pushem; worker
+potřebuje reinstall (`npm run copier:mac -- install`) až bude flat/disarmed
+— NEDĚLAT za běhu obchodu. V repu zůstala cizí rozdělaná práce
+(@capacitor/push-notifications + migrace native_push_subscriptions.sql) —
+nezahazovat, není moje, čeká na majitele.
 
 ### 2026-08-19 (Claude, „kopírka se furt vypíná" + parita kopií)
 Dvě příčiny z reálného obchodování (leader 4-8 MNQ):

@@ -163,6 +163,7 @@ function loadTemplates(): CopyGroupTemplate[] {
         leaderAccountId: Number.isFinite(record.leaderAccountId) ? Number(record.leaderAccountId) : null,
         followers,
         safety: {
+          ...DEFAULT_COPY_GROUP_SAFETY,
           positionReconciler: typeof safety.positionReconciler === 'boolean' ? safety.positionReconciler : DEFAULT_COPY_GROUP_SAFETY.positionReconciler,
           disableReplicationOnBreach: true,
           autoCloseFollowerPositions: typeof safety.autoCloseFollowerPositions === 'boolean' ? safety.autoCloseFollowerPositions : DEFAULT_COPY_GROUP_SAFETY.autoCloseFollowerPositions,
@@ -244,6 +245,10 @@ interface Props {
   onEmergencyStop?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
   dayLockUntil?: number;
+  /** Důvod aktivního day-locku (ruční i auto) pro zobrazení v panelu. */
+  dayLockReason?: string | null;
+  /** Denní risk počítadlo leadera z runtime (auto day-lock). */
+  dailyStats?: { sessionEndAt: number; realizedPnlUsd: number; losingTrades: number; unpricedSymbols: string[] } | null;
   /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
   cooldownUntil?: number;
   /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
@@ -289,6 +294,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onEmergencyStop,
   onDayLock,
   dayLockUntil = 0,
+  dayLockReason = null,
+  dailyStats = null,
   cooldownUntil = 0,
   stuckOperations = [],
   executionGroupId = null,
@@ -507,6 +514,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         shadow={copierShadow && !copierKillSwitch}
         killSwitch={copierKillSwitch}
         dayLocked={dayLockUntil > Date.now()}
+        dayLockReason={dayLockReason}
+        dailyStats={dailyStats}
         cooldownUntil={cooldownUntil}
         cooldownTotalMs={(runtimeGroup?.safety?.entryCooldownMinutes ?? 0) * 60_000}
         onShadow={onShadowMode ? async () => {
@@ -920,12 +929,14 @@ const CooldownRing = ({ until, totalMs }: { until: number; totalMs: number }) =>
   );
 };
 
-const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, dayLocked, cooldownUntil = 0, cooldownTotalMs = 0, onShadow, onArm, onDisarm, onKill, onDayLock }: {
+const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, dayLocked, dayLockReason = null, dailyStats = null, cooldownUntil = 0, cooldownTotalMs = 0, onShadow, onArm, onDisarm, onKill, onDayLock }: {
   apiReady: boolean;
   armed: boolean;
   shadow: boolean;
   killSwitch: boolean;
   dayLocked: boolean;
+  dayLockReason?: string | null;
+  dailyStats?: { sessionEndAt: number; realizedPnlUsd: number; losingTrades: number; unpricedSymbols: string[] } | null;
   cooldownUntil?: number;
   cooldownTotalMs?: number;
   onShadow?: () => Promise<void> | void;
@@ -942,8 +953,16 @@ const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, dayLocked, co
       <span className={`rounded-md px-2.5 py-1 text-[10px] font-black tracking-wide ${color}`}>{status}</span>
       <div className="min-w-0">
         <b className="block text-xs text-[var(--text-primary)]">Session řízení copieru</b>
-        <span className="block truncate text-[10px] text-[var(--text-secondary)]">{apiReady ? 'Execution runtime připojen. Live ARM vyžaduje reconciliation a ruční potvrzení.' : 'Execution runtime není připojen. Shadow ani live příkazy nejsou aktivní.'}</span>
+        <span className="block truncate text-[10px] text-[var(--text-secondary)]">{dayLocked && dayLockReason ? dayLockReason : apiReady ? 'Execution runtime připojen. Live ARM vyžaduje reconciliation a ruční potvrzení.' : 'Execution runtime není připojen. Shadow ani live příkazy nejsou aktivní.'}</span>
       </div>
+      {dailyStats && (dailyStats.realizedPnlUsd !== 0 || dailyStats.losingTrades > 0) ? (
+        <span
+          title={`Denní realizovaný P&L leadera (auto day-lock počítadlo)${dailyStats.unpricedSymbols.length > 0 ? ` · bez USD ohodnocení: ${dailyStats.unpricedSymbols.join(', ')}` : ''}`}
+          className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-black ${dailyStats.realizedPnlUsd < 0 ? 'bg-rose-500/10 text-rose-500' : 'bg-emerald-500/10 text-emerald-600'}`}
+        >
+          Dnes {dailyStats.realizedPnlUsd >= 0 ? '+' : '−'}{Math.abs(Math.round(dailyStats.realizedPnlUsd))} $ · {dailyStats.losingTrades}L
+        </span>
+      ) : null}
     </div>
     <div className="flex flex-wrap items-center gap-2">
       {cooldownActive ? <CooldownRing until={cooldownUntil} totalMs={cooldownTotalMs} /> : null}
@@ -1483,6 +1502,59 @@ const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, on
                     className="h-9 w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
                   />
                   <span className="text-[11px] font-bold text-[var(--text-secondary)]">min</span>
+                </span>
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
+                <span>
+                  <b className="block text-xs text-[var(--text-primary)]">Po vypršení ARM</b>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Když ostrý ARM vyprší (konec session) s otevřenou pozicí, copier risk-redukčně zavře kopie. Nikdy nezvětší pozici ani neotočí směr.</span>
+                </span>
+                <select
+                  aria-label="Akce po vypršení ARM"
+                  value={safety.armExpiryFlatten}
+                  onChange={event => updateSafety('armExpiryFlatten', event.target.value as CopyGroupSafetySettings['armExpiryFlatten'])}
+                  className="h-9 shrink-0 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]"
+                >
+                  <option value="followers">Zavřít followery</option>
+                  <option value="group">Zavřít celou skupinu</option>
+                  <option value="off">Nezavírat (jen DISARM)</option>
+                </select>
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
+                <span>
+                  <b className="block text-xs text-[var(--text-primary)]">Auto day-lock: denní ztráta</b>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Realizovaná denní ztráta leadera, při které se copier po zploštění skupiny sám zamkne do konce session. Nula znamená vypnuto.</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <input
+                    aria-label="Denní ztrátový limit v USD"
+                    type="number"
+                    min="0"
+                    step="50"
+                    value={safety.dailyLossLimitUsd}
+                    onChange={event => updateSafety('dailyLossLimitUsd', Math.min(1_000_000, Math.max(0, Number(event.target.value) || 0)))}
+                    className="h-9 w-24 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
+                  />
+                  <span className="text-[11px] font-bold text-[var(--text-secondary)]">USD</span>
+                </span>
+              </label>
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
+                <span>
+                  <b className="block text-xs text-[var(--text-primary)]">Auto day-lock: ztrátové obchody</b>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Počet ztrátových obchodů leadera za den, po kterém se copier po zploštění zamkne. Nula znamená vypnuto.</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <input
+                    aria-label="Max ztrátových obchodů za den"
+                    type="number"
+                    min="0"
+                    max="50"
+                    step="1"
+                    value={safety.dailyMaxLosingTrades}
+                    onChange={event => updateSafety('dailyMaxLosingTrades', Math.min(50, Math.max(0, Math.floor(Number(event.target.value) || 0))))}
+                    className="h-9 w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
+                  />
+                  <span className="text-[11px] font-bold text-[var(--text-secondary)]">obchodů</span>
                 </span>
               </label>
               <label className="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] px-4 py-3">

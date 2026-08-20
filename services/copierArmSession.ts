@@ -6,8 +6,9 @@
  * počtu hodin od armování, ale na hranici session.
  *
  * Záměrně jen počítá čas. Co se stane po expiraci, řeší risk gate
- * (`arm-expired` → DISARM) a watchdog (notifikace). Pozice se NEZAVÍRAJÍ —
- * systém neobchoduje sám ani při úklidu.
+ * (`arm-expired` → DISARM), runtime controller (risk-redukující auto-flatten
+ * podle `safety.armExpiryFlatten` — jediná automatická broker akce copieru)
+ * a watchdog (notifikace).
  */
 
 export const TRADOVATE_SESSION_TIMEZONE = 'America/Chicago';

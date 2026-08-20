@@ -18,6 +18,8 @@ const snapshot = (partial: Partial<CopierNotificationSnapshot> = {}): CopierNoti
   armExpiresAt: 0,
   entryCooldownUntil: 0,
   dayLockUntil: 0,
+  dayLockReason: null,
+  armExpiryClose: null,
   copyEvents: [],
   ...partial,
 });
@@ -113,5 +115,57 @@ describe('okamžité incidenty', () => {
     expect(down.fireNow).toEqual([expect.objectContaining({ title: 'Copier: Tradovate odpojen' })]);
     const up = plan(snapshot({ connected: false }), snapshot());
     expect(up.fireNow).toEqual([]);
+  });
+});
+
+describe('day-lock a auto-flatten hrany', () => {
+  it('nové dayLockUntil vypálí okamžitou zprávu s důvodem a naplánuje konec', () => {
+    const next = snapshot({
+      dayLockUntil: NOW + 2 * HOUR,
+      dayLockReason: 'auto day-lock: 2. ztrátový obchod dne (limit 2)',
+    });
+    const result = plan(snapshot(), next);
+    expect(result.fireNow).toEqual([expect.objectContaining({
+      title: 'Copier: DAY-LOCK',
+      body: expect.stringContaining('2. ztrátový obchod'),
+    })]);
+    expect(result.schedule).toEqual([expect.objectContaining({ key: 'daylock-end' })]);
+
+    // Stejný zámek podruhé už nic nepálí.
+    const repeat = plan(next, next, [{ key: 'daylock-end', at: NOW + 2 * HOUR, id: 7 }]);
+    expect(repeat.fireNow).toHaveLength(0);
+    expect(repeat.schedule).toHaveLength(0);
+  });
+
+  it('výsledek auto-flatten se hlásí právě jednou per operationId, selhání křičí', () => {
+    const success = snapshot({
+      armExpiryClose: { operationId: 'arm-expiry:1', flat: true, canceledOrders: 1, submittedClosures: 2 },
+    });
+    const first = plan(snapshot(), success);
+    expect(first.fireNow).toEqual([expect.objectContaining({
+      title: expect.stringContaining('kopie zavřeny'),
+    })]);
+    expect(plan(success, success).fireNow).toHaveLength(0);
+
+    const failure = snapshot({
+      armExpiryClose: {
+        operationId: 'arm-expiry:2', flat: false, canceledOrders: 0, submittedClosures: 0,
+        error: 'Flatten close MNQU6 nebyl bezpečně potvrzen',
+      },
+    });
+    const failed = plan(success, failure);
+    expect(failed.fireNow).toEqual([expect.objectContaining({
+      title: expect.stringContaining('SELHAL'),
+      body: expect.stringContaining('Zkontroluj pozice'),
+    })]);
+  });
+
+  it('první sync bez prev nehlásí historický day-lock ani auto-flatten', () => {
+    const next = snapshot({
+      dayLockUntil: NOW + HOUR,
+      dayLockReason: 'auto day-lock: cokoliv',
+      armExpiryClose: { operationId: 'arm-expiry:9', flat: true, canceledOrders: 0, submittedClosures: 1 },
+    });
+    expect(plan(null, next).fireNow).toHaveLength(0);
   });
 });

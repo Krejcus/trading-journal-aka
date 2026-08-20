@@ -21,6 +21,15 @@ export interface CopierNotificationSnapshot {
   armExpiresAt: number;
   entryCooldownUntil: number;
   dayLockUntil: number;
+  dayLockReason: string | null;
+  /** Výsledek posledního auto-flatten po expiraci ARM. */
+  armExpiryClose: {
+    operationId: string;
+    flat: boolean;
+    canceledOrders: number;
+    submittedClosures: number;
+    error?: string;
+  } | null;
   /** Vstupy/exity leadera z runtime deníku (id, popisek). */
   copyEvents: Array<{ id: string; title: string; body: string }>;
 }
@@ -151,6 +160,29 @@ export function planCopierNotifications(options: {
         title: 'Copier: Tradovate odpojen',
         body: 'Spojení k brokerovi spadlo. Kopírování stojí; SL/TP u brokera zůstávají.',
       });
+    }
+    // Auto day-lock: hlásí se nová hodnota dayLockUntil, která je v budoucnu.
+    if (next.dayLockUntil > now && previous.dayLockUntil !== next.dayLockUntil) {
+      fireNow.push({
+        title: 'Copier: DAY-LOCK',
+        body: next.dayLockReason
+          ? `${next.dayLockReason}. ARM je blokovaný do konce broker session.`
+          : 'Denní zámek je aktivní. ARM je blokovaný do konce broker session.',
+      });
+    }
+    // Výsledek auto-flatten po expiraci ARM — právě jednou per operationId.
+    if (next.armExpiryClose
+      && next.armExpiryClose.operationId !== previous.armExpiryClose?.operationId) {
+      const close = next.armExpiryClose;
+      fireNow.push(close.flat && !close.error
+        ? {
+          title: 'Copier: ARM vypršel — kopie zavřeny',
+          body: `Auto-flatten hotový: zrušeno ${close.canceledOrders} příkazů, zavřeno ${close.submittedClosures} pozic. Vše flat.`,
+        }
+        : {
+          title: 'Copier: ARM vypršel, auto-flatten SELHAL',
+          body: `${close.error ?? 'Účty nejsou potvrzené flat.'} Zkontroluj pozice v Tradovate!`,
+        });
     }
     // Trade potvrzení: jen eventy, které v předchozím snapshotu nebyly.
     // První sync (bez prev) historii nepřehrává — stejné pravidlo jako výše.

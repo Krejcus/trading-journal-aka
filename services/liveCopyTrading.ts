@@ -13,6 +13,14 @@ export interface CopyFollowerConfig {
   maxContracts?: number;
 }
 
+/**
+ * Co udělat s pozicemi, když ostrý ARM vyprší (konec broker session).
+ * `followers` zavře jen kopie — leader je ruka uživatele a zůstává jeho;
+ * `group` zavře i leadera. Zavření je čistě risk-redukující: ruší working
+ * příkazy a market-close k nule, nikdy nezvětší |pozici| ani neotočí směr.
+ */
+export type ArmExpiryFlattenScope = 'off' | 'followers' | 'group';
+
 export interface CopyGroupSafetySettings {
   positionReconciler: boolean;
   disableReplicationOnBreach: boolean;
@@ -25,6 +33,19 @@ export interface CopyGroupSafetySettings {
    * takže nevzniká záměrná divergence.
    */
   entryCooldownMinutes: number;
+  /**
+   * Expirace ARM nesmí nechat kopie viset bez dozoru. Default `followers`:
+   * po vypršení ARM se follower účty flatten-ou (leader zůstává uživateli).
+   */
+  armExpiryFlatten: ArmExpiryFlattenScope;
+  /**
+   * Auto day-lock: realizovaná denní ztráta leadera v USD, při které se
+   * copier po zploštění skupiny sám zamkne do konce broker session.
+   * 0 = vypnuto. Nikdy nezasahuje uprostřed obchodu — lock čeká na flat.
+   */
+  dailyLossLimitUsd: number;
+  /** Auto day-lock po N ztrátových obchodech leadera za den. 0 = vypnuto. */
+  dailyMaxLosingTrades: number;
 }
 
 export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
@@ -35,6 +56,11 @@ export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
   autoCloseFollowerPositions: true,
   preventHedging: true,
   entryCooldownMinutes: 0,
+  // Expirovaný ARM s otevřenými kopiemi je fail-open na risk. Výchozí je
+  // proto zavřít followery; leader zůstává v rukách uživatele.
+  armExpiryFlatten: 'followers',
+  dailyLossLimitUsd: 0,
+  dailyMaxLosingTrades: 0,
 };
 
 export interface CopyGroupConfig {
@@ -244,6 +270,22 @@ function sanitizeSafety(value: unknown): CopyGroupSafetySettings {
         && raw.entryCooldownMinutes >= 0
         ? Math.min(720, Math.floor(raw.entryCooldownMinutes))
         : DEFAULT_COPY_GROUP_SAFETY.entryCooldownMinutes,
+    armExpiryFlatten:
+      raw.armExpiryFlatten === 'off' || raw.armExpiryFlatten === 'followers' || raw.armExpiryFlatten === 'group'
+        ? raw.armExpiryFlatten
+        : DEFAULT_COPY_GROUP_SAFETY.armExpiryFlatten,
+    dailyLossLimitUsd:
+      typeof raw.dailyLossLimitUsd === 'number'
+        && Number.isFinite(raw.dailyLossLimitUsd)
+        && raw.dailyLossLimitUsd >= 0
+        ? Math.min(1_000_000, Math.round(raw.dailyLossLimitUsd * 100) / 100)
+        : DEFAULT_COPY_GROUP_SAFETY.dailyLossLimitUsd,
+    dailyMaxLosingTrades:
+      typeof raw.dailyMaxLosingTrades === 'number'
+        && Number.isSafeInteger(raw.dailyMaxLosingTrades)
+        && raw.dailyMaxLosingTrades >= 0
+        ? Math.min(50, raw.dailyMaxLosingTrades)
+        : DEFAULT_COPY_GROUP_SAFETY.dailyMaxLosingTrades,
   };
 }
 

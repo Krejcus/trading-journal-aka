@@ -6,7 +6,7 @@ import { createOutboxEntry, markRejected, markUnknown } from '../services/copier
 import { createModifyEntry, markCancelUnknown } from '../services/copierCancelOutbox';
 import { createOsoOutboxEntry, markOsoRejected } from '../services/copierOsoOutbox';
 import { createMockBroker } from '../services/mockBroker';
-import type { CopyGroupConfig } from '../services/liveCopyTrading';
+import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 
 const group: CopyGroupConfig = {
   id: 'g1', name: 'Group', enabled: true, leaderAccountId: 100,
@@ -1079,8 +1079,7 @@ describe('bootstrapCopierRuntime', () => {
     const cooldownGroup: CopyGroupConfig = {
       ...group,
       safety: {
-        positionReconciler: true, disableReplicationOnBreach: true,
-        autoCloseFollowerPositions: true, preventHedging: true,
+        ...DEFAULT_COPY_GROUP_SAFETY,
         entryCooldownMinutes: 10,
       },
     };
@@ -1116,8 +1115,7 @@ describe('bootstrapCopierRuntime', () => {
     const cooldownGroup: CopyGroupConfig = {
       ...group,
       safety: {
-        positionReconciler: true, disableReplicationOnBreach: true,
-        autoCloseFollowerPositions: true, preventHedging: true,
+        ...DEFAULT_COPY_GROUP_SAFETY,
         entryCooldownMinutes: 10,
       },
     };
@@ -1142,8 +1140,7 @@ describe('bootstrapCopierRuntime', () => {
     const cooldownGroup: CopyGroupConfig = {
       ...group,
       safety: {
-        positionReconciler: true, disableReplicationOnBreach: true,
-        autoCloseFollowerPositions: true, preventHedging: true,
+        ...DEFAULT_COPY_GROUP_SAFETY,
         entryCooldownMinutes: 10,
       },
     };
@@ -1239,6 +1236,298 @@ describe('flatten vs stuck outbox', () => {
 
     await expect(controller.flattenAccount(200, 'manual-flat-unknown-002'))
       .rejects.toThrow('nejistým osudem');
+    controller.stop();
+  });
+});
+
+describe('expirace ARM s auto-flatten', () => {
+  /** Hodiny s ručním posunem — expirace se řídí injektovaným časem. */
+  const jumpClock = () => {
+    let value = 100;
+    const clock = () => ++value;
+    return { clock, jump: (ms: number) => { value += ms; } };
+  };
+
+  const expiryGroup = (scope: 'off' | 'followers' | 'group'): CopyGroupConfig => ({
+    ...group,
+    safety: { ...DEFAULT_COPY_GROUP_SAFETY, armExpiryFlatten: scope },
+  });
+
+  it('po vypršení ARM risk-redukčně zavře followery; leadera se nedotkne', async () => {
+    const { clock, jump } = jumpClock();
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: expiryGroup('followers'),
+      clock, osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm({ ttlMs: 60_000 });
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ orderType: 'Market' }) });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(1);
+    expect(controller.status().armed).toBe(true);
+
+    jump(120_000);
+    broker.emitEvent({ type: 'heartbeat', at: clock() });
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.armed).toBe(false);
+    expect(status.armExpiryClose).toMatchObject({
+      scope: 'followers', flat: true, submittedClosures: 1, accountIds: [200],
+    });
+    // Zavírací příkaz: přesně opačná strana a přesně |pozice| — nikdy víc.
+    expect(broker.placedRequests()).toHaveLength(2);
+    expect(broker.placedRequests()[1]).toMatchObject({
+      accountId: 200, side: 'Sell', quantity: 2, orderType: 'Market',
+    });
+    expect(broker.placedRequests().every(request => request.accountId !== 100)).toBe(true);
+    controller.stop();
+  });
+
+  it('bez otevřené expozice expirace jen odzbrojí — žádný broker příkaz, žádný poplach', async () => {
+    const { clock, jump } = jumpClock();
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: expiryGroup('followers'), clock,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm({ ttlMs: 60_000 });
+
+    jump(120_000);
+    broker.emitEvent({ type: 'heartbeat', at: clock() });
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.armed).toBe(false);
+    expect(status.armExpiryClose).toBeNull();
+    expect(status.lastError).toBeNull();
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('scope off a shadow režim nikdy nic nezavírají', async () => {
+    const { clock, jump } = jumpClock();
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: expiryGroup('off'),
+      clock, osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm({ ttlMs: 60_000 });
+    broker.emitEvent({ type: 'order', order: leaderOrder({ orderType: 'Market' }) });
+    await controller.waitForIdle();
+
+    jump(120_000);
+    broker.emitEvent({ type: 'heartbeat', at: clock() });
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(false);
+    expect(controller.status().armExpiryClose).toBeNull();
+    expect(broker.placedRequests()).toHaveLength(1);
+    controller.stop();
+
+    // Shadow ARM: expirace nesmí být první reálný broker příkaz — ani když
+    // scope `group` vidí otevřenou leader pozici.
+    const shadowClock = jumpClock();
+    const shadowBroker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const shadowController = await bootstrapCopierRuntime({
+      broker: shadowBroker, store: createMemoryCopierStore(), group: expiryGroup('group'),
+      clock: shadowClock.clock,
+    });
+    shadowBroker.setConnected(true);
+    await shadowController.waitForIdle();
+    await shadowController.reconcile();
+    shadowController.arm({ shadowMode: true, ttlMs: 60_000 });
+    shadowBroker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    shadowClock.jump(120_000);
+    shadowBroker.emitEvent({ type: 'heartbeat', at: shadowClock.clock() });
+    await shadowController.waitForIdle();
+    expect(shadowController.status().armed).toBe(false);
+    expect(shadowController.status().armExpiryClose).toBeNull();
+    expect(shadowBroker.placedRequests()).toHaveLength(0);
+    shadowController.stop();
+  });
+
+  it('selhání auto-flatten failne zavřeně a nechá viditelnou chybu', async () => {
+    const { clock, jump } = jumpClock();
+    // Vstupní kopie projde, zavírací Sell se u brokera založí, ale zůstane
+    // working bez fillu — účty nejsou potvrzené flat.
+    const broker = createMockBroker({
+      behavior: request => request.side === 'Sell'
+        ? { kind: 'working' }
+        : { kind: 'fill', price: 20_000 },
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: expiryGroup('followers'),
+      clock, osoCorrelationWindowMs: 5,
+      flattenConfirmationAttempts: 2, flattenConfirmationPollMs: 0,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm({ ttlMs: 60_000 });
+    broker.emitEvent({ type: 'order', order: leaderOrder({ orderType: 'Market' }) });
+    await controller.waitForIdle();
+
+    jump(120_000);
+    broker.emitEvent({ type: 'heartbeat', at: clock() });
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.armed).toBe(false);
+    expect(status.armExpiryClose).toMatchObject({ flat: false });
+    expect(status.armExpiryClose?.error).toBeTruthy();
+    expect(status.lastError).toContain('auto-flatten selhal');
+    controller.stop();
+  });
+});
+
+describe('auto day-lock z denní ztráty leadera', () => {
+  const lossGroup = (safety: Partial<CopyGroupConfig['safety'] & object>): CopyGroupConfig => ({
+    ...group,
+    safety: { ...DEFAULT_COPY_GROUP_SAFETY, ...safety },
+  });
+
+  const leaderFill = (side: 'Buy' | 'Sell', quantity: number, price: number, at: number) => ({
+    type: 'fill' as const,
+    fill: {
+      fillId: `lf-${at}`, tag: '', brokerOrderId: `lo-${at}`, accountId: 100,
+      symbol: 'MNQU6', side, quantity, price, filledAt: at,
+    },
+  });
+
+  it('ztrátový obchod přes USD limit zamkne den až po zploštění skupiny', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group: lossGroup({ dailyLossLimitUsd: 100 }), clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    // Long 2 MNQ @ 20 000 -> exit @ 19 970 = -60 bodů × 2 $ = -120 USD.
+    broker.emitEvent(leaderFill('Buy', 2, 20_000, 200));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    await controller.waitForIdle();
+    expect(controller.status().dayLockUntil).toBe(0);
+
+    broker.emitEvent(leaderFill('Sell', 2, 19_970, 210));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.dailyStats).toMatchObject({ realizedPnlUsd: -120, losingTrades: 1 });
+    expect(status.dayLockUntil).toBeGreaterThan(0);
+    expect(status.dayLockReason).toContain('denní ztráta');
+    await controller.reconcile();
+    expect(() => controller.arm()).toThrow('denním lockem');
+    controller.stop();
+
+    // Restart nesmí lock ani napočítanou ztrátu zapomenout.
+    broker.setConnected(false);
+    const restarted = await bootstrapCopierRuntime({
+      broker, store, group: lossGroup({ dailyLossLimitUsd: 100 }), clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await restarted.waitForIdle();
+    await restarted.reconcile();
+    expect(restarted.status().dailyStats).toMatchObject({ realizedPnlUsd: -120 });
+    expect(() => restarted.arm()).toThrow('denním lockem');
+    restarted.stop();
+  });
+
+  it('limit ztrátových obchodů: první ztráta nezamyká, N-tá ano', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(),
+      group: lossGroup({ dailyMaxLosingTrades: 2 }), clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    broker.emitEvent(leaderFill('Buy', 1, 20_000, 300));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent(leaderFill('Sell', 1, 19_995, 310));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    expect(controller.status().dailyStats).toMatchObject({ losingTrades: 1 });
+    expect(controller.status().dayLockUntil).toBe(0);
+
+    broker.emitEvent(leaderFill('Buy', 1, 20_000, 320));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent(leaderFill('Sell', 1, 19_990, 330));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+
+    expect(controller.status().dailyStats).toMatchObject({ losingTrades: 2 });
+    expect(controller.status().dayLockUntil).toBeGreaterThan(0);
+    expect(controller.status().dayLockReason).toContain('ztrátový obchod');
+    controller.stop();
+  });
+
+  it('ziskový den nezamyká a obchod rozjetý před startem počítadla se nepočítá', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(),
+      group: lossGroup({ dailyLossLimitUsd: 100, dailyMaxLosingTrades: 1 }), clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    // Pozice existovala dřív, než počítadlo vidělo vstupní fill — exit
+    // bez známé průměrné ceny se nesmí počítat (ani jako ztráta).
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 3 } });
+    broker.emitEvent(leaderFill('Sell', 3, 19_000, 400));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    expect(controller.status().dayLockUntil).toBe(0);
+    expect(controller.status().dailyStats?.losingTrades ?? 0).toBe(0);
+
+    // Ziskový obchod po flatu se počítá normálně a nic nezamyká.
+    broker.emitEvent(leaderFill('Buy', 1, 20_000, 410));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent(leaderFill('Sell', 1, 20_050, 420));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    expect(controller.status().dailyStats).toMatchObject({ realizedPnlUsd: 100, losingTrades: 0 });
+    expect(controller.status().dayLockUntil).toBe(0);
+    controller.stop();
+  });
+
+  it('nová session začíná s čistým počítadlem', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore({
+      ...emptySnapshot(),
+      safety: {
+        entryCooldownUntil: 0,
+        dayLockUntil: 0,
+        dailyStats: {
+          sessionEndAt: 50, realizedPnlUsd: -500, losingTrades: 3,
+          openLots: [], unpricedSymbols: [],
+        },
+      },
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group: lossGroup({ dailyLossLimitUsd: 600 }), clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    // Včerejší -500 USD se po hranici session (50) nesmí sčítat s dneškem.
+    broker.emitEvent(leaderFill('Buy', 1, 20_000, 500));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent(leaderFill('Sell', 1, 19_990, 510));
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    expect(controller.status().dailyStats).toMatchObject({ realizedPnlUsd: -20, losingTrades: 1 });
+    expect(controller.status().dayLockUntil).toBe(0);
     controller.stop();
   });
 });

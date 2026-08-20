@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFileCopyGroupStore } from '../services/fileCopyGroupStore';
-import type { CopyGroupConfig } from '../services/liveCopyTrading';
+import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 
 const group = (): CopyGroupConfig => ({
   id: 'persistent-group',
@@ -12,10 +12,7 @@ const group = (): CopyGroupConfig => ({
   leaderAccountId: 11,
   followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1.5, maxContracts: 3 }],
   safety: {
-    positionReconciler: true,
-    disableReplicationOnBreach: true,
-    autoCloseFollowerPositions: true,
-    preventHedging: true,
+    ...DEFAULT_COPY_GROUP_SAFETY,
     entryCooldownMinutes: 10,
   },
   localOnly: true,

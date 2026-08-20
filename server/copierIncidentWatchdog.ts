@@ -68,6 +68,12 @@ const BOOT_GRACE_MS = 120_000;
 /** Interní marker pro detekci hrany armed -> disarmed; nikdy nenotifikuje. */
 const ARMED_MARKER_KEY = 'state:armed';
 
+/** Marker: `detail` nese poslední ohlášené `dayLockUntil` (auto i ruční lock). */
+const DAY_LOCK_MARKER_KEY = 'state:day-lock';
+
+/** Marker: `detail` nese `operationId` posledního ohlášeného auto-flatten. */
+const ARM_EXPIRY_CLOSE_MARKER_KEY = 'state:arm-expiry-close';
+
 /** Interní marker: `detail` nese `at` posledního odeslaného copy eventu. */
 export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
 
@@ -166,6 +172,8 @@ interface IncidentSpec {
 const asBool = (value: unknown): boolean => value === true;
 const asText = (value: unknown): string | null =>
   typeof value === 'string' && value.trim() ? value.trim() : null;
+const asNumber = (value: unknown): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : 0;
 
 const INCIDENTS: IncidentSpec[] = [
   {
@@ -283,6 +291,48 @@ export function evaluateCopierIncidents(options: {
       } else if (!present && state?.active) {
         resolve(spec.key, spec.resolvedTitle, spec.resolvedBody);
       }
+    }
+
+    // --- Day-lock (auto i ruční): jednorázová zpráva per dayLockUntil ----
+    const dayLockUntil = asNumber(status.dayLockUntil);
+    const dayLockMarker = activeState(userId, deviceId, DAY_LOCK_MARKER_KEY);
+    if (dayLockUntil > options.now && dayLockMarker?.detail !== String(dayLockUntil)) {
+      const reason = asText(status.dayLockReason);
+      notifications.push({
+        userId, deviceId, incidentKey: 'day-lock', kind: 'opened',
+        title: 'Copier: DAY-LOCK',
+        body: reason
+          ? `${reason}. ARM je blokovaný do konce broker session.`
+          : 'Denní zámek je aktivní. ARM je blokovaný do konce broker session.',
+      });
+      upserts.push({
+        userId, deviceId, incidentKey: DAY_LOCK_MARKER_KEY,
+        active: false, detail: String(dayLockUntil), notified: true,
+      });
+    }
+
+    // --- Auto-flatten po expiraci ARM: právě jednou per operationId ------
+    const close = status.armExpiryClose as {
+      operationId?: unknown; flat?: unknown; canceledOrders?: unknown;
+      submittedClosures?: unknown; error?: unknown;
+    } | null | undefined;
+    const closeOperationId = asText(close?.operationId);
+    const closeMarker = activeState(userId, deviceId, ARM_EXPIRY_CLOSE_MARKER_KEY);
+    if (closeOperationId && closeMarker?.detail !== closeOperationId) {
+      const failed = close?.flat !== true || asText(close?.error) != null;
+      notifications.push({
+        userId, deviceId, incidentKey: 'arm-expiry-close', kind: 'opened',
+        title: failed
+          ? 'Copier: ARM vypršel, auto-flatten SELHAL'
+          : 'Copier: ARM vypršel — kopie zavřeny',
+        body: failed
+          ? `${asText(close?.error) ?? 'Účty nejsou potvrzené flat.'} Zkontroluj pozice v Tradovate!`
+          : `Auto-flatten hotový: zrušeno ${asNumber(close?.canceledOrders)} příkazů, zavřeno ${asNumber(close?.submittedClosures)} pozic. Vše flat.`,
+      });
+      upserts.push({
+        userId, deviceId, incidentKey: ARM_EXPIRY_CLOSE_MARKER_KEY,
+        active: false, detail: closeOperationId, notified: true,
+      });
     }
 
     // --- Hrana armed -> disarmed (jednorázová zpráva, žádné recovery) ----

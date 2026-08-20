@@ -126,7 +126,23 @@ function cloneSnapshot(snapshot: CopierSnapshot): CopierSnapshot {
     links: snapshot.links.map(([orderId, links]) => [orderId, links.map(link => ({ ...link }))]),
     leaderCumQty: snapshot.leaderCumQty.map(item => [...item]),
     followerFillTargets: snapshot.followerFillTargets.map(item => [...item]),
-    safety: { ...(snapshot.safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 }) },
+    safety: cloneSafety(snapshot.safety),
+  };
+}
+
+function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapshot['safety']> {
+  const base = safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 };
+  return {
+    ...base,
+    ...(base.dailyStats
+      ? {
+        dailyStats: {
+          ...base.dailyStats,
+          openLots: base.dailyStats.openLots.map(lot => ({ ...lot })),
+          unpricedSymbols: [...base.dailyStats.unpricedSymbols],
+        },
+      }
+      : {}),
   };
 }
 
@@ -156,6 +172,6 @@ export function toSnapshot(
     links: [...state.links].map(([orderId, links]) => [orderId, [...links]]),
     leaderCumQty: [...state.leaderCumQty],
     followerFillTargets: [...state.followerFillTargets],
-    safety: { ...state.safety },
+    safety: cloneSafety(state.safety),
   };
 }

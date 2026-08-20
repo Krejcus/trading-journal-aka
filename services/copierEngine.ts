@@ -109,7 +109,35 @@ export interface CopierState {
     entryCooldownUntil: number;
     dayLockUntil: number;
     dayLockReason?: string;
+    /**
+     * Denní risk počítadlo leadera pro auto day-lock. Je součástí stejného
+     * CAS snapshotu jako outbox — restart workeru nesmí zapomenout ranní
+     * ztráty a obejít tak denní limit.
+     */
+    dailyStats?: CopierDailyStats;
   };
+}
+
+export interface CopierDailyLot {
+  symbol: string;
+  /** Kladné = long. Průměrovací (avg-cost) lot otevřeného obchodu leadera. */
+  netQuantity: number;
+  avgPrice: number;
+  /** Realizovaný P&L rozpracovaného obchodu (od posledního flat) v USD. */
+  tradePnlUsd: number;
+  /** Totéž v bodech — znaménko pro počítání ztrátových obchodů bez point value. */
+  tradePnlPoints: number;
+}
+
+export interface CopierDailyStats {
+  /** Konec broker session (17:00 CT), do které statistiky patří. */
+  sessionEndAt: number;
+  /** Realizovaný denní P&L leadera v USD (jen symboly se známou point value). */
+  realizedPnlUsd: number;
+  losingTrades: number;
+  openLots: CopierDailyLot[];
+  /** Symboly bez známé point value — USD limit je nepočítá (audit varuje). */
+  unpricedSymbols: string[];
 }
 
 export function createCopierState(
@@ -126,7 +154,18 @@ export function createCopierState(
     links: new Map(links),
     leaderCumQty: new Map(leaderCumQty),
     followerFillTargets: new Map(followerFillTargets),
-    safety: { ...safety },
+    safety: {
+      ...safety,
+      ...(safety.dailyStats
+        ? {
+          dailyStats: {
+            ...safety.dailyStats,
+            openLots: safety.dailyStats.openLots.map(lot => ({ ...lot })),
+            unpricedSymbols: [...safety.dailyStats.unpricedSymbols],
+          },
+        }
+        : {}),
+    },
   };
 }
 

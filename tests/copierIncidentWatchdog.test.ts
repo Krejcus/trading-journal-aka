@@ -193,3 +193,73 @@ describe('trade notifikace (planCopyEventNotifications)', () => {
     expect(result.notifications).toEqual([]);
   });
 });
+
+describe('day-lock notifikace', () => {
+  const until = NOW + 3_600_000;
+  const locked = runtime({
+    status: {
+      armed: false, shadowMode: false, connected: true, killSwitch: false,
+      stuckOutbox: false, lastError: null,
+      dayLockUntil: until, dayLockReason: 'auto day-lock: denní ztráta 120 USD dosáhla limitu 100 USD',
+    },
+  });
+
+  it('aktivní day-lock ohlásí právě jednou a nese důvod', () => {
+    const first = evaluate([locked]);
+    const dayLock = first.notifications.filter(item => item.incidentKey === 'day-lock');
+    expect(dayLock).toHaveLength(1);
+    expect(dayLock[0].body).toContain('denní ztráta 120 USD');
+    const marker = first.upserts.find(item => item.incidentKey === 'state:day-lock');
+    expect(marker).toMatchObject({ detail: String(until), notified: true });
+
+    const second = evaluate([locked], [{ ...state('state:day-lock', false), detail: String(until) }]);
+    expect(second.notifications.filter(item => item.incidentKey === 'day-lock')).toHaveLength(0);
+  });
+
+  it('nový zámek (jiné dayLockUntil) notifikuje znovu; prošlý zámek mlčí', () => {
+    const relocked = evaluate([locked], [{ ...state('state:day-lock', false), detail: String(until - 1) }]);
+    expect(relocked.notifications.filter(item => item.incidentKey === 'day-lock')).toHaveLength(1);
+
+    const expired = runtime({
+      status: { ...locked.status, dayLockUntil: NOW - 1_000 },
+    });
+    const silent = evaluate([expired]);
+    expect(silent.notifications.filter(item => item.incidentKey === 'day-lock')).toHaveLength(0);
+  });
+});
+
+describe('auto-flatten po expiraci ARM', () => {
+  const closeStatus = (close: Record<string, unknown>) => runtime({
+    status: {
+      armed: false, shadowMode: false, connected: true, killSwitch: false,
+      stuckOutbox: false, lastError: null, armExpiryClose: close,
+    },
+  });
+
+  it('úspěšné zavření ohlásí souhrn právě jednou per operationId', () => {
+    const status = closeStatus({
+      operationId: 'arm-expiry:500', flat: true, canceledOrders: 1, submittedClosures: 2,
+    });
+    const first = evaluate([status]);
+    const close = first.notifications.filter(item => item.incidentKey === 'arm-expiry-close');
+    expect(close).toHaveLength(1);
+    expect(close[0].title).toContain('kopie zavřeny');
+    expect(close[0].body).toContain('zavřeno 2 pozic');
+    expect(first.upserts.find(item => item.incidentKey === 'state:arm-expiry-close'))
+      .toMatchObject({ detail: 'arm-expiry:500' });
+
+    const second = evaluate([status], [{ ...state('state:arm-expiry-close', false), detail: 'arm-expiry:500' }]);
+    expect(second.notifications.filter(item => item.incidentKey === 'arm-expiry-close')).toHaveLength(0);
+  });
+
+  it('selhané zavření křičí SELHAL s chybou', () => {
+    const result = evaluate([closeStatus({
+      operationId: 'arm-expiry:600', flat: false, canceledOrders: 0, submittedClosures: 0,
+      error: 'Flatten nelze spustit bez broker spojení',
+    })]);
+    const close = result.notifications.filter(item => item.incidentKey === 'arm-expiry-close');
+    expect(close).toHaveLength(1);
+    expect(close[0].title).toContain('SELHAL');
+    expect(close[0].body).toContain('bez broker spojení');
+  });
+});

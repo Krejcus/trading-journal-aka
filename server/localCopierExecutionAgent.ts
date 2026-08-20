@@ -194,7 +194,8 @@ export async function startLocalCopierExecutionAgent(
           throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
         }
         // Ostrý ARM končí nejpozději s broker session (17:00 CT). Zapomenutý
-        // ARM tak nepřežije do dalšího dne; pozice expirace nezavírá.
+        // ARM tak nepřežije do dalšího dne; otevřené kopie expirace
+        // risk-redukčně zavře podle `safety.armExpiryFlatten`.
         options.controller.arm({ shadowMode: false, ttlMs: msUntilTradovateSessionEnd(Date.now()) });
         return;
       }
