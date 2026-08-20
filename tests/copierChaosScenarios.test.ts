@@ -162,3 +162,93 @@ describe('chaos: výpadek WebSocket spojení', () => {
     controller.stop();
   });
 });
+
+describe('fail-closed za živého ARM: auto-zavření kopií', () => {
+  const followersGroup: CopyGroupConfig = {
+    ...group,
+    safety: { ...DEFAULT_COPY_GROUP_SAFETY, armExpiryFlatten: 'followers' },
+  };
+
+  it('kritická chyba uprostřed obchodu zavře followery; leadera se nedotkne', async () => {
+    // Vstup (Market) projde a otevře follower pozici; druhá kopie (Limit)
+    // dostane reject -> fail-closed. Zavírací Market flatten musí projít.
+    const broker = createMockBroker({
+      behavior: request => request.orderType === 'Limit'
+        ? { kind: 'reject', reason: 'Simulovaný broker reject' }
+        : { kind: 'fill', price: 20_000 },
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: followersGroup,
+      clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder() });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(1);
+
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ brokerOrderId: 'leader-2', orderType: 'Limit', limitPrice: 19_900, sourceVersion: '2:Working' }),
+    });
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.armed).toBe(false);
+    expect(status.lastError).toBeTruthy();
+    expect(status.autoClose).toMatchObject({
+      trigger: 'fail-closed', scope: 'followers', flat: true, submittedClosures: 1,
+    });
+    // Poslední odeslaný příkaz je risk-redukující close: opačná strana,
+    // přesně |pozice|, jen follower účet.
+    const close = broker.placedRequests().at(-1);
+    expect(close).toMatchObject({ accountId: 200, side: 'Sell', quantity: 2, orderType: 'Market' });
+    expect(broker.placedRequests().every(request => request.accountId !== 100)).toBe(true);
+    controller.stop();
+  });
+
+  it('výpadek transportu auto-zavření nespouští — bez spojení nejde zavírat', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: followersGroup,
+      clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({ type: 'order', order: leaderOrder() });
+    await controller.waitForIdle();
+    const placedBefore = broker.placedRequests().length;
+
+    broker.emitEvent({ type: 'error', error: new Error('Tradovate WebSocket transport error'), at: 900 });
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(false);
+    expect(controller.status().autoClose).toBeNull();
+    expect(broker.placedRequests()).toHaveLength(placedBefore);
+    controller.stop();
+  });
+
+  it('fail-closed bez otevřené pozice nic neposílá', async () => {
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'reject', reason: 'Simulovaný broker reject' }),
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: followersGroup,
+      clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({ type: 'order', order: leaderOrder() });
+    await controller.waitForIdle();
+
+    expect(controller.status().armed).toBe(false);
+    expect(controller.status().autoClose).toBeNull();
+    controller.stop();
+  });
+});

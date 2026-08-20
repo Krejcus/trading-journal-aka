@@ -1,11 +1,10 @@
 /**
  * Deterministické copier notifikace pro nativní appku — čisté plánování.
  *
- * Free Apple ID neumí APNs, takže server nemůže probudit zavřenou Capacitor
- * appku. Co ale jde: události se ZNÁMÝM časem (konec ARM, konec cooldownu,
- * konec day-locku) naplánovat dopředu jako lokální notifikace — doručí je
- * pak samotný iOS i při zavřené appce. Nepředvídatelné incidenty se hlásí
- * okamžitě, dokud appka běží; se zavřenou appkou je kryje PWA watchdog.
+ * Události se ZNÁMÝM časem (konec ARM, konec cooldownu, konec day-locku)
+ * plánujeme jako lokální fallback přímo v iOS. Nepředvídatelné incidenty
+ * plán hlásí okamžitě při živém pollu; serverová APNs cesta kryje zavřenou
+ * aplikaci. Obě větve sdílejí stejné hrany a nesmějí vykonat broker akci.
  *
  * Tenhle modul NIC neplánuje — vrací akce. Side effects dělá exekutor,
  * takže celé chování jde pokrýt deterministickými testy.
@@ -17,14 +16,17 @@ export interface CopierNotificationSnapshot {
   killSwitch: boolean;
   stuckOutbox: boolean;
   connected: boolean;
+  reconciliationRequired: boolean;
+  divergentAccounts: number[];
   lastError: string | null;
   armExpiresAt: number;
   entryCooldownUntil: number;
   dayLockUntil: number;
   dayLockReason: string | null;
-  /** Výsledek posledního auto-flatten po expiraci ARM. */
-  armExpiryClose: {
+  /** Výsledek posledního auto-flatten (expirace ARM / fail-closed). */
+  autoClose: {
     operationId: string;
+    trigger: 'arm-expiry' | 'fail-closed';
     flat: boolean;
     canceledOrders: number;
     submittedClosures: number;
@@ -54,6 +56,7 @@ export interface CopierPlannedNotification {
 export interface CopierImmediateNotification {
   title: string;
   body: string;
+  kind: 'trade' | 'risk';
 }
 
 export interface CopierNotificationPlan {
@@ -141,24 +144,66 @@ export function planCopierNotifications(options: {
       fireNow.push({
         title: 'Copier: KILL SWITCH',
         body: 'Kill switch je aktivní. Runtime se sám znovu nespustí.',
+        kind: 'risk',
       });
     }
     if (previous.lastError == null && next.lastError != null && !next.killSwitch) {
       fireNow.push({
         title: 'Copier: bezpečné zastavení',
         body: next.lastError,
+        kind: 'risk',
       });
     }
     if (!previous.stuckOutbox && next.stuckOutbox) {
       fireNow.push({
         title: 'Copier: STUCK OUTBOX',
         body: 'Objednávka s nejasným výsledkem čeká na ruční kontrolu. ARM je blokovaný.',
+        kind: 'risk',
+      });
+    }
+    if (previous.stuckOutbox && !next.stuckOutbox) {
+      fireNow.push({
+        title: 'Copier: outbox vyřešen',
+        body: 'Nejasné objednávky už neblokují kontrolu účtů. Před ARM proběhne reconciliation.',
+        kind: 'risk',
       });
     }
     if (previous.connected && !next.connected) {
       fireNow.push({
         title: 'Copier: Tradovate odpojen',
         body: 'Spojení k brokerovi spadlo. Kopírování stojí; SL/TP u brokera zůstávají.',
+        kind: 'risk',
+      });
+    }
+    if (!previous.connected && next.connected) {
+      fireNow.push({
+        title: 'Copier: Tradovate připojen',
+        body: 'Broker spojení je obnovené. Ostrý ARM se sám nezapnul.',
+        kind: 'risk',
+      });
+    }
+    const previousDivergence = previous.divergentAccounts.join(',');
+    const nextDivergence = next.divergentAccounts.join(',');
+    if (next.divergentAccounts.length > 0 && nextDivergence !== previousDivergence) {
+      fireNow.push({
+        title: 'Copier: ÚČTY NESOUHLASÍ',
+        body: `${next.divergentAccounts.length} účt${next.divergentAccounts.length === 1 ? 'u' : 'ů'} má rozdílnou pozici. ARM je zamčený do úspěšné reconciliation.`,
+        kind: 'risk',
+      });
+    } else if (previous.divergentAccounts.length > 0
+      && next.divergentAccounts.length === 0
+      && !next.reconciliationRequired) {
+      fireNow.push({
+        title: 'Copier: účty synchronní',
+        body: 'Reconciliation potvrdila shodné pozice. Případný nový ARM zůstává ruční.',
+        kind: 'risk',
+      });
+    }
+    if (next.entryCooldownUntil > now && previous.entryCooldownUntil !== next.entryCooldownUntil) {
+      fireNow.push({
+        title: 'Copier: COOLDOWN aktivní',
+        body: `Po potvrzeném zploštění je nový vstup blokovaný do ${new Date(next.entryCooldownUntil).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}.`,
+        kind: 'risk',
       });
     }
     // Auto day-lock: hlásí se nová hodnota dayLockUntil, která je v budoucnu.
@@ -168,27 +213,31 @@ export function planCopierNotifications(options: {
         body: next.dayLockReason
           ? `${next.dayLockReason}. ARM je blokovaný do konce broker session.`
           : 'Denní zámek je aktivní. ARM je blokovaný do konce broker session.',
+        kind: 'risk',
       });
     }
-    // Výsledek auto-flatten po expiraci ARM — právě jednou per operationId.
-    if (next.armExpiryClose
-      && next.armExpiryClose.operationId !== previous.armExpiryClose?.operationId) {
-      const close = next.armExpiryClose;
+    // Výsledek auto-flatten (expirace ARM / fail-closed) — jednou per operationId.
+    if (next.autoClose
+      && next.autoClose.operationId !== previous.autoClose?.operationId) {
+      const close = next.autoClose;
+      const cause = close.trigger === 'fail-closed' ? 'FAIL-CLOSED' : 'ARM vypršel';
       fireNow.push(close.flat && !close.error
         ? {
-          title: 'Copier: ARM vypršel — kopie zavřeny',
+          title: `Copier: ${cause} — kopie zavřeny`,
           body: `Auto-flatten hotový: zrušeno ${close.canceledOrders} příkazů, zavřeno ${close.submittedClosures} pozic. Vše flat.`,
+          kind: 'risk',
         }
         : {
-          title: 'Copier: ARM vypršel, auto-flatten SELHAL',
+          title: `Copier: ${cause}, auto-zavření kopií SELHALO`,
           body: `${close.error ?? 'Účty nejsou potvrzené flat.'} Zkontroluj pozice v Tradovate!`,
+          kind: 'risk',
         });
     }
     // Trade potvrzení: jen eventy, které v předchozím snapshotu nebyly.
     // První sync (bez prev) historii nepřehrává — stejné pravidlo jako výše.
     const known = new Set(previous.copyEvents.map(event => event.id));
     for (const event of next.copyEvents) {
-      if (!known.has(event.id)) fireNow.push({ title: event.title, body: event.body });
+      if (!known.has(event.id)) fireNow.push({ title: event.title, body: event.body, kind: 'trade' });
     }
   }
 

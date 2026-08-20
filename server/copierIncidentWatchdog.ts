@@ -71,8 +71,11 @@ const ARMED_MARKER_KEY = 'state:armed';
 /** Marker: `detail` nese poslední ohlášené `dayLockUntil` (auto i ruční lock). */
 const DAY_LOCK_MARKER_KEY = 'state:day-lock';
 
+/** Marker: `detail` nese poslední ohlášené `entryCooldownUntil`. */
+const COOLDOWN_MARKER_KEY = 'state:cooldown';
+
 /** Marker: `detail` nese `operationId` posledního ohlášeného auto-flatten. */
-const ARM_EXPIRY_CLOSE_MARKER_KEY = 'state:arm-expiry-close';
+const AUTO_CLOSE_MARKER_KEY = 'state:auto-close';
 
 /** Interní marker: `detail` nese `at` posledního odeslaného copy eventu. */
 export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
@@ -80,22 +83,24 @@ export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
 export interface CopierCopyEventRow {
   id: string;
   at: number;
-  kind: 'entry' | 'exit' | 'flip';
+  kind: 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip';
   symbol: string;
   side: 'Long' | 'Short';
   quantity: number;
   followers: number;
 }
 
-const COPY_KIND_LABEL: Record<CopierCopyEventRow['kind'], string> = {
-  entry: 'vstup',
-  exit: 'exit',
-  flip: 'otočka',
+const COPY_KIND_TITLE: Record<CopierCopyEventRow['kind'], string> = {
+  entry: 'Copier: vstup zkopírován',
+  'scale-in': 'Copier: pozice navýšena',
+  'scale-out': 'Copier: částečný výstup',
+  exit: 'Copier: výstup zkopírován',
+  flip: 'Copier: pozice otočena',
 };
 
 export function copyEventNotification(event: CopierCopyEventRow): { title: string; body: string } {
   return {
-    title: `Copier: ${COPY_KIND_LABEL[event.kind]} zkopírován`,
+    title: COPY_KIND_TITLE[event.kind],
     body: `${event.side} ${event.quantity} ${event.symbol} → ${event.followers} follower${event.followers === 1 ? '' : 'ů'}.`,
   };
 }
@@ -111,9 +116,25 @@ export function planCopyEventNotifications(options: {
   alertStates: readonly CopierAlertStateRow[];
   now: number;
   staleAfterMs?: number;
-}): { notifications: Array<{ userId: string; deviceId: string; title: string; body: string }>; markers: AlertStateUpsert[] } {
+}): { notifications: Array<{
+  userId: string;
+  deviceId: string;
+  eventId: string;
+  kind: CopierCopyEventRow['kind'];
+  at: number;
+  title: string;
+  body: string;
+}>; markers: AlertStateUpsert[] } {
   const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
-  const notifications: Array<{ userId: string; deviceId: string; title: string; body: string }> = [];
+  const notifications: Array<{
+    userId: string;
+    deviceId: string;
+    eventId: string;
+    kind: CopierCopyEventRow['kind'];
+    at: number;
+    title: string;
+    body: string;
+  }> = [];
   const markers: AlertStateUpsert[] = [];
   const markerFor = new Map(options.alertStates
     .filter(row => row.incident_key === COPY_EVENTS_MARKER_KEY)
@@ -122,8 +143,9 @@ export function planCopyEventNotifications(options: {
   for (const runtime of options.runtimes) {
     const lastSeen = Date.parse(runtime.last_seen_at);
     if (!Number.isFinite(lastSeen) || options.now - lastSeen > staleAfterMs) continue;
-    const events = Array.isArray(runtime.status?.recentCopyEvents)
-      ? (runtime.status.recentCopyEvents as CopierCopyEventRow[])
+    const status = controllerStatus(runtime.status ?? {});
+    const events = Array.isArray(status.recentCopyEvents)
+      ? (status.recentCopyEvents as CopierCopyEventRow[])
       : [];
     if (events.length === 0) continue;
 
@@ -139,6 +161,9 @@ export function planCopyEventNotifications(options: {
       notifications.push({
         userId: runtime.user_id,
         deviceId: runtime.device_id,
+        eventId: event.id,
+        kind: event.kind,
+        at: event.at,
         ...content,
       });
     }
@@ -174,6 +199,18 @@ const asText = (value: unknown): string | null =>
   typeof value === 'string' && value.trim() ? value.trim() : null;
 const asNumber = (value: unknown): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : 0;
+
+/**
+ * Relay heartbeat ukládá celý LocalCopierAgentStatus, kde je skutečný stav
+ * controlleru pod `status.controller`. Starší snapshoty mohou mít controller
+ * fields přímo v `status`, proto podporujeme oba formáty.
+ */
+const controllerStatus = (status: Record<string, unknown>): Record<string, unknown> => {
+  const nested = status.controller;
+  return nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : status;
+};
 
 const INCIDENTS: IncidentSpec[] = [
   {
@@ -211,6 +248,17 @@ const INCIDENTS: IncidentSpec[] = [
     resolvedBody: 'Nejasné objednávky jsou vyřešené.',
   },
   {
+    key: 'position-divergence',
+    present: status => Array.isArray(status.divergentAccounts) && status.divergentAccounts.length > 0,
+    detail: status => Array.isArray(status.divergentAccounts)
+      ? String(status.divergentAccounts.length)
+      : null,
+    openTitle: 'Copier: ÚČTY NESOUHLASÍ',
+    openBody: detail => `${detail ?? 'Několik'} účtů má rozdílnou pozici. ARM je zamčený do úspěšné reconciliation.`,
+    resolvedTitle: 'Copier: účty synchronní',
+    resolvedBody: 'Reconciliation potvrdila shodné pozice. Případný nový ARM zůstává ruční.',
+  },
+  {
     key: 'broker-disconnected',
     present: (status, uptimeMs) => uptimeMs > BOOT_GRACE_MS && status.connected === false,
     detail: () => null,
@@ -242,7 +290,7 @@ export function evaluateCopierIncidents(options: {
     const lastSeen = Date.parse(runtime.last_seen_at);
     const uptimeMs = options.now - Date.parse(runtime.started_at);
     const offline = !Number.isFinite(lastSeen) || options.now - lastSeen > staleAfterMs;
-    const status = runtime.status ?? {};
+    const status = controllerStatus(runtime.status ?? {});
 
     const open = (key: string, detail: string | null, title: string, body: string) => {
       notifications.push({ userId, deviceId, incidentKey: key, kind: 'opened', title, body });
@@ -311,34 +359,67 @@ export function evaluateCopierIncidents(options: {
       });
     }
 
-    // --- Auto-flatten po expiraci ARM: právě jednou per operationId ------
-    const close = status.armExpiryClose as {
-      operationId?: unknown; flat?: unknown; canceledOrders?: unknown;
-      submittedClosures?: unknown; error?: unknown;
+    // --- Anti-revenge cooldown: vznik i konec právě jednou ----------------
+    const cooldownUntil = asNumber(status.entryCooldownUntil);
+    const cooldownMarker = activeState(userId, deviceId, COOLDOWN_MARKER_KEY);
+    if (cooldownUntil > options.now && cooldownMarker?.detail !== String(cooldownUntil)) {
+      notifications.push({
+        userId, deviceId, incidentKey: 'cooldown', kind: 'opened',
+        title: 'Copier: COOLDOWN aktivní',
+        body: 'Po potvrzeném zploštění je nový vstup dočasně blokovaný.',
+      });
+      upserts.push({
+        userId, deviceId, incidentKey: COOLDOWN_MARKER_KEY,
+        active: true, detail: String(cooldownUntil), notified: true,
+      });
+    } else if (cooldownUntil <= options.now && cooldownMarker?.active) {
+      notifications.push({
+        userId, deviceId, incidentKey: 'cooldown-ended', kind: 'resolved',
+        title: 'Copier: cooldown skončil',
+        body: 'Anti-revenge cooldown doběhl. Nový ARM zůstává ruční.',
+      });
+      upserts.push({
+        userId, deviceId, incidentKey: COOLDOWN_MARKER_KEY,
+        active: false, detail: cooldownMarker.detail ?? null, notified: true,
+      });
+    }
+
+    // --- Auto-flatten (expirace ARM / fail-closed): jednou per operationId
+    const close = status.autoClose as {
+      operationId?: unknown; trigger?: unknown; flat?: unknown;
+      canceledOrders?: unknown; submittedClosures?: unknown; error?: unknown;
     } | null | undefined;
     const closeOperationId = asText(close?.operationId);
-    const closeMarker = activeState(userId, deviceId, ARM_EXPIRY_CLOSE_MARKER_KEY);
+    const closeMarker = activeState(userId, deviceId, AUTO_CLOSE_MARKER_KEY);
     if (closeOperationId && closeMarker?.detail !== closeOperationId) {
       const failed = close?.flat !== true || asText(close?.error) != null;
+      const cause = close?.trigger === 'fail-closed' ? 'FAIL-CLOSED' : 'ARM vypršel';
       notifications.push({
-        userId, deviceId, incidentKey: 'arm-expiry-close', kind: 'opened',
+        userId, deviceId, incidentKey: 'auto-close', kind: 'opened',
         title: failed
-          ? 'Copier: ARM vypršel, auto-flatten SELHAL'
-          : 'Copier: ARM vypršel — kopie zavřeny',
+          ? `Copier: ${cause}, auto-zavření kopií SELHALO`
+          : `Copier: ${cause} — kopie zavřeny`,
         body: failed
           ? `${asText(close?.error) ?? 'Účty nejsou potvrzené flat.'} Zkontroluj pozice v Tradovate!`
           : `Auto-flatten hotový: zrušeno ${asNumber(close?.canceledOrders)} příkazů, zavřeno ${asNumber(close?.submittedClosures)} pozic. Vše flat.`,
       });
       upserts.push({
-        userId, deviceId, incidentKey: ARM_EXPIRY_CLOSE_MARKER_KEY,
+        userId, deviceId, incidentKey: AUTO_CLOSE_MARKER_KEY,
         active: false, detail: closeOperationId, notified: true,
       });
     }
 
-    // --- Hrana armed -> disarmed (jednorázová zpráva, žádné recovery) ----
+    // --- Hrany DISARMED <-> ARMED (jednorázově, bez replaye při bootstrapu)
     // Zajímá nás jen ostrý ARM: shadow nic neposílá, o ten uživatel nepřijde.
     const liveArmed = asBool(status.armed) && status.shadowMode !== true;
     const marker = activeState(userId, deviceId, ARMED_MARKER_KEY);
+    if (marker && marker.active === false && liveArmed) {
+      notifications.push({
+        userId, deviceId, incidentKey: 'arm-started', kind: 'opened',
+        title: 'Copier: ARM aktivní',
+        body: 'Ostrý ARM je aktivní. Kopírování je povolené do expirace session nebo ručního DISARM.',
+      });
+    }
     if (marker?.active === true && !liveArmed) {
       // Důvod už možná ohlásil konkrétní incident; obecná zpráva kryje
       // tichý konec (expirace TTL, ruční DISARM z jiného zařízení).
@@ -356,8 +437,8 @@ export function evaluateCopierIncidents(options: {
     }
     if (marker?.active !== liveArmed) {
       upserts.push({
-        userId, deviceId, incidentKey: ARMED_MARKER_KEY,
-        active: liveArmed, detail: null, notified: false,
+        userId, deviceId, incidentKey: ARMED_MARKER_KEY, active: liveArmed,
+        detail: null, notified: Boolean(marker && marker.active === false && liveArmed),
       });
     }
   }

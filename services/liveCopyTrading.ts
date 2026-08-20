@@ -14,10 +14,12 @@ export interface CopyFollowerConfig {
 }
 
 /**
- * Co udělat s pozicemi, když ostrý ARM vyprší (konec broker session).
- * `followers` zavře jen kopie — leader je ruka uživatele a zůstává jeho;
- * `group` zavře i leadera. Zavření je čistě risk-redukující: ruší working
- * příkazy a market-close k nule, nikdy nezvětší |pozici| ani neotočí směr.
+ * Co udělat s otevřenými kopiemi, když copier přestane kopírovat —
+ * expirací ostrého ARM (konec broker session) NEBO fail-closed chybou za
+ * živého ARM. `followers` zavře jen kopie — leader je ruka uživatele a
+ * zůstává jeho; `group` zavře i leadera. Zavření je čistě risk-redukující:
+ * ruší working příkazy a market-close k nule, nikdy nezvětší |pozici| ani
+ * neotočí směr.
  */
 export type ArmExpiryFlattenScope = 'off' | 'followers' | 'group';
 
@@ -34,8 +36,9 @@ export interface CopyGroupSafetySettings {
    */
   entryCooldownMinutes: number;
   /**
-   * Expirace ARM nesmí nechat kopie viset bez dozoru. Default `followers`:
-   * po vypršení ARM se follower účty flatten-ou (leader zůstává uživateli).
+   * Vypnutí copieru (expirace ARM i fail-closed) nesmí nechat kopie viset
+   * bez dozoru. Default `followers`: follower účty se flatten-ou, leader
+   * zůstává uživateli.
    */
   armExpiryFlatten: ArmExpiryFlattenScope;
   /**

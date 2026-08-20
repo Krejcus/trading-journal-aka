@@ -139,6 +139,7 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
         dailyStats: {
           ...base.dailyStats,
           openLots: base.dailyStats.openLots.map(lot => ({ ...lot })),
+          recentClosedTrades: base.dailyStats.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
           unpricedSymbols: [...base.dailyStats.unpricedSymbols],
         },
       }

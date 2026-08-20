@@ -1506,8 +1506,8 @@ const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, on
               </label>
               <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
                 <span>
-                  <b className="block text-xs text-[var(--text-primary)]">Po vypršení ARM</b>
-                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Když ostrý ARM vyprší (konec session) s otevřenou pozicí, copier risk-redukčně zavře kopie. Nikdy nezvětší pozici ani neotočí směr.</span>
+                  <b className="block text-xs text-[var(--text-primary)]">Auto-zavření kopií</b>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Když copier přestane kopírovat s otevřenou pozicí (vypršení ARM nebo fail-closed chyba), risk-redukčně zavře kopie. Nikdy nezvětší pozici ani neotočí směr.</span>
                 </span>
                 <select
                   aria-label="Akce po vypršení ARM"

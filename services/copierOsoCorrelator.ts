@@ -57,7 +57,11 @@ export class CopierOsoCorrelator {
   private readonly legs = new Map<string, Map<string, LegCandidate>>();
   private readonly emitted = new Set<string>();
 
-  constructor(windowMs = 500) {
+  // TradingView → Tradovate propaguje SL/TP i se stovkami ms zpoždění za
+  // entry; 500 ms okno je v praxi míjelo (živý pád 2026-08-20: TP dorazil
+  // po okně, lone-leg shodil copier). Cena za širší okno je jen o ~1 s
+  // pomalejší kopie ČEKAJÍCÍCH (limit/stop) entry — market jde mimo okno.
+  constructor(windowMs = 1500) {
     if (!Number.isFinite(windowMs) || windowMs <= 0) throw new Error('OSO inference window musí být kladné číslo');
     this.windowMs = windowMs;
   }
@@ -137,6 +141,16 @@ export class CopierOsoCorrelator {
 
   isPending(entryOrderId: string): boolean {
     return this.entries.has(entryOrderId) && !this.emitted.has(entryOrderId);
+  }
+
+  /**
+   * Kolik protective legů se k entry stihlo přiřadit bez dokončeného páru.
+   * Nenulová hodnota při expiraci okna znamená „SL bez TP" (nebo naopak) —
+   * entry se nesmí tiše zkopírovat bez ochrany.
+   */
+  pendingLegCount(entryOrderId: string): number {
+    if (this.emitted.has(entryOrderId)) return 0;
+    return this.legs.get(entryOrderId)?.size ?? 0;
   }
 
   /**

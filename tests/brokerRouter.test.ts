@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBrokerRouter } from '../services/brokerRouter';
+import type { BrokerEvent } from '../services/brokerPort';
 import { createMockBroker } from '../services/mockBroker';
 
 describe('broker router', () => {
@@ -73,5 +74,65 @@ describe('broker router', () => {
     ])).toThrow('DEMO a LIVE');
     const router = createBrokerRouter([{ broker: demo, accountIds: [11] }]);
     expect(() => router.listPositions(22)).toThrow('není nakonfigurované OAuth');
+  });
+});
+
+describe('reconnect grace nekritických spojení', () => {
+  const graceRouter = (events: BrokerEvent[], graceMs = 20) => {
+    const critical = createMockBroker();
+    const follower = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: critical, accountIds: [100], critical: true },
+      { broker: follower, accountIds: [200], critical: false },
+    ], { reconnectGraceMs: graceMs });
+    const unsubscribe = router.subscribe(event => events.push(event));
+    critical.setConnected(true);
+    follower.setConnected(true);
+    return { critical, follower, unsubscribe };
+  };
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  it('mrknutí follower spojení kratší než lhůta se nikdy neohlásí', async () => {
+    const events: BrokerEvent[] = [];
+    const { follower, unsubscribe } = graceRouter(events, 40);
+    expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true]);
+
+    follower.emitEvent({ type: 'error', error: new Error('Tradovate WebSocket transport error'), at: 5 });
+    follower.setConnected(false);
+    await wait(10);
+    follower.setConnected(true);
+    await wait(60);
+
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true]);
+    unsubscribe();
+  });
+
+  it('výpadek delší než lhůta se ohlásí včetně zadržené chyby', async () => {
+    const events: BrokerEvent[] = [];
+    const { follower, unsubscribe } = graceRouter(events, 20);
+
+    follower.emitEvent({ type: 'error', error: new Error('Tradovate WebSocket transport error'), at: 5 });
+    follower.setConnected(false);
+    await wait(50);
+
+    expect(events.some(event => event.type === 'error')).toBe(true);
+    expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true, false]);
+
+    follower.setConnected(true);
+    expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true, false, true]);
+    unsubscribe();
+  });
+
+  it('kritické spojení lhůtu nedostává — výpadek se hlásí okamžitě', async () => {
+    const events: BrokerEvent[] = [];
+    const { critical, unsubscribe } = graceRouter(events, 1_000);
+
+    critical.emitEvent({ type: 'error', error: new Error('Tradovate WebSocket transport error'), at: 5 });
+    critical.setConnected(false);
+
+    expect(events.some(event => event.type === 'error')).toBe(true);
+    expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true, false]);
+    unsubscribe();
   });
 });

@@ -121,6 +121,12 @@ export interface TradovateBrokerConfig {
   reconnectDelayMs?: number;
   syncTimeoutMs?: number;
   socketIdleTimeoutMs?: number;
+  /**
+   * Lidský štítek OAuth spojení do chybových hlášek. U multi-connection
+   * runtime bez něj nejde z logu poznat, KTERÉ spojení vypadlo (živý případ:
+   * „odpojil se Lucid?" nešlo z `transport error` vůbec vyčíst).
+   */
+  connectionLabel?: string;
   /** Jak dlouho po command ACK čekat na autoritativní Order update ze sync streamu. */
   commandConfirmationTimeoutMs?: number;
 }
@@ -189,6 +195,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
   let reconnectBackoffMs: number | null = null;
   let requestId = 2;
   let syncReady = false;
+  const withConnectionLabel = (message: string): string =>
+    config.connectionLabel ? `${message} [${config.connectionLabel}]` : message;
   const commandCorrelationTag = (command: TradovateCommandEntity): string | undefined =>
     command.clOrdId?.trim() || command.customTag50?.trim() || undefined;
   const syncRequestBody = {
@@ -682,7 +690,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
         });
     };
     socket.onerror = () => {
-      emit({ type: 'error', error: new TradovateTransportError('Tradovate WebSocket transport error'), at: clock() });
+      emit({ type: 'error', error: new TradovateTransportError(withConnectionLabel('Tradovate WebSocket transport error')), at: clock() });
       emit({ type: 'connection', connected: false, at: clock() });
       socket?.close();
     };
@@ -711,7 +719,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
       if (now - lastSocketMessageAt >= (config.socketIdleTimeoutMs ?? 15_000)) {
         emit({
           type: 'error',
-          error: new TradovateTransportError('Tradovate WebSocket heartbeat timeout'),
+          error: new TradovateTransportError(withConnectionLabel('Tradovate WebSocket heartbeat timeout')),
           at: now,
         });
         socket.close();

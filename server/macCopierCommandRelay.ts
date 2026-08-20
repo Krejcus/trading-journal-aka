@@ -28,7 +28,12 @@ export function startMacCopierCommandRelay(options: {
   };
 
   const complete = async (commandId: string, result?: unknown, error?: string) => {
-    await request({ action: 'complete', commandId, ...(error ? { error } : { result }) });
+    // Autoritativní stav po vykonání posíláme ve stejném potvrzení. Server tak
+    // může okamžitě oznámit ARM/DISARM bez čekání na další poll heartbeat.
+    await request({
+      action: 'complete', commandId, status: options.agent.status(),
+      ...(error ? { error } : { result }),
+    });
   };
 
   const loop = async () => {
@@ -51,7 +56,9 @@ export function startMacCopierCommandRelay(options: {
         }
       } catch (error) {
         failures += 1;
-        if (failures === 1 || failures % 20 === 0) console.error(`COPIER RELAY ${error instanceof Error ? error.message : String(error)}`);
+        if (failures === 1 || failures % 20 === 0) {
+          console.error(`${new Date().toISOString()} COPIER RELAY (${failures}. selhání v řadě) ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
       await new Promise(resolve => setTimeout(resolve, failures ? Math.min(5_000, pollMs * failures) : pollMs));
     }

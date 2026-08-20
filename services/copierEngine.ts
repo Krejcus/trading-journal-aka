@@ -127,6 +127,23 @@ export interface CopierDailyLot {
   tradePnlUsd: number;
   /** Totéž v bodech — znaménko pro počítání ztrátových obchodů bez point value. */
   tradePnlPoints: number;
+  /** Volitelné kvůli kompatibilitě se snapshoty vytvořenými před ledgerem. */
+  openedAt?: number;
+  side?: 'Long' | 'Short';
+  maxQuantity?: number;
+}
+
+export interface CopierClosedTrade {
+  /** Stabilní broker fill ID závěrečného plnění — idempotentní napříč restarty. */
+  id: string;
+  symbol: string;
+  side: 'Long' | 'Short';
+  quantity: number;
+  /** Null pouze pro symbol bez známé USD hodnoty bodu; nikdy se nefabrikuje 0. */
+  realizedPnlUsd: number | null;
+  followerCount: number;
+  openedAt: number | null;
+  closedAt: number;
 }
 
 export interface CopierDailyStats {
@@ -136,6 +153,8 @@ export interface CopierDailyStats {
   realizedPnlUsd: number;
   losingTrades: number;
   openLots: CopierDailyLot[];
+  /** Poslední brokerem potvrzené closes; server je idempotentně ukládá. */
+  recentClosedTrades?: CopierClosedTrade[];
   /** Symboly bez známé point value — USD limit je nepočítá (audit varuje). */
   unpricedSymbols: string[];
 }
@@ -161,6 +180,7 @@ export function createCopierState(
           dailyStats: {
             ...safety.dailyStats,
             openLots: safety.dailyStats.openLots.map(lot => ({ ...lot })),
+            recentClosedTrades: safety.dailyStats.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
             unpricedSymbols: [...safety.dailyStats.unpricedSymbols],
           },
         }

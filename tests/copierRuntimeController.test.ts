@@ -1276,7 +1276,7 @@ describe('expirace ARM s auto-flatten', () => {
 
     const status = controller.status();
     expect(status.armed).toBe(false);
-    expect(status.armExpiryClose).toMatchObject({
+    expect(status.autoClose).toMatchObject({
       scope: 'followers', flat: true, submittedClosures: 1, accountIds: [200],
     });
     // Zavírací příkaz: přesně opačná strana a přesně |pozice| — nikdy víc.
@@ -1305,7 +1305,7 @@ describe('expirace ARM s auto-flatten', () => {
 
     const status = controller.status();
     expect(status.armed).toBe(false);
-    expect(status.armExpiryClose).toBeNull();
+    expect(status.autoClose).toBeNull();
     expect(status.lastError).toBeNull();
     expect(broker.placedRequests()).toHaveLength(0);
     controller.stop();
@@ -1329,7 +1329,7 @@ describe('expirace ARM s auto-flatten', () => {
     broker.emitEvent({ type: 'heartbeat', at: clock() });
     await controller.waitForIdle();
     expect(controller.status().armed).toBe(false);
-    expect(controller.status().armExpiryClose).toBeNull();
+    expect(controller.status().autoClose).toBeNull();
     expect(broker.placedRequests()).toHaveLength(1);
     controller.stop();
 
@@ -1350,7 +1350,7 @@ describe('expirace ARM s auto-flatten', () => {
     shadowBroker.emitEvent({ type: 'heartbeat', at: shadowClock.clock() });
     await shadowController.waitForIdle();
     expect(shadowController.status().armed).toBe(false);
-    expect(shadowController.status().armExpiryClose).toBeNull();
+    expect(shadowController.status().autoClose).toBeNull();
     expect(shadowBroker.placedRequests()).toHaveLength(0);
     shadowController.stop();
   });
@@ -1382,9 +1382,9 @@ describe('expirace ARM s auto-flatten', () => {
 
     const status = controller.status();
     expect(status.armed).toBe(false);
-    expect(status.armExpiryClose).toMatchObject({ flat: false });
-    expect(status.armExpiryClose?.error).toBeTruthy();
-    expect(status.lastError).toContain('auto-flatten selhal');
+    expect(status.autoClose).toMatchObject({ flat: false });
+    expect(status.autoClose?.error).toBeTruthy();
+    expect(status.lastError).toContain('selhal');
     controller.stop();
   });
 });
@@ -1528,6 +1528,124 @@ describe('auto day-lock z denní ztráty leadera', () => {
     await controller.waitForIdle();
     expect(controller.status().dailyStats).toMatchObject({ realizedPnlUsd: -20, losingTrades: 1 });
     expect(controller.status().dayLockUntil).toBe(0);
+    controller.stop();
+  });
+
+  it('redigovaný notifikační deník rozlišuje vstup, scale-in, scale-out, exit a flip', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+
+    for (const netQuantity of [2, 4, 1, 0, -2, 1]) {
+      broker.emitEvent({
+        type: 'position',
+        position: { accountId: 100, symbol: 'MNQU6', netQuantity },
+      });
+    }
+    await controller.waitForIdle();
+
+    expect(controller.status().recentCopyEvents?.map(event => [event.kind, event.quantity])).toEqual([
+      ['entry', 2],
+      ['scale-in', 2],
+      ['scale-out', 3],
+      ['exit', 1],
+      ['entry', 2],
+      ['flip', 1],
+    ]);
+    controller.stop();
+  });
+});
+
+describe('reconciliation vs abandoned cancel/modify', () => {
+  it('čistá autoritativní reconciliation odblokuje terminální abandoned položky', async () => {
+    const abandoned = {
+      ...createModifyEntry('cm1', 'ev1', 1, 200, 'bo-1', { quantity: 2, orderType: 'Stop' as const, stopPrice: 20_000 }, 1),
+      status: 'abandoned' as const,
+      reason: 'modify nebyl potvrzen; objednávka skončila jako rejected',
+    };
+    const store = createMemoryCopierStore({
+      ...emptySnapshot(),
+      lastSequence: 1,
+      cancelOutbox: [abandoned],
+    });
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    expect(controller.status().stuckOutbox).toBe(true);
+    await controller.reconcile();
+    expect(controller.status().stuckOutbox).toBe(false);
+    expect((await store.load()).cancelOutbox[0]).toMatchObject({
+      status: 'waived',
+      reason: expect.stringContaining('autoritativní reconciliation'),
+    });
+    controller.arm();
+    expect(controller.status().armed).toBe(true);
+    controller.stop();
+  });
+});
+
+describe('OSO inference okno vs. sekvence (živý pád 2026-08-20 17:04Z)', () => {
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  it('entry s jediným protective legem failne s jasnou hláškou, nikdy tichá kopie bez ochrany', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(), osoCorrelationWindowMs: 30,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    // Limit entry + POUZE stop leg (TP se z TradingView nestihl propsat).
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'entry-1' }) });
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'sl-1', side: 'Sell', orderType: 'Stop', stopPrice: 29_400,
+        limitPrice: undefined, sourceVersion: '1:WorkingSL',
+      }),
+    });
+    await wait(80);
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.armed).toBe(false);
+    expect(status.lastError).toContain('jedním ochranným');
+    // Nic se neodeslalo: ani nechráněný entry, ani osamocený leg.
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('nesouvisející event během okna entry neshodí — odložený flush je replay, ne rozbitá sekvence', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(), osoCorrelationWindowMs: 30,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    // Limit entry čeká v okně; mezitím projde nesouvisející market order,
+    // který posune sekvenční počítadlo (dřívější příčina out-of-order pádu).
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'entry-2' }) });
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ brokerOrderId: 'market-1', orderType: 'Market', limitPrice: undefined, sourceVersion: '1:WorkingM' }),
+    });
+    await controller.waitForIdle();
+    await wait(80);
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.armed).toBe(true);
+    expect(status.lastError).toBeNull();
+    // Obě kopie odeslané: market hned, limit po vypršení okna.
+    expect(broker.placedRequests().map(request => request.orderType).sort()).toEqual(['Limit', 'Market']);
     controller.stop();
   });
 });

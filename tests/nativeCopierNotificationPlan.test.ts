@@ -14,12 +14,14 @@ const snapshot = (partial: Partial<CopierNotificationSnapshot> = {}): CopierNoti
   killSwitch: false,
   stuckOutbox: false,
   connected: true,
+  reconciliationRequired: false,
+  divergentAccounts: [],
   lastError: null,
   armExpiresAt: 0,
   entryCooldownUntil: 0,
   dayLockUntil: 0,
   dayLockReason: null,
-  armExpiryClose: null,
+  autoClose: null,
   copyEvents: [],
   ...partial,
 });
@@ -110,11 +112,33 @@ describe('okamžité incidenty', () => {
     expect(coldStart.fireNow).toEqual([]);
   });
 
-  it('pád spojení hlásí; návrat nehlásí (to řeší UI)', () => {
+  it('pád i bezpečný návrat spojení hlásí', () => {
     const down = plan(snapshot(), snapshot({ connected: false }));
     expect(down.fireNow).toEqual([expect.objectContaining({ title: 'Copier: Tradovate odpojen' })]);
     const up = plan(snapshot({ connected: false }), snapshot());
-    expect(up.fireNow).toEqual([]);
+    expect(up.fireNow).toEqual([expect.objectContaining({ title: 'Copier: Tradovate připojen' })]);
+  });
+
+  it('divergence účtů zamkne ARM a úspěšná reconciliation oznámí obnovu', () => {
+    const mismatch = plan(snapshot(), snapshot({
+      reconciliationRequired: true,
+      divergentAccounts: [11, 12],
+    }));
+    expect(mismatch.fireNow).toEqual([expect.objectContaining({
+      title: 'Copier: ÚČTY NESOUHLASÍ',
+      body: expect.stringContaining('2 účtů'),
+    })]);
+    const fixed = plan(snapshot({
+      reconciliationRequired: true,
+      divergentAccounts: [11, 12],
+    }), snapshot());
+    expect(fixed.fireNow).toEqual([expect.objectContaining({ title: 'Copier: účty synchronní' })]);
+  });
+
+  it('začátek cooldownu se oznámí okamžitě a konec zůstane naplánovaný', () => {
+    const result = plan(snapshot(), snapshot({ entryCooldownUntil: NOW + HOUR }));
+    expect(result.fireNow).toEqual([expect.objectContaining({ title: 'Copier: COOLDOWN aktivní' })]);
+    expect(result.schedule).toEqual([expect.objectContaining({ key: 'cooldown-end' })]);
   });
 });
 
@@ -139,7 +163,7 @@ describe('day-lock a auto-flatten hrany', () => {
 
   it('výsledek auto-flatten se hlásí právě jednou per operationId, selhání křičí', () => {
     const success = snapshot({
-      armExpiryClose: { operationId: 'arm-expiry:1', flat: true, canceledOrders: 1, submittedClosures: 2 },
+      autoClose: { operationId: 'arm-expiry:1', trigger: 'arm-expiry' as const, flat: true, canceledOrders: 1, submittedClosures: 2 },
     });
     const first = plan(snapshot(), success);
     expect(first.fireNow).toEqual([expect.objectContaining({
@@ -148,8 +172,8 @@ describe('day-lock a auto-flatten hrany', () => {
     expect(plan(success, success).fireNow).toHaveLength(0);
 
     const failure = snapshot({
-      armExpiryClose: {
-        operationId: 'arm-expiry:2', flat: false, canceledOrders: 0, submittedClosures: 0,
+      autoClose: {
+        operationId: 'arm-expiry:2', trigger: 'arm-expiry' as const, flat: false, canceledOrders: 0, submittedClosures: 0,
         error: 'Flatten close MNQU6 nebyl bezpečně potvrzen',
       },
     });
@@ -164,7 +188,7 @@ describe('day-lock a auto-flatten hrany', () => {
     const next = snapshot({
       dayLockUntil: NOW + HOUR,
       dayLockReason: 'auto day-lock: cokoliv',
-      armExpiryClose: { operationId: 'arm-expiry:9', flat: true, canceledOrders: 0, submittedClosures: 1 },
+      autoClose: { operationId: 'arm-expiry:9', trigger: 'arm-expiry' as const, flat: true, canceledOrders: 0, submittedClosures: 1 },
     });
     expect(plan(null, next).fireNow).toHaveLength(0);
   });

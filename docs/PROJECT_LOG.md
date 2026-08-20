@@ -72,6 +72,250 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-20 (Codex, ActivityKit push-to-start při zavřené appce)
+Audit odhalil, že APNs uměla existující Live Activity aktualizovat a ukončit,
+ale bez běžící aplikace ji neuměla poprvé vytvořit. iOS větev proto registruje
+device-scoped ActivityKit push-to-start token a sleduje i serverem vytvořené
+aktivity; server vytvoří novou read-only Live Activity jen pro novou stabilní
+ARM session nebo autoritativně otevřenou pozici. Trigger se ukládá, takže ručně
+zavřená aktivita se ve stejné session znovu neobjeví. Token je v server-only
+RLS tabulce bez grantů pro anon/authenticated, sdílí se už existující bounded
+broker snapshot a žádná větev nemá broker-write cestu. Migrace
+`native_live_activity_push_to_start` i deployment
+`dpl_84CizzhgkpbotZNfe5ju4H6PBgH7` jsou v produkci; endpoint i cron bez secretu
+vrací 401. Prošlo 20 cílených testů, lint změněných souborů, izolovaný TypeScript
+a Vercel build, native sync, iOS doctor a podepsaný device build. Fyzická
+instalace čeká jen na to, až CoreDevice přestane připojený iPhone hlásit jako
+`unavailable`.
+Následný source audit navíc odstranil zavádějící prázdné hodnoty: Home i Lock
+Screen widgety bez platného snapshotu už nevypisují `$0` ani `100 %`, ale
+explicitní „Čekám na skutečná data“. Rozšířená sada 53 testů pro APNs,
+push-to-start, WidgetKit, P&L, account-lock a watchdog prošla a podepsaný build
+po této úpravě znovu prošel celým Xcode sestavením.
+
+### 2026-08-20 (Codex, iOS 26 WidgetKit push + ruční garantovaná obnova)
+Fyzický force-quit test potvrdil, že samotná `.after(+5 min)` timeline není
+pětiminutový slib: iOS neposlal nový request ani po ~26 minutách. Apple běžný
+widget budgetuje; interakce App Intent ale garantuje nový timeline request a
+iOS 26 navíc nabízí opportunistický WidgetKit APNs push. Všech 12 Home/Lock
+widgetů proto nově registruje `WidgetPushHandler`, server ukládá jeho APNs token
+jen v server-only tabulce a cron sdílí stejný read-only broker snapshot jako
+ActivityKit. ARM/lock/pozice/order změny žádají refresh hned, pohyb P&L nejvýše
+jednou za 5 minut. Home widgety mají i tlačítko Obnovit, které neotevírá appku
+a nemá broker-write cestu. Migrace `native_widget_push_updates` je v produkci;
+anon/authenticated nemají granty a deployment `dpl_8VHUdZi1NiqKqN16VK9s41mPSoeE`
+je READY. Prošlo 29 cílených testů, TypeScript, lint, web build, widget i celý
+iOS build; podepsaná app i extension mají development APNs entitlement.
+Fyzická registrace push tokenu a push-triggered reload čekají na odemčený iPhone,
+který CoreDevice momentálně hlásí jako `unavailable`.
+
+### 2026-08-20 (Codex, vzdálené P&L + broker account-lock APNs)
+Aktuální podepsaný widget build byl nainstalován na iPhone 13 Pro Max a po
+spuštění vznikl jeden revokovatelný WidgetKit token; server zaznamenal i
+první autorizované načtení snapshotu. Audit ale našel rozdíl mezi ukázkovou
+22-alert galerií a skutečnou force-quit cestou: vstup/scale/exit a copier
+incidenty chodily přes APNs, přesné P&L uzavřeného obchodu a broker lock/unlock
+se plánovaly jen v otevřené appce. Produkční cron proto nově čte durable
+`tradovate_copier_trades`, posílá jednu deduplikovanou zprávu s leader P&L
+(obecný exit se v tom ticku potlačí) a přes sdílený read-only Tradovate snapshot
+hlásí změny `canTrade`/`changesLocked`. Neúplná broker odpověď nikdy nevyrábí
+falešné odemčení a žádná větev nemá broker command. Cíleně prošlo 38 testů,
+TypeScript, lint změněných souborů, produkční build a `git diff --check`.
+Izolovaný deployment `dpl_Dbhp9qiEN2GU3z9T4Xuxtxm4PbhH` je `READY` na hlavním
+aliasu; první minutový cron založil markery pro dvě runtime zařízení a všech
+šest současných účtů jako odemčené bez replaye čtyř starších close záznamů a
+bez falešné notifikace. Běžný Home widget od 18:16 do 18:38 nový timeline
+request neudělal; přesný closed-app interval proto zůstává fyzicky neověřený a
+nesmí se zaměňovat s okamžitou APNs/Live Activity cestou řízenou serverem.
+
+### 2026-08-20 večer III (Claude, živý pád: OSO inference okno vs. sekvence)
+Uživatel zadal limit (19:04 lokálně) → FAIL-CLOSED `out-of-order`. Kořen:
+entry se drží v OSO inference okně (500 ms); dorazil jen JEDEN protective
+leg (druhý se z TradingView propsal později) → pár nevznikl → leg mezitím
+posunul `lastSequence` (recordLeaderEventOnly) → odložený flush entry
+vyhodnocen jako out-of-order → sequence-broken → DISARM. Entry s jedním
+legem se navíc dřív mohl teoreticky zkopírovat bez ochrany (leg samostatně
+nikdy neodejde). Opravy: (1) `deferredReplay` v processLeaderEvent — flush
+už zaznamenané události toleruje posunutou sekvenci stejně jako duplicate
+(idempotence = replikační klíče + outbox, ne pořadí); `gap` dál failuje;
+(2) lone-leg při expiraci okna = explicitní fail-closed „zadej SL i TP
+společně" — žádná tichá kopie bez ochrany, žádný kryptický pád;
+(3) OSO okno 500 → 1500 ms (reálná TV→Tradovate latence; zdrží jen kopie
+čekajících limit/stop entry, market jde mimo okno). Z labelů spojení také
+potvrzeno: WS blipy (~16:23, 18:06, 18:23, 18:40Z) jsou na PRIMÁRNÍM
+spojení conn:53157614 (leader) — reconnect grace na něj záměrně neplatí,
+takže plynulá obměna socketu před expirací tokenu zůstává P1 pro klid.
+Gate: copier testy 162/162; celková suite obsahuje ~36 pádů z Codexovy
+rozdělané práce na chart drawing (mimo copier). Worker přeinstalován.
+
+### 2026-08-20 večer II (Claude, škálování na více propfirem: reconnect grace + diagnostika spojení)
+Uživatel plánuje rozšíření na více firem a ~20 účtů. Diagnóza „odpojil se
+Lucid": každá propfirma jede přes vlastní OAuth spojení s vlastním WS;
+Tradovate zavírá socket při cyklu access tokenu (~80 min) a worker se do
+~1 s připojí zpět — ale JEDNO mrknutí odzbrojilo VŠECHNY firmy (router:
+any-down = disconnect). S N firmami by to znamenalo DISARM každých ~80/N
+minut. Opravy: (1) chybové hlášky WS nesou štítek spojení
+(`conn:<id8>`, mapování na účty se loguje při startu) + timestampy na
+FAIL-CLOSED/COPIER RELAY řádcích — do dneška nešlo z logu poznat, které
+spojení padlo; (2) `brokerRouter` reconnect grace: follower-only spojení
+(route `critical:false`) smí mlčet `reconnectGraceMs` (10 s) — kratší
+mrknutí se nikdy neohlásí; spojení nesoucí leader stream zůstává bez
+tolerance (ztracené leader eventy nejde dopočítat → okamžitý DISARM +
+reconciliation). Objednávka odeslaná během mezery selže fail-closed
+vlastní outbox cestou — grace jen ruší plané poplachy bez broker akce.
+Další velcí kandidáti pro scale (zapsáno, neimplementováno): plynulá
+obměna socketu před expirací tokenu (kryje i leader spojení), paralelní
+manual-flatten přes účty (dnes sekvenční — na 20 účtech pomalé),
+parita jako metrika. Gate: 1270 testů. `COPIER RELAY fetch failed` ×22
+(deduplikováno) naznačuje i mikrovýpadky sítě Macu → argument pro VPS.
+
+### 2026-08-20 večer (Claude, živý incident: rejected modify → fail-closed → otevřené kopie)
+Incident 16:45: uživatel z TradingView posouval SL na BE, cena už byla za
+úrovní → Tradovate cancel-replace REJECTL (a tím objednávku ZABIL — cancel
+prošel, replace ne; TV na leaderovi založil nový SL). Copier reject
+vyhodnotil jako kritický → fail-closed DISARM; exit leadera o 9 s později
+už byl `blocked disarmed` → follower pozice zůstaly otevřené a mirror
+cancelů jim sundal i brackety. Tři opravy:
+(1) **Tolerantní lifecycle resolution** (`resolveCancelLookup`): cancel
+proti objednávce ve stavu canceled/rejected = cíl splněn (confirmed no-op);
+modify proti canceled = bezpředmětný no-op. Fail-closed zůstává pro modify
+→ rejected/filled (mrtvá ochrana / změněná pozice) a cancel → filled
+(divergence).
+(2) **Auto-flatten kopií i při fail-closed za živého ARM** — sdílená
+mašinerie s expirací ARM (`autoFlattenCopies`), stejné pojistky: scope
+`safety.armExpiryFlatten` (teď pokrývá OBĚ příčiny), jen při lokálně známé
+expozici, nikdy shadow/kill-switch/transport-lost (bez spojení zavírat
+nejde). Status pole přejmenováno `armExpiryClose` → `autoClose`
+(+`trigger`), watchdog marker `state:auto-close`. Jednorázovost: selhání
+flattenu volá failClosed už odzbrojené → smyčka se neroztočí.
+(3) **Reconciliation samočistka**: čistá autoritativní reconciliation
+waivne i `abandoned` cancel/modify položky (terminálně známé; případný
+`filled` outcome by reconciliation rozbil dřív) — 10 stuck položek z
+incidentu zmizí prvním reconcile.
+Gate: 1267 testů, tsc čistý. POZOR: strom obsahuje rozsáhlou necommitnutou
+práci Codexu (APNs push, widgety, Live Activities) propletenou se stejnými
+soubory — commit se řeší s uživatelem, worker se nasazuje z lokálního
+stromu nezávisle na gitu.
+
+### 2026-08-20 (Codex, durable copier obchody + WidgetKit refresh bez otevřené appky)
+Příčina falešného `DATA ZASTARALÁ` byla potvrzena: WidgetKit četl jen App Group
+snapshot, který React obnovoval po minutě pouze za běhu aplikace, a po 120 s ho
+označil stale. Současně copier držel poslední position eventy jen v RAM a neměl
+spolehlivý per-trade P&L zdroj. Nově worker vždy (i s vypnutými risk limity)
+vede durable avg-cost ledger leader fillů, uzavřené obchody posílá idempotentně
+v heartbeat a server je ukládá do `tradovate_copier_trades`. Neznámá hodnota
+bodu zůstává `null`, nikdy se nevydává za $0. Equity se rekonstruuje pouze pro
+leadera; follower fill/slippage se neodhaduje.
+
+Widget extension má revokovatelný 256bit read-only token v App Group; Postgres
+ukládá pouze SHA-256 do `native_widget_devices`. `anon` i `authenticated` mají
+na obě nové tabulky nulová práva, RLS je zapnuté a CRUD má jen `service_role`.
+Endpoint `/api/native-widget-snapshot` načte heartbeat + omezený broker snapshot
+a neobsahuje žádnou broker-write cestu. Widget zachová lokální journal, obnovuje
+LIVE přes WidgetKit (požadavek 5 min; skutečný budget řídí iOS), při síťové chybě
+ponechá poslední dobrá data. Skutečný worker outage je `WORKER OFFLINE` po 90 s;
+obecný stale badge až po 30 min bez úspěšné obnovy.
+
+Migrace `native_widget_remote_refresh` je na produkci jako `20260820105246`.
+Finální izolovaný preview `dpl_HPEjF5qxTXfRCUXSX2Xm2etqaecL` prošel
+bezpečnostním 401 testem a byl povýšen jako produkční
+`dpl_3zs5wVqs9a16mQR4SpUuLBaPh4Rg` (`READY`, hlavní alias). Mac worker byl po
+potvrzeném exit→flat, DISARMED a read-only reconciliation přeinstalován z
+kanonického repa; po restartu druhá reconciliation potvrdila 0 divergencí a
+0 working orders. 58 cílených testů, TypeScript, `ios:doctor`, web/native build
+a Swift build app+widget extension prošly. iPhone je momentálně `unavailable`;
+instalace a fyzický closed-app refresh čekají na kabel/odemknutí. První řádek
+ledgeru vznikne až přirozeně uzavřeným dalším obchodem — test nesmí vyrábět
+broker pozici.
+
+### 2026-08-20 (Codex + uživatel, remote Live Activity nasazena a fyzicky ověřena)
+Uživatel výslovně povolil read-only přenos P&L a pozic přes APNs. Produkční
+tabulka `native_live_activity_subscriptions` je aplikovaná s RLS, bez grantů
+pro `anon`/`authenticated` a s CRUD pouze pro `service_role`; finanční hodnoty
+se do ní neukládají. Izolovaný snapshot `origin/main` plus jen APNs/Live
+Activity backend byl nasazen jako Vercel deployment
+`dpl_HB3dAizW1q6u7cVojTZtrzB3jbYF` (`READY`, hlavní alias). Nejnovější
+placeně podepsaný build s retry tokenu a častými ActivityKit aktualizacemi je
+na iPhone 13 Pro Max. Telefon zaregistroval skutečný ActivityKit token, cron
+odeslal vzdálený payload bez chyby a uživatel potvrdil, že se Live Activity po
+serverovém zjištění DISARMED + brokerem potvrzeného flat stavu sama ukončila.
+Copier LIVE widget na ploše fyzicky ukazuje reálné `DISARMED`; zbývající Home
+widgety, tři Lock Screen widgety, stale/recovery a galerie 22 notifikací ještě
+čekají na fyzické potvrzení. Měnící se remote P&L se ověří až při přirozeně
+aktivní pozici — test nesmí vyrábět broker obchod.
+
+### 2026-08-20 (Codex, live widgety a kompletní nativní alert matice)
+Widget extension už nepoužívá test data mimo systémovou galerii. Devět Home
+Screen a tři Lock Screen widgety čtou token-free user-scoped snapshot z App
+Group: journal P&L/R/equity/discipline, účty a zámky, broker pozice, open i
+realized P&L, copier ARM/spojení/cooldown/day-lock/kill-switch a poslední
+potvrzené obchody. Snapshot má minutový heartbeat; po dvou minutách bez obnovy
+Copier a Lock Screen LIVE viditelně ukazují `DATA ZASTARALÁ`. Barvy používají
+systémový light/dark vzhled. Lokální Live Activity se automaticky váže na
+ARM/open position/day-lock/kill-switch, je read-only a žádná její akce nemůže
+odeslat broker příkaz.
+
+Notifikační plán nově rozlišuje entry, scale-in, scale-out, exit a flip; hlásí
+offline/recovery, broker disconnect/reconnect, fail-closed, stuck outbox a jeho
+vyřešení, divergence/reconciliation, cooldown start/end, day-lock, account
+lock/unlock a ARM-expiry auto-flatten success/failure. Brokerem potvrzený close
+vytvoří lokální iOS P&L zprávu. Jedním tlačítkem lze naplánovat 22 read-only
+testů včetně PNG trade preview. Cílených 99 testů, TypeScript, `ios:doctor` a
+podepsaný arm64 Xcode build prošly. Nic z této fáze nebylo deploynuto a zařízení
+je pro instalaci momentálně `unavailable`. Remote Live Activity P&L/pozice
+zůstávají vypnuté: jejich payload přes Apple APNs vyžaduje výslovný souhlas
+uživatele a následně samostatně schválenou migraci/deploy.
+
+Následný completion audit opravil jednu důležitou hranici: P&L widget a
+lokální P&L notifikace teď berou pouze `trade-closed`, nikdy vstupní ani
+samostatný exit fill. Při pouhém otevření pozice proto nevznikne falešný
+`$0` výsledek. Galerie 22 alertů má pětisekundové rozestupy a celá doběhne
+za méně než dvě minuty. Regresní test, TypeScript, `ios:doctor`, nativní
+bundle i podepsaný Xcode build prošly.
+
+### 2026-08-20 (Codex + uživatel, APNs fyzicky ověřeno)
+Aktuální placeně podepsaný build byl nainstalován na iPhone 13 Pro Max.
+Aplikace po přihlášení úspěšně zaregistrovala development APNs token přes
+produkční `/api/native-push-subscription` (`200`) a první serverový test
+doručila. Následně uživatel AlphaTrade úplně ukončil a zamkl telefon; nezávislý
+APNs test Apple přijal (`200`, APNs ID
+`EFCCA7C1-D1E4-A5AF-1EC7-01598761122A`) a uživatel potvrdil jeho doručení na
+zamčený telefon. Tím je reálně prokázán scénář server -> force-quit appka ->
+zamčený iPhone; remote push už není jen laboratorně připravený.
+
+### 2026-08-20 (Codex, APNs backend nasazen do produkce)
+Dokončena serverová část skutečných nativních push notifikací. V Apple
+Developer portálu vznikl týmový Sandbox & Production APNs klíč
+`QYVLP2Y6QM`; privátní klíč nebyl zapsán do repa a jeho tři hodnoty jsou ve
+Vercelu jako citlivé Production proměnné. Supabase migrace
+`20260820054128_native_push_subscriptions.sql` je aplikovaná: RLS je zapnuté,
+`anon` ani `authenticated` nemají přístup a CRUD má pouze `service_role`.
+Produkční deployment `dpl_37cddUT47oHS7bAdqMVtvnX3JuUq` je `READY` na hlavním
+aliasu; `/api/native-push-test` i `/api/native-push-subscription` při smoke
+testu správně vrátily `401 missing-token` a runtime log neobsahoval chyby.
+Kvůli špinavému checkoutu byl nasazen čistý snapshot `origin/main` plus jen
+APNs backend a napojení existujícího alert/watchdog cronu, takže žádná jiná
+rozpracovaná změna nešla do produkce. Aktuální nativní bundle prošel
+`ios:doctor`, sestavením i strict codesignem; podpis obsahuje APNs a App Group.
+Zbývá pouze instalace na fyzický iPhone a důkaz server -> force-quit + zamčený
+telefon; zařízení bylo při pokusu stále `offline/unavailable`.
+
+### 2026-08-20 (Codex, placený Apple Team + připravená APNs větev)
+Apple Developer členství je aktivní a Xcode ho skutečně použil: generický
+arm64 Debug build je platně podepsaný Teamem `7CUFT9738Q`; podpis appky obsahuje
+`aps-environment=development` a `group.app.alphatrade.native`, widget extension
+stejnou App Group. Přidán oficiální Capacitor Push Notifications plugin,
+bezpečná registrace APNs tokenu po přihlášení (server-only tabulka, odstranění
+při logoutu), přímý HTTP/2 APNs provider, autentizovaný serverový test a fan-out
+stávajícího copier watchdogu do Web Push i APNs. `ios:sync`, typecheck, strict
+codesign a 23 cílených testů prošly. Nic nebylo nasazeno: před deployem je nutné
+v Apple portálu vytvořit jednorázově stahovaný `.p8` klíč, vložit tři APNs
+secrety do Vercelu, aplikovat migraci `20260820054128_native_push_subscriptions.sql`
+a teprve potom po schválení deploynout. iPhone byl při finálním buildu
+`unavailable`, takže instalace a důkaz server -> force-quit + zamčený telefon
+zůstávají otevřené. Widgety úmyslně dál používají test data; reálný token-free
+snapshot writer uživatel odložil na finále.
+
 ### 2026-08-20 (Claude, bezpečnostní trojice: auto-flatten po ARM, auto day-lock, chaos testy)
 Uživatelův požadavek: „když jsem v obchodě a kopírka se vypne, mám všude
 otevřeno" — expirace ARM nechávala kopie viset bez dozoru (fail-open na risk).

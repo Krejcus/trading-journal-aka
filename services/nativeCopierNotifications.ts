@@ -56,18 +56,21 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
     killSwitch: status.killSwitch,
     stuckOutbox: status.stuckOutbox,
     connected: status.connected,
+    reconciliationRequired: status.reconciliationRequired,
+    divergentAccounts: [...status.divergentAccounts].sort((a, b) => a - b),
     lastError: status.lastError,
     armExpiresAt: status.armExpiresAt ?? 0,
     entryCooldownUntil: status.entryCooldownUntil ?? 0,
     dayLockUntil: status.dayLockUntil ?? 0,
     dayLockReason: status.dayLockReason ?? null,
-    armExpiryClose: status.armExpiryClose
+    autoClose: status.autoClose
       ? {
-        operationId: status.armExpiryClose.operationId,
-        flat: status.armExpiryClose.flat,
-        canceledOrders: status.armExpiryClose.canceledOrders,
-        submittedClosures: status.armExpiryClose.submittedClosures,
-        ...(status.armExpiryClose.error ? { error: status.armExpiryClose.error } : {}),
+        operationId: status.autoClose.operationId,
+        trigger: status.autoClose.trigger,
+        flat: status.autoClose.flat,
+        canceledOrders: status.autoClose.canceledOrders,
+        submittedClosures: status.autoClose.submittedClosures,
+        ...(status.autoClose.error ? { error: status.autoClose.error } : {}),
       }
       : null,
     copyEvents: (status.recentCopyEvents ?? []).map(event => ({
@@ -117,8 +120,8 @@ export async function syncCopierNativeNotifications(
         body: immediate.body,
         delayMs: 1_000,
         route: 'live',
-        threadIdentifier: 'alphatrade-copier',
-        actionType: 'risk',
+        threadIdentifier: immediate.kind === 'trade' ? 'alphatrade-copier-trades' : 'alphatrade-copier',
+        actionType: immediate.kind,
       });
     }
   } catch {

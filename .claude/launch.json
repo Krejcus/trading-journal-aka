@@ -4,9 +4,22 @@
     {
       "name": "alphatrade",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5273,
       "autoPort": true
+    },
+    {
+      "name": "alphatrade-live",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:live"
+      ],
+      "port": 3000,
+      "url": "http://localhost:3000"
     }
   ]
 }

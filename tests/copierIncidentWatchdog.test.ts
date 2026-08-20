@@ -105,10 +105,48 @@ describe('stavové incidenty', () => {
     const result = evaluate([runtime({ status: { connected: true, stuckOutbox: true } })]);
     expect(result.notifications).toEqual([expect.objectContaining({ incidentKey: 'stuck-outbox' })]);
   });
+
+  it('divergence účtů otevře lock incident a shoda ho uzavře', () => {
+    const opened = evaluate([runtime({
+      status: { connected: true, divergentAccounts: [10, 11], reconciliationRequired: true },
+    })]);
+    expect(opened.notifications).toEqual([expect.objectContaining({
+      incidentKey: 'position-divergence', title: 'Copier: ÚČTY NESOUHLASÍ',
+    })]);
+    const resolved = evaluate([runtime()], [state('position-divergence')]);
+    expect(resolved.notifications).toEqual([expect.objectContaining({
+      incidentKey: 'position-divergence', kind: 'resolved',
+    })]);
+  });
 });
 
-describe('hrana armed -> disarmed', () => {
+describe('hrany DISARMED <-> ARMED', () => {
   const armedMarker = (): CopierAlertStateRow => state('state:armed', true);
+
+  it('první běh ostrý ARM nereplayuje, jen založí marker', () => {
+    const result = evaluate([runtime({ status: { armed: true, shadowMode: false, connected: true } })]);
+    expect(result.notifications).toHaveLength(0);
+    expect(result.upserts).toContainEqual(expect.objectContaining({
+      incidentKey: 'state:armed', active: true, notified: false,
+    }));
+  });
+
+  it('produkční nested stav po hraně DISARMED -> ARM pošle zprávu právě jednou', () => {
+    const first = evaluate([
+      runtime({ status: { controller: { armed: true, shadowMode: false, connected: true } } }),
+    ], [state('state:armed', false)]);
+    expect(first.notifications).toEqual([expect.objectContaining({
+      incidentKey: 'arm-started', title: 'Copier: ARM aktivní',
+    })]);
+    expect(first.upserts).toContainEqual(expect.objectContaining({
+      incidentKey: 'state:armed', active: true, notified: true,
+    }));
+
+    const second = evaluate([
+      runtime({ status: { controller: { armed: true, shadowMode: false, connected: true } } }),
+    ], [armedMarker()]);
+    expect(second.notifications).toHaveLength(0);
+  });
 
   it('tichý konec ostrého ARM pošle jednorázovou zprávu', () => {
     const result = evaluate([runtime()], [armedMarker()]);
@@ -134,13 +172,6 @@ describe('hrana armed -> disarmed', () => {
       .toBe(false);
   });
 
-  it('ostrý ARM jen zapíše marker bez notifikace', () => {
-    const result = evaluate([runtime({ status: { armed: true, shadowMode: false, connected: true } })]);
-    expect(result.notifications).toHaveLength(0);
-    expect(result.upserts).toContainEqual(expect.objectContaining({
-      incidentKey: 'state:armed', active: true, notified: false,
-    }));
-  });
 });
 
 describe('víc zařízení a uživatelů', () => {
@@ -192,6 +223,18 @@ describe('trade notifikace (planCopyEventNotifications)', () => {
     })], [marker(String(NOW - 60_000))]);
     expect(result.notifications).toEqual([]);
   });
+
+  it('scale-in a scale-out mají vlastní srozumitelné zprávy', () => {
+    const events = [
+      { ...copyEvent(NOW - 6_000, 'scale-in'), kind: 'scale-in' as const, quantity: 2 },
+      { ...copyEvent(NOW - 5_000, 'scale-out'), kind: 'scale-out' as const, quantity: 1 },
+    ];
+    const result = planEvents([runtime({ status: { recentCopyEvents: events } })], [marker(String(NOW - 60_000))]);
+    expect(result.notifications.map(item => item.title)).toEqual([
+      'Copier: pozice navýšena',
+      'Copier: částečný výstup',
+    ]);
+  });
 });
 
 describe('day-lock notifikace', () => {
@@ -228,11 +271,31 @@ describe('day-lock notifikace', () => {
   });
 });
 
+describe('cooldown notifikace', () => {
+  const until = NOW + 600_000;
+
+  it('vznik cooldownu a jeho konec oznámí právě jednou', () => {
+    const opened = evaluate([runtime({ status: { connected: true, entryCooldownUntil: until } })]);
+    expect(opened.notifications).toContainEqual(expect.objectContaining({
+      incidentKey: 'cooldown', kind: 'opened',
+    }));
+    const cooldownState: CopierAlertStateRow = {
+      ...state('state:cooldown'), detail: String(until),
+    };
+    const steady = evaluate([runtime({ status: { connected: true, entryCooldownUntil: until } })], [cooldownState]);
+    expect(steady.notifications).toHaveLength(0);
+    const ended = evaluate([runtime({ status: { connected: true, entryCooldownUntil: NOW - 1 } })], [cooldownState]);
+    expect(ended.notifications).toContainEqual(expect.objectContaining({
+      incidentKey: 'cooldown-ended', kind: 'resolved',
+    }));
+  });
+});
+
 describe('auto-flatten po expiraci ARM', () => {
   const closeStatus = (close: Record<string, unknown>) => runtime({
     status: {
       armed: false, shadowMode: false, connected: true, killSwitch: false,
-      stuckOutbox: false, lastError: null, armExpiryClose: close,
+      stuckOutbox: false, lastError: null, autoClose: close,
     },
   });
 
@@ -241,15 +304,15 @@ describe('auto-flatten po expiraci ARM', () => {
       operationId: 'arm-expiry:500', flat: true, canceledOrders: 1, submittedClosures: 2,
     });
     const first = evaluate([status]);
-    const close = first.notifications.filter(item => item.incidentKey === 'arm-expiry-close');
+    const close = first.notifications.filter(item => item.incidentKey === 'auto-close');
     expect(close).toHaveLength(1);
     expect(close[0].title).toContain('kopie zavřeny');
     expect(close[0].body).toContain('zavřeno 2 pozic');
-    expect(first.upserts.find(item => item.incidentKey === 'state:arm-expiry-close'))
+    expect(first.upserts.find(item => item.incidentKey === 'state:auto-close'))
       .toMatchObject({ detail: 'arm-expiry:500' });
 
-    const second = evaluate([status], [{ ...state('state:arm-expiry-close', false), detail: 'arm-expiry:500' }]);
-    expect(second.notifications.filter(item => item.incidentKey === 'arm-expiry-close')).toHaveLength(0);
+    const second = evaluate([status], [{ ...state('state:auto-close', false), detail: 'arm-expiry:500' }]);
+    expect(second.notifications.filter(item => item.incidentKey === 'auto-close')).toHaveLength(0);
   });
 
   it('selhané zavření křičí SELHAL s chybou', () => {
@@ -257,7 +320,7 @@ describe('auto-flatten po expiraci ARM', () => {
       operationId: 'arm-expiry:600', flat: false, canceledOrders: 0, submittedClosures: 0,
       error: 'Flatten nelze spustit bez broker spojení',
     })]);
-    const close = result.notifications.filter(item => item.incidentKey === 'arm-expiry-close');
+    const close = result.notifications.filter(item => item.incidentKey === 'auto-close');
     expect(close).toHaveLength(1);
     expect(close[0].title).toContain('SELHAL');
     expect(close[0].body).toContain('bez broker spojení');

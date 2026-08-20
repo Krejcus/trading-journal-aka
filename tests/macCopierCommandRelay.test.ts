@@ -26,7 +26,11 @@ describe('Mac copier command relay', () => {
     const agent = { status, execute, origin: 'http://127.0.0.1:3211', close: vi.fn() } as unknown as LocalCopierExecutionAgent;
     const relay = startMacCopierCommandRelay({ apiOrigin: 'https://alpha.example', authorizationHeader: async () => 'Device id.secret', agent, fetchImpl: fetchImpl as typeof fetch, pollMs: 500 });
     await vi.waitFor(() => expect(execute).toHaveBeenCalledWith({ type: 'shadow' }), { timeout: 2_000 });
-    await vi.waitFor(() => expect(calls).toContainEqual(expect.objectContaining({ action: 'complete', commandId: 'command-1' })), { timeout: 2_000 });
+    await vi.waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
+      action: 'complete', commandId: 'command-1', status: expect.objectContaining({
+        controller: expect.objectContaining({ armed: false }),
+      }),
+    })), { timeout: 2_000 });
     await relay.close();
   });
 

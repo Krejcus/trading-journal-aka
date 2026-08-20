@@ -289,6 +289,15 @@ export interface ProcessLeaderEventOptions {
   metrics?: CopierMetrics;
   /** Lokální ochrana API; followery se stále překrývají, ale bez neomezeného fan-outu. */
   maxConcurrentDispatches?: number;
+  /**
+   * Odložené zpracování už ZAZNAMENANÉ události (OSO inference okno).
+   * Sekvence události byla platná v okamžiku observe a mezitím ji legitimně
+   * posunuly její vlastní legy nebo nesouvisející lifecycle — `out-of-order`
+   * tady není rozbitý stream, ale očekávaný replay. Idempotenci hlídají
+   * replikační klíče a outbox, ne pořadí (živý pád 2026-08-20 17:04Z:
+   * lone-leg posunul počítadlo a flush entry shodil copier).
+   */
+  deferredReplay?: boolean;
 }
 
 export interface CopierRunResult {
@@ -803,15 +812,20 @@ export async function processLeaderEvent(
   let revision = runtime.revision;
 
   const verdict = classifySequence(event.sequence, state.lastSequence);
-  if (verdict === 'duplicate') {
+  const deferredReplay = options.deferredReplay === true && verdict === 'out-of-order';
+  if (verdict === 'duplicate' || deferredReplay) {
     // Jen záznam do auditu — zpracování pokračuje. Kdyby se tady skončilo,
     // nešel by dokončit pokus, který minule spadl na timeout: `lastSequence`
     // už je posunutá, ale objednávka odeslaná není. Idempotenci hlídají
-    // klíče replikace a outbox, ne pořadí ve streamu.
-    audit.push({ at: clock(), leaderEventId: event.id, kind: 'skipped', reason: 'duplicate-sequence' });
+    // klíče replikace a outbox, ne pořadí ve streamu. Deferred replay je
+    // totéž pro událost odloženou OSO inference oknem.
+    audit.push({
+      at: clock(), leaderEventId: event.id, kind: 'skipped',
+      reason: deferredReplay ? 'deferred-replay-sequence' : 'duplicate-sequence',
+    });
   }
 
-  const sequenceBroken = verdict === 'gap' || verdict === 'out-of-order';
+  const sequenceBroken = verdict === 'gap' || (verdict === 'out-of-order' && !deferredReplay);
   if (sequenceBroken) {
     audit.push({ at: clock(), leaderEventId: event.id, kind: 'sequence-broken', reason: verdict });
   }

@@ -1,3 +1,21 @@
+components/AlphaTradeChartWorkspace.tsx: error TS2339: Property 'text' does not exist on type 'DrawingStyle'.
+components/CandleKitTradeChart.tsx: error TS2339: Property 'text' does not exist on type 'DrawingStyle'.
+components/GenericDrawingFloatingToolbar.tsx: error TS2339: Property 'fontSize' does not exist on type 'DrawingStyle'.
+components/GenericDrawingFloatingToolbar.tsx: error TS2339: Property 'lineStyle' does not exist on type 'DrawingStyle'.
+components/GenericDrawingFloatingToolbar.tsx: error TS2353: Object literal may only specify known properties, and 'fontSize' does not exist in type 'Partial<DrawingStyle>'.
+components/GenericDrawingFloatingToolbar.tsx: error TS2353: Object literal may only specify known properties, and 'lineStyle' does not exist in type 'Partial<DrawingStyle>'.
+components/GenericDrawingSettingsDialog.tsx: error TS2339: Property 'fontSize' does not exist on type 'DrawingStyle'.
+components/GenericDrawingSettingsDialog.tsx: error TS2339: Property 'lineStyle' does not exist on type 'DrawingStyle'.
+components/GenericDrawingSettingsDialog.tsx: error TS2339: Property 'text' does not exist on type 'DrawingStyle'.
+components/GenericDrawingSettingsDialog.tsx: error TS2339: Property 'textColor' does not exist on type 'DrawingStyle'.
+components/GenericDrawingSettingsDialog.tsx: error TS2339: Property 'textHorizontal' does not exist on type 'DrawingStyle'.
+components/GenericDrawingSettingsDialog.tsx: error TS2339: Property 'textVertical' does not exist on type 'DrawingStyle'.
+components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'fontSize' does not exist in type 'Partial<DrawingStyle>'.
+components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'lineStyle' does not exist in type 'Partial<DrawingStyle>'.
+components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'text' does not exist in type 'Partial<DrawingStyle>'.
+components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'textColor' does not exist in type 'Partial<DrawingStyle>'.
+components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'textHorizontal' does not exist in type 'Partial<DrawingStyle>'.
+components/GenericDrawingSettingsDialog.tsx: error TS2353: Object literal may only specify known properties, and 'textVertical' does not exist in type 'Partial<DrawingStyle>'.
 scripts/audit-data.ts: error TS2304: Cannot find name 'stats'.
 scripts/check-business-data.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
 scripts/check-journal.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
@@ -15,3 +33,26 @@ scripts/test-db.ts: error TS2307: Cannot find module 'dotenv' or its correspondi
 scripts/test-discord.ts: error TS2305: Module '"../services/discord/webhook"' has no exported member 'sendDiscordNotification'.
 scripts/test-discord.ts: error TS2307: Cannot find module 'dotenv' or its corresponding type declarations.
 scripts/test-interact.ts: error TS2307: Cannot find module 'discord-interactions' or its corresponding type declarations.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'fontSize' does not exist on type 'DrawingStyle'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'fontSize' does not exist on type 'Partial<DrawingStyle>'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'lineStyle' does not exist on type 'DrawingStyle'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'lineStyle' does not exist on type 'Partial<DrawingStyle>'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'text' does not exist on type 'DrawingStyle'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'text' does not exist on type 'Partial<DrawingStyle>'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'textColor' does not exist on type 'DrawingStyle'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'textColor' does not exist on type 'Partial<DrawingStyle>'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'textHorizontal' does not exist on type 'DrawingStyle'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'textHorizontal' does not exist on type 'Partial<DrawingStyle>'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'textVertical' does not exist on type 'DrawingStyle'.
+services/chartDrawingStyleDefaults.ts: error TS2339: Property 'textVertical' does not exist on type 'Partial<DrawingStyle>'.
+services/chartDrawingStyleDefaults.ts: error TS2345: Argument of type '{ [x: string]: DrawingStyle | { text: string; color: string; width: number; dashed: boolean; fill: string | null; }; }' is not assignable to parameter of type 'DrawingStyleDefaults'.
+services/chartDrawingStyleDefaults.ts: error TS2353: Object literal may only specify known properties, and 'lineStyle' does not exist in type 'DrawingStyle'.
+services/chartDrawingStyleDefaults.ts: error TS2353: Object literal may only specify known properties, and 'text' does not exist in type 'DrawingStyle'.
+tests/candleKitDrawingExtensions.test.ts: error TS2353: Object literal may only specify known properties, and 'lineStyle' does not exist in type 'DrawingStyle'.
+tests/candleKitDrawingExtensions.test.ts: error TS2353: Object literal may only specify known properties, and 'text' does not exist in type 'DrawingStyle'.
+tests/chartDrawingStyleDefaults.test.ts: error TS2353: Object literal may only specify known properties, and 'lineStyle' does not exist in type 'Partial<DrawingStyle>'.
+tests/chartDrawingStyleDefaults.test.ts: error TS2353: Object literal may only specify known properties, and 'text' does not exist in type 'DrawingStyle'.
+tests/chartDrawingStyleDefaults.test.ts: error TS2353: Object literal may only specify known properties, and 'text' does not exist in type 'Partial<DrawingStyle>'.
+tests/chartPositionDrawing.test.ts: error TS2339: Property 'priceAxisViews' does not exist on type 'DrawingPrimitive'.
+tests/chartPositionDrawing.test.ts: error TS2352: Conversion of type '{ position: PositionDrawingSettings; }' to type 'DrawingStyle' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+tests/nativeLiveActivityUpdater.test.ts: error TS2493: Tuple type '[]' of length '0' has no element at index '1'.

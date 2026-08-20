@@ -67,7 +67,19 @@ export function resolveCancelLookup(
       : markCancelUnknown(entry, 'prázdný lookup z eventual streamu', now);
   }
   if (entry.operation === 'modify') {
+    if (order.status === 'canceled') {
+      // Závod lifecycle při rychlém ručním ovládání: leader objednávku
+      // mezitím zrušil a mirror cancelu jde vlastní cestou. Modify je
+      // bezpředmětný no-op, ne integritní chyba.
+      return {
+        ...entry, status: 'confirmed', outcome: 'canceled',
+        reason: 'modify bezpředmětný — objednávka už je zrušená', updatedAt: now,
+      };
+    }
     if (order.status !== 'working') {
+      // `rejected` u Tradovate cancel-replace znamená, že objednávka ZEMŘELA
+      // (cancel prošel, replace ne) — follower může být bez ochrany.
+      // `filled` znamená změněnou pozici. Obojí je vážné a failuje zavřeně.
       return {
         ...entry, status: 'abandoned', outcome: order.status,
         reason: `modify nebyl potvrzen; objednávka skončila jako ${order.status}`, updatedAt: now,
@@ -86,7 +98,16 @@ export function resolveCancelLookup(
   if (order.status === 'canceled') {
     return { ...entry, status: 'confirmed', outcome: 'canceled', reason: undefined, updatedAt: now };
   }
-  if (order.status === 'filled' || order.status === 'rejected') {
+  if (order.status === 'rejected') {
+    // Objednávka u brokera zemřela rejectem — cíl cancelu („nesmí být
+    // working") je splněn. Trestat tohle fail-closedem vyrábělo falešné
+    // vypnutí uprostřed obchodu (živý incident 2026-08-20).
+    return {
+      ...entry, status: 'confirmed', outcome: 'rejected',
+      reason: 'cancel bezpředmětný — objednávka skončila jako rejected', updatedAt: now,
+    };
+  }
+  if (order.status === 'filled') {
     return {
       ...entry,
       status: 'abandoned',

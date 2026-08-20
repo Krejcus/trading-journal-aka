@@ -1,7 +1,7 @@
 import type { BrokerEvent, BrokerFill, BrokerPort } from './brokerPort';
 import { msUntilTradovateSessionEnd } from './copierArmSession';
 import { pointValueUsd } from './futuresContractSpecs';
-import type { CopierDailyStats } from './copierEngine';
+import type { CopierClosedTrade, CopierDailyStats } from './copierEngine';
 import { CopierLeaderEventSource } from './copierLeaderEventSource';
 import { CopierBracketCorrelator, type LeaderBracketPair } from './copierBracketCorrelator';
 import { CopierOsoCorrelator } from './copierOsoCorrelator';
@@ -64,25 +64,30 @@ export interface CopierControllerStatus {
    * plánuje deterministickou lokální notifikaci „ARM vypršel".
    */
   armExpiresAt?: number;
+  /** Stabilní začátek aktuální ARM session pro deduplikaci systémových surface. */
+  armedAt?: number;
   /**
    * Posledních pár vstupů/exitů leadera (přechody přes flat) pro trade
    * notifikace. Server je čte z heartbeat statusu, appka z pollu.
    */
   recentCopyEvents?: CopierCopyEvent[];
-  /** Výsledek posledního auto-flatten po expiraci ARM (jen tento běh). */
-  armExpiryClose?: CopierArmExpiryClose | null;
+  /** Výsledek posledního auto-flatten (expirace ARM / fail-closed); jen tento běh. */
+  autoClose?: CopierAutoClose | null;
   /** Redigované denní risk počítadlo leadera pro UI a watchdog. */
   dailyStats?: {
     sessionEndAt: number;
     realizedPnlUsd: number;
     losingTrades: number;
     unpricedSymbols: string[];
+    recentClosedTrades?: CopierClosedTrade[];
   } | null;
 }
 
-export interface CopierArmExpiryClose {
+export interface CopierAutoClose {
   at: number;
   operationId: string;
+  /** Co zavření spustilo: expirace ARM, nebo fail-closed chyba za live ARM. */
+  trigger: 'arm-expiry' | 'fail-closed';
   scope: 'followers' | 'group';
   accountIds: number[];
   flat: boolean;
@@ -95,7 +100,7 @@ export interface CopierCopyEvent {
   /** Monotónní v rámci běhu procesu (epoch ms + pořadí). */
   id: string;
   at: number;
-  kind: 'entry' | 'exit' | 'flip';
+  kind: 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip';
   symbol: string;
   /** Long/Short podle znaménka pozice PO události (u exitu PŘED ní). */
   side: 'Long' | 'Short';
@@ -256,8 +261,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       push('exit', previousNet > 0 ? 'Long' : 'Short', Math.abs(previousNet));
     } else if (Math.sign(previousNet) !== Math.sign(nextNet)) {
       push('flip', nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet));
+    } else if (Math.abs(nextNet) > Math.abs(previousNet)) {
+      push('scale-in', nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet - previousNet));
+    } else if (Math.abs(nextNet) < Math.abs(previousNet)) {
+      push('scale-out', previousNet > 0 ? 'Long' : 'Short', Math.abs(previousNet - nextNet));
     }
-    // Scale-in/out (stejné znaménko, jiná velikost) schválně nehlásíme.
   };
   let stopped = false;
   let positionCheckComplete = false;
@@ -277,7 +285,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * takový obchod se do denního limitu nepočítá, dokud symbol není flat.
    */
   const untrackedTradeSymbols = new Set<string>();
-  let lastArmExpiryClose: CopierArmExpiryClose | null = null;
+  let lastAutoClose: CopierAutoClose | null = null;
+  let autoCloseInFlight = false;
   const pendingBracketTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingOsoTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingOsoEvents = new Map<string, LeaderEvent>();
@@ -366,6 +375,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const outbox = new Map(current.outbox);
       const bracketOutbox = new Map(current.bracketOutbox);
       const osoOutbox = new Map(current.osoOutbox);
+      const cancelOutbox = new Map(current.cancelOutbox);
       let changed = false;
 
       for (const [key, entry] of outbox) {
@@ -383,13 +393,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         osoOutbox.set(key, waiveOsoOutboxEntry(entry, reason(entry.reason), now));
         changed = true;
       }
+      // Abandoned cancel/modify je také terminálně známý stav (objednávka
+      // skončila mimo naši kontrolu). Čistá reconciliation právě potvrdila
+      // synchronní pozice — případný `filled` outcome by ji rozbil a sem
+      // bychom se nedostali. Stará položka pak nesmí navždy blokovat ARM.
+      for (const [key, entry] of cancelOutbox) {
+        if (entry.status !== 'abandoned') continue;
+        cancelOutbox.set(key, waiveCancelEntry(entry, reason(entry.reason), now));
+        changed = true;
+      }
       if (!changed) return current;
 
       const committed = await options.store.commit(
         toSnapshot(
           current.state,
           outbox.values(),
-          current.cancelOutbox.values(),
+          cancelOutbox.values(),
           current.revision,
           bracketOutbox.values(),
           osoOutbox.values(),
@@ -401,6 +420,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         outbox,
         bracketOutbox,
         osoOutbox,
+        cancelOutbox,
         revision: committed.revision,
       };
     });
@@ -455,6 +475,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     realizedPnlUsd: 0,
     losingTrades: 0,
     openLots: [],
+    recentClosedTrades: [],
     unpricedSymbols: [],
   });
 
@@ -465,20 +486,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return {
       ...stored,
       openLots: stored.openLots.map(lot => ({ ...lot })),
+      recentClosedTrades: stored.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
       unpricedSymbols: [...stored.unpricedSymbols],
     };
   };
 
   /**
-   * Denní risk počítadlo z leader fillů (avg-cost matching per symbol).
-   * Počítá se jen když je nějaký denní limit zapnutý; při překročení se
-   * nastaví čekající day-lock, který se zamkne až po zploštění skupiny —
-   * uprostřed obchodu se nikdy nezasahuje.
+   * Denní read-only ledger z leader fillů (avg-cost matching per symbol).
+   * Běží vždy, aby uzavřené copier obchody a P&L přežily restart a mohly
+   * napájet widgety. Risk limity jsou pouze volitelní konzumenti; při jejich
+   * překročení se day-lock stále aktivuje až po zploštění celé skupiny.
    */
   const trackLeaderFill = async (fill: BrokerFill, now: number) => {
     const limitUsd = group.safety?.dailyLossLimitUsd ?? 0;
     const maxLosing = group.safety?.dailyMaxLosingTrades ?? 0;
-    if (limitUsd <= 0 && maxLosing <= 0) return;
     const at = fill.filledAt > 0 ? fill.filledAt : now;
     const stored = currentRuntime().state.safety.dailyStats;
     if (stored && at >= stored.sessionEndAt) untrackedTradeSymbols.clear();
@@ -514,10 +535,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         lot.tradePnlUsd += points * pv;
         stats.realizedPnlUsd += points * pv;
       }
+      const closingSide = lot.side ?? (lot.netQuantity > 0 ? 'Long' : 'Short');
+      const closingQuantity = lot.maxQuantity ?? Math.abs(lot.netQuantity);
       lot.netQuantity += Math.sign(remaining) * closing;
       remaining -= Math.sign(remaining) * closing;
       if (lot.netQuantity === 0) {
         if (lot.tradePnlPoints < 0) stats.losingTrades += 1;
+        const closedTrade: CopierClosedTrade = {
+          id: fill.fillId,
+          symbol: fill.symbol,
+          side: closingSide,
+          quantity: closingQuantity,
+          realizedPnlUsd: pv == null ? null : lot.tradePnlUsd,
+          followerCount: group.followers.filter(follower => follower.mode !== 'off').length,
+          openedAt: lot.openedAt ?? null,
+          closedAt: at,
+        };
+        stats.recentClosedTrades = [
+          closedTrade,
+          ...(stats.recentClosedTrades ?? []).filter(trade => trade.id !== closedTrade.id),
+        ].slice(0, 20);
         stats.openLots = stats.openLots.filter(item => item !== lot);
         lot = undefined;
       }
@@ -527,11 +564,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         stats.openLots.push({
           symbol: fill.symbol, netQuantity: remaining, avgPrice: fill.price,
           tradePnlUsd: 0, tradePnlPoints: 0,
+          openedAt: at,
+          side: remaining > 0 ? 'Long' : 'Short',
+          maxQuantity: Math.abs(remaining),
         });
       } else {
         const total = Math.abs(lot.netQuantity) + Math.abs(remaining);
         lot.avgPrice = (Math.abs(lot.netQuantity) * lot.avgPrice + Math.abs(remaining) * fill.price) / total;
         lot.netQuantity += remaining;
+        lot.maxQuantity = Math.max(lot.maxQuantity ?? 0, Math.abs(lot.netQuantity));
       }
     }
 
@@ -569,6 +610,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   const failClosed = (reason: unknown, failure: { transportLost?: boolean } = {}) => {
+    const wasLiveArmed = gate.armed && !gate.shadowMode;
     lastError = errorOf(reason);
     gate = {
       ...gate,
@@ -581,6 +623,36 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     positionCheckComplete = false;
     if (failure.transportLost) source.connection(false);
     options.onError?.(lastError);
+    // Fail-closed uprostřed živého obchodu nesmí nechat kopie viset bez
+    // dozoru (živý incident: rejected modify zabil follower SL a exit
+    // leadera o 9 s později už byl blokovaný). Bez transportu zavřít nejde
+    // a kill switch je explicitní freeze — obojí kryje jen notifikace.
+    if (wasLiveArmed && !failure.transportLost && !gate.killSwitch) {
+      scheduleAutoClose('fail-closed');
+    }
+  };
+
+  /**
+   * Naplánuje risk-redukující zavření kopií na konec event fronty. Jednorázové
+   * per epizoda: selhání zavření volá failClosed už odzbrojené (wasLiveArmed
+   * = false), takže se smyčka nikdy neroztočí.
+   */
+  const scheduleAutoClose = (trigger: 'fail-closed') => {
+    if (autoCloseInFlight || stopped) return;
+    autoCloseInFlight = true;
+    const seed = clock();
+    eventTail = eventTail
+      .then(async () => {
+        try {
+          await autoFlattenCopies(trigger, seed);
+        } finally {
+          autoCloseInFlight = false;
+        }
+      })
+      .catch(reason => {
+        autoCloseInFlight = false;
+        failClosed(reason);
+      });
   };
 
   const failClosedOnCriticalAudit = (entries: readonly CopierAuditEntry[]) => {
@@ -644,12 +716,48 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   /**
+   * Risk-redukující zavření kopií — jediná automatická broker akce copieru.
+   * Ruší working příkazy a zavírá pozice k nule; nikdy nezvětší |pozici|
+   * ani neotočí směr (planFlatten). Spouští ji expirace ARM a fail-closed
+   * za živého ARM. Bez lokálně známé expozice se nic neposílá — výpadek na
+   * hranici session nesmí vyrábět falešné FAIL-CLOSED poplachy z flattenu
+   * naprázdno (working day-orders ruší burza sama).
+   */
+  const autoFlattenCopies = async (trigger: CopierAutoClose['trigger'], seed: number) => {
+    const scope = group.safety?.armExpiryFlatten ?? DEFAULT_COPY_GROUP_SAFETY.armExpiryFlatten;
+    if (scope === 'off' || group.leaderAccountId == null || gate.killSwitch) return;
+    const accountIds = scope === 'group'
+      ? [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
+      : group.followers.map(follower => follower.accountId);
+    const hasExposure = accountIds.some(accountId =>
+      [...(positionsByAccount.get(accountId)?.values() ?? [])].some(quantity => quantity !== 0));
+    if (!hasExposure) return;
+    const operationId = `auto-close:${trigger}:${seed}`;
+    const at = clock();
+    try {
+      const result = await flatten(accountIds, operationId);
+      lastAutoClose = {
+        at, operationId, trigger, scope, accountIds, flat: result.flat,
+        canceledOrders: result.canceledOrders, submittedClosures: result.submittedClosures,
+      };
+      options.onAudit?.([{
+        at: clock(), leaderEventId: operationId, kind: 'blocked',
+        reason: `auto-close (${trigger}, ${scope}): zrušeno ${result.canceledOrders} příkazů, zavřeno ${result.submittedClosures} pozic`,
+      }]);
+    } catch (error) {
+      lastAutoClose = {
+        at, operationId, trigger, scope, accountIds, flat: false,
+        canceledOrders: 0, submittedClosures: 0, error: errorOf(error).message,
+      };
+      failClosed(new Error(`Auto-close kopií (${trigger}) selhal: ${errorOf(error).message}`));
+    }
+  };
+
+  /**
    * Expirace ARM nesmí nechat kopie viset bez dozoru. Vyhodnocuje se
    * event-driven (heartbeat chodí každé ~2,5 s) proti injektovaným hodinám,
-   * takže je plně deterministická. Auto-flatten je jediná automatická broker
-   * akce copieru a je čistě risk-redukující: ruší working příkazy a zavírá
-   * pozice k nule — nikdy nezvětší |pozici| ani neotočí směr (planFlatten).
-   * Shadow ARM nikdy nic neposílá, ani při expiraci.
+   * takže je plně deterministická. Shadow ARM nikdy nic neposílá, ani při
+   * expiraci.
    */
   const maybeHandleArmExpiry = async (now: number) => {
     if (stopped || !gate.armed || gate.armTtlMs <= 0) return;
@@ -661,34 +769,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       at: now, leaderEventId: `arm-expiry-${armedAt}`, kind: 'blocked',
       reason: 'arm-expired: ARM TTL vypršel, copier se odzbrojil',
     }]);
-    const scope = group.safety?.armExpiryFlatten ?? DEFAULT_COPY_GROUP_SAFETY.armExpiryFlatten;
-    if (wasShadow || scope === 'off' || group.leaderAccountId == null) return;
-    const accountIds = scope === 'group'
-      ? [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
-      : group.followers.map(follower => follower.accountId);
-    // Bez lokálně známé expozice se nic neposílá — expirace často potká
-    // ztrátu spojení na hranici session a flatten naprázdno by jen vyrobil
-    // falešný FAIL-CLOSED poplach. Working day-orders ruší burza sama.
-    const hasExposure = accountIds.some(accountId =>
-      [...(positionsByAccount.get(accountId)?.values() ?? [])].some(quantity => quantity !== 0));
-    if (!hasExposure) return;
-    const operationId = `arm-expiry:${armedAt}`;
+    if (wasShadow || autoCloseInFlight) return;
+    autoCloseInFlight = true;
     try {
-      const result = await flatten(accountIds, operationId);
-      lastArmExpiryClose = {
-        at: now, operationId, scope, accountIds, flat: result.flat,
-        canceledOrders: result.canceledOrders, submittedClosures: result.submittedClosures,
-      };
-      options.onAudit?.([{
-        at: clock(), leaderEventId: `arm-expiry-${armedAt}`, kind: 'blocked',
-        reason: `arm-expiry flatten (${scope}): zrušeno ${result.canceledOrders} příkazů, zavřeno ${result.submittedClosures} pozic`,
-      }]);
-    } catch (error) {
-      lastArmExpiryClose = {
-        at: now, operationId, scope, accountIds, flat: false,
-        canceledOrders: 0, submittedClosures: 0, error: errorOf(error).message,
-      };
-      failClosed(new Error(`ARM vypršel s otevřenou expozicí a auto-flatten selhal: ${errorOf(error).message}`));
+      await autoFlattenCopies('arm-expiry', armedAt);
+    } finally {
+      autoCloseInFlight = false;
     }
   };
 
@@ -704,8 +790,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     pendingOsoTimers.delete(entryOrderId);
     const pending = pendingOsoEvents.get(entryOrderId);
     pendingOsoEvents.delete(entryOrderId);
+    const loneLegCount = osoCorrelator.pendingLegCount(entryOrderId);
     osoCorrelator.release(entryOrderId);
     if (!pending || stopped) {
+      settleOsoFlush(entryOrderId);
+      return;
+    }
+    // Entry s jediným protective legem se nesmí tiše zkopírovat bez ochrany
+    // (leg se samostatně nikdy neodesílá). Jasný fail-closed místo tiché
+    // díry v ochraně — a místo dřívějšího kryptického `out-of-order` pádu.
+    if (loneLegCount > 0) {
+      options.onAudit?.([{
+        at: clock(), leaderEventId: pending.id, kind: 'blocked',
+        reason: `oso-lone-leg: entry má ${loneLegCount} ochranný příkaz bez druhého do ${osoCorrelator.pendingWindowMs()} ms`,
+      }]);
+      failClosed(new Error(
+        `Entry ${entryOrderId} dorazil jen s jedním ochranným příkazem (SL bez TP, nebo TP dorazil pozdě). `
+        + 'Entry nebyl zkopírován — zadej SL i TP společně.',
+      ));
       settleOsoFlush(entryOrderId);
       return;
     }
@@ -724,6 +826,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         store: options.store,
         metrics,
         maxConcurrentDispatches: options.maxConcurrentDispatches,
+        // Událost byla zaznamenaná v pořadí; mezitím ji směly předběhnout
+        // nesouvisející lifecycle eventy. Viz ProcessLeaderEventOptions.
+        deferredReplay: true,
       });
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
@@ -770,9 +875,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // Obchod rozjetý před startem počítadla skončil — další vstup na
         // tomto symbolu se už do denního limitu počítá normálně.
         if (event.position.netQuantity === 0) untrackedTradeSymbols.delete(event.position.symbol);
-        // Deník vstupů/exitů pro notifikace: jen přechody přes flat, jednotlivé
-        // nohy a scale-in/out schválně ne. Ring buffer čte server z heartbeat
-        // statusu (push do PWA) a appka z pollu — obchodní hot path se nemění.
+        // Redigovaný deník změn pozice pro notifikace. Ring buffer čte server
+        // z heartbeat statusu a appka z pollu; nevykonává žádnou broker akci.
         recordCopyEvent(previousNet, event.position.netQuantity, event.position.symbol, now);
         const cooldownMinutes = group.safety?.entryCooldownMinutes ?? 0;
         if (
@@ -1221,13 +1325,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         dayLockUntil: current.state.safety.dayLockUntil,
         dayLockReason: current.state.safety.dayLockReason ?? null,
         armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : 0,
+        armedAt: gate.armed ? gate.armedAt : 0,
         recentCopyEvents: [...recentCopyEvents],
-        armExpiryClose: lastArmExpiryClose ? { ...lastArmExpiryClose, accountIds: [...lastArmExpiryClose.accountIds] } : null,
+        autoClose: lastAutoClose ? { ...lastAutoClose, accountIds: [...lastAutoClose.accountIds] } : null,
         dailyStats: current.state.safety.dailyStats
           ? {
             sessionEndAt: current.state.safety.dailyStats.sessionEndAt,
             realizedPnlUsd: current.state.safety.dailyStats.realizedPnlUsd,
             losingTrades: current.state.safety.dailyStats.losingTrades,
+            recentClosedTrades: current.state.safety.dailyStats.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
             unpricedSymbols: [...current.state.safety.dailyStats.unpricedSymbols],
           }
           : null,

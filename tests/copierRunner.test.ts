@@ -966,12 +966,14 @@ describe('zrušení objednávky u leadera', () => {
     });
 
     expect(recovered.runtime.cancelOutbox.get(unknownCancel.key)).toMatchObject({ status: 'confirmed' });
+    // Modify proti už zrušené objednávce je od 2026-08-20 bezpředmětný
+    // no-op (confirmed), ne waived — výsledek je ekvivalentně terminální.
     expect(recovered.runtime.cancelOutbox.get(stuckModify.key)).toMatchObject({
-      status: 'waived',
-      reason: expect.stringContaining('nahrazeno potvrzeným cancellem'),
+      status: 'confirmed',
+      reason: expect.stringContaining('bezpředmětný'),
     });
     expect(recovered.runtime.state.lastSequence).toBe(3);
-    expect(recovered.metrics.recovered).toBe(1);
+    expect(recovered.metrics.recovered).toBe(2);
   });
 
   it('po pádu mezi broker cancellem a finálním commitem obnoví všechny followery bez druhého cancelu', async () => {

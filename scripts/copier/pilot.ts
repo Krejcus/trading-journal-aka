@@ -169,14 +169,25 @@ async function runMultiConnectionAgent(): Promise<void> {
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
       getAccessToken: context.getAccessToken,
+      // Do chybových hlášek: bez štítku nejde z logu poznat, které OAuth
+      // spojení (propfirma) vypadlo.
+      connectionLabel: `conn:${entry.connectionId.slice(0, 8)}`,
     });
+    console.log(`CONNECTION conn:${entry.connectionId.slice(0, 8)} účty=${entry.accountIds.join(',')}`);
     return { context, accountIds: entry.accountIds, accounts, accountSpecsByAccountId, broker };
   }));
   const accounts = loaded.flatMap(item => item.accounts);
   const leaderId = integerFlag('leader');
   const followerId = integerFlag('follower');
   validatePair(accounts, leaderId, followerId);
-  const broker = createBrokerRouter(loaded.map(item => ({ broker: item.broker, accountIds: item.accountIds })));
+  // Spojení nesoucí leader stream je kritické (výpadek = okamžitý DISARM);
+  // follower-only propfirmy dostávají reconnect lhůtu, aby token cyklus
+  // jedné z nich nezastavoval kopírování všech ostatních.
+  const broker = createBrokerRouter(loaded.map(item => ({
+    broker: item.broker,
+    accountIds: item.accountIds,
+    critical: item.accountIds.includes(leaderId),
+  })));
   await runLocalAgent(loaded.map(item => item.context), leaderId, followerId, accounts, broker);
 }
 
@@ -297,7 +308,7 @@ async function runLocalAgent(
       onAudit: entries => {
         auditTail = auditTail.then(() => writeAudit(entries));
       },
-      onError: error => console.error(`FAIL-CLOSED ${error.message}`),
+      onError: error => console.error(`${new Date().toISOString()} FAIL-CLOSED ${error.message}`),
     });
     await waitUntil(() => controller?.status().connected === true, 15_000, 'WebSocket sync timeout');
     agent = await startLocalCopierExecutionAgent({
@@ -714,7 +725,7 @@ async function runRuntime(
       onAudit: entries => {
         auditTail = auditTail.then(() => writeAudit(entries));
       },
-      onError: error => console.error(`FAIL-CLOSED ${error.message}`),
+      onError: error => console.error(`${new Date().toISOString()} FAIL-CLOSED ${error.message}`),
     });
     await waitUntil(() => controller?.status().connected === true, 15_000, 'WebSocket sync timeout');
     const reconciliation = await controller.reconcile();
