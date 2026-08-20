@@ -39,8 +39,10 @@
 	<true/>
     <key>NSFaceIDUsageDescription</key>
     <string>AlphaTrade používá Face ID pouze k ochraně finančních dat v aplikaci.</string>
-    <key>NSSupportsLiveActivities</key>
-    <true/>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>AlphaTrade otevře systémový editor pouze pro událost, kterou se rozhodnete uložit do Kalendáře.</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -5,32 +5,141 @@ import WidgetKit
 
 private struct AlphaTradeSnapshot: Codable, Equatable {
     struct Account: Codable, Equatable {
+        let id: String
         let name: String
         let balance: Double
         let pnl: Double
+        let openPnl: Double
+        let locked: Bool
+        let lockReason: String?
     }
 
-    let dayPnL: Double
-    let dayR: Double
-    let tradeCount: Int
-    let riskPercent: Int
-    let discipline: Int
-    let equity: [Double]
-    let accounts: [Account]
+    struct Trade: Codable, Equatable {
+        let id: String
+        let symbol: String
+        let side: String
+        let pnl: Double
+        let quantity: Double?
+        let timestamp: Double
+    }
+
+    struct Position: Codable, Equatable {
+        let accountName: String
+        let symbol: String
+        let side: String
+        let quantity: Double
+        let averagePrice: Double?
+    }
+
+    struct Journal: Codable, Equatable {
+        let dayPnl: Double
+        let dayR: Double
+        let tradeCount: Int
+        let riskPercent: Int
+        let discipline: Int
+        let equity: [Double]
+        let accounts: [Account]
+        let recentTrades: [Trade]
+    }
+
+    struct Live: Codable, Equatable {
+        let connected: Bool
+        let armed: Bool
+        let shadowMode: Bool
+        let killSwitch: Bool
+        let status: String
+        let statusDetail: String
+        let armExpiresAt: Double
+        let cooldownUntil: Double
+        let dayLockUntil: Double
+        let dayLockReason: String?
+        let dailyRealizedPnl: Double
+        let losingTrades: Int
+        let followerCount: Int
+        let openPositionCount: Int
+        let workingOrderCount: Int
+        let realizedPnl: Double
+        let openPnl: Double
+        let totalPnl: Double
+        let accounts: [Account]
+        let positions: [Position]
+        let recentTrades: [Trade]
+        let equity: [Double]?
+    }
+
+    let version: Int
+    let updatedAt: Double
+    let journal: Journal?
+    let live: Live?
+
+    var dayPnL: Double { live?.totalPnl ?? journal?.dayPnl ?? 0 }
+    var dayR: Double { journal?.dayR ?? 0 }
+    var tradeCount: Int { journal?.tradeCount ?? live?.recentTrades.count ?? 0 }
+    var riskPercent: Int { journal?.riskPercent ?? 0 }
+    var discipline: Int { journal?.discipline ?? 100 }
+    var equity: [Double] {
+        if let liveEquity = live?.equity, liveEquity.count > 1 { return liveEquity }
+        return journal?.equity ?? []
+    }
+    var accounts: [Account] { live?.accounts.isEmpty == false ? live?.accounts ?? [] : journal?.accounts ?? [] }
+    var recentTrades: [Trade] { live?.recentTrades.isEmpty == false ? live?.recentTrades ?? [] : journal?.recentTrades ?? [] }
+    var isPlaceholder: Bool { updatedAt <= 0 }
+    var isLiveStale: Bool {
+        guard live != nil, updatedAt > 0 else { return false }
+        return Date().timeIntervalSince1970 * 1_000 - updatedAt > 30 * 60_000
+    }
 
     static let test = AlphaTradeSnapshot(
-        dayPnL: 428.50,
-        dayR: 2.14,
-        tradeCount: 3,
-        riskPercent: 38,
-        discipline: 92,
-        equity: [50_000, 50_120, 50_040, 50_310, 50_260, 50_510, 50_428],
-        accounts: [
-            .init(name: "Alpha 50K", balance: 50_428.50, pnl: 428.50),
-            .init(name: "Tradeify 50K", balance: 50_214.25, pnl: 214.25),
-            .init(name: "Lucid 50K", balance: 49_942.00, pnl: -58.00),
-        ]
+        version: 2,
+        updatedAt: 0,
+        journal: .init(
+            dayPnl: 428.50, dayR: 2.14, tradeCount: 3, riskPercent: 38,
+            discipline: 92, equity: [50_000, 50_120, 50_040, 50_310, 50_428],
+            accounts: [
+                .init(id: "preview-1", name: "Alpha 50K", balance: 50_428.50, pnl: 428.50, openPnl: 0, locked: false, lockReason: nil),
+                .init(id: "preview-2", name: "Tradeify 50K", balance: 50_214.25, pnl: 214.25, openPnl: 0, locked: false, lockReason: nil),
+            ],
+            recentTrades: [.init(id: "preview", symbol: "MNQ", side: "Long", pnl: 428.50, quantity: 2, timestamp: 0)]
+        ),
+        live: .init(
+            connected: true, armed: true, shadowMode: false, killSwitch: false,
+            status: "ARM LIVE", statusDetail: "Kopírování je aktivní.",
+            armExpiresAt: 0, cooldownUntil: 0, dayLockUntil: 0, dayLockReason: nil,
+            dailyRealizedPnl: 320, losingTrades: 1, followerCount: 5,
+            openPositionCount: 1, workingOrderCount: 2, realizedPnl: 320,
+            openPnl: 108.50, totalPnl: 428.50,
+            accounts: [], positions: [.init(accountName: "Alpha 50K", symbol: "MNQ", side: "Long", quantity: 2, averagePrice: 22_450.25)],
+            recentTrades: [], equity: [50_000, 50_120, 50_040, 50_310, 50_428]
+        )
     )
+
+    static let empty = AlphaTradeSnapshot(
+        version: 2,
+        updatedAt: 0,
+        journal: .init(
+            dayPnl: 0, dayR: 0, tradeCount: 0, riskPercent: 0,
+            discipline: 100, equity: [], accounts: [], recentTrades: []
+        ),
+        live: nil
+    )
+
+    static func current() -> AlphaTradeSnapshot {
+        guard let defaults = UserDefaults(suiteName: "group.app.alphatrade.native"),
+              let json = defaults.string(forKey: "AlphaTradeWidgetSnapshotV2"),
+              let data = json.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(AlphaTradeSnapshot.self, from: data),
+              decoded.version == 2 else { return .empty }
+        return decoded
+    }
+
+    func mergingRemote(_ remote: AlphaTradeSnapshot) -> AlphaTradeSnapshot {
+        AlphaTradeSnapshot(
+            version: 2,
+            updatedAt: remote.updatedAt,
+            journal: journal ?? remote.journal,
+            live: remote.live ?? live
+        )
+    }
 }
 
 private struct AlphaTradeEntry: TimelineEntry {
@@ -39,24 +148,119 @@ private struct AlphaTradeEntry: TimelineEntry {
 }
 
 private struct AlphaTradeProvider: TimelineProvider {
+    private let suiteName = "group.app.alphatrade.native"
+    private let tokenKey = "AlphaTradeWidgetAccessTokenV1"
+    private let snapshotKey = "AlphaTradeWidgetSnapshotV2"
+    private let endpoint = URL(string: "https://alphatrade-mentor-15.vercel.app/api/native-widget-snapshot")!
+
     func placeholder(in context: Context) -> AlphaTradeEntry { .init(date: .now, snapshot: .test) }
     func getSnapshot(in context: Context, completion: @escaping (AlphaTradeEntry) -> Void) {
-        completion(.init(date: .now, snapshot: .test))
+        completion(.init(date: .now, snapshot: context.isPreview ? .test : .current()))
     }
     func getTimeline(in context: Context, completion: @escaping (Timeline<AlphaTradeEntry>) -> Void) {
-        completion(.init(entries: [.init(date: .now, snapshot: .test)], policy: .after(.now.addingTimeInterval(900))))
+        let current = AlphaTradeSnapshot.current()
+        guard let defaults = UserDefaults(suiteName: suiteName),
+              let token = defaults.string(forKey: tokenKey),
+              token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else {
+            completion(timeline(current))
+            return
+        }
+        AlphaTradeWidgetPushRegistration.registerIfNeeded(defaults: defaults, accessToken: token)
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 12
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("Widget \(token)", forHTTPHeaderField: "Authorization")
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            guard let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data,
+                  let remote = try? JSONDecoder().decode(AlphaTradeSnapshot.self, from: data),
+                  remote.version == 2 else {
+                completion(timeline(current))
+                return
+            }
+            let merged = current.mergingRemote(remote)
+            if let encoded = try? JSONEncoder().encode(merged),
+               let json = String(data: encoded, encoding: .utf8) {
+                defaults.set(json, forKey: snapshotKey)
+            }
+            completion(timeline(merged))
+        }.resume()
+    }
+
+    private func timeline(_ snapshot: AlphaTradeSnapshot) -> Timeline<AlphaTradeEntry> {
+        // WidgetKit owns the actual budget. Five minutes is a request, not a
+        // promise; urgent ARM/position changes continue through ActivityKit.
+        Timeline(entries: [.init(date: .now, snapshot: snapshot)], policy: .after(.now.addingTimeInterval(5 * 60)))
+    }
+}
+
+@available(iOS 26.0, *)
+private enum AlphaTradeWidgetPushRegistration {
+    private static let pushTokenKey = "AlphaTradeWidgetPushTokenV1"
+    private static let kindsKey = "AlphaTradeWidgetPushKindsV1"
+    private static let registeredSignatureKey = "AlphaTradeWidgetPushRegisteredSignatureV1"
+    private static let endpoint = URL(string: "https://alphatrade-mentor-15.vercel.app/api/native-widget-push-subscription")!
+
+    static func receive(pushInfo: WidgetPushInfo, widgets: [WidgetInfo]) {
+        guard let defaults = UserDefaults(suiteName: "group.app.alphatrade.native") else { return }
+        let deviceToken = pushInfo.token.map { String(format: "%02x", $0) }.joined()
+        let kinds = Array(Set(widgets.map(\.kind))).sorted()
+        defaults.set(deviceToken, forKey: pushTokenKey)
+        defaults.set(kinds, forKey: kindsKey)
+        guard let accessToken = defaults.string(forKey: "AlphaTradeWidgetAccessTokenV1") else { return }
+        registerIfNeeded(defaults: defaults, accessToken: accessToken)
+    }
+
+    static func registerIfNeeded(defaults: UserDefaults, accessToken: String) {
+        guard accessToken.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+              let deviceToken = defaults.string(forKey: pushTokenKey),
+              deviceToken.range(of: "^[0-9a-f]{64,512}$", options: .regularExpression) != nil else { return }
+        let kinds = defaults.stringArray(forKey: kindsKey) ?? []
+#if DEBUG
+        let environment = "development"
+#else
+        let environment = "production"
+#endif
+        let signature = "\(environment):\(deviceToken):\(kinds.joined(separator: ","))"
+        guard defaults.string(forKey: registeredSignatureKey) != signature else { return }
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 12
+        request.setValue("Widget \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "deviceToken": deviceToken,
+            "environment": environment,
+            "bundleId": "app.alphatrade.native",
+            "enabled": !kinds.isEmpty,
+            "widgetKinds": kinds,
+        ])
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            defaults.set(signature, forKey: registeredSignatureKey)
+        }.resume()
+    }
+}
+
+@available(iOS 26.0, *)
+private struct AlphaTradeWidgetPushHandler: WidgetPushHandler {
+    init() {}
+
+    func pushTokenDidChange(_ pushInfo: WidgetPushInfo, widgets: [WidgetInfo]) {
+        AlphaTradeWidgetPushRegistration.receive(pushInfo: pushInfo, widgets: widgets)
     }
 }
 
 private enum ATStyle {
-    static let background = Color(red: 248 / 255, green: 250 / 255, blue: 252 / 255)
-    static let card = Color.white
-    static let ink = Color(red: 15 / 255, green: 23 / 255, blue: 42 / 255)
-    static let muted = Color(red: 100 / 255, green: 116 / 255, blue: 139 / 255)
+    static let background = Color(uiColor: .secondarySystemBackground)
+    static let card = Color(uiColor: .systemBackground)
+    static let ink = Color.primary
+    static let muted = Color.secondary
     static let blue = Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255)
     static let green = Color(red: 5 / 255, green: 150 / 255, blue: 105 / 255)
     static let red = Color(red: 225 / 255, green: 29 / 255, blue: 72 / 255)
-    static let border = Color(red: 226 / 255, green: 232 / 255, blue: 240 / 255)
+    static let border = Color(uiColor: .separator).opacity(0.35)
 }
 
 private extension View {
@@ -72,12 +276,24 @@ private extension View {
 private struct ATHeader: View {
     let title: String
     let icon: String
+    var stale = false
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: icon).foregroundStyle(ATStyle.blue)
             Text(title).font(.caption2.bold()).lineLimit(1).minimumScaleFactor(0.7)
             Spacer()
-            Text("TEST DATA").font(.system(size: 7, weight: .bold)).foregroundStyle(ATStyle.muted)
+            if stale {
+                Image(systemName: "clock.badge.exclamationmark.fill")
+                    .font(.caption2).foregroundStyle(ATStyle.red)
+                    .accessibilityLabel("Data jsou zastaralá")
+            }
+            Button(intent: RefreshAlphaTradeWidgetsIntent()) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption2.bold())
+                    .foregroundStyle(ATStyle.blue)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Obnovit data")
         }
     }
 }
@@ -86,15 +302,31 @@ private func money(_ value: Double) -> String {
     value.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
 }
 
+private struct ATNoDataView: View {
+    var compact = false
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "icloud.and.arrow.down")
+            Text("Čekám na skutečná data")
+        }
+        .font(compact ? .caption2.bold() : .caption.bold())
+        .foregroundStyle(ATStyle.muted)
+    }
+}
+
 private struct TodayView: View {
     let entry: AlphaTradeEntry
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ATHeader(title: "ALPHATRADE", icon: "checklist")
-            Text("Dnešní plán").font(.headline)
-            Text("Sweep → MSS → návrat do FVG").font(.caption).foregroundStyle(ATStyle.muted)
+            ATHeader(title: "ALPHATRADE", icon: "checklist", stale: entry.snapshot.isLiveStale)
+            Text(entry.snapshot.isPlaceholder ? "Otevři AlphaTrade" : entry.snapshot.live?.status ?? "Dnešní deník")
+                .font(.headline)
+            Text(entry.snapshot.isPlaceholder
+                 ? "Po prvním načtení se zobrazí skutečná data."
+                 : entry.snapshot.live?.statusDetail ?? "\(entry.snapshot.tradeCount) obchodů · \(money(entry.snapshot.dayPnL))")
+                .font(.caption).foregroundStyle(ATStyle.muted).lineLimit(2)
             Spacer()
-            HStack { Text("Risk \(entry.snapshot.riskPercent)%"); Spacer(); Text("\(entry.snapshot.tradeCount) / 3") }
+            HStack { Text("Risk \(entry.snapshot.riskPercent)%"); Spacer(); Text("\(entry.snapshot.tradeCount) obchodů") }
                 .font(.caption2.bold()).foregroundStyle(ATStyle.blue)
         }.padding().alphaTradeSurface().widgetURL(URL(string: "alphatrade-native://dashboard"))
     }
@@ -104,11 +336,20 @@ private struct PnLView: View {
     let entry: AlphaTradeEntry
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ATHeader(title: "DAILY P&L", icon: "dollarsign.circle.fill")
-            Text(money(entry.snapshot.dayPnL)).font(.title2.bold().monospacedDigit()).foregroundStyle(ATStyle.green).privacySensitive()
-            Text(String(format: "%+.2fR", entry.snapshot.dayR)).font(.headline.monospacedDigit()).foregroundStyle(ATStyle.blue)
-            Spacer()
-            Text("\(entry.snapshot.tradeCount) obchody · Risk \(entry.snapshot.riskPercent)%").font(.caption2.bold()).foregroundStyle(ATStyle.muted)
+            ATHeader(title: "DAILY P&L", icon: "dollarsign.circle.fill", stale: entry.snapshot.isLiveStale)
+            if entry.snapshot.isPlaceholder {
+                Spacer()
+                ATNoDataView()
+                Text("Otevři AlphaTrade nebo klepni na obnovu.")
+                    .font(.caption2).foregroundStyle(ATStyle.muted)
+                Spacer()
+            } else {
+                Text(money(entry.snapshot.dayPnL)).font(.title2.bold().monospacedDigit())
+                    .foregroundStyle(entry.snapshot.dayPnL >= 0 ? ATStyle.green : ATStyle.red).privacySensitive()
+                Text(String(format: "%+.2fR", entry.snapshot.dayR)).font(.headline.monospacedDigit()).foregroundStyle(ATStyle.blue)
+                Spacer()
+                Text("\(entry.snapshot.tradeCount) obchody · Risk \(entry.snapshot.riskPercent)%").font(.caption2.bold()).foregroundStyle(ATStyle.muted)
+            }
         }.padding().alphaTradeSurface().widgetURL(URL(string: "alphatrade-native://journal"))
     }
 }
@@ -143,9 +384,16 @@ private struct EquityView: View {
                     }.stroke(ATStyle.border, lineWidth: 1)
                     EquityLine(values: entry.snapshot.equity)
                         .stroke(LinearGradient(colors: [ATStyle.blue, ATStyle.green], startPoint: .leading, endPoint: .trailing), style: .init(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    if entry.snapshot.equity.count < 2 {
+                        Text("Zatím bez equity dat").font(.caption2).foregroundStyle(ATStyle.muted)
+                    }
                 }
             }
-            HStack { Text("START"); Spacer(); Text(money(entry.snapshot.equity.last ?? 0)).privacySensitive() }
+            HStack {
+                Text("START")
+                Spacer()
+                Text(entry.snapshot.equity.last.map(money) ?? "—").privacySensitive()
+            }
                 .font(.caption.bold().monospacedDigit()).foregroundStyle(ATStyle.muted)
         }.padding().alphaTradeSurface().widgetURL(URL(string: "alphatrade-native://dashboard"))
     }
@@ -155,11 +403,26 @@ private struct AccountsView: View {
     let entry: AlphaTradeEntry
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            ATHeader(title: "ÚČTY", icon: "wallet.bifold.fill")
-            ForEach(entry.snapshot.accounts, id: \.name) { account in
+            ATHeader(title: "ÚČTY", icon: "wallet.bifold.fill", stale: entry.snapshot.isLiveStale)
+            if entry.snapshot.accounts.isEmpty {
+                Spacer()
+                ATNoDataView()
+                Spacer()
+            }
+            ForEach(entry.snapshot.accounts, id: \.id) { account in
                 HStack {
-                    VStack(alignment: .leading) { Text(account.name).font(.caption.bold()); Text(money(account.balance)).privacySensitive() }
-                    Spacer(); Text(money(account.pnl)).foregroundStyle(account.pnl >= 0 ? ATStyle.green : ATStyle.red).privacySensitive()
+                    VStack(alignment: .leading) {
+                        HStack(spacing: 3) {
+                            Text(account.name).font(.caption.bold()).lineLimit(1)
+                            if account.locked { Image(systemName: "lock.fill").foregroundStyle(ATStyle.red) }
+                        }
+                        Text(money(account.balance)).privacySensitive()
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(money(account.pnl)).foregroundStyle(account.pnl >= 0 ? ATStyle.green : ATStyle.red).privacySensitive()
+                        if account.openPnl != 0 { Text("open \(money(account.openPnl))").foregroundStyle(ATStyle.muted).privacySensitive() }
+                    }
                 }.font(.caption2.monospacedDigit())
                 if account.name != entry.snapshot.accounts.last?.name { Divider() }
             }
@@ -173,11 +436,15 @@ private struct DisciplineView: View {
         VStack(alignment: .leading, spacing: 8) {
             ATHeader(title: "DISCIPLÍNA", icon: "shield.checkered")
             Spacer()
-            ZStack {
-                Circle().stroke(ATStyle.border, lineWidth: 10)
-                Circle().trim(from: 0, to: Double(entry.snapshot.discipline) / 100)
-                    .stroke(ATStyle.green, style: .init(lineWidth: 10, lineCap: .round)).rotationEffect(.degrees(-90))
-                Text("\(entry.snapshot.discipline)%").font(.title3.bold().monospacedDigit())
+            if entry.snapshot.isPlaceholder {
+                ATNoDataView()
+            } else {
+                ZStack {
+                    Circle().stroke(ATStyle.border, lineWidth: 10)
+                    Circle().trim(from: 0, to: Double(entry.snapshot.discipline) / 100)
+                        .stroke(ATStyle.green, style: .init(lineWidth: 10, lineCap: .round)).rotationEffect(.degrees(-90))
+                    Text("\(entry.snapshot.discipline)%").font(.title3.bold().monospacedDigit())
+                }
             }
             Spacer()
         }.padding().alphaTradeSurface().widgetURL(URL(string: "alphatrade-native://ai"))
@@ -186,12 +453,19 @@ private struct DisciplineView: View {
 
 private struct TradesView: View {
     let entry: AlphaTradeEntry
-    private let trades = [("MNQ", "LONG", "+1.42R"), ("MNQ", "SHORT", "-0.50R"), ("NQ", "LONG", "+1.22R")]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ATHeader(title: "POSLEDNÍ OBCHODY", icon: "list.bullet.rectangle")
-            ForEach(Array(trades.enumerated()), id: \.offset) { _, trade in
-                HStack { Text(trade.0).bold(); Text(trade.1).foregroundStyle(trade.1 == "LONG" ? ATStyle.green : ATStyle.red); Spacer(); Text(trade.2).bold() }
+            ATHeader(title: "POSLEDNÍ OBCHODY", icon: "list.bullet.rectangle", stale: entry.snapshot.isLiveStale)
+            if entry.snapshot.recentTrades.isEmpty {
+                Text("Zatím bez potvrzených obchodů").font(.caption).foregroundStyle(ATStyle.muted)
+            }
+            ForEach(entry.snapshot.recentTrades.prefix(3), id: \.id) { trade in
+                HStack {
+                    Text(trade.symbol).bold()
+                    Text(trade.side.uppercased()).foregroundStyle(trade.side.lowercased() == "long" ? ATStyle.green : ATStyle.red)
+                    Spacer()
+                    Text(money(trade.pnl)).bold().foregroundStyle(trade.pnl >= 0 ? ATStyle.green : ATStyle.red).privacySensitive()
+                }
                     .font(.caption.monospacedDigit())
                 Divider()
             }
@@ -223,26 +497,121 @@ private struct ActionsView: View {
     }
 }
 
+private struct CopierStatusView: View {
+    let entry: AlphaTradeEntry
+    private var live: AlphaTradeSnapshot.Live? { entry.snapshot.live }
+    private var statusColor: Color {
+        guard let live else { return ATStyle.muted }
+        if entry.snapshot.isLiveStale { return ATStyle.red }
+        if live.killSwitch || !live.connected { return ATStyle.red }
+        if live.dayLockUntil > Date().timeIntervalSince1970 * 1_000 { return .orange }
+        return live.armed ? ATStyle.green : ATStyle.muted
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ATHeader(title: "COPIER LIVE", icon: "bolt.shield.fill", stale: entry.snapshot.isLiveStale)
+            HStack(alignment: .firstTextBaseline) {
+                Circle().fill(statusColor).frame(width: 8, height: 8)
+                Text(entry.snapshot.isLiveStale ? "DATA ZASTARALÁ" : live?.status ?? "ČEKÁ NA DATA")
+                    .font(.headline).foregroundStyle(statusColor).lineLimit(1).minimumScaleFactor(0.7)
+                Spacer()
+            }
+            Text(entry.snapshot.isLiveStale
+                 ? "Widget se déle než 30 minut nepodařilo obnovit."
+                 : live?.statusDetail ?? "Otevři AlphaTrade LIVE pro první snapshot.")
+                .font(.caption2).foregroundStyle(ATStyle.muted).lineLimit(2)
+            Spacer(minLength: 0)
+            if let live {
+                HStack {
+                    Label("\(live.followerCount)", systemImage: "person.2.fill")
+                    Spacer()
+                    Label("\(live.openPositionCount)", systemImage: "chart.bar.fill")
+                    Spacer()
+                    Text(money(live.totalPnl))
+                        .foregroundStyle(live.totalPnl >= 0 ? ATStyle.green : ATStyle.red)
+                        .privacySensitive()
+                }.font(.caption2.bold().monospacedDigit())
+            } else {
+                ATNoDataView(compact: true)
+            }
+            if let expires = live?.armExpiresAt, expires > Date().timeIntervalSince1970 * 1_000 {
+                HStack(spacing: 4) {
+                    Text("ARM zbývá").foregroundStyle(ATStyle.muted)
+                    Text(timerInterval: Date()...Date(timeIntervalSince1970: expires / 1_000), countsDown: true)
+                        .monospacedDigit().foregroundStyle(statusColor)
+                }.font(.caption2.bold())
+            }
+        }.padding().alphaTradeSurface().widgetURL(URL(string: "alphatrade-native://live"))
+    }
+}
+
+private struct PositionsView: View {
+    let entry: AlphaTradeEntry
+    private var live: AlphaTradeSnapshot.Live? { entry.snapshot.live }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ATHeader(title: "OTEVŘENÉ POZICE", icon: "chart.bar.doc.horizontal.fill", stale: entry.snapshot.isLiveStale)
+            if live?.positions.isEmpty != false {
+                Spacer()
+                Label(live == nil ? "Čeká na LIVE snapshot" : "Všechny účty jsou flat", systemImage: "checkmark.shield.fill")
+                    .font(.caption.bold()).foregroundStyle(live == nil ? ATStyle.muted : ATStyle.green)
+                Spacer()
+            } else {
+                ForEach(Array((live?.positions ?? []).prefix(4).enumerated()), id: \.offset) { _, position in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(position.accountName).font(.caption2.bold()).lineLimit(1)
+                            Text(position.symbol).font(.caption2).foregroundStyle(ATStyle.muted)
+                        }
+                        Spacer()
+                        Text(position.side.uppercased())
+                            .font(.caption2.bold()).foregroundStyle(position.side.lowercased() == "long" ? ATStyle.green : ATStyle.red)
+                        Text("×\(position.quantity.formatted(.number.precision(.fractionLength(0...2))))")
+                            .font(.caption.bold().monospacedDigit())
+                    }
+                }
+            }
+            if let live {
+                HStack {
+                    Text("Open P&L").foregroundStyle(ATStyle.muted)
+                    Spacer()
+                    Text(money(live.openPnl))
+                        .foregroundStyle(live.openPnl >= 0 ? ATStyle.green : ATStyle.red)
+                        .privacySensitive()
+                }.font(.caption.bold().monospacedDigit())
+            }
+        }.padding().alphaTradeSurface().widgetURL(URL(string: "alphatrade-native://live"))
+    }
+}
+
 struct TodayWidget: Widget {
-    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeToday", provider: AlphaTradeProvider()) { TodayView(entry: $0) }.configurationDisplayName("Dnešní plán").description("Plán, risk a počet obchodů.").supportedFamilies([.systemSmall, .systemMedium]) }
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeToday", provider: AlphaTradeProvider()) { TodayView(entry: $0) }.configurationDisplayName("Dnešní plán").description("Plán, risk a počet obchodů.").supportedFamilies([.systemSmall, .systemMedium]).pushHandler(AlphaTradeWidgetPushHandler.self) }
 }
 struct DailyPnLWidget: Widget {
-    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeDailyPnL", provider: AlphaTradeProvider()) { PnLView(entry: $0) }.configurationDisplayName("Daily P&L").description("Výsledek dne v USD a R.").supportedFamilies([.systemSmall, .systemMedium]) }
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeDailyPnL", provider: AlphaTradeProvider()) { PnLView(entry: $0) }.configurationDisplayName("Daily P&L").description("Výsledek dne v USD a R.").supportedFamilies([.systemSmall, .systemMedium]).pushHandler(AlphaTradeWidgetPushHandler.self) }
 }
 struct EquityWidget: Widget {
-    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeEquity", provider: AlphaTradeProvider()) { EquityView(entry: $0) }.configurationDisplayName("Equity Curve").description("Vývoj účtu za poslední období.").supportedFamilies([.systemMedium, .systemLarge]) }
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeEquity", provider: AlphaTradeProvider()) { EquityView(entry: $0) }.configurationDisplayName("Equity Curve").description("Vývoj účtu za poslední období.").supportedFamilies([.systemMedium, .systemLarge]).pushHandler(AlphaTradeWidgetPushHandler.self) }
 }
 struct AccountsWidget: Widget {
-    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeAccounts", provider: AlphaTradeProvider()) { AccountsView(entry: $0) }.configurationDisplayName("Přehled účtů").description("Zůstatky a denní výsledky.").supportedFamilies([.systemMedium]) }
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeAccounts", provider: AlphaTradeProvider()) { AccountsView(entry: $0) }.configurationDisplayName("Přehled účtů").description("Zůstatky a denní výsledky.").supportedFamilies([.systemMedium]).pushHandler(AlphaTradeWidgetPushHandler.self) }
 }
 struct DisciplineWidget: Widget {
-    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeDiscipline", provider: AlphaTradeProvider()) { DisciplineView(entry: $0) }.configurationDisplayName("Disciplína").description("Dodržení plánu a pravidel.").supportedFamilies([.systemSmall]) }
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeDiscipline", provider: AlphaTradeProvider()) { DisciplineView(entry: $0) }.configurationDisplayName("Disciplína").description("Dodržení plánu a pravidel.").supportedFamilies([.systemSmall]).pushHandler(AlphaTradeWidgetPushHandler.self) }
 }
 struct RecentTradesWidget: Widget {
-    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeTrades", provider: AlphaTradeProvider()) { TradesView(entry: $0) }.configurationDisplayName("Poslední obchody").description("Rychlý přehled výsledků.").supportedFamilies([.systemMedium]) }
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeTrades", provider: AlphaTradeProvider()) { TradesView(entry: $0) }.configurationDisplayName("Poslední obchody").description("Rychlý přehled výsledků.").supportedFamilies([.systemMedium]).pushHandler(AlphaTradeWidgetPushHandler.self) }
 }
 struct QuickActionsWidget: Widget {
-    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeActions", provider: AlphaTradeProvider()) { ActionsView(entry: $0) }.configurationDisplayName("Rychlé akce").description("Zápis, Coach, LIVE a Deník.").supportedFamilies([.systemMedium]) }
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeActions", provider: AlphaTradeProvider()) { ActionsView(entry: $0) }.configurationDisplayName("Rychlé akce").description("Zápis, Coach, LIVE a Deník.").supportedFamilies([.systemMedium]).pushHandler(AlphaTradeWidgetPushHandler.self) }
+}
+struct CopierStatusWidget: Widget {
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradeCopier", provider: AlphaTradeProvider()) { CopierStatusView(entry: $0) }.configurationDisplayName("Copier LIVE").description("ARM, spojení, locky, pozice a P&L kopírky.").supportedFamilies([.systemSmall, .systemMedium]).pushHandler(AlphaTradeWidgetPushHandler.self) }
+}
+struct PositionsWidget: Widget {
+    var body: some WidgetConfiguration { StaticConfiguration(kind: "AlphaTradePositions", provider: AlphaTradeProvider()) { PositionsView(entry: $0) }.configurationDisplayName("Otevřené pozice").description("Poslední potvrzené pozice a open P&L ze všech účtů.").supportedFamilies([.systemMedium, .systemLarge]).pushHandler(AlphaTradeWidgetPushHandler.self) }
 }
 
 private struct LockPnLView: View {
@@ -251,9 +620,22 @@ private struct LockPnLView: View {
 
     @ViewBuilder
     var body: some View {
+        if entry.snapshot.isPlaceholder {
+            switch family {
+            case .accessoryInline:
+                Label("P&L čeká na data", systemImage: "icloud.and.arrow.down")
+            case .accessoryCircular:
+                ZStack {
+                    AccessoryWidgetBackground()
+                    Image(systemName: "icloud.and.arrow.down").widgetAccentable()
+                }
+            default:
+                ATNoDataView(compact: true)
+            }
+        } else {
         switch family {
         case .accessoryInline:
-            Label("TEST P&L \(money(entry.snapshot.dayPnL)) · \(String(format: "%+.2fR", entry.snapshot.dayR))", systemImage: "chart.line.uptrend.xyaxis")
+            Label("P&L \(money(entry.snapshot.dayPnL)) · \(String(format: "%+.2fR", entry.snapshot.dayR))", systemImage: "chart.line.uptrend.xyaxis")
                 .privacySensitive()
         case .accessoryCircular:
             ZStack {
@@ -268,13 +650,14 @@ private struct LockPnLView: View {
             }
         default:
             VStack(alignment: .leading, spacing: 3) {
-                Label("DAILY P&L · TEST", systemImage: "dollarsign.circle.fill")
+                Label("DAILY P&L", systemImage: "dollarsign.circle.fill")
                     .font(.caption2.bold()).widgetAccentable()
                 Text(money(entry.snapshot.dayPnL))
                     .font(.headline.bold().monospacedDigit()).privacySensitive()
                 Text("\(String(format: "%+.2fR", entry.snapshot.dayR)) · \(entry.snapshot.tradeCount) obchody")
                     .font(.caption2).privacySensitive()
             }
+        }
         }
     }
 }
@@ -284,7 +667,9 @@ private struct LockDisciplineView: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        if family == .accessoryCircular {
+        if entry.snapshot.isPlaceholder {
+            ATNoDataView(compact: true)
+        } else if family == .accessoryCircular {
             Gauge(value: Double(entry.snapshot.discipline), in: 0...100) {
                 Image(systemName: "shield.checkered")
             } currentValueLabel: {
@@ -294,7 +679,7 @@ private struct LockDisciplineView: View {
             .widgetAccentable()
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                Label("DISCIPLÍNA · TEST", systemImage: "shield.checkered")
+                Label("DISCIPLÍNA", systemImage: "shield.checkered")
                     .font(.caption2.bold()).widgetAccentable()
                 HStack(alignment: .firstTextBaseline) {
                     Text("\(entry.snapshot.discipline)%").font(.title3.bold().monospacedDigit())
@@ -308,7 +693,18 @@ private struct LockDisciplineView: View {
 }
 
 private struct LockLiveView: View {
+    let entry: AlphaTradeEntry
     @Environment(\.widgetFamily) private var family
+
+    private var live: AlphaTradeSnapshot.Live? { entry.snapshot.live }
+
+    private var icon: String {
+        if entry.snapshot.isLiveStale { return "clock.badge.exclamationmark.fill" }
+        if live?.killSwitch == true { return "exclamationmark.octagon.fill" }
+        if (live?.dayLockUntil ?? 0) > Date().timeIntervalSince1970 * 1_000 { return "lock.fill" }
+        if live?.armed == true { return "bolt.shield.fill" }
+        return live?.connected == true ? "pause.circle.fill" : "wifi.slash"
+    }
 
     @ViewBuilder
     var body: some View {
@@ -316,18 +712,26 @@ private struct LockLiveView: View {
             ZStack {
                 AccessoryWidgetBackground()
                 VStack(spacing: 2) {
-                    Image(systemName: "waveform.path.ecg").font(.headline).widgetAccentable()
-                    Text("LIVE").font(.caption2.bold())
+                    Image(systemName: icon).font(.headline).widgetAccentable()
+                    Text(live?.armed == true ? "ARM" : "LIVE").font(.caption2.bold())
                 }
             }
         } else if family == .accessoryInline {
-            Label("Otevřít AlphaTrade LIVE", systemImage: "waveform.path.ecg")
+            if let live {
+                Label("\(live.status) · \(money(live.totalPnl))", systemImage: icon)
+                    .privacySensitive()
+            } else {
+                Label("LIVE čeká na data", systemImage: "icloud.and.arrow.down")
+            }
         } else {
             HStack(spacing: 8) {
-                Image(systemName: "waveform.path.ecg").font(.title2).widgetAccentable()
+                Image(systemName: icon).font(.title2).widgetAccentable()
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("ALPHATRADE LIVE").font(.caption.bold())
-                    Text("Otevřít živý přehled").font(.caption2)
+                    Text(entry.snapshot.isLiveStale ? "DATA ZASTARALÁ" : live?.status ?? "ALPHATRADE LIVE").font(.caption.bold())
+                    Text(live == nil
+                         ? "Otevři appku pro první snapshot"
+                         : "\(live?.openPositionCount ?? 0) pozic · \(money(live?.totalPnl ?? 0))")
+                        .font(.caption2).privacySensitive()
                 }
             }
         }
@@ -341,8 +745,9 @@ struct LockPnLWidget: Widget {
                 .alphaTradeLockSurface()
                 .widgetURL(URL(string: "alphatrade-native://journal"))
         }
+            .pushHandler(AlphaTradeWidgetPushHandler.self)
             .configurationDisplayName("Lock Screen P&L")
-            .description("Testovací denní P&L a R na zamčené obrazovce.")
+            .description("Poslední potvrzené denní P&L a R na zamčené obrazovce.")
             .supportedFamilies([.accessoryInline, .accessoryCircular, .accessoryRectangular])
     }
 }
@@ -354,19 +759,21 @@ struct LockDisciplineWidget: Widget {
                 .alphaTradeLockSurface()
                 .widgetURL(URL(string: "alphatrade-native://ai"))
         }
+            .pushHandler(AlphaTradeWidgetPushHandler.self)
             .configurationDisplayName("Lock Screen disciplína")
-            .description("Testovací skóre disciplíny na zamčené obrazovce.")
+            .description("Aktuální skóre disciplíny na zamčené obrazovce.")
             .supportedFamilies([.accessoryCircular, .accessoryRectangular])
     }
 }
 
 struct LockLiveWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "AlphaTradeLockLive", provider: AlphaTradeProvider()) { _ in
-            LockLiveView()
+        StaticConfiguration(kind: "AlphaTradeLockLive", provider: AlphaTradeProvider()) {
+            LockLiveView(entry: $0)
                 .alphaTradeLockSurface()
                 .widgetURL(URL(string: "alphatrade-native://live"))
         }
+            .pushHandler(AlphaTradeWidgetPushHandler.self)
             .configurationDisplayName("Lock Screen LIVE")
             .description("Rychle otevře AlphaTrade LIVE bez provedení broker akce.")
             .supportedFamilies([.accessoryInline, .accessoryCircular, .accessoryRectangular])
@@ -453,9 +860,9 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                 Text("ALPHATRADE · \(context.attributes.symbol)")
                     .font(.caption.bold())
                 Spacer()
-                Text("TEST")
+                Text(context.state.status)
                     .font(.system(size: 9, weight: .black))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.cyan)
             }
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -471,7 +878,7 @@ private struct AlphaTradeLiveActivityLockScreen: View {
             }
             ProgressView(value: context.state.progress)
                 .tint(context.state.isPositive ? .green : .orange)
-            Text("Pouze test zobrazení · žádná broker akce")
+            Text("Read-only monitoring · žádná broker akce")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
@@ -490,6 +897,8 @@ struct AlphaTradeWidgetBundle: WidgetBundle {
         DisciplineWidget()
         RecentTradesWidget()
         QuickActionsWidget()
+        CopierStatusWidget()
+        PositionsWidget()
         LockPnLWidget()
         LockDisciplineWidget()
         LockLiveWidget()

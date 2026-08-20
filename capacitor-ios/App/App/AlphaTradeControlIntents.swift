@@ -1,4 +1,17 @@
 import AppIntents
+import WidgetKit
+
+@available(iOS 17.0, *)
+struct RefreshAlphaTradeWidgetsIntent: AppIntent {
+    static let title: LocalizedStringResource = "Obnovit AlphaTrade widgety"
+    static let description = IntentDescription("Načte nejnovější read-only stav bez otevření aplikace.")
+    static let openAppWhenRun = false
+
+    func perform() async throws -> some IntentResult {
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
+    }
+}
 
 /// Shared with the widget extension so WidgetKit can discover the controls.
 /// When `openAppWhenRun` is true, iOS executes the app-target copy in the main

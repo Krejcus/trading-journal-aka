@@ -67,6 +67,7 @@
 		A71FAB042FEA000100000004 /* AlphaTradeSystemActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaTradeSystemActions.swift; sourceTree = "<group>"; };
 		A71FAB062FEA000100000006 /* AlphaTradeLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaTradeLiveActivityAttributes.swift; sourceTree = "<group>"; };
 		A71FAB092FEA000100000009 /* AlphaTradeControlIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaTradeControlIntents.swift; sourceTree = "<group>"; };
+		A71FAB0C2FEA00010000000C /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 		B10000000000000000000002 /* AlphaTradeWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaTradeWidgets.swift; sourceTree = "<group>"; };
 		B10000000000000000000004 /* AlphaTradeWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AlphaTradeWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -115,6 +116,7 @@
 		504EC3061FED79650016851F /* App */ = {
 			isa = PBXGroup;
 			children = (
+				A71FAB0C2FEA00010000000C /* App.entitlements */,
 				A71FAB092FEA000100000009 /* AlphaTradeControlIntents.swift */,
 				A71FAB062FEA000100000006 /* AlphaTradeLiveActivityAttributes.swift */,
 				A71FAB042FEA000100000004 /* AlphaTradeSystemActions.swift */,
@@ -200,10 +202,23 @@
 						CreatedOnToolsVersion = 9.2;
 						LastSwiftMigration = 1100;
 						ProvisioningStyle = Automatic;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+							com.apple.Push = {
+								enabled = 1;
+							};
+						};
 					};
 					B10000000000000000000010 = {
 						CreatedOnToolsVersion = 26.0;
 						ProvisioningStyle = Automatic;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups.iOS = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -422,7 +437,9 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
+				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				DEVELOPMENT_TEAM = 7CUFT9738Q;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -445,7 +462,9 @@
 		504EC3181FED79650016851F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				DEVELOPMENT_TEAM = 7CUFT9738Q;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -468,11 +487,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				APS_ENVIRONMENT = development;
+				CODE_SIGN_ENTITLEMENTS = AlphaTradeWidgets/AlphaTradeWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7CUFT9738Q;
 				INFOPLIST_FILE = AlphaTradeWidgets/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -493,11 +514,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				APS_ENVIRONMENT = production;
+				CODE_SIGN_ENTITLEMENTS = AlphaTradeWidgets/AlphaTradeWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7CUFT9738Q;
 				INFOPLIST_FILE = AlphaTradeWidgets/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

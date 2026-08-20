@@ -19,7 +19,7 @@ function requireMatch(value, pattern, label) {
   if (!pattern.test(value)) errors.push(label);
 }
 
-const [config, plist, project, shell, plugin, scene, appDelegate, nativeStorage, packageJson, appSource, widgetSource, widgetPlist, widgetEntitlements, privacyGate, stylesheet, tradeDetail, controlIntents, systemActions] = await Promise.all([
+const [config, plist, project, shell, plugin, scene, appDelegate, nativeStorage, packageJson, appSource, widgetSource, widgetPlist, appEntitlements, widgetEntitlements, privacyGate, stylesheet, tradeDetail, controlIntents, systemActions] = await Promise.all([
   text('capacitor.config.ts'),
   text('capacitor-ios/App/App/Info.plist'),
   text('capacitor-ios/App/App.xcodeproj/project.pbxproj'),
@@ -32,6 +32,7 @@ const [config, plist, project, shell, plugin, scene, appDelegate, nativeStorage,
   text('App.tsx'),
   text('capacitor-ios/App/AlphaTradeWidgets/AlphaTradeWidgets.swift'),
   text('capacitor-ios/App/AlphaTradeWidgets/Info.plist'),
+  text('capacitor-ios/App/App/App.entitlements'),
   text('capacitor-ios/App/AlphaTradeWidgets/AlphaTradeWidgets.entitlements'),
   text('components/NativePrivacyGate.tsx'),
   text('index.css'),
@@ -45,6 +46,7 @@ requireMatch(config, /loggingBehavior:\s*['"]none['"]/, 'Capacitor bridge loggin
 requireMatch(config, /iosScheme:\s*['"]capacitor['"]/, 'Nativní bundle musí používat capacitor:// origin');
 requireMatch(plist, /<string>alphatrade-native<\/string>/, 'Info.plist nemá OAuth scheme alphatrade-native');
 requireMatch(plist, /<key>NSSupportsLiveActivities<\/key>\s*<true\/>/, 'Info.plist nepovoluje Live Activities');
+requireMatch(plist, /<key>NSSupportsLiveActivitiesFrequentUpdates<\/key>\s*<true\/>/, 'Info.plist nepovoluje časté vzdálené Live Activity aktualizace');
 requireMatch(plist, /<key>NSCalendarsWriteOnlyAccessUsageDescription<\/key>/, 'Info.plist nemá účel přístupu k zápisu do Kalendáře');
 for (const key of ['NSFaceIDUsageDescription', 'NSMicrophoneUsageDescription', 'NSSpeechRecognitionUsageDescription']) {
   requireMatch(plist, new RegExp(`<key>${key}<\\/key>`), `Info.plist nemá ${key}`);
@@ -55,8 +57,16 @@ requireMatch(plugin, /CAPPluginMethod\(name: "shareText"/, 'Swift plugin neregis
 for (const method of ['getLiveActivityState', 'startLiveActivity', 'updateLiveActivity', 'endLiveActivity']) {
   requireMatch(plugin, new RegExp(`CAPPluginMethod\\(name: "${method}"`), `Swift plugin neregistruje ${method}`);
 }
+for (const method of ['updateWidgetSnapshot', 'clearWidgetSnapshot', 'setWidgetAccessToken', 'clearWidgetAccessToken']) {
+  requireMatch(plugin, new RegExp(`CAPPluginMethod\\(name: "${method}"`), `Swift plugin neregistruje ${method}`);
+}
+requireMatch(plugin, /UserDefaults\(suiteName: widgetSuiteName\)/, 'Widget snapshot se neukládá do sdílené App Group');
+requireMatch(plugin, /WidgetCenter\.shared\.reloadAllTimelines\(\)/, 'Zápis widget snapshotu neobnoví WidgetKit timeline');
 requireMatch(plugin, /ActivityAuthorizationInfo\(\)\.areActivitiesEnabled/, 'Live Activity musí respektovat systémové povolení iOS');
 requireMatch(plugin, /Activity<AlphaTradeLiveActivityAttributes>\.activities/, 'Live Activity nemá autoritativní ActivityKit stav');
+requireMatch(plugin, /pushType: \.token/, 'Live Activity nevyžádá APNs token pro vzdálenou aktualizaci');
+requireMatch(plugin, /"liveActivityPushToken"/, 'Live Activity nepředá APNs token bezpečnému webovému mostu');
+requireMatch(plugin, /"liveActivityEnded"/, 'Live Activity nehlásí ukončení pro odstranění mrtvého APNs tokenu');
 requireMatch(plugin, /CAPPluginMethod\(name: "presentCalendarEvent"/, 'Swift plugin neregistruje systémový editor Kalendáře');
 requireMatch(plugin, /EKEventEditViewController\(\)/, 'Kalendářní událost musí otevřít systémový editor');
 requireMatch(plugin, /eventEditViewController[\s\S]*didCompleteWith/, 'Swift plugin nevrací výsledek systémového editoru Kalendáře');
@@ -74,9 +84,18 @@ requireMatch(plugin, /"effective": UIApplication\.shared\.isIdleTimerDisabled/, 
 requireMatch(plugin, /min\(max\(call\.getInt\("count"\) \?\? 0, 0\), 999\)/, 'Badge musí být omezený na bezpečný rozsah 0 až 999');
 requireMatch(plugin, /UNUserNotificationCenter\.current\(\)\.setBadgeCount\(count\)/, 'Badge musí na moderním iOS používat UNUserNotificationCenter');
 requireMatch(project, /PRODUCT_BUNDLE_IDENTIFIER = app\.alphatrade\.native;/, 'Xcode bundle identifier neodpovídá Capacitor appId');
+requireMatch(project, /CODE_SIGN_ENTITLEMENTS = App\/App\.entitlements;/, 'App target nepoužívá placené APNs\/App Group entitlements');
+requireMatch(project, /CODE_SIGN_ENTITLEMENTS = AlphaTradeWidgets\/AlphaTradeWidgets\.entitlements;/, 'Widget target nepoužívá App Group entitlements');
+requireMatch(appEntitlements, /<key>aps-environment<\/key>/, 'App entitlements nemají APNs prostředí');
+requireMatch(appEntitlements, /<string>group\.app\.alphatrade\.native<\/string>/, 'App target nemá sdílenou App Group');
+requireMatch(widgetEntitlements, /<string>group\.app\.alphatrade\.native<\/string>/, 'Widget target nemá sdílenou App Group');
+requireMatch(appDelegate, /capacitorDidRegisterForRemoteNotifications/, 'AppDelegate nepředává APNs token Capacitoru');
+requireMatch(appDelegate, /capacitorDidFailToRegisterForRemoteNotifications/, 'AppDelegate nepředává chybu registrace APNs Capacitoru');
+requireMatch(plugin, /CAPPluginMethod\(name: "getPushEnvironment"/, 'Swift plugin nehlásí APNs sandbox\/production prostředí');
+requireMatch(packageJson, /"@capacitor\/push-notifications"/, 'Chybí oficiální Capacitor Push Notifications plugin');
 requireMatch(project, /AlphaTradeWidgets\.appex in Embed App Extensions/, 'Widget extension není vložená do hlavní aplikace');
 requireMatch(project, /PRODUCT_BUNDLE_IDENTIFIER = app\.alphatrade\.native\.widgets;/, 'Widget extension nemá očekávaný bundle identifier');
-for (const kind of ['AlphaTradeToday', 'AlphaTradeDailyPnL', 'AlphaTradeEquity', 'AlphaTradeAccounts', 'AlphaTradeDiscipline', 'AlphaTradeTrades', 'AlphaTradeActions', 'AlphaTradeLockPnL', 'AlphaTradeLockDiscipline', 'AlphaTradeLockLive']) {
+for (const kind of ['AlphaTradeToday', 'AlphaTradeDailyPnL', 'AlphaTradeEquity', 'AlphaTradeAccounts', 'AlphaTradeDiscipline', 'AlphaTradeTrades', 'AlphaTradeActions', 'AlphaTradeCopier', 'AlphaTradePositions', 'AlphaTradeLockPnL', 'AlphaTradeLockDiscipline', 'AlphaTradeLockLive']) {
   requireMatch(widgetSource, new RegExp(`kind: "${kind}"`), `Chybí widget ${kind}`);
 }
 for (const family of ['accessoryInline', 'accessoryCircular', 'accessoryRectangular']) {
@@ -98,7 +117,14 @@ for (const route of widgetRoutes) {
 }
 requireMatch(widgetSource, /AlphaTradeLockLive[\s\S]*alphatrade-native:\/\/live/, 'Lock Screen LIVE widget neotevírá LIVE route');
 requireMatch(widgetSource, /ActivityConfiguration\(for: AlphaTradeLiveActivityAttributes\.self\)/, 'Widget extension nemá Live Activity konfiguraci');
-requireMatch(widgetSource, /DynamicIsland[\s\S]*Pouze test zobrazení · žádná broker akce/, 'Live Activity nemá Dynamic Island nebo bezpečnostní TEST označení');
+requireMatch(widgetSource, /DynamicIsland[\s\S]*Read-only monitoring · žádná broker akce/, 'Live Activity nemá Dynamic Island nebo read-only bezpečnostní označení');
+requireMatch(widgetSource, /AlphaTradeWidgetSnapshotV2/, 'Widget extension nečte živý snapshot z App Group');
+requireMatch(widgetSource, /isLiveStale[\s\S]*30 \* 60_000/, 'LIVE widgety nemají nouzové varování při dlouho neobnoveném snapshotu');
+requireMatch(widgetSource, /forHTTPHeaderField: "Authorization"/, 'WidgetKit neposílá autorizační hlavičku');
+requireMatch(widgetSource, /Widget \\\(token\)/, 'WidgetKit neposílá omezený read-only token');
+requireMatch(widgetSource, /native-widget-snapshot/, 'WidgetKit nemá serverový endpoint pro obnovu na pozadí');
+requireMatch(widgetSource, /mergingRemote/, 'Vzdálená LIVE obnova nezachovává lokální deník');
+requireMatch(widgetSource, /DATA ZASTARALÁ/, 'Copier widget nemá viditelné stale-data varování');
 for (const kind of ['AlphaTradeControlLive', 'AlphaTradeControlCapture']) {
   requireMatch(widgetSource, new RegExp(`kind: "${kind}"`), `Chybí ovladač Ovládacího centra ${kind}`);
 }
@@ -118,9 +144,6 @@ if (liveActivitySourceMemberships.length < 4) {
   errors.push('ActivityAttributes schema musí být součástí app i widget targetu');
 }
 requireMatch(widgetPlist, /com\.apple\.widgetkit-extension/, 'Widget Info.plist nemá WidgetKit extension point');
-if (/com\.apple\.security\.application-groups/.test(widgetEntitlements)) {
-  errors.push('Testovací widget target nesmí vyžadovat placený App Group entitlement');
-}
 requireMatch(shell, /registerPluginInstance\(AlphaTradeNativePlugin\(\)\)/, 'Nativní plugin není explicitně registrovaný jako instance');
 requireMatch(shell, /final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate/, 'Shell musí používat stabilní vlastní UITabBar mimo UITabBarController');
 requireMatch(shell, /guard Thread\.isMainThread/, 'Změny nativního tématu musí být přesměrovány na main thread');

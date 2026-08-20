@@ -8,6 +8,7 @@ import Security
 import Speech
 import UIKit
 import UserNotifications
+import WidgetKit
 
 @objc(AlphaTradeNativePlugin)
 public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventEditViewDelegate {
@@ -42,6 +43,11 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         CAPPluginMethod(name: "setShellTheme", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellWorld", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "reportRefreshComplete", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getPushEnvironment", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "updateWidgetSnapshot", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearWidgetSnapshot", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setWidgetAccessToken", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearWidgetAccessToken", returnType: CAPPluginReturnPromise),
     ]
 
     private let audioEngine = AVAudioEngine()
@@ -53,10 +59,92 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     private var hasAudioTap = false
     private var calendarEventCall: CAPPluginCall?
     private let keychainService = "app.alphatrade.native.auth"
+    private let widgetSuiteName = "group.app.alphatrade.native"
+    private let widgetSnapshotKey = "AlphaTradeWidgetSnapshotV2"
+    private let widgetAccessTokenKey = "AlphaTradeWidgetAccessTokenV1"
+    private var liveActivityTokenTasks: [String: Task<Void, Never>] = [:]
+    private var liveActivityStateTasks: [String: Task<Void, Never>] = [:]
+    private var liveActivityDiscoveryTask: Task<Void, Never>?
+    private var liveActivityPushToStartTask: Task<Void, Never>?
+
+    override public func load() {
+        super.load()
+        guard #available(iOS 16.2, *) else { return }
+        for activity in Activity<AlphaTradeLiveActivityAttributes>.activities {
+            observeLiveActivityPushToken(activity)
+        }
+        liveActivityDiscoveryTask = Task { [weak self] in
+            for await activity in Activity<AlphaTradeLiveActivityAttributes>.activityUpdates {
+                guard !Task.isCancelled else { return }
+                self?.observeLiveActivityPushToken(activity)
+            }
+        }
+        if #available(iOS 17.2, *) {
+            liveActivityPushToStartTask = Task { [weak self] in
+                if let tokenData = Activity<AlphaTradeLiveActivityAttributes>.pushToStartToken {
+                    self?.emitLiveActivityPushToStartToken(tokenData)
+                }
+                for await tokenData in Activity<AlphaTradeLiveActivityAttributes>.pushToStartTokenUpdates {
+                    guard !Task.isCancelled else { return }
+                    self?.emitLiveActivityPushToStartToken(tokenData)
+                }
+            }
+        }
+    }
 
     private var shellController: AlphaTradeShellViewController? {
         if let shell = bridge?.viewController as? AlphaTradeShellViewController { return shell }
         return bridge?.viewController?.parent as? AlphaTradeShellViewController
+    }
+
+    @objc public func getPushEnvironment(_ call: CAPPluginCall) {
+#if DEBUG
+        call.resolve(["environment": "development"])
+#else
+        call.resolve(["environment": "production"])
+#endif
+    }
+
+    @objc public func updateWidgetSnapshot(_ call: CAPPluginCall) {
+        guard let snapshotJSON = call.getString("snapshotJson"),
+              !snapshotJSON.isEmpty,
+              snapshotJSON.utf8.count <= 256_000,
+              let data = snapshotJSON.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) != nil else {
+            call.reject("Neplatný nebo příliš velký widget snapshot.")
+            return
+        }
+        guard let defaults = UserDefaults(suiteName: widgetSuiteName) else {
+            call.reject("Sdílené úložiště widgetů není dostupné.")
+            return
+        }
+        defaults.set(snapshotJSON, forKey: widgetSnapshotKey)
+        WidgetCenter.shared.reloadAllTimelines()
+        call.resolve(["bytes": snapshotJSON.utf8.count])
+    }
+
+    @objc public func clearWidgetSnapshot(_ call: CAPPluginCall) {
+        UserDefaults(suiteName: widgetSuiteName)?.removeObject(forKey: widgetSnapshotKey)
+        WidgetCenter.shared.reloadAllTimelines()
+        call.resolve()
+    }
+
+    @objc public func setWidgetAccessToken(_ call: CAPPluginCall) {
+        guard let token = call.getString("widgetToken"),
+              token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+              let defaults = UserDefaults(suiteName: widgetSuiteName) else {
+            call.reject("Neplatný widgetový token nebo nedostupné sdílené úložiště.")
+            return
+        }
+        defaults.set(token, forKey: widgetAccessTokenKey)
+        WidgetCenter.shared.reloadAllTimelines()
+        call.resolve()
+    }
+
+    @objc public func clearWidgetAccessToken(_ call: CAPPluginCall) {
+        UserDefaults(suiteName: widgetSuiteName)?.removeObject(forKey: widgetAccessTokenKey)
+        WidgetCenter.shared.reloadAllTimelines()
+        call.resolve()
     }
 
     @objc public func setShellTheme(_ call: CAPPluginCall) {
@@ -136,8 +224,9 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
                         sessionID: UUID().uuidString,
                         symbol: call.getString("symbol") ?? "MNQ"
                     )
-                    activity = try Activity.request(attributes: attributes, content: content, pushType: nil)
+                    activity = try Activity.request(attributes: attributes, content: content, pushType: .token)
                 }
+                self.observeLiveActivityPushToken(activity)
                 call.resolve(["supported": true, "enabled": true, "activeCount": 1, "activityID": activity.id])
             } catch {
                 call.reject("Live Activity se nepodařilo spustit.", nil, error)
@@ -183,6 +272,13 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             let activities = Activity<AlphaTradeLiveActivityAttributes>.activities
             for activity in activities {
                 await activity.end(nil, dismissalPolicy: .immediate)
+                self.notifyListeners(
+                    "liveActivityEnded",
+                    data: ["activityId": activity.id],
+                    retainUntilConsumed: true
+                )
+                self.liveActivityTokenTasks.removeValue(forKey: activity.id)?.cancel()
+                self.liveActivityStateTasks.removeValue(forKey: activity.id)?.cancel()
             }
             call.resolve([
                 "supported": true,
@@ -201,7 +297,50 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             pnlText: call.getString("pnlText") ?? "+$428.50",
             isPositive: call.getBool("isPositive") ?? true,
             progress: min(max(call.getDouble("progress") ?? 0.62, 0), 1),
-            updatedAt: .now
+            updatedAt: Date().timeIntervalSince1970
+        )
+    }
+
+    @available(iOS 16.2, *)
+    private func observeLiveActivityPushToken(_ activity: Activity<AlphaTradeLiveActivityAttributes>) {
+        if liveActivityTokenTasks[activity.id] == nil {
+            liveActivityTokenTasks[activity.id] = Task { [weak self] in
+                for await tokenData in activity.pushTokenUpdates {
+                    guard !Task.isCancelled else { return }
+                    let token = tokenData.map { String(format: "%02x", $0) }.joined()
+                    self?.notifyListeners(
+                        "liveActivityPushToken",
+                        data: ["activityId": activity.id, "pushToken": token],
+                        retainUntilConsumed: true
+                    )
+                }
+            }
+        }
+        if liveActivityStateTasks[activity.id] == nil {
+            liveActivityStateTasks[activity.id] = Task { [weak self] in
+                for await state in activity.activityStateUpdates {
+                    guard !Task.isCancelled else { return }
+                    guard state == .ended || state == .dismissed else { continue }
+                    self?.notifyListeners(
+                        "liveActivityEnded",
+                        data: ["activityId": activity.id],
+                        retainUntilConsumed: true
+                    )
+                    self?.liveActivityTokenTasks.removeValue(forKey: activity.id)?.cancel()
+                    self?.liveActivityStateTasks.removeValue(forKey: activity.id)?.cancel()
+                    return
+                }
+            }
+        }
+    }
+
+    @available(iOS 17.2, *)
+    private func emitLiveActivityPushToStartToken(_ tokenData: Data) {
+        let token = tokenData.map { String(format: "%02x", $0) }.joined()
+        notifyListeners(
+            "liveActivityPushToStartToken",
+            data: ["pushToken": token],
+            retainUntilConsumed: true
         )
     }
 

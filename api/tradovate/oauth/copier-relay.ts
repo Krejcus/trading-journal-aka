@@ -6,6 +6,8 @@ import {
 } from '../../../server/tradovateCopierCommandRelay.js';
 import { createTradovateAdminClient, readTradovateServerConfig, requireSupabaseUserId } from '../../../server/tradovateOAuthStore.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
+import { sendImmediateCopierArmPush, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
+import type { LocalCopierAgentStatus } from '../../../lib/localCopierAgentProtocol.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -26,8 +28,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ command: await claimTradovateCopierCommand({ db, deviceId: device.id }) });
       }
       if (action === 'complete') {
-        const accepted = await completeTradovateCopierCommand({ db, deviceId: device.id, commandId: String(req.body?.commandId ?? ''), result: req.body?.result, error: typeof req.body?.error === 'string' ? req.body.error : undefined });
-        return res.status(accepted ? 200 : 409).json({ accepted });
+        const commandId = String(req.body?.commandId ?? '');
+        const commandError = typeof req.body?.error === 'string' ? req.body.error : undefined;
+        const status = req.body?.status as LocalCopierAgentStatus | undefined;
+        if (status) {
+          await heartbeatTradovateCopierDevice({
+            db, deviceId: device.id, userId: device.userId,
+            connectionId: device.connectionId, status,
+          });
+        }
+        const { data: commandRow, error: commandErrorLookup } = await db
+          .from('tradovate_copier_commands')
+          .select('command_type')
+          .eq('id', commandId)
+          .eq('device_id', device.id)
+          .eq('status', 'claimed')
+          .maybeSingle<{ command_type: string }>();
+        if (commandErrorLookup) throw new Error(`copier-relay-command-type-failed: ${commandErrorLookup.message}`);
+
+        const accepted = await completeTradovateCopierCommand({
+          db, deviceId: device.id, commandId,
+          result: req.body?.result, error: commandError,
+        });
+        let immediatePush: { devices: number; sent: number } | undefined;
+        const transition: CopierArmTransition | null = commandRow?.command_type === 'arm-live'
+          ? 'arm-started'
+          : commandRow?.command_type === 'disarm' ? 'arm-ended' : null;
+        if (accepted && !commandError && transition) {
+          try {
+            immediatePush = await sendImmediateCopierArmPush({
+              db, userId: device.userId, deviceId: device.id, transition,
+            });
+          } catch (pushError) {
+            // Notifikace nikdy nesmí změnit potvrzený výsledek copier příkazu.
+            // Marker při chybě zůstane beze změny a minutový watchdog je retry.
+            console.error('[copier-relay-push]', pushError instanceof Error ? pushError.message : String(pushError));
+          }
+        }
+        return res.status(accepted ? 200 : 409).json({ accepted, immediatePush });
       }
       return res.status(400).json({ error: 'invalid-copier-relay-action' });
     }

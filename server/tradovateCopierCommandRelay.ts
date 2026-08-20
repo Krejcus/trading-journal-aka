@@ -18,6 +18,47 @@ interface CommandRow {
   error: string | null;
 }
 
+export interface PersistedCopierTradeInput {
+  tradeId: string;
+  symbol: string;
+  side: 'Long' | 'Short';
+  quantity: number;
+  realizedPnlUsd: number | null;
+  followerCount: number;
+  openedAt: string | null;
+  closedAt: string;
+}
+
+const finite = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+/** Redukuje heartbeat na malý, validovaný a idempotentní ledger close událostí. */
+export function closedTradesFromStatus(status: LocalCopierAgentStatus): PersistedCopierTradeInput[] {
+  const candidates = status.controller.dailyStats?.recentClosedTrades;
+  if (!Array.isArray(candidates)) return [];
+  const unique = new Map<string, PersistedCopierTradeInput>();
+  for (const candidate of candidates.slice(0, 20)) {
+    const tradeId = typeof candidate?.id === 'string' ? candidate.id.trim().slice(0, 160) : '';
+    const symbol = typeof candidate?.symbol === 'string' ? candidate.symbol.trim().slice(0, 32) : '';
+    const quantity = finite(candidate?.quantity);
+    const closedAt = finite(candidate?.closedAt);
+    const openedAt = finite(candidate?.openedAt);
+    if (!tradeId || !symbol || !quantity || quantity <= 0 || !closedAt || closedAt <= 0
+      || (candidate?.side !== 'Long' && candidate?.side !== 'Short')) continue;
+    unique.set(tradeId, {
+      tradeId,
+      symbol,
+      side: candidate.side,
+      quantity,
+      realizedPnlUsd: finite(candidate.realizedPnlUsd),
+      followerCount: Math.max(0, Math.floor(finite(candidate.followerCount) ?? 0)),
+      openedAt: openedAt && openedAt > 0 ? new Date(openedAt).toISOString() : null,
+      closedAt: new Date(closedAt).toISOString(),
+    });
+  }
+  return [...unique.values()];
+}
+
 const allowed = new Set<LocalCopierAgentCommand['type']>([
   'copy-command', 'arm-live', 'shadow', 'disarm', 'kill-switch',
 ]);
@@ -136,6 +177,27 @@ export async function heartbeatTradovateCopierDevice(options: {
     status: safeStatus, last_seen_at: new Date().toISOString(), started_at: options.status.startedAt,
   }, { onConflict: 'device_id' });
   if (error) throw new Error(`copier-relay-heartbeat-failed: ${error.message}`);
+  const trades = closedTradesFromStatus(options.status);
+  if (trades.length > 0) {
+    const { error: tradeError } = await options.db.from('tradovate_copier_trades').upsert(
+      trades.map(trade => ({
+        user_id: options.userId,
+        device_id: options.deviceId,
+        connection_id: options.connectionId,
+        trade_id: trade.tradeId,
+        symbol: trade.symbol,
+        side: trade.side,
+        quantity: trade.quantity,
+        realized_pnl_usd: trade.realizedPnlUsd,
+        follower_count: trade.followerCount,
+        opened_at: trade.openedAt,
+        closed_at: trade.closedAt,
+        updated_at: new Date().toISOString(),
+      })),
+      { onConflict: 'device_id,trade_id' },
+    );
+    if (tradeError) throw new Error(`copier-trade-ledger-upsert-failed: ${tradeError.message}`);
+  }
 }
 
 export async function readTradovateCopierDeviceRuntime(options: { db: SupabaseClient; userId: string; connectionId: string }) {

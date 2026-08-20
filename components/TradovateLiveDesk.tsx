@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ConfirmActionDialog, { type ConfirmActionOptions } from './ConfirmActionDialog';
 import { syncCopierNativeNotifications } from '../services/nativeCopierNotifications';
 import {
+  buildNativeLiveWidgetState,
+  syncNativeLiveWidgetSnapshot,
+} from '../services/nativeWidgetSnapshot';
+import {
   Activity,
   AlertTriangle,
   ChevronRight,
@@ -160,6 +164,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
     () => live.data ? tradovateCopyTradeOrders(live.data) : [],
     [live.data],
   );
+
+  // Jeden autoritativní read-only snapshot pro Home/Lock Screen widgety a
+  // Live Activity. Neobsahuje OAuth token ani žádnou broker akci.
+  useEffect(() => {
+    if (!live.data) return;
+    const state = buildNativeLiveWidgetState({
+      accounts: live.data.accounts,
+      profiles: live.profiles,
+      controller: agentStatus?.controller ?? null,
+      followerCount: agentStatus?.group.followers.length ?? 0,
+    });
+    void syncNativeLiveWidgetSnapshot(state);
+  }, [agentStatus, live.data, live.profiles]);
   const executionGroup = useMemo(() => {
     if (!agentStatus) return null;
     return resolveLocalExecutionGroup(copyGroups, agentStatus.group);

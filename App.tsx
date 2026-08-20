@@ -95,6 +95,25 @@ import { playNativeHapticIfAvailable, type NativeTradeDraft } from './services/n
 import MorningBriefBanner from './components/MorningBriefBanner';
 import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
+import {
+  deactivateNativeRemoteNotifications,
+  initializeNativeRemoteNotifications,
+  resetNativeRemoteNotificationListeners,
+} from './services/nativePushNotifications';
+import {
+  buildNativeJournalWidgetState,
+  clearNativeWidgetSnapshot,
+  syncNativeJournalWidgetSnapshot,
+} from './services/nativeWidgetSnapshot';
+import {
+  deactivateNativeLiveActivityPush,
+  initializeNativeLiveActivityPush,
+  resetNativeLiveActivityPushListener,
+} from './services/nativeLiveActivityPush';
+import {
+  deactivateNativeWidgetRemote,
+  initializeNativeWidgetRemote,
+} from './services/nativeWidgetRemote';
 
 const APP_VERSION = "1.5.2 [MATRIX-UPDATE]";
 
@@ -626,6 +645,14 @@ const App: React.FC = () => {
     }
   }, [isUserFromDb, currentUser.id]);
 
+  // Home/Lock Screen widgety používají poslední potvrzený snapshot skutečných
+  // journal dat. Výchozí placeholder se nikdy nezapíše do App Group.
+  useEffect(() => {
+    if (!isUserFromDb || currentUser.id === 'default_user') return;
+    const state = buildNativeJournalWidgetState({ trades, accounts });
+    void syncNativeJournalWidgetSnapshot(state);
+  }, [accounts, currentUser.id, isUserFromDb, trades]);
+
   // Persist celý user objekt do localStorage při každé změně z DB — další reload pak má
   // instant rendering (žádný flash avatara/jména/role). Cache klíč per-user.
   useEffect(() => {
@@ -770,10 +797,22 @@ const App: React.FC = () => {
     const userId = session?.user?.id;
     if (!userId) {
       setIsPushActive(false);
+      if (isNativeShell()) {
+        void resetNativeRemoteNotificationListeners();
+        void resetNativeLiveActivityPushListener();
+      }
       return;
     }
 
     let cancelled = false;
+    if (isNativeShell()) {
+      void initializeNativeLiveActivityPush(userId);
+      void initializeNativeWidgetRemote(userId);
+      void initializeNativeRemoteNotifications(userId).then(active => {
+        if (!cancelled) setIsPushActive(active);
+      });
+      return () => { cancelled = true; };
+    }
     const check = () => {
       syncPushSubscription().then(active => {
         if (!cancelled) setIsPushActive(active);
@@ -3478,6 +3517,12 @@ const App: React.FC = () => {
           onAddTrade={handleTryAddTrade}
           user={currentUser}
           onLogout={async () => {
+            if (isNativeShell()) {
+              await deactivateNativeRemoteNotifications(session.user.id);
+              await deactivateNativeLiveActivityPush(session.user.id);
+              await deactivateNativeWidgetRemote(session.user.id);
+              await clearNativeWidgetSnapshot();
+            }
             clearAppStorage();
             await supabase.auth.signOut();
             setSession(null);

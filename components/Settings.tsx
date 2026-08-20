@@ -24,6 +24,7 @@ import ImportQueue from './ImportQueue';
 import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 import { enablePush, disablePush, listPushDevices, sendTestPush, type PushDevice } from '../services/pushSubscriptionService';
+import { sendNativeRemoteTestPush } from '../services/nativePushNotifications';
 import {
   mergeTradecopiaNotificationPreferences,
   type TradecopiaNotificationPreferences,
@@ -199,6 +200,34 @@ const LOCAL_ALERT_SAMPLES: Array<{ label: string; event: TradecopiaFastEvent }> 
     },
   },
 ];
+
+type NativeCopierAlertSample = {
+  label: string;
+  title: string;
+  body: string;
+  kind: 'trade' | 'risk';
+};
+
+const NATIVE_COPIER_ALERT_SAMPLES: NativeCopierAlertSample[] = [
+  { label: 'ARM aktivní', title: 'Copier: ARM aktivní', body: 'Ostrý ARM je aktivní do konce broker session.', kind: 'risk' },
+  { label: 'DISARM', title: 'Copier: ARM skončil', body: 'Kopírování stojí. Nový ARM je vždy ruční.', kind: 'risk' },
+  { label: 'Scale-in', title: 'Copier: pozice navýšena', body: 'Long +2 MNQ → 5 followerů.', kind: 'trade' },
+  { label: 'Scale-out', title: 'Copier: částečný výstup', body: 'Long -1 MNQ → 5 followerů.', kind: 'trade' },
+  { label: 'Cooldown', title: 'Copier: COOLDOWN aktivní', body: 'Po potvrzeném zploštění je nový vstup dočasně blokovaný.', kind: 'risk' },
+  { label: 'Day-lock', title: 'Copier: DAY-LOCK', body: 'Denní limit byl dosažen. ARM je blokovaný do konce broker session.', kind: 'risk' },
+  { label: 'Účet zamčen', title: 'Účet zamčen: Alpha 50K', body: 'Broker hlásí account lock. Otevři LIVE pro detail.', kind: 'risk' },
+  { label: 'Účet odemčen', title: 'Účet odemčen: Alpha 50K', body: 'Broker už účet nehlásí jako zamčený. ARM zůstává ruční.', kind: 'risk' },
+  { label: 'Worker offline', title: 'Copier: WORKER OFFLINE', body: 'Mac worker se neozývá. Kopírování neběží; SL/TP u brokera zůstávají.', kind: 'risk' },
+  { label: 'Worker online', title: 'Copier: worker zpět online', body: 'Mac worker se znovu ozývá. Před ARM proběhne reconciliation.', kind: 'risk' },
+  { label: 'Stuck outbox', title: 'Copier: STUCK OUTBOX', body: 'Objednávka s nejasným výsledkem čeká na ruční kontrolu.', kind: 'risk' },
+  { label: 'Divergence', title: 'Copier: ÚČTY NESOUHLASÍ', body: 'Dva účty mají rozdílnou pozici. ARM je zamčený.', kind: 'risk' },
+  { label: 'Auto-flatten hotový', title: 'Copier: ARM vypršel — kopie zavřeny', body: 'Zrušeny 2 příkazy, zavřeno 5 pozic. Vše flat.', kind: 'risk' },
+  { label: 'Auto-flatten selhal', title: 'Copier: AUTO-FLATTEN SELHAL', body: 'Účty nejsou potvrzené flat. Okamžitě zkontroluj Tradovate!', kind: 'risk' },
+];
+
+const NATIVE_ALERT_GALLERY_COUNT = LOCAL_ALERT_SAMPLES.length + NATIVE_COPIER_ALERT_SAMPLES.length;
+const NATIVE_ALERT_GALLERY_FIRST_DELAY_MS = 4_000;
+const NATIVE_ALERT_GALLERY_INTERVAL_MS = 5_000;
 
 const EmojiPicker = ({ onSelect, onClose, isDark }: { onSelect: (e: string) => void, onClose: () => void, isDark: boolean }) => (
   <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -553,9 +582,11 @@ const Settings: React.FC<SettingsProps> = ({
     setPushBusy(true);
     try {
       if (isNativeBuild) {
-        await scheduleNativeTestNotification();
+        const result = await sendNativeRemoteTestPush();
         await refreshPushState();
-        showToast('Test naplánován — zavři appku a počkej 2 sekundy');
+        showToast(result.ok
+          ? `APNs odesláno na ${result.sent} z ${result.devices} zařízení — appku můžeš úplně zavřít`
+          : (result.message || 'Serverový APNs test se nepodařilo odeslat'));
         return;
       }
       const result = await sendTestPush();
@@ -612,11 +643,24 @@ const Settings: React.FC<SettingsProps> = ({
           attachmentUrl,
           actionType: event.severity === 'critical' ? 'risk' : (isTradeEvent ? 'trade' : 'general'),
           interruptionLevel: event.severity === 'critical' ? 'timeSensitive' : 'active',
-          delayMs: 4_000 + index * 8_000,
+          delayMs: NATIVE_ALERT_GALLERY_FIRST_DELAY_MS + index * NATIVE_ALERT_GALLERY_INTERVAL_MS,
+        });
+      }
+      const copierStartDelay = NATIVE_ALERT_GALLERY_FIRST_DELAY_MS
+        + LOCAL_ALERT_SAMPLES.length * NATIVE_ALERT_GALLERY_INTERVAL_MS;
+      for (const [index, sample] of NATIVE_COPIER_ALERT_SAMPLES.entries()) {
+        await scheduleNativeNotification({
+          title: sample.title,
+          body: sample.body,
+          route: 'live',
+          threadIdentifier: sample.kind === 'trade' ? 'alphatrade-copier-trades' : 'alphatrade-copier-risk',
+          actionType: sample.kind,
+          interruptionLevel: sample.kind === 'risk' ? 'timeSensitive' : 'active',
+          delayMs: copierStartDelay + index * NATIVE_ALERT_GALLERY_INTERVAL_MS,
         });
       }
       await refreshPushState();
-      showToast(`Naplánováno ${LOCAL_ALERT_SAMPLES.length} iOS scénářů během jedné minuty`);
+      showToast(`Naplánováno ${NATIVE_ALERT_GALLERY_COUNT} iOS scénářů během dvou minut`);
     } catch (error) {
       showToast(`Galerie selhala: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
     } finally {
@@ -1434,7 +1478,7 @@ const Settings: React.FC<SettingsProps> = ({
                         onClick={() => void handleNativeAlertGallery()}
                         className="py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-50"
                       >
-                        {pushBusy ? 'Plánuji galerii…' : `Naplánovat všech ${LOCAL_ALERT_SAMPLES.length} scénářů`}
+                        {pushBusy ? 'Plánuji galerii…' : `Naplánovat všech ${NATIVE_ALERT_GALLERY_COUNT} scénářů`}
                       </button>
                       <button
                         type="button"
@@ -1557,7 +1601,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
                 {/* Test lze spustit i z počítače bez vlastního odběru; endpoint
                     ho pošle na všechna registrovaná zařízení uživatele. */}
-                {(isNativeBuild || pushDevices.length > 0) && <button onClick={handleTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)]">{pushBusy ? (isNativeBuild ? 'Plánuji…' : 'Odesílám…') : (isNativeBuild ? 'Naplánovat test za 2 sekundy' : `Poslat zkušební notifikaci (${pushDevices.length})`)}</button>}
+                {(isNativeBuild || pushDevices.length > 0) && <button onClick={handleTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)]">{pushBusy ? 'Odesílám…' : (isNativeBuild ? 'Poslat APNs test ze serveru' : `Poslat zkušební notifikaci (${pushDevices.length})`)}</button>}
                 {isNativeBuild && (
                   <div className="mt-4 rounded-xl border border-[var(--border-subtle)] p-3">
                     <div className="mb-2 flex items-center justify-between gap-3">

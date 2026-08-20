@@ -62,7 +62,9 @@ clear secure auth storage as part of a reviewed, versioned lifecycle migration.
 The native build uses `@capacitor/local-notifications` for on-device tests and
 the Settings alert lab. Tapping a notification routes back into the shared web
 application through the native shell bridge, including after a cold launch.
-Trade open/close scenarios render a 1200 x 675 PNG preview from the shared web
+The one-click gallery schedules 22 read-only scenarios covering the full trade,
+copier, account-lock, risk and recovery matrix. Trade open/close scenarios
+render a 1200 x 675 PNG preview from the shared web
 code, store it temporarily in the iOS cache, and attach it to the expandable
 notification. Cached previews older than seven days are removed the next time a
 rich alert is created. The same attachment input can later receive the user's
@@ -71,6 +73,23 @@ actual saved trade screenshot.
 Notification categories expose contextual system actions for LIVE, Journal,
 Coach, and quick trade capture. Risk scenarios use iOS time-sensitive delivery;
 the app does not request the restricted critical-alert entitlement.
+
+Server-origin alerts use the separate official
+`@capacitor/push-notifications` path. After login, the app requests permission,
+waits for a real APNs device token, detects sandbox versus production signing,
+and registers the token through the authenticated
+`/api/native-push-subscription` endpoint. The underlying table is server-only;
+neither anon nor authenticated clients can enumerate device tokens. Logout
+removes the current installation before the Supabase session is revoked.
+
+`api/cron/send-alerts.ts` fans the existing copier watchdog and configured
+alerts out to both legacy Web Push and native APNs devices during the migration.
+The APNs provider uses token authentication with `APNS_KEY_ID`, `APNS_TEAM_ID`,
+and either `APNS_PRIVATE_KEY` or `APNS_PRIVATE_KEY_BASE64`. These secrets must
+exist in the deployment. `/api/native-push-test` provides an authenticated
+server-origin smoke test. Force-quit locked-phone delivery and immediate
+ARM/DISARM were physically verified on the target iPhone; each newly added
+event class still receives its own end-to-end smoke check.
 
 Trade notifications also expose an authenticated text-input action named
 `Přidat poznámku`. The entered text opens the existing manual trade form as a
@@ -148,36 +167,35 @@ not create a second navigation stack.
 
 ## Home Screen and Lock Screen widgets
 
-The embedded `AlphaTradeWidgets` extension exposes seven testable Home Screen variants:
+The embedded `AlphaTradeWidgets` extension exposes nine Home Screen variants:
 Today plan, Daily P&L, Equity Curve, Accounts, Discipline, Recent Trades, and
-Quick Actions. They are signed by the free Personal Team without an App Group,
-display clearly labelled test snapshots, and deep-link into the corresponding
-shared app section. Quick Actions only opens AlphaTrade; it never performs a
-trade from the widget.
+Quick Actions, plus Copier LIVE and Open Positions. The paid Team signs both
+targets with `group.app.alphatrade.native`. Installed widgets decode the
+token-free, user-scoped `AlphaTradeWidgetSnapshotV2`; preview-only sample data
+is confined to the Widget Gallery. Quick Actions only opens AlphaTrade; it
+never performs a trade from the widget.
 
 Three additional accessory widgets are designed specifically for the Lock
 Screen: Daily P&L, Discipline, and a LIVE launcher. Together they cover inline,
 circular, and rectangular accessory families with compact layouts and adaptive
-system backgrounds. Financial values remain privacy-sensitive and all current
-values are labelled test snapshots. The LIVE widget only opens the app.
-
-Real synchronized account values are intentionally not faked. They require one
-paid Apple Developer App Group shared by the app and widget extension, followed
-by a reviewed snapshot writer that excludes auth tokens. Live Activities shared
-data and production push notifications also remain paid-program capabilities.
+system backgrounds. Financial values remain privacy-sensitive. The app refreshes
+the shared snapshot at least once per minute while LIVE is available; after two
+minutes without a refresh, LIVE surfaces visibly switch to `DATA ZASTARALÁ`
+instead of presenting old information as current. The LIVE widget only opens
+the app.
 
 ## Live Activity
 
-The native capability lab can start one local ActivityKit test for the current
-session, update it to a positive-P&L or risk-warning state, and end it
-immediately. The presentation appears on the Lock Screen and, on supported
-iPhones, in the Dynamic Island. Tapping it opens the read-only LIVE section.
+ActivityKit mirrors the same read-only copier snapshot. It starts for ARM, an
+open position, day-lock or kill switch; updates status, position summary and
+local P&L; and ends after the monitored condition clears. It appears on the
+Lock Screen and, on supported iPhones, in the Dynamic Island. Tapping it opens
+the read-only LIVE section.
 
-The state is deliberately labelled `TEST` and contains display-only sample
-values. It has no broker command, auth token, App Group, APNs token, or remote
-push path. Local foreground updates work with the Personal Team build; keeping
-it synchronized from a server while AlphaTrade is terminated is a separate
-paid-program APNs capability.
+The activity requests an ActivityKit APNs token, but remote updates containing
+P&L or position state remain disabled until the user separately approves that
+financial payload crossing Apple APNs and the isolated server registration path
+is deployed. No ActivityKit surface contains a broker command or auth token.
 
 ## Apple Calendar event editor
 
@@ -202,7 +220,8 @@ Screen quick actions.
 
 Both controls are navigation-only. LIVE opens the existing read-only overview;
 Capture opens the existing review form and never saves or submits a trade. They
-use no App Group, broker capability, auth token, or background order path.
+read no shared financial snapshot and use no broker capability, auth token, or
+background order path.
 
 ## Architecture guardrails
 

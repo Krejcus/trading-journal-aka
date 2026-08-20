@@ -17,7 +17,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "copier:pilot": "tsx scripts/copier/pilot.ts",
-    "copier:mac": "tsx scripts/copier/mac-install.ts"
+    "copier:mac": "tsx scripts/copier/mac-install.ts",
+    "dev:live": "ALPHATRADE_LOCAL_TRADOVATE_READ_PROXY=1 vite"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",
@@ -27,6 +28,7 @@
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/ios": "^8.5.0",
     "@capacitor/local-notifications": "^8.2.1",
+    "@capacitor/push-notifications": "^8.1.2",
     "@getcandlekit/charts": "0.1.0",
     "@supabase/supabase-js": "^2.89.0",
     "@types/react-grid-layout": "^1.3.6",
