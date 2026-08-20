@@ -306,6 +306,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const hasStuckOutbox = () => currentStuckOperations().length > 0;
 
   /**
+   * Operace, u kterých NEVÍME, co u brokera existuje (`sending`/`unknown`).
+   * Jen ty smí blokovat Flatten: nouzové zavření pozice je risk-snižující
+   * akce a nesmí čekat na papírování kolem `rejected` operací — reject je
+   * konečný, známý stav, broker prokazatelně nic nevytvořil. (Živý případ:
+   * maxContracts odmítl OSO, pět rejected položek pak zablokovalo Flatten
+   * uprostřed otevřené pozice.) ARM dál blokuje každá stuck položka.
+   */
+  const hasBrokerUncertainOutbox = () => currentStuckOperations()
+    .some(operation => operation.status === 'sending' || operation.status === 'unknown');
+
+  /**
    * Reject je konečný, známý výsledek bez nejasného side effectu. Během
    * aktuální session stále failne zavřeně, protože leader a follower se
    * nemuseli shodnout. Jakmile ale operátor spustí novou autoritativní
@@ -444,7 +455,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     positionCheckComplete = false;
     if (gate.killSwitch) throw new Error('Flatten nelze spustit: kill switch je aktivní');
     if (!gate.connected) throw new Error('Flatten nelze spustit bez broker spojení');
-    if (hasStuckOutbox()) throw new Error('Flatten nelze spustit: copier má nevyřešený outbox');
+    if (hasBrokerUncertainOutbox()) {
+      throw new Error('Flatten nelze spustit: objednávka s nejistým osudem u brokera (sending/unknown) čeká na dohledání');
+    }
     let result: ManualFlattenResult | null = null;
     try {
       await processor.mutate(async current => {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
 import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
-import { createOutboxEntry, markUnknown } from '../services/copierOutbox';
+import { createOutboxEntry, markRejected, markUnknown } from '../services/copierOutbox';
 import { createModifyEntry, markCancelUnknown } from '../services/copierCancelOutbox';
 import { createOsoOutboxEntry, markOsoRejected } from '../services/copierOsoOutbox';
 import { createMockBroker } from '../services/mockBroker';
@@ -1186,5 +1186,59 @@ describe('bootstrapCopierRuntime', () => {
     await restarted.reconcile();
     expect(() => restarted.arm()).toThrow('denním lockem');
     restarted.stop();
+  });
+});
+
+describe('flatten vs stuck outbox', () => {
+  const stuckRequest = {
+    tag: 'cpabc123', accountId: 200, symbol: 'MNQU6', side: 'Buy' as const,
+    quantity: 1, orderType: 'Market' as const,
+  };
+  const storeWith = async (entry: ReturnType<typeof createOutboxEntry>) => {
+    const base = createMemoryCopierStore();
+    await base.commit({
+      revision: 0, replicated: [], lastSequence: 0, outbox: [entry], cancelOutbox: [],
+      links: [], leaderCumQty: [], followerFillTargets: [],
+    }, 0);
+    return base;
+  };
+
+  it('rejected stuck položka Flatten NEBLOKUJE — nouzové zavření nesmí čekat na papírování', async () => {
+    const rejected = markRejected(
+      createOutboxEntry('cp:g1:e1:200', 'cpabc123', 'leader-1', stuckRequest, 1, false, 'e1', 1),
+      'maxContracts blokoval účet',
+      2,
+    );
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: await storeWith(rejected), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    expect(controller.status().stuckOutbox).toBe(true);
+
+    // Účty jsou flat, takže flatten jen potvrdí stav — nesmí ale hodit
+    // 'nevyřešený outbox' jako dřív.
+    const result = await controller.flattenAccount(200, 'manual-flat-rejected-001');
+    expect(result.flat).toBe(true);
+    controller.stop();
+  });
+
+  it('unknown stuck položka Flatten dál blokuje — osud objednávky neznáme', async () => {
+    const unknown = markUnknown(
+      createOutboxEntry('cp:g1:e1:200', 'cpabc123', 'leader-1', stuckRequest, 1, false, 'e1', 1),
+      'timeout',
+      2,
+    );
+    const broker = createMockBroker({ lookupCompleteness: 'eventual' });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: await storeWith(unknown), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.flattenAccount(200, 'manual-flat-unknown-002'))
+      .rejects.toThrow('nejistým osudem');
+    controller.stop();
   });
 });
