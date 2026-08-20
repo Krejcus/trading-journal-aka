@@ -170,6 +170,15 @@ export async function startLocalCopierExecutionAgent(
         throw new Error('Lokální agent už má jednu aktivní skupinu');
       case 'delete-group':
         throw new Error('Skupinu nejdřív DISARM a ukonči lokální agent');
+      case 'resolve-stuck-operation':
+        // Durable waive: nic neposílá brokerovi, odzbrojí a vynutí novou
+        // reconciliation. Stejná cesta jako mac-install resolve-stuck.
+        await options.controller.waiveStuckOperation({
+          kind: command.kind,
+          key: command.key,
+          reason: command.reason,
+        });
+        return { type: 'configuration', group };
       case 'cancel-order':
         throw new Error('Ruční cancel z UI zatím není napojen na durable runtime');
     }

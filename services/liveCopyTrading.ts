@@ -56,6 +56,8 @@ export type LiveCopyTradingCommand =
   | { type: 'set-replication'; groupId: string; accountId: number; mode: CopyReplicationMode }
   | { type: 'set-multiplier'; groupId: string; accountId: number; multiplier: number }
   | { type: 'flatten-account'; groupId: string; accountId: number; operationId: string }
+  /** Ruční uzavření stuck operace — nikdy neposílá broker příkaz. */
+  | { type: 'resolve-stuck-operation'; groupId: string; kind: 'place' | 'bracket' | 'oso' | 'cancel-or-modify'; key: string; reason: string }
   | { type: 'flatten-group'; groupId: string; operationId: string }
   | { type: 'cancel-order'; groupId: string; orderId: number };
 

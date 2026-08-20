@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
+import type { CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
@@ -243,6 +244,10 @@ interface Props {
   onEmergencyStop?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
   dayLockUntil?: number;
+  /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
+  cooldownUntil?: number;
+  /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
+  stuckOperations?: CopierStuckOperation[];
   executionGroupId?: string | null;
   runtimeGroup?: CopyGroupConfig | null;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
@@ -284,6 +289,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onEmergencyStop,
   onDayLock,
   dayLockUntil = 0,
+  cooldownUntil = 0,
+  stuckOperations = [],
   executionGroupId = null,
   runtimeGroup = null,
   onGroupsChange,
@@ -422,7 +429,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       update?.();
       const successText = result && result.type === 'flatten'
         ? `Flatten potvrzen: ${result.accountIds.length} účtů je flat, zrušeno ${result.canceledOrders} příkazů, odesláno ${result.submittedClosures} close příkazů.`
-        : command.type === 'set-multiplier'
+        : command.type === 'resolve-stuck-operation'
+          ? 'Operace označena za vyřešenou. Runtime je DISARMED; před ARM proběhne nová reconciliation.'
+          : command.type === 'set-multiplier'
           ? `Násobek ${normalizeMultiplier(command.multiplier)} byl potvrzen lokálním execution runtime. Runtime zůstává DISARMED do nového ARM.`
           : 'Změna byla potvrzena přes execution adaptér.';
       setToast({
@@ -478,12 +487,28 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         telemetry={apiTelemetry}
       />
 
+      {stuckOperations.length > 0 && commandAdapter ? (
+        <StuckOperationsPanel
+          operations={stuckOperations}
+          busy={busyCommand != null}
+          onResolve={operation => void runCommand({
+            type: 'resolve-stuck-operation',
+            groupId: executionGroupId ?? '',
+            kind: operation.kind,
+            key: operation.key,
+            reason: `Ručně potvrzeno v LIVE UI (${operation.kind} ${operation.key})`,
+          })}
+        />
+      ) : null}
+
       <CopierSessionPanel
         apiReady={!!commandAdapter}
         armed={copierArmed && !copierKillSwitch}
         shadow={copierShadow && !copierKillSwitch}
         killSwitch={copierKillSwitch}
         dayLocked={dayLockUntil > Date.now()}
+        cooldownUntil={cooldownUntil}
+        cooldownTotalMs={(runtimeGroup?.safety?.entryCooldownMinutes ?? 0) * 60_000}
         onShadow={onShadowMode ? async () => {
           try {
             await onShadowMode();
@@ -804,19 +829,109 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
   );
 };
 
-const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, dayLocked, onShadow, onArm, onDisarm, onKill, onDayLock }: {
+// Zaseknuté operace čekající na člověka. Dřív byly vidět jen z terminálu —
+// uživatel pak zíral na 'záhadně' vypnutou kopírku. Blokují ARM, takže musí
+// být vedle ARM tlačítka, s důvodem a cestou ven. Resolve NIKDY neposílá
+// broker příkaz; jen durable označí položku a vynutí novou reconciliation.
+const STUCK_KIND_LABEL: Record<CopierStuckOperation['kind'], string> = {
+  place: 'objednávka', bracket: 'OCO bracket', oso: 'OSO', 'cancel-or-modify': 'cancel/modify',
+};
+const StuckOperationsPanel = ({ operations, busy, onResolve }: {
+  operations: CopierStuckOperation[];
+  busy: boolean;
+  onResolve: (operation: CopierStuckOperation) => void;
+}) => {
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!confirmKey) return;
+    const timer = window.setTimeout(() => setConfirmKey(null), 6_000);
+    return () => window.clearTimeout(timer);
+  }, [confirmKey]);
+  return (
+    <section className="rounded-lg border border-amber-500/35 bg-amber-500/[0.06] px-4 py-3">
+      <div className="flex items-center gap-2">
+        <ShieldAlert size={15} className="shrink-0 text-amber-600" />
+        <b className="text-xs text-[var(--text-primary)]">Operace čekající na ruční kontrolu ({operations.length})</b>
+        <span className="hidden text-[10px] text-[var(--text-secondary)] sm:block">Blokují ARM. Ověř stav v Tradovate a teprve pak označ za vyřešené.</span>
+      </div>
+      <div className="mt-2 divide-y divide-amber-500/15">
+        {operations.map(operation => (
+          <div key={`${operation.kind}:${operation.key}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-amber-700">{STUCK_KIND_LABEL[operation.kind]}</span>
+            <span className="rounded bg-[var(--bg-page)] px-1.5 py-0.5 text-[9px] font-black uppercase text-[var(--text-secondary)]">{operation.status}</span>
+            {operation.accountId != null ? <span className="text-[10px] font-bold text-[var(--text-secondary)]">účet {operation.accountId}</span> : null}
+            <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-primary)]" title={operation.reason}>{operation.reason ?? operation.key}</span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                if (confirmKey === operation.key) {
+                  setConfirmKey(null);
+                  onResolve(operation);
+                } else {
+                  setConfirmKey(operation.key);
+                }
+              }}
+              className={`h-7 shrink-0 rounded-md px-2.5 text-[10px] font-black disabled:cursor-not-allowed disabled:opacity-40 ${confirmKey === operation.key ? 'bg-amber-600 text-white' : 'border border-amber-500/40 text-amber-700'}`}
+            >
+              {confirmKey === operation.key ? 'Opravdu — ověřeno v Tradovate' : 'Označit za vyřešené'}
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+};
+
+// Kruhové odpočítávání anti-revenge cooldownu. Sedí přímo u ARM tlačítka,
+// protože přesně to cooldown zamyká — je to brzda, ne alarm.
+const CooldownRing = ({ until, totalMs }: { until: number; totalMs: number }) => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const remaining = Math.max(0, until - now);
+  if (remaining <= 0) return null;
+  const fraction = totalMs > 0 ? Math.min(1, remaining / totalMs) : 1;
+  const radius = 15;
+  const circumference = 2 * Math.PI * radius;
+  const minutes = Math.floor(remaining / 60_000);
+  const seconds = Math.floor((remaining % 60_000) / 1_000);
+  return (
+    <span className="flex items-center gap-2" title="Anti-revenge cooldown: ostrý ARM je blokovaný do konce odpočtu. Rozhodni s chladnou hlavou.">
+      <svg width="34" height="34" viewBox="0 0 36 36" className="-rotate-90">
+        <circle cx="18" cy="18" r={radius} fill="none" strokeWidth="3.5" className="stroke-amber-500/20" />
+        <circle
+          cx="18" cy="18" r={radius} fill="none" strokeWidth="3.5" strokeLinecap="round"
+          className="stroke-amber-500 transition-[stroke-dashoffset] duration-1000 ease-linear"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - fraction)}
+        />
+      </svg>
+      <span className="text-xs font-black tabular-nums text-amber-600">
+        {minutes}:{String(seconds).padStart(2, '0')}
+      </span>
+    </span>
+  );
+};
+
+const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, dayLocked, cooldownUntil = 0, cooldownTotalMs = 0, onShadow, onArm, onDisarm, onKill, onDayLock }: {
   apiReady: boolean;
   armed: boolean;
   shadow: boolean;
   killSwitch: boolean;
   dayLocked: boolean;
+  cooldownUntil?: number;
+  cooldownTotalMs?: number;
   onShadow?: () => Promise<void> | void;
   onArm?: () => Promise<void> | void;
   onDisarm?: () => Promise<void> | void;
   onKill?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
 }) => {
-  const status = killSwitch ? 'KILL SWITCH' : dayLocked ? 'LOCKED' : armed ? 'ARMED' : shadow ? 'SHADOW' : 'DISARMED';
+  const cooldownActive = !armed && cooldownUntil > Date.now();
+  const status = killSwitch ? 'KILL SWITCH' : dayLocked ? 'LOCKED' : armed ? 'ARMED' : cooldownActive ? 'COOLDOWN' : shadow ? 'SHADOW' : 'DISARMED';
   const color = killSwitch || dayLocked ? 'text-rose-500 bg-rose-500/10' : armed ? 'text-emerald-500 bg-emerald-500/10' : shadow ? 'text-indigo-500 bg-indigo-500/10' : 'text-amber-600 bg-amber-500/10';
   return <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-3">
     <div className="flex min-w-0 items-center gap-3">
@@ -827,8 +942,9 @@ const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, dayLocked, on
       </div>
     </div>
     <div className="flex flex-wrap items-center gap-2">
+      {cooldownActive ? <CooldownRing until={cooldownUntil} totalMs={cooldownTotalMs} /> : null}
       <button type="button" onClick={() => void onShadow?.()} disabled={!apiReady || !onShadow || killSwitch || dayLocked || shadow || armed} title={!apiReady || !onShadow ? 'Shadow vyžaduje připojený execution runtime.' : 'Bezpečný shadow režim bez brokerových zápisů'} className="h-8 rounded-md border border-indigo-500/25 px-3 text-[10px] font-black text-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"><Eye size={12} className="mr-1.5 inline" />Shadow</button>
-      <button type="button" onClick={() => void onArm?.()} disabled={!apiReady || !onArm || killSwitch || dayLocked || armed} title={!apiReady || !onArm ? 'ARM bude dostupný až po napojení runtime controlleru a úspěšné reconciliation.' : 'ARM LIVE session'} className="h-8 rounded-md bg-emerald-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-35"><Power size={12} className="mr-1.5 inline" />ARM LIVE</button>
+      <button type="button" onClick={() => void onArm?.()} disabled={!apiReady || !onArm || killSwitch || dayLocked || armed || cooldownActive} title={cooldownActive ? 'Anti-revenge cooldown: ostrý ARM je blokovaný do konce odpočtu.' : !apiReady || !onArm ? 'ARM bude dostupný až po napojení runtime controlleru a úspěšné reconciliation.' : 'ARM LIVE session'} className="h-8 rounded-md bg-emerald-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-35"><Power size={12} className="mr-1.5 inline" />ARM LIVE</button>
       <button type="button" onClick={() => void onDisarm?.()} disabled={!apiReady || !onDisarm || killSwitch || (!armed && !shadow)} className="h-8 rounded-md border border-[var(--border-subtle)] px-3 text-[10px] font-black text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">DISARM</button>
       <button type="button" onClick={() => void onKill?.()} disabled={!apiReady || !onKill || killSwitch} title={!apiReady || !onKill ? 'Kill switch vyžaduje připojený execution runtime.' : 'Okamžitě zablokovat copier'} className="h-8 rounded-md bg-rose-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-55"><AlertTriangle size={12} className="mr-1.5 inline" />Kill switch</button>
       <button type="button" onClick={() => void onDayLock?.()} disabled={!apiReady || !onDayLock || killSwitch || dayLocked} title="Zablokovat nový ARM až do konce broker session" className="h-8 rounded-md border border-rose-500/25 px-3 text-[10px] font-black text-rose-500 disabled:cursor-not-allowed disabled:opacity-40"><ShieldAlert size={12} className="mr-1.5 inline" />Zamknout den</button>

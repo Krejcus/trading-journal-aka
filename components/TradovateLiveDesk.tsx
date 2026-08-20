@@ -351,6 +351,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
               copierShadow={agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
+              cooldownUntil={agentStatus?.controller.entryCooldownUntil ?? 0}
+              stuckOperations={agentStatus?.controller.stuckOperations ?? []}
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
               onGroupsChange={setCopyGroups}
