@@ -86,11 +86,18 @@ export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
 export interface CopierCopyEventRow {
   id: string;
   at: number;
-  kind: 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip';
+  kind: 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip'
+    | 'order-placed' | 'bracket-placed' | 'order-canceled' | 'order-moved'
+    | 'sl-moved' | 'tp-moved';
   symbol: string;
   side: 'Long' | 'Short';
   quantity: number;
   followers: number;
+  price?: number;
+  stopPrice?: number;
+  targetPrice?: number;
+  exitReason?: 'sl' | 'tp' | 'manual';
+  pnlUsd?: number;
 }
 
 const COPY_KIND_TITLE: Record<CopierCopyEventRow['kind'], string> = {
@@ -99,12 +106,36 @@ const COPY_KIND_TITLE: Record<CopierCopyEventRow['kind'], string> = {
   'scale-out': 'Copier: částečný výstup',
   exit: 'Copier: výstup zkopírován',
   flip: 'Copier: pozice otočena',
+  'order-placed': 'Copier: obchod zadán',
+  'bracket-placed': 'Copier: SL/TP nastaveny',
+  'order-canceled': 'Copier: objednávka zrušena',
+  'order-moved': 'Copier: objednávka posunuta',
+  'sl-moved': 'Copier: SL posunut',
+  'tp-moved': 'Copier: TP posunut',
 };
 
+const formatUsd = (value: number): string =>
+  `${value >= 0 ? '+' : '−'}${Math.abs(Math.round(value))} USD`;
+
 export function copyEventNotification(event: CopierCopyEventRow): { title: string; body: string } {
+  // Exit s atribucí: SL/TP hit má vlastní titulek, P&L jde do těla.
+  const title = event.kind === 'exit' || event.kind === 'flip'
+    ? event.exitReason === 'sl'
+      ? `Copier: SL HIT${event.pnlUsd != null ? ` ${formatUsd(event.pnlUsd)}` : ''}`
+      : event.exitReason === 'tp'
+        ? `Copier: TP HIT${event.pnlUsd != null ? ` ${formatUsd(event.pnlUsd)}` : ''}`
+        : COPY_KIND_TITLE[event.kind]
+    : COPY_KIND_TITLE[event.kind] ?? 'Copier: obchodní událost';
+  const parts = [`${event.side} ${event.quantity} ${event.symbol}`];
+  if (event.price != null) parts.push(`@ ${event.price}`);
+  if (event.stopPrice != null) parts.push(`SL ${event.stopPrice}`);
+  if (event.targetPrice != null) parts.push(`TP ${event.targetPrice}`);
+  if ((event.kind === 'exit' || event.kind === 'flip') && event.pnlUsd != null) {
+    parts.push(`P&L ${formatUsd(event.pnlUsd)}`);
+  }
   return {
-    title: COPY_KIND_TITLE[event.kind],
-    body: `${event.side} ${event.quantity} ${event.symbol} → ${event.followers} follower${event.followers === 1 ? '' : 'ů'}.`,
+    title,
+    body: `${parts.join(' · ')} → ${event.followers} follower${event.followers === 1 ? '' : 'ů'}.`,
   };
 }
 

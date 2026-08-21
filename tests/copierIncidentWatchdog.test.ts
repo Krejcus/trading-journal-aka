@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  copyEventNotification,
   planCopyEventNotifications,
   DEFAULT_STALE_AFTER_MS,
   evaluateCopierIncidents,
@@ -345,5 +346,35 @@ describe('resume nabídka po výpadku', () => {
 
     const second = evaluate([offered], [{ ...state('state:resume-offer', false), detail: '777' }]);
     expect(second.notifications.filter(item => item.incidentKey === 'resume-offer')).toHaveLength(0);
+  });
+});
+
+describe('texty lifecycle notifikací', () => {
+  const base = { id: 'e1', at: 1, symbol: 'MNQU6', side: 'Long' as const, quantity: 2, followers: 5 };
+
+  it('order-placed nese cenu a SL/TP', () => {
+    const content = copyEventNotification({
+      ...base, kind: 'order-placed', price: 29_500, stopPrice: 29_400, targetPrice: 29_700,
+    });
+    expect(content.title).toBe('Copier: obchod zadán');
+    expect(content.body).toContain('@ 29500');
+    expect(content.body).toContain('SL 29400');
+    expect(content.body).toContain('TP 29700');
+  });
+
+  it('SL hit má vlastní titulek s P&L', () => {
+    const content = copyEventNotification({ ...base, kind: 'exit', exitReason: 'sl', pnlUsd: -400 });
+    expect(content.title).toBe('Copier: SL HIT −400 USD');
+    expect(content.body).toContain('P&L −400 USD');
+  });
+
+  it('TP hit má vlastní titulek s P&L', () => {
+    const content = copyEventNotification({ ...base, kind: 'exit', exitReason: 'tp', pnlUsd: 240 });
+    expect(content.title).toBe('Copier: TP HIT +240 USD');
+  });
+
+  it('ruční exit zůstává u původního titulku', () => {
+    const content = copyEventNotification({ ...base, kind: 'exit', exitReason: 'manual' });
+    expect(content.title).toBe('Copier: výstup zkopírován');
   });
 });

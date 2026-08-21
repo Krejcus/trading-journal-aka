@@ -701,7 +701,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             for (const notification of copyEvents.notifications) {
                 // Přesný broker-confirmed P&L nahrazuje obecné „výstup
                 // zkopírován“, aby jeden close neposlal dvě zprávy.
-                if (notification.kind === 'exit' && closedPnl.notifications.some(item =>
+                if ((notification.kind === 'exit' || notification.kind === 'flip') && closedPnl.notifications.some(item =>
                     item.userId === notification.userId && item.deviceId === notification.deviceId)) continue;
                 const devices = devicesByUser.get(notification.userId) ?? [];
                 for (const device of devices) {

@@ -107,12 +107,25 @@ export interface CopierCopyEvent {
   /** Monotónní v rámci běhu procesu (epoch ms + pořadí). */
   id: string;
   at: number;
-  kind: 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip';
+  kind:
+    | 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip'
+    // Order lifecycle: čekající vstup zadán/zrušen/posunut, SL/TP nastaveny
+    // a posuny ochranných nohou. Vše až PO potvrzeném dispatchi kopií.
+    | 'order-placed' | 'bracket-placed' | 'order-canceled' | 'order-moved'
+    | 'sl-moved' | 'tp-moved';
   symbol: string;
   /** Long/Short podle znaménka pozice PO události (u exitu PŘED ní). */
   side: 'Long' | 'Short';
   quantity: number;
   followers: number;
+  /** Cena čekajícího vstupu / nová úroveň u *-moved. */
+  price?: number;
+  stopPrice?: number;
+  targetPrice?: number;
+  /** Jak se pozice zavřela — podle orderId závěrečného fillu leadera. */
+  exitReason?: 'sl' | 'tp' | 'manual';
+  /** Realizovaný P&L uzavřeného obchodu leadera v USD (známe-li point value). */
+  pnlUsd?: number;
 }
 
 export interface CopierRuntimeController {
@@ -251,27 +264,89 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Deník vstupů/exitů pro notifikace; jen poslední položky, jen tento běh. */
   const recentCopyEvents: CopierCopyEvent[] = [];
   let copyEventCounter = 0;
+  /** Leader ochranné nohy (SL/TP) podle brokerOrderId — pro atribuci exitu
+   *  a odfiltrování šumu (OCO auto-cancel druhé nohy po výstupu). */
+  const leaderStopOrderIds = new Set<string>();
+  const leaderTargetOrderIds = new Set<string>();
+  /** Poslední leader fill per symbol — spojí flat přechod s objednávkou. */
+  const lastLeaderFillOrderId = new Map<string, string>();
+
+  /** Lifecycle notifikace jen při plně čistém dispatchi — částečný úspěch
+   *  (dispatched + rejected/unknown) končí fail-closed a nesmí tvrdit opak. */
+  const auditCleanDispatch = (audit: readonly CopierAuditEntry[], kind: 'dispatched' | 'canceled' | 'modified') =>
+    audit.some(item => item.kind === kind)
+    && !audit.some(item => item.kind === 'unknown' || item.kind === 'abandoned'
+      || item.kind === 'rejected' || item.kind === 'blocked' || item.kind === 'cancel-failed');
+
+  const rememberProtectiveLeg = (stopOrderId: string, targetOrderId: string) => {
+    leaderStopOrderIds.add(stopOrderId);
+    leaderTargetOrderIds.add(targetOrderId);
+    // Pojistka: sety nesmí růst bez limitu (Set iteruje v pořadí vložení).
+    for (const set of [leaderStopOrderIds, leaderTargetOrderIds]) {
+      while (set.size > 300) {
+        const oldest = set.values().next().value as string | undefined;
+        if (oldest == null) break;
+        set.delete(oldest);
+      }
+    }
+  };
+
+  const pushCopyEvent = (
+    kind: CopierCopyEvent['kind'],
+    symbol: string,
+    side: 'Long' | 'Short',
+    quantity: number,
+    at: number,
+    extra: Partial<Pick<CopierCopyEvent, 'price' | 'stopPrice' | 'targetPrice' | 'exitReason' | 'pnlUsd'>> = {},
+  ): void => {
+    // Tažení SL/TP v platformě generuje sérii modify — držíme jen poslední.
+    if ((kind === 'sl-moved' || kind === 'tp-moved' || kind === 'order-moved')
+      && recentCopyEvents.length > 0) {
+      const last = recentCopyEvents[recentCopyEvents.length - 1];
+      if (last.kind === kind && last.symbol === symbol) recentCopyEvents.pop();
+    }
+    copyEventCounter += 1;
+    recentCopyEvents.push({
+      id: `${at}-${copyEventCounter}`,
+      at, kind, symbol, side, quantity,
+      followers: group.followers.filter(follower => follower.mode !== 'off').length,
+      ...extra,
+    });
+    if (recentCopyEvents.length > 20) recentCopyEvents.shift();
+  };
+
   const recordCopyEvent = (previousNet: number, nextNet: number, symbol: string, at: number): void => {
     if (previousNet === nextNet) return;
-    const push = (kind: CopierCopyEvent['kind'], side: 'Long' | 'Short', quantity: number) => {
-      copyEventCounter += 1;
-      recentCopyEvents.push({
-        id: `${at}-${copyEventCounter}`,
-        at, kind, symbol, side, quantity,
-        followers: group.followers.filter(follower => follower.mode !== 'off').length,
-      });
-      if (recentCopyEvents.length > 10) recentCopyEvents.shift();
+    const exitExtra = (): Partial<CopierCopyEvent> => {
+      const lastFill = lastLeaderFillOrderId.get(symbol);
+      // Fill tracking (trackLeaderFill) běží PŘED position eventem a P&L
+      // uzavřeného obchodu už leží v durable recentClosedTrades.
+      const closed = currentRuntime().state.safety.dailyStats?.recentClosedTrades
+        ?.find(trade => trade.symbol === symbol);
+      const exitReason: 'sl' | 'tp' | 'manual' = lastFill && leaderStopOrderIds.has(lastFill)
+        ? 'sl'
+        : lastFill && leaderTargetOrderIds.has(lastFill) ? 'tp' : 'manual';
+      // Vyplněná noha už svoji roli splnila — bez úklidu by sety rostly
+      // o jednu položku na každý uzavřený obchod až do restartu.
+      if (lastFill) {
+        leaderStopOrderIds.delete(lastFill);
+        leaderTargetOrderIds.delete(lastFill);
+      }
+      return {
+        exitReason,
+        ...(closed?.realizedPnlUsd != null ? { pnlUsd: closed.realizedPnlUsd } : {}),
+      };
     };
     if (previousNet === 0 && nextNet !== 0) {
-      push('entry', nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet));
+      pushCopyEvent('entry', symbol, nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet), at);
     } else if (previousNet !== 0 && nextNet === 0) {
-      push('exit', previousNet > 0 ? 'Long' : 'Short', Math.abs(previousNet));
+      pushCopyEvent('exit', symbol, previousNet > 0 ? 'Long' : 'Short', Math.abs(previousNet), at, exitExtra());
     } else if (Math.sign(previousNet) !== Math.sign(nextNet)) {
-      push('flip', nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet));
+      pushCopyEvent('flip', symbol, nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet), at, exitExtra());
     } else if (Math.abs(nextNet) > Math.abs(previousNet)) {
-      push('scale-in', nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet - previousNet));
+      pushCopyEvent('scale-in', symbol, nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet - previousNet), at);
     } else if (Math.abs(nextNet) < Math.abs(previousNet)) {
-      push('scale-out', previousNet > 0 ? 'Long' : 'Short', Math.abs(previousNet - nextNet));
+      pushCopyEvent('scale-out', symbol, previousNet > 0 ? 'Long' : 'Short', Math.abs(previousNet - nextNet), at);
     }
   };
   let stopped = false;
@@ -938,6 +1013,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
       failClosedOnCriticalAudit(result.audit);
+      if (pending.kind === 'submitted'
+        && (pending.orderType === 'Limit' || pending.orderType === 'Stop' || pending.orderType === 'StopLimit')
+        && auditCleanDispatch(result.audit, 'dispatched')) {
+        pushCopyEvent('order-placed', pending.symbol,
+          pending.side === 'Buy' ? 'Long' : 'Short', pending.quantity, clock(), {
+            ...(pending.limitPrice != null ? { price: pending.limitPrice } : {}),
+            ...(pending.limitPrice == null && pending.stopPrice != null ? { price: pending.stopPrice } : {}),
+          });
+      }
     } catch (error) {
       failClosed(error);
     } finally {
@@ -1016,6 +1100,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (event.type === 'fill' && event.fill.accountId === group.leaderAccountId) {
+      // Atribuce exitu (SL/TP/ručně): flat přechod se páruje s objednávkou
+      // posledního fillu daného symbolu.
+      lastLeaderFillOrderId.set(event.fill.symbol, event.fill.brokerOrderId);
       // Denní risk počítadlo čte leader filly; event pak normálně pokračuje
       // do leader event source (on-fill replikace se nemění).
       await trackLeaderFill(event.fill, now);
@@ -1082,6 +1169,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         || item.kind === 'rejected'
       ))) {
         failClosed(new Error('OCO bracket nebyl bezpečně potvrzen brokerem'));
+      } else {
+        rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId);
+        if (auditCleanDispatch(result.audit, 'dispatched')) {
+          pushCopyEvent('bracket-placed', bracketPair.symbol,
+            bracketPair.side === 'Buy' ? 'Short' : 'Long', bracketPair.quantity, now, {
+              stopPrice: bracketPair.stopPrice, targetPrice: bracketPair.targetPrice,
+            });
+        }
       }
       return;
     }
@@ -1168,7 +1263,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (result.audit.some(item => (
         item.kind === 'unknown' || item.kind === 'abandoned'
         || item.kind === 'blocked' || item.kind === 'rejected'
-      ))) failClosed(new Error('OSO nebyl bezpečně potvrzen brokerem'));
+      ))) {
+        failClosed(new Error('OSO nebyl bezpečně potvrzen brokerem'));
+      } else {
+        rememberProtectiveLeg(pair.stopOrderId, pair.targetOrderId);
+        if (auditCleanDispatch(result.audit, 'dispatched')) {
+          pushCopyEvent('order-placed', pair.symbol,
+            pair.entrySide === 'Buy' ? 'Long' : 'Short', pair.quantity, now, {
+              ...(pair.entryLimitPrice != null ? { price: pair.entryLimitPrice } : {}),
+              ...(pair.entryLimitPrice == null && pair.entryStopPrice != null ? { price: pair.entryStopPrice } : {}),
+              stopPrice: pair.stopPrice, targetPrice: pair.targetPrice,
+            });
+        }
+      }
       return;
     }
     if (leaderEvent.kind === 'submitted' && !admittedLeaderOrders.has(leaderEvent.orderId)) {
@@ -1217,6 +1324,34 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     runtime = result.runtime;
     if (result.audit.length > 0) options.onAudit?.(result.audit);
     failClosedOnCriticalAudit(result.audit);
+
+    // Order lifecycle notifikace (po potvrzeném mirroru na followerech).
+    const eventSide: 'Long' | 'Short' = leaderEvent.side === 'Sell' ? 'Short' : 'Long';
+    if (leaderEvent.kind === 'canceled'
+      && auditCleanDispatch(result.audit, 'canceled')) {
+      const isProtective = leaderStopOrderIds.delete(leaderEvent.orderId)
+        // OCO auto-cancel druhé nohy po SL/TP hitu je šum — nenotifikuje se.
+        || leaderTargetOrderIds.delete(leaderEvent.orderId);
+      if (!isProtective) {
+        pushCopyEvent('order-canceled', leaderEvent.symbol, eventSide, leaderEvent.quantity, now);
+      }
+    } else if (leaderEvent.kind === 'replaced'
+      && auditCleanDispatch(result.audit, 'modified')) {
+      if (leaderStopOrderIds.has(leaderEvent.orderId)) {
+        pushCopyEvent('sl-moved', leaderEvent.symbol, eventSide, leaderEvent.quantity, now, {
+          ...(leaderEvent.stopPrice != null ? { price: leaderEvent.stopPrice } : {}),
+        });
+      } else if (leaderTargetOrderIds.has(leaderEvent.orderId)) {
+        pushCopyEvent('tp-moved', leaderEvent.symbol, eventSide, leaderEvent.quantity, now, {
+          ...(leaderEvent.limitPrice != null ? { price: leaderEvent.limitPrice } : {}),
+        });
+      } else {
+        pushCopyEvent('order-moved', leaderEvent.symbol, eventSide, leaderEvent.quantity, now, {
+          ...(leaderEvent.limitPrice != null ? { price: leaderEvent.limitPrice } : {}),
+          ...(leaderEvent.limitPrice == null && leaderEvent.stopPrice != null ? { price: leaderEvent.stopPrice } : {}),
+        });
+      }
+    }
   };
 
   /** Autoritativní reconciliation — sdílí ji veřejné API i connection recovery. */
@@ -1256,6 +1391,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ));
       }
       leaderPositions.clear();
+      // Atribuce SL/TP exitů přežije restart: ochranné nohy leadera se
+      // obnoví z autoritativních working orderů (mají parent/OCO vazbu).
+      for (const order of byAccount.get(group.leaderAccountId)?.orders ?? []) {
+        if (order.status !== 'working') continue;
+        if (order.parentOrderId == null && order.ocoId == null && order.linkedOrderId == null) continue;
+        if (order.orderType === 'Stop' || order.orderType === 'StopLimit') {
+          leaderStopOrderIds.add(order.brokerOrderId);
+        } else if (order.orderType === 'Limit') {
+          leaderTargetOrderIds.add(order.brokerOrderId);
+        }
+      }
       const reconciledLeaderPositions = new Map(
         (byAccount.get(group.leaderAccountId)?.positions ?? []).map(item => [item.symbol, item.netQuantity]),
       );

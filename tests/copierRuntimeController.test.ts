@@ -1649,3 +1649,139 @@ describe('OSO inference okno vs. sekvence (živý pád 2026-08-20 17:04Z)', () =
     controller.stop();
   });
 });
+
+describe('order lifecycle notifikace (obchod zadán, SL/TP, atribuce exitu)', () => {
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const kinds = (controller: { status(): { recentCopyEvents?: { kind: string }[] } }) =>
+    (controller.status().recentCopyEvents ?? []).map(event => event.kind);
+
+  it('čekající limitka = order-placed s cenou; zrušení = order-canceled', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(), osoCorrelationWindowMs: 25,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder() });
+    await wait(70);
+    await controller.waitForIdle();
+    const placed = controller.status().recentCopyEvents?.find(event => event.kind === 'order-placed');
+    expect(placed).toMatchObject({ side: 'Long', quantity: 2, price: 29_500, symbol: 'MNQU6' });
+
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ status: 'canceled', sourceVersion: '2:Canceled' }),
+    });
+    await controller.waitForIdle();
+    expect(kinds(controller)).toContain('order-canceled');
+    controller.stop();
+  });
+
+  it('OSO vstup nese SL/TP, posun SL hlásí sl-moved a drží jen poslední úroveň', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(), osoCorrelationWindowMs: 25,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder() });
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'sl-1', side: 'Sell', orderType: 'Stop', stopPrice: 29_400,
+        limitPrice: undefined, sourceVersion: '1:WorkingSL',
+      }),
+    });
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'tp-1', side: 'Sell', orderType: 'Limit', limitPrice: 29_700,
+        sourceVersion: '1:WorkingTP',
+      }),
+    });
+    await controller.waitForIdle();
+    const oso = controller.status().recentCopyEvents?.find(event => event.kind === 'order-placed');
+    expect(oso).toMatchObject({ price: 29_500, stopPrice: 29_400, targetPrice: 29_700 });
+
+    // Dva posuny SL za sebou → v deníku zůstává jen poslední úroveň.
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'sl-1', side: 'Sell', orderType: 'Stop', stopPrice: 29_450,
+        limitPrice: undefined, sourceVersion: '2:WorkingSL',
+      }),
+    });
+    await controller.waitForIdle();
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'sl-1', side: 'Sell', orderType: 'Stop', stopPrice: 29_480,
+        limitPrice: undefined, sourceVersion: '3:WorkingSL',
+      }),
+    });
+    await controller.waitForIdle();
+    const moved = (controller.status().recentCopyEvents ?? []).filter(event => event.kind === 'sl-moved');
+    expect(moved).toHaveLength(1);
+    expect(moved[0]).toMatchObject({ price: 29_480 });
+    controller.stop();
+  });
+
+  it('exit přes SL nese exitReason sl a P&L obchodu', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(), osoCorrelationWindowMs: 25,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    // OSO vstup, ať se SL noha eviduje jako ochranná.
+    broker.emitEvent({ type: 'order', order: leaderOrder() });
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'sl-1', side: 'Sell', orderType: 'Stop', stopPrice: 29_400,
+        limitPrice: undefined, sourceVersion: '1:WorkingSL',
+      }),
+    });
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'tp-1', side: 'Sell', orderType: 'Limit', limitPrice: 29_700,
+        sourceVersion: '1:WorkingTP',
+      }),
+    });
+    await controller.waitForIdle();
+
+    // Leader: vstupní fill @29500, pozice 2 → SL fill @29400, pozice 0.
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'lf-1', tag: '', brokerOrderId: 'leader-1', accountId: 100,
+        symbol: 'MNQU6', side: 'Buy', quantity: 2, price: 29_500, filledAt: 500,
+      },
+    });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'lf-2', tag: '', brokerOrderId: 'sl-1', accountId: 100,
+        symbol: 'MNQU6', side: 'Sell', quantity: 2, price: 29_400, filledAt: 510,
+      },
+    });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+
+    const exit = controller.status().recentCopyEvents?.find(event => event.kind === 'exit');
+    // -100 bodů... 2 kontrakty × 100 bodů × 2 USD (MNQ) = -400 USD
+    expect(exit).toMatchObject({ exitReason: 'sl', pnlUsd: -400 });
+    controller.stop();
+  });
+});
