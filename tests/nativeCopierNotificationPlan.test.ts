@@ -21,6 +21,7 @@ const snapshot = (partial: Partial<CopierNotificationSnapshot> = {}): CopierNoti
   entryCooldownUntil: 0,
   dayLockUntil: 0,
   dayLockReason: null,
+  resumeOffer: null,
   autoClose: null,
   copyEvents: [],
   ...partial,
@@ -190,6 +191,18 @@ describe('day-lock a auto-flatten hrany', () => {
       dayLockReason: 'auto day-lock: cokoliv',
       autoClose: { operationId: 'arm-expiry:9', trigger: 'arm-expiry' as const, flat: true, canceledOrders: 0, submittedClosures: 1 },
     });
+    expect(plan(null, next).fireNow).toHaveLength(0);
+  });
+});
+
+describe('resume nabídka po výpadku', () => {
+  it('vystřelí jednou per `at` a bez prev mlčí', () => {
+    const next = snapshot({ resumeOffer: { at: 42 } });
+    const first = plan(snapshot(), next);
+    expect(first.fireNow).toEqual([expect.objectContaining({
+      title: expect.stringContaining('kopie drženy'),
+    })]);
+    expect(plan(next, next).fireNow).toHaveLength(0);
     expect(plan(null, next).fireNow).toHaveLength(0);
   });
 });

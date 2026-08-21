@@ -73,8 +73,13 @@ export interface CopierControllerStatus {
    * notifikace. Server je čte z heartbeat statusu, appka z pollu.
    */
   recentCopyEvents?: CopierCopyEvent[];
-  /** Výsledek posledního auto-flatten (expirace ARM / fail-closed); jen tento běh. */
+  /** Výsledek posledního auto-flatten (expirace ARM / fail-closed / reconnect); jen tento běh. */
   autoClose?: CopierAutoClose | null;
+  /**
+   * Connection recovery podle stavu: po výpadku jsou kopie SYNCHRONNÍ
+   * s leaderem, drží se s brackety a čekají na jediný klik ARM.
+   */
+  resumeOffer?: { at: number } | null;
   /** Redigované denní risk počítadlo leadera pro UI a watchdog. */
   dailyStats?: {
     sessionEndAt: number;
@@ -88,8 +93,8 @@ export interface CopierControllerStatus {
 export interface CopierAutoClose {
   at: number;
   operationId: string;
-  /** Co zavření spustilo: expirace ARM, nebo fail-closed chyba za live ARM. */
-  trigger: 'arm-expiry' | 'fail-closed';
+  /** Co zavření spustilo: expirace ARM, fail-closed za live ARM, nebo osiřelé kopie po výpadku. */
+  trigger: 'arm-expiry' | 'fail-closed' | 'reconnect';
   scope: 'followers' | 'group';
   accountIds: number[];
   flat: boolean;
@@ -289,6 +294,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const untrackedTradeSymbols = new Set<string>();
   let lastAutoClose: CopierAutoClose | null = null;
   let autoCloseInFlight = false;
+  /** Po reconnectu/bootu se má rozhodnout o osudu otevřených kopií. */
+  let pendingConnectionRecovery = false;
+  let recoveryInFlight = false;
+  let bootRecoveryChecked = false;
+  let lastResumeOffer: { at: number } | null = null;
   const pendingBracketTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingOsoTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingOsoEvents = new Map<string, LeaderEvent>();
@@ -450,6 +460,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     .filter((accountId): accountId is number => accountId != null)
     .every(accountId => [...(positionsByAccount.get(accountId)?.values() ?? [])]
       .every(quantity => quantity === 0));
+
+  const hasFollowerExposure = () => group.followers.some(follower =>
+    [...(positionsByAccount.get(follower.accountId)?.values() ?? [])].some(quantity => quantity !== 0));
+
+  /** Durable stopa „za živého ARM existují kopie" — podklad boot recovery. */
+  const syncLiveCopyExposureFlag = async (reason: 'update' | 'clear') => {
+    const stored = currentRuntime().state.safety.liveCopyOpenSince;
+    if (reason === 'clear' || groupIsFlat()) {
+      if (stored == null) return;
+      const { liveCopyOpenSince: _cleared, ...rest } = currentRuntime().state.safety;
+      await persistSafety(rest);
+      return;
+    }
+    if (stored != null) return;
+    if (!(gate.armed && !gate.shadowMode && hasFollowerExposure())) return;
+    await persistSafety({ ...currentRuntime().state.safety, liveCopyOpenSince: clock() });
+  };
 
   const maybeActivateCooldown = async (now: number, symbol: string) => {
     const cooldownMinutes = group.safety?.entryCooldownMinutes ?? 0;
@@ -632,6 +659,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (wasLiveArmed && !failure.transportLost && !gate.killSwitch) {
       scheduleAutoClose('fail-closed');
     }
+    if (wasLiveArmed && failure.transportLost && hasFollowerExposure()) {
+      // Bez transportu zavírat nejde — rozhodne se po reconnectu podle stavu.
+      pendingConnectionRecovery = true;
+    }
   };
 
   /**
@@ -746,6 +777,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         at: clock(), leaderEventId: operationId, kind: 'blocked',
         reason: `auto-close (${trigger}, ${scope}): zrušeno ${result.canceledOrders} příkazů, zavřeno ${result.submittedClosures} pozic`,
       }]);
+      if (result.flat) await syncLiveCopyExposureFlag('clear');
     } catch (error) {
       lastAutoClose = {
         at, operationId, trigger, scope, accountIds, flat: false,
@@ -753,6 +785,77 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       };
       failClosed(new Error(`Auto-close kopií (${trigger}) selhal: ${errorOf(error).message}`));
     }
+  };
+
+  /**
+   * Connection recovery „podle stavu": po obnovení spojení (nebo po bootu
+   * s durable stopou živých kopií) se autoritativně ověří účty.
+   * Synchronní kopie s otevřeným leaderem se DRŽÍ (brackety je chrání)
+   * a čeká se na jediný klik ARM; osiřelé nebo rozjeté kopie se
+   * risk-redukčně zavřou. Nikdy se sám neARMuje.
+   */
+  const runConnectionRecovery = async () => {
+    if (!pendingConnectionRecovery || stopped) return;
+    pendingConnectionRecovery = false;
+    const scope = group.safety?.armExpiryFlatten ?? DEFAULT_COPY_GROUP_SAFETY.armExpiryFlatten;
+    if (scope === 'off' || gate.killSwitch || group.leaderAccountId == null) return;
+    if (!gate.connected) {
+      pendingConnectionRecovery = true;
+      return;
+    }
+    const wait = options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+    let reconciliation: { divergentAccounts: number[]; workingOrderAccounts: number[] } | null = null;
+    for (let attempt = 0; attempt < 5 && !stopped; attempt += 1) {
+      if (attempt > 0) await wait(2_000);
+      if (!gate.connected) {
+        pendingConnectionRecovery = true;
+        return;
+      }
+      try {
+        reconciliation = await performReconciliation();
+        break;
+      } catch {
+        // Spojení je čerstvé — pár pokusů, pak poctivé přiznání níže.
+      }
+    }
+    if (!reconciliation) {
+      failClosed(new Error(
+        'Po obnovení spojení se nepodařilo ověřit stav účtů — kopie zůstávají chráněné brackety, zkontroluj Tradovate',
+      ));
+      return;
+    }
+    if (!hasFollowerExposure()) {
+      await syncLiveCopyExposureFlag('clear');
+      return;
+    }
+    const leaderOpen = [...(positionsByAccount.get(group.leaderAccountId)?.values() ?? [])]
+      .some(quantity => quantity !== 0);
+    if (leaderOpen && reconciliation.divergentAccounts.length === 0) {
+      lastResumeOffer = { at: clock() };
+      options.onAudit?.([{
+        at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
+        reason: 'connection-recovery: kopie jsou synchronní s leaderem — drženy, čeká se na ruční ARM',
+      }]);
+      return;
+    }
+    await autoFlattenCopies('reconnect', clock());
+  };
+
+  const scheduleConnectionRecovery = () => {
+    if (recoveryInFlight || stopped) return;
+    recoveryInFlight = true;
+    eventTail = eventTail
+      .then(async () => {
+        try {
+          await runConnectionRecovery();
+        } finally {
+          recoveryInFlight = false;
+        }
+      })
+      .catch(reason => {
+        recoveryInFlight = false;
+        failClosed(reason);
+      });
   };
 
   /**
@@ -855,6 +958,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (event.type === 'connection') {
+      // Výpadek za živého ARM s otevřenými kopiemi → po reconnectu se
+      // rozhodne „podle stavu" (držet synchronní / zavřít osiřelé).
+      if (!event.connected && gate.armed && !gate.shadowMode && hasFollowerExposure()) {
+        pendingConnectionRecovery = true;
+      }
       source.connection(event.connected);
       gate = {
         ...gate,
@@ -864,6 +972,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         armed: event.connected ? gate.armed : false,
       };
       if (event.connected && source.needsReconciliation()) positionCheckComplete = false;
+      if (event.connected) {
+        // Boot po pádu: durable stopa říká, že kopie vznikly za živého ARM.
+        if (!bootRecoveryChecked) {
+          bootRecoveryChecked = true;
+          if (currentRuntime().state.safety.liveCopyOpenSince != null) pendingConnectionRecovery = true;
+        }
+        if (pendingConnectionRecovery) scheduleConnectionRecovery();
+      }
       return;
     }
     await maybeHandleArmExpiry(now);
@@ -895,6 +1011,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       await maybeEngageDayLock(now);
       await maybeActivateCooldown(now, event.position.symbol);
+      await syncLiveCopyExposureFlag('update');
+      if (lastResumeOffer && groupIsFlat()) lastResumeOffer = null;
       return;
     }
     if (event.type === 'fill' && event.fill.accountId === group.leaderAccountId) {
@@ -1101,62 +1219,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     failClosedOnCriticalAudit(result.audit);
   };
 
-  const unsubscribe = broker.subscribe(event => {
-    eventTail = eventTail.then(() => handleBrokerEvent(event)).catch(failClosed);
-  });
-
-  return {
-    arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {
-      if (stopped) throw new Error('Copier runtime is stopped');
-      if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
-      if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
-        throw new Error('ARM TTL musí být kladný počet milisekund');
-      }
-      const now = clock();
-      if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
-      if (source.needsReconciliation()) throw new Error('Po reconnectu je nutná kontrola pozic');
-      const safety = currentRuntime().state.safety;
-      if (!shadowMode && now < safety.dayLockUntil) {
-        throw new Error(`ARM blokován denním lockem: ${safety.dayLockReason ?? 'risk lock'}`);
-      }
-      if (!shadowMode && now < safety.entryCooldownUntil) {
-        const remainingMin = Math.ceil((safety.entryCooldownUntil - now) / 60_000);
-        throw new Error(`ARM blokován anti-revenge cooldownem ještě ${remainingMin} min`);
-      }
-      if (!shadowMode && !positionCheckComplete) throw new Error('Před live dispatch je nutné potvrdit kontrolu pozic');
-      if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
-      if (gate.divergentAccounts.size > 0) throw new Error('Pozice leader/follower se rozcházejí');
-      if (workingOrderAccounts.size > 0) throw new Error('Před ARM musí být všechny účty bez pracovních příkazů');
-      // Kratší z limitů vyhrává: session TTL nesmí ARM prodloužit za výchozí strop.
-      const armTtlMs = ttlMs != null ? Math.min(ttlMs, defaultArmTtlMs) : defaultArmTtlMs;
-      gate = { ...gate, armed: true, armedAt: now, now, shadowMode, armTtlMs };
-    },
-    disarm() {
-      gate = { ...gate, armed: false };
-    },
-    engageKillSwitch(reason = 'Ruční nouzové zastavení') {
-      if (stopped) return;
-      lastError = new Error(reason.trim() || 'Ruční nouzové zastavení');
-      // Kill switch se v této runtime session nedá odjistit. Nový bootstrap znovu
-      // startuje DISARMED a stále vyžaduje reconciliation před ostrým ARM.
-      gate = { ...gate, armed: false, killSwitch: true };
-      positionCheckComplete = false;
-      options.onError?.(lastError);
-    },
-    async lockUntil(until, reason) {
-      if (!Number.isFinite(until) || until <= clock()) {
-        throw new Error('Denní lock musí končit v budoucnosti');
-      }
-      const explanation = reason.trim();
-      if (explanation.length < 3) throw new Error('Denní lock vyžaduje důvod');
-      gate = { ...gate, armed: false };
-      await persistSafety({
-        ...currentRuntime().state.safety,
-        dayLockUntil: until,
-        dayLockReason: explanation,
-      });
-    },
-    async reconcile() {
+  /** Autoritativní reconciliation — sdílí ji veřejné API i connection recovery. */
+  const performReconciliation = async (): Promise<{ divergentAccounts: number[]; workingOrderAccounts: number[] }> => {
       if (!gate.connected) throw new Error('Kontrolu pozic nelze provést bez broker spojení');
       if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');
       const accountIds = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
@@ -1221,6 +1285,73 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         divergentAccounts: [...divergent],
         workingOrderAccounts: [...workingOrderAccounts],
       };
+  };
+
+  const unsubscribe = broker.subscribe(event => {
+    eventTail = eventTail.then(() => handleBrokerEvent(event)).catch(failClosed);
+  });
+
+  return {
+    arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {
+      if (stopped) throw new Error('Copier runtime is stopped');
+      if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
+      if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
+        throw new Error('ARM TTL musí být kladný počet milisekund');
+      }
+      const now = clock();
+      if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
+      if (source.needsReconciliation()) throw new Error('Po reconnectu je nutná kontrola pozic');
+      const safety = currentRuntime().state.safety;
+      if (!shadowMode && now < safety.dayLockUntil) {
+        throw new Error(`ARM blokován denním lockem: ${safety.dayLockReason ?? 'risk lock'}`);
+      }
+      if (!shadowMode && now < safety.entryCooldownUntil) {
+        const remainingMin = Math.ceil((safety.entryCooldownUntil - now) / 60_000);
+        throw new Error(`ARM blokován anti-revenge cooldownem ještě ${remainingMin} min`);
+      }
+      if (!shadowMode && !positionCheckComplete) throw new Error('Před live dispatch je nutné potvrdit kontrolu pozic');
+      if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
+      if (gate.divergentAccounts.size > 0) throw new Error('Pozice leader/follower se rozcházejí');
+      if (workingOrderAccounts.size > 0) throw new Error('Před ARM musí být všechny účty bez pracovních příkazů');
+      // Kratší z limitů vyhrává: session TTL nesmí ARM prodloužit za výchozí strop.
+      const armTtlMs = ttlMs != null ? Math.min(ttlMs, defaultArmTtlMs) : defaultArmTtlMs;
+      gate = { ...gate, armed: true, armedAt: now, now, shadowMode, armTtlMs };
+      lastResumeOffer = null;
+    },
+    disarm() {
+      gate = { ...gate, armed: false };
+      lastResumeOffer = null;
+      // Ruční DISARM = vědomé „drž pozice" — boot recovery je nesmí zavřít.
+      void syncLiveCopyExposureFlag('clear').catch(() => undefined);
+    },
+    engageKillSwitch(reason = 'Ruční nouzové zastavení') {
+      if (stopped) return;
+      lastError = new Error(reason.trim() || 'Ruční nouzové zastavení');
+      // Kill switch se v této runtime session nedá odjistit. Nový bootstrap znovu
+      // startuje DISARMED a stále vyžaduje reconciliation před ostrým ARM.
+      gate = { ...gate, armed: false, killSwitch: true };
+      positionCheckComplete = false;
+      lastResumeOffer = null;
+      pendingConnectionRecovery = false;
+      // Kill switch = explicitní freeze; žádná pozdější automatika.
+      void syncLiveCopyExposureFlag('clear').catch(() => undefined);
+      options.onError?.(lastError);
+    },
+    async lockUntil(until, reason) {
+      if (!Number.isFinite(until) || until <= clock()) {
+        throw new Error('Denní lock musí končit v budoucnosti');
+      }
+      const explanation = reason.trim();
+      if (explanation.length < 3) throw new Error('Denní lock vyžaduje důvod');
+      gate = { ...gate, armed: false };
+      await persistSafety({
+        ...currentRuntime().state.safety,
+        dayLockUntil: until,
+        dayLockReason: explanation,
+      });
+    },
+    async reconcile() {
+      return performReconciliation();
     },
     updateGroup(nextGroup) {
       // Jakýkoli pokus o změnu konfigurace nejdřív zavře live dispatch.
@@ -1331,6 +1462,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         armedAt: gate.armed ? gate.armedAt : 0,
         recentCopyEvents: [...recentCopyEvents],
         autoClose: lastAutoClose ? { ...lastAutoClose, accountIds: [...lastAutoClose.accountIds] } : null,
+        resumeOffer: lastResumeOffer ? { ...lastResumeOffer } : null,
         dailyStats: current.state.safety.dailyStats
           ? {
             sessionEndAt: current.state.safety.dailyStats.sessionEndAt,

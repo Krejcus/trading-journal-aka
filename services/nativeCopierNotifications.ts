@@ -63,6 +63,7 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
     entryCooldownUntil: status.entryCooldownUntil ?? 0,
     dayLockUntil: status.dayLockUntil ?? 0,
     dayLockReason: status.dayLockReason ?? null,
+    resumeOffer: status.resumeOffer ? { at: status.resumeOffer.at } : null,
     autoClose: status.autoClose
       ? {
         operationId: status.autoClose.operationId,

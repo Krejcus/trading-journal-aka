@@ -23,10 +23,12 @@ export interface CopierNotificationSnapshot {
   entryCooldownUntil: number;
   dayLockUntil: number;
   dayLockReason: string | null;
+  /** Connection recovery: kopie drženy, čeká se na ruční ARM. */
+  resumeOffer: { at: number } | null;
   /** Výsledek posledního auto-flatten (expirace ARM / fail-closed). */
   autoClose: {
     operationId: string;
-    trigger: 'arm-expiry' | 'fail-closed';
+    trigger: 'arm-expiry' | 'fail-closed' | 'reconnect';
     flat: boolean;
     canceledOrders: number;
     submittedClosures: number;
@@ -216,11 +218,21 @@ export function planCopierNotifications(options: {
         kind: 'risk',
       });
     }
+    // Resume nabídka po výpadku — jednou per `at`.
+    if (next.resumeOffer && next.resumeOffer.at !== previous.resumeOffer?.at) {
+      fireNow.push({
+        title: 'Copier: výpadek skončil — kopie drženy',
+        body: 'Účty jsou synchronní s leaderem a kopie chrání brackety. Klikni ARM pro pokračování kopírování.',
+        kind: 'risk',
+      });
+    }
     // Výsledek auto-flatten (expirace ARM / fail-closed) — jednou per operationId.
     if (next.autoClose
       && next.autoClose.operationId !== previous.autoClose?.operationId) {
       const close = next.autoClose;
-      const cause = close.trigger === 'fail-closed' ? 'FAIL-CLOSED' : 'ARM vypršel';
+      const cause = close.trigger === 'fail-closed'
+        ? 'FAIL-CLOSED'
+        : close.trigger === 'reconnect' ? 'osiřelé kopie po výpadku' : 'ARM vypršel';
       fireNow.push(close.flat && !close.error
         ? {
           title: `Copier: ${cause} — kopie zavřeny`,

@@ -326,3 +326,24 @@ describe('auto-flatten po expiraci ARM', () => {
     expect(close[0].body).toContain('bez broker spojení');
   });
 });
+
+describe('resume nabídka po výpadku', () => {
+  const offered = runtime({
+    status: {
+      armed: false, shadowMode: false, connected: true, killSwitch: false,
+      stuckOutbox: false, lastError: null, resumeOffer: { at: 777 },
+    },
+  });
+
+  it('držené kopie se ohlásí právě jednou per nabídku', () => {
+    const first = evaluate([offered]);
+    const offers = first.notifications.filter(item => item.incidentKey === 'resume-offer');
+    expect(offers).toHaveLength(1);
+    expect(offers[0].body).toContain('ARM');
+    expect(first.upserts.find(item => item.incidentKey === 'state:resume-offer'))
+      .toMatchObject({ detail: '777' });
+
+    const second = evaluate([offered], [{ ...state('state:resume-offer', false), detail: '777' }]);
+    expect(second.notifications.filter(item => item.incidentKey === 'resume-offer')).toHaveLength(0);
+  });
+});

@@ -128,6 +128,24 @@ bez falešné notifikace. Běžný Home widget od 18:16 do 18:38 nový timeline
 request neudělal; přesný closed-app interval proto zůstává fyzicky neověřený a
 nesmí se zaměňovat s okamžitou APNs/Live Activity cestou řízenou serverem.
 
+### 2026-08-21 dopoledne (Claude, connection recovery „podle stavu")
+Poslední nekrytý případ: výpadek spojení/pád Macu s otevřenými kopiemi.
+Rozhodnutí uživatele: po obnovení NE slepě „vždy zavřít" ani „vždy držet",
+ale PODLE STAVU. Implementace: durable stopa `safety.liveCopyOpenSince`
+(kopie vznikly za živého ARM; maže ji flat skupiny, ruční DISARM — vědomé
+„drž pozice" — a kill switch). Po reconnectu NEBO po bootu s touto stopou
+proběhne autoritativní reconciliation (sdílená `performReconciliation`,
+až 5 pokusů) a: (a) kopie synchronní s otevřeným leaderem → DRŽÍ SE
+(brackety chrání), status `resumeOffer` + notifikace „klikni ARM pro
+pokračování" — reconciliation už proběhla, ARM je jeden klik; (b) osiřelé
+nebo rozjeté kopie → risk-redukční auto-close (`autoClose.trigger:
+'reconnect'`); (c) ověření se nepovede → poctivý fail-closed s hláškou.
+Auto-ARM záměrně neexistuje — „copier se nikdy sám neozbrojí" platí dál.
+Scope řídí `safety.armExpiryFlatten` (off vypíná). Tím je tabulka „jak ARM
+skončí vs. co s pozicemi" kompletní: jediné ruční zbytky jsou kill switch
+(záměr) a doba, kdy fyzicky není spojení (kryto SL/TP brackety u brokera).
+Gate: 1265+42 testů (chart selhání = známé prostředí).
+
 ### 2026-08-21 ráno (Claude, rychlost: plynulá obměna WS + realtime kick pro příkazy)
 (1) **Plynulá obměna socketu** (`TradovateBrokerPort.renewSocket()`):
 plánovaná údržba zavře WS bez disconnect eventu a hned se připojí s

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
-import { createMemoryCopierStore } from '../services/copierStore';
+import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
 import { createMockBroker } from '../services/mockBroker';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 
@@ -250,5 +250,120 @@ describe('fail-closed za živého ARM: auto-zavření kopií', () => {
     expect(controller.status().armed).toBe(false);
     expect(controller.status().autoClose).toBeNull();
     controller.stop();
+  });
+});
+
+describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () => {
+  const recoveryGroup: CopyGroupConfig = {
+    ...group,
+    safety: { ...DEFAULT_COPY_GROUP_SAFETY, armExpiryFlatten: 'followers' },
+  };
+
+  const openCopy = async (broker: ReturnType<typeof createMockBroker>, controller: Awaited<ReturnType<typeof bootstrapCopierRuntime>>) => {
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({ type: 'order', order: leaderOrder() });
+    await controller.waitForIdle();
+    expect(broker.placedRequests().filter(request => request.accountId === 200)).toHaveLength(1);
+  };
+
+  it('synchronní kopie po reconnectu DRŽÍ, nabídne ARM a nic neposílá', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group: recoveryGroup, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    await openCopy(broker, controller);
+    // Leader má u brokera stejnou pozici jako kopie (2 kontrakty).
+    await broker.placeOrder({
+      tag: 'seed-leader', accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 2, orderType: 'Market',
+    });
+    const placedBefore = broker.placedRequests().length;
+
+    broker.setConnected(false);
+    await controller.waitForIdle();
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(broker.placedRequests()).toHaveLength(placedBefore);
+    expect(status.resumeOffer).not.toBeNull();
+    expect(status.autoClose).toBeNull();
+    expect(status.armed).toBe(false);
+    // Recovery už udělalo autoritativní reconciliation — ARM je jeden klik.
+    expect(() => controller.arm()).not.toThrow();
+    expect(controller.status().resumeOffer).toBeNull();
+    controller.stop();
+  });
+
+  it('osiřelé kopie (leader mezitím flat) se po reconnectu risk-redukčně zavřou', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: recoveryGroup, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    await openCopy(broker, controller);
+
+    broker.setConnected(false);
+    await controller.waitForIdle();
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.autoClose).toMatchObject({ trigger: 'reconnect', flat: true, submittedClosures: 1 });
+    expect(status.resumeOffer).toBeNull();
+    const close = broker.placedRequests().at(-1);
+    expect(close).toMatchObject({ accountId: 200, side: 'Sell', quantity: 2, orderType: 'Market' });
+    controller.stop();
+  });
+
+  it('boot po pádu Macu: durable stopa spustí recovery a osiřelé kopie zavře bez ARM', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    // Kopie existuje u brokera, leader je flat — worker mezitím ležel.
+    await broker.placeOrder({
+      tag: 'seed-follower', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 2, orderType: 'Market',
+    });
+    const store = createMemoryCopierStore({
+      ...emptySnapshot(),
+      safety: { entryCooldownUntil: 0, dayLockUntil: 0, liveCopyOpenSince: 50 },
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group: recoveryGroup, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    const status = controller.status();
+    expect(status.autoClose).toMatchObject({ trigger: 'reconnect', flat: true });
+    expect(broker.placedRequests().at(-1)).toMatchObject({ accountId: 200, side: 'Sell', quantity: 2 });
+    expect((await store.load()).safety?.liveCopyOpenSince).toBeUndefined();
+    controller.stop();
+  });
+
+  it('ruční DISARM smaže durable stopu — boot recovery držené pozice nezavírá', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const store = createMemoryCopierStore();
+    const first = await bootstrapCopierRuntime({
+      broker, store, group: recoveryGroup, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    await openCopy(broker, first);
+    expect((await store.load()).safety?.liveCopyOpenSince).toBeDefined();
+
+    first.disarm();
+    await first.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await store.load()).safety?.liveCopyOpenSince).toBeUndefined();
+    first.stop();
+
+    const placedBefore = broker.placedRequests().length;
+    const restarted = await bootstrapCopierRuntime({
+      broker, store, group: recoveryGroup, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await restarted.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(placedBefore);
+    expect(restarted.status().autoClose).toBeNull();
+    restarted.stop();
   });
 });

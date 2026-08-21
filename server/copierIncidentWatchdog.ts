@@ -77,6 +77,9 @@ const COOLDOWN_MARKER_KEY = 'state:cooldown';
 /** Marker: `detail` nese `operationId` posledního ohlášeného auto-flatten. */
 const AUTO_CLOSE_MARKER_KEY = 'state:auto-close';
 
+/** Marker: `detail` nese `at` poslední ohlášené resume nabídky. */
+const RESUME_OFFER_MARKER_KEY = 'state:resume-offer';
+
 /** Interní marker: `detail` nese `at` posledního odeslaného copy eventu. */
 export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
 
@@ -393,7 +396,9 @@ export function evaluateCopierIncidents(options: {
     const closeMarker = activeState(userId, deviceId, AUTO_CLOSE_MARKER_KEY);
     if (closeOperationId && closeMarker?.detail !== closeOperationId) {
       const failed = close?.flat !== true || asText(close?.error) != null;
-      const cause = close?.trigger === 'fail-closed' ? 'FAIL-CLOSED' : 'ARM vypršel';
+      const cause = close?.trigger === 'fail-closed'
+        ? 'FAIL-CLOSED'
+        : close?.trigger === 'reconnect' ? 'osiřelé kopie po výpadku' : 'ARM vypršel';
       notifications.push({
         userId, deviceId, incidentKey: 'auto-close', kind: 'opened',
         title: failed
@@ -406,6 +411,22 @@ export function evaluateCopierIncidents(options: {
       upserts.push({
         userId, deviceId, incidentKey: AUTO_CLOSE_MARKER_KEY,
         active: false, detail: closeOperationId, notified: true,
+      });
+    }
+
+    // --- Resume nabídka po výpadku: kopie drženy, čeká se na ARM ---------
+    const resumeOffer = status.resumeOffer as { at?: unknown } | null | undefined;
+    const resumeAt = asNumber(resumeOffer?.at);
+    const resumeMarker = activeState(userId, deviceId, RESUME_OFFER_MARKER_KEY);
+    if (resumeAt > 0 && resumeMarker?.detail !== String(resumeAt)) {
+      notifications.push({
+        userId, deviceId, incidentKey: 'resume-offer', kind: 'opened',
+        title: 'Copier: výpadek skončil — kopie drženy',
+        body: 'Účty jsou synchronní s leaderem a kopie chrání brackety. Klikni ARM pro pokračování kopírování.',
+      });
+      upserts.push({
+        userId, deviceId, incidentKey: RESUME_OFFER_MARKER_KEY,
+        active: false, detail: String(resumeAt), notified: true,
       });
     }
 

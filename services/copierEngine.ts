@@ -115,6 +115,14 @@ export interface CopierState {
      * ztráty a obejít tak denní limit.
      */
     dailyStats?: CopierDailyStats;
+    /**
+     * Epoch, od kdy za ŽIVÉHO ARM existují otevřené follower kopie. Durable,
+     * aby restart workeru po pádu poznal, že kopie nevznikly ručním „drž
+     * pozice" DISARMem, a mohl spustit connection recovery (podle stavu:
+     * synchronní kopie držet + nabídnout ARM, osiřelé risk-redukčně zavřít).
+     * Maže se při zploštění skupiny, ručním DISARM a kill switchi.
+     */
+    liveCopyOpenSince?: number;
   };
 }
 
