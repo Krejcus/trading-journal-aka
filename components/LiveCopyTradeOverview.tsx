@@ -207,12 +207,12 @@ function loadHiddenColumnSet<T extends string>(key: string): Set<T> {
   }
 }
 
-function loadViewSettings(): { density: number; redaction: RedactionSettings; confirmDisableAfterFlatten: boolean } {
+function loadViewSettings(): { density: number; redaction: RedactionSettings; confirmRearmAfterFlatten: boolean } {
   try {
     const parsed = JSON.parse(localStorage.getItem(VIEW_SETTINGS_STORAGE_KEY) ?? '{}') as Partial<{
       density: number;
       redaction: Partial<RedactionSettings>;
-      confirmDisableAfterFlatten: boolean;
+      confirmRearmAfterFlatten: boolean;
     }>;
     const density = [80, 90, 100, 110].includes(parsed.density ?? 0) ? parsed.density as number : 100;
     return {
@@ -221,10 +221,10 @@ function loadViewSettings(): { density: number; redaction: RedactionSettings; co
         visibleStart: Number.isFinite(parsed.redaction?.visibleStart) ? Math.max(0, Number(parsed.redaction?.visibleStart)) : DEFAULT_REDACTION.visibleStart,
         visibleEnd: Number.isFinite(parsed.redaction?.visibleEnd) ? Math.max(0, Number(parsed.redaction?.visibleEnd)) : DEFAULT_REDACTION.visibleEnd,
       },
-      confirmDisableAfterFlatten: typeof parsed.confirmDisableAfterFlatten === 'boolean' ? parsed.confirmDisableAfterFlatten : true,
+      confirmRearmAfterFlatten: typeof parsed.confirmRearmAfterFlatten === 'boolean' ? parsed.confirmRearmAfterFlatten : true,
     };
   } catch {
-    return { density: 100, redaction: DEFAULT_REDACTION, confirmDisableAfterFlatten: true };
+    return { density: 100, redaction: DEFAULT_REDACTION, confirmRearmAfterFlatten: true };
   }
 }
 
@@ -263,7 +263,8 @@ interface PendingAction {
   detail: string;
   confirmLabel: string;
   danger?: boolean;
-  command: LiveCopyTradingCommand;
+  command?: LiveCopyTradingCommand;
+  run?: () => Promise<void>;
 }
 
 function loadDraftGroups(snapshot: LiveSnapshot): CopyGroupConfig[] {
@@ -317,7 +318,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [redactNames, setRedactNames] = useState(false);
   const [redaction, setRedaction] = useState<RedactionSettings>(initialViewSettings.redaction);
-  const [confirmDisableAfterFlatten, setConfirmDisableAfterFlatten] = useState(initialViewSettings.confirmDisableAfterFlatten);
+  const [confirmRearmAfterFlatten, setConfirmRearmAfterFlatten] = useState(initialViewSettings.confirmRearmAfterFlatten);
   const [density, setDensity] = useState(initialViewSettings.density);
   const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
   const [busyCommand, setBusyCommand] = useState<string | null>(null);
@@ -334,9 +335,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     try {
       localStorage.setItem(GROUP_COLUMNS_STORAGE_KEY, JSON.stringify([...hiddenGroupColumns]));
       localStorage.setItem(ORDER_COLUMNS_STORAGE_KEY, JSON.stringify([...hiddenOrderColumns]));
-      localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ density, redaction, confirmDisableAfterFlatten }));
+      localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ density, redaction, confirmRearmAfterFlatten }));
     } catch { /* private mode */ }
-  }, [confirmDisableAfterFlatten, density, hiddenGroupColumns, hiddenOrderColumns, redaction]);
+  }, [confirmRearmAfterFlatten, density, hiddenGroupColumns, hiddenOrderColumns, redaction]);
 
   useEffect(() => {
     setGroups(current => {
@@ -717,7 +718,22 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           onClose={() => setPendingAction(null)}
           onConfirm={() => {
             const action = pendingAction;
+            if (action.run) {
+              if (busyCommand) return;
+              setBusyCommand('rearm-after-flatten');
+              void action.run()
+                .then(() => {
+                  setPendingAction(null);
+                  setToast({ tone: 'success', text: 'Copier je znovu ARMED — kopírování pokračuje.' });
+                })
+                .catch(reason => {
+                  setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Akci se nepodařilo dokončit.' });
+                })
+                .finally(() => setBusyCommand(null));
+              return;
+            }
             const command = action.command;
+            if (!command) return;
             void runCommand(command, () => {
               if (command.type === 'set-group-enabled') {
                 const { groupId, enabled } = command;
@@ -726,12 +742,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 const { groupId } = command;
                 setGroups(current => current.filter(group => group.id !== groupId));
               }
-              if (command.type === 'flatten-group' && confirmDisableAfterFlatten) {
+              if (command.type === 'flatten-group' && confirmRearmAfterFlatten && onArmLive && !copierKillSwitch) {
                 setPendingAction({
-                  title: 'Vypnout replikaci skupiny?',
-                  detail: 'Flatten byl potvrzen. Vypnout nyní replikaci této skupiny, aby další leader příkaz nevytvořil novou pozici?',
-                  confirmLabel: 'Vypnout replikaci',
-                  command: { type: 'set-group-enabled', groupId: command.groupId, enabled: false },
+                  title: 'Pokračovat v kopírování?',
+                  detail: 'Flatten je potvrzen: všechny účty jsou flat. ARM spustí novou reconciliation a kopírování pojede dál.',
+                  confirmLabel: 'ARM & pokračovat',
+                  run: async () => { await onArmLive(); },
                 });
               } else {
                 setPendingAction(null);
@@ -741,7 +757,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         />
       )}
       {helpOpen && <CopyTradingHelpDialog onClose={() => setHelpOpen(false)} apiReady={!!commandAdapter} />}
-      {tableSettingsOpen && <TableSettingsDialog hiddenColumns={hiddenColumns} hiddenGroupColumns={hiddenGroupColumns} hiddenOrderColumns={hiddenOrderColumns} density={density} redaction={redaction} confirmDisableAfterFlatten={confirmDisableAfterFlatten} onDensity={setDensity} onRedaction={setRedaction} onConfirmDisableAfterFlatten={setConfirmDisableAfterFlatten} onToggleColumn={toggleColumn} onToggleGroupColumn={key => setHiddenGroupColumns(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onToggleOrderColumn={key => setHiddenOrderColumns(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onReset={() => { setHiddenColumns(new Set()); setHiddenGroupColumns(new Set()); setHiddenOrderColumns(new Set()); setDensity(100); setRedaction(DEFAULT_REDACTION); setConfirmDisableAfterFlatten(true); }} onClose={() => setTableSettingsOpen(false)} />}
+      {tableSettingsOpen && <TableSettingsDialog hiddenColumns={hiddenColumns} hiddenGroupColumns={hiddenGroupColumns} hiddenOrderColumns={hiddenOrderColumns} density={density} redaction={redaction} confirmRearmAfterFlatten={confirmRearmAfterFlatten} onDensity={setDensity} onRedaction={setRedaction} onConfirmRearmAfterFlatten={setConfirmRearmAfterFlatten} onToggleColumn={toggleColumn} onToggleGroupColumn={key => setHiddenGroupColumns(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onToggleOrderColumn={key => setHiddenOrderColumns(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onReset={() => { setHiddenColumns(new Set()); setHiddenGroupColumns(new Set()); setHiddenOrderColumns(new Set()); setDensity(100); setRedaction(DEFAULT_REDACTION); setConfirmRearmAfterFlatten(true); }} onClose={() => setTableSettingsOpen(false)} />}
       {templatesOpen && <GroupTemplatesDialog templates={templates} accounts={snapshot.accounts} onChange={setTemplates} onClose={() => setTemplatesOpen(false)} />}
       {toast && <StatusToast tone={toast.tone} text={toast.text} />}
     </div>
@@ -1580,16 +1596,16 @@ const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, on
   );
 };
 
-const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenOrderColumns, density, redaction, confirmDisableAfterFlatten, onDensity, onRedaction, onConfirmDisableAfterFlatten, onToggleColumn, onToggleGroupColumn, onToggleOrderColumn, onReset, onClose }: {
+const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenOrderColumns, density, redaction, confirmRearmAfterFlatten, onDensity, onRedaction, onConfirmRearmAfterFlatten, onToggleColumn, onToggleGroupColumn, onToggleOrderColumn, onReset, onClose }: {
   hiddenColumns: Set<AccountColumnKey>;
   hiddenGroupColumns: Set<GroupColumnKey>;
   hiddenOrderColumns: Set<OrderColumnKey>;
   density: number;
   redaction: RedactionSettings;
-  confirmDisableAfterFlatten: boolean;
+  confirmRearmAfterFlatten: boolean;
   onDensity: (value: number) => void;
   onRedaction: (value: RedactionSettings) => void;
-  onConfirmDisableAfterFlatten: (value: boolean) => void;
+  onConfirmRearmAfterFlatten: (value: boolean) => void;
   onToggleColumn: (key: AccountColumnKey) => void;
   onToggleGroupColumn: (key: GroupColumnKey) => void;
   onToggleOrderColumn: (key: OrderColumnKey) => void;
@@ -1611,7 +1627,7 @@ const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenOrderCol
             <label className="space-y-1.5"><span className="block text-[10px] font-bold text-[var(--text-secondary)]">Visible last characters</span><input aria-label="Visible last account characters" type="number" min="0" max="12" value={redaction.visibleEnd} onChange={event => onRedaction({ ...redaction, visibleEnd: Math.max(0, Number(event.target.value)) })} className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]" /></label>
           </div>
         </div>
-        <label className="flex items-center gap-2.5 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={confirmDisableAfterFlatten} onChange={event => onConfirmDisableAfterFlatten(event.target.checked)} className="accent-indigo-600" />Confirm disabling replication after flatten</label>
+        <label className="flex items-center gap-2.5 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={confirmRearmAfterFlatten} onChange={event => onConfirmRearmAfterFlatten(event.target.checked)} className="accent-indigo-600" />Po Flatten All nabídnout ARM &amp; pokračovat</label>
       </div>
       <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-5 py-4"><button onClick={onReset} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-page)]"><RotateCcw size={13} /> Reset to default</button><button onClick={onClose} className="h-9 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white">Done</button></footer>
     </section>
@@ -1793,11 +1809,13 @@ const ConfirmActionDialog = ({ action, busy, apiReady, onClose, onConfirm }: { a
     <section role="alertdialog" aria-modal="true" className="w-full max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl p-5">
       <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${action.danger ? 'bg-rose-500/10 text-rose-500' : 'bg-indigo-500/10 text-indigo-500'}`}>{action.danger ? <AlertTriangle size={21} /> : <Power size={21} />}</div>
       <h3 className="text-lg font-black text-[var(--text-primary)] mt-4">{action.title}</h3><p className="text-sm text-[var(--text-secondary)] mt-1.5 leading-relaxed">{action.detail}</p>
-      <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
-        {apiReady
-          ? 'Execution adaptér je připojen. Potvrzená akce bude předána lokálnímu DEMO runtime.'
-          : 'Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.'}
-      </div>
+      {!action.run && (
+        <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
+          {apiReady
+            ? 'Execution adaptér je připojen. Potvrzená akce bude předána lokálnímu DEMO runtime.'
+            : 'Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.'}
+        </div>
+      )}
       <div className="flex justify-end gap-2 mt-5"><button onClick={onClose} disabled={busy} className="h-10 px-4 rounded-xl border border-[var(--border-subtle)] text-xs font-bold text-[var(--text-secondary)]">Zrušit</button><button onClick={onConfirm} disabled={busy} className={`h-10 px-4 rounded-xl text-white text-xs font-bold disabled:opacity-50 ${action.danger ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{busy ? 'Připravuji…' : action.confirmLabel}</button></div>
     </section>
   </div>, document.body,

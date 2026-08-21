@@ -78,6 +78,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-21 (Codex, Flatten All follow-up re-ARM)
+Frontendový follow-up po potvrzeném skupinovém Flatten All už nenabízí vypnutí
+replikace, ale volitelný explicitní `ARM & pokračovat`. Nabídka vznikne pouze
+s dostupnou ARM akcí, vypnutým kill switchem a zapnutým novým view nastavením;
+ARM dál prochází existující čerstvou reconciliation a controllerové DISARM
+chování flattenu se nemění. Starý localStorage klíč pro disable follow-up se
+ignoruje. TypeScript a všech 1333 Vitest testů prošly.
+
 ### 2026-08-21 odpoledne V (Claude + GPT cross-review, Flatten přes relay)
 Uživatel narazil: Flatten/Flatten All ze Safari na produkci → „copier relay
 failed". Příčina: relay whitelist ZÁMĚRNĚ blokoval broker-write příkazy a
