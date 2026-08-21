@@ -88,6 +88,14 @@ export function startMacCopierCommandRelay(options: {
         maybeSubscribeKick(response.realtime);
         const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
         if (remote?.id && remote.command) {
+          // Telemetrie: enqueue čas = expiresAt - 30 s (server TTL). Čekání
+          // ve frontě přímo ukazuje, jestli realtime kick funguje (<300 ms).
+          if (remote.expiresAt) {
+            const queuedAt = Date.parse(remote.expiresAt) - 30_000;
+            if (Number.isFinite(queuedAt)) {
+              console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} čekal ve frontě ${Math.max(0, Date.now() - queuedAt)} ms`);
+            }
+          }
           if (!remote.expiresAt || Date.parse(remote.expiresAt) <= Date.now()) {
             await complete(remote.id, undefined, 'command-expired-before-execution');
           } else {

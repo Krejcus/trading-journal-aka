@@ -388,3 +388,44 @@ describe('local copier execution agent', () => {
     runtime.stop();
   });
 });
+
+describe('atomický arm-live s konfigurací', () => {
+  it('arm-live s group nejdřív synchronizuje konfiguraci, pak reconcile a ARM', async () => {
+    const runtime = controller();
+    const saved: CopyGroupConfig[] = [];
+    const agent = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      onGroupChanged: async changed => { saved.push(changed); },
+    });
+    try {
+      const next: CopyGroupConfig = {
+        ...group(),
+        followers: [{ accountId: 22, mode: 'on-submit', multiplier: 2 }],
+      };
+      const result = await agent.execute({ type: 'arm-live', group: next });
+      expect(result.ok).toBe(true);
+      // Konfigurace prošla před ARMem a durable persist proběhl.
+      expect(runtime.updateGroup).toHaveBeenCalled();
+      expect(saved).toHaveLength(1);
+      expect(saved[0].followers[0].multiplier).toBe(2);
+      expect(runtime.reconcile).toHaveBeenCalled();
+      expect(runtime.arm).toHaveBeenCalledWith(expect.objectContaining({ shadowMode: false }));
+      expect(agent.status().group.followers[0].multiplier).toBe(2);
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it('arm-live bez group armuje beze změny konfigurace', async () => {
+    const runtime = controller();
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      await agent.execute({ type: 'arm-live' });
+      expect(runtime.updateGroup).not.toHaveBeenCalled();
+      expect(runtime.arm).toHaveBeenCalled();
+    } finally {
+      await agent.close();
+    }
+  });
+});

@@ -189,6 +189,11 @@ export async function startLocalCopierExecutionAgent(
       case 'copy-command':
         return executeCopyCommand(command.command);
       case 'arm-live': {
+        // Volitelný atomický sync konfigurace: dřív UI posílalo update-group
+        // + arm-live jako dva relay round-tripy (~5 s); teď jde obojí naráz.
+        if (command.group) {
+          await applyGroup(mappedGroup(group, command.group));
+        }
         const reconciliation = await options.controller.reconcile();
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');

@@ -409,14 +409,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
                   message: `ARM LIVE skupinu ${executionGroup.name}? Runtime nejdřív provede reconciliation a při jakémkoli rozdílu ARM odmítne. Platnost skončí nejpozději v 17:00 Chicago.`,
                   confirmLabel: 'ARM LIVE',
                 }))) return;
-                // UI je autoritativní pro aktuální násobky/módy. Před každým
-                // ARM je nejdřív durable runtime synchronizujeme; update-group
-                // sám DISARMuje a teprve následující ARM provede reconciliation.
-                await executeAgent({
-                  type: 'copy-command',
-                  command: { type: 'update-group', group: executionGroup },
-                });
-                setAgentStatus((await executeAgent({ type: 'arm-live' })).status);
+                // UI je autoritativní pro aktuální násobky/módy — sync
+                // konfigurace jde atomicky uvnitř arm-live (jeden relay
+                // round-trip; dva sériové dělaly z ARMu 5–6 s).
+                setAgentStatus((await executeAgent({ type: 'arm-live', group: executionGroup })).status);
               } : undefined}
               onShadowMode={executionGroup ? async () => setAgentStatus((await executeAgent({ type: 'shadow' })).status) : undefined}
               onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}

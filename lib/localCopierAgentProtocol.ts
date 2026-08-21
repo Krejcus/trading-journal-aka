@@ -36,7 +36,12 @@ export interface LocalCopierAgentStatus {
 
 export type LocalCopierAgentCommand =
   | { type: 'copy-command'; command: LiveCopyTradingCommand }
-  | { type: 'arm-live' }
+  /**
+   * `group` volitelně synchronizuje UI konfiguraci atomicky před ARMem —
+   * jeden relay round-trip místo dvou (update-group + arm-live dělaly
+   * z ARMu 5–6 s). Bez `group` se armuje aktuální runtime konfigurace.
+   */
+  | { type: 'arm-live'; group?: CopyGroupConfig }
   | { type: 'shadow' }
   | { type: 'disarm' }
   | { type: 'kill-switch' }
