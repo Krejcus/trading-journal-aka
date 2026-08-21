@@ -1241,11 +1241,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ].filter(Boolean).join(' ');
         throw new Error(`OAuth/account preflight selhal: ${details}`);
       }
-      const snapshots = await Promise.all(accountIds.map(async accountId => ({
-        accountId,
-        positions: await broker.listPositions(accountId),
-        orders: await broker.listOrders(accountId),
-      })));
+      const snapshots = await Promise.all(accountIds.map(async accountId => {
+        const [positions, orders] = await Promise.all([
+          broker.listPositions(accountId),
+          broker.listOrders(accountId),
+        ]);
+        return { accountId, positions, orders };
+      }));
       const byAccount = new Map(snapshots.map(item => [item.accountId, item]));
       positionsByAccount.clear();
       for (const snapshot of snapshots) {

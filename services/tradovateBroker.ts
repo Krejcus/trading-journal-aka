@@ -463,7 +463,43 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     for (const fill of waiting) await emitMappedFill(fill);
   };
 
+  /**
+   * In-flight dedup globálních čtení: reconciliation/flatten volají
+   * listPositions/listOrders pro KAŽDÝ účet spojení, ale Tradovate vrací
+   * seznamy globálně. Bez sdílení dělal ARM pro 5 účtů ~25 identických REST
+   * dotazů (a throttling je natahoval na sekundy). Sdílí se jen souběžné
+   * volání — žádná TTL cache, žádné riziko starých dat.
+   */
+  let positionListInFlight: Promise<TradovatePositionEntity[]> | null = null;
+  const listPositionEntities = () => {
+    if (!positionListInFlight) {
+      positionListInFlight = request<TradovatePositionEntity[]>('/position/list')
+        .finally(() => { positionListInFlight = null; });
+    }
+    return positionListInFlight;
+  };
+  let accountListInFlight: Promise<TradovateAccountEntity[]> | null = null;
+  const listAccountEntities = () => {
+    if (!accountListInFlight) {
+      accountListInFlight = request<TradovateAccountEntity[]>('/account/list')
+        .finally(() => { accountListInFlight = null; });
+    }
+    return accountListInFlight;
+  };
+  let orderGraphInFlight: Promise<TradovateRawOrderEntity[]> | null = null;
+
   const loadOrderGraph = async (selectedOrderId?: number) => {
+    if (selectedOrderId == null) {
+      if (!orderGraphInFlight) {
+        orderGraphInFlight = loadOrderGraphUncached()
+          .finally(() => { orderGraphInFlight = null; });
+      }
+      return orderGraphInFlight;
+    }
+    return loadOrderGraphUncached(selectedOrderId);
+  };
+
+  const loadOrderGraphUncached = async (selectedOrderId?: number) => {
     const suffix = selectedOrderId == null ? '/list' : `/deps?masterid=${selectedOrderId}`;
     const [rawResult, versionResult, commandResult, fillResult] = await Promise.all([
       selectedOrderId == null
@@ -833,7 +869,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
     },
     async listAccountCapabilities(accountIds): Promise<BrokerAccountCapability[]> {
-      const entities = await request<TradovateAccountEntity[]>('/account/list');
+      const entities = await listAccountEntities();
       const selected = new Set(accountIds);
       return (entities ?? []).filter(item => selected.has(item.id)).map(item => ({
         accountId: item.id,
@@ -842,7 +878,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }));
     },
     async listPositions(accountId): Promise<BrokerPosition[]> {
-      const entities = await request<TradovatePositionEntity[]>('/position/list');
+      const entities = await listPositionEntities();
       const selected = (entities ?? []).filter(item => item.accountId === accountId);
       await hydrateContracts(selected.map(item => item.contractId));
       return selected.map(item => ({
