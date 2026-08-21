@@ -128,6 +128,27 @@ bez falešné notifikace. Běžný Home widget od 18:16 do 18:38 nový timeline
 request neudělal; přesný closed-app interval proto zůstává fyzicky neověřený a
 nesmí se zaměňovat s okamžitou APNs/Live Activity cestou řízenou serverem.
 
+### 2026-08-21 dopoledne II (Claude, ARM z 5–6 s na <1 s / ~2 s — čtyři nálezy)
+Uživatel: „ARM trvá 5–6 s." Postupná diagnóza měřením, čtyři skutečné
+příčiny (žádná nebyla „pomalá reconciliation" sama o sobě):
+(1) list metody brokeru stahují GLOBÁLNÍ seznamy a filtrují per účet —
+reconciliation pro 5 účtů = ~25 identických REST dotazů; in-flight dedup
+(sdílení souběžných fetchů, žádná TTL cache) → reconciliation 335–635 ms.
+(2) UI posílalo update-group + arm-live jako DVA sériové relay round-tripy;
+arm-live teď volitelně nese `group` a synchronizuje atomicky (1 round-trip).
+(3) Realtime kick se ZAHAZOVAL, když přišel během poll requestu (wake byl
+null) → fronta 1,1–1,5 s; `kickPending` ho drží → fronta 0,4–0,7 s.
+Telemetrie: `RELAY KICK přijat` + `RELAY CMD … čekal ve frontě X ms`.
+(4) Přímý loopback agent se používal jen na http://localhost — produkční
+HTTPS web na Macu teď zkouší 127.0.0.1 napřímo (CORS + private-network
+header byly připravené; telefon po 1. neúspěchu tiše na relay). POZOR:
+Safari HTTPS→127.0.0.1 blokuje (WebKit bez localhost výjimky) — na Macu
+pro desk používat Chrome (<1 s); Safari/telefon jede relay ~2 s. Navíc
+enqueue endpoint long-polluje ~2,2 s na výsledek (UI bez polling koleček).
+Uživatel potvrdil „už to funguje rychle". Další krok pro telefon: VPS.
+Provozní poučení: reinstall workeru VŽDY gate-ovat na armed=False v
+skriptu (jednou proběhl při ARMED — jen flat, ale nesmí se opakovat).
+
 ### 2026-08-21 dopoledne (Claude, connection recovery „podle stavu")
 Poslední nekrytý případ: výpadek spojení/pád Macu s otevřenými kopiemi.
 Rozhodnutí uživatele: po obnovení NE slepě „vždy zavřít" ani „vždy držet",
