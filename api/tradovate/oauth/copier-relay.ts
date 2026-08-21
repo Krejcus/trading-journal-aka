@@ -146,6 +146,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('auth-token') || message === 'invalid-copier-device-auth') return res.status(401).json({ error: message });
     if (message.endsWith('not-found')) return res.status(404).json({ error: message });
+    // Odmítnutý příkaz je validační chyba klienta — generické 502 „copier
+    // relay failed" by maskovalo skutečný důvod (viz Flatten ze Safari).
+    if (message === 'unsupported-relay-command' || message === 'unsupported-remote-copy-command' || message === 'invalid-relay-command-payload') {
+      return res.status(400).json({ error: message });
+    }
     console.error('[copier-relay]', message);
     return res.status(502).json({ error: 'copier-relay-failed' });
   }

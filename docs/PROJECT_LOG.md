@@ -78,6 +78,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-21 odpoledne V (Claude + GPT cross-review, Flatten přes relay)
+Uživatel narazil: Flatten/Flatten All ze Safari na produkci → „copier relay
+failed". Příčina: relay whitelist ZÁMĚRNĚ blokoval broker-write příkazy a
+Safari nemá přímý loopback (blokuje https→127.0.0.1) → fallback na relay →
+odmítnuto s generickým 502. Rozhodnutí (se souhlasem uživatele): Flatten je
+risk-snižující nouzová brzda stejné třídy jako disarm/kill-switch — panic
+button musí fungovat ze Safari i z iPhone appky. Změny:
+- relay pouští copy-commandy `flatten-account`/`flatten-group`; ostatní
+  broker-write (cancel-order, …) dál blokované;
+- validační chyby mapované na 400 místo generického 502;
+- ingress strukturální validace flatten payloadu (groupId, operationId dle
+  operationToken regexu, accountId) — vadný příkaz dřív doputoval k workerovi,
+  který PŘED validací DISARMuje → zbytečný fail-closed (nález GPT review);
+- agent autoritativně ověřuje `groupId` proti runtime skupině (nález GPT:
+  frontend kontrola není bezpečnostní hranice); testy posílaly nekonzistentní
+  groupId a starý kód to mlčky polykal — opraveno + negativní testy.
+ZNÁMÝ LIMIT (GPT nález, pre-existující všude): market close z planFlatten
+není atomický reduce-only — při souběžné změně pozice cizím klientem může
+teoreticky otočit směr. Budoucí řešení: Tradovate `/order/liquidateposition`.
+NASAZENÍ: relay část funguje hned po push na main (bez workera); agent
+groupId check se aktivuje příštím worker reinstallem (DISARMED gate).
+
 ### 2026-08-21 odpoledne IV (Codex implementace + Claude spec/review, paralelní Flatten)
 Příprava na ~20 účtů: `processManualFlatten` přepsán na per-account
 pipelines (uvnitř účtu SEKVENČNĚ cancel → close — bezpečnostní invariant;

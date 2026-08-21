@@ -92,15 +92,34 @@ describe('local copier execution agent', () => {
 
     expect((await post(running, nonce, {
       type: 'copy-command',
-      command: { type: 'flatten-account', groupId: 'ui-test', accountId: 22, operationId: 'flatten-one-123' },
+      command: { type: 'flatten-account', groupId: 'runtime-test', accountId: 22, operationId: 'flatten-one-123' },
     })).status).toBe(200);
     expect(runtime.flattenAccount).toHaveBeenCalledWith(22, 'flatten-one-123');
 
     expect((await post(running, nonce, {
       type: 'copy-command',
-      command: { type: 'flatten-group', groupId: 'ui-test', operationId: 'flatten-all-123' },
+      command: { type: 'flatten-group', groupId: 'runtime-test', operationId: 'flatten-all-123' },
     })).status).toBe(200);
     expect(runtime.flattenGroup).toHaveBeenCalledWith('flatten-all-123');
+  });
+
+  it('rejects Flatten aimed at a different group than the runtime one', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const nonce = running.status().nonce;
+
+    const account = await post(running, nonce, {
+      type: 'copy-command',
+      command: { type: 'flatten-account', groupId: 'jina-skupina', accountId: 22, operationId: 'flatten-one-123' },
+    });
+    expect(account.status).toBe(409);
+    const wholeGroup = await post(running, nonce, {
+      type: 'copy-command',
+      command: { type: 'flatten-group', groupId: 'jina-skupina', operationId: 'flatten-all-123' },
+    });
+    expect(wholeGroup.status).toBe(409);
+    expect(runtime.flattenAccount).not.toHaveBeenCalled();
+    expect(runtime.flattenGroup).not.toHaveBeenCalled();
   });
 
   it('rejects foreign origins, invalid nonce and accounts outside the runtime group', async () => {
@@ -111,13 +130,13 @@ describe('local copier execution agent', () => {
 
     const wrongNonce = await post(running, 'wrong', {
       type: 'copy-command',
-      command: { type: 'flatten-account', groupId: 'ui-test', accountId: 22, operationId: 'flatten-one-123' },
+      command: { type: 'flatten-account', groupId: 'runtime-test', accountId: 22, operationId: 'flatten-one-123' },
     });
     expect(wrongNonce.status).toBe(401);
 
     const outside = await post(running, running.status().nonce, {
       type: 'copy-command',
-      command: { type: 'flatten-account', groupId: 'ui-test', accountId: 33, operationId: 'flatten-one-123' },
+      command: { type: 'flatten-account', groupId: 'runtime-test', accountId: 33, operationId: 'flatten-one-123' },
     });
     expect(outside.status).toBe(409);
     expect(runtime.flattenAccount).not.toHaveBeenCalled();
@@ -358,7 +377,7 @@ describe('local copier execution agent', () => {
 
     const flattenFollower = await post(running, nonce, {
       type: 'copy-command',
-      command: { type: 'flatten-account', groupId: 'ui-test', accountId: 22, operationId: 'e2e-flatten-one-001' },
+      command: { type: 'flatten-account', groupId: 'runtime-test', accountId: 22, operationId: 'e2e-flatten-one-001' },
     });
     expect(flattenFollower.status).toBe(200);
     expect((await flattenFollower.json()).result).toMatchObject({
@@ -376,7 +395,7 @@ describe('local copier execution agent', () => {
 
     const flattenAll = await post(running, nonce, {
       type: 'copy-command',
-      command: { type: 'flatten-group', groupId: 'ui-test', operationId: 'e2e-flatten-all-001' },
+      command: { type: 'flatten-group', groupId: 'runtime-test', operationId: 'e2e-flatten-all-001' },
     });
     expect(flattenAll.status).toBe(200);
     expect((await flattenAll.json()).result).toMatchObject({

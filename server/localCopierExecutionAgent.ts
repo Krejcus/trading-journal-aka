@@ -69,6 +69,12 @@ const assertMember = (group: CopyGroupConfig, accountId: number): void => {
   }
 };
 
+const assertGroupTarget = (group: CopyGroupConfig, groupId: string): void => {
+  if (groupId !== group.id) {
+    throw new Error('Flatten míří na jinou skupinu, než jakou má lokální execution agent');
+  }
+};
+
 const mappedGroup = (runtimeGroup: CopyGroupConfig, incoming: CopyGroupConfig): CopyGroupConfig => {
   if (runtimeGroup.leaderAccountId !== incoming.leaderAccountId) {
     throw new Error('Leader běžícího execution agenta se nesmí změnit');
@@ -162,9 +168,14 @@ export async function startLocalCopierExecutionAgent(
         });
       }
       case 'flatten-account':
+        // Autoritativní cíl: groupId z příkazu musí sedět na runtime skupinu.
+        // Web adapter to kontroluje taky, ale frontend není bezpečnostní
+        // hranice — přes relay smí Flatten dorazit odkudkoliv.
+        assertGroupTarget(group, command.groupId);
         assertMember(group, command.accountId);
         return { type: 'flatten', ...await options.controller.flattenAccount(command.accountId, command.operationId) };
       case 'flatten-group':
+        assertGroupTarget(group, command.groupId);
         return { type: 'flatten', ...await options.controller.flattenGroup(command.operationId) };
       case 'create-group':
         throw new Error('Lokální agent už má jednu aktivní skupinu');

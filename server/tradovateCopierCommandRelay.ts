@@ -63,16 +63,55 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   'copy-command', 'arm-live', 'shadow', 'disarm', 'kill-switch',
 ]);
 
+// The browser relay exists to synchronize the already configured group before
+// an explicit ARM — plus the risk-reducing emergency brakes. Flatten only
+// cancels working orders and closes positions to zero (planFlatten never
+// increases |exposure| nor flips direction), so it belongs to the same remote
+// class as disarm/kill-switch: the panic button must work from Safari and the
+// iPhone app, where the direct loopback agent is unreachable. Every other
+// broker-write command (cancel-order, replication changes mid-flight, …)
+// stays deliberately rejected on this remote path.
+const remoteCopyCommands = new Set([
+  'update-group', 'set-group-enabled', 'set-replication', 'set-multiplier',
+  'flatten-account', 'flatten-group',
+]);
+
+// Stejný formát vynucuje controller (operationToken); validace už na ingressu
+// brání tomu, aby vadný Flatten doputoval k workerovi — ten před validací
+// příkazu DISARMuje a vadný payload by tak vyrobil zbytečný fail-closed.
+const OPERATION_ID_PATTERN = /^[a-zA-Z0-9:_-]{8,120}$/;
+
+/**
+ * Tělo copy-commandu přichází z nevalidovaného JSON (request body / DB řádek)
+ * — typová anotace nic nezaručuje. Whitelist + strukturální kontrola musí být
+ * na enqueue i claim straně identická (obrana do hloubky proti ručně
+ * vloženému řádku).
+ */
+const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== 'object') throw new Error('invalid-relay-command-payload');
+  const command = value as { type?: unknown; groupId?: unknown; accountId?: unknown; operationId?: unknown };
+  if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
+    throw new Error('unsupported-remote-copy-command');
+  }
+  if (command.type === 'flatten-account' || command.type === 'flatten-group') {
+    if (typeof command.groupId !== 'string' || command.groupId.trim() === '') {
+      throw new Error('invalid-relay-command-payload');
+    }
+    if (typeof command.operationId !== 'string' || !OPERATION_ID_PATTERN.test(command.operationId.trim())) {
+      throw new Error('invalid-relay-command-payload');
+    }
+    if (command.type === 'flatten-account'
+      && (typeof command.accountId !== 'number' || !Number.isSafeInteger(command.accountId) || command.accountId <= 0)) {
+      throw new Error('invalid-relay-command-payload');
+    }
+  }
+  return command as Record<string, unknown>;
+};
+
 const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknown> => {
   if (!allowed.has(command.type) || command.type === 'device-paired') throw new Error('unsupported-relay-command');
   if (command.type === 'copy-command') {
-    // The browser relay exists only to synchronize the already configured group
-    // before an explicit ARM. Broker-write commands (Flatten, cancel, etc.) are
-    // deliberately not accepted through this remote path.
-    if (!['update-group', 'set-group-enabled', 'set-replication', 'set-multiplier'].includes(command.command.type)) {
-      throw new Error('unsupported-remote-copy-command');
-    }
-    return { command: command.command };
+    return { command: validatedRemoteCopyCommand((command as { command?: unknown }).command) };
   }
   return {};
 };
@@ -80,12 +119,7 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
 const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
   if (!allowed.has(row.command_type) || row.command_type === 'device-paired') throw new Error('unsupported-relay-command');
   if (row.command_type === 'copy-command') {
-    if (!row.payload?.command || typeof row.payload.command !== 'object') throw new Error('invalid-relay-command-payload');
-    const command = row.payload.command as { type?: string };
-    if (!['update-group', 'set-group-enabled', 'set-replication', 'set-multiplier'].includes(String(command.type))) {
-      throw new Error('unsupported-remote-copy-command');
-    }
-    return { type: 'copy-command', command: command as never };
+    return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
   }
   return { type: row.command_type } as LocalCopierAgentCommand;
 };
