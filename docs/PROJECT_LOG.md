@@ -55,16 +55,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
-- [ ] iOS 26 WidgetKit APNs registrace: telefon token vydá a widgetový snapshot
-      načítá, ale produkční `/api/native-widget-push-subscription` končí při
-      databázovém zápisu `500 widget-push-upsert-failed`. Dokud se neopraví a
-      fyzicky neověří push-triggered reload, vzdálené obnovení widgetu není hotové.
-- [ ] ActivityKit push-to-start: token připojeného iPhonu je v produkci
-      zaregistrovaný, ale vytvoření nové Live Activity ze serveru při force-quit
-      appce ještě nebylo fyzicky ověřeno bezpečnou novou ARM session.
-- [ ] Do iPhonu nahrát přes kabel nový build z finálního commitu tohoto handoffu.
-      Aktuálně instalovaný build obsahuje později vrácený diagnostický widget
-      retry; repo a telefon proto nejsou byte-for-byte shodné.
+- [x] iOS 26 WidgetKit APNs registrace — VYŘEŠENO 21. 8. (zápis „widgety a
+      notifikace dokončeny"): příčinou byl Postgres regex limit v CHECK
+      constraintu; registrace, push i push-triggered reload fyzicky ověřeny.
+- [x] ActivityKit push-to-start — FYZICKY OVĚŘENO 21. 8.: Live Activity se
+      vytvořila ze serveru při force-quit appce (ARM z Mac Safari).
+- [x] Kabel rebuild — 21. 8. nainstalován build shodný s repem (devicectl).
 - [ ] Pairing flow (ikona klíče v LIVE Connections) — nasazený, ale
       neproklikaný na produkci.
 - [x] Multi-follower DEMO test — 18. 8. potvrzen OCO/SL lifecycle na čtyřech
@@ -81,6 +77,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-21 odpoledne (Claude, widgety a notifikace dokončeny)
+Kořen `500 widget-push-upsert-failed`: CHECK constraint
+`widget_push_token ~ '^[0-9a-f]{64,512}$'` — POSIX regex v Postgresu má
+limit opakování {n,m} s m ≤ 255. DDL prošlo (regex se nevaliduje při
+CREATE), ale KAŽDÉ vyhodnocení při zápisu padalo `2201B invalid
+repetition count` → každý POST 500. Oprava: char_length hlídá délku,
+regex jen znakovou sadu (migrace 20260821080500, aplikováno přes
+Management API — supabase migration history je vůči repu rozjetá
+z Codexova MCP apply, db push nepoužívat bez repair). POZOR pro příště:
+regex délkové limity v SQL vždy přes char_length.
+Po opravě end-to-end: registrace tokenu (160 zn., 6 widget kinds) ✓,
+APNs send ✓, reload ✓. Latence reloadu vyřešena dvěma kroky:
+(1) urgentní widget push s prioritou 10 (5 = power-friendly, iOS odkládá);
+(2) okamžitý widget nudge ve stejném místě jako okamžitá ARM notifikace
+(sendImmediateCopierArmPush) — předtím widget čekal na minutový cron
+(~35 s), teď se překreslí do pár vteřin (fyzicky ověřeno).
+Dále: kabel rebuild nainstalován (repo = telefon), push-to-start Live
+Activity fyzicky ověřen při force-quit. Zbývá přirozeně: galerie 22
+alertů (ruční matice) a přesné P&L widgetu při přirozeném close (nesmí
+se vyrábět obchodem). Pozn.: při ladění jsem si testovacím revertem
+přepsal první úspěšnou registraci — diagnostické zápisy do produkčních
+řádků dělat jen s uloženou kopií původních hodnot.
 
 ### 2026-08-21 (Codex, uzavření nativní větve pro předání Claude session)
 Rozdělaný widget retry v `AlphaTradeNativePlugin.swift` a
