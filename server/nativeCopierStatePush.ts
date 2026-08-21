@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { sendApnsNotification, type ApnsDevice } from './apns.js';
+import { sendApnsNotification, sendApnsWidgetUpdate, type ApnsDevice } from './apns.js';
 
 export type CopierArmTransition = 'arm-started' | 'arm-ended';
 
@@ -58,6 +58,29 @@ export async function sendImmediateCopierArmPush(options: {
   }
 
   const sent = results.filter(result => result.status === 'sent').length;
+
+  // Okamžitý nudge i pro Home/Lock Screen widgety: minutový cron znamenal
+  // ~35 s starý ARM stav na ploše, zatímco notifikace chodila hned. Payload
+  // je jen content-changed — widget si čerstvý snapshot stáhne sám; hash
+  // dedup cronu se neposouvá, případný duplicitní reload slije collapse-id.
+  try {
+    const { data: widgetRows } = await options.db.from('native_widget_devices')
+      .select('id,widget_push_token,widget_push_environment,widget_push_bundle_id')
+      .eq('user_id', options.userId)
+      .eq('widget_push_enabled', true)
+      .is('expired_at', null)
+      .is('widget_push_expired_at', null)
+      .not('widget_push_token', 'is', null);
+    await Promise.all((widgetRows ?? []).map(row => sendApnsWidgetUpdate({
+      id: row.id,
+      deviceToken: row.widget_push_token,
+      environment: row.widget_push_environment,
+      bundleId: row.widget_push_bundle_id,
+    } as ApnsDevice, { urgent: true })));
+  } catch (reason) {
+    // Widget nudge je optimalizace — selhání kryje minutový cron.
+    console.warn('[copier-arm-push] widget nudge failed', reason instanceof Error ? reason.message : String(reason));
+  }
   console.log('[copier-arm-push]', JSON.stringify({
     transition: options.transition,
     devices: devices.length,
