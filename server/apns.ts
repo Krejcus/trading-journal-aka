@@ -314,14 +314,22 @@ export async function sendApnsLiveActivityStart(
   });
 }
 
-/** Ask iOS 26 WidgetKit to reload all configured push-enabled timelines. */
-export async function sendApnsWidgetUpdate(device: ApnsDevice): Promise<ApnsResult> {
+/**
+ * Ask iOS 26 WidgetKit to reload all configured push-enabled timelines.
+ * Priorita 5 je „power-friendly" a iOS smí doručení/reload odložit — živě
+ * ověřeno: push přijat, widget zůstal starý. Urgentní změny (ARM/DISARM,
+ * status) proto jedou s prioritou 10; úsporná 5 zůstává jen pro P&L refresh.
+ */
+export async function sendApnsWidgetUpdate(
+  device: ApnsDevice,
+  options: { urgent?: boolean } = {},
+): Promise<ApnsResult> {
   return sendApnsRequest({
     environment: device.environment,
     deviceToken: device.deviceToken,
     topic: `${device.bundleId}.push-type.widgets`,
     pushType: 'widgets',
-    priority: '5',
+    priority: options.urgent ? '10' : '5',
     expiration: Math.floor(Date.now() / 1_000) + 15 * 60,
     collapseId: `widget-refresh-${device.id}`,
     payload: buildApnsWidgetPayload(),

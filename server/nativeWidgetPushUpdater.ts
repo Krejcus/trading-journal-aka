@@ -111,7 +111,11 @@ export async function updateNativeWidgetPushes(options: {
       deviceToken: device.widget_push_token,
       environment: device.widget_push_environment,
       bundleId: device.widget_push_bundle_id,
-    } as ApnsDevice);
+    } as ApnsDevice, {
+      // ARM/DISARM a změny stavu musí widget překreslit hned (priorita 10);
+      // pouhé osvěžení P&L zůstává úsporné (5) kvůli iOS budgetu.
+      urgent: plan.reason === 'initial' || plan.reason === 'urgent-change',
+    });
     const nowIso = new Date(now).toISOString();
     if (result.status === 'sent') {
       sent++;
