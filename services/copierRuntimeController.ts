@@ -196,6 +196,7 @@ export interface BootstrapCopierOptions {
   /** Testovatelná bounded read-only konfirmace ručního Flatten. */
   flattenConfirmationAttempts?: number;
   flattenConfirmationPollMs?: number;
+  flattenAccountConcurrency?: number;
   wait?: (ms: number) => Promise<void>;
 }
 
@@ -850,6 +851,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           clock,
           confirmationAttempts: options.flattenConfirmationAttempts,
           confirmationPollMs: options.flattenConfirmationPollMs,
+          accountConcurrency: options.flattenAccountConcurrency,
           wait: options.wait,
         });
         result = processed.result;
@@ -862,8 +864,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (!result) throw new Error('Flatten nedokončil žádný výsledek');
     workingOrderAccounts = new Set(result.workingOrderAccounts);
     if (!result.flat) {
+      const failed = result.accounts.filter(account => !account.ok);
+      const detail = failed
+        .map(account => `${account.accountId} (${account.error ?? 'účet není autoritativně flat'})`)
+        .join(', ');
       const error = new Error(
-        `Flatten čeká na reconciliation: positions=${result.remainingPositionAccounts.join(',') || 'none'} working=${result.workingOrderAccounts.join(',') || 'none'}`,
+        `Flatten selhal: zavřeno ${result.accounts.length - failed.length}/${result.accounts.length} účtů; selhaly ${detail || 'neznámé účty'}`,
       );
       failClosed(error);
       throw error;

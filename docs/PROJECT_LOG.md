@@ -78,6 +78,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-21 odpoledne IV (Codex implementace + Claude spec/review, paralelní Flatten)
+Příprava na ~20 účtů: `processManualFlatten` přepsán na per-account
+pipelines (uvnitř účtu SEKVENČNĚ cancel → close — bezpečnostní invariant;
+napříč účty paralelně, `accountConcurrency` default 5 kvůli Tradovate rate
+limitům). Izolace chyb: zaseknutý účet už NEblokuje zavření ostatních —
+jeho durable outbox položky zůstávají (unknown/rejected/…) pro
+reconciliation a účet skončí v `failedAccounts`. Výsledek nese
+`accounts: ManualFlattenAccountResult[]` (ok/error/zbylé pozice per účet);
+fail-closed na `!flat` zůstává, hláška teď říká „zavřeno 18/20 účtů;
+selhaly …". Klíčová záludnost: durable store má CAS commity s revizí →
+broker I/O běží paralelně, ale commity jdou serializovanou frontou
+(sdílený runtime holder, řetězení revizí); žádný `cancelOrder`/`placeOrder`
+se neodešle před dokončeným commitem položky ve stavu `sending` — platí
+i při selhání commitu (fail-stop). Workflow: Claude napsal spec +
+invarianty, Codex (`codex exec --sandbox workspace-write`) implementaci
+a 7 testů, Claude review diffu řádek po řádku. 1326/1326 testů.
+NASAZENÍ: worker reinstall čeká na DISARMED + pokyn uživatele.
+
 ### 2026-08-21 odpoledne III (Claude, trade notifikace okamžitě)
 Trade eventy chodily přes minutový cron (~30–60 s). Nová okamžitá cesta:
 controller `onCopyEvent` → pilot → `relay.nudgeCopyEvents()` (probudí

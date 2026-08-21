@@ -1025,7 +1025,9 @@ describe('bootstrapCopierRuntime', () => {
     broker.setConnected(true);
     await controller.waitForIdle();
 
-    await expect(controller.flattenAccount(200, 'manual-flat-stuck-position-001')).rejects.toThrow('čeká na reconciliation');
+    await expect(controller.flattenAccount(200, 'manual-flat-stuck-position-001')).rejects.toThrow(
+      'Flatten selhal: zavřeno 0/1 účtů; selhaly 200',
+    );
     expect(controller.status()).toMatchObject({
       armed: false,
       connected: true,

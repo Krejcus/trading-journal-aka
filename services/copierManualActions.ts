@@ -26,6 +26,18 @@ export interface ManualFlattenResult {
   flat: boolean;
   remainingPositionAccounts: number[];
   workingOrderAccounts: number[];
+  accounts: ManualFlattenAccountResult[];
+  failedAccounts: number[];
+}
+
+export interface ManualFlattenAccountResult {
+  accountId: number;
+  ok: boolean;
+  canceledOrders: number;
+  submittedClosures: number;
+  error?: string;
+  remainingPositions: number;
+  workingOrders: number;
 }
 
 interface ManualFlattenOptions {
@@ -39,6 +51,7 @@ interface ManualFlattenOptions {
   /** Počet read-only kontrol autoritativního Order/Position stavu. */
   confirmationAttempts?: number;
   confirmationPollMs?: number;
+  accountConcurrency?: number;
   wait?: (ms: number) => Promise<void>;
 }
 
@@ -50,25 +63,30 @@ const operationToken = (value: string) => {
   return normalized;
 };
 
-async function commit(runtime: CopierRuntime, store: CopierStore): Promise<CopierRuntime> {
-  const saved = await store.commit(
-    toSnapshot(
-      runtime.state,
-      runtime.outbox.values(),
-      runtime.cancelOutbox.values(),
-      runtime.revision,
-      runtime.bracketOutbox.values(),
-      runtime.osoOutbox.values(),
-    ),
-    runtime.revision,
-  );
-  return { ...runtime, revision: saved.revision };
-}
-
 const cancelKey = (groupId: string, operationId: string, order: BrokerOrder) =>
   `manual-cancel:${groupId}:${operationId}:${order.accountId}:${order.brokerOrderId}`;
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+const errorMessage = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(items.length || 1, limit));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index]);
+    }
+  }));
+  return results;
+}
 
 /**
  * Explicitní ruční Flatten. Nejdřív durable zruší všechny working příkazy,
@@ -85,12 +103,53 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     throw new Error('Flatten nemá platný cílový účet');
   }
 
-  let runtime = options.runtime;
-  let canceledOrders = 0;
-  let submittedClosures = 0;
+  // Mapy outboxů zůstávají sdílené mezi account workery; holder nese vždy
+  // poslední revizi vrácenou durable storem.
+  const runtime = { current: options.runtime };
   const confirmationAttempts = Math.max(1, Math.trunc(options.confirmationAttempts ?? 50));
   const confirmationPollMs = Math.max(0, Math.trunc(options.confirmationPollMs ?? 100));
+  const requestedConcurrency = Math.trunc(options.accountConcurrency ?? 5);
+  const accountConcurrency = Number.isFinite(requestedConcurrency)
+    ? Math.max(1, requestedConcurrency)
+    : 5;
   const wait = options.wait ?? sleep;
+  let commitTail: Promise<void> = Promise.resolve();
+  let commitFailed = false;
+  let commitFailure: unknown;
+
+  const throwIfCommitFailed = () => {
+    if (commitFailed) throw commitFailure;
+  };
+
+  // Snapshoty se smí překrývat v přípravě, ale samotné CAS commity musí
+  // navazovat na revizi předchozího dokončeného zápisu.
+  const commitSerialized = () => {
+    throwIfCommitFailed();
+    const pending = commitTail.then(async () => {
+      throwIfCommitFailed();
+      const current = runtime.current;
+      try {
+        const saved = await options.store.commit(
+          toSnapshot(
+            current.state,
+            current.outbox.values(),
+            current.cancelOutbox.values(),
+            current.revision,
+            current.bracketOutbox.values(),
+            current.osoOutbox.values(),
+          ),
+          current.revision,
+        );
+        runtime.current = { ...current, revision: saved.revision };
+      } catch (reason) {
+        commitFailed = true;
+        commitFailure = reason;
+        throw reason;
+      }
+    });
+    commitTail = pending.catch(() => undefined);
+    return pending;
+  };
 
   const confirmCancel = async (
     current: CancelOutboxEntry,
@@ -102,122 +161,74 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
       if (attempt > 0) await wait(confirmationPollMs);
       const lookup = await options.broker.findOrderById(accountId, brokerOrderId);
       entry = resolveCancelLookup(entry, lookup.order, lookup.completeness, options.clock());
-      runtime.cancelOutbox.set(entry.key, entry);
-      runtime = await commit(runtime, options.store);
+      runtime.current.cancelOutbox.set(entry.key, entry);
+      await commitSerialized();
       if (entry.status === 'confirmed' || entry.status === 'abandoned') break;
     }
     return entry;
   };
 
-  for (const accountId of accountIds) {
-    const working = (await options.broker.listOrders(accountId)).filter(order => order.status === 'working');
-    for (const order of working) {
-      const key = cancelKey(options.groupId, operationId, order);
-      let entry = runtime.cancelOutbox.get(key);
-      if (entry?.status === 'confirmed') continue;
-      if (entry && entry.status !== 'planned') {
-        throw new Error(`Flatten cancel ${order.brokerOrderId} čeká na ruční dohledání (${entry.status})`);
-      }
-      if (!entry) {
-        entry = createCancelEntry(
-          key,
-          `manual-flatten:${operationId}`,
-          runtime.state.lastSequence,
-          accountId,
-          order.brokerOrderId,
-          options.clock(),
-        );
-        runtime.cancelOutbox.set(key, entry);
-        runtime = await commit(runtime, options.store);
-      }
+  // Každý worker zpracuje účet sekvenčně cancel → close. Pool omezuje jen
+  // počet současně rozběhnutých účtů, nikoli pořadí operací uvnitř účtu.
+  const pipelineResults = await mapWithConcurrency(accountIds, accountConcurrency, async accountId => {
+    let canceledOrders = 0;
+    let submittedClosures = 0;
+    try {
+      const working = (await options.broker.listOrders(accountId)).filter(order => order.status === 'working');
+      for (const order of working) {
+        const key = cancelKey(options.groupId, operationId, order);
+        let entry = runtime.current.cancelOutbox.get(key);
+        if (entry?.status === 'confirmed') continue;
+        if (entry && entry.status !== 'planned') {
+          throw new Error(`Flatten cancel ${order.brokerOrderId} čeká na ruční dohledání (${entry.status})`);
+        }
+        if (!entry) {
+          entry = createCancelEntry(
+            key,
+            `manual-flatten:${operationId}`,
+            runtime.current.state.lastSequence,
+            accountId,
+            order.brokerOrderId,
+            options.clock(),
+          );
+          runtime.current.cancelOutbox.set(key, entry);
+          await commitSerialized();
+        }
 
-      entry = markCancelSending(entry, options.clock());
-      runtime.cancelOutbox.set(key, entry);
-      runtime = await commit(runtime, options.store);
-      try {
-        await options.broker.cancelOrder(accountId, order.brokerOrderId);
-        entry = await confirmCancel(entry, accountId, order.brokerOrderId);
-      } catch (reason) {
+        entry = markCancelSending(entry, options.clock());
+        runtime.current.cancelOutbox.set(key, entry);
+        await commitSerialized();
         try {
+          await options.broker.cancelOrder(accountId, order.brokerOrderId);
           entry = await confirmCancel(entry, accountId, order.brokerOrderId);
-        } catch {
-          entry = markCancelUnknown(
-            entry,
-            reason instanceof Error ? reason.message : String(reason),
-            options.clock(),
-          );
+        } catch (reason) {
+          throwIfCommitFailed();
+          try {
+            entry = await confirmCancel(entry, accountId, order.brokerOrderId);
+          } catch {
+            throwIfCommitFailed();
+            entry = markCancelUnknown(entry, errorMessage(reason), options.clock());
+          }
         }
-      }
-      runtime.cancelOutbox.set(key, entry);
-      runtime = await commit(runtime, options.store);
-      if (entry.status !== 'confirmed') {
-        throw new Error(`Flatten cancel ${order.brokerOrderId} není autoritativně potvrzen (${entry.status})`);
-      }
-      canceledOrders += 1;
-    }
-  }
-
-  for (const accountId of accountIds) {
-    const positions = (await options.broker.listPositions(accountId)).filter(position => position.netQuantity !== 0);
-    for (const position of positions) {
-      const plan = planFlatten(
-        options.groupId,
-        position,
-        `${operationId}:${position.symbol}`,
-      );
-      if (!plan) continue;
-      let entry = runtime.outbox.get(plan.key);
-      if (entry?.status === 'acknowledged') continue;
-      if (entry?.status === 'rejected' || entry?.status === 'abandoned' || entry?.status === 'waived') {
-        throw new Error(`Flatten close ${position.symbol} skončil jako ${entry.status}`);
-      }
-      if (entry?.status === 'sending' || entry?.status === 'unknown') {
-        const lookup = await options.broker.findOrdersByTag(accountId, entry.tag);
-        if (lookup.orders.length > 1) {
-          entry = { ...entry, status: 'abandoned', reason: 'nalezeno více flatten objednávek se stejným tagem', updatedAt: options.clock() };
-        } else {
-          const found = lookup.orders[0];
-          entry = resolveLookup(
-            entry,
-            found ? { brokerOrderId: found.brokerOrderId, rejected: found.status === 'rejected', reason: found.rejectReason } : null,
-            lookup.completeness,
-            options.clock(),
-          );
+        runtime.current.cancelOutbox.set(key, entry);
+        await commitSerialized();
+        if (entry.status !== 'confirmed') {
+          throw new Error(`Flatten cancel ${order.brokerOrderId} není autoritativně potvrzen (${entry.status})`);
         }
-        runtime.outbox.set(plan.key, entry);
-        runtime = await commit(runtime, options.store);
-        if (entry.status !== 'acknowledged') {
-          throw new Error(`Flatten close ${position.symbol} čeká na ruční dohledání (${entry.status})`);
-        }
-        continue;
-      }
-      if (!entry) {
-        entry = createOutboxEntry(
-          plan.key,
-          plan.request.tag,
-          `manual-flatten:${operationId}:${position.symbol}`,
-          plan.request,
-          options.clock(),
-          false,
-          `manual-flatten:${operationId}`,
-          runtime.state.lastSequence,
-        );
-        runtime.outbox.set(plan.key, entry);
-        runtime = await commit(runtime, options.store);
+        canceledOrders += 1;
       }
 
-      entry = markSending(entry, options.clock());
-      runtime.outbox.set(plan.key, entry);
-      runtime = await commit(runtime, options.store);
-      try {
-        const ack = await options.broker.placeOrder(entry.request);
-        entry = ack.accepted && ack.definitive
-          ? markAcknowledged(entry, ack.brokerOrderId, options.clock())
-          : ack.definitive
-            ? markRejected(entry, ack.rejectReason ?? 'Flatten odmítnut brokerem', options.clock())
-            : markUnknown(entry, 'Flatten vrátil nejednoznačnou odpověď', options.clock());
-      } catch (reason) {
-        try {
+      const positions = (await options.broker.listPositions(accountId))
+        .filter(position => position.netQuantity !== 0);
+      for (const position of positions) {
+        const plan = planFlatten(options.groupId, position, `${operationId}:${position.symbol}`);
+        if (!plan) continue;
+        let entry = runtime.current.outbox.get(plan.key);
+        if (entry?.status === 'acknowledged') continue;
+        if (entry?.status === 'rejected' || entry?.status === 'abandoned' || entry?.status === 'waived') {
+          throw new Error(`Flatten close ${position.symbol} skončil jako ${entry.status}`);
+        }
+        if (entry?.status === 'sending' || entry?.status === 'unknown') {
           const lookup = await options.broker.findOrdersByTag(accountId, entry.tag);
           if (lookup.orders.length > 1) {
             entry = { ...entry, status: 'abandoned', reason: 'nalezeno více flatten objednávek se stejným tagem', updatedAt: options.clock() };
@@ -230,36 +241,93 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
               options.clock(),
             );
           }
-        } catch {
-          entry = markUnknown(
-            entry,
-            reason instanceof Error ? reason.message : String(reason),
-            options.clock(),
-          );
+          runtime.current.outbox.set(plan.key, entry);
+          await commitSerialized();
+          if (entry.status !== 'acknowledged') {
+            throw new Error(`Flatten close ${position.symbol} čeká na ruční dohledání (${entry.status})`);
+          }
+          continue;
         }
+        if (!entry) {
+          entry = createOutboxEntry(
+            plan.key,
+            plan.request.tag,
+            `manual-flatten:${operationId}:${position.symbol}`,
+            plan.request,
+            options.clock(),
+            false,
+            `manual-flatten:${operationId}`,
+            runtime.current.state.lastSequence,
+          );
+          runtime.current.outbox.set(plan.key, entry);
+          await commitSerialized();
+        }
+
+        entry = markSending(entry, options.clock());
+        runtime.current.outbox.set(plan.key, entry);
+        await commitSerialized();
+        try {
+          const ack = await options.broker.placeOrder(entry.request);
+          entry = ack.accepted && ack.definitive
+            ? markAcknowledged(entry, ack.brokerOrderId, options.clock())
+            : ack.definitive
+              ? markRejected(entry, ack.rejectReason ?? 'Flatten odmítnut brokerem', options.clock())
+              : markUnknown(entry, 'Flatten vrátil nejednoznačnou odpověď', options.clock());
+        } catch (reason) {
+          try {
+            const lookup = await options.broker.findOrdersByTag(accountId, entry.tag);
+            if (lookup.orders.length > 1) {
+              entry = { ...entry, status: 'abandoned', reason: 'nalezeno více flatten objednávek se stejným tagem', updatedAt: options.clock() };
+            } else {
+              const found = lookup.orders[0];
+              entry = resolveLookup(
+                entry,
+                found ? { brokerOrderId: found.brokerOrderId, rejected: found.status === 'rejected', reason: found.rejectReason } : null,
+                lookup.completeness,
+                options.clock(),
+              );
+            }
+          } catch {
+            entry = markUnknown(entry, errorMessage(reason), options.clock());
+          }
+        }
+        runtime.current.outbox.set(plan.key, entry);
+        await commitSerialized();
+        if (entry.status !== 'acknowledged') {
+          throw new Error(`Flatten close ${position.symbol} nebyl bezpečně potvrzen (${entry.status})`);
+        }
+        submittedClosures += 1;
       }
-      runtime.outbox.set(plan.key, entry);
-      runtime = await commit(runtime, options.store);
-      if (entry.status !== 'acknowledged') {
-        throw new Error(`Flatten close ${position.symbol} nebyl bezpečně potvrzen (${entry.status})`);
-      }
-      submittedClosures += 1;
+      return { accountId, canceledOrders, submittedClosures };
+    } catch (reason) {
+      return { accountId, canceledOrders, submittedClosures, error: errorMessage(reason) };
     }
-  }
+  });
+
+  throwIfCommitFailed();
 
   let finalState: Array<{
     accountId: number;
     positions: Awaited<ReturnType<BrokerPort['listPositions']>>;
     orders: Awaited<ReturnType<BrokerPort['listOrders']>>;
+    error?: string;
   }> = [];
   for (let attempt = 0; attempt < confirmationAttempts; attempt += 1) {
     if (attempt > 0) await wait(confirmationPollMs);
-    finalState = await Promise.all(accountIds.map(async accountId => ({
-      accountId,
-      positions: await options.broker.listPositions(accountId),
-      orders: await options.broker.listOrders(accountId),
-    })));
+    finalState = await Promise.all(accountIds.map(async accountId => {
+      try {
+        return {
+          accountId,
+          positions: await options.broker.listPositions(accountId),
+          orders: await options.broker.listOrders(accountId),
+        };
+      } catch (reason) {
+        return { accountId, positions: [], orders: [], error: errorMessage(reason) };
+      }
+    }));
     if (finalState.every(item => (
+      !('error' in item)
+      &&
       item.positions.every(position => position.netQuantity === 0)
       && item.orders.every(order => order.status !== 'working')
     ))) break;
@@ -270,17 +338,44 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
   const workingOrderAccounts = finalState
     .filter(item => item.orders.some(order => order.status === 'working'))
     .map(item => item.accountId);
+  const accounts = accountIds.map((accountId, index): ManualFlattenAccountResult => {
+    const pipeline = pipelineResults[index];
+    const final = finalState[index];
+    const remainingPositions = final.positions.filter(position => position.netQuantity !== 0).length;
+    const workingOrders = final.orders.filter(order => order.status === 'working').length;
+    const verificationError = final.error;
+    const error = pipeline.error
+      ?? (verificationError ? `Finální kontrola selhala: ${verificationError}` : undefined)
+      ?? (remainingPositions > 0 ? `Po finální kontrole zbývá ${remainingPositions} otevřených pozic` : undefined)
+      ?? (workingOrders > 0 ? `Po finální kontrole zbývá ${workingOrders} working orderů` : undefined)
+      ?? undefined;
+    return {
+      accountId,
+      ok: error === undefined,
+      canceledOrders: pipeline.canceledOrders,
+      submittedClosures: pipeline.submittedClosures,
+      ...(error ? { error } : {}),
+      remainingPositions,
+      workingOrders,
+    };
+  });
+  const canceledOrders = accounts.reduce((sum, account) => sum + account.canceledOrders, 0);
+  const submittedClosures = accounts.reduce((sum, account) => sum + account.submittedClosures, 0);
+  const failedAccounts = accounts.filter(account => !account.ok).map(account => account.accountId);
 
   return {
-    runtime,
+    runtime: runtime.current,
     result: {
       operationId,
       accountIds,
       canceledOrders,
       submittedClosures,
-      flat: remainingPositionAccounts.length === 0 && workingOrderAccounts.length === 0,
+      flat: accounts.every(account => account.remainingPositions === 0 && account.workingOrders === 0)
+        && finalState.every(item => item.error === undefined),
       remainingPositionAccounts,
       workingOrderAccounts,
+      accounts,
+      failedAccounts,
     },
   };
 }
