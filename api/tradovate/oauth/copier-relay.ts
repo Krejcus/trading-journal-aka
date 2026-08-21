@@ -108,15 +108,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       // Long-poll: worker s kickem vyřídí příkaz typicky do ~1,5 s — když
       // výsledek stihneme, UI ušetří celé polling kolečko (další RTT).
+      // POZOR: enqueue už durable proběhl — selhání long-pollu se MUSÍ
+      // degradovat na obyčejné `202 queued`. Chyba (502) by klienta svedla
+      // k novému pokusu s novým idempotencyKey = duplicitní příkaz.
+      // (Nález GPT cross-review, 2026-08-21.)
       let resolution: Awaited<ReturnType<typeof readTradovateCopierCommand>> | null = null;
-      const longPollDeadline = Date.now() + 2_200;
-      while (Date.now() < longPollDeadline) {
-        await new Promise(resolve => setTimeout(resolve, 150));
-        const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
-        if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') {
-          resolution = current;
-          break;
+      try {
+        const longPollDeadline = Date.now() + 2_200;
+        while (Date.now() < longPollDeadline) {
+          await new Promise(resolve => setTimeout(resolve, 150));
+          const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
+          if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') {
+            resolution = current;
+            break;
+          }
         }
+      } catch {
+        // UI si výsledek vyzvedne klasickým pollingem.
       }
       return res.status(202).json({ ...queued, ...(resolution ? { resolution } : {}) });
     }
