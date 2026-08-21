@@ -6,7 +6,7 @@ import {
 } from '../../../server/tradovateCopierCommandRelay.js';
 import { createTradovateAdminClient, readTradovateServerConfig, requireSupabaseUserId } from '../../../server/tradovateOAuthStore.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
-import { sendImmediateCopierArmPush, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
+import { sendImmediateCopierArmPush, sendImmediateCopyEventPushes, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
 import type { LocalCopierAgentStatus } from '../../../lib/localCopierAgentProtocol.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -25,6 +25,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const action = String(req.body?.action ?? '');
       if (action === 'poll') {
         if (req.body?.status) await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId, connectionId: device.connectionId, status: req.body.status });
+        // Worker hlásí nové trade eventy -> okamžitý push místo čekání na
+        // minutový cron (sdílený marker, cron je jen záloha).
+        if (req.body?.copyEvents === true && req.body?.status) {
+          try {
+            await sendImmediateCopyEventPushes({
+              db, userId: device.userId, deviceId: device.id,
+              status: req.body.status as Record<string, unknown>,
+            });
+          } catch (reason) {
+            console.warn('[copier-relay] immediate copy-event push failed',
+              reason instanceof Error ? reason.message : String(reason));
+          }
+        }
         return res.status(200).json({
           command: await claimTradovateCopierCommand({ db, deviceId: device.id }),
           // Realtime „kick": worker se přihlásí k broadcast kanálu a příkaz

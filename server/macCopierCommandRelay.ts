@@ -2,6 +2,9 @@ import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import type { LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol.js';
 
 export interface MacCopierCommandRelay {
+  /** Okamžitě probudí poll s příznakem nových trade eventů — server pošle
+   *  push hned místo čekání na minutový cron. */
+  nudgeCopyEvents(): void;
   close(): Promise<void>;
 }
 
@@ -35,6 +38,8 @@ export function startMacCopierCommandRelay(options: {
   let wake: (() => void) | null = null;
   /** Kick přišel mimo spánek (během poll requestu) — nesmí se ztratit. */
   let kickPending = false;
+  /** Nové trade eventy čekají na okamžité odeslání serverem. */
+  let copyEventsPending = false;
   let unsubscribeKick: (() => void) | null = null;
   let kickTopic: string | null = null;
 
@@ -94,8 +99,14 @@ export function startMacCopierCommandRelay(options: {
     let failures = 0;
     while (!stopped) {
       try {
-        const response = await request({ action: 'poll', status: options.agent.status() });
+        const notifyCopyEvents = copyEventsPending;
+        const response = await request({
+          action: 'poll',
+          status: options.agent.status(),
+          ...(notifyCopyEvents ? { copyEvents: true } : {}),
+        });
         failures = 0;
+        if (notifyCopyEvents) copyEventsPending = false;
         maybeSubscribeKick(response.realtime);
         const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
         if (remote?.id && remote.command) {
@@ -128,6 +139,11 @@ export function startMacCopierCommandRelay(options: {
   };
   running = loop();
   return {
+    nudgeCopyEvents() {
+      copyEventsPending = true;
+      kickPending = true;
+      wake?.();
+    },
     async close() {
       stopped = true;
       unsubscribeKick?.();

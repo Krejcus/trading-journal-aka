@@ -1,5 +1,95 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendApnsNotification, sendApnsWidgetUpdate, type ApnsDevice } from './apns.js';
+import {
+  COPY_EVENTS_MARKER_KEY,
+  planCopyEventNotifications,
+  type CopierAlertStateRow,
+  type CopierRuntimeRow,
+} from './copierIncidentWatchdog.js';
+
+/**
+ * Okamžitý fan-out trade eventů (obchod zadán, SL/TP, exit s P&L) hned po
+ * worker heartbeatu s příznakem `copyEvents` — bez čekání na minutový cron.
+ * Dedup přes stejný marker (`state:copy-events`), takže cron zůstává čistá
+ * záloha: kdo doběhne první, posune hranici, druhý už nic neposílá.
+ */
+export async function sendImmediateCopyEventPushes(options: {
+  db: SupabaseClient;
+  userId: string;
+  deviceId: string;
+  status: Record<string, unknown>;
+}): Promise<{ notifications: number; sent: number }> {
+  const nowIso = new Date().toISOString();
+  const { data: markerRows, error: markerError } = await options.db.from('copier_alert_state')
+    .select('device_id,user_id,incident_key,active,detail')
+    .eq('user_id', options.userId)
+    .eq('device_id', options.deviceId)
+    .eq('incident_key', COPY_EVENTS_MARKER_KEY);
+  if (markerError) throw new Error(`copy-events-marker-query-failed: ${markerError.message}`);
+
+  const runtime: CopierRuntimeRow = {
+    device_id: options.deviceId,
+    user_id: options.userId,
+    status: options.status,
+    last_seen_at: nowIso,
+    started_at: nowIso,
+  };
+  const evaluation = planCopyEventNotifications({
+    runtimes: [runtime],
+    alertStates: (markerRows ?? []) as CopierAlertStateRow[],
+    now: Date.now(),
+  });
+  if (evaluation.notifications.length === 0 && evaluation.markers.length === 0) {
+    return { notifications: 0, sent: 0 };
+  }
+
+  let sent = 0;
+  if (evaluation.notifications.length > 0) {
+    const { data: subs, error: subsError } = await options.db.from('native_push_subscriptions')
+      .select('id,device_token,environment,bundle_id')
+      .eq('user_id', options.userId)
+      .is('expired_at', null);
+    if (subsError) throw new Error(`copy-events-devices-query-failed: ${subsError.message}`);
+    const devices = (subs ?? []).map(row => ({
+      id: row.id,
+      deviceToken: row.device_token,
+      environment: row.environment,
+      bundleId: row.bundle_id,
+    } as ApnsDevice));
+    for (const notification of evaluation.notifications) {
+      const results = await Promise.all(devices.map(device => sendApnsNotification(device, {
+        title: notification.title,
+        body: notification.body,
+        route: 'live',
+        threadId: 'alphatrade-copier-trades',
+        category: 'ALPHATRADE_TRADE',
+        interruptionLevel: 'time-sensitive',
+      })));
+      sent += results.filter(result => result.status === 'sent').length;
+      for (let index = 0; index < results.length; index++) {
+        if (results[index].status !== 'expired') continue;
+        await options.db.from('native_push_subscriptions').update({
+          expired_at: nowIso,
+          last_error: results[index].error ?? null,
+        }).eq('id', devices[index].id);
+      }
+    }
+  }
+
+  for (const marker of evaluation.markers) {
+    const { error: upsertError } = await options.db.from('copier_alert_state').upsert({
+      user_id: marker.userId,
+      device_id: marker.deviceId,
+      incident_key: marker.incidentKey,
+      active: marker.active,
+      detail: marker.detail,
+      updated_at: nowIso,
+      ...(marker.notified ? { notified_at: nowIso } : {}),
+    }, { onConflict: 'user_id,device_id,incident_key' });
+    if (upsertError) throw new Error(`copy-events-marker-upsert-failed: ${upsertError.message}`);
+  }
+  return { notifications: evaluation.notifications.length, sent };
+}
 
 export type CopierArmTransition = 'arm-started' | 'arm-ended';
 

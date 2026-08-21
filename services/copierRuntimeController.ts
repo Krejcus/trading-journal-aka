@@ -165,6 +165,12 @@ export interface BootstrapCopierOptions {
   clock?: () => number;
   risk?: Partial<RiskGateContext>;
   onAudit?: (entries: readonly CopierAuditEntry[]) => void;
+  /**
+   * Okamžitá notifikační cesta: zavolá se hned po přidání trade eventu do
+   * deníku. Pilot přes ni šťouchne relay, aby server poslal push bez čekání
+   * na minutový cron (dedup marker sdílí obě cesty).
+   */
+  onCopyEvent?: (event: CopierCopyEvent) => void;
   onError?: (error: Error) => void;
   metrics?: CopierMetrics;
   /** Read-only observability hook; nesmí provádět broker side effect. */
@@ -306,13 +312,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (last.kind === kind && last.symbol === symbol) recentCopyEvents.pop();
     }
     copyEventCounter += 1;
-    recentCopyEvents.push({
+    const copyEvent: CopierCopyEvent = {
       id: `${at}-${copyEventCounter}`,
       at, kind, symbol, side, quantity,
       followers: group.followers.filter(follower => follower.mode !== 'off').length,
       ...extra,
-    });
+    };
+    recentCopyEvents.push(copyEvent);
     if (recentCopyEvents.length > 20) recentCopyEvents.shift();
+    options.onCopyEvent?.(copyEvent);
   };
 
   const recordCopyEvent = (previousNet: number, nextNet: number, symbol: string, at: number): void => {

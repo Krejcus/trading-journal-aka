@@ -313,6 +313,8 @@ async function runLocalAgent(
         auditTail = auditTail.then(() => writeAudit(entries));
       },
       onError: error => console.error(`${new Date().toISOString()} FAIL-CLOSED ${error.message}`),
+      // Trade event -> okamžitý poll s příznakem -> server pushne hned.
+      onCopyEvent: () => { relay?.nudgeCopyEvents(); },
     });
     await waitUntil(() => controller?.status().connected === true, 15_000, 'WebSocket sync timeout');
     agent = await startLocalCopierExecutionAgent({

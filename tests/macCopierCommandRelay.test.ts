@@ -143,3 +143,33 @@ describe('kick race', () => {
     await relay.close();
   });
 });
+
+describe('okamžité trade eventy', () => {
+  it('nudgeCopyEvents probudí poll s příznakem copyEvents a příznak se po odeslání smaže', async () => {
+    const polls: Array<{ at: number; copyEvents: boolean }> = [];
+    const started = Date.now();
+    const fetchImpl = (async (_url: unknown, init: unknown) => {
+      const body = JSON.parse((init as { body: string }).body) as { action: string; copyEvents?: boolean };
+      if (body.action === 'poll') polls.push({ at: Date.now() - started, copyEvents: body.copyEvents === true });
+      return { ok: true, json: async () => ({ command: null }) };
+    }) as unknown as typeof fetch;
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://example.test',
+      authorizationHeader: async () => 'Device x',
+      agent: { status: () => ({}) as never, execute: async () => ({}) as never, origin: '', close: async () => undefined },
+      fetchImpl,
+      pollMs: 60_000,
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(polls).toHaveLength(1);
+    expect(polls[0].copyEvents).toBe(false);
+
+    relay.nudgeCopyEvents();
+    await new Promise(resolve => setTimeout(resolve, 40));
+    expect(polls).toHaveLength(2);
+    expect(polls[1].copyEvents).toBe(true);
+    expect(polls[1].at).toBeLessThan(1_000);
+    await relay.close();
+  });
+});
