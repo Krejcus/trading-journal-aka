@@ -97,6 +97,13 @@ a Xcode selhaly pouze na zákazu loopback socketu/cache zápisu; opakování mim
 sandbox prošla. Nic nebylo commitnuto, pushnuto, deploynuto ani instalováno na
 telefon; finální vizuální kontrola na fyzickém Lock Screen/Dynamic Island tedy
 zůstává samostatný krok.
+DOPLNĚNÍ (Claude, tentýž den): review přidal dvě opravy — `quantity` na kartě
+je leaderova velikost (ne součet přes followery, „LONG 72 MNQ" by mátl)
+a followers řádek se bez kompletních dat schová (žádné falešné „0/5").
+NASAZENO: server push na main (594a2ce5) + signed build nainstalován do
+iPhonu kabelem (devicectl, „App installed"). Nové UI se ukáže od příští
+ARM session; vizuální kontrola na fyzickém Lock Screenu stále čeká na
+první ostrý ARM/obchod.
 
 ### 2026-08-21 (Codex, Flatten All follow-up re-ARM)
 Frontendový follow-up po potvrzeném skupinovém Flatten All už nenabízí vypnutí
