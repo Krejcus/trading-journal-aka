@@ -78,6 +78,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-21 večer (Claude, Live Activity nešla — diagnóza a fix)
+Po polední upgrade instalaci kabelem přestala fungovat Live Activity úplně
+(push-to-start i lokální test): hláška o úspěchu, karta nikde, iOS po
+opakovaných pokusech appce sám vypínal Živé aktivity. Server byl čistý
+(push odešel, APNs přijal, token platný, schéma dekódovatelné — ověřeno).
+Skutečná příčina nalezena přes pymobiledevice3 syslog z telefonu:
+`ChronoCoreErrorDomain Code=1 "Unknown extension process"` — chronod měl
+po devicectl UPGRADE instalaci (přes běžící appku) rozbitou registraci
+widget rozšíření pro aktivity; malé widgety jely dál (běžící proces),
+aktivita se vytvořila, ale obsah se nikdy nevyrenderoval. Restart telefonu
+NEPOMÁHÁ (registr je na disku). FIX: `devicectl device uninstall` + čistá
+instalace → „Ensure content complete", karta fyzicky potvrzena uživatelem.
+LEKCE pro kabelové deploye: když po upgrade instalaci Live Activity
+nenaskakuje, nezkoumat kód — rovnou odinstalovat a nainstalovat načisto
+(daň: nové přihlášení + případně znovu přidat widgety).
+Diagnostický postup: `xcrun devicectl device copy from --domain-type
+systemCrashLogs` (pády), `python3 -m pymobiledevice3 syslog live` (live log).
+
 ### 2026-08-21 (Codex, Live Activity: obchodní stav + ARM countdown)
 Live Activity na Lock Screen a Dynamic Island má nový light-first vzhled
 (slate/indigo, adaptivní navy dark mode) a tři read-only režimy: čekající
