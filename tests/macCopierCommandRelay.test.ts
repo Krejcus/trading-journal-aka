@@ -52,3 +52,50 @@ describe('Mac copier command relay', () => {
     await relay.close();
   });
 });
+
+describe('realtime kick', () => {
+  it('kick probudí poll okamžitě a config z poll odpovědi založí odběr jen jednou', async () => {
+    const polls: number[] = [];
+    let kick: (() => void) | null = null;
+    let subscriptions = 0;
+    let unsubscribed = 0;
+    const started = Date.now();
+    const fetchImpl = (async (_url: unknown, init: unknown) => {
+      const body = JSON.parse((init as { body: string }).body) as { action: string };
+      if (body.action === 'poll') polls.push(Date.now() - started);
+      return {
+        ok: true,
+        json: async () => ({
+          command: null,
+          realtime: { url: 'https://example.supabase.co', anonKey: 'anon', topic: 'copier-kick-d1' },
+        }),
+      };
+    }) as unknown as typeof fetch;
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://example.test',
+      authorizationHeader: async () => 'Device x',
+      agent: { status: () => ({}) as never, execute: async () => ({}) as never, origin: '', close: async () => undefined },
+      fetchImpl,
+      pollMs: 60_000,
+      createKickSubscription: (_config, onKick) => {
+        subscriptions += 1;
+        kick = onKick;
+        return () => { unsubscribed += 1; };
+      },
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(polls).toHaveLength(1);
+    expect(subscriptions).toBe(1);
+
+    // Kick místo čekání 60 s.
+    kick?.();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(polls).toHaveLength(2);
+    // Stejný topic z další poll odpovědi odběr neduplikuje.
+    expect(subscriptions).toBe(1);
+
+    await relay.close();
+    expect(unsubscribed).toBe(1);
+  });
+});

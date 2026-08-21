@@ -128,6 +128,28 @@ bez falešné notifikace. Běžný Home widget od 18:16 do 18:38 nový timeline
 request neudělal; přesný closed-app interval proto zůstává fyzicky neověřený a
 nesmí se zaměňovat s okamžitou APNs/Live Activity cestou řízenou serverem.
 
+### 2026-08-21 ráno (Claude, rychlost: plynulá obměna WS + realtime kick pro příkazy)
+(1) **Plynulá obměna socketu** (`TradovateBrokerPort.renewSocket()`):
+plánovaná údržba zavře WS bez disconnect eventu a hned se připojí s
+čerstvým tokenem — controller výpadek nevidí, ARM přežije. Zadržené chyby
+se při nezdaru (deadline 15 s) přiznají a výpadek se ohlásí poctivě.
+Bezpečnost překryvu: order eventy dedupuje sourceVersion, filly
+`emittedFillIds` (broker-level), resync doplní stav z autoritativního
+snapshotu; baseline filly se nikdy neemitují (jen markují). Pilot obměňuje
+po 50 min (čeká na flat), po 70 min i v obchodě — lepší řízený sub-sekundový
+swap než tvrdé zavření serverem (DISARM + reconciliation). Status má nové
+`groupFlat`. Tím mizí poslední zdroj samovolných DISARMů (token cyklus
+~80 min, včetně leader spojení).
+(2) **Realtime kick pro relay příkazy**: enqueue endpoint po zařazení
+příkazu pošle Supabase Realtime broadcast (`copier-kick-{deviceId}`,
+service key přes HTTP broadcast API); worker odebírá kanál (config přijde
+v poll odpovědi — URL+anon key, worker nepotřebuje žádné env) a poll
+proběhne okamžitě. ARM/DISARM z telefonu: ~0,7–1,2 s místo 2–5 s. Kick je
+POUZE optimalizace latence — transport zůstává autentizovaný REST relay
+s idempotencí, poll interval (750 ms) jako záloha. Kanál nenese žádná data.
+Gate: 1261 testů (36 známých chart selhání = downgrade @getcandlekit/charts
+v node_modules, netýká se repa). Worker přeinstalován.
+
 ### 2026-08-20 večer III (Claude, živý pád: OSO inference okno vs. sekvence)
 Uživatel zadal limit (19:04 lokálně) → FAIL-CLOSED `out-of-order`. Kořen:
 entry se drží v OSO inference okně (500 ms); dorazil jen JEDEN protective

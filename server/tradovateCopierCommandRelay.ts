@@ -97,7 +97,7 @@ export async function enqueueTradovateCopierCommand(options: {
   command: LocalCopierAgentCommand;
   idempotencyKey?: string;
   now?: number;
-}): Promise<{ id: string; status: string; expiresAt: string }> {
+}): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
   const now = options.now ?? Date.now();
   const idempotencyKey = options.idempotencyKey?.trim() || randomUUID();
   const { data: device, error: deviceError } = await options.db
@@ -127,7 +127,7 @@ export async function enqueueTradovateCopierCommand(options: {
     .select('id,status,expires_at')
     .maybeSingle<{ id: string; status: string; expires_at: string }>();
   if (error) throw new Error(`copier-relay-enqueue-failed: ${error.message}`);
-  if (data) return { id: data.id, status: data.status, expiresAt: data.expires_at };
+  if (data) return { id: data.id, status: data.status, expiresAt: data.expires_at, deviceId: device.id };
   const { data: existing, error: existingError } = await options.db
     .from('tradovate_copier_commands')
     .select('id,status,expires_at')
@@ -136,7 +136,7 @@ export async function enqueueTradovateCopierCommand(options: {
     .eq('idempotency_key', idempotencyKey)
     .single<{ id: string; status: string; expires_at: string }>();
   if (existingError || !existing) throw new Error(`copier-relay-idempotency-lookup-failed: ${existingError?.message ?? 'missing'}`);
-  return { id: existing.id, status: existing.status, expiresAt: existing.expires_at };
+  return { id: existing.id, status: existing.status, expiresAt: existing.expires_at, deviceId: device.id };
 }
 
 export async function readTradovateCopierCommand(options: { db: SupabaseClient; userId: string; commandId: string }) {

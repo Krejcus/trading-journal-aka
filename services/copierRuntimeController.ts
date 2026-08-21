@@ -56,6 +56,8 @@ export interface CopierControllerStatus {
   lastError: string | null;
   revision: number;
   lastSequence: number;
+  /** Celá skupina je podle lokálně známých pozic flat (vhodný moment pro údržbu). */
+  groupFlat?: boolean;
   entryCooldownUntil?: number;
   dayLockUntil?: number;
   dayLockReason?: string | null;
@@ -1321,6 +1323,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         lastError: lastError?.message ?? null,
         revision: current.revision,
         lastSequence: current.state.lastSequence,
+        groupFlat: groupIsFlat(),
         entryCooldownUntil: current.state.safety.entryCooldownUntil,
         dayLockUntil: current.state.safety.dayLockUntil,
         dayLockReason: current.state.safety.dayLockReason ?? null,

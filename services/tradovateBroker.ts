@@ -127,6 +127,8 @@ export interface TradovateBrokerConfig {
    * „odpojil se Lucid?" nešlo z `transport error` vůbec vyčíst).
    */
   connectionLabel?: string;
+  /** Nejdéle jak smí plánovaná obměna socketu trvat, než se přizná výpadek. */
+  renewalDeadlineMs?: number;
   /** Jak dlouho po command ACK čekat na autoritativní Order update ze sync streamu. */
   commandConfirmationTimeoutMs?: number;
 }
@@ -162,7 +164,19 @@ const supportedOrderType = (value: string): OrderType => {
   throw new TradovateTransportError(`Unsupported Tradovate order type: ${value}`);
 };
 
-export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort {
+export interface TradovateBrokerPort extends BrokerPort {
+  /**
+   * Plánovaná plynulá obměna WebSocketu (cyklus Tradovate access tokenu).
+   * Zavře socket BEZ disconnect eventu a hned se připojí s čerstvým tokenem;
+   * resync doplní stav z autoritativního snapshotu (order sourceVersion a
+   * fillId dedup kryjí překryvy). Když se obnova nestihne do deadline,
+   * výpadek se přizná normální cestou. Vrací false, když obměna nejde
+   * spustit (socket není v plném provozu nebo už běží).
+   */
+  renewSocket(): boolean;
+}
+
+export function createTradovateBroker(config: TradovateBrokerConfig): TradovateBrokerPort {
   const hosts = TRADOVATE_HOSTS[config.environment];
   const fetchImpl = config.fetchImpl ?? globalThis.fetch;
   const clock = config.clock ?? Date.now;
@@ -195,8 +209,31 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
   let reconnectBackoffMs: number | null = null;
   let requestId = 2;
   let syncReady = false;
+  /**
+   * Plánovaná obměna socketu (cyklus access tokenu). Dokud běží, disconnect
+   * eventy se zadržují — controller nesmí kvůli údržbě ztratit ARM. Když se
+   * nový socket nestihne synchronizovat do deadline, zadržené chyby se
+   * přiznají a výpadek se ohlásí normální cestou.
+   */
+  let renewalInProgress = false;
+  let renewalDeadline: ReturnType<typeof setTimeout> | null = null;
+  let renewalHeldEvents: BrokerEvent[] = [];
   const withConnectionLabel = (message: string): string =>
     config.connectionLabel ? `${message} [${config.connectionLabel}]` : message;
+  const finishRenewal = () => {
+    if (renewalDeadline) clearTimeouts(renewalDeadline);
+    renewalDeadline = null;
+    renewalInProgress = false;
+    renewalHeldEvents = [];
+  };
+  /** Zadrží chybu během plánované obměny; jinak ji rovnou emituje. */
+  const emitOrHoldError = (error: Error) => {
+    if (renewalInProgress) {
+      renewalHeldEvents.push({ type: 'error', error, at: clock() });
+      return;
+    }
+    emit({ type: 'error', error, at: clock() });
+  };
   const commandCorrelationTag = (command: TradovateCommandEntity): string | undefined =>
     command.clOrdId?.trim() || command.customTag50?.trim() || undefined;
   const syncRequestBody = {
@@ -593,11 +630,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
                 }, 1);
                 syncTimeout = timeouts(() => socket?.close(), config.syncTimeoutMs ?? 5_000);
               } catch (reason) {
-                emit({
-                  type: 'error',
-                  error: reason instanceof Error ? reason : new Error(String(reason)),
-                  at: clock(),
-                });
+                emitOrHoldError(reason instanceof Error ? reason : new Error(String(reason)));
                 socket?.close();
               }
             }, delay);
@@ -635,6 +668,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
         if (syncRetry) clearTimeouts(syncRetry);
         syncRetry = null;
         syncReady = true;
+        // Dokončená plánovaná obměna: controller výpadek nikdy neviděl,
+        // redundantní `connected: true` je neškodné a srovná heartbeat.
+        if (renewalInProgress) finishRenewal();
         emit({ type: 'connection', connected: true, at: clock() });
       }
       return;
@@ -685,17 +721,17 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
               ? 60 * 60 * 1_000
               : Math.max(error.retryAfterMs ?? 0, config.reconnectDelayMs ?? 1_000);
           }
-          emit({ type: 'error', error, at: clock() });
+          emitOrHoldError(error);
           socket?.close();
         });
     };
     socket.onerror = () => {
-      emit({ type: 'error', error: new TradovateTransportError(withConnectionLabel('Tradovate WebSocket transport error')), at: clock() });
-      emit({ type: 'connection', connected: false, at: clock() });
+      emitOrHoldError(new TradovateTransportError(withConnectionLabel('Tradovate WebSocket transport error')));
+      if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
       socket?.close();
     };
     socket.onclose = () => {
-      emit({ type: 'connection', connected: false, at: clock() });
+      if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
       socket = null;
       syncReady = false;
       if (syncTimeout) clearTimeouts(syncTimeout);
@@ -846,6 +882,30 @@ export function createTradovateBroker(config: TradovateBrokerConfig): BrokerPort
       const order = await composeOrder(orderId);
       if (!order) throw new TradovateTransportError(`Missing OrderVersion for order ${orderId}`);
       return { order, completeness: 'authoritative', observedAt: clock() };
+    },
+    renewSocket() {
+      if (!socket || !syncReady || renewalInProgress || listeners.size === 0) return false;
+      renewalInProgress = true;
+      renewalHeldEvents = [];
+      renewalDeadline = timeouts(() => {
+        // Obnova se nestihla — přiznej zadržené chyby a výpadek poctivě.
+        renewalDeadline = null;
+        renewalInProgress = false;
+        const held = renewalHeldEvents;
+        renewalHeldEvents = [];
+        for (const heldEvent of held) emit(heldEvent);
+        emit({
+          type: 'error',
+          error: new TradovateTransportError(withConnectionLabel('Tradovate WebSocket renewal timeout')),
+          at: clock(),
+        });
+        // Flag už je shozený, takže disconnect ohlásí onclose; bez živého
+        // socketu (mezera mezi close a reconnectem) ho ohlásíme sami.
+        if (socket && socket.readyState !== 3) socket.close();
+        else emit({ type: 'connection', connected: false, at: clock() });
+      }, config.renewalDeadlineMs ?? 15_000);
+      socket.close();
+      return true;
     },
     subscribe(listener) {
       listeners.add(listener);

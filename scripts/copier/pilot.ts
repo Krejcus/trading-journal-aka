@@ -1,7 +1,7 @@
 import { access, appendFile, chmod, copyFile, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { createClient as createSupabaseClient, type SupabaseClient } from '@supabase/supabase-js';
 import { tradovateApiBaseUrl } from '../../server/tradovateOAuth';
 import { loadTradovateAccountData } from '../../server/tradovateAccountData';
 import {
@@ -11,7 +11,7 @@ import {
 } from '../../server/tradovateOAuthStore';
 import { createFileCopierStore } from '../../services/fileCopierStore';
 import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
-import { createTradovateBroker } from '../../services/tradovateBroker';
+import { createTradovateBroker, type TradovateBrokerPort } from '../../services/tradovateBroker';
 import { createBrokerRouter } from '../../services/brokerRouter';
 import type { BrokerPort } from '../../services/brokerPort';
 import { dryRunTradovateOrder } from '../../services/tradovateDryRun';
@@ -188,7 +188,10 @@ async function runMultiConnectionAgent(): Promise<void> {
     accountIds: item.accountIds,
     critical: item.accountIds.includes(leaderId),
   })));
-  await runLocalAgent(loaded.map(item => item.context), leaderId, followerId, accounts, broker);
+  await runLocalAgent(
+    loaded.map(item => item.context), leaderId, followerId, accounts, broker,
+    loaded.map(item => ({ broker: item.broker, label: `conn:${item.context.connectionId.slice(0, 8)}` })),
+  );
 }
 
 async function runLocalAgent(
@@ -197,6 +200,7 @@ async function runLocalAgent(
   followerId: number,
   accounts: TradovateAccountDataAccount[],
   baseBroker: BrokerPort,
+  renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string }> = [],
 ): Promise<void> {
   const context = contexts[0];
   if (!context) throw new Error('Lokální agent potřebuje alespoň jedno OAuth spojení');
@@ -325,11 +329,59 @@ async function runLocalAgent(
         await groupStore.save(changed);
       },
     });
-    if (context.relay) relay = startMacCopierCommandRelay({ ...context.relay, agent });
+    if (context.relay) {
+      relay = startMacCopierCommandRelay({
+        ...context.relay,
+        agent,
+        // Realtime budíček: příkaz z UI dorazí za ~100–300 ms místo čekání
+        // na poll interval. Kanál nese jen „kick", data jdou dál přes
+        // autentizovaný REST relay; poll zůstává jako záloha.
+        createKickSubscription: (config, onKick) => {
+          const client = createSupabaseClient(config.url, config.anonKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          });
+          const channel = client.channel(config.topic);
+          channel.on('broadcast', { event: 'kick' }, () => onKick()).subscribe(subscriptionState => {
+            if (subscriptionState === 'SUBSCRIBED') {
+              console.log(`${new Date().toISOString()} RELAY KICK aktivní (${config.topic})`);
+            }
+          });
+          return () => {
+            void client.removeChannel(channel);
+            void client.realtime.disconnect();
+          };
+        },
+      });
+    }
     console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} followers=${group.followers.map(item => `${item.accountId}@${item.multiplier}${item.maxContracts != null ? `@max${item.maxContracts}` : ''}`).join(',')}`);
     console.log('Stav je DISARMED. ARM, Flatten, Flatten All a násobek vyžadují explicitní akci v AlphaTrade LIVE UI.');
+    // Plynulá obměna WS před cyklem Tradovate access tokenu (~80 min):
+    // po 50 min se čeká na flat/klidný moment, po 70 min se obměňuje i
+    // uprostřed obchodu — řízený sub-sekundový swap je bezpečnější než
+    // nechat server tvrdě zavřít socket (DISARM + povinná reconciliation).
+    const RENEW_AFTER_MS = 50 * 60_000;
+    const RENEW_FORCE_MS = 70 * 60_000;
+    const renewalAt = new Map(renewableBrokers.map(item => [item, Date.now()]));
+    const maybeRenewSockets = () => {
+      const status = controller?.status();
+      if (!status?.connected) return;
+      const now = Date.now();
+      for (const item of renewableBrokers) {
+        const age = now - (renewalAt.get(item) ?? now);
+        if (age < RENEW_AFTER_MS) continue;
+        const inTrade = status.armed && status.groupFlat === false;
+        if (inTrade && age < RENEW_FORCE_MS) continue;
+        if (item.broker.renewSocket()) {
+          renewalAt.set(item, now);
+          console.log(`${new Date().toISOString()} SOCKET RENEWAL ${item.label} (věk ${Math.round(age / 60_000)} min${inTrade ? ', vynuceno v obchodě' : ''})`);
+        }
+      }
+    };
     const deadline = Date.now() + Number(minutesValue) * 60_000;
-    while (Date.now() < deadline && !stopPromise) await delay(1_000);
+    while (Date.now() < deadline && !stopPromise) {
+      await delay(1_000);
+      maybeRenewSockets();
+    }
     await stop('time-limit');
   } finally {
     process.off('SIGINT', onSignal);

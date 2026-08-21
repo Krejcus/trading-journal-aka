@@ -5,17 +5,60 @@ export interface MacCopierCommandRelay {
   close(): Promise<void>;
 }
 
+export interface MacCopierRealtimeKickConfig {
+  url: string;
+  anonKey: string;
+  topic: string;
+}
+
 export function startMacCopierCommandRelay(options: {
   apiOrigin: string;
   authorizationHeader: () => Promise<string>;
   agent: LocalCopierExecutionAgent;
   fetchImpl?: typeof fetch;
   pollMs?: number;
+  /**
+   * Volitelný realtime „kick": server po zařazení příkazu pošle broadcast a
+   * relay poll proběhne okamžitě místo čekání na interval. Konfigurace
+   * kanálu přijde v poll odpovědi; poll interval zůstává jako záloha —
+   * kick je čistá optimalizace latence, ne transport.
+   */
+  createKickSubscription?: (
+    config: MacCopierRealtimeKickConfig,
+    onKick: () => void,
+  ) => () => void;
 }): MacCopierCommandRelay {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const pollMs = Math.max(500, options.pollMs ?? 750);
   let stopped = false;
   let running: Promise<void> | null = null;
+  let wake: (() => void) | null = null;
+  let unsubscribeKick: (() => void) | null = null;
+  let kickTopic: string | null = null;
+
+  const sleep = (ms: number) => new Promise<void>(resolve => {
+    const timer = setTimeout(() => {
+      wake = null;
+      resolve();
+    }, ms);
+    wake = () => {
+      clearTimeout(timer);
+      wake = null;
+      resolve();
+    };
+  });
+
+  const maybeSubscribeKick = (realtime: unknown) => {
+    if (!options.createKickSubscription || stopped) return;
+    const config = realtime as Partial<MacCopierRealtimeKickConfig> | null | undefined;
+    if (!config?.url || !config.anonKey || !config.topic || config.topic === kickTopic) return;
+    unsubscribeKick?.();
+    kickTopic = config.topic;
+    unsubscribeKick = options.createKickSubscription(
+      { url: config.url, anonKey: config.anonKey, topic: config.topic },
+      () => { wake?.(); },
+    );
+  };
 
   const request = async (payload: unknown) => {
     const response = await fetchImpl(`${options.apiOrigin}/api/tradovate/oauth/copier-relay`, {
@@ -42,6 +85,7 @@ export function startMacCopierCommandRelay(options: {
       try {
         const response = await request({ action: 'poll', status: options.agent.status() });
         failures = 0;
+        maybeSubscribeKick(response.realtime);
         const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
         if (remote?.id && remote.command) {
           if (!remote.expiresAt || Date.parse(remote.expiresAt) <= Date.now()) {
@@ -60,9 +104,17 @@ export function startMacCopierCommandRelay(options: {
           console.error(`${new Date().toISOString()} COPIER RELAY (${failures}. selhání v řadě) ${error instanceof Error ? error.message : String(error)}`);
         }
       }
-      await new Promise(resolve => setTimeout(resolve, failures ? Math.min(5_000, pollMs * failures) : pollMs));
+      await sleep(failures ? Math.min(5_000, pollMs * failures) : pollMs);
     }
   };
   running = loop();
-  return { async close() { stopped = true; await running; } };
+  return {
+    async close() {
+      stopped = true;
+      unsubscribeKick?.();
+      unsubscribeKick = null;
+      wake?.();
+      await running;
+    },
+  };
 }

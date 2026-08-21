@@ -25,7 +25,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const action = String(req.body?.action ?? '');
       if (action === 'poll') {
         if (req.body?.status) await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId, connectionId: device.connectionId, status: req.body.status });
-        return res.status(200).json({ command: await claimTradovateCopierCommand({ db, deviceId: device.id }) });
+        return res.status(200).json({
+          command: await claimTradovateCopierCommand({ db, deviceId: device.id }),
+          // Realtime „kick": worker se přihlásí k broadcast kanálu a příkaz
+          // dostane okamžitě místo čekání na další poll. Anon key je veřejný
+          // (je i ve web bundlu); kanál nenese žádná data, jen budíček.
+          realtime: {
+            url: config.supabaseUrl,
+            anonKey: config.supabaseAnonKey,
+            topic: `copier-kick-${device.id}`,
+          },
+        });
       }
       if (action === 'complete') {
         const commandId = String(req.body?.commandId ?? '');
@@ -79,7 +89,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(await readTradovateCopierDeviceRuntime({ db, userId, connectionId }));
     }
     if (req.method === 'POST') {
-      return res.status(202).json(await enqueueTradovateCopierCommand({ db, userId, connectionId, command: req.body?.command, idempotencyKey: req.body?.idempotencyKey }));
+      const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: req.body?.command, idempotencyKey: req.body?.idempotencyKey });
+      // Budíček pro worker: bez něj příkaz čeká na další poll (~750 ms).
+      // Kick je jen optimalizace — selhání nesmí shodit enqueue.
+      try {
+        await fetch(`${config.supabaseUrl}/realtime/v1/api/broadcast`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: config.supabaseServiceRoleKey,
+            Authorization: `Bearer ${config.supabaseServiceRoleKey}`,
+          },
+          body: JSON.stringify({ messages: [{ topic: `copier-kick-${queued.deviceId}`, event: 'kick', payload: {} }] }),
+          signal: AbortSignal.timeout(1_500),
+        });
+      } catch {
+        // Poll fallback příkaz doručí i bez kicku.
+      }
+      return res.status(202).json(queued);
     }
     return res.status(405).json({ error: 'method-not-allowed' });
   } catch (error) {
