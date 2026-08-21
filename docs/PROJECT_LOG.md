@@ -55,6 +55,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] iOS 26 WidgetKit APNs registrace: telefon token vydá a widgetový snapshot
+      načítá, ale produkční `/api/native-widget-push-subscription` končí při
+      databázovém zápisu `500 widget-push-upsert-failed`. Dokud se neopraví a
+      fyzicky neověří push-triggered reload, vzdálené obnovení widgetu není hotové.
+- [ ] ActivityKit push-to-start: token připojeného iPhonu je v produkci
+      zaregistrovaný, ale vytvoření nové Live Activity ze serveru při force-quit
+      appce ještě nebylo fyzicky ověřeno bezpečnou novou ARM session.
+- [ ] Do iPhonu nahrát přes kabel nový build z finálního commitu tohoto handoffu.
+      Aktuálně instalovaný build obsahuje později vrácený diagnostický widget
+      retry; repo a telefon proto nejsou byte-for-byte shodné.
 - [ ] Pairing flow (ikona klíče v LIVE Connections) — nasazený, ale
       neproklikaný na produkci.
 - [x] Multi-follower DEMO test — 18. 8. potvrzen OCO/SL lifecycle na čtyřech
@@ -71,6 +81,61 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-21 (Codex, uzavření nativní větve pro předání Claude session)
+Rozdělaný widget retry v `AlphaTradeNativePlugin.swift` a
+`nativeWidgetRemote.ts` byl vrácen jako diagnostický experiment: WidgetKit
+callback už token sám správně ukládal a odesílal, nový most jen duplikoval
+stejný produkční požadavek a zbytečně vystavoval APNs token JavaScriptu.
+Skutečný blok je serverový: telefon vydal 160znakový WidgetKit token, hlásí pět
+konfigurací a autorizovaně načítá snapshot, ale každý POST na
+`/api/native-widget-push-subscription` skončí `500
+widget-push-upsert-failed`. Vercel runtime potvrzuje přijetí požadavků;
+`native_widget_devices.widget_push_token` proto zůstává prázdný. WidgetKit APNs
+push ani push-triggered reload tedy nejsou fyzicky hotové. Ruční tlačítko
+Obnovit vyvolalo nový serverový snapshot request, ale běžný systémový timeline
+zůstává oportunistický.
+
+Fyzicky ověřené na iPhone 13 Pro Max: placeně podepsaný development APNs build;
+serverová notifikace dorazila při force-quit aplikaci a zamčeném telefonu;
+existující Live Activity přijala vzdálenou aktualizaci a vzdáleně se ukončila;
+Copier Home widget dříve zobrazil reálný `DISARMED` stav a v tomto finálním kole
+po ruční obnově skutečně kontaktoval snapshot endpoint. Nový ActivityKit
+push-to-start token se 21. 8. zaregistroval do produkce, ale vzdálené vytvoření
+úplně nové aktivity při force-quit ještě nebylo fyzicky vyvoláno. Všechny Home
+a Lock Screen varianty ani celá 22-alert galerie nebyly po posledním buildu
+znovu vyčerpávajícím způsobem otestované; přesné P&L při přirozeném novém close
+se dál nesmí nahrazovat vyrobeným broker obchodem. Telefon aktuálně obsahuje
+build s později vráceným diagnostickým retry, takže pro shodu s repem zbývá
+jeden rebuild a instalace přes kabel.
+
+Všech pět migrací z 20. 8. je na projektu `kopinlpdvjfgmvxydohk` skutečně
+aplikovaných pod časy produkční aplikace:
+`20260820061451 native_push_subscriptions`,
+`20260820091413 native_live_activity_subscriptions`,
+`20260820105246 native_widget_remote_refresh`,
+`20260820165149 native_widget_push_updates` a
+`20260820170636 native_live_activity_push_to_start`. Ověřeno i podle skutečného
+schématu: všech pět souvisejících tabulek existuje, RLS je zapnuté, `anon` a
+`authenticated` nemají žádné table grants, `service_role` má potřebný přístup
+a widget push sloupce jsou přítomné. Nic se znovu neaplikovalo.
+
+Známý lokální CandleKit incident: Codexův `npm install` z 20. 8. přepsal vlastní
+AlphaTrade build publikovaným `@getcandlekit/charts@0.1.0`. Správná verze není
+jiné semver číslo, ale **AlphaTrade-patched build 0.1.0** s Text,
+Long/Short Position, Fib a hover rozšířeními. Neporušená kopie je v
+`~/Downloads/alphatrade-mentor-15/oauth-data-probe/node_modules/@getcandlekit/charts`;
+obnova znamená nejdřív odložit současný
+`node_modules/@getcandlekit/charts` a tuto složku zkopírovat na jeho místo.
+Samotné `npm install` nestačí a současný
+`patches/@getcandlekit+charts+0.1.0.patch` se na registry tarball čistě
+neaplikuje; dlouhodobě je nutné patch z tohoto správného buildu regenerovat
+nebo balíček zavendorovat. V tomto checkoutu byl správný build obnoven (původní
+registry kopie je dočasně v
+`/private/tmp/alphatrade-candlekit-published.5s25yj/charts`). Před obnovou
+selhávalo přesně 36 chart/CandleKit testů a typecheck; po obnově a opravě typu
+Live Activity mocku prošlo `164/164` test files, `1309/1309` testů a celý
+`tsc --noEmit`.
 
 ### 2026-08-20 (Codex, ActivityKit push-to-start při zavřené appce)
 Audit odhalil, že APNs uměla existující Live Activity aktualizovat a ukončit,

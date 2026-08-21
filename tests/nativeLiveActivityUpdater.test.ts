@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildApnsLiveActivityPayload, buildApnsLiveActivityStartPayload } from '../server/apns';
+import {
+  buildApnsLiveActivityPayload,
+  buildApnsLiveActivityStartPayload,
+  type ApnsDevice,
+  type ApnsLiveActivityStart,
+  type ApnsResult,
+} from '../server/apns';
 import { loadNativeLiveActivityBrokerSnapshot } from '../server/nativeLiveActivityBrokerSnapshot';
 import {
   liveActivityAccountIds,
@@ -149,7 +155,10 @@ describe('remote native Live Activity', () => {
         };
       },
     };
-    const send = vi.fn(async () => ({ status: 'sent' as const, statusCode: 200 }));
+    const send = vi.fn(async (
+      _device: ApnsDevice,
+      _start: ApnsLiveActivityStart,
+    ): Promise<ApnsResult> => ({ status: 'sent', statusCode: 200 }));
     const result = await startNativeLiveActivities({
       db: db as never,
       runtimes: [runtime({ armed: true, armedAt: now - 20_000, connected: true })],
