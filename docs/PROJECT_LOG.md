@@ -78,6 +78,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-21 odpoledne II (Claude, order lifecycle notifikace)
+Trade notifikace rozšířeny z pozičních přechodů na celý lifecycle:
+`order-placed` (čekající limit/stop s cenou; u OSO včetně SL/TP),
+`bracket-placed`, `order-canceled` (OCO auto-cancel druhé nohy po exitu
+se záměrně filtruje jako šum), `order/sl/tp-moved` (série modify při
+tažení v platformě collapsuje na poslední úroveň). Exit/flip nese
+`exitReason` (sl/tp/manual — párování orderId závěrečného leader fillu
+proti evidovaným ochranným nohám) a `pnlUsd` z recentClosedTrades →
+tituly „SL HIT −400 USD" / „TP HIT +240 USD". Market vstupy order-placed
+nedělají (kryje je entry z pozice). Ring buffer 10→20.
+GPT cross-review chytil 4 reálné díry, opraveno: (1) lifecycle event jen
+při plně čistém auditu — částečný dispatch (dispatched+rejected) končí
+fail-closed a nesmí poslat „obchod zadán"; (2) ochranné nohy se obnovují
+při reconciliation z working orderů s parent/OCO vazbou — atribuce přežije
+restart; (3) sety id: úklid po exitu + strop 300; (4) flip se v cron
+suppresi počítá jako close — žádná dvojitá zpráva s přesným P&L alertem.
+NASAZENÍ: web/cron hned; nové eventy začne worker vysílat až po
+reinstallu (gate na armed=False tentokrát skriptem — při pushi byl ARMED,
+reinstall čeká).
+
 ### 2026-08-21 odpoledne (Claude, widgety a notifikace dokončeny)
 Kořen `500 widget-push-upsert-failed`: CHECK constraint
 `widget_push_token ~ '^[0-9a-f]{64,512}$'` — POSIX regex v Postgresu má
