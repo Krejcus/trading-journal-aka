@@ -1707,7 +1707,11 @@ describe('order lifecycle notifikace (obchod zadán, SL/TP, atribuce exitu)', ()
     });
     await controller.waitForIdle();
     const oso = controller.status().recentCopyEvents?.find(event => event.kind === 'order-placed');
-    expect(oso).toMatchObject({ price: 29_500, stopPrice: 29_400, targetPrice: 29_700 });
+    // Risk/reward: SL (29400-29500)×2×2$ = -400; TP (29700-29500)×2×2$ = +800.
+    expect(oso).toMatchObject({
+      price: 29_500, stopPrice: 29_400, targetPrice: 29_700,
+      stopPnlUsd: -400, targetPnlUsd: 800,
+    });
 
     // Dva posuny SL za sebou → v deníku zůstává jen poslední úroveň.
     broker.emitEvent({
@@ -1728,7 +1732,9 @@ describe('order lifecycle notifikace (obchod zadán, SL/TP, atribuce exitu)', ()
     await controller.waitForIdle();
     const moved = (controller.status().recentCopyEvents ?? []).filter(event => event.kind === 'sl-moved');
     expect(moved).toHaveLength(1);
-    expect(moved[0]).toMatchObject({ price: 29_480 });
+    // SL noha je Sell příkaz, ale pozice je Long — notifikace hlásí pozici.
+    // Potenciální P&L vůči plánovanému vstupu 29500: (29480-29500)×2×2$ = -80.
+    expect(moved[0]).toMatchObject({ price: 29_480, side: 'Long', levelPnlUsd: -80 });
     controller.stop();
   });
 

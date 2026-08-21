@@ -126,6 +126,11 @@ export interface CopierCopyEvent {
   exitReason?: 'sl' | 'tp' | 'manual';
   /** Realizovaný P&L uzavřeného obchodu leadera v USD (známe-li point value). */
   pnlUsd?: number;
+  /** Potenciální P&L na úrovni `price` u *-moved (vs. průměrný vstup). */
+  levelPnlUsd?: number;
+  /** Potenciální P&L na SL/TP úrovni u order/bracket-placed (risk/reward). */
+  stopPnlUsd?: number;
+  targetPnlUsd?: number;
 }
 
 export interface CopierRuntimeController {
@@ -277,6 +282,40 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Poslední leader fill per symbol — spojí flat přechod s objednávkou. */
   const lastLeaderFillOrderId = new Map<string, string>();
 
+  /** Čekající vstup per symbol — referenční cena pro potenciální P&L,
+   *  dokud fill nezaloží skutečný lot. */
+  const plannedEntryBySymbol = new Map<string, { price: number; signedQuantity: number }>();
+  const rememberPlannedEntry = (symbol: string, price: number, signedQuantity: number) => {
+    plannedEntryBySymbol.set(symbol, { price, signedQuantity });
+    while (plannedEntryBySymbol.size > 50) {
+      const oldest = plannedEntryBySymbol.keys().next().value as string | undefined;
+      if (oldest == null) break;
+      plannedEntryBySymbol.delete(oldest);
+    }
+  };
+
+  /** Potenciální P&L dané cenové úrovně vůči průměrnému vstupu (nebo
+   *  plánovanému vstupu u nevyplněné objednávky). */
+  const levelPnl = (symbol: string, level: number | undefined): { levelPnlUsd: number } | null => {
+    if (level == null) return null;
+    const pv = pointValueUsd(symbol);
+    if (pv == null) return null;
+    const lot = currentRuntime().state.safety.dailyStats?.openLots
+      .find(item => item.symbol === symbol && item.netQuantity !== 0);
+    if (lot) {
+      return {
+        levelPnlUsd: (level - lot.avgPrice) * Math.sign(lot.netQuantity) * Math.abs(lot.netQuantity) * pv,
+      };
+    }
+    const planned = plannedEntryBySymbol.get(symbol);
+    if (planned && planned.signedQuantity !== 0) {
+      return {
+        levelPnlUsd: (level - planned.price) * Math.sign(planned.signedQuantity) * Math.abs(planned.signedQuantity) * pv,
+      };
+    }
+    return null;
+  };
+
   /** Lifecycle notifikace jen při plně čistém dispatchi — částečný úspěch
    *  (dispatched + rejected/unknown) končí fail-closed a nesmí tvrdit opak. */
   const auditCleanDispatch = (audit: readonly CopierAuditEntry[], kind: 'dispatched' | 'canceled' | 'modified') =>
@@ -346,6 +385,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       };
     };
     if (previousNet === 0 && nextNet !== 0) {
+      plannedEntryBySymbol.delete(symbol);
       pushCopyEvent('entry', symbol, nextNet > 0 ? 'Long' : 'Short', Math.abs(nextNet), at);
     } else if (previousNet !== 0 && nextNet === 0) {
       pushCopyEvent('exit', symbol, previousNet > 0 ? 'Long' : 'Short', Math.abs(previousNet), at, exitExtra());
@@ -1024,10 +1064,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (pending.kind === 'submitted'
         && (pending.orderType === 'Limit' || pending.orderType === 'Stop' || pending.orderType === 'StopLimit')
         && auditCleanDispatch(result.audit, 'dispatched')) {
+        const pendingEntryPrice = pending.limitPrice ?? pending.stopPrice;
+        if (pendingEntryPrice != null) {
+          rememberPlannedEntry(pending.symbol, pendingEntryPrice, (pending.side === 'Buy' ? 1 : -1) * pending.quantity);
+        }
         pushCopyEvent('order-placed', pending.symbol,
           pending.side === 'Buy' ? 'Long' : 'Short', pending.quantity, clock(), {
-            ...(pending.limitPrice != null ? { price: pending.limitPrice } : {}),
-            ...(pending.limitPrice == null && pending.stopPrice != null ? { price: pending.stopPrice } : {}),
+            ...(pendingEntryPrice != null ? { price: pendingEntryPrice } : {}),
           });
       }
     } catch (error) {
@@ -1180,9 +1223,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       } else {
         rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
+          const stopPotential = levelPnl(bracketPair.symbol, bracketPair.stopPrice);
+          const targetPotential = levelPnl(bracketPair.symbol, bracketPair.targetPrice);
           pushCopyEvent('bracket-placed', bracketPair.symbol,
             bracketPair.side === 'Buy' ? 'Short' : 'Long', bracketPair.quantity, now, {
               stopPrice: bracketPair.stopPrice, targetPrice: bracketPair.targetPrice,
+              ...(stopPotential ? { stopPnlUsd: stopPotential.levelPnlUsd } : {}),
+              ...(targetPotential ? { targetPnlUsd: targetPotential.levelPnlUsd } : {}),
             });
         }
       }
@@ -1276,11 +1323,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       } else {
         rememberProtectiveLeg(pair.stopOrderId, pair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
+          const entryPrice = pair.entryLimitPrice ?? pair.entryStopPrice;
+          const direction = pair.entrySide === 'Buy' ? 1 : -1;
+          const pv = pointValueUsd(pair.symbol);
+          if (entryPrice != null) {
+            rememberPlannedEntry(pair.symbol, entryPrice, direction * pair.quantity);
+          }
           pushCopyEvent('order-placed', pair.symbol,
             pair.entrySide === 'Buy' ? 'Long' : 'Short', pair.quantity, now, {
-              ...(pair.entryLimitPrice != null ? { price: pair.entryLimitPrice } : {}),
-              ...(pair.entryLimitPrice == null && pair.entryStopPrice != null ? { price: pair.entryStopPrice } : {}),
+              ...(entryPrice != null ? { price: entryPrice } : {}),
               stopPrice: pair.stopPrice, targetPrice: pair.targetPrice,
+              ...(pv != null && entryPrice != null
+                ? {
+                  stopPnlUsd: (pair.stopPrice - entryPrice) * direction * pair.quantity * pv,
+                  targetPnlUsd: (pair.targetPrice - entryPrice) * direction * pair.quantity * pv,
+                }
+                : {}),
             });
         }
       }
@@ -1341,22 +1399,33 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // OCO auto-cancel druhé nohy po SL/TP hitu je šum — nenotifikuje se.
         || leaderTargetOrderIds.delete(leaderEvent.orderId);
       if (!isProtective) {
+        plannedEntryBySymbol.delete(leaderEvent.symbol);
         pushCopyEvent('order-canceled', leaderEvent.symbol, eventSide, leaderEvent.quantity, now);
       }
     } else if (leaderEvent.kind === 'replaced'
       && auditCleanDispatch(result.audit, 'modified')) {
+      // Ochranná noha je technicky opačný příkaz (SL longu = Sell), ale
+      // uživatel drží POZICI — notifikace hlásí směr pozice, ne nohy.
+      const positionSide: 'Long' | 'Short' = eventSide === 'Long' ? 'Short' : 'Long';
       if (leaderStopOrderIds.has(leaderEvent.orderId)) {
-        pushCopyEvent('sl-moved', leaderEvent.symbol, eventSide, leaderEvent.quantity, now, {
+        pushCopyEvent('sl-moved', leaderEvent.symbol, positionSide, leaderEvent.quantity, now, {
           ...(leaderEvent.stopPrice != null ? { price: leaderEvent.stopPrice } : {}),
+          ...(levelPnl(leaderEvent.symbol, leaderEvent.stopPrice) ?? {}),
         });
       } else if (leaderTargetOrderIds.has(leaderEvent.orderId)) {
-        pushCopyEvent('tp-moved', leaderEvent.symbol, eventSide, leaderEvent.quantity, now, {
+        pushCopyEvent('tp-moved', leaderEvent.symbol, positionSide, leaderEvent.quantity, now, {
           ...(leaderEvent.limitPrice != null ? { price: leaderEvent.limitPrice } : {}),
+          ...(levelPnl(leaderEvent.symbol, leaderEvent.limitPrice) ?? {}),
         });
       } else {
+        const movedPrice = leaderEvent.limitPrice ?? leaderEvent.stopPrice;
+        // Posun čekajícího entry mění referenci pro potenciální P&L SL/TP.
+        if (movedPrice != null && plannedEntryBySymbol.has(leaderEvent.symbol)) {
+          rememberPlannedEntry(leaderEvent.symbol, movedPrice,
+            (leaderEvent.side === 'Sell' ? -1 : 1) * leaderEvent.quantity);
+        }
         pushCopyEvent('order-moved', leaderEvent.symbol, eventSide, leaderEvent.quantity, now, {
-          ...(leaderEvent.limitPrice != null ? { price: leaderEvent.limitPrice } : {}),
-          ...(leaderEvent.limitPrice == null && leaderEvent.stopPrice != null ? { price: leaderEvent.stopPrice } : {}),
+          ...(movedPrice != null ? { price: movedPrice } : {}),
         });
       }
     }

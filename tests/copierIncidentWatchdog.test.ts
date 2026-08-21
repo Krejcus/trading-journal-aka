@@ -378,3 +378,23 @@ describe('texty lifecycle notifikací', () => {
     expect(content.title).toBe('Copier: výstup zkopírován');
   });
 });
+
+describe('potenciální P&L v textech', () => {
+  const base = { id: 'e2', at: 1, symbol: 'MNQU6', side: 'Long' as const, quantity: 2, followers: 5 };
+
+  it('order-placed nese risk/reward u SL a TP', () => {
+    const content = copyEventNotification({
+      ...base, kind: 'order-placed', price: 29_500,
+      stopPrice: 29_400, targetPrice: 29_700, stopPnlUsd: -400, targetPnlUsd: 800,
+    });
+    expect(content.body).toContain('SL 29400 (−400 USD)');
+    expect(content.body).toContain('TP 29700 (+800 USD)');
+  });
+
+  it('SL posunutý na break-even ukazuje (BE)', () => {
+    const content = copyEventNotification({
+      ...base, kind: 'sl-moved', price: 29_500, levelPnlUsd: 0,
+    });
+    expect(content.body).toContain('@ 29500 (BE)');
+  });
+});

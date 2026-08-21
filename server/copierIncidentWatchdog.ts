@@ -98,6 +98,9 @@ export interface CopierCopyEventRow {
   targetPrice?: number;
   exitReason?: 'sl' | 'tp' | 'manual';
   pnlUsd?: number;
+  levelPnlUsd?: number;
+  stopPnlUsd?: number;
+  targetPnlUsd?: number;
 }
 
 const COPY_KIND_TITLE: Record<CopierCopyEventRow['kind'], string> = {
@@ -117,6 +120,14 @@ const COPY_KIND_TITLE: Record<CopierCopyEventRow['kind'], string> = {
 const formatUsd = (value: number): string =>
   `${value >= 0 ? '+' : '−'}${Math.abs(Math.round(value))} USD`;
 
+/** Potenciální P&L úrovně v závorce; přesná nula = break-even. */
+const formatPotential = (value: number | undefined): string => {
+  if (value == null || !Number.isFinite(value)) return '';
+  // BE jen pro skutečnou nulu — zaokrouhlená −0.5 USD není break-even.
+  if (value === 0) return ' (BE)';
+  return ` (${formatUsd(value)})`;
+};
+
 export function copyEventNotification(event: CopierCopyEventRow): { title: string; body: string } {
   // Exit s atribucí: SL/TP hit má vlastní titulek, P&L jde do těla.
   const title = event.kind === 'exit' || event.kind === 'flip'
@@ -127,9 +138,9 @@ export function copyEventNotification(event: CopierCopyEventRow): { title: strin
         : COPY_KIND_TITLE[event.kind]
     : COPY_KIND_TITLE[event.kind] ?? 'Copier: obchodní událost';
   const parts = [`${event.side} ${event.quantity} ${event.symbol}`];
-  if (event.price != null) parts.push(`@ ${event.price}`);
-  if (event.stopPrice != null) parts.push(`SL ${event.stopPrice}`);
-  if (event.targetPrice != null) parts.push(`TP ${event.targetPrice}`);
+  if (event.price != null) parts.push(`@ ${event.price}${formatPotential(event.levelPnlUsd)}`);
+  if (event.stopPrice != null) parts.push(`SL ${event.stopPrice}${formatPotential(event.stopPnlUsd)}`);
+  if (event.targetPrice != null) parts.push(`TP ${event.targetPrice}${formatPotential(event.targetPnlUsd)}`);
   if ((event.kind === 'exit' || event.kind === 'flip') && event.pnlUsd != null) {
     parts.push(`P&L ${formatUsd(event.pnlUsd)}`);
   }
