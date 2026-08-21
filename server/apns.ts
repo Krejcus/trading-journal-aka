@@ -29,6 +29,18 @@ export interface ApnsLiveActivityContentState {
   isPositive: boolean;
   progress: number;
   updatedAt: number;
+  mode?: 'idle' | 'pending' | 'position';
+  symbol?: string;
+  side?: 'Long' | 'Short';
+  quantity?: number;
+  entryPrice?: number;
+  currentPrice?: number;
+  stopPrice?: number;
+  targetPrice?: number;
+  slTpProgress?: number;
+  armExpiresAt?: number;
+  followersTotal?: number;
+  followersOk?: number;
 }
 
 export interface ApnsLiveActivityUpdate {
@@ -131,13 +143,8 @@ export function buildApnsLiveActivityPayload(update: ApnsLiveActivityUpdate): Re
       timestamp: Math.max(0, Math.floor(update.state.updatedAt)),
       event,
       'content-state': {
-        status: update.state.status,
-        headline: update.state.headline,
-        detail: update.state.detail,
-        pnlText: update.state.pnlText,
-        isPositive: update.state.isPositive,
+        ...update.state,
         progress: Math.min(1, Math.max(0, update.state.progress)),
-        updatedAt: update.state.updatedAt,
       },
       ...(update.staleAt == null ? {} : { 'stale-date': Math.max(0, Math.floor(update.staleAt)) }),
       ...(event !== 'end' || update.dismissalAt == null
@@ -154,13 +161,8 @@ export function buildApnsLiveActivityStartPayload(start: ApnsLiveActivityStart):
       timestamp: Math.max(0, Math.floor(start.state.updatedAt)),
       event: 'start',
       'content-state': {
-        status: start.state.status,
-        headline: start.state.headline,
-        detail: start.state.detail,
-        pnlText: start.state.pnlText,
-        isPositive: start.state.isPositive,
+        ...start.state,
         progress: Math.min(1, Math.max(0, start.state.progress)),
-        updatedAt: start.state.updatedAt,
       },
       'attributes-type': 'AlphaTradeLiveActivityAttributes',
       attributes: {

@@ -78,6 +78,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-21 (Codex, Live Activity: obchodní stav + ARM countdown)
+Live Activity na Lock Screen a Dynamic Island má nový light-first vzhled
+(slate/indigo, adaptivní navy dark mode) a tři read-only režimy: čekající
+leader Limit/Stop entry, otevřenou pozici s live open P&L a SL→TP gradientem,
+nebo ARM idle s followery. ARM expirace se posílá jako epoch seconds a iOS ji
+vykresluje nativním `timerInterval`, takže odpočet běží bez dalších pushů.
+Broker snapshot nově bezpečně páruje working leader orders s nejnovějšími
+`orderVersion`, vybírá nejbližší SL/TP k entry a dopočítává cenu z kompletního
+open P&L pouze pro známý futures point value; selhání volitelného version
+fetchu jen vynuluje cenové detaily. Pending working order brání předčasnému
+ukončení aktivity. APNs transportní allowlist byl rozšířen o typovaná volitelná
+pole; staré payloady se dál dekódují a mají legacy UI fallback. Žádná broker
+akce, copier/relay změna, cadence ani priority pushů nepřibyla. Ověření:
+TypeScript čistý, 166 souborů / 1336 Vitest testů prošlo a generic iOS Debug
+build bez signing prošel (`BUILD SUCCEEDED`). První sandboxové běhy celé suite
+a Xcode selhaly pouze na zákazu loopback socketu/cache zápisu; opakování mimo
+sandbox prošla. Nic nebylo commitnuto, pushnuto, deploynuto ani instalováno na
+telefon; finální vizuální kontrola na fyzickém Lock Screen/Dynamic Island tedy
+zůstává samostatný krok.
+
 ### 2026-08-21 (Codex, Flatten All follow-up re-ARM)
 Frontendový follow-up po potvrzeném skupinovém Flatten All už nenabízí vypnutí
 replikace, ale volitelný explicitní `ARM & pokračovat`. Nabídka vznikne pouze

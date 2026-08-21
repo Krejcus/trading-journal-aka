@@ -1,3 +1,5 @@
+import { pointValueUsd } from '../services/futuresContractSpecs.js';
+
 interface PositionEntity {
   accountId?: number;
   contractId?: number;
@@ -6,8 +8,20 @@ interface PositionEntity {
 }
 
 interface OrderEntity {
+  id?: number;
   accountId?: number;
+  contractId?: number;
+  action?: string;
   ordStatus?: string;
+}
+
+interface OrderVersionEntity {
+  id?: number;
+  orderId?: number;
+  orderQty?: number;
+  orderType?: string;
+  price?: number;
+  stopPrice?: number;
 }
 
 interface CashBalanceEntity {
@@ -56,11 +70,23 @@ export interface NativeLiveActivityBrokerPosition {
   symbol: string | null;
   side: 'Long' | 'Short';
   quantity: number;
+  entryPrice: number | null;
+  currentPrice: number | null;
+  stopPrice: number | null;
+  targetPrice: number | null;
+}
+
+export interface NativeLiveActivityBrokerPendingOrder {
+  symbol: string;
+  side: 'Buy' | 'Sell';
+  quantity: number;
+  price: number;
 }
 
 export interface NativeLiveActivityBrokerSnapshot {
   accounts: NativeLiveActivityBrokerAccount[];
   positions: NativeLiveActivityBrokerPosition[];
+  pendingOrder: NativeLiveActivityBrokerPendingOrder | null;
   workingOrderCount: number;
   realizedPnl: number;
   openPnl: number;
@@ -77,6 +103,8 @@ export interface NativeLiveActivityBrokerSnapshot {
 const terminalOrderStatuses = new Set(['filled', 'canceled', 'cancelled', 'rejected', 'expired', 'completed']);
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
+const working = (order: OrderEntity): boolean =>
+  !terminalOrderStatuses.has((order.ordStatus ?? '').toLowerCase());
 
 async function requestJson<T>(options: {
   baseUrl: string;
@@ -123,12 +151,13 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       return { values: [], complete: false };
     }
   };
-  const [rawPositions, rawOrders, rawBalances, rawAccounts, rawAutoLiq] = await Promise.all([
+  const [rawPositions, rawOrders, rawBalances, rawAccounts, rawAutoLiq, rawOrderVersions] = await Promise.all([
     requestJson<PositionEntity[]>({ ...options, path: '/position/list', fetchImpl }),
     requestJson<OrderEntity[]>({ ...options, path: '/order/list', fetchImpl }),
     requestJson<CashBalanceEntity[]>({ ...options, path: '/cashBalance/list', fetchImpl }),
     optionalList<AccountEntity>('/account/list'),
     optionalList<UserAccountAutoLiqEntity>('/userAccountAutoLiq/list'),
+    optionalList<OrderVersionEntity>('/orderVersion/list'),
   ]);
   if (!Array.isArray(rawPositions) || !Array.isArray(rawOrders) || !Array.isArray(rawBalances)) {
     throw new Error('tradovate-live-activity-invalid-list');
@@ -140,9 +169,18 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     const netPosition = finite(position.netPos);
     if (accountId == null || contractId == null || netPosition == null || netPosition === 0
       || !allowedAccounts.has(accountId)) return [];
-    return [{ accountId, contractId, netPosition }];
+    return [{ accountId, contractId, netPosition, entryPrice: finite(position.netPrice) }];
   });
-  const contractIds = [...new Set(open.map(position => position.contractId))];
+  const leaderAccountId = options.accountIds.find(Number.isSafeInteger) ?? null;
+  const workingOrders = rawOrders.filter(order => {
+    const accountId = finite(order.accountId);
+    return accountId != null && allowedAccounts.has(accountId) && working(order);
+  });
+  const leaderWorkingOrders = workingOrders.filter(order => finite(order.accountId) === leaderAccountId);
+  const contractIds = [...new Set([
+    ...open.map(position => position.contractId),
+    ...leaderWorkingOrders.flatMap(order => finite(order.contractId) ?? []),
+  ])];
   let symbols = new Map<number, string>();
   if (contractIds.length > 0) {
     try {
@@ -222,6 +260,102 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     };
   });
 
+  const latestVersionByOrderId = new Map<number, OrderVersionEntity>();
+  if (rawOrderVersions.complete) {
+    for (const version of rawOrderVersions.values) {
+      const orderId = finite(version.orderId);
+      const versionId = finite(version.id);
+      if (orderId == null) continue;
+      const current = latestVersionByOrderId.get(orderId);
+      if (!current || (versionId ?? 0) >= (finite(current.id) ?? 0)) {
+        latestVersionByOrderId.set(orderId, version);
+      }
+    }
+  }
+
+  const leaderOpen = open.filter(position => position.accountId === leaderAccountId);
+  const dominantPool = leaderOpen.length > 0 ? leaderOpen : open;
+  const quantityByContract = new Map<number, number>();
+  for (const position of dominantPool) {
+    quantityByContract.set(position.contractId,
+      (quantityByContract.get(position.contractId) ?? 0) + Math.abs(position.netPosition));
+  }
+  const dominantContractId = [...quantityByContract.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0] ?? null;
+  const dominantPositions = dominantContractId == null
+    ? []
+    : open.filter(position => position.contractId === dominantContractId);
+  const dominantQuantity = dominantPositions.reduce((sum, position) => sum + Math.abs(position.netPosition), 0);
+  const dominantDirection = dominantPositions[0]?.netPosition && dominantPositions[0].netPosition > 0 ? 1 : -1;
+  const sameDirection = dominantPositions.every(position => Math.sign(position.netPosition) === dominantDirection);
+  const allExposureIsDominant = dominantPositions.length === open.length;
+  const dominantEntryNumerator = dominantPositions.reduce((sum, position) =>
+    sum + (position.entryPrice == null ? 0 : position.entryPrice * Math.abs(position.netPosition)), 0);
+  const hasCompleteEntry = dominantPositions.length > 0
+    && dominantPositions.every(position => position.entryPrice != null);
+  const dominantEntryPrice = hasCompleteEntry && dominantQuantity > 0
+    ? dominantEntryNumerator / dominantQuantity
+    : null;
+  const dominantSymbol = dominantContractId == null ? null : symbols.get(dominantContractId) ?? null;
+
+  let stopPrice: number | null = null;
+  let targetPrice: number | null = null;
+  if (rawOrderVersions.complete && dominantContractId != null && dominantEntryPrice != null && sameDirection) {
+    const protectiveAction = dominantDirection > 0 ? 'sell' : 'buy';
+    const candidates = leaderWorkingOrders.flatMap(order => {
+      const orderId = finite(order.id);
+      if (orderId == null || finite(order.contractId) !== dominantContractId
+        || (order.action ?? '').toLowerCase() !== protectiveAction) return [];
+      const version = latestVersionByOrderId.get(orderId);
+      return version ? [version] : [];
+    });
+    const stops = candidates.flatMap(version => {
+      const kind = (version.orderType ?? '').toLowerCase();
+      const price = finite(version.stopPrice);
+      const correctSide = price != null
+        && (dominantDirection > 0 ? price <= dominantEntryPrice : price >= dominantEntryPrice);
+      return (kind === 'stop' || kind === 'stoplimit') && correctSide ? [price] : [];
+    });
+    const targets = candidates.flatMap(version => {
+      const price = finite(version.price);
+      const correctSide = price != null
+        && (dominantDirection > 0 ? price >= dominantEntryPrice : price <= dominantEntryPrice);
+      return (version.orderType ?? '').toLowerCase() === 'limit' && correctSide ? [price] : [];
+    });
+    stopPrice = stops.sort((a, b) => Math.abs(a - dominantEntryPrice) - Math.abs(b - dominantEntryPrice))[0] ?? null;
+    targetPrice = targets.sort((a, b) => Math.abs(a - dominantEntryPrice) - Math.abs(b - dominantEntryPrice))[0] ?? null;
+  }
+
+  let currentPrice: number | null = null;
+  if (completeOpenPnl && allExposureIsDominant && sameDirection && dominantEntryPrice != null
+    && dominantSymbol != null && dominantQuantity > 0) {
+    const pointValue = pointValueUsd(dominantSymbol);
+    if (pointValue != null) {
+      currentPrice = dominantEntryPrice + openPnl / (dominantQuantity * pointValue * dominantDirection);
+    }
+  }
+
+  let pendingOrder: NativeLiveActivityBrokerPendingOrder | null = null;
+  if (open.length === 0 && rawOrderVersions.complete) {
+    const candidate = leaderWorkingOrders.flatMap(order => {
+      const orderId = finite(order.id);
+      const contractId = finite(order.contractId);
+      const action = (order.action ?? '').toLowerCase();
+      if (orderId == null || contractId == null || (action !== 'buy' && action !== 'sell')) return [];
+      const version = latestVersionByOrderId.get(orderId);
+      const kind = (version?.orderType ?? '').toLowerCase();
+      const price = kind === 'limit' ? finite(version?.price)
+        : (kind === 'stop' || kind === 'stoplimit') ? finite(version?.stopPrice) : null;
+      const quantity = finite(version?.orderQty);
+      const symbol = symbols.get(contractId);
+      return price == null || quantity == null || quantity <= 0 || !symbol ? [] : [{
+        orderId,
+        pending: { symbol, side: action === 'buy' ? 'Buy' as const : 'Sell' as const, quantity, price },
+      }];
+    }).sort((a, b) => a.orderId - b.orderId)[0];
+    pendingOrder = candidate?.pending ?? null;
+  }
+
   return {
     accounts,
     positions: open.map(position => ({
@@ -229,13 +363,13 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       symbol: symbols.get(position.contractId) ?? null,
       side: position.netPosition > 0 ? 'Long' : 'Short',
       quantity: Math.abs(position.netPosition),
+      entryPrice: position.entryPrice,
+      currentPrice: position.contractId === dominantContractId ? currentPrice : null,
+      stopPrice: position.contractId === dominantContractId ? stopPrice : null,
+      targetPrice: position.contractId === dominantContractId ? targetPrice : null,
     })),
-    workingOrderCount: rawOrders.filter(order => {
-      const accountId = finite(order.accountId);
-      return accountId != null
-        && allowedAccounts.has(accountId)
-        && !terminalOrderStatuses.has((order.ordStatus ?? '').toLowerCase());
-    }).length,
+    pendingOrder,
+    workingOrderCount: workingOrders.length,
     realizedPnl,
     openPnl,
     totalPnl: realizedPnl + openPnl,

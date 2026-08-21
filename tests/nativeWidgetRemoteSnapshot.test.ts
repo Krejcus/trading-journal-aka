@@ -22,7 +22,7 @@ const broker: NativeLiveActivityBrokerSnapshot = {
     { accountId: 10, accountName: 'A10', balance: 50_040, realizedPnl: 40, openPnl: 0, totalPnl: 40, canTrade: true, changesLocked: false },
     { accountId: 11, accountName: 'A11', balance: 50_020, realizedPnl: 20, openPnl: 0, totalPnl: 20, canTrade: false, changesLocked: false },
   ],
-  positions: [], workingOrderCount: 0, realizedPnl: 60, openPnl: 0,
+  positions: [], pendingOrder: null, workingOrderCount: 0, realizedPnl: 60, openPnl: 0,
   totalPnl: 60, completeOpenPnl: true, capturedAt: Date.parse('2026-08-20T10:00:00Z'),
 };
 

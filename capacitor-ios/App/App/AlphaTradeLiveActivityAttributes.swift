@@ -13,6 +13,18 @@ struct AlphaTradeLiveActivityAttributes: ActivityAttributes {
         let isPositive: Bool
         let progress: Double
         let updatedAt: Double
+        var mode: String? = nil
+        var symbol: String? = nil
+        var side: String? = nil
+        var quantity: Double? = nil
+        var entryPrice: Double? = nil
+        var currentPrice: Double? = nil
+        var stopPrice: Double? = nil
+        var targetPrice: Double? = nil
+        var slTpProgress: Double? = nil
+        var armExpiresAt: Double? = nil
+        var followersTotal: Int? = nil
+        var followersOk: Int? = nil
     }
 
     let sessionID: String
