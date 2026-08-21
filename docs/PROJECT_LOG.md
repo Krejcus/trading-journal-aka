@@ -128,6 +128,21 @@ bez falešné notifikace. Běžný Home widget od 18:16 do 18:38 nový timeline
 request neudělal; přesný closed-app interval proto zůstává fyzicky neověřený a
 nesmí se zaměňovat s okamžitou APNs/Live Activity cestou řízenou serverem.
 
+### 2026-08-21 poledne (Claude, cross-model delegace: Codex jako nástroj Claude Code)
+Nastaveno spojení předplatných (Claude + ChatGPT Max 20x) bez API billingu:
+Codex CLI (`~/.local/bin/codex`, auth_mode chatgpt) + `codex mcp-server`
+registrován v Claude Code (user scope). Politika: „svaly GPT, hlava
+Claude" — objemná implementace/testy/mechanické refactory a REVIEW
+Claudových diffů → Codex (vždy `--sandbox read-only` pro review); copier
+core píše Claude a GPT recenzuje; architektura/integrace/gate → Claude.
+Zvažovaný OpenRig (persistentní tmux tým) zamítnut: malá adopce, seaty
+pálí limity, tohle řeší totéž levněji. První ostrý test delegace našel
+reálný bug: long-poll v enqueue endpointu při selhání čtení vracel 502
+po durable zápisu → klientský retry s novým idempotencyKey = duplicitní
+příkaz; opraveno degradací na 202 (18acb729). Pozn. pro Codex: když
+pracuješ v repu přímo, pravidlo „jeden asistent naráz" platí dál — tahle
+delegace běží POD Claude session, ne vedle ní.
+
 ### 2026-08-21 dopoledne II (Claude, ARM z 5–6 s na <1 s / ~2 s — čtyři nálezy)
 Uživatel: „ARM trvá 5–6 s." Postupná diagnóza měřením, čtyři skutečné
 příčiny (žádná nebyla „pomalá reconciliation" sama o sobě):
