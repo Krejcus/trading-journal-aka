@@ -227,10 +227,19 @@ export async function executeTradovateCopierRelayCommand(
   command: LocalCopierAgentCommand,
 ): Promise<LocalCopierAgentCommandResult> {
   const idempotencyKey = crypto.randomUUID();
-  const queued = await authenticatedRequest<{ id: string; expiresAt: string }>('/api/tradovate/oauth/copier-relay', {
+  const queued = await authenticatedRequest<{
+    id: string;
+    expiresAt: string;
+    /** Server long-poll: hotový výsledek už v enqueue odpovědi — bez dalších kol. */
+    resolution?: { status: string; result?: LocalCopierAgentCommandResult; error?: string };
+  }>('/api/tradovate/oauth/copier-relay', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ connectionId, command, idempotencyKey }),
   });
+  if (queued.resolution) {
+    if (queued.resolution.status === 'succeeded' && queued.resolution.result) return queued.resolution.result;
+    throw new Error(queued.resolution.error || `Copier příkaz skončil stavem ${queued.resolution.status}`);
+  }
   const deadline = Math.min(Date.parse(queued.expiresAt) + 5_000, Date.now() + 35_000);
   while (Date.now() < deadline) {
     const result = await authenticatedRequest<{ status: string; result?: LocalCopierAgentCommandResult; error?: string }>(

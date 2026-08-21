@@ -99,3 +99,47 @@ describe('realtime kick', () => {
     expect(unsubscribed).toBe(1);
   });
 });
+
+describe('kick race', () => {
+  it('kick doručený během poll requestu se neztratí — další poll jde hned', async () => {
+    const polls: number[] = [];
+    let kick: (() => void) | null = null;
+    const started = Date.now();
+    const fetchImpl = (async (_url: unknown, init: unknown) => {
+      const body = JSON.parse((init as { body: string }).body) as { action: string };
+      if (body.action === 'poll') {
+        polls.push(Date.now() - started);
+        // Kick přijde BĚHEM zpracování pollu (před začátkem spánku) —
+        // přesně race, který dřív budíček zahodil.
+        if (polls.length === 2) kick?.();
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          command: null,
+          realtime: { url: 'https://example.supabase.co', anonKey: 'anon', topic: 'copier-kick-d1' },
+        }),
+      };
+    }) as unknown as typeof fetch;
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://example.test',
+      authorizationHeader: async () => 'Device x',
+      agent: { status: () => ({}) as never, execute: async () => ({}) as never, origin: '', close: async () => undefined },
+      fetchImpl,
+      pollMs: 60_000,
+      createKickSubscription: (_config, onKick) => {
+        kick = onKick;
+        return () => undefined;
+      },
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    // Subscription vznikla po 1. pollu; normální kick probudí 2. poll…
+    kick!();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    // …a kick vypálený BĚHEM 2. pollu nesmí zapadnout: 3. poll jde hned.
+    expect(polls.length).toBeGreaterThanOrEqual(3);
+    expect(polls[2]! - polls[1]!).toBeLessThan(1_000);
+    await relay.close();
+  });
+});

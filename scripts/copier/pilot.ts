@@ -341,7 +341,10 @@ async function runLocalAgent(
             auth: { persistSession: false, autoRefreshToken: false },
           });
           const channel = client.channel(config.topic);
-          channel.on('broadcast', { event: 'kick' }, () => onKick()).subscribe(subscriptionState => {
+          channel.on('broadcast', { event: 'kick' }, () => {
+            console.log(`${new Date().toISOString()} RELAY KICK přijat`);
+            onKick();
+          }).subscribe(subscriptionState => {
             if (subscriptionState === 'SUBSCRIBED') {
               console.log(`${new Date().toISOString()} RELAY KICK aktivní (${config.topic})`);
             }

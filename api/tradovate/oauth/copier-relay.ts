@@ -106,7 +106,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch {
         // Poll fallback příkaz doručí i bez kicku.
       }
-      return res.status(202).json(queued);
+      // Long-poll: worker s kickem vyřídí příkaz typicky do ~1,5 s — když
+      // výsledek stihneme, UI ušetří celé polling kolečko (další RTT).
+      let resolution: Awaited<ReturnType<typeof readTradovateCopierCommand>> | null = null;
+      const longPollDeadline = Date.now() + 2_200;
+      while (Date.now() < longPollDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const current = await readTradovateCopierCommand({ db, userId, commandId: queued.id });
+        if (current.status === 'succeeded' || current.status === 'rejected' || current.status === 'expired') {
+          resolution = current;
+          break;
+        }
+      }
+      return res.status(202).json({ ...queued, ...(resolution ? { resolution } : {}) });
     }
     return res.status(405).json({ error: 'method-not-allowed' });
   } catch (error) {

@@ -204,14 +204,21 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
     };
   }, [agentClient, agentTransport, executionGroup, relayConnectionId]);
 
+  // Přímý loopback agent zkoušíme i z produkčního HTTPS webu: na Macu
+  // s běžícím workerem to sráží ARM/Flatten z relay sekund na stovky ms
+  // (agent má produkční origin v CORS allowlistu + private-network header).
+  // Na telefonu / bez workeru první pokus selže a napořád se přejde na
+  // relay; na localhostu se zkouší vždy (dev worker může startovat později).
+  const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
   useEffect(() => {
     let stopped = false;
     let timer: number | undefined;
     const poll = async () => {
-      if (canUseDirectLocalCopierAgent(window.location)) {
+      if (canUseDirectLocalCopierAgent(window.location) || directAgentProbe.current !== 'unavailable') {
         try {
           const next = await agentClient.status();
           if (!stopped) {
+            directAgentProbe.current = 'available';
             setAgentStatus(next);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
@@ -220,6 +227,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
           return;
         } catch {
           // Lokální dev může pokračovat přes relay, pokud přímý agent neběží.
+          // Mimo localhost: první neúspěch = zařízení bez workeru (telefon),
+          // dál nezkoušíme; ztráta dříve fungujícího agenta (restart workeru)
+          // dostane ještě šanci v příštím cyklu.
+          directAgentProbe.current = directAgentProbe.current === 'available' ? 'unknown' : 'unavailable';
         }
       }
       try {

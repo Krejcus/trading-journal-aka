@@ -33,15 +33,23 @@ export function startMacCopierCommandRelay(options: {
   let stopped = false;
   let running: Promise<void> | null = null;
   let wake: (() => void) | null = null;
+  /** Kick přišel mimo spánek (během poll requestu) — nesmí se ztratit. */
+  let kickPending = false;
   let unsubscribeKick: (() => void) | null = null;
   let kickTopic: string | null = null;
 
   const sleep = (ms: number) => new Promise<void>(resolve => {
+    if (kickPending) {
+      kickPending = false;
+      resolve();
+      return;
+    }
     const timer = setTimeout(() => {
       wake = null;
       resolve();
     }, ms);
     wake = () => {
+      kickPending = false;
       clearTimeout(timer);
       wake = null;
       resolve();
@@ -56,7 +64,10 @@ export function startMacCopierCommandRelay(options: {
     kickTopic = config.topic;
     unsubscribeKick = options.createKickSubscription(
       { url: config.url, anonKey: config.anonKey, topic: config.topic },
-      () => { wake?.(); },
+      () => {
+        kickPending = true;
+        wake?.();
+      },
     );
   };
 
