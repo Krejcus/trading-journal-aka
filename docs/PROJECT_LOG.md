@@ -78,6 +78,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-21 odpoledne III (Claude, trade notifikace okamžitě)
+Trade eventy chodily přes minutový cron (~30–60 s). Nová okamžitá cesta:
+controller `onCopyEvent` → pilot → `relay.nudgeCopyEvents()` (probudí
+poll s příznakem `copyEvents`) → server v poll handleru zavolá
+`sendImmediateCopyEventPushes` (APNs na native_push_subscriptions).
+Dedup přes SDÍLENÝ marker `state:copy-events` — kdo doběhne první (nudge
+vs cron), posune hranici; nikdy dvakrát. Latence ~1–2 s. Web/PWA push
+záměrně zůstává na cronu. Nasazeno server i worker.
+
 ### 2026-08-21 odpoledne II (Claude, order lifecycle notifikace)
 Trade notifikace rozšířeny z pozičních přechodů na celý lifecycle:
 `order-placed` (čekající limit/stop s cenou; u OSO včetně SL/TP),
