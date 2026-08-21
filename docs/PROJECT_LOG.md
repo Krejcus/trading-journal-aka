@@ -127,11 +127,13 @@ Long/Short Position, Fib a hover rozšířeními. Neporušená kopie je v
 `~/Downloads/alphatrade-mentor-15/oauth-data-probe/node_modules/@getcandlekit/charts`;
 obnova znamená nejdřív odložit současný
 `node_modules/@getcandlekit/charts` a tuto složku zkopírovat na jeho místo.
-Samotné `npm install` nestačí a současný
-`patches/@getcandlekit+charts+0.1.0.patch` se na registry tarball čistě
-neaplikuje; dlouhodobě je nutné patch z tohoto správného buildu regenerovat
-nebo balíček zavendorovat. V tomto checkoutu byl správný build obnoven (původní
-registry kopie je dočasně v
+Pouhé opakování `patch-package` nad už nekonzistentním lokálním `node_modules`
+selže; reprodukovatelná obnova je čisté `npm ci` (nebo odložení celé složky
+`node_modules/@getcandlekit/charts` a nový `npm install`), aby `postinstall`
+aplikoval `patches/@getcandlekit+charts+0.1.0.patch` na čerstvý registry
+tarball. Tento postup následně potvrdil i čistý Vercel build, kde se CandleKit
+i Lightweight Charts patch aplikovaly úspěšně. V tomto checkoutu byl správný
+build obnoven také z neporušené kopie (původní registry kopie je dočasně v
 `/private/tmp/alphatrade-candlekit-published.5s25yj/charts`). Před obnovou
 selhávalo přesně 36 chart/CandleKit testů a typecheck; po obnově a opravě typu
 Live Activity mocku prošlo `164/164` test files, `1309/1309` testů a celý
