@@ -29,6 +29,7 @@ import {
 } from '../../server/nativeFinancialAlertPlanner.js';
 import { updateNativeWidgetPushes } from '../../server/nativeWidgetPushUpdater.js';
 import { readTradovateServerConfig } from '../../server/tradovateOAuthStore.js';
+import { collectConnectedAccountSnapshots } from '../../server/copierAccountSnapshotStore.js';
 
 // Init Supabase with Service Role Key to bypass RLS in Cron job
 // VITE_ prefix vars are only available at build time, not in serverless runtime
@@ -615,6 +616,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         let liveActivityResult = { registered: 0, sent: 0, ended: 0, skipped: 0, failed: 0 };
         let liveActivityStartResult = { registered: 0, sent: 0, skipped: 0, failed: 0, expired: 0 };
         let widgetPushResult = { registered: 0, sent: 0, skipped: 0, failed: 0, expired: 0 };
+        let accountSnapshotResult = { connections: 0, inserted: 0, failed: 0 };
         try {
             const [runtimesResult, alertStatesResult, closedTradesResult] = await Promise.all([
                 supabase
@@ -634,9 +636,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (closedTradesResult.error) throw new Error(closedTradesResult.error.message);
             const runtimes = (runtimesResult.data ?? []) as NativeLiveActivityRuntimeRow[];
             const alertStates = (alertStatesResult.data ?? []) as CopierAlertStateRow[];
+            const tradovateConfig = readTradovateServerConfig();
             const brokerSnapshot = createNativeBrokerSnapshotLoader({
                 db: supabase,
-                config: readTradovateServerConfig(),
+                config: tradovateConfig,
+                now: now.getTime(),
+            });
+
+            accountSnapshotResult = await collectConnectedAccountSnapshots({
+                db: supabase,
+                environment: tradovateConfig.environment,
+                runtimes,
+                brokerSnapshot,
                 now: now.getTime(),
             });
 
@@ -823,7 +834,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             liveActivityResult = await updateNativeLiveActivities({
                 db: supabase,
                 runtimes,
-                config: readTradovateServerConfig(),
+                config: tradovateConfig,
                 now: now.getTime(),
                 brokerSnapshot,
             });
@@ -847,7 +858,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             console.error('[Cron] Copier watchdog failed:', copierWatchdogError);
         }
 
-        console.log(`[Cron] Done: ${sentCount} web sent, ${nativeSentCount} APNs sent, ${duplicateCount} deduped, ${pushJobs.length + nativePushJobs.length} total jobs, ${profiles.length} profiles, ${(subsResult.data?.length || 0) + (nativeSubsResult.data?.length || 0)} devices, ${copierAlertsSent} copier alerts, ${liveActivityStartResult.sent} live activity starts, ${liveActivityResult.sent} live activity updates, ${widgetPushResult.sent} widget pushes`);
+        console.log(`[Cron] Done: ${sentCount} web sent, ${nativeSentCount} APNs sent, ${duplicateCount} deduped, ${pushJobs.length + nativePushJobs.length} total jobs, ${profiles.length} profiles, ${(subsResult.data?.length || 0) + (nativeSubsResult.data?.length || 0)} devices, ${copierAlertsSent} copier alerts, ${liveActivityStartResult.sent} live activity starts, ${liveActivityResult.sent} live activity updates, ${widgetPushResult.sent} widget pushes, ${accountSnapshotResult.inserted} account snapshots`);
         return res.status(200).json({
             success: true,
             sent: sentCount,
@@ -861,6 +872,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             liveActivities: liveActivityResult,
             liveActivityStarts: liveActivityStartResult,
             widgetPushes: widgetPushResult,
+            accountSnapshots: accountSnapshotResult,
         });
 
     } catch (err: any) {

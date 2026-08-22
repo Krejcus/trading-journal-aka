@@ -78,6 +78,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, F3a snapshoty účtů + payout datová vrstva)
+Připravená datová vrstva budoucího Kokpitu bez UI a bez worker změn. Minutový
+`send-alerts` nejvýše jednou za 15 minut projde všechna connected OAuth spojení,
+načte všechny jejich účty přes stejný per-connection broker snapshot cache jako
+Live Activity/WidgetKit a batchově uloží dostupný balance, realized P&L dne a
+open P&L. Používá stejné Tradovate endpointy jako dosavadní snapshot; žádný nový
+endpoint ani druhé načtení v témže ticku nepřibylo. DB throttle je autoritativní
+po cold startu, teplá instance má navíc per-account cache. Query, broker i insert
+chyby končí pouze varováním a nemohou shodit alerty ani nativní větve; neúplný
+broker balance se neukládá jako falešná nula.
+
+Nové upravitelné šablony pokrývají Tradeify Growth/Lightning a LucidFlex/Pro,
+klientská služba ukládá přes RLS a bez řádku vrací kopii šablony. Čisté metriky
+počítají Chicago EOD ledger, profit dny, consistency, payout eligibility/cap,
+static/EOD/intraday trailing floor a historicky správný breach. Monotónní jádro
+trailingu je sdílené s existujícím `propDrawdown`, ne duplikované.
+
+Migrace `20260822083921_account_snapshots_and_firm_payout_rules.sql` přidává obě
+tabulky, FK/indexy, least-privilege granty a RLS s `(select auth.uid())`; ZÁMĚRNĚ
+NEBYLA APLIKOVANÁ a před produkcí vyžaduje export/zálohu, explicitní souhlas a
+security/performance advisory. Ověření: `npx tsc --noEmit` čistý, cíleně 25/25 a
+celkem 174 souborů / 1369 testů. Sandboxový full run selhal jen na zákazu
+`listen 127.0.0.1`; mimo sandbox vše prošlo. Nic nebylo commitnuto, pushnuto,
+deploynuto, migrováno ani reinstalováno.
+
 ### 2026-08-22 (Claude, nasazení bloku F0+F1+F1b/c)
 Celý blok „kopírka plní deník" je NASAZENÝ: web (commity 4d4f77e5→05db3dbd
 na main), migrace aplikované přes Management API (mapped_account_id,

@@ -46,6 +46,7 @@ export interface NativeLiveActivityPlan {
 
 export type NativeBrokerSnapshotLoader = (
   runtime: NativeLiveActivityRuntimeRow,
+  options?: { allAccounts?: boolean },
 ) => Promise<NativeLiveActivityBrokerSnapshot | null>;
 
 const finite = (value: unknown): number =>
@@ -269,13 +270,14 @@ export function createNativeBrokerSnapshotLoader(options: {
   fetchImpl?: typeof fetch;
 }): NativeBrokerSnapshotLoader {
   const brokerByConnection = new Map<string, Promise<NativeLiveActivityBrokerSnapshot | null>>();
-  return runtime => {
+  return (runtime, loadOptions) => {
     const key = `${runtime.user_id}:${runtime.connection_id}`;
     let pending = brokerByConnection.get(key);
     if (!pending) {
       pending = (async () => {
-        const accountIds = liveActivityAccountIds(runtime);
-        if (accountIds.length === 0) return null;
+        const runtimeAccountIds = liveActivityAccountIds(runtime);
+        const accountIds = loadOptions?.allAccounts ? null : runtimeAccountIds;
+        if (accountIds?.length === 0) return null;
         const { accessToken } = await getValidTradovateAccessToken({
           db: options.db,
           config: options.config,
@@ -288,6 +290,7 @@ export function createNativeBrokerSnapshotLoader(options: {
           baseUrl: tradovateApiBaseUrl(options.config.environment),
           accessToken,
           accountIds,
+          leaderAccountId: runtimeAccountIds[0] ?? null,
           fetchImpl: options.fetchImpl,
           now: options.now,
         });

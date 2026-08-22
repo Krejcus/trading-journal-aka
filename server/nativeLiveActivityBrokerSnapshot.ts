@@ -63,6 +63,9 @@ export interface NativeLiveActivityBrokerAccount {
   totalPnl: number;
   canTrade: boolean;
   changesLocked: boolean;
+  /** False zabrání persistenci syntetické nuly při neúplné broker odpovědi. */
+  balanceAvailable?: boolean;
+  openPnlAvailable?: boolean;
 }
 
 export interface NativeLiveActivityBrokerPosition {
@@ -137,12 +140,13 @@ async function requestJson<T>(options: {
 export async function loadNativeLiveActivityBrokerSnapshot(options: {
   baseUrl: string;
   accessToken: string;
-  accountIds: readonly number[];
+  /** Null načte všechny účty vrácené stejnými broker listy. */
+  accountIds: readonly number[] | null;
+  leaderAccountId?: number | null;
   fetchImpl?: typeof fetch;
   now?: number;
 }): Promise<NativeLiveActivityBrokerSnapshot> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const allowedAccounts = new Set(options.accountIds.filter(Number.isSafeInteger));
   const optionalList = async <T>(path: string): Promise<{ values: T[]; complete: boolean }> => {
     try {
       const value = await requestJson<T[]>({ ...options, path, fetchImpl });
@@ -163,6 +167,14 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     throw new Error('tradovate-live-activity-invalid-list');
   }
 
+  const discoveredAccountIds = [
+    ...rawBalances.map(balance => finite(balance.accountId)),
+    ...rawAccounts.values.map(account => finite(account.id)),
+    ...rawPositions.map(position => finite(position.accountId)),
+    ...rawOrders.map(order => finite(order.accountId)),
+  ].flatMap(accountId => accountId == null ? [] : [accountId]);
+  const allowedAccounts = new Set((options.accountIds ?? discoveredAccountIds).filter(Number.isSafeInteger));
+
   const open = rawPositions.flatMap(position => {
     const accountId = finite(position.accountId);
     const contractId = finite(position.contractId);
@@ -171,7 +183,9 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       || !allowedAccounts.has(accountId)) return [];
     return [{ accountId, contractId, netPosition, entryPrice: finite(position.netPrice) }];
   });
-  const leaderAccountId = options.accountIds.find(Number.isSafeInteger) ?? null;
+  const leaderAccountId = options.leaderAccountId
+    ?? options.accountIds?.find(Number.isSafeInteger)
+    ?? null;
   const workingOrders = rawOrders.filter(order => {
     const accountId = finite(order.accountId);
     return accountId != null && allowedAccounts.has(accountId) && working(order);
@@ -257,6 +271,8 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       totalPnl: realized + (openResult?.value ?? 0),
       canTrade: account?.canTrade !== false,
       changesLocked: autoLiqByAccount.get(accountId)?.changesLocked === true,
+      balanceAvailable: openResult?.balance != null || finite(balance?.amount) != null,
+      openPnlAvailable: openResult == null || openResult.value != null,
     };
   });
 

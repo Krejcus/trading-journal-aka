@@ -38,6 +38,18 @@ const sizeKey = (balance: number): 25000 | 50000 | 100000 | 150000 | null => {
   }, null);
 };
 
+/** Sdílené jádro trailing flooru: floor se smí posunout jen nahoru. */
+export function trailingFloorFromHighWatermark(
+  currentFloor: number,
+  highWatermark: number,
+  maxLoss: number,
+): number {
+  if (![currentFloor, highWatermark, maxLoss].every(Number.isFinite) || maxLoss < 0) {
+    throw new Error('Neplatný vstup pro trailing drawdown floor');
+  }
+  return Math.max(currentFloor, highWatermark - maxLoss);
+}
+
 /** Firemní fallback. Neznámé programy záměrně nehádej — nastaví se ručně v účtu. */
 export function inferDrawdownConfig(account: Account): AccountDrawdownConfig | null {
   if (account.drawdownConfig?.enabled === false || account.type === 'Backtest') return null;
@@ -144,8 +156,7 @@ export function calculateAccountDrawdown(
     balance += values.tradePnl + values.incidentPnl + values.payouts;
 
     if (config.manualCurrentFloor == null && config.mode === 'eod_trailing' && !locked) {
-      const candidate = balance - config.amount;
-      let nextFloor = Math.max(floor, candidate);
+      let nextFloor = trailingFloorFromHighWatermark(floor, balance, config.amount);
       let nextLocked = locked;
       if (config.lockTriggerBalance != null && balance >= config.lockTriggerBalance) {
         nextLocked = true;
