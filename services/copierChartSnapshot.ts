@@ -249,22 +249,46 @@ export async function captureTradingViewAlertSnapshot(
     const resolved = { targetId: target.id, chartId: chartIdFromUrl(target.url) };
     await options.onDedicatedResolved?.(resolved);
     const waitAfterNavigation = Math.min(1_500, Math.max(0, remaining() - 500));
+    // Ořez na plochu grafu: bounds se měří až po navigaci a příkazy jdou
+    // sekvenčně, takže clip parametry doplníme dynamicky mezi kroky. Bez
+    // nalezených bounds se vyfotí celá stránka (fallback beze změny chování).
+    const captureCommand: { id: number; method: string; params?: Record<string, unknown> } = {
+      id: 3, method: 'Page.captureScreenshot', params: { format: 'png', fromSurface: false },
+    };
+    const boundsExpression = `(() => {
+      const el = document.querySelector('.layout__area--center') || document.querySelector('.chart-container');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return r.width > 200 && r.height > 150 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+    })()`;
     const results = await cdpRequest({
       target,
       timeoutMs: remaining(),
       webSocketFactory,
       commands: [
         { id: 1, method: 'Runtime.evaluate', params: { expression: evaluateExpression(options.symbol, options.timeframe || '1'), returnByValue: true } },
-        { id: 2, method: 'Page.captureScreenshot', params: { format: 'png', fromSurface: false } },
+        { id: 2, method: 'Runtime.evaluate', params: { expression: boundsExpression, returnByValue: true } },
+        captureCommand,
       ],
       onCommandResult: async (id, result) => {
-        if (id !== 1) return;
-        const evaluation = result.result as { value?: unknown } | undefined;
-        if (evaluation?.value !== true) throw new Error('snapshot-tv-render-navigation-failed');
-        await sleepImpl(waitAfterNavigation);
+        if (id === 1) {
+          const evaluation = result.result as { value?: unknown } | undefined;
+          if (evaluation?.value !== true) throw new Error('snapshot-tv-render-navigation-failed');
+          await sleepImpl(waitAfterNavigation);
+          return;
+        }
+        if (id !== 2) return;
+        const bounds = (result.result as { value?: unknown } | undefined)?.value as
+          { x: number; y: number; width: number; height: number } | null | undefined;
+        if (bounds && [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
+          captureCommand.params = {
+            format: 'png', fromSurface: false,
+            clip: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: 2 },
+          };
+        }
       },
     });
-    const encoded = results.get(2)?.data;
+    const encoded = results.get(3)?.data;
     if (typeof encoded !== 'string') throw new Error('snapshot-cdp-invalid-response');
     const png = Buffer.from(encoded, 'base64');
     if (png.length === 0) throw new Error('snapshot-cdp-invalid-response');

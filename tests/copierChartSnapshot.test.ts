@@ -96,9 +96,18 @@ describe('TV alert dedicated chart navigation', () => {
     expect(navigation.params.expression).toContain('setRightOffset(40)');
     expect(navigation.params.expression).toContain('setBarSpacing(3)');
     socket.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: true } } }) });
+    // Krok 2: měření bounds plochy grafu — vrátíme obdélník, capture pak
+    // musí jít s clipem (scale 2) přesně na něj.
     await vi.waitUntil(() => socket.sent.length === 2, { timeout: 1_000 });
-    expect(JSON.parse(socket.sent[1])).toMatchObject({ method: 'Page.captureScreenshot' });
-    socket.emit('message', { data: JSON.stringify({ id: 2, result: { data: Buffer.from('dedicated').toString('base64') } }) });
+    expect(JSON.parse(socket.sent[1])).toMatchObject({ method: 'Runtime.evaluate' });
+    expect(JSON.parse(socket.sent[1]).params.expression).toContain('layout__area--center');
+    socket.emit('message', { data: JSON.stringify({ id: 2, result: { result: { value: { x: 10, y: 20, width: 800, height: 600 } } } }) });
+    await vi.waitUntil(() => socket.sent.length === 3, { timeout: 1_000 });
+    expect(JSON.parse(socket.sent[2])).toMatchObject({
+      method: 'Page.captureScreenshot',
+      params: { clip: { x: 10, y: 20, width: 800, height: 600, scale: 2 } },
+    });
+    socket.emit('message', { data: JSON.stringify({ id: 3, result: { data: Buffer.from('dedicated').toString('base64') } }) });
     await expect(promise).resolves.toEqual(Buffer.from('dedicated'));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
