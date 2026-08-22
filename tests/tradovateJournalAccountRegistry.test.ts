@@ -102,3 +102,54 @@ describe('Tradovate journal account registry', () => {
     expect(result.profiles[0].mappedAccountId).toBe(existing.id);
   });
 });
+
+describe('klasifikace a hojení OAuth účtů', () => {
+  it('evaluace se založí jako Challenge s firmOverride z propFirm', () => {
+    const plan = planTradovateJournalAccountLinks({
+      accounts: [],
+      profiles: [profile({ accountType: 'evaluation' })],
+      connectionData,
+      createId: () => 'acc-1',
+    });
+    expect(plan.accounts[0]).toMatchObject({
+      type: 'Funded', phase: 'Challenge', firmOverride: 'Tradeify',
+    });
+  });
+
+  it('zhojí dřív založený účet: doplní firmOverride a opraví výchozí Funded/Funded na Challenge', () => {
+    const existing = {
+      id: 'acc-1', name: 'Tradeify hlavní', type: 'Funded' as const, phase: 'Funded' as const,
+      status: 'Active' as const, initialBalance: 50_000, currency: 'USD', createdAt: 1,
+      oauth: {
+        provider: 'tradovate' as const, environment: 'demo' as const, externalAccountId: '62364058',
+        connectionId: 'connection-1', firm: 'Tradeify',
+      },
+    };
+    const plan = planTradovateJournalAccountLinks({
+      accounts: [existing],
+      profiles: [profile({ accountType: 'evaluation', mappedAccountId: 'acc-1' })],
+      connectionData,
+    });
+    expect(plan.changed).toBe(true);
+    expect(plan.accounts[0]).toMatchObject({ firmOverride: 'Tradeify', phase: 'Challenge' });
+  });
+
+  it('nehojí ručně přenastavenou fázi ani vyplněný firmOverride', () => {
+    const existing = {
+      id: 'acc-1', name: 'Moje jméno', type: 'Funded' as const, phase: 'Challenge' as const,
+      status: 'Active' as const, initialBalance: 50_000, currency: 'USD', createdAt: 1,
+      firmOverride: 'MOJE FIRMA',
+      oauth: {
+        provider: 'tradovate' as const, environment: 'demo' as const, externalAccountId: '62364058',
+        connectionId: 'connection-1', firm: 'Tradeify',
+      },
+    };
+    const plan = planTradovateJournalAccountLinks({
+      accounts: [existing],
+      profiles: [profile({ accountType: 'live', mappedAccountId: 'acc-1' })],
+      connectionData,
+    });
+    expect(plan.changed).toBe(false);
+    expect(plan.accounts[0]).toMatchObject({ firmOverride: 'MOJE FIRMA', phase: 'Challenge', type: 'Funded' });
+  });
+});

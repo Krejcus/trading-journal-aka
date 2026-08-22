@@ -45,8 +45,45 @@ export const planTradovateJournalAccountLinks = ({
     account,
   ] as const] : []));
 
+  // Typ/fáze v journalu podle typu účtu z profilu (evaluace ≠ funded).
+  const classification = (accountType: TradovateAccountProfile['accountType']): Pick<Account, 'type' | 'phase'> => {
+    if (accountType === 'evaluation') return { type: 'Funded', phase: 'Challenge' };
+    if (accountType === 'live') return { type: 'Live' };
+    return { type: 'Funded', phase: 'Funded' };
+  };
+
+  // Hojení už namapovaných účtů: firmOverride (řídí seskupení v kartě Účty)
+  // doplň, jen když chybí; typ/fázi oprav pouze z auto-výchozího stavu
+  // 'Funded'/'Funded' — ručně přenastavené hodnoty se nikdy nepřepisují.
+  const healMapped = (profile: TradovateAccountProfile) => {
+    const index = nextAccounts.findIndex(account => account.id === profile.mappedAccountId && account.oauth);
+    if (index < 0) return;
+    const account = nextAccounts[index];
+    const healed = { ...account };
+    let touched = false;
+    if (!String(healed.firmOverride ?? '').trim() && profile.propFirm) {
+      healed.firmOverride = profile.propFirm;
+      touched = true;
+    }
+    const desired = classification(profile.accountType);
+    if (profile.accountType && profile.accountType !== 'funded'
+      && healed.type === 'Funded' && healed.phase === 'Funded'
+      && (healed.type !== desired.type || healed.phase !== desired.phase)) {
+      healed.type = desired.type;
+      healed.phase = desired.phase;
+      touched = true;
+    }
+    if (touched) {
+      nextAccounts[index] = healed;
+      changed = true;
+    }
+  };
+
   const nextProfiles = profiles.map(profile => {
-    if (profile.mappedAccountId) return profile;
+    if (profile.mappedAccountId) {
+      healMapped(profile);
+      return profile;
+    }
     const identity = oauthIdentity(profile.provider, profile.environment, profile.externalAccountId);
     const broker = brokerAccounts.get(identity);
     if (!broker) return profile;
@@ -56,12 +93,12 @@ export const planTradovateJournalAccountLinks = ({
       journalAccount = {
         id: createId(),
         name: profile.displayName || broker.account.name,
-        type: 'Funded',
-        phase: 'Funded',
+        ...classification(profile.accountType),
         status: 'Active',
         initialBalance: profile.accountSize ?? broker.account.balance.totalCashValue ?? 0,
         currency: 'USD',
         createdAt: now,
+        ...(profile.propFirm ? { firmOverride: profile.propFirm } : {}),
         oauth: {
           provider: profile.provider,
           environment: profile.environment,
