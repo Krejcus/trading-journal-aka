@@ -104,6 +104,15 @@ describe('tradovate LIVE view model', () => {
     expect(accountRiskCushion(value, profile)).toBe(-825);
   });
 
+  it('auto-liq 0 je sentinel „nenastaveno" — floor se rekonstruuje z high-watermarku', () => {
+    const value = account();
+    value.balance.autoLiqLevel = 0;
+    value.risk.trailingMaxDrawdown = 2_000;
+    value.risk.maxNetLiq = 51_000;
+    const profile = { accountSize: 50_000, maxLoss: 2_000, drawdownType: 'eod_trailing' } as never;
+    expect(accountRiskFloor(value, profile)).toBe(49_000);
+  });
+
   it('moves an EOD trailing floor only when a historical ending balance made a new high', () => {
     const value = account();
     value.daily = [

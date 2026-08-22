@@ -148,7 +148,10 @@ export const accountRiskFloor = (
   if (profile?.drawdownType === 'none') return null;
   // Brokerův auto-liq level je skutečný aktuální floor a má přednost před
   // rekonstrukcí z high-watermarku a nominálního max loss pravidla.
-  if (account.balance.autoLiqLevel != null && Number.isFinite(account.balance.autoLiqLevel)) {
+  // Nula je sentinel „nenastaveno" (mimo seanci ho Tradovate posílá jako 0)
+  // — floor prop účtu je vždy kladná cena, jinak se propadá k rekonstrukci.
+  if (account.balance.autoLiqLevel != null && Number.isFinite(account.balance.autoLiqLevel)
+    && account.balance.autoLiqLevel > 0) {
     return account.balance.autoLiqLevel;
   }
   const maxLoss = account.risk.trailingMaxDrawdown ?? profile?.maxLoss ?? null;
