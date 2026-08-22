@@ -78,6 +78,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, F1c journal master + follower kopie)
+Copier journal sync nyní dostává všechny aktivní followery skupiny a pro
+každý leader close zakládá master i deterministické per-account kopie. Master
+má `groupId=copier-group-<trade_id>`, `isMaster=true` a žádný
+`masterTradeId`; kopie sdílí groupId a odkazují na skutečné storage UUID
+mastera. Follower quantity i P&L se škálují multiplierem, P&L kopie je
+označené `pnlEstimated=true` a kopie nemají `needsReview`. Chybějící journal
+mapping se pouze započítá do `skippedFollowers`; žádný účet se automaticky
+nezakládá.
+
+Healing pro posledních 30 dní doplňuje starým copier masterům pouze
+chybějící `groupId`/`isMaster` přes merge-safe `updateTrade` a dozaloží
+chybějící kopie; poznámky, emoce, review a excursion data mastera nemění.
+`pnlEstimated` je součástí Trade typu i obou storage read cest. Stávající
+TradeHistory čítač/filtr není třeba měnit: váže se na `needsReview`, které
+má pouze master, a group lookup pro kombinovaný pohled pracuje nad plnou sadou.
+Oveření: `npx tsc --noEmit` čistý; `npx vitest run` 169/169 souborů a
+1351/1351 testů. První sandboxový běh selhal jen na zakázaném listen
+127.0.0.1, mimo sandbox celá sada prošla. Nic nebylo commitnuto, pushnuto,
+deploynuto ani aplikováno do produkce; worker/server/migrace zůstaly beze změny.
+
 ### 2026-08-22 (Codex, F1 copier close -> nezkontrolovaný journal draft)
 Durable statistika leader fillů nyní při uzavření ukládá volitelný důvod
 `sl/tp/manual`, průměrný vstup a cenu závěrečného fillu; změna zůstala pouze v

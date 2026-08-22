@@ -255,6 +255,8 @@ export interface Trade {
   exitReason?: 'sl' | 'tp' | 'manual';
   /** Stabilní logické ID copier close události; DB `trades.id` zůstává UUID. */
   copierTradeId?: string;
+  /** Odhad P&L kopie podle leadera a multiplieru; přesnou hodnotu doplní budoucí reconciliace z broker historie. */
+  pnlEstimated?: boolean;
   /** Ruční význam setupu. Automatický přepočet jej nesmí měnit. */
   setupType?: 'reaction' | 'break' | 'unclear';
   tags?: string[];

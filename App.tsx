@@ -656,14 +656,18 @@ const App: React.FC = () => {
         userId,
         leaderAccountId,
         accounts,
+        followers: (group?.followers ?? [])
+          .filter(follower => follower.mode !== 'off')
+          .map(follower => ({ accountId: follower.accountId, multiplier: follower.multiplier })),
         accountIdOverride: options?.accountIdOverride,
       });
       copierJournalLastSyncRef.current = now;
       setPendingCopierTrades(result.pending);
-      if (result.created.length > 0) {
+      if (result.created.length > 0 || result.updated.length > 0) {
         setTrades(current => {
           const byId = new Map(current.map(trade => [String(trade.id), trade]));
           const copierIds = new Set(current.map(trade => trade.copierTradeId).filter(Boolean));
+          for (const trade of result.updated) byId.set(String(trade.id), trade);
           for (const trade of result.created) {
             if (!byId.has(String(trade.id)) && !copierIds.has(trade.copierTradeId)) byId.set(String(trade.id), trade);
           }
@@ -1085,7 +1089,8 @@ const App: React.FC = () => {
       }
       await runCopierJournalSync({
         id: 'copier-journal-pending', name: 'Copier journal', enabled: true,
-        leaderAccountId: pending.leaderAccountId, followers: [],
+        leaderAccountId: pending.leaderAccountId,
+        followers: pending.followers.map(follower => ({ ...follower, mode: 'on-fill' })),
       }, { force: true, accountIdOverride: accountId });
     } catch (reason) {
       console.error('[Copier journal] Přiřazení účtu selhalo:', reason);

@@ -144,6 +144,7 @@ export const storageService = {
         needsReview: d.needsReview === true,
         exitReason: d.exitReason || undefined,
         copierTradeId: d.copierTradeId || undefined,
+        pnlEstimated: d.pnlEstimated === true,
         setupType: d.setupType,
         screenshot: t.screenshot_url || undefined,
         screenshots: t.screenshots_urls || undefined,
@@ -445,6 +446,7 @@ export const storageService = {
         needsReview:data->>needsReview,
         exitReason:data->>exitReason,
         copierTradeId:data->>copierTradeId,
+        pnlEstimated:data->>pnlEstimated,
         setupType:data->>setupType,
         miniViewRange:data->>miniViewRange,
         miniViewLayout:data->>miniViewLayout,
@@ -546,6 +548,7 @@ export const storageService = {
       needsReview: t.needsReview === 'true' || t.needsReview === true,
       exitReason: t.exitReason || undefined,
       copierTradeId: t.copierTradeId || undefined,
+      pnlEstimated: t.pnlEstimated === 'true' || t.pnlEstimated === true,
       setupType: t.setupType,
       // Include screenshot URLs (small strings, not base64 blobs — safe to include always)
       screenshot: t.screenshot && !String(t.screenshot).startsWith('data:') ? t.screenshot : undefined,
