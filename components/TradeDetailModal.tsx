@@ -198,6 +198,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             ...prev,
                             screenshot: detailed.screenshot ?? prev.screenshot,
                             screenshots: detailed.screenshots ?? prev.screenshots,
+                            copierSnapshots: detailed.copierSnapshots ?? prev.copierSnapshots,
                             drawings: detailed.drawings ?? prev.drawings,
                             aiSuggestions: (detailed as any).aiSuggestions ?? (prev as any).aiSuggestions,
                             visionAnalysis: (detailed as any).visionAnalysis ?? (prev as any).visionAnalysis,
@@ -273,6 +274,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [accountsExpanded, setAccountsExpanded] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>('chart');
+    const [signedCopierSnapshots, setSignedCopierSnapshots] = useState<Array<{
+        kind: string; at: number; path: string; url: string;
+    }>>([]);
     const [shareCopied, setShareCopied] = useState(false);
     const [isShareCardOpen, setIsShareCardOpen] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -327,9 +331,30 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         setIsEditingNotes(false);
     };
 
-    const images = activeTrade.screenshots && activeTrade.screenshots.length > 0
+    const manualImages = activeTrade.screenshots && activeTrade.screenshots.length > 0
         ? activeTrade.screenshots
         : (activeTrade.screenshot ? [activeTrade.screenshot] : []);
+    const images = [...manualImages, ...signedCopierSnapshots.map(snapshot => snapshot.url)];
+    const activeCopierSnapshot = activeImageIndex >= manualImages.length
+        ? signedCopierSnapshots[activeImageIndex - manualImages.length]
+        : undefined;
+
+    // Modal je hranice lazy-loadu: privátní cesty se podepíší až po otevření
+    // detailu a ruční screenshoty zůstávají nedotčené.
+    useEffect(() => {
+        let cancelled = false;
+        setSignedCopierSnapshots([]);
+        const snapshots = activeTrade.copierSnapshots ?? [];
+        if (snapshots.length === 0) return () => { cancelled = true; };
+        void storageService.createCopierSnapshotSignedUrls(snapshots)
+            .then(items => { if (!cancelled) setSignedCopierSnapshots(items); })
+            .catch(error => console.warn('[SNAPSHOT] gallery load failed', error));
+        return () => { cancelled = true; };
+    }, [activeTrade.id, activeTrade.copierSnapshots]);
+
+    useEffect(() => {
+        if (activeImageIndex >= images.length) setActiveImageIndex(0);
+    }, [activeImageIndex, images.length]);
 
     const entryPrice = safeValue(activeTrade.entryPrice);
     const exitPrice = safeValue(activeTrade.exitPrice);
@@ -694,6 +719,12 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                             {!isLoadingDetails && (images.length > 0 && !imageLoadError) ? (
                                                 <motion.div key={images[activeImageIndex]} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">
                                                     <img src={images[activeImageIndex]} className="absolute inset-0 w-full h-full object-contain cursor-zoom-in" onClick={() => setIsZoomed(true)} onError={() => setImageLoadError(true)} />
+                                                    {activeCopierSnapshot && (
+                                                        <div className="absolute top-16 left-4 z-20 rounded-lg border border-white/10 bg-black/65 px-3 py-2 text-white backdrop-blur-md">
+                                                            <p className="text-[9px] font-black uppercase tracking-widest">Auto · {activeCopierSnapshot.kind}</p>
+                                                            <p className="mt-0.5 text-[9px] font-mono text-white/60">{new Date(activeCopierSnapshot.at).toLocaleTimeString('cs-CZ')}</p>
+                                                        </div>
+                                                    )}
                                                     <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                                                         <div className="p-5 bg-black/40 backdrop-blur-md rounded-full text-white border border-white/20 shadow-2xl pointer-events-auto cursor-pointer" onClick={() => setIsZoomed(true)}><Maximize2 size={28} /></div>
                                                     </div>

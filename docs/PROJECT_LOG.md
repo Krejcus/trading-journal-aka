@@ -78,6 +78,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, F1b auto-snapshoty TradingView k copier obchodům)
+Durable leader lot dostal volitelné UUID `episodeId`, které se beze změny
+order/risk logiky propisuje do close ledgeru a relevantních copy eventů.
+Mac pilot pro entry/exit a nejvýše jeden posun SL za 30 s na symbol spouští
+striktně fire-and-forget pasivní CDP `Page.captureScreenshot` s
+`fromSurface:false`; společný capture deadline je 3 s, vypínač
+`ALPHATRADE_SNAPSHOTS=off` a nedostupný TradingView/CDP se tiše přeskakuje.
+PNG nad 2 MB se zahodí, relay upload má nejvýše dva retry a všechny chyby
+končí pouze v `SNAPSHOT` logu; broker command/safety cesta se nezměnila.
+
+Device relay validuje UUID, whitelist, strict base64, PNG magic a velikost.
+Limit 12/min/device má lokální fast-path i atomickou Postgres sliding-window
+pojistku pro více Vercel instancí. Service-role ukládá privátní objekt do
+`copier-snapshots` a metadata do `copier_trade_snapshots`; Storage/DB selhání
+vrací pouze best-effort výsledek a nemůže shodit poll. Připravená migrace
+`20260822055450_copier_trade_snapshots.sql` přidává tabulky/RLS/bucket/policy,
+rate-limit RPC a nullable `tradovate_copier_trades.episode_id`; ZÁMĚRNĚ NEBYLA
+APLIKOVANÁ. Journal sync přilepí metadata episode k novému masteru a detail
+obchodu teprve při otevření vytvoří hodinové signed URL; ruční screenshoty
+zůstávají oddělené a nezměněné.
+
+Ověření: `npx tsc --noEmit` čistý; cíleně 84/84 a finálně 171/171 souborů,
+1361/1361 Vitest testů. První sandboxový full run měl pouze známý zákaz
+`listen 127.0.0.1`; mimo sandbox vše prošlo. Nic nebylo commitnuto, pushnuto,
+deploynuto, migrováno ani reinstalováno. Aktivace vyžaduje nejdřív schválenou
+Supabase migraci + server deploy a potom bezpečný worker reinstall ve
+stavu DISARMED/flat; galerie bez těchto kroků nemá data.
+
 ### 2026-08-22 (Codex, F1c journal master + follower kopie)
 Copier journal sync nyní dostává všechny aktivní followery skupiny a pro
 každý leader close zakládá master i deterministické per-account kopie. Master

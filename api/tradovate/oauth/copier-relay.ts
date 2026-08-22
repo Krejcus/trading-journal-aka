@@ -8,6 +8,14 @@ import { createTradovateAdminClient, readTradovateServerConfig, requireSupabaseU
 import { handleNativeCors } from '../../../server/nativeCors.js';
 import { sendImmediateCopierArmPush, sendImmediateCopyEventPushes, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
 import type { LocalCopierAgentStatus } from '../../../lib/localCopierAgentProtocol.js';
+import {
+  CopierSnapshotRateLimiter,
+  consumeCopierSnapshotRateLimit,
+  storeCopierSnapshot,
+  validateCopierSnapshotPayload,
+} from '../../../server/copierSnapshotStore.js';
+
+const snapshotRateLimiter = new CopierSnapshotRateLimiter();
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -23,6 +31,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
       const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization });
       const action = String(req.body?.action ?? '');
+      if (action === 'snapshot') {
+        const input = validateCopierSnapshotPayload(req.body);
+        if (!snapshotRateLimiter.consume(device.id)) {
+          return res.status(429).json({ error: 'snapshot-rate-limit' });
+        }
+        try {
+          if (!await consumeCopierSnapshotRateLimit({ db, deviceId: device.id })) {
+            return res.status(429).json({ error: 'snapshot-rate-limit' });
+          }
+          const stored = await storeCopierSnapshot({ db, userId: device.userId, input });
+          return res.status(202).json({ accepted: true, path: stored.storagePath });
+        } catch (reason) {
+          // Snapshot je observability artefakt. Jeho Storage/DB selhání nesmí
+          // ovlivnit poll ani trading command cestu; worker už nic neopakuje
+          // po svém bounded retry a tato akce končí úspěšným přijetím.
+          console.warn('[SNAPSHOT] store failed', reason instanceof Error ? reason.message : String(reason));
+          return res.status(202).json({ accepted: false });
+        }
+      }
       if (action === 'poll') {
         if (req.body?.status) await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId, connectionId: device.connectionId, status: req.body.status });
         // Worker hlásí nové trade eventy -> okamžitý push místo čekání na
@@ -146,6 +173,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('auth-token') || message === 'invalid-copier-device-auth') return res.status(401).json({ error: message });
     if (message.endsWith('not-found')) return res.status(404).json({ error: message });
+    if (message === 'snapshot-too-large') return res.status(413).json({ error: message });
+    if (message === 'invalid-snapshot-payload' || message === 'invalid-snapshot-png') {
+      return res.status(400).json({ error: message });
+    }
     // Odmítnutý příkaz je validační chyba klienta — generické 502 „copier
     // relay failed" by maskovalo skutečný důvod (viz Flatten ze Safari).
     if (message === 'unsupported-relay-command' || message === 'unsupported-remote-copy-command' || message === 'invalid-relay-command-payload') {

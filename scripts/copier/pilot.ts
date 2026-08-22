@@ -47,6 +47,7 @@ import {
 } from '../../server/macCopierDevice';
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
+import { captureTradingViewChartSnapshot } from '../../services/copierChartSnapshot';
 
 type Command = 'keygen' | 'mac-device-init' | 'accounts' | 'preflight' | 'dry-run' | 'shadow' | 'live' | 'agent';
 
@@ -273,6 +274,8 @@ async function runLocalAgent(
   let controller: CopierRuntimeController | null = null;
   let agent: Awaited<ReturnType<typeof startLocalCopierExecutionAgent>> | null = null;
   let relay: MacCopierCommandRelay | null = null;
+  const snapshotsEnabled = process.env.ALPHATRADE_SNAPSHOTS?.trim().toLowerCase() !== 'off';
+  const lastStopSnapshotAt = new Map<string, number>();
   let stopPromise: Promise<void> | null = null;
   const writeAudit = async (entries: readonly CopierAuditEntry[]) => {
     if (entries.length === 0) return;
@@ -314,7 +317,34 @@ async function runLocalAgent(
       },
       onError: error => console.error(`${new Date().toISOString()} FAIL-CLOSED ${error.message}`),
       // Trade event -> okamžitý poll s příznakem -> server pushne hned.
-      onCopyEvent: () => { relay?.nudgeCopyEvents(); },
+      onCopyEvent: event => {
+        relay?.nudgeCopyEvents();
+        if (!snapshotsEnabled || !relay || !event.episodeId) return;
+        if (event.kind !== 'entry' && event.kind !== 'exit' && event.kind !== 'sl-moved') return;
+        if (event.kind === 'sl-moved') {
+          const previous = lastStopSnapshotAt.get(event.symbol) ?? 0;
+          if (event.at - previous < 30_000) return;
+          lastStopSnapshotAt.set(event.symbol, event.at);
+        }
+        const snapshotRelay = relay;
+        // Záměrně bez await: CDP ani síť nesmí vstoupit do dispatch/eventTail.
+        void captureTradingViewChartSnapshot().then(async png => {
+          if (!png) return;
+          if (png.byteLength > 2 * 1024 * 1024) {
+            console.warn(`${new Date().toISOString()} SNAPSHOT PNG je větší než 2 MB; zahazuji ${event.symbol} ${event.kind}`);
+            return;
+          }
+          await snapshotRelay.uploadSnapshot({
+            episodeId: event.episodeId!,
+            kind: event.kind,
+            at: event.at,
+            symbol: event.symbol,
+            png: png.toString('base64'),
+          });
+        }).catch(error => {
+          console.warn(`${new Date().toISOString()} SNAPSHOT ${error instanceof Error ? error.message : String(error)}`);
+        });
+      },
     });
     await waitUntil(() => controller?.status().connected === true, 15_000, 'WebSocket sync timeout');
     agent = await startLocalCopierExecutionAgent({

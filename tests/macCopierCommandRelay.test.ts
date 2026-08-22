@@ -10,6 +10,33 @@ const status = (): LocalCopierAgentStatus => ({
 });
 
 describe('Mac copier command relay', () => {
+  it('snapshot upload retryne nejvýše dvakrát a pak skončí', async () => {
+    const snapshotRequests: unknown[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}'));
+      if (request.action === 'poll') return Response.json({ command: null });
+      if (request.action === 'snapshot') {
+        snapshotRequests.push(request);
+        if (snapshotRequests.length === 1) return Response.json({ accepted: false }, { status: 202 });
+        if (snapshotRequests.length === 2) return Response.json({ error: 'temporary' }, { status: 503 });
+        return Response.json({ accepted: true }, { status: 202 });
+      }
+      return Response.json({ accepted: true });
+    });
+    const agent = { status, execute: vi.fn(), origin: '', close: vi.fn() } as unknown as LocalCopierExecutionAgent;
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://alpha.example', authorizationHeader: async () => 'Device id.secret',
+      agent, fetchImpl: fetchImpl as typeof fetch, pollMs: 60_000,
+    });
+
+    await expect(relay.uploadSnapshot({
+      episodeId: '11111111-1111-4111-8111-111111111111', kind: 'entry', at: 1,
+      symbol: 'MNQU6', png: 'iVBORw0KGgo=',
+    })).resolves.toBeUndefined();
+    expect(snapshotRequests).toHaveLength(3);
+    await relay.close();
+  });
+
   it('polls, executes one claimed command, and acknowledges the authoritative result', async () => {
     const calls: unknown[] = [];
     let delivered = false;

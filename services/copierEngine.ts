@@ -127,6 +127,8 @@ export interface CopierState {
 }
 
 export interface CopierDailyLot {
+  /** Stabilní ID jedné flat -> open -> flat epizody; starší snapshoty ho nemají. */
+  episodeId?: string;
   symbol: string;
   /** Kladné = long. Průměrovací (avg-cost) lot otevřeného obchodu leadera. */
   netQuantity: number;
@@ -144,6 +146,8 @@ export interface CopierDailyLot {
 export interface CopierClosedTrade {
   /** Stabilní broker fill ID závěrečného plnění — idempotentní napříč restarty. */
   id: string;
+  /** Stejné ID jako na otevřeném lotu, ze kterého close vznikl. */
+  episodeId?: string;
   symbol: string;
   side: 'Long' | 'Short';
   quantity: number;

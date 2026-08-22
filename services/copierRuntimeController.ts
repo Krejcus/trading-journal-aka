@@ -118,6 +118,8 @@ export interface CopierCopyEvent {
   side: 'Long' | 'Short';
   quantity: number;
   followers: number;
+  /** ID otevřené obchodní epizody; volitelné kvůli starším statusům. */
+  episodeId?: string;
   /** Cena čekajícího vstupu / nová úroveň u *-moved. */
   price?: number;
   stopPrice?: number;
@@ -168,6 +170,8 @@ export interface BootstrapCopierOptions {
   store: CopierStore;
   group: CopyGroupConfig;
   clock?: () => number;
+  /** Injektovatelné pouze pro deterministické testy statistického episode ID. */
+  episodeIdFactory?: () => string;
   risk?: Partial<RiskGateContext>;
   onAudit?: (entries: readonly CopierAuditEntry[]) => void;
   /**
@@ -352,10 +356,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (last.kind === kind && last.symbol === symbol) recentCopyEvents.pop();
     }
     copyEventCounter += 1;
+    const episodeKind = kind === 'entry' || kind === 'scale-in' || kind === 'exit'
+      || kind === 'flip' || kind === 'sl-moved' || kind === 'tp-moved';
+    const openEpisodeId = currentRuntime().state.safety.dailyStats?.openLots
+      .find(lot => lot.symbol === symbol)?.episodeId;
+    const closedEpisodeId = currentRuntime().state.safety.dailyStats?.recentClosedTrades
+      ?.find(trade => trade.symbol === symbol)?.episodeId;
+    const episodeId = episodeKind ? (openEpisodeId ?? closedEpisodeId) : undefined;
     const copyEvent: CopierCopyEvent = {
       id: `${at}-${copyEventCounter}`,
       at, kind, symbol, side, quantity,
       followers: group.followers.filter(follower => follower.mode !== 'off').length,
+      ...(episodeId ? { episodeId } : {}),
       ...extra,
     };
     recentCopyEvents.push(copyEvent);
@@ -696,6 +708,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (lot.tradePnlPoints < 0) stats.losingTrades += 1;
         const closedTrade: CopierClosedTrade = {
           id: fill.fillId,
+          ...(lot.episodeId ? { episodeId: lot.episodeId } : {}),
           symbol: fill.symbol,
           side: closingSide,
           quantity: closingQuantity,
@@ -720,6 +733,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (remaining !== 0) {
       if (!lot) {
         stats.openLots.push({
+          episodeId: options.episodeIdFactory?.() ?? globalThis.crypto.randomUUID(),
           symbol: fill.symbol, netQuantity: remaining, avgPrice: fill.price,
           tradePnlUsd: 0, tradePnlPoints: 0,
           openedAt: at,

@@ -5,6 +5,13 @@ export interface MacCopierCommandRelay {
   /** Okamžitě probudí poll s příznakem nových trade eventů — server pošle
    *  push hned místo čekání na minutový cron. */
   nudgeCopyEvents(): void;
+  uploadSnapshot(snapshot: {
+    episodeId: string;
+    kind: 'entry' | 'exit' | 'sl-moved';
+    at: number;
+    symbol: string;
+    png: string;
+  }): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -143,6 +150,22 @@ export function startMacCopierCommandRelay(options: {
       copyEventsPending = true;
       kickPending = true;
       wake?.();
+    },
+    async uploadSnapshot(snapshot) {
+      let lastError: unknown;
+      // První pokus + nejvýše dva retry. Tato větev nikdy není awaitovaná
+      // controllerem a po vyčerpání pokusů pouze předá chybu SNAPSHOT logu.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const response = await request({ action: 'snapshot', ...snapshot });
+          if (response.accepted !== true) throw new Error('copier-snapshot-store-rejected');
+          return;
+        } catch (error) {
+          lastError = error;
+          if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+      }
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
     },
     async close() {
       stopped = true;

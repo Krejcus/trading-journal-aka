@@ -17,7 +17,15 @@ export interface CopierLedgerRow {
   exit_reason: 'sl' | 'tp' | 'manual' | null;
   entry_price: number | null;
   exit_price: number | null;
+  episode_id?: string | null;
   connection_id?: string | null;
+}
+
+export interface CopierSnapshotRow {
+  episode_id: string;
+  kind: string;
+  at: string;
+  storage_path: string;
 }
 
 export interface PendingCopierJournalTrade {
@@ -43,6 +51,7 @@ interface KeyValueStore {
 
 export interface CopierJournalSyncDeps {
   loadRows: (userId: string, after: string) => Promise<CopierLedgerRow[]>;
+  loadSnapshots: (userId: string, episodeIds: string[]) => Promise<CopierSnapshotRow[]>;
   getTrades: () => Promise<Trade[]>;
   saveTrades: (trades: Trade[]) => Promise<Trade[]>;
   updateTrade: (tradeId: string | number, updates: Partial<Trade>) => Promise<void>;
@@ -76,7 +85,7 @@ const browserStore: KeyValueStore = {
 const defaultLoadRows = async (userId: string, after: string): Promise<CopierLedgerRow[]> => {
   const { data, error } = await supabase
     .from('tradovate_copier_trades')
-    .select('trade_id,symbol,side,quantity,realized_pnl_usd,opened_at,closed_at,exit_reason,entry_price,exit_price,connection_id')
+    .select('trade_id,symbol,side,quantity,realized_pnl_usd,opened_at,closed_at,exit_reason,entry_price,exit_price,episode_id,connection_id')
     .eq('user_id', userId)
     .gt('closed_at', after)
     .order('closed_at', { ascending: true });
@@ -84,8 +93,21 @@ const defaultLoadRows = async (userId: string, after: string): Promise<CopierLed
   return (data ?? []) as CopierLedgerRow[];
 };
 
+const defaultLoadSnapshots = async (userId: string, episodeIds: string[]): Promise<CopierSnapshotRow[]> => {
+  if (episodeIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from('copier_trade_snapshots')
+    .select('episode_id,kind,at,storage_path')
+    .eq('user_id', userId)
+    .in('episode_id', episodeIds)
+    .order('at', { ascending: true });
+  if (error) throw new Error(`copier-journal-snapshot-read-failed: ${error.message}`);
+  return (data ?? []) as CopierSnapshotRow[];
+};
+
 const defaultDeps: CopierJournalSyncDeps = {
   loadRows: defaultLoadRows,
+  loadSnapshots: defaultLoadSnapshots,
   getTrades: () => storageService.getTrades(),
   saveTrades: trades => storageService.saveTrades(trades),
   updateTrade: (tradeId, updates) => storageService.updateTrade(tradeId, updates),
@@ -112,7 +134,7 @@ const copierGroupId = (tradeId: string): string => `copier-group-${tradeId.trim(
 const followerLogicalId = (tradeId: string, followerAccountId: number): string =>
   `copier-${tradeId.trim()}-${followerAccountId}`;
 
-const candidateFromRow = (row: CopierLedgerRow, accountId: string): Trade => {
+const candidateFromRow = (row: CopierLedgerRow, accountId: string, snapshots: CopierSnapshotRow[]): Trade => {
   const closedAt = Date.parse(row.closed_at);
   const openedAt = row.opened_at ? Date.parse(row.opened_at) : Number.NaN;
   const durationMinutes = Number.isFinite(openedAt)
@@ -144,6 +166,13 @@ const candidateFromRow = (row: CopierLedgerRow, accountId: string): Trade => {
     exitReason: row.exit_reason === 'sl' || row.exit_reason === 'tp' || row.exit_reason === 'manual'
       ? row.exit_reason
       : undefined,
+    ...(snapshots.length > 0 ? {
+      copierSnapshots: snapshots.map(snapshot => ({
+        kind: snapshot.kind,
+        at: Date.parse(snapshot.at),
+        path: snapshot.storage_path,
+      })).filter(snapshot => Number.isFinite(snapshot.at)),
+    } : {}),
     needsReview: true,
     runUp: 0,
     drawdown: 0,
@@ -207,6 +236,14 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
   const firstCursor = new Date(deps.now() - FIRST_SYNC_DAYS * 24 * 60 * 60_000).toISOString();
   const after = storedCursor && Number.isFinite(Date.parse(storedCursor)) ? storedCursor : firstCursor;
   const rows = (await deps.loadRows(userId, after)).filter(validRow);
+  const episodeIds = [...new Set(rows.flatMap(row => row.episode_id ? [row.episode_id] : []))];
+  const snapshotRows = await deps.loadSnapshots(userId, episodeIds);
+  const snapshotsByEpisode = new Map<string, CopierSnapshotRow[]>();
+  for (const snapshot of snapshotRows) {
+    const list = snapshotsByEpisode.get(snapshot.episode_id) ?? [];
+    list.push(snapshot);
+    snapshotsByEpisode.set(snapshot.episode_id, list);
+  }
 
   const existing = await deps.getTrades();
   const existingIds = new Set(existing.flatMap(trade => [String(trade.id), trade.copierTradeId].filter(Boolean) as string[]));
@@ -285,7 +322,8 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
   }
 
   const masterCandidates = rows
-    .map(row => candidateFromRow(row, account.id))
+    .map(row => candidateFromRow(row, account.id,
+      row.episode_id ? (snapshotsByEpisode.get(row.episode_id) ?? []) : []))
     .filter(trade => !existingIds.has(String(trade.id)) && !existingIds.has(String(trade.copierTradeId)));
   const savedMasters = masterCandidates.length > 0 ? await deps.saveTrades(masterCandidates) : [];
   created.push(...savedMasters);

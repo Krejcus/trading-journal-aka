@@ -20,6 +20,7 @@ interface CommandRow {
 
 export interface PersistedCopierTradeInput {
   tradeId: string;
+  episodeId: string | null;
   symbol: string;
   side: 'Long' | 'Short';
   quantity: number;
@@ -42,6 +43,9 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
   const unique = new Map<string, PersistedCopierTradeInput>();
   for (const candidate of candidates.slice(0, 20)) {
     const tradeId = typeof candidate?.id === 'string' ? candidate.id.trim().slice(0, 160) : '';
+    const episodeId = typeof candidate?.episodeId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate.episodeId)
+      ? candidate.episodeId
+      : null;
     const symbol = typeof candidate?.symbol === 'string' ? candidate.symbol.trim().slice(0, 32) : '';
     const quantity = finite(candidate?.quantity);
     const closedAt = finite(candidate?.closedAt);
@@ -53,6 +57,7 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
       || (candidate?.side !== 'Long' && candidate?.side !== 'Short')) continue;
     unique.set(tradeId, {
       tradeId,
+      episodeId,
       symbol,
       side: candidate.side,
       quantity,
@@ -228,6 +233,7 @@ export async function heartbeatTradovateCopierDevice(options: {
         device_id: options.deviceId,
         connection_id: options.connectionId,
         trade_id: trade.tradeId,
+        episode_id: trade.episodeId,
         symbol: trade.symbol,
         side: trade.side,
         quantity: trade.quantity,

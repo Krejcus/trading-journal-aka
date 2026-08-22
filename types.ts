@@ -236,6 +236,8 @@ export interface Trade {
   exitDate?: string;
   screenshot?: string;
   screenshots?: string[];
+  /** Privátní auto-snapshoty copier epizody; `path` není veřejná URL. */
+  copierSnapshots?: Array<{ kind: string; at: number; path: string }>;
   notes?: string;
   shareNotes?: boolean; // Při sdílení veřejného linku: smí se zobrazit poznámka? (default false)
   drawings?: DrawingObject[]; // Array of drawing objects (lines, rects, text, fib, etc.)

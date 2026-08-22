@@ -26,11 +26,13 @@ describe('copier closed trade heartbeat ledger', () => {
   it('normalizes one broker-confirmed close without inventing missing PnL', () => {
     expect(closedTradesFromStatus(status([{
       id: 'fill-42', symbol: 'MNQZ6', side: 'Long', quantity: 2,
+      episodeId: '11111111-1111-4111-8111-111111111111',
       realizedPnlUsd: 125, followerCount: 5,
       openedAt: 1_777_777_000_000, closedAt: 1_777_777_060_000,
       exitReason: 'tp', avgEntryPrice: 21_000.25, avgExitPrice: 21_040.5,
     }]))).toEqual([{
-      tradeId: 'fill-42', symbol: 'MNQZ6', side: 'Long', quantity: 2,
+      tradeId: 'fill-42', episodeId: '11111111-1111-4111-8111-111111111111',
+      symbol: 'MNQZ6', side: 'Long', quantity: 2,
       realizedPnlUsd: 125, followerCount: 5,
       openedAt: new Date(1_777_777_000_000).toISOString(),
       closedAt: new Date(1_777_777_060_000).toISOString(),
@@ -39,7 +41,7 @@ describe('copier closed trade heartbeat ledger', () => {
     expect(closedTradesFromStatus(status([{
       id: 'fill-unpriced', symbol: 'UNKNOWN', side: 'Short', quantity: 1,
       realizedPnlUsd: null, followerCount: 1, closedAt: 1_777_777_060_000,
-    }]))[0].realizedPnlUsd).toBeNull();
+    }]))[0]).toMatchObject({ episodeId: null, realizedPnlUsd: null });
     expect(closedTradesFromStatus(status([{
       id: 'fill-invalid-extra', symbol: 'MNQ', side: 'Long', quantity: 1,
       realizedPnlUsd: 1, followerCount: 1, closedAt: 1_777_777_060_000,

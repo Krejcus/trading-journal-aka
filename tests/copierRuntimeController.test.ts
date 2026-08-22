@@ -1744,6 +1744,7 @@ describe('order lifecycle notifikace (obchod zadán, SL/TP, atribuce exitu)', ()
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(), osoCorrelationWindowMs: 25,
+      episodeIdFactory: () => '11111111-1111-4111-8111-111111111111',
     });
     broker.setConnected(true);
     await controller.waitForIdle();
@@ -1788,10 +1789,15 @@ describe('order lifecycle notifikace (obchod zadán, SL/TP, atribuce exitu)', ()
     await controller.waitForIdle();
 
     const exit = controller.status().recentCopyEvents?.find(event => event.kind === 'exit');
+    const entry = controller.status().recentCopyEvents?.find(event => event.kind === 'entry');
     // -100 bodů... 2 kontrakty × 100 bodů × 2 USD (MNQ) = -400 USD
-    expect(exit).toMatchObject({ exitReason: 'sl', pnlUsd: -400 });
+    expect(entry).toMatchObject({ episodeId: '11111111-1111-4111-8111-111111111111' });
+    expect(exit).toMatchObject({
+      episodeId: '11111111-1111-4111-8111-111111111111', exitReason: 'sl', pnlUsd: -400,
+    });
     expect(controller.status().dailyStats?.recentClosedTrades?.[0]).toMatchObject({
       id: 'lf-2',
+      episodeId: '11111111-1111-4111-8111-111111111111',
       exitReason: 'sl',
       avgEntryPrice: 29_500,
       avgExitPrice: 29_400,

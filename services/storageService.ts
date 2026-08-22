@@ -144,6 +144,7 @@ export const storageService = {
         needsReview: d.needsReview === true,
         exitReason: d.exitReason || undefined,
         copierTradeId: d.copierTradeId || undefined,
+        copierSnapshots: Array.isArray(d.copierSnapshots) ? d.copierSnapshots : undefined,
         pnlEstimated: d.pnlEstimated === true,
         setupType: d.setupType,
         screenshot: t.screenshot_url || undefined,
@@ -446,6 +447,7 @@ export const storageService = {
         needsReview:data->>needsReview,
         exitReason:data->>exitReason,
         copierTradeId:data->>copierTradeId,
+        copierSnapshots:data->copierSnapshots,
         pnlEstimated:data->>pnlEstimated,
         setupType:data->>setupType,
         miniViewRange:data->>miniViewRange,
@@ -548,6 +550,7 @@ export const storageService = {
       needsReview: t.needsReview === 'true' || t.needsReview === true,
       exitReason: t.exitReason || undefined,
       copierTradeId: t.copierTradeId || undefined,
+      copierSnapshots: Array.isArray(t.copierSnapshots) ? t.copierSnapshots : undefined,
       pnlEstimated: t.pnlEstimated === 'true' || t.pnlEstimated === true,
       setupType: t.setupType,
       // Include screenshot URLs (small strings, not base64 blobs — safe to include always)
@@ -1027,6 +1030,23 @@ export const storageService = {
     }
 
     return result;
+  },
+
+  /** Privátní copier artefakty podepisujeme až při otevření detailu obchodu. */
+  async createCopierSnapshotSignedUrls(
+    snapshots: NonNullable<Trade['copierSnapshots']>,
+  ): Promise<Array<{ kind: string; at: number; path: string; url: string }>> {
+    const signed = await Promise.all(snapshots.map(async snapshot => {
+      const { data, error } = await supabase.storage
+        .from('copier-snapshots')
+        .createSignedUrl(snapshot.path, 3_600);
+      if (error || !data?.signedUrl) {
+        console.warn('[SNAPSHOT] signed URL failed', error?.message ?? snapshot.path);
+        return null;
+      }
+      return { ...snapshot, url: data.signedUrl };
+    }));
+    return signed.filter((item): item is { kind: string; at: number; path: string; url: string } => item != null);
   },
 
   // Globální in-memory cache screenshotů — sdílená napříč komponentami.

@@ -76,6 +76,37 @@ describe('copier journal sync', () => {
     }
   });
 
+  it('přilepí snapshoty stejné episode pouze k novému masteru', async () => {
+    const episodeRow = { ...row, episode_id: '11111111-1111-4111-8111-111111111111' };
+    const saveTrades = vi.fn(async (trades: Trade[]) => trades.map((trade, index) => ({
+      ...trade,
+      id: trade.isMaster ? '22222222-2222-4222-8222-222222222222' : `copy-${index}`,
+    })));
+    const loadSnapshots = vi.fn(async () => [{
+      episode_id: episodeRow.episode_id,
+      kind: 'entry',
+      at: '2026-08-22T10:00:00.000Z',
+      storage_path: `u1/${episodeRow.episode_id}/entry-1.png`,
+    }]);
+
+    await syncCopierJournal({
+      userId: 'u1', leaderAccountId: 100,
+      accounts: [account(), account('200', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')],
+      followers: [{ accountId: 200, multiplier: 1 }],
+      deps: {
+        loadRows: async () => [episodeRow], loadSnapshots, getTrades: async () => [], saveTrades,
+        cursorStore: memoryStore(), now: () => Date.parse('2026-08-22T12:00:00Z'),
+      },
+    });
+
+    expect(loadSnapshots).toHaveBeenCalledWith('u1', [episodeRow.episode_id]);
+    expect(saveTrades.mock.calls[0][0][0].copierSnapshots).toEqual([{
+      kind: 'entry', at: Date.parse('2026-08-22T10:00:00.000Z'),
+      path: `u1/${episodeRow.episode_id}/entry-1.png`,
+    }]);
+    expect(saveTrades.mock.calls[1][0][0].copierSnapshots).toBeUndefined();
+  });
+
   it('je idempotentní a druhý běh nevytvoří master ani kopii znovu', async () => {
     const stored: Trade[] = [];
     const saveTrades = vi.fn(async (trades: Trade[]) => {
