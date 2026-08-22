@@ -162,13 +162,12 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
 
   useEffect(() => {
     if (!userId || !enabled || !journalOptions?.accounts) return;
-    const unmapped = profiles.filter(profile => !profile.mappedAccountId && Object.values(connectionData).some(dataset => (
-      dataset.environment === profile.environment
-      && dataset.accounts.some(account => String(account.id) === profile.externalAccountId)
-    )));
-    if (unmapped.length === 0) return;
-    const attemptKey = unmapped
-      .map(profile => `${profile.id}:${profile.updatedAt}`)
+    // Plánovač řeší nejen nenamapované profily, ale i hojení už namapovaných
+    // účtů (firmOverride, evaluace vs funded) — proto se spouští nad všemi
+    // profily; idempotenci hlídá attemptKey + plan.changed.
+    if (profiles.length === 0 || Object.keys(connectionData).length === 0) return;
+    const attemptKey = profiles
+      .map(profile => `${profile.id}:${profile.updatedAt}:${profile.mappedAccountId ?? '-'}`)
       .sort()
       .join('|');
     if (journalLinkAttemptsRef.current.has(attemptKey)) return;
