@@ -32,6 +32,16 @@ describe('copier snapshot migration', () => {
     expect(sql).toContain('for update;');
     expect(sql).toContain("(storage.foldername(name))[1] = (select auth.uid())::text");
   });
+
+  it('připraví TV webhook/alert RLS, atomický limit a jen rozšíří snapshot kind', () => {
+    const sql = readFileSync(new URL('../supabase/migrations/20260822193000_tv_alert_image_notifications.sql', import.meta.url), 'utf8');
+    expect(sql).toContain('create table if not exists public.tv_alert_webhooks');
+    expect(sql).toContain('create table if not exists public.tv_alerts');
+    expect(sql).toContain('using ((select auth.uid()) = user_id)');
+    expect(sql).toContain('consume_tv_alert_webhook_rate_limit');
+    expect(sql).toContain('for update;');
+    expect(sql).toContain("check (kind in ('entry', 'exit', 'sl-moved', 'tv-alert'))");
+  });
 });
 
 describe('copier relay snapshot validation', () => {
@@ -39,6 +49,10 @@ describe('copier relay snapshot validation', () => {
     expect(validateCopierSnapshotPayload(payload({ symbol: 'mnqu6' }))).toMatchObject({
       kind: 'entry', symbol: 'MNQU6', at: 1_777_000_000_000,
     });
+  });
+
+  it('přijme tv-alert se stejnou přísnou PNG validací', () => {
+    expect(validateCopierSnapshotPayload(payload({ kind: 'tv-alert' }))).toMatchObject({ kind: 'tv-alert' });
   });
 
   it('odmítne špatné magic bytes', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { captureTradingViewChartSnapshot } from '../services/copierChartSnapshot';
+import { captureTradingViewAlertSnapshot, captureTradingViewChartSnapshot } from '../services/copierChartSnapshot';
 
 class FakeSocket {
   listeners = new Map<string, Set<(event: any) => void>>();
@@ -35,8 +35,9 @@ describe('copier TradingView CDP snapshot', () => {
       webSocketFactory: () => socket,
       timeoutMs: 100,
     });
-    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 100 });
+    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 1_000 });
     socket.emit('open');
+    await vi.waitUntil(() => socket.sent.length > 0, { timeout: 1_000 });
     const command = JSON.parse(socket.sent[0]);
     expect(command).toEqual({
       id: 1,
@@ -62,9 +63,75 @@ describe('copier TradingView CDP snapshot', () => {
       webSocketFactory: () => socket,
       timeoutMs: 10,
     });
-    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 100 });
+    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 1_000 });
     socket.emit('open');
     await expect(promise).resolves.toBeNull();
     expect(socket.closed).toBe(true);
+  });
+});
+
+describe('TV alert dedicated chart navigation', () => {
+  it('navigates only the configured target, sets chart viewport and captures after render', async () => {
+    const socket = new FakeSocket();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify([
+      { id: 'other', type: 'page', url: 'https://www.tradingview.com/chart/other/', webSocketDebuggerUrl: 'ws://other' },
+      { id: 'dedicated', type: 'page', url: 'https://www.tradingview.com/chart/alpha/', webSocketDebuggerUrl: 'ws://dedicated' },
+    ]), { status: 200 })) as typeof fetch;
+    const promise = captureTradingViewAlertSnapshot({
+      symbol: 'MNQ1!', timeframe: '5', dedicated: { chartId: 'alpha' },
+      fetchImpl, webSocketFactory: url => {
+        expect(url).toBe('ws://dedicated');
+        return socket;
+      },
+      sleepImpl: async () => undefined,
+      timeoutMs: 500,
+    });
+    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 1_000 });
+    socket.emit('open');
+    const navigation = JSON.parse(socket.sent[0]);
+    expect(navigation.method).toBe('Runtime.evaluate');
+    expect(navigation.params.expression).toContain('TradingViewApi');
+    expect(navigation.params.expression).toContain('setSymbol("MNQ1!")');
+    expect(navigation.params.expression).toContain('setResolution("5")');
+    expect(navigation.params.expression).toContain('setRightOffset(40)');
+    expect(navigation.params.expression).toContain('setBarSpacing(3)');
+    socket.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: true } } }) });
+    await vi.waitUntil(() => socket.sent.length === 2, { timeout: 1_000 });
+    expect(JSON.parse(socket.sent[1])).toMatchObject({ method: 'Page.captureScreenshot' });
+    socket.emit('message', { data: JSON.stringify({ id: 2, result: { data: Buffer.from('dedicated').toString('base64') } }) });
+    await expect(promise).resolves.toEqual(Buffer.from('dedicated'));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the passive F1b target when dedicated render navigation fails', async () => {
+    const dedicated = new FakeSocket();
+    const passive = new FakeSocket();
+    let lists = 0;
+    const fetchImpl = vi.fn(async () => {
+      lists += 1;
+      return new Response(JSON.stringify(lists === 1 ? [{
+        id: 'dedicated', type: 'page', url: 'https://www.tradingview.com/chart/alpha/', webSocketDebuggerUrl: 'ws://dedicated',
+      }] : [{
+        id: 'current', type: 'page', url: 'https://www.tradingview.com/chart/current/', webSocketDebuggerUrl: 'ws://current',
+      }]), { status: 200 });
+    }) as typeof fetch;
+    const promise = captureTradingViewAlertSnapshot({
+      symbol: 'MNQ1!', timeframe: '1', dedicated: { chartId: 'alpha' },
+      fetchImpl,
+      webSocketFactory: url => url === 'ws://dedicated' ? dedicated : passive,
+      sleepImpl: async () => undefined,
+      timeoutMs: 500,
+    });
+    await vi.waitUntil(() => dedicated.listeners.has('open'), { timeout: 1_000 });
+    dedicated.emit('open');
+    dedicated.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: false } } }) });
+    await vi.waitUntil(() => passive.listeners.has('open'), { timeout: 1_000 });
+    passive.emit('open');
+    expect(JSON.parse(passive.sent[0])).toEqual({
+      id: 1, method: 'Page.captureScreenshot', params: { format: 'png', fromSurface: false },
+    });
+    passive.emit('message', { data: JSON.stringify({ id: 1, result: { data: Buffer.from('fallback').toString('base64') } }) });
+    await expect(promise).resolves.toEqual(Buffer.from('fallback'));
+    expect(dedicated.sent).toHaveLength(1);
   });
 });

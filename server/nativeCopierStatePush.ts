@@ -64,6 +64,7 @@ export async function sendImmediateCopyEventPushes(options: {
         threadId: 'alphatrade-copier-trades',
         category: 'ALPHATRADE_TRADE',
         interruptionLevel: 'time-sensitive',
+        collapseId: notification.collapseId,
       })));
       sent += results.filter(result => result.status === 'sent').length;
       for (let index = 0; index < results.length; index++) {

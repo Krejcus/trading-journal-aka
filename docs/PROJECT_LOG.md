@@ -78,6 +78,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, F2a obrázkové notifikace — server + worker)
+Připravený, ale NENASAZENÝ tok pro dva spotřebitele obrázkových pushů. Nový
+TradingView webhook má per-user 256bit hex token, validovaný bounded payload,
+lokální i atomický Postgres limit 30/min a okamžitý textový APNs push. Alert se
+uloží jako `tv_alerts`; worker dostává pouze pending requesty mladší než 60 s.
+Text nikdy nečeká na obrázek. Dedikovaný TradingView CDP target je evidovaný v
+Application Support, naviguje symbol/resolution/rightOffset/barSpacing v
+samostatné šestisekundové fire-and-forget větvi a při problému použije pasivní
+F1b capture. `ALPHATRADE_SNAPSHOTS=off` vypíná i tuto cestu.
+
+Copier entry/exit/sl-moved textové pushy mají deterministický collapse-id z
+`episodeId + kind + timestamp zaokrouhlený na sekundu`. Po úspěšném uploadu
+server z aktuálního runtime eventu zrekonstruuje stejný title/body, vytvoří
+hodinovou signed URL a pošle samostatný `mutable-content: 1` payload se stejným
+collapse-id a `imageUrl`; chyba follow-upu je jen warning. TV alert používá
+stejný mechanismus s `tvalert-<alert UUID>`. Minutový cron pouze na UTC hodině
+maže TV alert řádky/objekty starší 24 h a metadata filtruje výhradně přes kind
+`tv-alert`; copier snapshoty deníku nemaže.
+
+Migrace `20260822193000_tv_alert_image_notifications.sql` přidává
+`tv_alert_webhooks`, `tv_alerts`, service-only rate-limit stav/RPC a rozšiřuje
+snapshot kind o `tv-alert`; ZÁMĚRNĚ NEBYLA APLIKOVANÁ. Ověření: `npx tsc
+--noEmit` čistý; cíleně 65/65; kompletně 179/179 souborů a 1391/1391 testů
+(loopback běh mimo sandbox); `npm run build` prošel. Nic nebylo commitnuto,
+pushnuto, deploynuto, migrováno ani reinstalováno. Aktivace vyžaduje nejdřív
+Supabase export/zálohu + explicitně schválenou migraci a advisory, potom server
+deploy a bezpečný worker reinstall v DISARMED/flat stavu. iOS Notification
+Service Extension pro stažení `imageUrl` je záměrně samostatná další várka.
+
 ### 2026-08-22 (Codex, F3c Kokpit: broker floor, payout limity, cross-firm Funeral)
 Kokpit nyní dostává živý `connectionData` a drawdown používá stejnou sdílenou
 funkci jako LIVE desk. Pořadí je autoritativní broker `autoLiqLevel`/LIVE

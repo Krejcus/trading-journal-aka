@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const COPIER_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
-export const COPIER_SNAPSHOT_KINDS = ['entry', 'exit', 'sl-moved'] as const;
+export const COPIER_SNAPSHOT_KINDS = ['entry', 'exit', 'sl-moved', 'tv-alert'] as const;
 export type CopierSnapshotKind = typeof COPIER_SNAPSHOT_KINDS[number];
 
 export interface CopierSnapshotInput {

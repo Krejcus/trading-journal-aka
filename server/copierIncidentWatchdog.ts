@@ -93,6 +93,7 @@ export interface CopierCopyEventRow {
   side: 'Long' | 'Short';
   quantity: number;
   followers: number;
+  episodeId?: string;
   price?: number;
   stopPrice?: number;
   targetPrice?: number;
@@ -150,6 +151,18 @@ export function copyEventNotification(event: CopierCopyEventRow): { title: strin
   };
 }
 
+/** Deterministická korelace textového a pozdějšího obrázkového push payloadu. */
+export function copierSnapshotCollapseId(input: {
+  episodeId: string;
+  kind: string;
+  at: number;
+}): string {
+  const second = Math.floor(input.at / 1_000);
+  const episode = input.episodeId.toLowerCase().replace(/-/g, '').replace(/[^a-z0-9]/g, '').slice(0, 32);
+  const kind = input.kind.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 12);
+  return `cpimg-${episode}-${kind}-${second}`.slice(0, 64);
+}
+
 /**
  * Trade notifikace (vstupy/exity) — vedle incidentů, ale se stejnou kázní:
  * každý event právě jednou. Worker drží ring buffer jen v paměti procesu,
@@ -169,6 +182,8 @@ export function planCopyEventNotifications(options: {
   at: number;
   title: string;
   body: string;
+  episodeId?: string;
+  collapseId?: string;
 }>; markers: AlertStateUpsert[] } {
   const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
   const notifications: Array<{
@@ -179,6 +194,8 @@ export function planCopyEventNotifications(options: {
     at: number;
     title: string;
     body: string;
+    episodeId?: string;
+    collapseId?: string;
   }> = [];
   const markers: AlertStateUpsert[] = [];
   const markerFor = new Map(options.alertStates
@@ -209,6 +226,14 @@ export function planCopyEventNotifications(options: {
         eventId: event.id,
         kind: event.kind,
         at: event.at,
+        ...(event.episodeId ? {
+          episodeId: event.episodeId,
+          collapseId: copierSnapshotCollapseId({
+            episodeId: event.episodeId,
+            kind: event.kind,
+            at: event.at,
+          }),
+        } : {}),
         ...content,
       });
     }

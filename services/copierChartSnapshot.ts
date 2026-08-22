@@ -2,9 +2,23 @@ const DEFAULT_CDP_ORIGIN = 'http://127.0.0.1:9222';
 const DEFAULT_TIMEOUT_MS = 3_000;
 
 interface CdpTarget {
+  id?: string;
   type?: string;
   url?: string;
   webSocketDebuggerUrl?: string;
+}
+
+export interface TradingViewDedicatedChartRef {
+  chartId?: string;
+  targetId?: string;
+}
+
+export interface TradingViewAlertSnapshotOptions extends CopierChartSnapshotOptions {
+  symbol: string;
+  timeframe?: string | null;
+  dedicated?: TradingViewDedicatedChartRef | null;
+  onDedicatedResolved?: (value: TradingViewDedicatedChartRef) => Promise<void> | void;
+  sleepImpl?: (ms: number) => Promise<void>;
 }
 
 interface WebSocketLike {
@@ -109,5 +123,158 @@ export async function captureTradingViewChartSnapshot(
     if ((error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'
       || error.message.startsWith('snapshot-cdp-'))) || (error instanceof TypeError)) return null;
     throw error;
+  }
+}
+
+const chartIdFromUrl = (url: string | undefined): string | undefined => {
+  const match = /tradingview\.com\/chart\/([^/?#]+)\/?/i.exec(url ?? '');
+  return match?.[1];
+};
+
+function evaluateExpression(symbol: string, timeframe: string): string {
+  return `(() => {
+    const api = globalThis.TradingViewApi;
+    if (!api) return false;
+    const chart = typeof api.activeChart === 'function' ? api.activeChart() : api;
+    if (!chart || typeof chart.setSymbol !== 'function' || typeof chart.setResolution !== 'function') return false;
+    chart.setSymbol(${JSON.stringify(symbol)});
+    chart.setResolution(${JSON.stringify(timeframe)});
+    if (typeof chart.setRightOffset === 'function') chart.setRightOffset(40);
+    if (typeof chart.setBarSpacing === 'function') chart.setBarSpacing(3);
+    const scale = typeof chart.timeScale === 'function' ? chart.timeScale() : null;
+    if (scale && typeof scale.setRightOffset === 'function') scale.setRightOffset(40);
+    if (scale && typeof scale.setBarSpacing === 'function') scale.setBarSpacing(3);
+    const rightOffsetReady = typeof chart.setRightOffset === 'function' || (scale && typeof scale.setRightOffset === 'function');
+    const barSpacingReady = typeof chart.setBarSpacing === 'function' || (scale && typeof scale.setBarSpacing === 'function');
+    return Boolean(rightOffsetReady && barSpacingReady);
+  })()`;
+}
+
+async function cdpRequest(options: {
+  target: CdpTarget;
+  commands: Array<{ id: number; method: string; params?: Record<string, unknown> }>;
+  timeoutMs: number;
+  webSocketFactory: (url: string) => WebSocketLike;
+  onCommandResult?: (id: number, result: Record<string, unknown>) => Promise<void> | void;
+}): Promise<Map<number, Record<string, unknown>>> {
+  if (!options.target.webSocketDebuggerUrl) throw new Error('snapshot-cdp-missing-websocket');
+  const socket = options.webSocketFactory(options.target.webSocketDebuggerUrl);
+  return new Promise((resolve, reject) => {
+    const results = new Map<number, Record<string, unknown>>();
+    let settled = false;
+    const timer = setTimeout(() => finish(reject, timeoutError()), options.timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.removeEventListener('open', onOpen);
+      socket.removeEventListener('message', onMessage);
+      socket.removeEventListener('error', onError);
+      socket.removeEventListener('close', onClose);
+      try { socket.close(); } catch { /* best effort */ }
+    };
+    const finish = (callback: (value: any) => void, value: any) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(value);
+    };
+    const send = (command: { id: number; method: string; params?: Record<string, unknown> }) => socket.send(JSON.stringify(command));
+    const onOpen = () => {
+      try { send(options.commands[0]); } catch (error) { finish(reject, error); }
+    };
+    const onMessage = (event: { data?: unknown }) => {
+      void (async () => {
+        try {
+          const message = JSON.parse(String(event.data ?? '')) as { id?: number; result?: Record<string, unknown>; error?: { message?: string } };
+          if (!message.id || !options.commands.some(command => command.id === message.id)) return;
+          if (message.error) throw new Error(message.error.message ?? 'snapshot-cdp-error');
+          const result = message.result ?? {};
+          results.set(message.id, result);
+          await options.onCommandResult?.(message.id, result);
+          const index = options.commands.findIndex(command => command.id === message.id);
+          const next = options.commands[index + 1];
+          if (next) send(next);
+          else finish(resolve, results);
+        } catch (error) { finish(reject, error); }
+      })();
+    };
+    const onError = () => finish(reject, new Error('snapshot-cdp-websocket-error'));
+    const onClose = () => finish(reject, new Error('snapshot-cdp-websocket-closed'));
+    socket.addEventListener('open', onOpen);
+    socket.addEventListener('message', onMessage);
+    socket.addEventListener('error', onError);
+    socket.addEventListener('close', onClose);
+  });
+}
+
+/**
+ * Navigační capture používá výhradně dříve uložený nebo právě vytvořený CDP
+ * target. Jakýkoli problém se do společného šestisekundového budgetu degraduje
+ * na původní pasivní F1b screenshot; nikdy nepropadne do trading cesty.
+ */
+export async function captureTradingViewAlertSnapshot(
+  options: TradingViewAlertSnapshotOptions,
+): Promise<Buffer | null> {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const webSocketFactory = options.webSocketFactory
+    ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
+  const sleepImpl = options.sleepImpl ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const totalMs = Math.min(6_000, Math.max(1, options.timeoutMs ?? 6_000));
+  const started = Date.now();
+  const remaining = () => Math.max(1, totalMs - (Date.now() - started));
+  const cdpOrigin = options.cdpOrigin ?? DEFAULT_CDP_ORIGIN;
+  try {
+    const listResponse = await fetchImpl(`${cdpOrigin}/json/list`, { signal: AbortSignal.timeout(remaining()) });
+    if (!listResponse.ok) throw new Error('snapshot-cdp-list-failed');
+    const targets = await listResponse.json() as CdpTarget[];
+    const ref = options.dedicated ?? {};
+    let target = Array.isArray(targets) ? targets.find(candidate => (
+      candidate.type === 'page'
+      && typeof candidate.webSocketDebuggerUrl === 'string'
+      && ((ref.targetId && candidate.id === ref.targetId)
+        || (ref.chartId && chartIdFromUrl(candidate.url) === ref.chartId))
+    )) : undefined;
+    if (!target) {
+      const targetUrl = ref.chartId
+        ? `https://www.tradingview.com/chart/${encodeURIComponent(ref.chartId)}/`
+        : 'https://www.tradingview.com/chart/?alphatradeDedicated=1';
+      const created = await fetchImpl(`${cdpOrigin}/json/new?${encodeURIComponent(targetUrl)}`, {
+        method: 'PUT', signal: AbortSignal.timeout(remaining()),
+      });
+      if (!created.ok) throw new Error('snapshot-cdp-create-target-failed');
+      target = await created.json() as CdpTarget;
+    }
+    if (!target?.webSocketDebuggerUrl || target.type !== 'page' || !target.url?.includes('tradingview.com/chart')) {
+      throw new Error('snapshot-cdp-invalid-dedicated-target');
+    }
+    const resolved = { targetId: target.id, chartId: chartIdFromUrl(target.url) };
+    await options.onDedicatedResolved?.(resolved);
+    const waitAfterNavigation = Math.min(1_500, Math.max(0, remaining() - 500));
+    const results = await cdpRequest({
+      target,
+      timeoutMs: remaining(),
+      webSocketFactory,
+      commands: [
+        { id: 1, method: 'Runtime.evaluate', params: { expression: evaluateExpression(options.symbol, options.timeframe || '1'), returnByValue: true } },
+        { id: 2, method: 'Page.captureScreenshot', params: { format: 'png', fromSurface: false } },
+      ],
+      onCommandResult: async (id, result) => {
+        if (id !== 1) return;
+        const evaluation = result.result as { value?: unknown } | undefined;
+        if (evaluation?.value !== true) throw new Error('snapshot-tv-render-navigation-failed');
+        await sleepImpl(waitAfterNavigation);
+      },
+    });
+    const encoded = results.get(2)?.data;
+    if (typeof encoded !== 'string') throw new Error('snapshot-cdp-invalid-response');
+    const png = Buffer.from(encoded, 'base64');
+    if (png.length === 0) throw new Error('snapshot-cdp-invalid-response');
+    return png;
+  } catch {
+    return captureTradingViewChartSnapshot({
+      cdpOrigin,
+      timeoutMs: Math.min(3_000, remaining()),
+      fetchImpl,
+      webSocketFactory,
+    });
   }
 }

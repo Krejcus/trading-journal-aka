@@ -30,6 +30,7 @@ import {
 import { updateNativeWidgetPushes } from '../../server/nativeWidgetPushUpdater.js';
 import { readTradovateServerConfig } from '../../server/tradovateOAuthStore.js';
 import { collectConnectedAccountSnapshots } from '../../server/copierAccountSnapshotStore.js';
+import { purgeExpiredTvAlerts, shouldRunTvAlertPurge } from '../../server/tvAlertPurge.js';
 
 // Init Supabase with Service Role Key to bypass RLS in Cron job
 // VITE_ prefix vars are only available at build time, not in serverless runtime
@@ -170,6 +171,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     try {
         const now = new Date();
+        if (shouldRunTvAlertPurge(now)) {
+            try {
+                const purged = await purgeExpiredTvAlerts({ db: supabase, now: now.getTime() });
+                if (purged.alerts > 0) console.log('[Cron] TV alert purge', purged);
+            } catch (error) {
+                // Úklid příloh nikdy nesmí shodit minutové alerty/watchdog.
+                console.warn('[Cron] TV alert purge failed:', error instanceof Error ? error.message : String(error));
+            }
+        }
         const pragueTime = new Intl.DateTimeFormat('cs-CZ', {
             timeZone: 'Europe/Prague',
             hour: 'numeric',
@@ -734,6 +744,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         threadId: 'alphatrade-copier-trades',
                         category: 'ALPHATRADE_TRADE',
                         interruptionLevel: 'active',
+                        collapseId: notification.collapseId,
                     });
                     if (result.status === 'sent') copierAlertsSent++;
                     if (result.status === 'expired') {

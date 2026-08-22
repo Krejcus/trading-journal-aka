@@ -7,11 +7,11 @@ export interface MacCopierCommandRelay {
   nudgeCopyEvents(): void;
   uploadSnapshot(snapshot: {
     episodeId: string;
-    kind: 'entry' | 'exit' | 'sl-moved';
+    kind: 'entry' | 'exit' | 'sl-moved' | 'tv-alert';
     at: number;
     symbol: string;
     png: string;
-  }): Promise<void>;
+  }, options?: { deadlineAt?: number }): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -19,6 +19,12 @@ export interface MacCopierRealtimeKickConfig {
   url: string;
   anonKey: string;
   topic: string;
+}
+
+export interface MacTvAlertSnapshotRequest {
+  id: string;
+  symbol: string;
+  timeframe: string | null;
 }
 
 export function startMacCopierCommandRelay(options: {
@@ -37,6 +43,8 @@ export function startMacCopierCommandRelay(options: {
     config: MacCopierRealtimeKickConfig,
     onKick: () => void,
   ) => () => void;
+  /** Fire-and-forget handoff; the relay poll never awaits chart capture. */
+  onSnapshotRequests?: (requests: readonly MacTvAlertSnapshotRequest[]) => void;
 }): MacCopierCommandRelay {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const pollMs = Math.max(500, options.pollMs ?? 750);
@@ -83,10 +91,11 @@ export function startMacCopierCommandRelay(options: {
     );
   };
 
-  const request = async (payload: unknown) => {
+  const request = async (payload: unknown, timeoutMs?: number) => {
     const response = await fetchImpl(`${options.apiOrigin}/api/tradovate/oauth/copier-relay`, {
       method: 'POST', headers: { Accept: 'application/json', Authorization: await options.authorizationHeader(), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      ...(timeoutMs ? { signal: AbortSignal.timeout(Math.max(1, timeoutMs)) } : {}),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error((body as { error?: string }).error || `copier-relay-http-${response.status}`);
@@ -115,6 +124,19 @@ export function startMacCopierCommandRelay(options: {
         failures = 0;
         if (notifyCopyEvents) copyEventsPending = false;
         maybeSubscribeKick(response.realtime);
+        if (Array.isArray(response.snapshotRequests) && options.onSnapshotRequests) {
+          const requests = response.snapshotRequests.flatMap(value => {
+            if (!value || typeof value !== 'object') return [];
+            const row = value as Record<string, unknown>;
+            if (typeof row.id !== 'string' || typeof row.symbol !== 'string') return [];
+            return [{
+              id: row.id,
+              symbol: row.symbol,
+              timeframe: typeof row.timeframe === 'string' ? row.timeframe : null,
+            }];
+          });
+          if (requests.length > 0) options.onSnapshotRequests(requests);
+        }
         const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
         if (remote?.id && remote.command) {
           // Telemetrie: enqueue čas = expiresAt - 30 s (server TTL). Čekání
@@ -151,18 +173,23 @@ export function startMacCopierCommandRelay(options: {
       kickPending = true;
       wake?.();
     },
-    async uploadSnapshot(snapshot) {
+    async uploadSnapshot(snapshot, uploadOptions) {
       let lastError: unknown;
       // První pokus + nejvýše dva retry. Tato větev nikdy není awaitovaná
       // controllerem a po vyčerpání pokusů pouze předá chybu SNAPSHOT logu.
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          const response = await request({ action: 'snapshot', ...snapshot });
+          const remaining = uploadOptions?.deadlineAt == null ? 3_000 : uploadOptions.deadlineAt - Date.now();
+          if (remaining <= 0) throw new Error('copier-snapshot-deadline');
+          const response = await request({ action: 'snapshot', ...snapshot }, Math.min(3_000, remaining));
           if (response.accepted !== true) throw new Error('copier-snapshot-store-rejected');
           return;
         } catch (error) {
           lastError = error;
-          if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+          const retryDelay = 250 * (attempt + 1);
+          if (attempt < 2 && (uploadOptions?.deadlineAt == null || Date.now() + retryDelay < uploadOptions.deadlineAt)) {
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+          } else if (attempt < 2) break;
         }
       }
       throw lastError instanceof Error ? lastError : new Error(String(lastError));

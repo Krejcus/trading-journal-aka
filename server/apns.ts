@@ -19,6 +19,9 @@ export interface ApnsNotification {
   collapseId?: string;
   interruptionLevel?: 'passive' | 'active' | 'time-sensitive';
   badge?: number;
+  /** Notification Service Extension downloads this URL before display. */
+  imageUrl?: string;
+  mutableContent?: boolean;
 }
 
 export interface ApnsLiveActivityContentState {
@@ -130,8 +133,10 @@ export function buildApnsPayload(notification: ApnsNotification): Record<string,
       ...(notification.threadId ? { 'thread-id': notification.threadId } : {}),
       ...(notification.category ? { category: notification.category } : {}),
       ...(notification.interruptionLevel ? { 'interruption-level': notification.interruptionLevel } : {}),
+      ...(notification.mutableContent ? { 'mutable-content': 1 } : {}),
     },
     route: notification.route ?? 'dashboard',
+    ...(notification.imageUrl ? { imageUrl: notification.imageUrl } : {}),
   };
 }
 

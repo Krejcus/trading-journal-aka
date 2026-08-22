@@ -1,5 +1,6 @@
 import { access, appendFile, chmod, copyFile, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createClient as createSupabaseClient, type SupabaseClient } from '@supabase/supabase-js';
 import { tradovateApiBaseUrl } from '../../server/tradovateOAuth';
@@ -47,7 +48,11 @@ import {
 } from '../../server/macCopierDevice';
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
-import { captureTradingViewChartSnapshot } from '../../services/copierChartSnapshot';
+import {
+  captureTradingViewAlertSnapshot,
+  captureTradingViewChartSnapshot,
+  type TradingViewDedicatedChartRef,
+} from '../../services/copierChartSnapshot';
 
 type Command = 'keygen' | 'mac-device-init' | 'accounts' | 'preflight' | 'dry-run' | 'shadow' | 'live' | 'agent';
 
@@ -77,6 +82,29 @@ interface PilotContextOptions {
   privateKeyPath?: string;
   connectionId?: string;
   accountSpec?: string;
+}
+
+const dedicatedChartConfigPath = resolve(homedir(), 'Library/Application Support/AlphaTrade/copier/chart-snapshot.json');
+
+async function loadDedicatedChartRef(): Promise<TradingViewDedicatedChartRef> {
+  try {
+    const parsed = JSON.parse(await readFile(dedicatedChartConfigPath, 'utf8')) as Record<string, unknown>;
+    return {
+      ...(typeof parsed.chart_id === 'string' ? { chartId: parsed.chart_id } : {}),
+      ...(typeof parsed.target_id === 'string' ? { targetId: parsed.target_id } : {}),
+    };
+  } catch (error) {
+    if (isCode(error, 'ENOENT') || error instanceof SyntaxError) return {};
+    throw error;
+  }
+}
+
+async function saveDedicatedChartRef(value: TradingViewDedicatedChartRef): Promise<void> {
+  await mkdir(dirname(dedicatedChartConfigPath), { recursive: true, mode: 0o700 });
+  await writeFile(dedicatedChartConfigPath, `${JSON.stringify({
+    chart_id: value.chartId ?? null,
+    target_id: value.targetId ?? null,
+  }, null, 2)}\n`, { mode: 0o600 });
 }
 
 const flags = parseFlags(process.argv.slice(3));
@@ -275,7 +303,15 @@ async function runLocalAgent(
   let agent: Awaited<ReturnType<typeof startLocalCopierExecutionAgent>> | null = null;
   let relay: MacCopierCommandRelay | null = null;
   const snapshotsEnabled = process.env.ALPHATRADE_SNAPSHOTS?.trim().toLowerCase() !== 'off';
-  const lastStopSnapshotAt = new Map<string, number>();
+  let dedicatedChartRef: TradingViewDedicatedChartRef = {};
+  if (snapshotsEnabled) {
+    try {
+      dedicatedChartRef = await loadDedicatedChartRef();
+    } catch (error) {
+      console.warn(`${new Date().toISOString()} SNAPSHOT dedicated config ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const tvSnapshotHandledUntil = new Map<string, number>();
   let stopPromise: Promise<void> | null = null;
   const writeAudit = async (entries: readonly CopierAuditEntry[]) => {
     if (entries.length === 0) return;
@@ -320,12 +356,9 @@ async function runLocalAgent(
       onCopyEvent: event => {
         relay?.nudgeCopyEvents();
         if (!snapshotsEnabled || !relay || !event.episodeId) return;
-        if (event.kind !== 'entry' && event.kind !== 'exit' && event.kind !== 'sl-moved') return;
-        if (event.kind === 'sl-moved') {
-          const previous = lastStopSnapshotAt.get(event.symbol) ?? 0;
-          if (event.at - previous < 30_000) return;
-          lastStopSnapshotAt.set(event.symbol, event.at);
-        }
+        // Jen vstup a výstup (rozhodnutí uživatele 2026-08-22): posun SL je
+        // vlastní akce — notifikace stačí textová a snímek by byl jen šum.
+        if (event.kind !== 'entry' && event.kind !== 'exit') return;
         const snapshotRelay = relay;
         // Záměrně bez await: CDP ani síť nesmí vstoupit do dispatch/eventTail.
         void captureTradingViewChartSnapshot().then(async png => {
@@ -385,6 +418,49 @@ async function runLocalAgent(
             void client.removeChannel(channel);
             void client.realtime.disconnect();
           };
+        },
+        onSnapshotRequests: requests => {
+          if (!snapshotsEnabled || !relay) return;
+          const now = Date.now();
+          for (const [id, until] of tvSnapshotHandledUntil) {
+            if (until <= now) tvSnapshotHandledUntil.delete(id);
+          }
+          for (const request of requests) {
+            if (tvSnapshotHandledUntil.has(request.id)) continue;
+            tvSnapshotHandledUntil.set(request.id, now + 60_000);
+            const snapshotRelay = relay;
+            // Poll callback pouze naplánuje práci. Navigace, render, capture i
+            // upload mají společný 6s deadline a nikdy nejsou awaitované zde.
+            void (async () => {
+              const deadlineAt = Date.now() + 6_000;
+              const png = await captureTradingViewAlertSnapshot({
+                symbol: request.symbol,
+                timeframe: request.timeframe,
+                dedicated: dedicatedChartRef,
+                timeoutMs: Math.min(4_500, deadlineAt - Date.now()),
+                onDedicatedResolved: resolved => {
+                  dedicatedChartRef = { ...dedicatedChartRef, ...resolved };
+                  void saveDedicatedChartRef(dedicatedChartRef).catch(error => {
+                    console.warn(`${new Date().toISOString()} SNAPSHOT dedicated config ${error instanceof Error ? error.message : String(error)}`);
+                  });
+                },
+              });
+              if (!png || Date.now() >= deadlineAt) return;
+              if (png.byteLength > 2 * 1024 * 1024) {
+                console.warn(`${new Date().toISOString()} SNAPSHOT TV alert PNG je větší než 2 MB; zahazuji ${request.symbol}`);
+                return;
+              }
+              await snapshotRelay.uploadSnapshot({
+                episodeId: request.id,
+                kind: 'tv-alert',
+                at: Date.now(),
+                symbol: request.symbol,
+                png: png.toString('base64'),
+              }, { deadlineAt });
+            })().catch(error => {
+              console.warn(`${new Date().toISOString()} SNAPSHOT TV alert ${error instanceof Error ? error.message : String(error)}`);
+            });
+          }
         },
       });
     }

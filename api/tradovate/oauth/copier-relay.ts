@@ -14,6 +14,8 @@ import {
   storeCopierSnapshot,
   validateCopierSnapshotPayload,
 } from '../../../server/copierSnapshotStore.js';
+import { sendCopierSnapshotFollowUp, sendTvAlertSnapshotFollowUp } from '../../../server/snapshotImagePush.js';
+import { loadPendingTvAlertSnapshotRequests } from '../../../server/tvAlertNotifications.js';
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
 
@@ -33,6 +35,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const action = String(req.body?.action ?? '');
       if (action === 'snapshot') {
         const input = validateCopierSnapshotPayload(req.body);
+        if (input.kind === 'tv-alert') {
+          const { data: pendingAlert, error: pendingAlertError } = await db.from('tv_alerts')
+            .select('id').eq('id', input.episodeId).eq('user_id', device.userId)
+            .is('snapshot_path', null)
+            .gt('created_at', new Date(Date.now() - 60_000).toISOString())
+            .maybeSingle<{ id: string }>();
+          if (pendingAlertError) throw new Error(`tv-alert-snapshot-validate-failed: ${pendingAlertError.message}`);
+          if (!pendingAlert) return res.status(202).json({ accepted: false });
+        }
         if (!snapshotRateLimiter.consume(device.id)) {
           return res.status(429).json({ error: 'snapshot-rate-limit' });
         }
@@ -41,6 +52,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return res.status(429).json({ error: 'snapshot-rate-limit' });
           }
           const stored = await storeCopierSnapshot({ db, userId: device.userId, input });
+          if (input.kind === 'tv-alert') {
+            const { error: alertUpdateError } = await db.from('tv_alerts').update({ snapshot_path: stored.storagePath })
+              .eq('id', input.episodeId).eq('user_id', device.userId).is('snapshot_path', null);
+            if (alertUpdateError) throw new Error(`tv-alert-snapshot-link-failed: ${alertUpdateError.message}`);
+          }
+          // Samostatný pozdější APNs payload. Chyba signed URL / APNs nikdy
+          // nemění přijetí snapshotu ani worker/trading výsledek.
+          try {
+            if (input.kind === 'tv-alert') {
+              await sendTvAlertSnapshotFollowUp({
+                db, userId: device.userId, alertId: input.episodeId, storagePath: stored.storagePath,
+              });
+            } else {
+              await sendCopierSnapshotFollowUp({
+                db, userId: device.userId, deviceId: device.id, input, storagePath: stored.storagePath,
+              });
+            }
+          } catch (reason) {
+            console.warn('[SNAPSHOT] follow-up push failed', reason instanceof Error ? reason.message : String(reason));
+          }
           return res.status(202).json({ accepted: true, path: stored.storagePath });
         } catch (reason) {
           // Snapshot je observability artefakt. Jeho Storage/DB selhání nesmí
@@ -65,8 +96,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               reason instanceof Error ? reason.message : String(reason));
           }
         }
+        // Broker/UI command má přednost: pokud nějaký čeká, poll nečeká ani na
+        // levný snapshot dotaz. Obrázek si worker vyzvedne až v dalším kole.
+        const command = await claimTradovateCopierCommand({ db, deviceId: device.id });
+        let snapshotRequests: Awaited<ReturnType<typeof loadPendingTvAlertSnapshotRequests>> = [];
+        if (!command) {
+          try {
+            snapshotRequests = await loadPendingTvAlertSnapshotRequests({ db, userId: device.userId });
+          } catch (reason) {
+            console.warn('[copier-relay] tv-alert snapshot request failed',
+              reason instanceof Error ? reason.message : String(reason));
+          }
+        }
         return res.status(200).json({
-          command: await claimTradovateCopierCommand({ db, deviceId: device.id }),
+          command,
+          snapshotRequests,
           // Realtime „kick": worker se přihlásí k broadcast kanálu a příkaz
           // dostane okamžitě místo čekání na další poll. Anon key je veřejný
           // (je i ve web bundlu); kanál nenese žádná data, jen budíček.
