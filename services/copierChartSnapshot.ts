@@ -231,21 +231,18 @@ export async function captureTradingViewAlertSnapshot(
     if (!listResponse.ok) throw new Error('snapshot-cdp-list-failed');
     const targets = await listResponse.json() as CdpTarget[];
     const ref = options.dedicated ?? {};
-    // Cílení VÝHRADNĚ přes targetId: uživatelův hlavní tab může sdílet
-    // stejné layout/chart ID (TV otevírá poslední layout), takže shoda podle
-    // chartId by mohla navigovat graf, na který se uživatel právě dívá.
-    let target = Array.isArray(targets) && ref.targetId ? targets.find(candidate => (
+    // Cílení: targetId (per session) → chartId z konfigurace. ChartId je
+    // bezpečné JEN proto, že konfiguraci plní vyhrazený layout „AlphaTrade
+    // Snapshoty" s unikátním ID — nikdy layout, který používá uživatel.
+    // Electron CDP neumí /json/new, takže bez nalezené záložky se capture
+    // vzdá (fallback pasivního snímku řeší catch níže).
+    const target = Array.isArray(targets) ? targets.find(candidate => (
       candidate.type === 'page'
       && typeof candidate.webSocketDebuggerUrl === 'string'
-      && candidate.id === ref.targetId
+      && ((ref.targetId && candidate.id === ref.targetId)
+        || (ref.chartId && chartIdFromUrl(candidate.url) === ref.chartId))
     )) : undefined;
-    if (!target) {
-      const created = await fetchImpl(`${cdpOrigin}/json/new?${encodeURIComponent('https://www.tradingview.com/chart/')}`, {
-        method: 'PUT', signal: AbortSignal.timeout(remaining()),
-      });
-      if (!created.ok) throw new Error('snapshot-cdp-create-target-failed');
-      target = await created.json() as CdpTarget;
-    }
+    if (!target) throw new Error('snapshot-cdp-dedicated-tab-missing');
     if (!target?.webSocketDebuggerUrl || target.type !== 'page' || !target.url?.includes('tradingview.com/chart')) {
       throw new Error('snapshot-cdp-invalid-dedicated-target');
     }

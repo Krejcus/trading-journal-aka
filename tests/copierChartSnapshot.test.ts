@@ -78,7 +78,7 @@ describe('TV alert dedicated chart navigation', () => {
       { id: 'dedicated', type: 'page', url: 'https://www.tradingview.com/chart/alpha/', webSocketDebuggerUrl: 'ws://dedicated' },
     ]), { status: 200 })) as typeof fetch;
     const promise = captureTradingViewAlertSnapshot({
-      symbol: 'MNQ1!', timeframe: '5', dedicated: { targetId: 'dedicated' },
+      symbol: 'MNQ1!', timeframe: '5', dedicated: { chartId: 'alpha' },
       fetchImpl, webSocketFactory: url => {
         expect(url).toBe('ws://dedicated');
         return socket;
@@ -132,7 +132,7 @@ describe('TV alert dedicated chart navigation', () => {
       }]), { status: 200 });
     }) as typeof fetch;
     const promise = captureTradingViewAlertSnapshot({
-      symbol: 'MNQ1!', timeframe: '1', dedicated: { targetId: 'dedicated' },
+      symbol: 'MNQ1!', timeframe: '1', dedicated: { chartId: 'alpha' },
       fetchImpl,
       webSocketFactory: url => url === 'ws://dedicated' ? dedicated : passive,
       sleepImpl: async () => undefined,
