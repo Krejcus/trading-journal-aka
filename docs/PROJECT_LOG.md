@@ -78,6 +78,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, Notification Service Extension pro obrázkové pushy)
+Do přímo spravovaného `App.xcodeproj` přibyl target `AlphaTradeNotifications`
+s bundle ID `app.alphatrade.native.notifications`, deployment targetem iOS 15.0
+shodným s hlavní appkou a embed/dependency vazbou do `App`. Service extension
+vyžaduje `aps.mutable-content = 1`, čte existující serverový klíč `imageUrl`, přijímá pouze HTTPS (včetně kontroly
+redirectů), JPEG/PNG a nejvýše 5 MB. Osmisekundový deadline, URLSession timeout
+a `serviceExtensionTimeWillExpire` vždy jednorázově doručí původní obsah při
+jakékoli chybě; pouze úspěšný download přidá `UNNotificationAttachment` s
+příponou odvozenou z Content-Type. Serverový payload zůstal beze změny.
+
+Ověření: požadovaný generic iOS Debug build bez signing prošel (`BUILD
+SUCCEEDED`); dependency graf zahrnul nový target a výsledná appex je vložená v
+`App.app/PlugIns` s bundle ID, iOS 15.0 a správným service-extension plist.
+`npx tsc --noEmit` prošel a plná sada `npx vitest run` mimo sandbox prošla
+179/179 souborů a 1391/1391 testů (první sandboxový běh selhal pouze na zákazu
+`listen 127.0.0.1`). Nic nebylo commitnuto, pushnuto, deploynuto ani instalováno
+na zařízení; fyzické doručení obrázkového APNs pushu zůstává neověřené.
+
 ### 2026-08-22 (Codex, F2a obrázkové notifikace — server + worker)
 Připravený, ale NENASAZENÝ tok pro dva spotřebitele obrázkových pushů. Nový
 TradingView webhook má per-user 256bit hex token, validovaný bounded payload,
