@@ -19,10 +19,14 @@ import { motion } from 'framer-motion';
 import { Skull, X, AlertTriangle, TrendingDown, Lightbulb, Calendar, DollarSign, Target } from 'lucide-react';
 import type { Account, Trade } from '../types';
 import { supabase } from '../services/supabase';
+import type { FailureData } from '../lib/accountFuneralPlan';
 
 interface Props {
     account: Account;
     accounts?: Account[];
+    successorCandidates?: Account[];
+    compactMulti?: boolean;
+    initialFailureDate?: string;
     title?: string;
     trades: Trade[];
     userId: string;
@@ -31,15 +35,7 @@ interface Props {
     theme: 'dark' | 'light' | 'oled';
 }
 
-export interface FailureData {
-    reason: string;
-    whatHappened: string;
-    amountLost: number;
-    daysOfConsistency: number;
-    progressPct: number;
-    keyLesson: string;
-    failureDate: string;
-}
+export type { FailureData } from '../lib/accountFuneralPlan';
 
 const REASON_OPTIONS = [
     'Tilt po ztrátě',
@@ -52,9 +48,12 @@ const REASON_OPTIONS = [
     'Jiný důvod',
 ];
 
-const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades, userId, onConfirm, onClose, theme }) => {
+const AccountFuneralModal: React.FC<Props> = ({ account, accounts, successorCandidates = [], compactMulti = false, initialFailureDate, title, trades, userId, onConfirm, onClose, theme }) => {
     const isDark = theme !== 'light';
-    const targetAccounts = useMemo(() => accounts?.length ? accounts : [account], [accounts, account]);
+    const availableAccounts = useMemo(() => accounts?.length ? accounts : [account], [accounts, account]);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(availableAccounts.map(item => item.id)));
+    const [successorOfAccountId, setSuccessorOfAccountId] = useState('');
+    const targetAccounts = useMemo(() => availableAccounts.filter(item => selectedIds.has(item.id)), [availableAccounts, selectedIds]);
     const targetAccountIds = useMemo(() => new Set(targetAccounts.map(a => a.id)), [targetAccounts]);
     const isGroup = targetAccounts.length > 1;
     const displayName = title || account.name;
@@ -123,15 +122,16 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
     }, [accountTrades, targetAccounts]);
 
     const today = new Date().toISOString().slice(0, 10);
-    const [reason, setReason] = useState<string>(REASON_OPTIONS[0]);
+    const [reason, setReason] = useState<string>(compactMulti ? 'Porušení max drawdownu' : REASON_OPTIONS[0]);
     const [whatHappened, setWhatHappened] = useState<string>('');
     const [amountLost, setAmountLost] = useState<number>(stats.maxDrawdown || 0);
     const [keyLesson, setKeyLesson] = useState<string>('');
-    const [failureDate, setFailureDate] = useState<string>(today);
+    const [failureDate, setFailureDate] = useState<string>(initialFailureDate || today);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const canSave = keyLesson.trim().length > 5 && whatHappened.trim().length > 5;
+    const canSave = targetAccounts.length > 0 && whatHappened.trim().length > 5
+        && (compactMulti || keyLesson.trim().length > 5);
 
     const handleSave = async () => {
         if (!canSave) {
@@ -147,8 +147,10 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
             amountLost,
             daysOfConsistency: stats.daysConsistency,
             progressPct: stats.progressPct,
-            keyLesson: keyLesson.trim(),
+            keyLesson: compactMulti ? '' : keyLesson.trim(),
             failureDate,
+            selectedAccountIds: targetAccounts.map(item => item.id),
+            ...(successorOfAccountId ? { successorOfAccountId } : {}),
         };
 
         // Insert do ai_coach_memory jako episode (importance 10 = nezapomeň!)
@@ -172,7 +174,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
                 `FINANČNÍ DOPAD: -$${amountLost.toLocaleString()}`,
                 ``,
                 `KLÍČOVÁ LEKCE:`,
-                `⚠️ ${keyLesson}`,
+                `⚠️ ${compactMulti ? whatHappened.trim() : keyLesson.trim()}`,
                 ``,
                 `AI COACH: Při jakékoliv otázce o disciplíně, position sizing, revenge tradingu`,
                 `nebo po loss day, VŽDY připomeň tuto epizodu. Zdůrazni že účet byl`,
@@ -198,7 +200,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
                     target_pnl_usd: stats.challengeTarget,
                     days_of_consistency: stats.daysConsistency,
                     reason,
-                    key_lesson: keyLesson.trim(),
+                    key_lesson: compactMulti ? whatHappened.trim() : keyLesson.trim(),
                     total_trades: stats.totalTrades,
                 },
             });
@@ -238,6 +240,25 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
                 </div>
 
                 <div className="p-6 lg:p-8 space-y-6">
+                    {availableAccounts.length > 1 && (
+                        <div className={`rounded-lg border p-4 ${isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`}>
+                            <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Účty k pohřbení</p>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                                {availableAccounts.map(item => {
+                                    const checked = selectedIds.has(item.id);
+                                    return <label key={item.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-xs font-bold ${checked ? 'border-rose-500/35 bg-rose-500/8' : isDark ? 'border-white/5' : 'border-slate-200'}`}>
+                                        <input type="checkbox" checked={checked} disabled={checked && selectedIds.size === 1} onChange={() => setSelectedIds(previous => {
+                                            const next = new Set(previous);
+                                            checked ? next.delete(item.id) : next.add(item.id);
+                                            return next;
+                                        })} />
+                                        <span className="truncate">{item.name}</span>
+                                    </label>;
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     {/* Auto-computed stats grid */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <StatCard label="Peak Equity" value={`$${stats.peakEquity.toLocaleString()}`} icon={Target} color="emerald" isDark={isDark} />
@@ -249,7 +270,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
                     {/* Reflection form */}
                     <div className="space-y-4">
                         {/* Reason */}
-                        <div>
+                        {!compactMulti && <div>
                             <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                                 <AlertTriangle size={11} className="inline mr-1.5" />
                                 Důvod spálení
@@ -261,7 +282,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
                             >
                                 {REASON_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
                             </select>
-                        </div>
+                        </div>}
 
                         {/* What happened */}
                         <div>
@@ -296,7 +317,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
                         </div>
 
                         {/* Amount lost + days */}
-                        <div className="grid grid-cols-2 gap-3">
+                        {!compactMulti && <div className="grid grid-cols-2 gap-3">
                             <div>
                                 <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                                     <DollarSign size={11} className="inline mr-1" />
@@ -322,10 +343,10 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
                                     <span className="text-[9px] uppercase tracking-widest opacity-50 ml-auto">auto</span>
                                 </div>
                             </div>
-                        </div>
+                        </div>}
 
                         {/* Key lesson */}
-                        <div>
+                        {!compactMulti && <div>
                             <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block text-amber-500`}>
                                 <Lightbulb size={11} className="inline mr-1.5" />
                                 Klíčová lekce <span className="text-rose-500">*</span>
@@ -337,7 +358,17 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, title, trades
                                 rows={3}
                                 className={`w-full px-4 py-3 rounded-xl border-2 text-sm resize-none ${isDark ? 'bg-amber-500/5 border-amber-500/30 text-white placeholder:text-slate-500' : 'bg-amber-50 border-amber-300 text-slate-900 placeholder:text-amber-700/40'}`}
                             />
-                        </div>
+                        </div>}
+
+                        {(compactMulti || successorCandidates.length > 0) && (
+                            <div>
+                                <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Volitelný nástupce</label>
+                                <select value={successorOfAccountId} onChange={event => setSuccessorOfAccountId(event.target.value)} className={`w-full px-4 py-3 rounded-lg border text-sm ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+                                    <option value="">Bez nástupce</option>
+                                    {successorCandidates.filter(candidate => !selectedIds.has(candidate.id)).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+                                </select>
+                            </div>
+                        )}
                     </div>
 
                     {/* AI Coach note */}

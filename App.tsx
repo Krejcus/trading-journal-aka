@@ -4320,6 +4320,7 @@ const App: React.FC = () => {
                         onUpdate={(next) => setAccounts([...next, ...accounts.filter(isBacktestAccount)])}
                         onDelete={handleDeleteAccount}
                         oauthLiveStates={oauthAccountLiveStates}
+                        tradovateProfiles={tradovateLive.profiles}
                         theme={theme}
                         trades={trades}
                         onUpdateTrades={handleUpdateTrades}
@@ -4351,6 +4352,7 @@ const App: React.FC = () => {
                             <React.Suspense fallback={<div className="h-32" />}>
                               <Graveyard
                                 accounts={failedAccounts}
+                                allAccounts={[...accounts, ...archivedAccounts]}
                                 trades={trades}
                                 theme={theme}
                               />

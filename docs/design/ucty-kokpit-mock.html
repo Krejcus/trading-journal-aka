@@ -1,0 +1,267 @@
+<title>Kokpit účtů</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,300..900&family=JetBrains+Mono:wght@400;600;800&display=swap">
+<style>
+  :root{
+    --bg:#0B1220; --panel:#111A2C; --panel2:#0E1626; --line:rgba(255,255,255,.06);
+    --ink:#E6EBF4; --mut:#8494AC; --dim:#5A6A85;
+    --acc:#6366F1; --good:#10B981; --warn:#F59E0B; --risk:#F43F5E; --funded:#A78BFA;
+    --disp:"Archivo",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--disp);font-size:15px;line-height:1.5;padding:0 0 80px}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .lbl{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .new{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.1em;color:var(--acc);border:1px solid rgba(99,102,241,.4);border-radius:99px;padding:1px 7px;vertical-align:2px;margin-left:8px}
+
+  header{padding:34px 0 6px}
+  header h1{font-weight:900;font-size:30px;font-stretch:112%;letter-spacing:-.01em}
+  header p{color:var(--mut);max-width:62ch;margin-top:6px}
+
+  /* souhrnný pás */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:26px 0 8px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .stat .v{font-size:24px;font-weight:800;margin-top:4px}
+  .stat .s{font-size:12px;color:var(--mut);margin-top:2px}
+  .stat.alert{border-color:rgba(244,63,94,.35);background:linear-gradient(180deg,rgba(244,63,94,.09),var(--panel))}
+  .stat.ready{border-color:rgba(16,185,129,.35);background:linear-gradient(180deg,rgba(16,185,129,.08),var(--panel))}
+  .up{color:var(--good)} .down{color:var(--risk)} .wa{color:var(--warn)}
+
+  /* skupina firmy */
+  .firm{margin-top:34px}
+  .firmhead{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid var(--line);padding-bottom:10px}
+  .firmlogo{width:26px;height:26px;border-radius:6px;background:var(--panel);border:1px solid var(--line);display:inline-grid;place-items:center;font-weight:900;font-size:12px;align-self:center}
+  .firmhead h2{font-size:17px;font-weight:900;letter-spacing:.02em}
+  .firmhead .agg{margin-left:auto;display:flex;gap:18px;font-size:12px;color:var(--mut)}
+  .firmhead .agg b{color:var(--ink);font-weight:800}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px;margin-top:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;position:relative;transition:border-color .2s}
+  .card:hover{border-color:rgba(99,102,241,.35)}
+  .card.warning{border-color:rgba(245,158,11,.45)}
+  .card.danger{border-color:rgba(244,63,94,.55);box-shadow:0 0 24px rgba(244,63,94,.07)}
+  .card.payout{border-color:rgba(16,185,129,.45)}
+
+  .chead{display:flex;align-items:center;gap:10px}
+  .dot{width:8px;height:8px;border-radius:99px;background:var(--good);box-shadow:0 0 8px rgba(16,185,129,.8);flex:none}
+  .dot.off{background:var(--dim);box-shadow:none}
+  .cname{font-weight:800;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pencil{color:var(--dim);font-size:11px;cursor:pointer}
+  .chip{margin-left:auto;flex:none;font-size:10px;font-weight:800;letter-spacing:.08em;padding:3px 9px;border-radius:99px}
+  .chip.challenge{color:var(--warn);background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.35)}
+  .chip.funded{color:var(--funded);background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.35)}
+  .cid{font-size:11px;color:var(--dim);margin:2px 0 0 18px}
+
+  .crow{display:flex;align-items:flex-end;justify-content:space-between;margin-top:12px;gap:10px}
+  .bal .lbl{margin-bottom:2px}
+  .bal .v{font-size:23px;font-weight:800}
+  .bal .d{font-size:12.5px;font-weight:700;margin-top:1px}
+  .spark{flex:none}
+
+  .gauges{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+  .g{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:9px 11px}
+  .g .t{display:flex;justify-content:space-between;font-size:10.5px;color:var(--mut);font-weight:700}
+  .g .t b{color:var(--ink)}
+  .bar{height:5px;border-radius:99px;background:rgba(255,255,255,.07);margin-top:7px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:99px}
+  .g .u{font-size:10px;color:var(--dim);margin-top:5px}
+  .g.hot .u,.g.hot .t b{color:var(--risk)}
+  .g.mid .u,.g.mid .t b{color:var(--warn)}
+
+  .foot{display:flex;align-items:center;gap:8px;margin-top:13px;font-size:11px;color:var(--mut);flex-wrap:wrap}
+  .tag{border:1px solid var(--line);border-radius:4px;padding:2px 8px;font-weight:700;font-size:10.5px}
+  .tag.ok{color:var(--good);border-color:rgba(16,185,129,.3)}
+  .tag.warn{color:var(--warn);border-color:rgba(245,158,11,.35)}
+  .tag.risk{color:var(--risk);border-color:rgba(244,63,94,.35)}
+  .tag.ghost{color:var(--dim)}
+
+  /* anotace */
+  .notes{margin-top:56px;border-top:1px solid var(--line);padding-top:26px}
+  .notes h3{font-weight:900;font-size:19px}
+  .ngrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:16px}
+  .note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;padding:14px 16px}
+  .note b{display:block;font-weight:800;margin-bottom:4px}
+  .note p{font-size:13px;color:var(--mut)}
+  .note .src{font-size:10.5px;color:var(--dim);margin-top:8px;font-family:var(--mono)}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>Kokpit účtů <span class="new">NÁVRH</span></h1>
+  <p>Karta Účty přestavěná pro OAuth éru: zdraví všech prop účtů na jeden pohled — vzdálenost od limitů, postup k payoutu a živý stav připojení. Mock ukazuje tvoje skutečné účty s realistickými čísly.</p>
+</header>
+
+<section class="stats">
+  <div class="stat"><div class="lbl">Celková equity</div><div class="v num">$253 480</div><div class="s">6 účtů · 2 firmy</div></div>
+  <div class="stat"><div class="lbl">Dnes</div><div class="v num up">+$1 176</div><div class="s">master +$196 × kopie</div></div>
+  <div class="stat alert"><div class="lbl">V riziku</div><div class="v down">1 účet</div><div class="s">TDFY #59 · 71 % daily limitu</div></div>
+  <div class="stat ready"><div class="lbl">Payout</div><div class="v up">za ~$310</div><div class="s">TDFY #57 splní minimum</div></div>
+</section>
+
+<!-- ═══ TRADEIFY ═══ -->
+<section class="firm">
+  <div class="firmhead">
+    <span class="firmlogo" style="color:var(--acc)">T</span>
+    <h2>TRADEIFY</h2><span class="lbl" style="align-self:center">5 účtů</span>
+    <div class="agg"><span>Dnes <b class="num up">+$980</b></span><span>Equity <b class="num">$203 340</b></span></div>
+  </div>
+  <div class="cards">
+
+    <div class="card payout">
+      <div class="chead"><span class="dot"></span><span class="cname">Tradeify hlavní ✏️</span><span class="chip funded">FUNDED</span></div>
+      <div class="cid num">62364057 · $50K · ×1</div>
+      <div class="crow">
+        <div class="bal"><div class="lbl">Balance</div><div class="v num">$51 940</div><div class="d num up">dnes +$196</div></div>
+        <svg class="spark" width="120" height="38" viewBox="0 0 120 38"><path d="M0 30 L14 27 L28 29 L42 22 L56 24 L70 16 L84 18 L98 10 L120 6" fill="none" stroke="#10B981" stroke-width="2"/><path d="M0 30 L14 27 L28 29 L42 22 L56 24 L70 16 L84 18 L98 10 L120 6 L120 38 L0 38 Z" fill="rgba(16,185,129,.09)"/><circle cx="120" cy="6" r="2.6" fill="#10B981"/></svg>
+      </div>
+      <div class="gauges">
+        <div class="g"><div class="t"><span>Denní limit</span><b class="num">−$196 / $1 100</b></div><div class="bar"><i style="width:18%;background:var(--good)"></i></div><div class="u">zbývá $904 prostoru</div></div>
+        <div class="g"><div class="t"><span>Trailing DD</span><b class="num">$1 730 od dna</b></div><div class="bar"><i style="width:24%;background:var(--good)"></i></div><div class="u">floor $50 210</div></div>
+      </div>
+      <div class="gauges" style="margin-top:10px">
+        <div class="g"><div class="t"><span>Profit dny (≥ $150)</span><b class="num">4 / 5</b></div><div class="bar"><i style="width:80%;background:var(--acc)"></i></div><div class="u">zbývá 1 zelený den</div></div>
+        <div class="g"><div class="t"><span>Payout okno</span><b class="num">split 90 % · cap dle velikosti</b></div><div class="bar"><i style="width:56%;background:var(--good)"></i></div><div class="u">nárok ~$1 400 · Growth cyklus</div></div>
+      </div>
+      <div class="foot"><span class="tag ok">Payout za ~$310</span><span class="tag ok">Consistency 24 % / 35 %</span><span>12 obchodních dní</span></div>
+    </div>
+
+    <div class="card danger">
+      <div class="chead"><span class="dot"></span><span class="cname">TDFY #59 ✏️</span><span class="chip funded">FUNDED</span></div>
+      <div class="cid num">62364059 · $50K · ×1</div>
+      <div class="crow">
+        <div class="bal"><div class="lbl">Balance</div><div class="v num">$49 610</div><div class="d num down">dnes −$782</div></div>
+        <svg class="spark" width="120" height="38" viewBox="0 0 120 38"><path d="M0 12 L16 15 L32 11 L48 18 L64 16 L80 24 L96 22 L120 31" fill="none" stroke="#F43F5E" stroke-width="2"/><path d="M0 12 L16 15 L32 11 L48 18 L64 16 L80 24 L96 22 L120 31 L120 38 L0 38 Z" fill="rgba(244,63,94,.08)"/><circle cx="120" cy="31" r="2.6" fill="#F43F5E"/></svg>
+      </div>
+      <div class="gauges">
+        <div class="g hot"><div class="t"><span>Denní limit</span><b class="num">−$782 / $1 100</b></div><div class="bar"><i style="width:71%;background:var(--risk)"></i></div><div class="u">zbývá jen $318 — zvaž stop na dnešek</div></div>
+        <div class="g mid"><div class="t"><span>Trailing DD</span><b class="num">$840 od dna</b></div><div class="bar"><i style="width:62%;background:var(--warn)"></i></div><div class="u">floor $48 770</div></div>
+      </div>
+      <div class="foot"><span class="tag risk">⚠ 71 % denního limitu</span><span class="tag ghost">payout daleko</span></div>
+    </div>
+
+    <div class="card warning">
+      <div class="chead"><span class="dot"></span><span class="cname">TDFY eval #60 ✏️</span><span class="chip challenge">CHALLENGE</span></div>
+      <div class="cid num">62364060 · $50K · ×1</div>
+      <div class="crow">
+        <div class="bal"><div class="lbl">Balance</div><div class="v num">$52 380</div><div class="d num up">dnes +$196</div></div>
+        <svg class="spark" width="120" height="38" viewBox="0 0 120 38"><path d="M0 32 L18 28 L36 30 L54 20 L72 22 L90 12 L120 8" fill="none" stroke="#10B981" stroke-width="2"/><path d="M0 32 L18 28 L36 30 L54 20 L72 22 L90 12 L120 8 L120 38 L0 38 Z" fill="rgba(16,185,129,.09)"/><circle cx="120" cy="8" r="2.6" fill="#10B981"/></svg>
+      </div>
+      <div class="gauges">
+        <div class="g"><div class="t"><span>Profit target</span><b class="num">$2 380 / $3 000</b></div><div class="bar"><i style="width:79%;background:var(--acc)"></i></div><div class="u">79 % — zbývá $620</div></div>
+        <div class="g mid"><div class="t"><span>Consistency</span><b class="num">31 % / 35 %</b></div><div class="bar"><i style="width:95%;background:var(--warn)"></i></div><div class="u">nejlepší den se blíží 35% limitu Growth</div></div>
+      </div>
+      <div class="foot"><span class="tag warn">Consistency na hraně</span><span class="tag ok">target blízko</span></div>
+    </div>
+
+    <div class="card">
+      <div class="chead"><span class="dot"></span><span class="cname">TDFY #55 ✏️</span><span class="chip funded">FUNDED</span></div>
+      <div class="cid num">62364055 · $50K · ×1</div>
+      <div class="crow">
+        <div class="bal"><div class="lbl">Balance</div><div class="v num">$50 210</div><div class="d num up">dnes +$196</div></div>
+        <svg class="spark" width="120" height="38" viewBox="0 0 120 38"><path d="M0 26 L20 24 L40 27 L60 20 L80 21 L100 15 L120 13" fill="none" stroke="#10B981" stroke-width="2"/><path d="M0 26 L20 24 L40 27 L60 20 L80 21 L100 15 L120 13 L120 38 L0 38 Z" fill="rgba(16,185,129,.09)"/><circle cx="120" cy="13" r="2.6" fill="#10B981"/></svg>
+      </div>
+      <div class="gauges">
+        <div class="g"><div class="t"><span>Denní limit</span><b class="num">+$196 / $1 100</b></div><div class="bar"><i style="width:4%;background:var(--good)"></i></div><div class="u">v zisku — limit netknutý</div></div>
+        <div class="g"><div class="t"><span>Trailing DD</span><b class="num">$2 020 od dna</b></div><div class="bar"><i style="width:14%;background:var(--good)"></i></div><div class="u">floor $48 190</div></div>
+      </div>
+      <div class="foot"><span class="tag ok">V bezpečí</span><span>payout za $1 890</span></div>
+    </div>
+
+    <div class="card" style="opacity:.55">
+      <div class="chead"><span class="dot off"></span><span class="cname">TDFY starý #61 ✏️</span><span class="chip challenge">CHALLENGE</span></div>
+      <div class="cid num">62364061 · odpojen před 6 dny</div>
+      <div class="crow">
+        <div class="bal"><div class="lbl">Poslední balance</div><div class="v num" style="color:var(--mut)">$48 120</div><div class="d" style="color:var(--dim)">historie zachována</div></div>
+      </div>
+      <div class="foot"><span class="tag ghost">Odpojen</span><span class="tag ghost">Archivovat</span><span class="tag ghost">Nástupce: #60</span></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ═══ LUCID ═══ -->
+<section class="firm">
+  <div class="firmhead">
+    <span class="firmlogo" style="color:var(--good)">L</span>
+    <h2>LUCID</h2><span class="lbl" style="align-self:center">1 účet</span>
+    <div class="agg"><span>Dnes <b class="num up">+$196</b></span><span>Equity <b class="num">$50 140</b></span></div>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <div class="chead"><span class="dot"></span><span class="cname">Lucid #1 ✏️</span><span class="chip funded">FUNDED</span></div>
+      <div class="cid num">62364553 · $50K · ×1</div>
+      <div class="crow">
+        <div class="bal"><div class="lbl">Balance</div><div class="v num">$50 140</div><div class="d num up">dnes +$196</div></div>
+        <svg class="spark" width="120" height="38" viewBox="0 0 120 38"><path d="M0 24 L20 26 L40 22 L60 25 L80 18 L100 19 L120 14" fill="none" stroke="#10B981" stroke-width="2"/><path d="M0 24 L20 26 L40 22 L60 25 L80 18 L100 19 L120 14 L120 38 L0 38 Z" fill="rgba(16,185,129,.09)"/><circle cx="120" cy="14" r="2.6" fill="#10B981"/></svg>
+      </div>
+      <div class="gauges">
+        <div class="g"><div class="t"><span>Denní limit</span><b class="num">+$196 / $1 250</b></div><div class="bar"><i style="width:3%;background:var(--good)"></i></div><div class="u">v zisku — limit netknutý</div></div>
+        <div class="g"><div class="t"><span>EOD trailing (intraday high)</span><b class="num">$1 460 od floor</b></div><div class="bar"><i style="width:22%;background:var(--good)"></i></div><div class="u">floor $48 680</div></div>
+      </div>
+      <div class="foot"><span class="tag ok">V bezpečí</span><span>LucidFlex: 3/5 winning days · min payout $100</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ HŘBITOV ═══ -->
+<section class="firm">
+  <div class="firmhead">
+    <span class="firmlogo" style="color:var(--risk)">✝</span>
+    <h2 style="color:var(--mut)">HŘBITOV</h2><span class="lbl" style="align-self:center">historie zůstává navždy</span>
+  </div>
+  <div class="cards">
+    <div class="card" style="border-color:rgba(244,63,94,.3);opacity:.8">
+      <div class="chead"><span class="dot off"></span><span class="cname" style="color:var(--mut)">TDFY eval spálený 💀</span><span class="chip" style="color:var(--risk);background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.35)">BREACH</span></div>
+      <div class="cid num">62364041 · $50K · spálen 14. 8. — trailing DD protnut (−$2 040)</div>
+      <div class="crow">
+        <div class="bal"><div class="lbl">Konečná bilance</div><div class="v num" style="color:var(--mut)">$47 960</div><div class="d num down">životní P&amp;L −$2 040 · 23 obchodů</div></div>
+        <svg class="spark" width="120" height="38" viewBox="0 0 120 38"><path d="M0 14 L20 12 L40 18 L60 16 L80 25 L100 28 L120 35" fill="none" stroke="#5A6A85" stroke-width="2"/><circle cx="120" cy="35" r="2.6" fill="#F43F5E"/></svg>
+      </div>
+      <div class="foot"><span class="tag risk">Breach: trailing DD</span><span class="tag ghost">Nástupce: TDFY eval #60</span><span class="tag ghost">Obchody v deníku ✓</span><span class="tag ghost">Náklad evaluace $189</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ ŠABLONY PRAVIDEL ═══ -->
+<section class="firm">
+  <div class="firmhead">
+    <span class="firmlogo" style="color:var(--warn)">§</span>
+    <h2>ŠABLONY PRAVIDEL FIREM</h2><span class="lbl" style="align-self:center">předvyplněno z veřejných pravidel 8/2026 · uprav dle svého plánu</span>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <div class="chead"><span class="cname">Tradeify — Growth Funded ✏️</span><span class="chip funded">AKTIVNÍ</span></div>
+      <div class="gauges" style="grid-template-columns:1fr 1fr;margin-top:12px">
+        <div class="g"><div class="t"><span>Profit dny / payout</span><b class="num">5 dnů</b></div><div class="u">každý nad min. práh</div></div>
+        <div class="g"><div class="t"><span>Consistency</span><b class="num">35 %</b></div><div class="u">nejlepší den ≤ 35 % zisku</div></div>
+        <div class="g"><div class="t"><span>Split</span><b class="num">90 / 10</b></div><div class="u">payout cap dle velikosti účtu</div></div>
+        <div class="g"><div class="t"><span>Drawdown</span><b class="num">EOD trailing</b></div><div class="u">+ daily loss limit</div></div>
+      </div>
+      <div class="foot"><span class="tag ghost">platí pro 5 účtů</span><span class="tag ghost">Lightning varianta: bez min. dnů · consistency 20 %</span></div>
+    </div>
+    <div class="card">
+      <div class="chead"><span class="cname">Lucid — LucidFlex ✏️</span><span class="chip funded">AKTIVNÍ</span></div>
+      <div class="gauges" style="grid-template-columns:1fr 1fr;margin-top:12px">
+        <div class="g"><div class="t"><span>Winning days / cyklus</span><b class="num">5 dnů</b></div><div class="u">bi-weekly payout cyklus</div></div>
+        <div class="g"><div class="t"><span>Min payout</span><b class="num">$100</b></div><div class="u">split 90 / 10</div></div>
+        <div class="g"><div class="t"><span>Drawdown</span><b class="num">EOD trailing</b></div><div class="u">floor z intraday high!</div></div>
+        <div class="g"><div class="t"><span>Alternativa</span><b class="num">LucidPro</b></div><div class="u">3denní cykly · bez min. dnů</div></div>
+      </div>
+      <div class="foot"><span class="tag ghost">platí pro 1 účet</span><span class="tag warn">firmy mění pravidla bez varování — šablona jde kdykoli upravit</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="notes">
+  <h3>Co je na kartě nového — a odkud tečou data</h3>
+  <div class="ngrid">
+    <div class="note"><b>Souhrnný pás nahoře</b><p>Ranní pohled za 5 vteřin: celková equity, dnešek, kolik účtů je v riziku a kdo je před payoutem. Řadí se risk-first — problém vždy nahoře.</p><div class="src">zdroj: snapshoty balance z heartbeatu workera (nová F3 várka)</div></div>
+    <div class="note"><b>Měřidla limitů firmy</b><p>Denní limit a trailing drawdown jako bar se semaforem a textem „zbývá $X". Přesně ta čísla, kvůli kterým dnes klikáš do Tradovate po jednom účtu.</p><div class="src">zdroj: tradovate_account_profiles (limity) + propDrawdown výpočet (už v appce)</div></div>
+    <div class="note"><b>Payout &amp; consistency</b><p>U funded odpočet k payoutu, u evaluací progress k targetu. Consistency hlídka upozorní, když se nejlepší den blíží procentnímu limitu firmy.</p><div class="src">zdroj: profil účtu + obchody z kopírky (F1 — už teče)</div></div>
+    <div class="note"><b>Živý stav + trvalá historie</b><p>Zelená tečka = připojen přes OAuth. Odpojený účet zešedne, ale křivka a obchody zůstávají navždy; jde archivovat a označit nástupce.</p><div class="src">zdroj: F0 registr (hotovo) — mock „starý #61" ukazuje odpojený stav</div></div>
+    <div class="note"><b>Payout checklist per firma</b><p>Šablona pravidel firmy: profit dny (např. 5× ≥ $150), min/max payout, cyklus. Nastavíš jednou pro Tradeify, jednou pro Lucid — účty dědí. Profit dny se počítají samy z denních snapshotů.</p><div class="src">zdroj: nová firm_payout_rules + denní snapshoty (F3)</div></div>
+    <div class="note"><b>Spálené účty → hřbitov (i hromadně)</b><p>Protnutí drawdownu snapshoty samy poznají a navrhnou pohřeb — při kopírkovém průšvihu jeden dialog pro všechny zasažené účty najednou: jeden popis incidentu, volitelně odkaz na obchod z deníku, každý účet si nese vlastní čísla. Lab pak umí říct, kolik tě spálené účty stojí.</p><div class="src">zdroj: existující Graveyard + breach detekce ze snapshotů (F3)</div></div>
+    <div class="note"><b>Payout „za $X" jen z tvých pravidel</b><p>Odpočet k payoutu se počítá výhradně ze šablony firmy (min payout, profit dny, cyklus…) — co firma nemá, to se neukazuje. Vzorec bude vidět přímo v nastavení firmy, žádná černá skříňka.</p><div class="src">zdroj: firm_payout_rules (F3, várka 1)</div></div>
+  </div>
+</section>
+</div>

@@ -156,6 +156,8 @@ export interface Account {
   failureKeyLesson?: string;
   /** Sdílené ID účtů pohřbených jedním hromadným Funeral formulářem. */
   failureGroupId?: string;
+  /** Volitelný journal účet označený při pohřbu jako nástupce tohoto účtu. */
+  successorOfAccountId?: string;
   /** Prop-firm maximum-loss konfigurace. Ukládá se do existujícího accounts.meta JSONu. */
   drawdownConfig?: AccountDrawdownConfig;
   /** Trvalá vazba journal účtu na externí OAuth účet. Ukládá se v accounts.meta. */

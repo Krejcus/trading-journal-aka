@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Account, Trade, BusinessPayout, User, DailyReview } from '../types';
 import {
   Activity,
@@ -15,13 +15,14 @@ import {
   Skull,
   Settings2,
   Link,
-  TrendingUp,
   LayoutGrid,
   Calendar,
   FlaskConical,
   LayoutDashboard,
   UploadCloud,
-  ChevronDown
+  ChevronDown,
+  AlertTriangle,
+  SlidersHorizontal
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import PayoutModal from './PayoutModal';
@@ -32,6 +33,13 @@ import { adjustmentForAccount, adjustmentTotal, directAdjustmentForFirm, getFina
 import { calculateAccountDrawdown, inferDrawdownConfig } from '../services/propDrawdown';
 import { accountRemovalDecision } from '../lib/oauthAccountArchivePolicy';
 import type { OAuthAccountLiveState } from '../lib/oauthAccountLiveState';
+import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
+import type { FirmPayoutRules } from '../lib/propFirmRules';
+import { defaultRulesForFirm, loadFirmPayoutRules, saveFirmPayoutRules } from '../services/firmPayoutRules';
+import { loadCopierAccountSnapshots, type CopierAccountSnapshotRow } from '../services/copierAccountSnapshots';
+import { buildAccountCockpitModel, sortAccountsRiskFirst, summarizeAccountCockpit, type AccountCockpitModel } from '../lib/accountCockpit';
+import { planMultiAccountFuneral } from '../lib/accountFuneralPlan';
+import FirmPayoutRulesDialog from './FirmPayoutRulesDialog';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -50,6 +58,7 @@ interface AccountsManagerProps {
   reviews: DailyReview[];
   user: User;
   oauthLiveStates?: Record<string, OAuthAccountLiveState>;
+  tradovateProfiles?: TradovateAccountProfile[];
 }
 
 const formatOAuthLastSeen = (value: string | null | undefined) => {
@@ -105,6 +114,30 @@ const AccountSparkline = ({ trades, initialBalance, color, theme }: { trades: Tr
       </svg>
     </div>
   );
+};
+
+const SnapshotSparkline = ({ values }: { values: number[] }) => {
+  if (values.length < 2) return null;
+  const width = 120, height = 38;
+  const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
+  const rising = values.at(-1)! >= values[0];
+  const color = rising ? '#10b981' : '#f43f5e';
+  const path = values.map((value, index) => {
+    const x = (index / (values.length - 1)) * width;
+    const y = height - ((value - min) / range) * (height - 4) - 2;
+    return `${index ? 'L' : 'M'} ${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(' ');
+  return <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="shrink-0 overflow-visible" aria-label="Vývoj equity ze snapshotů"><path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><circle cx={width} cy={height - ((values.at(-1)! - min) / range) * (height - 4) - 2} r="2.5" fill={color} /></svg>;
+};
+
+const CockpitGauge = ({ label, value, detail, pct, level = 'ok' }: { label: string; value: string; detail: string; pct: number; level?: 'ok' | 'warning' | 'danger' }) => {
+  const tone = level === 'danger' ? 'text-rose-500' : level === 'warning' ? 'text-amber-500' : 'text-emerald-500';
+  const bar = level === 'danger' ? 'bg-rose-500' : level === 'warning' ? 'bg-amber-500' : 'bg-emerald-500';
+  return <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3">
+    <div className="flex items-start justify-between gap-2 text-[10px] font-bold text-[var(--text-secondary)]"><span>{label}</span><b className={`text-right tabular-nums ${tone}`}>{value}</b></div>
+    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-500/10"><i className={`block h-full rounded-full ${bar}`} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} /></div>
+    <p className={`mt-1.5 text-[10px] ${level === 'ok' ? 'text-[var(--text-secondary)]' : tone}`}>{detail}</p>
+  </div>;
 };
 
 // Vlastní výběr firmy: vyjede přesně pod pole a každá položka má malé logo + název.
@@ -181,6 +214,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   onOpenInDashboard,
   onImportTradovate,
   oauthLiveStates = {},
+  tradovateProfiles = [],
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -193,7 +227,14 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   // Firmy: sbalené sekce + cíl hromadného pohřbení celé firmy
   const [collapsedFirms, setCollapsedFirms] = useState<Set<string>>(new Set());
   const [firmFuneralTarget, setFirmFuneralTarget] = useState<string | null>(null);
+  const [funeralCandidateIds, setFuneralCandidateIds] = useState<string[] | null>(null);
   const [drawdownDetailAccountId, setDrawdownDetailAccountId] = useState<string | null>(null);
+  const [snapshotRows, setSnapshotRows] = useState<CopierAccountSnapshotRow[]>([]);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [firmRules, setFirmRules] = useState<Record<string, FirmPayoutRules | null>>({});
+  const [rulesDialogFirm, setRulesDialogFirm] = useState<string | null>(null);
+  const [rulesSaving, setRulesSaving] = useState(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
 
   const [newAccount, setNewAccount] = useState<Partial<Account>>({
     name: '',
@@ -211,6 +252,46 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   const [editFormData, setEditFormData] = useState<Partial<Account>>({});
 
   const financialAdjustments = useMemo(() => getFinancialAdjustments(reviews), [reviews]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCopierAccountSnapshots().then(rows => {
+      if (!cancelled) setSnapshotRows(rows);
+    }).catch(error => {
+      if (!cancelled) setSnapshotError(error instanceof Error ? error.message : 'Snapshoty účtů se nepodařilo načíst.');
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const firmKeys = useMemo(() => [...new Set(accounts.filter(account => account.oauth).map(firmOf))].sort(), [accounts]);
+  const firmKeySignature = firmKeys.join('|');
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(firmKeys.map(async firm => [firm, await loadFirmPayoutRules(firm)] as const))
+      .then(entries => { if (!cancelled) setFirmRules(current => ({ ...current, ...Object.fromEntries(entries) })); })
+      .catch(error => { if (!cancelled) setRulesError(error instanceof Error ? error.message : 'Pravidla firem se nepodařilo načíst.'); });
+    return () => { cancelled = true; };
+  // Stabilní podpis brání opakovaným dotazům při změně identity pole accounts.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firmKeySignature]);
+
+  const profileByAccountId = useMemo(() => new Map(accounts.flatMap(account => {
+    if (!account.oauth) return [];
+    const profile = tradovateProfiles.find(candidate => candidate.provider === account.oauth!.provider
+      && candidate.environment === account.oauth!.environment
+      && candidate.externalAccountId === account.oauth!.externalAccountId) ?? null;
+    return [[account.id, profile] as const];
+  })), [accounts, tradovateProfiles]);
+
+  const cockpitByAccount = useMemo(() => new Map(accounts.flatMap(account => {
+    if (!account.oauth) return [];
+    const firm = firmOf(account);
+    const rules = Object.prototype.hasOwnProperty.call(firmRules, firm) ? firmRules[firm] : defaultRulesForFirm(firm);
+    return [[account.id, buildAccountCockpitModel({ account, rows: snapshotRows, profile: profileByAccountId.get(account.id) ?? null, rules })] as const];
+  })), [accounts, firmRules, profileByAccountId, snapshotRows]);
+
+  const activeCockpitModels = useMemo(() => accounts.filter(account => account.status === 'Active').flatMap(account => cockpitByAccount.get(account.id) ? [cockpitByAccount.get(account.id)!] : []), [accounts, cockpitByAccount]);
+  const cockpitSummary = useMemo(() => summarizeAccountCockpit(activeCockpitModels), [activeCockpitModels]);
   const drawdownByAccount = useMemo(() => new Map(
     accounts.map(account => [account.id, calculateAccountDrawdown(account, trades, payouts, financialAdjustments)] as const)
   ), [accounts, trades, payouts, financialAdjustments]);
@@ -308,49 +389,55 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       const multiplierLabel = mults.length === 1 ? (mults[0] > 1 ? `${mults[0]}×` : null) : 'mix';
 
       // Master (bez parentAccountId) první, zbytek přirozeně podle názvu (TOPSTEP 2 < TOPSTEP 10)
-      const sortedVisible = [...visible].sort((a, b) => {
-        const am = a.parentAccountId ? 1 : 0, bm = b.parentAccountId ? 1 : 0;
-        if (am !== bm) return am - bm;
-        return a.name.localeCompare(b.name, 'cs', { numeric: true });
-      });
+      const sortedVisible = sortAccountsRiskFirst(visible, cockpitByAccount);
 
-      return { firm, visible: sortedVisible, bought, paid, received, pending, net: received - paid, activeCount, failedCount, sumBalance, sumPnl, multiplierLabel };
+      const cockpitModels = sortedVisible.flatMap(account => cockpitByAccount.get(account.id) ? [cockpitByAccount.get(account.id)!] : []);
+      const snapshotBalances = cockpitModels.filter(model => model.balance != null);
+      const snapshotToday = cockpitModels.filter(model => model.todayPnl != null);
+      const liveEquity = snapshotBalances.length ? snapshotBalances.reduce((sum, model) => sum + model.balance!, 0) : null;
+      const liveToday = snapshotToday.length ? snapshotToday.reduce((sum, model) => sum + model.todayPnl!, 0) : null;
+      return { firm, visible: sortedVisible, bought, paid, received, pending, net: received - paid, activeCount, failedCount, sumBalance, sumPnl, multiplierLabel, liveEquity, liveToday };
     }).sort((a, b) => (b.activeCount - a.activeCount) || a.firm.localeCompare(b.firm, 'cs'));
-  }, [accounts, showInactive, payouts, pnlByAccount, financialAdjustments]);
+  }, [accounts, showInactive, payouts, pnlByAccount, financialAdjustments, cockpitByAccount]);
 
   // Hromadné pohřbení celé firmy používá stejný plný Funeral formulář jako
   // jednotlivý účet a jeho reflexi uloží ke všem aktivním účtům skupiny.
   const executeFirmFuneral = useCallback((failureData: FailureData) => {
     if (!firmFuneralTarget) return;
-    const today = new Date().toISOString().split('T')[0];
-    const funeralGroupId = crypto.randomUUID();
-    const archivedAt = Date.now();
-    const updated = accounts.map(a => {
-      if (firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest') {
-        const individualStats = computeStats(a, trades);
-        return {
-            ...a,
-            status: 'Inactive',
-            isArchived: true,
-            archivedAt,
-            result: 'Failed',
-            failureDate: failureData.failureDate || today,
-            failureReason: failureData.reason,
-            failureWhatHappened: failureData.whatHappened,
-            // Reflexe je společná, finanční statistiky zůstávají za konkrétní účet,
-            // aby souhrn Hřbitova nenásobil skupinovou ztrátu počtem účtů.
-            failureAmountLost: individualStats.amountLost,
-            failureProgressPct: individualStats.progressPct,
-            failureDaysOfConsistency: individualStats.daysConsistency,
-            failureKeyLesson: failureData.keyLesson,
-            failureGroupId: funeralGroupId,
-          } as Account;
-      }
-      return a;
+    const candidateSet = funeralCandidateIds ? new Set(funeralCandidateIds) : null;
+    const candidates = accounts.filter(a => (candidateSet ? candidateSet.has(a.id) : firmOf(a) === firmFuneralTarget) && a.status === 'Active' && a.type !== 'Backtest');
+    const selectedAccountIds = failureData.selectedAccountIds ?? candidates.map(account => account.id);
+    const statsByAccountId = Object.fromEntries(candidates.map(account => {
+      const stats = computeStats(account, trades);
+      return [account.id, { amountLost: stats.amountLost, progressPct: stats.progressPct, daysConsistency: stats.daysConsistency }];
+    }));
+    const updated = planMultiAccountFuneral({
+      accounts,
+      selectedAccountIds,
+      failureData,
+      statsByAccountId,
+      archivedAt: Date.now(),
+      funeralGroupId: crypto.randomUUID(),
     });
     onUpdate(updated);
     setFirmFuneralTarget(null);
-  }, [firmFuneralTarget, accounts, trades, onUpdate]);
+    setFuneralCandidateIds(null);
+  }, [firmFuneralTarget, funeralCandidateIds, accounts, trades, onUpdate]);
+
+  const saveRules = useCallback(async (rules: FirmPayoutRules) => {
+    if (!rulesDialogFirm) return;
+    setRulesSaving(true);
+    setRulesError(null);
+    try {
+      const saved = await saveFirmPayoutRules(rulesDialogFirm, rules);
+      setFirmRules(current => ({ ...current, [rulesDialogFirm]: saved }));
+      setRulesDialogFirm(null);
+    } catch (error) {
+      setRulesError(error instanceof Error ? error.message : 'Pravidla se nepodařilo uložit.');
+    } finally {
+      setRulesSaving(false);
+    }
+  }, [rulesDialogFirm]);
 
   const toggleFirmCollapsed = (firm: string) => {
     setCollapsedFirms(prev => {
@@ -520,7 +607,62 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
   const inputClass = `w-full px-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-blue-500/40 outline-none transition-all ${theme !== 'light' ? 'bg-slate-900 border-white/10 text-white placeholder-slate-700' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400'}`;
 
+  const renderOAuthAccountCard = (acc: Account, model: AccountCockpitModel) => {
+    const profile = profileByAccountId.get(acc.id) ?? null;
+    const rules = firmRules[firmOf(acc)] ?? defaultRulesForFirm(firmOf(acc));
+    const oauthState = oauthLiveStates[acc.id];
+    const oauthLastSeen = formatOAuthLastSeen(oauthState?.lastSeenAt);
+    const accTrades = trades.filter(trade => trade.accountId === acc.id);
+    const phaseFunded = acc.phase === 'Funded';
+    const border = model.risk === 'danger' ? 'border-rose-500/55 shadow-[0_0_24px_rgba(244,63,94,0.07)]'
+      : model.risk === 'warning' ? 'border-amber-500/45' : model.payout?.eligible ? 'border-emerald-500/45' : 'border-[var(--border-subtle)]';
+    const money = (value: number) => `$${Math.round(Math.abs(value)).toLocaleString('en-US')}`;
+    const signed = (value: number) => `${value >= 0 ? '+' : '−'}${money(value)}`;
+    const consistencyLevel = model.consistency?.limit == null ? 'ok'
+      : model.consistency.breached ? 'danger'
+        : model.consistency.pct >= model.consistency.limit * 0.8 ? 'warning' : 'ok';
+
+    return <div key={acc.id} onClick={() => acc.status === 'Active' ? setActiveAccountId(acc.id) : setArchivedDetail(acc)} className={`group relative cursor-pointer rounded-xl border bg-[var(--bg-card)] p-5 transition-all hover:border-indigo-500/35 ${border} ${oauthState?.status === 'disconnected' ? 'opacity-60' : ''}`}>
+      <div className="flex items-start gap-2">
+        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${oauthState?.status === 'connected' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,.8)]' : 'bg-slate-500'}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2"><h3 className="truncate text-sm font-black text-[var(--text-primary)]">{acc.name}</h3>{model.breached && <span className="rounded-full border border-rose-500/35 bg-rose-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-rose-500">Breach?</span>}</div>
+          <p className="mt-0.5 truncate text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">{acc.oauth?.externalAccountId}{profile?.accountSize != null ? ` · ${money(profile.accountSize)}` : ''}{(acc.copyMultiplier ?? 1) > 1 ? ` · ×${acc.copyMultiplier}` : ''}{oauthState?.status === 'disconnected' && oauthLastSeen ? ` · naposledy ${oauthLastSeen}` : ''}</p>
+        </div>
+        <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${phaseFunded ? 'border-violet-500/30 bg-violet-500/10 text-violet-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-500'}`}>{phaseFunded ? 'Funded' : 'Challenge'}</span>
+        <button type="button" onClick={event => startEditing(event, acc)} className="rounded-lg p-1.5 text-slate-500 hover:bg-indigo-500/10 hover:text-indigo-500" aria-label={`Upravit ${acc.name}`}><Settings2 size={14} /></button>
+      </div>
+
+      <div className="mt-4 flex items-end justify-between gap-3">
+        <div><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">{model.balance == null ? 'Poslední balance' : 'Balance'}</p><p className="mt-0.5 text-2xl font-black text-[var(--text-primary)] tabular-nums">{model.balance == null ? '—' : money(model.balance)}</p>{model.todayPnl != null && <p className={`text-xs font-bold tabular-nums ${model.todayPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>dnes {signed(model.todayPnl)}</p>}</div>
+        {model.equity.length >= 2 ? <SnapshotSparkline values={model.equity} /> : <div className="relative h-10 w-[120px] overflow-hidden"><AccountSparkline trades={accTrades} initialBalance={acc.initialBalance} color={(accTrades.reduce((sum, trade) => sum + trade.pnl, 0) >= 0) ? 'emerald' : 'rose'} theme={theme} /></div>}
+      </div>
+
+      {(model.dailyLimit || model.drawdown || model.evaluation || model.profitDays || model.consistency || (phaseFunded && rules && (rules.minPayoutUsd != null || rules.maxPayoutUsd != null))) && <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {model.dailyLimit && profile?.dailyLossLimit != null && model.todayPnl != null && <CockpitGauge label="Denní limit" value={`${signed(model.todayPnl)} / ${money(profile.dailyLossLimit)}`} pct={model.dailyLimit.usedPct} level={model.dailyLimit.level} detail={model.dailyLimit.usedUsd === 0 ? 'v zisku — limit netknutý' : model.dailyLimit.level === 'danger' ? `zbývá jen ${money(model.dailyLimit.remainingUsd)} — zvaž stop na dnešek` : `zbývá ${money(model.dailyLimit.remainingUsd)} prostoru`} />}
+        {model.drawdown && <CockpitGauge label="Trailing DD" value={`${money(model.drawdown.distance)} od flooru`} pct={model.drawdown.usage.usedPct} level={model.drawdown.usage.level} detail={`floor ${money(model.drawdown.floor)}`} />}
+        {!phaseFunded && model.evaluation && <CockpitGauge label="Profit target" value={`${signed(model.evaluation.profitUsd)} / ${money(model.evaluation.targetUsd)}`} pct={model.evaluation.progressPct} level={model.evaluation.progressPct >= 80 ? 'warning' : 'ok'} detail={`${model.evaluation.progressPct.toFixed(0)} % — zbývá ${money(model.evaluation.remainingUsd)}`} />}
+        {phaseFunded && model.profitDays && <CockpitGauge label={`Profit dny${rules?.minProfitPerDayUsd != null ? ` (≥ ${money(rules.minProfitPerDayUsd)})` : ''}`} value={`${model.profitDays.completed} / ${model.profitDays.required}`} pct={(model.profitDays.completed / Math.max(1, model.profitDays.required)) * 100} detail={model.profitDays.remaining ? `zbývá ${model.profitDays.remaining} zelených dnů` : 'podmínka splněna'} />}
+        {model.consistency?.limit != null && <CockpitGauge label="Consistency" value={`${model.consistency.pct.toFixed(0)} % / ${model.consistency.limit} %`} pct={(model.consistency.pct / Math.max(1, model.consistency.limit)) * 100} level={consistencyLevel} detail={model.consistency.breached ? 'limit překročen' : consistencyLevel === 'warning' ? 'nejlepší den se blíží limitu' : 'v limitu'} />}
+        {phaseFunded && rules && (rules.minPayoutUsd != null || rules.maxPayoutUsd != null) && <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3"><p className="text-[10px] font-bold text-[var(--text-secondary)]">Payout</p><div className="mt-2 flex flex-wrap gap-2">{rules.minPayoutUsd != null && <span className="rounded border border-emerald-500/25 px-2 py-1 text-[10px] font-bold text-emerald-500 tabular-nums">min {money(rules.minPayoutUsd)}</span>}{rules.maxPayoutUsd != null && <span className="rounded border border-indigo-500/25 px-2 py-1 text-[10px] font-bold text-indigo-400 tabular-nums">max {money(rules.maxPayoutUsd)}</span>}</div><p className="mt-2 text-[10px] text-[var(--text-secondary)]">{model.payout?.eligible ? 'payout podmínky splněny' : model.payout?.missing.amountUsd != null ? `do minima chybí ${money(model.payout.missing.amountUsd)}` : 'čeká na další podmínky'}</p></div>}
+      </div>}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border-subtle)] pt-3">
+        {model.breached && <><span className="rounded border border-rose-500/35 px-2 py-1 text-[10px] font-bold text-rose-500">Breach: floor protnut</span><button type="button" onClick={event => { event.stopPropagation(); const breachedIds = accounts.filter(candidate => candidate.status === 'Active' && cockpitByAccount.get(candidate.id)?.breached).map(candidate => candidate.id); setFuneralCandidateIds(breachedIds.length ? breachedIds : [acc.id]); setFirmFuneralTarget('Breached účty'); }} className="rounded-lg bg-rose-600 px-3 py-1.5 text-[10px] font-black uppercase text-white">Pohřbít</button></>}
+        {model.payout?.eligible && <span className="rounded border border-emerald-500/30 px-2 py-1 text-[10px] font-bold text-emerald-500">Payout připraven</span>}
+        {!model.breached && model.risk === 'ok' && <span className="rounded border border-emerald-500/25 px-2 py-1 text-[10px] font-bold text-emerald-500">V bezpečí</span>}
+        <div className="ml-auto flex items-center gap-2">
+          {phaseFunded && <button type="button" onClick={event => { event.stopPropagation(); setPayoutTargetAccountId(acc.id); }} className="rounded-lg p-1.5 text-emerald-500 hover:bg-emerald-500/10" aria-label="Výplata"><HandCoins size={14} /></button>}
+          {onImportTradovate && <button type="button" onClick={event => { event.stopPropagation(); onImportTradovate(acc.id); }} className="rounded-lg p-1.5 text-indigo-500 hover:bg-indigo-500/10" aria-label="Importovat"><UploadCloud size={14} /></button>}
+          <button type="button" onClick={event => toggleAccountStatus(event, acc.id)} className="text-[9px] font-black uppercase text-slate-500 hover:text-amber-500">Archivovat</button>
+        </div>
+      </div>
+    </div>;
+  };
+
   const renderAccountCard = (acc: Account, isSlave = false) => {
+    const cockpit = cockpitByAccount.get(acc.id);
+    if (acc.oauth && cockpit) return renderOAuthAccountCard(acc, cockpit);
     const accTrades = trades.filter(t => t.accountId === acc.id);
     const tradePnL = accTrades.reduce((sum, t) => sum + t.pnl, 0);
     const incidentPnL = adjustmentForAccount(financialAdjustments, acc);
@@ -714,50 +856,21 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     );
   };
 
+  const payoutCandidateAccount = cockpitSummary.payoutCandidate
+    ? accounts.find(account => account.id === cockpitSummary.payoutCandidate!.accountId) : null;
+  const riskAccount = accounts.find(account => account.status === 'Active' && cockpitByAccount.get(account.id)?.risk === 'danger')
+    ?? accounts.find(account => account.status === 'Active' && cockpitByAccount.get(account.id)?.risk === 'warning');
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      <section className={`px-6 py-4 rounded-[24px] border flex flex-col lg:flex-row justify-between items-center gap-6 ${theme !== 'light' ? 'bg-theme-page/40 border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
-        <div className="flex gap-8 items-center">
-          <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-xl ${theme !== 'light' ? 'bg-rose-500/10 text-rose-500' : 'bg-rose-50 text-rose-500'}`}><TrendingUp size={16} /></div>
-            <div>
-              <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Náklady</p>
-              <p className="text-sm font-black font-mono text-rose-500">-${portfolioStats.totalChallengeCosts.toLocaleString()}</p>
-            </div>
-          </div>
-          <div className="w-px h-8 bg-white/5" />
-          <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-xl ${theme !== 'light' ? 'bg-blue-500/10 text-blue-500' : 'bg-blue-50 text-blue-500'}`}><Activity size={16} /></div>
-            <div>
-              <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Skutečný PnL</p>
-              <p className={`text-sm font-black font-mono ${portfolioStats.totalTradesPnL >= 0 ? 'text-slate-200' : 'text-rose-500'}`}>{portfolioStats.totalTradesPnL >= 0 ? '+' : ''}${portfolioStats.totalTradesPnL.toLocaleString()}</p>
-              {portfolioStats.incidentPnL !== 0 && (
-                <p className="text-[8px] font-bold text-rose-500">mimo trady {portfolioStats.incidentPnL.toLocaleString()}</p>
-              )}
-            </div>
-          </div>
-          <div className="w-px h-8 bg-white/5" />
-          <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-xl ${theme !== 'light' ? 'bg-amber-500/10 text-amber-500' : 'bg-amber-50 text-amber-500'}`}><Trophy size={16} /></div>
-            <div>
-              <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Pass Rate</p>
-              <p className="text-sm font-black font-mono text-amber-500">{portfolioStats.passRate.toFixed(0)}%</p>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-6 pl-6 lg:border-l border-white/5">
-          <div className="text-right">
-            <p className="text-[9px] font-black uppercase text-emerald-500 tracking-widest mb-0.5">Výplaty (Net)</p>
-            <p className="text-sm font-black font-mono text-emerald-500">+${portfolioStats.totalNetPayouts.toLocaleString()}</p>
-          </div>
-          <div className={`px-5 py-2 rounded-xl border flex items-center gap-3 ${portfolioStats.netCashflow >= 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-rose-500/5 border-rose-500/20'}`}>
-            <div>
-              <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Net Cashflow</p>
-              <p className={`text-lg font-black font-mono ${portfolioStats.netCashflow >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>{portfolioStats.netCashflow >= 0 ? '+' : ''}${portfolioStats.netCashflow.toLocaleString()}</p>
-            </div>
-          </div>
-        </div>
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Celková equity</p><p className="mt-1 text-2xl font-black text-[var(--text-primary)] tabular-nums">{cockpitSummary.totalEquity == null ? '—' : `$${Math.round(cockpitSummary.totalEquity).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">{activeCockpitModels.length} OAuth účtů · {new Set(accounts.filter(account => account.status === 'Active' && account.oauth).map(firmOf)).size} firem</p></div>
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Dnes</p><p className={`mt-1 text-2xl font-black tabular-nums ${cockpitSummary.todayPnl == null ? 'text-[var(--text-primary)]' : cockpitSummary.todayPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{cockpitSummary.todayPnl == null ? '—' : `${cockpitSummary.todayPnl >= 0 ? '+' : '−'}$${Math.round(Math.abs(cockpitSummary.todayPnl)).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">z denních snapshot ledgerů</p></div>
+        <div className={`rounded-xl border p-4 ${cockpitSummary.riskCount > 0 ? 'border-rose-500/35 bg-gradient-to-b from-rose-500/10 to-[var(--bg-card)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">V riziku</p><p className={`mt-1 text-2xl font-black ${cockpitSummary.riskCount ? 'text-rose-500' : 'text-emerald-500'}`}>{cockpitSummary.riskCount} {cockpitSummary.riskCount === 1 ? 'účet' : 'účtů'}</p><p className="mt-1 truncate text-xs text-[var(--text-secondary)]">{riskAccount ? riskAccount.name : 'žádný aktivní semafor'}</p></div>
+        <div className={`rounded-xl border p-4 ${payoutCandidateAccount ? 'border-emerald-500/35 bg-gradient-to-b from-emerald-500/10 to-[var(--bg-card)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Payout</p><p className={`mt-1 text-2xl font-black tabular-nums ${payoutCandidateAccount ? 'text-emerald-500' : 'text-[var(--text-primary)]'}`}>{cockpitSummary.payoutCandidate ? cockpitSummary.payoutCandidate.amountUsd === 0 ? 'připraven' : `za ~$${Math.round(cockpitSummary.payoutCandidate.amountUsd).toLocaleString('en-US')}` : '—'}</p><p className="mt-1 truncate text-xs text-[var(--text-secondary)]">{payoutCandidateAccount?.name ?? 'chybí úplná payout pravidla'}</p></div>
       </section>
+
+      {snapshotError && <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-2 text-xs text-amber-500"><AlertTriangle size={14} />{snapshotError} Karty nezobrazují odhadované hodnoty.</div>}
 
       <div className="flex justify-between items-center">
         <div className="flex gap-2">
@@ -812,7 +925,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       )}
 
       {showInactive && failedAccounts.length > 0 && (
-        <Graveyard accounts={failedAccounts} trades={trades} theme={theme} />
+        <Graveyard accounts={failedAccounts} allAccounts={accounts} trades={trades} theme={theme} />
       )}
 
       {/* Sekce po firmách: hlavička s agregáty + byznys řádkem, pod ní karty účtů */}
@@ -821,7 +934,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           const collapsed = collapsedFirms.has(g.firm);
           const canBuryFirm = !showInactive && g.visible.some(a => a.type !== 'Backtest');
           return (
-            <section key={g.firm} className={`rounded-[28px] border overflow-hidden ${theme !== 'light' ? 'bg-slate-900/25 border-white/5' : 'bg-slate-50/60 border-slate-200'}`}>
+            <section key={g.firm} className={`rounded-xl border overflow-hidden ${theme !== 'light' ? 'bg-slate-900/25 border-white/5' : 'bg-slate-50/60 border-slate-200'}`}>
               <button
                 onClick={() => toggleFirmCollapsed(g.firm)}
                 aria-expanded={!collapsed}
@@ -846,19 +959,20 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                   </span>
                   <div className="ml-auto flex items-center gap-5">
                     <div className="text-right">
-                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Σ Balance</p>
-                      <p className={`text-sm font-black font-mono ${g.sumBalance >= 0 ? 'text-slate-200' : 'text-rose-500'} ${theme === 'light' ? '!text-slate-900' : ''}`}>${g.sumBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Equity</p>
+                      <p className={`text-sm font-black tabular-nums ${(g.liveEquity ?? g.sumBalance) >= 0 ? 'text-slate-200' : 'text-rose-500'} ${theme === 'light' ? '!text-slate-900' : ''}`}>${(g.liveEquity ?? g.sumBalance).toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Σ P&L</p>
-                      <p className={`text-sm font-black font-mono ${g.sumPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{g.sumPnl >= 0 ? '+' : ''}${g.sumPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Dnes</p>
+                      <p className={`text-sm font-black tabular-nums ${(g.liveToday ?? g.sumPnl) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{(g.liveToday ?? g.sumPnl) >= 0 ? '+' : ''}${(g.liveToday ?? g.sumPnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
                     </div>
+                    {g.visible.some(account => account.oauth) && <span role="button" tabIndex={0} onClick={event => { event.stopPropagation(); setRulesError(null); setRulesDialogFirm(g.firm); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); setRulesError(null); setRulesDialogFirm(g.firm); } }} className="flex cursor-pointer items-center gap-1 rounded-lg border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-2 text-[9px] font-black uppercase tracking-wider text-indigo-400 hover:bg-indigo-500/20"><SlidersHorizontal size={13} /> Pravidla</span>}
                     {canBuryFirm && (
                       <span
                         role="button"
                         tabIndex={0}
-                        onClick={(e) => { e.stopPropagation(); setFirmFuneralTarget(g.firm); }}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setFirmFuneralTarget(g.firm); } }}
+                        onClick={(e) => { e.stopPropagation(); setFuneralCandidateIds(g.visible.filter(account => account.status === 'Active' && account.type !== 'Backtest').map(account => account.id)); setFirmFuneralTarget(g.firm); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setFuneralCandidateIds(g.visible.filter(account => account.status === 'Active' && account.type !== 'Backtest').map(account => account.id)); setFirmFuneralTarget(g.firm); } }}
                         className="p-2 bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white rounded-xl transition-all border border-rose-500/20 cursor-pointer"
                         title={`Pohřbít celou firmu ${g.firm} (všechny aktivní účty → Failed)`}
                       >
@@ -881,7 +995,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 </div>
               </button>
               {!collapsed && (
-                <div className="px-5 pb-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 items-start">
+                <div className="px-5 pb-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
                   {g.visible.map(acc => renderAccountCard(acc, !!acc.parentAccountId))}
                 </div>
               )}
@@ -1026,20 +1140,33 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       />
 
       {firmFuneralTarget && (() => {
-        const targetAccounts = accounts.filter(a => firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest');
+        const candidateSet = funeralCandidateIds ? new Set(funeralCandidateIds) : null;
+        const targetAccounts = accounts.filter(a => (candidateSet ? candidateSet.has(a.id) : firmOf(a) === firmFuneralTarget) && a.status === 'Active' && a.type !== 'Backtest');
         if (!targetAccounts.length) return null;
         return (
           <AccountFuneralModal
             account={targetAccounts[0]}
             accounts={targetAccounts}
+            successorCandidates={accounts.filter(account => account.status === 'Active' && account.type !== 'Backtest')}
+            compactMulti
+            initialFailureDate={targetAccounts.flatMap(account => cockpitByAccount.get(account.id)?.breachDate ? [cockpitByAccount.get(account.id)!.breachDate!] : []).sort()[0]}
             title={firmFuneralTarget}
             trades={trades}
             userId={user.id}
             onConfirm={executeFirmFuneral}
-            onClose={() => setFirmFuneralTarget(null)}
+            onClose={() => { setFirmFuneralTarget(null); setFuneralCandidateIds(null); }}
             theme={theme}
           />
         );
+      })()}
+
+      {rulesDialogFirm && (() => {
+        const initialRules = firmRules[rulesDialogFirm] ?? defaultRulesForFirm(rulesDialogFirm) ?? {
+          planName: firmLabel(rulesDialogFirm), profitDaysRequired: null, minProfitPerDayUsd: null,
+          minPayoutUsd: null, maxPayoutUsd: null, payoutCycleDays: null, consistencyPct: null,
+          splitPct: null, drawdownType: null,
+        } satisfies FirmPayoutRules;
+        return <FirmPayoutRulesDialog firm={firmLabel(rulesDialogFirm)} initialRules={initialRules} theme={theme} saving={rulesSaving} error={rulesError} onSave={saveRules} onClose={() => { if (!rulesSaving) { setRulesDialogFirm(null); setRulesError(null); } }} />;
       })()}
 
       {archivedDetail && (
@@ -1047,6 +1174,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           account={archivedDetail}
           stats={computeStats(archivedDetail, trades)}
           trades={trades.filter(t => t.accountId === archivedDetail.id)}
+          successorName={archivedDetail.successorOfAccountId ? accounts.find(account => account.id === archivedDetail.successorOfAccountId)?.name : undefined}
           isDark={theme !== 'light'}
           onClose={() => setArchivedDetail(null)}
           onOpenInDashboard={onOpenInDashboard ? (id) => { setArchivedDetail(null); onOpenInDashboard(id); } : undefined}

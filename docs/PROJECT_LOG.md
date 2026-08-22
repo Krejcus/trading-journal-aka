@@ -78,6 +78,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, F3b Kokpit účtů)
+Karta Účty má nový OAuth kokpit podle `docs/design/ucty-kokpit-mock.html`,
+zatímco ruční účty dál používají původní renderer. Jeden uživatelsky izolovaný
+RLS dotaz načte a v paměti cachuje 35 dní `copier_account_snapshots`; řádky se
+párují současně přes `connection_id` i `external_account_id`, aby se nesmíchaly
+stejné broker ID z různých spojení. Souhrn i karty používají jen skutečné
+snapshoty: poslední balance, Chicago daily ledger, snapshot sparkline a
+profilové limity. Chybějící pravidlo nebo datum se nevyrábí jako nula/odhad.
+
+Finanční model je mimo React v `propFirmMetrics` + čistém `accountCockpit`:
+daily semafor (<50 / 50–80 / >80 %), autoritativní trailing floor a historický
+breach, funded profit-day/min-max/consistency checklist, evaluation target a
+consistency a risk-first řazení danger → warning → ok. Hlavička firmy má editor
+uživatelských `firm_payout_rules` s bezpečným template fallbackem a upozorněním,
+že firmy pravidla mění bez varování.
+
+Existující Funeral flow byl rozšířen o checkboxy, jediný společný popis
+incidentu a volitelného nástupce; nikdy se nespouští automaticky. Čistý
+`planMultiAccountFuneral` ukládá společnou reflexi, ale individuální finanční
+statistiky každého vybraného účtu. Graveyard ukazuje příčinu, datum, životní
+P&L a nástupce. Přibyl volitelný `Account.successorOfAccountId`, uložený ve
+stávajícím `accounts.meta`; žádná migrace, server ani worker se neměnily.
+
+Ověření: `npx tsc --noEmit` čistý; `npx vitest run` mimo sandbox (loopback
+testy) 176/176 souborů a 1373/1373 testů; `npm run build` prošel. Lokální Vite
+server běžel na `127.0.0.1:3011`, ale v relaci nebyl připojen žádný ovladatelný
+browser, takže finální render dark/light/oled není vydáván za vizuálně ověřený.
+Nic nebylo commitnuto, pushnuto, deploynuto ani změněno v Supabase.
+
 ### 2026-08-22 (Codex, F3a snapshoty účtů + payout datová vrstva)
 Připravená datová vrstva budoucího Kokpitu bez UI a bez worker změn. Minutový
 `send-alerts` nejvýše jednou za 15 minut projde všechna connected OAuth spojení,

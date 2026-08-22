@@ -20,6 +20,7 @@ import { storageService } from '../services/storageService';
 
 interface Props {
     accounts: Account[]; // pouze spálené (result === 'Failed')
+    allAccounts?: Account[];
     trades: Trade[];
     theme: 'dark' | 'light' | 'oled';
 }
@@ -162,7 +163,7 @@ const MiniCurve: React.FC<{ data: number[]; }> = ({ data }) => {
 const fmt = (n: number) => `$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const fmtDate = (d?: string) => d ? new Date(d).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
 
-const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
+const Graveyard: React.FC<Props> = ({ accounts, allAccounts = accounts, trades, theme }) => {
     const isDark = theme !== 'light';
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [detailAccount, setDetailAccount] = useState<Account | null>(null);
@@ -256,12 +257,13 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
     const renderTombstone = (acc: Account) => {
         const s = statsMap.get(acc.id)!;
         const isSel = selected.has(acc.id);
+        const successor = acc.successorOfAccountId ? allAccounts.find(candidate => candidate.id === acc.successorOfAccountId) : null;
         return (
             <motion.div
                 key={acc.id}
                 layout
                 onClick={() => setDetailAccount(acc)}
-                className={`group relative cursor-pointer rounded-[24px] border p-5 transition-all ${isSel ? 'border-blue-500/60 ring-2 ring-blue-500/30' : isDark ? 'border-rose-500/15 hover:border-rose-500/30' : 'border-rose-200 hover:border-rose-300'} ${isDark ? 'bg-gradient-to-b from-rose-500/[0.06] to-slate-900/40' : 'bg-gradient-to-b from-rose-50 to-white'}`}
+                className={`group relative cursor-pointer rounded-xl border p-5 transition-all ${isSel ? 'border-blue-500/60 ring-2 ring-blue-500/30' : isDark ? 'border-rose-500/15 hover:border-rose-500/30' : 'border-rose-200 hover:border-rose-300'} ${isDark ? 'bg-gradient-to-b from-rose-500/[0.06] to-slate-900/40' : 'bg-gradient-to-b from-rose-50 to-white'}`}
             >
                 <button
                     onClick={(e) => { e.stopPropagation(); toggleSelect(acc.id); }}
@@ -285,8 +287,8 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 mb-4">
+                    <TombStat label="Životní P&L" value={`${s.totalPnL >= 0 ? '+' : '−'}${fmt(s.totalPnL)}`} accent={s.totalPnL >= 0 ? undefined : 'rose'} isDark={isDark} />
                     <TombStat label="Spáleno" value={`-${fmt(s.amountLost)}`} accent="rose" isDark={isDark} />
-                    <TombStat label="K cíli" value={`${s.progressPct}%`} accent="amber" isDark={isDark} />
                     <TombStat label="Dní" value={s.daysConsistency.toString()} isDark={isDark} />
                 </div>
 
@@ -295,6 +297,8 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
                         <AlertTriangle size={10} /> {acc.failureReason}
                     </div>
                 )}
+
+                {successor && <p className="mb-2 text-[10px] font-bold text-indigo-400">Nástupce: {successor.name}</p>}
 
                 {acc.failureKeyLesson && (
                     <p className={`text-xs leading-snug line-clamp-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
@@ -316,7 +320,7 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
 
     if (accounts.length === 0) {
         return (
-            <div className={`p-12 rounded-[24px] border text-center ${isDark ? 'bg-theme-page/40 border-white/5' : 'bg-white border-slate-200'}`}>
+            <div className={`p-12 rounded-xl border text-center ${isDark ? 'bg-theme-page/40 border-white/5' : 'bg-white border-slate-200'}`}>
                 <Skull size={40} className="mx-auto text-slate-600 mb-3" />
                 <p className="text-sm font-bold text-slate-500">Žádné spálené účty. Drž se plánu. 🙏</p>
             </div>
@@ -326,7 +330,7 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
     return (
         <div className="space-y-6">
             {/* ── Summary bar ── */}
-            <div className={`rounded-[24px] border overflow-hidden ${isDark ? 'bg-gradient-to-br from-rose-500/[0.07] to-transparent border-rose-500/15' : 'bg-rose-50/50 border-rose-200'}`}>
+            <div className={`rounded-xl border overflow-hidden ${isDark ? 'bg-gradient-to-br from-rose-500/[0.07] to-transparent border-rose-500/15' : 'bg-rose-50/50 border-rose-200'}`}>
                 <div className="px-6 py-3 flex items-center gap-2 border-b border-rose-500/10">
                     <Skull size={15} className="text-rose-500" />
                     <p className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-500">Hřbitov účtů</p>
@@ -385,7 +389,7 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
                                     const expanded = expandedFunerals.has(funeral.key);
                                     const avgProgress = Math.round(funeral.accts.reduce((sum, a) => sum + (statsMap.get(a.id)?.progressPct || 0), 0) / funeral.accts.length);
                                     return (
-                                        <div key={funeral.key} className={`rounded-[24px] border overflow-hidden ${isDark ? 'bg-rose-500/[0.04] border-rose-500/15' : 'bg-rose-50/60 border-rose-200'}`}>
+                                        <div key={funeral.key} className={`rounded-xl border overflow-hidden ${isDark ? 'bg-rose-500/[0.04] border-rose-500/15' : 'bg-rose-50/60 border-rose-200'}`}>
                                             <button
                                                 onClick={() => toggleFuneral(funeral.key)}
                                                 className={`w-full p-4 flex items-center gap-4 text-left transition-colors ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-rose-50'}`}
@@ -440,6 +444,7 @@ const Graveyard: React.FC<Props> = ({ accounts, trades, theme }) => {
                         account={detailAccount}
                         stats={statsMap.get(detailAccount.id)!}
                         trades={trades.filter(t => t.accountId === detailAccount.id)}
+                        successorName={detailAccount.successorOfAccountId ? allAccounts.find(candidate => candidate.id === detailAccount.successorOfAccountId)?.name : undefined}
                         isDark={isDark}
                         onClose={() => setDetailAccount(null)}
                     />
@@ -491,7 +496,7 @@ const TombStat: React.FC<{ label: string; value: string; accent?: 'rose' | 'ambe
 };
 
 // ── Memorial modal ──
-export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; trades: Trade[]; isDark: boolean; onClose: () => void; onOpenInDashboard?: (id: string) => void }> = ({ account, stats, trades, isDark, onClose, onOpenInDashboard }) => {
+export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; trades: Trade[]; successorName?: string; isDark: boolean; onClose: () => void; onOpenInDashboard?: (id: string) => void }> = ({ account, stats, trades, successorName, isDark, onClose, onOpenInDashboard }) => {
     const sorted = useMemo(() => [...trades].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)), [trades]);
     const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
     const isFailed = account.result === 'Failed';
@@ -541,6 +546,7 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
                             <p className={`text-[9px] font-black uppercase tracking-[0.3em] mb-1 ${labelColor}`}>{label}</p>
                             <h2 className={`text-2xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{account.name}</h2>
                             <p className="text-[11px] font-bold text-slate-500 mt-0.5">{headerDate}</p>
+                            {successorName && <p className="mt-1 text-[10px] font-bold text-indigo-400">Nástupce: {successorName}</p>}
                         </div>
                     </div>
                 </div>

@@ -58,6 +58,22 @@ export interface BreachResult {
   at?: string;
 }
 
+export type RiskLevel = 'ok' | 'warning' | 'danger';
+
+export interface LimitUsage {
+  usedUsd: number;
+  remainingUsd: number;
+  usedPct: number;
+  level: RiskLevel;
+}
+
+export interface EvaluationProgress {
+  profitUsd: number;
+  targetUsd: number;
+  remainingUsd: number;
+  progressPct: number;
+}
+
 const chicagoDateFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Chicago',
   year: 'numeric',
@@ -77,6 +93,9 @@ const chicagoDate = (epochMs: number): string => {
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? '';
   return `${value('year')}-${value('month')}-${value('day')}`;
 };
+
+export const chicagoTradingDate = (value: string | number | Date = new Date()): string =>
+  chicagoDate(timestamp(value));
 
 const sortedSnapshots = (snapshots: readonly PropFirmAccountSnapshot[]) => snapshots
   .map(snapshot => ({ ...snapshot, epochMs: timestamp(snapshot.capturedAt) }))
@@ -142,6 +161,52 @@ export function consistencyCheck(
     limit: rules.consistencyPct,
     breached: rules.consistencyPct != null && pct > rules.consistencyPct,
   };
+}
+
+/** Semafor denního loss limitu. Kladný den limit nečerpá. */
+export function dailyLimitUsage(todayPnl: number, dailyLossLimit: number): LimitUsage | null {
+  if (!Number.isFinite(todayPnl) || !Number.isFinite(dailyLossLimit) || dailyLossLimit <= 0) return null;
+  const usedUsd = Math.max(0, -todayPnl);
+  const usedPct = (usedUsd / dailyLossLimit) * 100;
+  return {
+    usedUsd,
+    remainingUsd: Math.max(0, dailyLossLimit - usedUsd),
+    usedPct,
+    level: usedPct > 80 ? 'danger' : usedPct >= 50 ? 'warning' : 'ok',
+  };
+}
+
+export function drawdownUsage(result: DrawdownFloorResult, maxLoss: number): LimitUsage | null {
+  if (!Number.isFinite(maxLoss) || maxLoss <= 0) return null;
+  const remainingUsd = Math.max(0, result.distance);
+  const usedUsd = Math.max(0, maxLoss - remainingUsd);
+  const usedPct = (usedUsd / maxLoss) * 100;
+  return {
+    usedUsd,
+    remainingUsd,
+    usedPct,
+    level: result.distance <= 0 || usedPct > 80 ? 'danger' : usedPct >= 50 ? 'warning' : 'ok',
+  };
+}
+
+export function evaluationProgress(
+  currentBalance: number,
+  accountSize: number,
+  profitTarget: number,
+): EvaluationProgress | null {
+  if (![currentBalance, accountSize, profitTarget].every(Number.isFinite) || profitTarget <= 0) return null;
+  const profitUsd = currentBalance - accountSize;
+  return {
+    profitUsd,
+    targetUsd: profitTarget,
+    remainingUsd: Math.max(0, profitTarget - profitUsd),
+    progressPct: Math.max(0, Math.min(100, (profitUsd / profitTarget) * 100)),
+  };
+}
+
+export function withdrawableProfit(currentBalance: number, accountSize: number): number | null {
+  if (![currentBalance, accountSize].every(Number.isFinite)) return null;
+  return Math.max(0, currentBalance - accountSize);
 }
 
 export function payoutEligibility(
