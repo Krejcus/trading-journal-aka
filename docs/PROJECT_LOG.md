@@ -78,6 +78,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Claude, nasazení bloku F0+F1+F1b/c)
+Celý blok „kopírka plní deník" je NASAZENÝ: web (commity 4d4f77e5→05db3dbd
+na main), migrace aplikované přes Management API (mapped_account_id,
+trade fakta+RLS, copier_trade_snapshots + privátní bucket + atomický
+rate limit) a worker reinstalován 2× přes DISARMED bránu (06:07 UTC,
+armed=False, connected). Review nálezy opravené za pochodu: skupiny firem
+(firmOverride z propFirm) + evaluace vs funded z profile.accountType
+včetně hojení, a brána hojícího efektu (spouštěl se jen pro nenamapované
+profily). NOVÁ POLITIKA (pokyn uživatele): o víkendu/zavřené burze se
+worker nasazuje automaticky; skriptová brána armed=False platí VŽDY.
+Čeká na přirozené ověření: první pondělní obchod = epizoda + kopie
+s multiplikátorem + snapshoty v detailu obchodu.
+
 ### 2026-08-22 (Codex, F1b auto-snapshoty TradingView k copier obchodům)
 Durable leader lot dostal volitelné UUID `episodeId`, které se beze změny
 order/risk logiky propisuje do close ledgeru a relevantních copy eventů.
