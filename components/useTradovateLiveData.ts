@@ -245,13 +245,18 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     if (!quiet) setBusy('data');
     setError(null);
     try {
-      const [datasets, stored] = await Promise.all([
+      // Záměrně allSettled: pád jediného preflightu nesmí zahodit profily
+      // (a naopak) — karta Účty bez profilů schovává všechna měřidla.
+      const [datasetsResult, storedResult] = await Promise.allSettled([
         Promise.all(connectionIds.map(connectionId => runTradovateReadOnlyPreflight(connectionId))),
-        loadTradovateAccountProfiles().catch(() => null),
+        loadTradovateAccountProfiles(),
       ]);
+      const stored = storedResult.status === 'fulfilled' ? storedResult.value : null;
+      if (stored) setProfiles(stored.profiles);
+      if (datasetsResult.status === 'rejected') throw datasetsResult.reason;
+      const datasets = datasetsResult.value;
       setConnectionData(Object.fromEntries(datasets.map(dataset => [dataset.connectionId, dataset])));
       if (stored) {
-        setProfiles(stored.profiles);
         const storedIds = new Set(stored.profiles.map(profile => profile.externalAccountId));
         if (datasets.flatMap(dataset => dataset.accounts).some(account => !storedIds.has(String(account.id)))) {
           setProfileSetupOpen(true);

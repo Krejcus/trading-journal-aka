@@ -979,7 +979,9 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                     </div>
                     <div className="text-right">
                       <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Dnes</p>
-                      <p className={`text-sm font-black tabular-nums ${(g.liveToday ?? g.sumPnl) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{(g.liveToday ?? g.sumPnl) >= 0 ? '+' : ''}${(g.liveToday ?? g.sumPnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                      {/* Bez denního ledgeru (víkend, první den sběru) žádný fallback —
+                          celoživotní P&L labelovaný „Dnes" mate. Pomlčka jako v souhrnu. */}
+                      <p className={`text-sm font-black tabular-nums ${g.liveToday == null ? 'text-[var(--text-secondary)]' : g.liveToday >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{g.liveToday == null ? '—' : `${g.liveToday >= 0 ? '+' : ''}$${g.liveToday.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</p>
                     </div>
                     {g.visible.some(account => account.oauth) && <span role="button" tabIndex={0} onClick={event => { event.stopPropagation(); setRulesError(null); setRulesDialogFirm(g.firm); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); setRulesError(null); setRulesDialogFirm(g.firm); } }} className="flex cursor-pointer items-center gap-1 rounded-lg border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-2 text-[9px] font-black uppercase tracking-wider text-indigo-400 hover:bg-indigo-500/20"><SlidersHorizontal size={13} /> Pravidla</span>}
                     {canBuryFirm && (
