@@ -78,7 +78,7 @@ describe('TV alert dedicated chart navigation', () => {
       { id: 'dedicated', type: 'page', url: 'https://www.tradingview.com/chart/alpha/', webSocketDebuggerUrl: 'ws://dedicated' },
     ]), { status: 200 })) as typeof fetch;
     const promise = captureTradingViewAlertSnapshot({
-      symbol: 'MNQ1!', timeframe: '5', dedicated: { chartId: 'alpha' },
+      symbol: 'MNQ1!', timeframe: '5', dedicated: { targetId: 'dedicated' },
       fetchImpl, webSocketFactory: url => {
         expect(url).toBe('ws://dedicated');
         return socket;
@@ -88,7 +88,15 @@ describe('TV alert dedicated chart navigation', () => {
     });
     await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 1_000 });
     socket.emit('open');
-    const navigation = JSON.parse(socket.sent[0]);
+    // Warm-up: focus emulace + lifecycle active, chyby tolerovány.
+    expect(JSON.parse(socket.sent[0])).toMatchObject({ id: 10, method: 'Emulation.setFocusEmulationEnabled' });
+    socket.emit('message', { data: JSON.stringify({ id: 10, result: {} }) });
+    await vi.waitUntil(() => socket.sent.length === 2, { timeout: 1_000 });
+    socket.emit('message', { data: JSON.stringify({ id: 11, result: {} }) });
+    await vi.waitUntil(() => socket.sent.length === 3, { timeout: 1_000 });
+    socket.emit('message', { data: JSON.stringify({ id: 12, error: { message: 'not supported' } }) });
+    await vi.waitUntil(() => socket.sent.length === 4, { timeout: 1_000 });
+    const navigation = JSON.parse(socket.sent[3]);
     expect(navigation.method).toBe('Runtime.evaluate');
     expect(navigation.params.expression).toContain('TradingViewApi');
     expect(navigation.params.expression).toContain('setSymbol("MNQ1!")');
@@ -96,16 +104,15 @@ describe('TV alert dedicated chart navigation', () => {
     expect(navigation.params.expression).toContain('setRightOffset(40)');
     expect(navigation.params.expression).toContain('setBarSpacing(3)');
     socket.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: true } } }) });
-    // Krok 2: měření bounds plochy grafu — vrátíme obdélník, capture pak
-    // musí jít s clipem (scale 2) přesně na něj.
-    await vi.waitUntil(() => socket.sent.length === 2, { timeout: 1_000 });
-    expect(JSON.parse(socket.sent[1])).toMatchObject({ method: 'Runtime.evaluate' });
-    expect(JSON.parse(socket.sent[1]).params.expression).toContain('layout__area--center');
+    // Bounds aktivního panelu → capture s clipem (fromSurface + scale 2).
+    await vi.waitUntil(() => socket.sent.length === 5, { timeout: 1_000 });
+    expect(JSON.parse(socket.sent[4])).toMatchObject({ method: 'Runtime.evaluate' });
+    expect(JSON.parse(socket.sent[4]).params.expression).toContain('chart-container.active');
     socket.emit('message', { data: JSON.stringify({ id: 2, result: { result: { value: { x: 10, y: 20, width: 800, height: 600 } } } }) });
-    await vi.waitUntil(() => socket.sent.length === 3, { timeout: 1_000 });
-    expect(JSON.parse(socket.sent[2])).toMatchObject({
+    await vi.waitUntil(() => socket.sent.length === 6, { timeout: 1_000 });
+    expect(JSON.parse(socket.sent[5])).toMatchObject({
       method: 'Page.captureScreenshot',
-      params: { clip: { x: 10, y: 20, width: 800, height: 600, scale: 2 } },
+      params: { fromSurface: true, clip: { x: 10, y: 20, width: 800, height: 600, scale: 2 } },
     });
     socket.emit('message', { data: JSON.stringify({ id: 3, result: { data: Buffer.from('dedicated').toString('base64') } }) });
     await expect(promise).resolves.toEqual(Buffer.from('dedicated'));
@@ -125,7 +132,7 @@ describe('TV alert dedicated chart navigation', () => {
       }]), { status: 200 });
     }) as typeof fetch;
     const promise = captureTradingViewAlertSnapshot({
-      symbol: 'MNQ1!', timeframe: '1', dedicated: { chartId: 'alpha' },
+      symbol: 'MNQ1!', timeframe: '1', dedicated: { targetId: 'dedicated' },
       fetchImpl,
       webSocketFactory: url => url === 'ws://dedicated' ? dedicated : passive,
       sleepImpl: async () => undefined,

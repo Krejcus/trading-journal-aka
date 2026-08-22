@@ -156,6 +156,8 @@ async function cdpRequest(options: {
   timeoutMs: number;
   webSocketFactory: (url: string) => WebSocketLike;
   onCommandResult?: (id: number, result: Record<string, unknown>) => Promise<void> | void;
+  /** Chyby těchto příkazů se tolerují (best-effort warm-up na starších Electronech). */
+  optionalCommandIds?: readonly number[];
 }): Promise<Map<number, Record<string, unknown>>> {
   if (!options.target.webSocketDebuggerUrl) throw new Error('snapshot-cdp-missing-websocket');
   const socket = options.webSocketFactory(options.target.webSocketDebuggerUrl);
@@ -186,8 +188,10 @@ async function cdpRequest(options: {
         try {
           const message = JSON.parse(String(event.data ?? '')) as { id?: number; result?: Record<string, unknown>; error?: { message?: string } };
           if (!message.id || !options.commands.some(command => command.id === message.id)) return;
-          if (message.error) throw new Error(message.error.message ?? 'snapshot-cdp-error');
-          const result = message.result ?? {};
+          if (message.error && !options.optionalCommandIds?.includes(message.id)) {
+            throw new Error(message.error.message ?? 'snapshot-cdp-error');
+          }
+          const result = message.error ? {} : (message.result ?? {});
           results.set(message.id, result);
           await options.onCommandResult?.(message.id, result);
           const index = options.commands.findIndex(command => command.id === message.id);
@@ -227,17 +231,16 @@ export async function captureTradingViewAlertSnapshot(
     if (!listResponse.ok) throw new Error('snapshot-cdp-list-failed');
     const targets = await listResponse.json() as CdpTarget[];
     const ref = options.dedicated ?? {};
-    let target = Array.isArray(targets) ? targets.find(candidate => (
+    // Cílení VÝHRADNĚ přes targetId: uživatelův hlavní tab může sdílet
+    // stejné layout/chart ID (TV otevírá poslední layout), takže shoda podle
+    // chartId by mohla navigovat graf, na který se uživatel právě dívá.
+    let target = Array.isArray(targets) && ref.targetId ? targets.find(candidate => (
       candidate.type === 'page'
       && typeof candidate.webSocketDebuggerUrl === 'string'
-      && ((ref.targetId && candidate.id === ref.targetId)
-        || (ref.chartId && chartIdFromUrl(candidate.url) === ref.chartId))
+      && candidate.id === ref.targetId
     )) : undefined;
     if (!target) {
-      const targetUrl = ref.chartId
-        ? `https://www.tradingview.com/chart/${encodeURIComponent(ref.chartId)}/`
-        : 'https://www.tradingview.com/chart/?alphatradeDedicated=1';
-      const created = await fetchImpl(`${cdpOrigin}/json/new?${encodeURIComponent(targetUrl)}`, {
+      const created = await fetchImpl(`${cdpOrigin}/json/new?${encodeURIComponent('https://www.tradingview.com/chart/')}`, {
         method: 'PUT', signal: AbortSignal.timeout(remaining()),
       });
       if (!created.ok) throw new Error('snapshot-cdp-create-target-failed');
@@ -256,7 +259,9 @@ export async function captureTradingViewAlertSnapshot(
       id: 3, method: 'Page.captureScreenshot', params: { format: 'png', fromSurface: false },
     };
     const boundsExpression = `(() => {
-      const el = document.querySelector('.layout__area--center') || document.querySelector('.chart-container');
+      const el = document.querySelector('.chart-container.active')
+        || document.querySelector('.layout__area--center')
+        || document.querySelector('.chart-container');
       if (!el) return null;
       const r = el.getBoundingClientRect();
       return r.width > 200 && r.height > 150 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
@@ -265,7 +270,13 @@ export async function captureTradingViewAlertSnapshot(
       target,
       timeoutMs: remaining(),
       webSocketFactory,
+      optionalCommandIds: [10, 11, 12],
       commands: [
+        // Pozadí Electron throttluje a graf by zůstal prázdný — emulace fokusu
+        // a lifecycle 'active' ho probudí bez krádeže skutečného fokusu.
+        { id: 10, method: 'Emulation.setFocusEmulationEnabled', params: { enabled: true } },
+        { id: 11, method: 'Page.enable' },
+        { id: 12, method: 'Page.setWebLifecycleState', params: { state: 'active' } },
         { id: 1, method: 'Runtime.evaluate', params: { expression: evaluateExpression(options.symbol, options.timeframe || '1'), returnByValue: true } },
         { id: 2, method: 'Runtime.evaluate', params: { expression: boundsExpression, returnByValue: true } },
         captureCommand,
@@ -281,8 +292,9 @@ export async function captureTradingViewAlertSnapshot(
         const bounds = (result.result as { value?: unknown } | undefined)?.value as
           { x: number; y: number; width: number; height: number } | null | undefined;
         if (bounds && [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
+          // clip funguje jen s fromSurface: true (bez surface ho CDP ignoruje).
           captureCommand.params = {
-            format: 'png', fromSurface: false,
+            format: 'png', fromSurface: true,
             clip: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: 2 },
           };
         }
