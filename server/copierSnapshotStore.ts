@@ -27,7 +27,9 @@ export function validateCopierSnapshotPayload(value: unknown): CopierSnapshotInp
   if (!UUID_PATTERN.test(episodeId)
     || !COPIER_SNAPSHOT_KINDS.includes(kind as CopierSnapshotKind)
     || typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0
-    || !symbol || symbol.length > 32 || !/^[A-Z0-9._-]+$/.test(symbol)
+    // TradingView tickery nesou '!' (kontinuální futures MNQ1!) a ':'
+    // (prefix burzy CME_MINI:MNQ1!) — do storage cesty symbol nevstupuje.
+    || !symbol || symbol.length > 32 || !/^[A-Z0-9._:!-]+$/.test(symbol)
     || !encoded || encoded.length % 4 !== 0 || !BASE64_PATTERN.test(encoded)) {
     throw new Error('invalid-snapshot-payload');
   }

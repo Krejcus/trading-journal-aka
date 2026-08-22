@@ -420,6 +420,7 @@ async function runLocalAgent(
           };
         },
         onSnapshotRequests: requests => {
+          console.log(`${new Date().toISOString()} SNAPSHOT požadavky: ${requests.map(r => `${r.id.slice(0, 8)}/${r.symbol}`).join(', ')}`);
           if (!snapshotsEnabled || !relay) return;
           const now = Date.now();
           for (const [id, until] of tvSnapshotHandledUntil) {
@@ -445,7 +446,10 @@ async function runLocalAgent(
                   });
                 },
               });
-              if (!png || Date.now() >= deadlineAt) return;
+              if (!png || Date.now() >= deadlineAt) {
+                console.warn(`${new Date().toISOString()} SNAPSHOT TV alert capture selhal (${request.symbol}, png=${png ? 'ok' : 'null'}, po deadline=${Date.now() >= deadlineAt})`);
+                return;
+              }
               if (png.byteLength > 2 * 1024 * 1024) {
                 console.warn(`${new Date().toISOString()} SNAPSHOT TV alert PNG je větší než 2 MB; zahazuji ${request.symbol}`);
                 return;
