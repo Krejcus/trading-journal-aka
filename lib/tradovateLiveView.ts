@@ -146,6 +146,11 @@ export const accountRiskFloor = (
   profile?: TradovateAccountProfile,
 ): number | null => {
   if (profile?.drawdownType === 'none') return null;
+  // Brokerův auto-liq level je skutečný aktuální floor a má přednost před
+  // rekonstrukcí z high-watermarku a nominálního max loss pravidla.
+  if (account.balance.autoLiqLevel != null && Number.isFinite(account.balance.autoLiqLevel)) {
+    return account.balance.autoLiqLevel;
+  }
   const maxLoss = account.risk.trailingMaxDrawdown ?? profile?.maxLoss ?? null;
   if (maxLoss == null) return null;
   const peak = accountRiskPeak(account, profile);

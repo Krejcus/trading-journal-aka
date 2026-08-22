@@ -4321,6 +4321,7 @@ const App: React.FC = () => {
                         onDelete={handleDeleteAccount}
                         oauthLiveStates={oauthAccountLiveStates}
                         tradovateProfiles={tradovateLive.profiles}
+                        tradovateConnectionData={tradovateLive.connectionData}
                         theme={theme}
                         trades={trades}
                         onUpdateTrades={handleUpdateTrades}

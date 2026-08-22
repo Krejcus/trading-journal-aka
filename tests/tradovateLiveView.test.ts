@@ -94,6 +94,16 @@ describe('tradovate LIVE view model', () => {
     expect(accountRiskCushion(value, profile)).toBe(900);
   });
 
+  it('prefers the broker auto-liq floor over reconstructed risk fields', () => {
+    const value = account();
+    value.balance.autoLiqLevel = 49_725;
+    value.risk.trailingMaxDrawdown = 2_000;
+    value.risk.maxNetLiq = 51_000;
+    const profile = { accountSize: 50_000, maxLoss: 2_000, drawdownType: 'eod_trailing' } as never;
+    expect(accountRiskFloor(value, profile)).toBe(49_725);
+    expect(accountRiskCushion(value, profile)).toBe(-825);
+  });
+
   it('moves an EOD trailing floor only when a historical ending balance made a new high', () => {
     const value = account();
     value.daily = [

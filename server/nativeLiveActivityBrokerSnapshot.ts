@@ -36,6 +36,7 @@ interface CashBalanceSnapshot {
   openPnL?: number;
   totalCashValue?: number;
   netLiq?: number;
+  autoLiqLevel?: number;
 }
 
 interface ContractEntity {
@@ -52,6 +53,7 @@ interface AccountEntity {
 interface UserAccountAutoLiqEntity {
   accountId?: number;
   changesLocked?: boolean;
+  autoLiqLevel?: number;
 }
 
 export interface NativeLiveActivityBrokerAccount {
@@ -63,6 +65,7 @@ export interface NativeLiveActivityBrokerAccount {
   totalPnl: number;
   canTrade: boolean;
   changesLocked: boolean;
+  autoLiqLevel?: number | null;
   /** False zabrání persistenci syntetické nuly při neúplné broker odpovědi. */
   balanceAvailable?: boolean;
   openPnlAvailable?: boolean;
@@ -241,9 +244,10 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
         accountId,
         value,
         balance: finite(snapshot.netLiq) ?? finite(snapshot.totalCashValue),
+        autoLiqLevel: finite(snapshot.autoLiqLevel),
       };
     } catch {
-      return { accountId, value: null, balance: null };
+      return { accountId, value: null, balance: null, autoLiqLevel: null };
     }
   }));
   const completeOpenPnl = openPnlResults.every(result => result.value != null);
@@ -271,6 +275,7 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       totalPnl: realized + (openResult?.value ?? 0),
       canTrade: account?.canTrade !== false,
       changesLocked: autoLiqByAccount.get(accountId)?.changesLocked === true,
+      autoLiqLevel: openResult?.autoLiqLevel ?? finite(autoLiqByAccount.get(accountId)?.autoLiqLevel),
       balanceAvailable: openResult?.balance != null || finite(balance?.amount) != null,
       openPnlAvailable: openResult == null || openResult.value != null,
     };

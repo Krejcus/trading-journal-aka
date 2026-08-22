@@ -20,10 +20,12 @@ import { Skull, X, AlertTriangle, TrendingDown, Lightbulb, Calendar, DollarSign,
 import type { Account, Trade } from '../types';
 import { supabase } from '../services/supabase';
 import type { FailureData } from '../lib/accountFuneralPlan';
+import { firmLabel, firmOf } from '../utils/accountFirm';
 
 interface Props {
     account: Account;
     accounts?: Account[];
+    initialSelectedAccountIds?: string[];
     successorCandidates?: Account[];
     compactMulti?: boolean;
     initialFailureDate?: string;
@@ -48,12 +50,20 @@ const REASON_OPTIONS = [
     'Jiný důvod',
 ];
 
-const AccountFuneralModal: React.FC<Props> = ({ account, accounts, successorCandidates = [], compactMulti = false, initialFailureDate, title, trades, userId, onConfirm, onClose, theme }) => {
+const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelectedAccountIds, successorCandidates = [], compactMulti = false, initialFailureDate, title, trades, userId, onConfirm, onClose, theme }) => {
     const isDark = theme !== 'light';
     const availableAccounts = useMemo(() => accounts?.length ? accounts : [account], [accounts, account]);
-    const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(availableAccounts.map(item => item.id)));
-    const [successorOfAccountId, setSuccessorOfAccountId] = useState('');
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(
+        initialSelectedAccountIds?.filter(id => availableAccounts.some(item => item.id === id))
+        ?? availableAccounts.map(item => item.id)
+    ));
+    const [successorByAccountId, setSuccessorByAccountId] = useState<Record<string, string>>({});
     const targetAccounts = useMemo(() => availableAccounts.filter(item => selectedIds.has(item.id)), [availableAccounts, selectedIds]);
+    const accountGroups = useMemo(() => {
+        const groups = new Map<string, Account[]>();
+        for (const item of availableAccounts) groups.set(firmOf(item), [...(groups.get(firmOf(item)) ?? []), item]);
+        return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right, 'cs'));
+    }, [availableAccounts]);
     const targetAccountIds = useMemo(() => new Set(targetAccounts.map(a => a.id)), [targetAccounts]);
     const isGroup = targetAccounts.length > 1;
     const displayName = title || account.name;
@@ -150,7 +160,8 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, successorCand
             keyLesson: compactMulti ? '' : keyLesson.trim(),
             failureDate,
             selectedAccountIds: targetAccounts.map(item => item.id),
-            ...(successorOfAccountId ? { successorOfAccountId } : {}),
+            successorByAccountId: Object.fromEntries(Object.entries(successorByAccountId)
+                .filter(([accountId, successorId]) => selectedIds.has(accountId) && successorId && !selectedIds.has(successorId))),
         };
 
         // Insert do ai_coach_memory jako episode (importance 10 = nezapomeň!)
@@ -214,7 +225,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, successorCand
     };
 
     return (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md" onClick={onClose}>
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md" role="dialog" aria-modal="true" aria-label="Pohřeb obchodních účtů" onClick={onClose}>
             <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -243,8 +254,10 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, successorCand
                     {availableAccounts.length > 1 && (
                         <div className={`rounded-lg border p-4 ${isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`}>
                             <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Účty k pohřbení</p>
-                            <div className="grid gap-2 sm:grid-cols-2">
-                                {availableAccounts.map(item => {
+                            <div className="space-y-3">
+                                {accountGroups.map(([firm, firmAccounts]) => <div key={firm}>
+                                  <p className="mb-1.5 text-[9px] font-black uppercase tracking-widest text-slate-500">{firmLabel(firm)}</p>
+                                  <div className="grid gap-2 sm:grid-cols-2">{firmAccounts.map(item => {
                                     const checked = selectedIds.has(item.id);
                                     return <label key={item.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-xs font-bold ${checked ? 'border-rose-500/35 bg-rose-500/8' : isDark ? 'border-white/5' : 'border-slate-200'}`}>
                                         <input type="checkbox" checked={checked} disabled={checked && selectedIds.size === 1} onChange={() => setSelectedIds(previous => {
@@ -254,7 +267,8 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, successorCand
                                         })} />
                                         <span className="truncate">{item.name}</span>
                                     </label>;
-                                })}
+                                  })}</div>
+                                </div>)}
                             </div>
                         </div>
                     )}
@@ -360,13 +374,10 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, successorCand
                             />
                         </div>}
 
-                        {(compactMulti || successorCandidates.length > 0) && (
+                        {successorCandidates.length > 0 && targetAccounts.length > 0 && (
                             <div>
-                                <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Volitelný nástupce</label>
-                                <select value={successorOfAccountId} onChange={event => setSuccessorOfAccountId(event.target.value)} className={`w-full px-4 py-3 rounded-lg border text-sm ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
-                                    <option value="">Bez nástupce</option>
-                                    {successorCandidates.filter(candidate => !selectedIds.has(candidate.id)).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
-                                </select>
+                                <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Volitelný nástupce per účet</label>
+                                <div className="space-y-2">{targetAccounts.map(item => <label key={item.id} className="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]"><span className="truncate text-xs font-bold">{item.name}</span><select value={successorByAccountId[item.id] ?? ''} onChange={event => setSuccessorByAccountId(current => ({ ...current, [item.id]: event.target.value }))} className={`w-full px-3 py-2 rounded-lg border text-sm ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}><option value="">Bez nástupce</option>{successorCandidates.filter(candidate => !selectedIds.has(candidate.id)).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>)}</div>
                             </div>
                         )}
                     </div>

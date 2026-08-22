@@ -56,6 +56,7 @@ export async function persistAccountSnapshots(options: {
       balance: account.balance,
       realized_pnl_day: account.realizedPnl,
       open_pnl: account.openPnlAvailable === false ? null : account.openPnl,
+      auto_liq_level: account.autoLiqLevel ?? null,
     }];
   });
   if (rows.length === 0) return 0;

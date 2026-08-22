@@ -295,13 +295,16 @@ describe('remote native Live Activity', () => {
         { id: 11, name: 'Follower', canTrade: false },
       ]));
       if (path.endsWith('/userAccountAutoLiq/list')) return new Response(JSON.stringify([
-        { accountId: 10, changesLocked: true },
-        { accountId: 11, changesLocked: false },
+        { accountId: 10, changesLocked: true, autoLiqLevel: 48_750 },
+        { accountId: 11, changesLocked: false, autoLiqLevel: 48_600 },
       ]));
       if (path.endsWith('/contract/items')) return new Response(JSON.stringify([{ id: 99, name: 'MNQU6' }]));
       if (path.endsWith('/cashBalance/getcashbalancesnapshot')) {
         const accountId = JSON.parse(String(init?.body)).accountId;
-        return new Response(JSON.stringify({ openPnL: accountId === 10 ? 20 : 30 }));
+        return new Response(JSON.stringify({
+          openPnL: accountId === 10 ? 20 : 30,
+          ...(accountId === 10 ? { autoLiqLevel: 49_000 } : {}),
+        }));
       }
       return new Response('{}', { status: 404 });
     }) as unknown as typeof fetch;
@@ -324,8 +327,8 @@ describe('remote native Live Activity', () => {
       capturedAt: 123,
     });
     expect(snapshot.accounts).toEqual([
-      expect.objectContaining({ accountId: 10, accountName: 'Leader', canTrade: true, changesLocked: true }),
-      expect.objectContaining({ accountId: 11, accountName: 'Follower', canTrade: false, changesLocked: false }),
+      expect.objectContaining({ accountId: 10, accountName: 'Leader', canTrade: true, changesLocked: true, autoLiqLevel: 49_000 }),
+      expect.objectContaining({ accountId: 11, accountName: 'Follower', canTrade: false, changesLocked: false, autoLiqLevel: 48_600 }),
     ]);
     expect(snapshot.positions).toEqual([
       { accountId: 10, symbol: 'MNQU6', side: 'Long', quantity: 1, entryPrice: 20_000,

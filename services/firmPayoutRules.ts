@@ -1,5 +1,5 @@
 import type { FirmPayoutRules } from '../lib/propFirmRules';
-import { payoutRuleTemplateForFirm } from '../lib/propFirmRules';
+import { normalizeFirmPayoutRules, payoutRuleTemplateForFirm } from '../lib/propFirmRules';
 import { supabase } from './supabase';
 
 interface FirmPayoutRulesRow {
@@ -27,7 +27,7 @@ export async function loadFirmPayoutRules(firmKey: string): Promise<FirmPayoutRu
     .eq('firm_key', key)
     .maybeSingle<FirmPayoutRulesRow>();
   if (error) throw new Error(`Načtení payout pravidel selhalo: ${error.message}`);
-  return data?.rules ? { ...data.rules, planName: data.plan_name } : defaultRulesForFirm(key);
+  return data?.rules ? normalizeFirmPayoutRules({ ...data.rules, planName: data.plan_name }) : defaultRulesForFirm(key);
 }
 
 export async function saveFirmPayoutRules(
@@ -46,5 +46,5 @@ export async function saveFirmPayoutRules(
     updated_at: timestamp,
   }, { onConflict: 'user_id,firm_key' }).select('firm_key,plan_name,rules').single<FirmPayoutRulesRow>();
   if (error || !data) throw new Error(`Uložení payout pravidel selhalo: ${error?.message ?? 'missing-row'}`);
-  return { ...data.rules, planName: data.plan_name };
+  return normalizeFirmPayoutRules({ ...data.rules, planName: data.plan_name });
 }

@@ -1,7 +1,9 @@
 import type { Account } from '../types';
 import type { CopierAccountSnapshotRow } from '../services/copierAccountSnapshots';
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
+import type { TradovateAccountDataAccount } from './tradovateAccountDataTypes';
 import type { FirmPayoutRules } from './propFirmRules';
+import { accountRiskFloor, accountRiskPeak } from './tradovateLiveView';
 import {
   breachDetector,
   chicagoTradingDate,
@@ -22,6 +24,67 @@ import {
   type ProfitDayProgress,
   type RiskLevel,
 } from './propFirmMetrics';
+
+interface CockpitDrawdownSnapshot {
+  capturedAt: string;
+  balance: number;
+  autoLiqLevel: number | null;
+}
+
+const finite = (value: number | null | undefined): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+/** Stejný floor jako LIVE desk, následovaný broker snapshotem a až pak výpočtem. */
+export function resolveCockpitDrawdown({
+  snapshots,
+  profile,
+  liveAccount,
+  liveCapturedAt,
+}: {
+  snapshots: readonly CockpitDrawdownSnapshot[];
+  profile: TradovateAccountProfile;
+  liveAccount?: TradovateAccountDataAccount | null;
+  liveCapturedAt?: string | null;
+}): DrawdownFloorResult | null {
+  if (profile.drawdownType == null || profile.drawdownType === 'none') return null;
+  const computed = drawdownFloor(snapshots, profile);
+  const brokerHistory = snapshots.flatMap(snapshot => finite(snapshot.autoLiqLevel) ? [{
+    at: snapshot.capturedAt,
+    balance: snapshot.balance,
+    floor: snapshot.autoLiqLevel,
+    distance: snapshot.balance - snapshot.autoLiqLevel,
+  }] : []);
+  const liveFloor = liveAccount ? accountRiskFloor(liveAccount, profile) : null;
+  const liveBalance = liveAccount?.balance.netLiq ?? liveAccount?.balance.totalCashValue ?? null;
+  if (finite(liveFloor) && finite(liveBalance)) {
+    const at = liveCapturedAt && Number.isFinite(Date.parse(liveCapturedAt))
+      ? new Date(liveCapturedAt).toISOString() : new Date().toISOString();
+    const history = brokerHistory.length > 0 ? brokerHistory : [...(computed?.history ?? [])];
+    history.push({ at, balance: liveBalance, floor: liveFloor, distance: liveBalance - liveFloor });
+    return {
+      floor: liveFloor,
+      balance: liveBalance,
+      distance: liveBalance - liveFloor,
+      highWatermark: accountRiskPeak(liveAccount, profile) ?? liveFloor + (profile.maxLoss ?? 0),
+      highWatermarkBasis: profile.drawdownType === 'static' ? 'static'
+        : profile.drawdownType === 'trailing' ? 'intraday' : 'eod',
+      history,
+    };
+  }
+  const latestBroker = brokerHistory.at(-1);
+  if (latestBroker) {
+    return {
+      floor: latestBroker.floor,
+      balance: latestBroker.balance,
+      distance: latestBroker.distance,
+      highWatermark: latestBroker.floor + (profile.maxLoss ?? 0),
+      highWatermarkBasis: profile.drawdownType === 'static' ? 'static'
+        : profile.drawdownType === 'trailing' ? 'intraday' : 'eod',
+      history: brokerHistory,
+    };
+  }
+  return computed;
+}
 
 export interface AccountCockpitModel {
   accountId: string;
@@ -50,19 +113,27 @@ export function buildAccountCockpitModel({
   rows,
   profile,
   rules,
+  liveAccount,
+  liveCapturedAt,
   now = new Date(),
 }: {
   account: Account;
   rows: readonly CopierAccountSnapshotRow[];
   profile: TradovateAccountProfile | null;
   rules: FirmPayoutRules | null;
+  liveAccount?: TradovateAccountDataAccount | null;
+  liveCapturedAt?: string | null;
   now?: Date;
 }): AccountCockpitModel {
   const ordered = rows
     .filter(row => row.connection_id === account.oauth?.connectionId
       && row.external_account_id === account.oauth?.externalAccountId)
     .sort((left, right) => Date.parse(left.captured_at) - Date.parse(right.captured_at));
-  const snapshots = ordered.map(row => ({ capturedAt: row.captured_at, balance: row.balance }));
+  const snapshots = ordered.map(row => ({
+    capturedAt: row.captured_at,
+    balance: row.balance,
+    autoLiqLevel: row.auto_liq_level,
+  }));
   const ledger = dailyLedger(snapshots);
   const today = ledger.find(day => day.date === chicagoTradingDate(now));
   const balance = ordered.at(-1)?.balance ?? null;
@@ -70,7 +141,7 @@ export function buildAccountCockpitModel({
 
   const dailyLimit = todayPnl != null && profile?.dailyLossLimit != null
     ? dailyLimitUsage(todayPnl, profile.dailyLossLimit) : null;
-  const floor = profile ? drawdownFloor(snapshots, profile) : null;
+  const floor = profile ? resolveCockpitDrawdown({ snapshots, profile, liveAccount, liveCapturedAt }) : null;
   const floorUsage = floor && profile?.maxLoss != null ? drawdownUsage(floor, profile.maxLoss) : null;
   const drawdown = floor && floorUsage ? { ...floor, usage: floorUsage } : null;
   const breach = floor ? breachDetector(snapshots, floor) : { breached: false as const };
@@ -78,7 +149,8 @@ export function buildAccountCockpitModel({
   const consistencyRules = account.phase !== 'Funded' && profile?.consistencyPct != null
     ? {
       planName: profile.planName ?? 'Evaluation', profitDaysRequired: null, minProfitPerDayUsd: null,
-      minPayoutUsd: null, maxPayoutUsd: null, payoutCycleDays: null, splitPct: null, drawdownType: null,
+      minPayoutUsd: null, maxPayoutUsd: null, withdrawablePctOfProfit: null,
+      minBalanceToRequestUsd: null, payoutCycleDays: null, splitPct: null, drawdownType: null,
       ...(rules ?? {}), consistencyPct: rules?.consistencyPct ?? profile.consistencyPct,
     } satisfies FirmPayoutRules
     : rules;
@@ -87,9 +159,10 @@ export function buildAccountCockpitModel({
   const withdrawable = balance != null && profile?.accountSize != null
     ? withdrawableProfit(balance, profile.accountSize) : null;
   const hasPayoutRule = Boolean(rules && (rules.profitDaysRequired != null || rules.minPayoutUsd != null
-    || rules.maxPayoutUsd != null || rules.payoutCycleDays != null));
+    || rules.maxPayoutUsd != null || rules.payoutCycleDays != null
+    || rules.withdrawablePctOfProfit != null || rules.minBalanceToRequestUsd != null));
   const payout = account.phase === 'Funded' && rules && hasPayoutRule && withdrawable != null
-    ? payoutEligibility(ledger, rules, withdrawable) : null;
+    ? payoutEligibility(ledger, rules, withdrawable, balance) : null;
   const evaluation = account.phase !== 'Funded' && balance != null
     && profile?.accountSize != null && profile.profitTarget != null
     ? evaluationProgress(balance, profile.accountSize, profile.profitTarget) : null;

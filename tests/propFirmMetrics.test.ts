@@ -16,6 +16,8 @@ const rules = (overrides: Partial<FirmPayoutRules> = {}): FirmPayoutRules => ({
   minProfitPerDayUsd: null,
   minPayoutUsd: null,
   maxPayoutUsd: null,
+  withdrawablePctOfProfit: null,
+  minBalanceToRequestUsd: null,
   payoutCycleDays: null,
   consistencyPct: null,
   splitPct: null,
@@ -56,15 +58,42 @@ describe('prop firm metrics', () => {
   });
 
   it('ignores null payout rules and applies only configured requirements', () => {
-    expect(payoutEligibility(ledger(null, -20), rules(), 0)).toEqual({ eligible: true, missing: {} });
+    expect(payoutEligibility(ledger(null, -20), rules(), 0)).toEqual({ eligible: true, withdrawableUsd: 0, missing: {} });
     expect(payoutEligibility(ledger(null, 80), rules({
       profitDaysRequired: 2,
       minPayoutUsd: 100,
       maxPayoutUsd: 2_000,
     }), 60)).toEqual({
       eligible: false,
+      withdrawableUsd: 60,
       missing: { profitDays: 1, amountUsd: 40 },
       capUsd: 2_000,
+    });
+  });
+
+  it('limits withdrawable payout by profit percentage, payout cap and minimum balance', () => {
+    expect(payoutEligibility(ledger(null, 1_000), rules({
+      withdrawablePctOfProfit: 50,
+      maxPayoutUsd: 400,
+    }), 1_000, 51_000)).toEqual({
+      eligible: true,
+      withdrawableUsd: 400,
+      missing: {},
+      capUsd: 400,
+    });
+    expect(payoutEligibility(ledger(null, 2_900), rules({
+      minBalanceToRequestUsd: 53_000,
+    }), 2_900, 52_900)).toEqual({
+      eligible: false,
+      withdrawableUsd: 0,
+      missing: { amountUsd: 100 },
+    });
+    expect(payoutEligibility(ledger(null, 3_500), rules({
+      minBalanceToRequestUsd: 53_000,
+    }), 3_500, 53_500)).toEqual({
+      eligible: true,
+      withdrawableUsd: 500,
+      missing: {},
     });
   });
 

@@ -78,6 +78,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, F3c Kokpit: broker floor, payout limity, cross-firm Funeral)
+Kokpit nyní dostává živý `connectionData` a drawdown používá stejnou sdílenou
+funkci jako LIVE desk. Pořadí je autoritativní broker `autoLiqLevel`/LIVE
+mapování → poslední snapshot s `auto_liq_level` → dosavadní deterministická
+rekonstrukce. Serverový snapshot loader pouze propisuje auto-liq hodnotu z již
+načítaných broker odpovědí; žádný nový Tradovate REST request nepřibyl.
+
+Payout pravidla mají editovatelné `withdrawablePctOfProfit` a
+`minBalanceToRequestUsd`; LucidFlex šablona používá 50 % zisku a Tradeify Growth
+50K minimum balance 53 000 USD. Vybratelná částka je minimum skutečného profitu,
+procentního limitu, payout capu a částky nad minimální balance. Starší JSON
+pravidla bez nových klíčů se normalizují na `null`.
+
+Funeral dialog ze všech vstupů nabízí všechny aktivní OAuth účty, seskupuje je
+napříč firmami, předvolí otevřený účet i všechny známé breach účty a ukládá
+jeden incident s volitelným nástupcem zvlášť pro každý účet. Čistý plán a testy
+pokrývají výběr účtů z více firem i individuální statistiky/nástupce.
+
+Připravená migrace `20260822160000_account_snapshots_auto_liq_level.sql` přidává
+nullable konečný broker floor; ZÁMĚRNĚ NEBYLA APLIKOVANÁ. Aktivace snapshotové
+cesty vyžaduje nejdřív export/zálohu produkčního Supabase, explicitní souhlas,
+aplikaci migrace a security/performance advisory. Ověření: `npx tsc --noEmit`
+čistý; `npx vitest run` 176/176 souborů a 1378/1378 testů (loopback běh mimo
+sandbox); `npm run build` prošel. Nic nebylo commitnuto, pushnuto, deploynuto
+ani migrováno; finální UI nebylo v této relaci vizuálně proklikáno.
+
 ### 2026-08-22 (Codex, F3b Kokpit účtů)
 Karta Účty má nový OAuth kokpit podle `docs/design/ucty-kokpit-mock.html`,
 zatímco ruční účty dál používají původní renderer. Jeden uživatelsky izolovaný

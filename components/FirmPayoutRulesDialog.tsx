@@ -12,11 +12,13 @@ interface Props {
   onClose: () => void;
 }
 
-const numericFields: Array<{ key: keyof FirmPayoutRules; label: string; suffix: string }> = [
+const numericFields: Array<{ key: keyof FirmPayoutRules; label: string; suffix: string; help?: string }> = [
   { key: 'profitDaysRequired', label: 'Profit dny', suffix: 'dnů' },
   { key: 'minProfitPerDayUsd', label: 'Minimum profit dne', suffix: 'USD' },
   { key: 'minPayoutUsd', label: 'Min payout', suffix: 'USD' },
   { key: 'maxPayoutUsd', label: 'Max payout', suffix: 'USD' },
+  { key: 'withdrawablePctOfProfit', label: 'Vybratelná část zisku', suffix: '%', help: 'Kolik procent simulovaného zisku lze vybrat v jedné žádosti.' },
+  { key: 'minBalanceToRequestUsd', label: 'Min balance pro žádost', suffix: 'USD', help: 'Žádost je dostupná až po dosažení této balance; vybrat lze část nad ní.' },
   { key: 'payoutCycleDays', label: 'Payout cyklus', suffix: 'dnů' },
   { key: 'consistencyPct', label: 'Consistency limit', suffix: '%' },
   { key: 'splitPct', label: 'Profit split', suffix: '%' },
@@ -40,7 +42,7 @@ const FirmPayoutRulesDialog: React.FC<Props> = ({ firm, initialRules, theme, sav
         </div>
         <label className="block"><span className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">Název plánu</span><input className={input} value={rules.planName} onChange={event => setRules(current => ({ ...current, planName: event.target.value }))} /></label>
         <div className="grid gap-4 sm:grid-cols-2">
-          {numericFields.map(field => <label key={field.key} className="block"><span className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">{field.label}</span><div className="relative"><input type="number" min="0" className={`${input} pr-14 tabular-nums`} value={rules[field.key] as number | null ?? ''} placeholder="Nezobrazovat" onChange={event => setRules(current => ({ ...current, [field.key]: event.target.value === '' ? null : Number(event.target.value) }))} /><span className="absolute right-3 top-2.5 text-[9px] font-black uppercase text-slate-500">{field.suffix}</span></div></label>)}
+          {numericFields.map(field => <label key={field.key} className="block"><span className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">{field.label}</span><div className="relative"><input type="number" min="0" className={`${input} pr-14 tabular-nums`} value={rules[field.key] as number | null ?? ''} placeholder="Nezobrazovat" onChange={event => setRules(current => ({ ...current, [field.key]: event.target.value === '' ? null : Number(event.target.value) }))} /><span className="absolute right-3 top-2.5 text-[9px] font-black uppercase text-slate-500">{field.suffix}</span></div>{field.help && <span className="mt-1 block text-[10px] leading-snug text-slate-500">{field.help}</span>}</label>)}
           <label className="block"><span className="mb-1 block text-[10px] font-black uppercase tracking-wider text-slate-500">Drawdown typ</span><select className={input} value={rules.drawdownType ?? ''} onChange={event => setRules(current => ({ ...current, drawdownType: event.target.value ? event.target.value as FirmPayoutRules['drawdownType'] : null }))}><option value="">Nezobrazovat</option><option value="trailing">Intraday trailing</option><option value="eod_trailing">EOD trailing</option><option value="static">Static</option></select></label>
         </div>
         {error && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs font-bold text-rose-500">{error}</p>}

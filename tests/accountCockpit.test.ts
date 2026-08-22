@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Account } from '../types';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
-import { buildAccountCockpitModel, sortAccountsRiskFirst } from '../lib/accountCockpit';
+import { buildAccountCockpitModel, resolveCockpitDrawdown, sortAccountsRiskFirst } from '../lib/accountCockpit';
 import type { FirmPayoutRules } from '../lib/propFirmRules';
 
 const account = (id: string, name: string, phase: 'Challenge' | 'Funded' = 'Funded'): Account => ({
@@ -20,6 +20,7 @@ const profile = (id: string): TradovateAccountProfile => ({
 const rules: FirmPayoutRules = {
   planName: 'Growth', profitDaysRequired: 2, minProfitPerDayUsd: 100, minPayoutUsd: 500,
   maxPayoutUsd: 2_000, payoutCycleDays: null, consistencyPct: 60, splitPct: 90, drawdownType: 'static',
+  withdrawablePctOfProfit: null, minBalanceToRequestUsd: null,
 };
 
 const rows = (id: string, balances: number[]) => balances.map((balance, index) => ({
@@ -29,6 +30,7 @@ const rows = (id: string, balances: number[]) => balances.map((balance, index) =
   balance,
   realized_pnl_day: null,
   open_pnl: null,
+  auto_liq_level: null,
 }));
 
 describe('account cockpit mapping', () => {
@@ -44,7 +46,7 @@ describe('account cockpit mapping', () => {
       dailyLimit: { usedUsd: 850, remainingUsd: 150, level: 'danger' },
       drawdown: { floor: 48_000, distance: 1_350 },
       profitDays: { completed: 1, required: 2, remaining: 1 },
-      payout: { eligible: false, missing: { profitDays: 1, amountUsd: 500 }, capUsd: 2_000 },
+      payout: { eligible: false, withdrawableUsd: 0, missing: { profitDays: 1, amountUsd: 500 }, capUsd: 2_000 },
       risk: 'danger',
     });
   });
@@ -69,5 +71,26 @@ describe('account cockpit mapping', () => {
       profile: profile(item.id), rules: null, now: new Date('2026-08-21T22:00:00Z'),
     })]));
     expect(sortAccountsRiskFirst(accounts, models).map(item => item.id)).toEqual(['danger', 'warning', 'ok']);
+  });
+
+  it('prefers live broker floor, then snapshot auto-liq and finally computed floor', () => {
+    const snapshots = [
+      { capturedAt: '2026-08-21T21:00:00.000Z', balance: 50_600, autoLiqLevel: null },
+      { capturedAt: '2026-08-22T21:00:00.000Z', balance: 50_900, autoLiqLevel: 49_250 },
+    ];
+    const floorProfile = { ...profile('floor'), drawdownType: 'eod_trailing' as const };
+    const liveAccount = {
+      balance: { autoLiqLevel: 49_700, netLiq: 50_950, totalCashValue: 50_900 },
+      risk: { trailingMaxDrawdown: 2_000, maxNetLiq: 51_100 },
+      daily: [],
+    } as never;
+    expect(resolveCockpitDrawdown({ snapshots, profile: floorProfile, liveAccount, liveCapturedAt: '2026-08-22T22:00:00Z' }))
+      .toMatchObject({ floor: 49_700, balance: 50_950, distance: 1_250 });
+    expect(resolveCockpitDrawdown({ snapshots, profile: floorProfile }))
+      .toMatchObject({ floor: 49_250, balance: 50_900, distance: 1_650 });
+    expect(resolveCockpitDrawdown({
+      snapshots: snapshots.map(snapshot => ({ ...snapshot, autoLiqLevel: null })),
+      profile: floorProfile,
+    })).toMatchObject({ floor: 48_900, balance: 50_900, distance: 2_000 });
   });
 });

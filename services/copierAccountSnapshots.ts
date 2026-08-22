@@ -7,6 +7,7 @@ export interface CopierAccountSnapshotRow {
   balance: number;
   realized_pnl_day: number | null;
   open_pnl: number | null;
+  auto_liq_level: number | null;
 }
 
 let cachedRows: CopierAccountSnapshotRow[] | null = null;
@@ -24,7 +25,7 @@ export function loadCopierAccountSnapshots(days = 35): Promise<CopierAccountSnap
       const since = new Date(Date.now() - days * 86_400_000).toISOString();
       const { data, error } = await supabase
         .from('copier_account_snapshots')
-        .select('connection_id,external_account_id,captured_at,balance,realized_pnl_day,open_pnl')
+        .select('connection_id,external_account_id,captured_at,balance,realized_pnl_day,open_pnl,auto_liq_level')
         .gte('captured_at', since)
         .order('captured_at', { ascending: true });
       if (error) throw new Error(`Načtení snapshotů účtů selhalo: ${error.message}`);

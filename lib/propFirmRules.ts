@@ -4,6 +4,8 @@ export interface FirmPayoutRules {
   minProfitPerDayUsd: number | null;
   minPayoutUsd: number | null;
   maxPayoutUsd: number | null;
+  withdrawablePctOfProfit: number | null;
+  minBalanceToRequestUsd: number | null;
   payoutCycleDays: number | null;
   consistencyPct: number | null;
   splitPct: number | null;
@@ -19,6 +21,8 @@ const rules = (
   minProfitPerDayUsd: null,
   minPayoutUsd: null,
   maxPayoutUsd: null,
+  withdrawablePctOfProfit: null,
+  minBalanceToRequestUsd: null,
   payoutCycleDays: null,
   consistencyPct: null,
   splitPct: null,
@@ -30,6 +34,7 @@ const rules = (
 // může uložit a upravit, protože firmy své podmínky průběžně mění.
 export const TRADEIFY_GROWTH_FUNDED_RULES = rules('Growth Funded', {
   profitDaysRequired: 5,
+  minBalanceToRequestUsd: 53_000,
   consistencyPct: 35,
   splitPct: 90,
   drawdownType: 'eod_trailing',
@@ -45,6 +50,7 @@ export const LUCID_FLEX_RULES = rules('LucidFlex', {
   profitDaysRequired: 5,
   minPayoutUsd: 100,
   payoutCycleDays: 14,
+  withdrawablePctOfProfit: 50,
   splitPct: 90,
   drawdownType: 'eod_trailing',
 });
@@ -62,10 +68,17 @@ export const FIRM_PAYOUT_RULE_TEMPLATES: Readonly<Record<string, FirmPayoutRules
   LUCID_PRO: LUCID_PRO_RULES,
 };
 
+/** JSON uložený před F3c čteme bez nových polí jako explicitní null. */
+export const normalizeFirmPayoutRules = (value: FirmPayoutRules): FirmPayoutRules => ({
+  ...value,
+  withdrawablePctOfProfit: value.withdrawablePctOfProfit ?? null,
+  minBalanceToRequestUsd: value.minBalanceToRequestUsd ?? null,
+});
+
 export function payoutRuleTemplateForFirm(firmKey: string): FirmPayoutRules | null {
   const normalized = firmKey.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
   const template = FIRM_PAYOUT_RULE_TEMPLATES[normalized]
     ?? (normalized === 'TRADEIFY' ? TRADEIFY_GROWTH_FUNDED_RULES : null)
     ?? (normalized === 'LUCID' ? LUCID_FLEX_RULES : null);
-  return template ? { ...template } : null;
+  return template ? normalizeFirmPayoutRules({ ...template }) : null;
 }

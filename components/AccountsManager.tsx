@@ -34,11 +34,12 @@ import { calculateAccountDrawdown, inferDrawdownConfig } from '../services/propD
 import { accountRemovalDecision } from '../lib/oauthAccountArchivePolicy';
 import type { OAuthAccountLiveState } from '../lib/oauthAccountLiveState';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
+import type { TradovatePreflightResult } from '../services/tradovateOAuthConnection';
 import type { FirmPayoutRules } from '../lib/propFirmRules';
 import { defaultRulesForFirm, loadFirmPayoutRules, saveFirmPayoutRules } from '../services/firmPayoutRules';
 import { loadCopierAccountSnapshots, type CopierAccountSnapshotRow } from '../services/copierAccountSnapshots';
 import { buildAccountCockpitModel, sortAccountsRiskFirst, summarizeAccountCockpit, type AccountCockpitModel } from '../lib/accountCockpit';
-import { planMultiAccountFuneral } from '../lib/accountFuneralPlan';
+import { funeralAccountScope, planMultiAccountFuneral } from '../lib/accountFuneralPlan';
 import FirmPayoutRulesDialog from './FirmPayoutRulesDialog';
 
 interface AccountsManagerProps {
@@ -59,6 +60,7 @@ interface AccountsManagerProps {
   user: User;
   oauthLiveStates?: Record<string, OAuthAccountLiveState>;
   tradovateProfiles?: TradovateAccountProfile[];
+  tradovateConnectionData?: Record<string, TradovatePreflightResult>;
 }
 
 const formatOAuthLastSeen = (value: string | null | undefined) => {
@@ -215,6 +217,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   onImportTradovate,
   oauthLiveStates = {},
   tradovateProfiles = [],
+  tradovateConnectionData = {},
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -283,12 +286,29 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     return [[account.id, profile] as const];
   })), [accounts, tradovateProfiles]);
 
+  const liveBrokerByAccountId = useMemo(() => new Map(accounts.flatMap(account => {
+    if (!account.oauth || oauthLiveStates[account.id]?.status !== 'connected') return [];
+    const dataset = tradovateConnectionData[account.oauth.connectionId]
+      ?? Object.values(tradovateConnectionData).find(candidate => candidate.environment === account.oauth!.environment
+        && candidate.accounts.some(brokerAccount => String(brokerAccount.id) === account.oauth!.externalAccountId));
+    const brokerAccount = dataset?.accounts.find(candidate => String(candidate.id) === account.oauth!.externalAccountId);
+    return brokerAccount && dataset ? [[account.id, { account: brokerAccount, capturedAt: dataset.capturedAt }] as const] : [];
+  })), [accounts, oauthLiveStates, tradovateConnectionData]);
+
   const cockpitByAccount = useMemo(() => new Map(accounts.flatMap(account => {
     if (!account.oauth) return [];
     const firm = firmOf(account);
     const rules = Object.prototype.hasOwnProperty.call(firmRules, firm) ? firmRules[firm] : defaultRulesForFirm(firm);
-    return [[account.id, buildAccountCockpitModel({ account, rows: snapshotRows, profile: profileByAccountId.get(account.id) ?? null, rules })] as const];
-  })), [accounts, firmRules, profileByAccountId, snapshotRows]);
+    const live = liveBrokerByAccountId.get(account.id);
+    return [[account.id, buildAccountCockpitModel({
+      account,
+      rows: snapshotRows,
+      profile: profileByAccountId.get(account.id) ?? null,
+      rules,
+      liveAccount: live?.account,
+      liveCapturedAt: live?.capturedAt,
+    })] as const];
+  })), [accounts, firmRules, liveBrokerByAccountId, profileByAccountId, snapshotRows]);
 
   const activeCockpitModels = useMemo(() => accounts.filter(account => account.status === 'Active').flatMap(account => cockpitByAccount.get(account.id) ? [cockpitByAccount.get(account.id)!] : []), [accounts, cockpitByAccount]);
   const cockpitSummary = useMemo(() => summarizeAccountCockpit(activeCockpitModels), [activeCockpitModels]);
@@ -400,14 +420,12 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     }).sort((a, b) => (b.activeCount - a.activeCount) || a.firm.localeCompare(b.firm, 'cs'));
   }, [accounts, showInactive, payouts, pnlByAccount, financialAdjustments, cockpitByAccount]);
 
-  // Hromadné pohřbení celé firmy používá stejný plný Funeral formulář jako
-  // jednotlivý účet a jeho reflexi uloží ke všem aktivním účtům skupiny.
+  // Firma určuje jen počáteční výběr; samotný plán smí zahrnout účty napříč firmami.
   const executeFirmFuneral = useCallback((failureData: FailureData) => {
     if (!firmFuneralTarget) return;
-    const candidateSet = funeralCandidateIds ? new Set(funeralCandidateIds) : null;
-    const candidates = accounts.filter(a => (candidateSet ? candidateSet.has(a.id) : firmOf(a) === firmFuneralTarget) && a.status === 'Active' && a.type !== 'Backtest');
-    const selectedAccountIds = failureData.selectedAccountIds ?? candidates.map(account => account.id);
-    const statsByAccountId = Object.fromEntries(candidates.map(account => {
+    const selectedAccountIds = failureData.selectedAccountIds ?? funeralCandidateIds ?? [];
+    const selected = new Set(selectedAccountIds);
+    const statsByAccountId = Object.fromEntries(accounts.filter(account => selected.has(account.id)).map(account => {
       const stats = computeStats(account, trades);
       return [account.id, { amountLost: stats.amountLost, progressPct: stats.progressPct, daysConsistency: stats.daysConsistency }];
     }));
@@ -545,26 +563,23 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
   const executeFail = useCallback((failureData: FailureData) => {
     if (!failConfirmTarget) return;
-    const updated = accounts.map(a =>
-      a.id === failConfirmTarget.id ? {
-        ...a,
-        status: 'Inactive',
-        isArchived: true,
-        archivedAt: Date.now(),
-        result: 'Failed',
-        // Funeral metadata — později render-uje "Lessons from failed accounts" widget
-        failureReason: failureData.reason,
-        failureDate: failureData.failureDate,
-        failureWhatHappened: failureData.whatHappened,
-        failureAmountLost: failureData.amountLost,
-        failureProgressPct: failureData.progressPct,
-        failureDaysOfConsistency: failureData.daysOfConsistency,
-        failureKeyLesson: failureData.keyLesson,
-      } as Account : a
-    );
+    const selectedAccountIds = failureData.selectedAccountIds ?? [failConfirmTarget.id];
+    const selected = new Set(selectedAccountIds);
+    const statsByAccountId = Object.fromEntries(accounts.filter(account => selected.has(account.id)).map(account => {
+      const stats = computeStats(account, trades);
+      return [account.id, { amountLost: stats.amountLost, progressPct: stats.progressPct, daysConsistency: stats.daysConsistency }];
+    }));
+    const updated = planMultiAccountFuneral({
+      accounts,
+      selectedAccountIds,
+      failureData,
+      statsByAccountId,
+      archivedAt: Date.now(),
+      funeralGroupId: crypto.randomUUID(),
+    });
     onUpdate(updated);
     setFailConfirmTarget(null);
-  }, [failConfirmTarget, accounts, onUpdate]);
+  }, [failConfirmTarget, accounts, trades, onUpdate]);
 
   const toggleAccountStatus = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -638,13 +653,13 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         {model.equity.length >= 2 ? <SnapshotSparkline values={model.equity} /> : <div className="relative h-10 w-[120px] overflow-hidden"><AccountSparkline trades={accTrades} initialBalance={acc.initialBalance} color={(accTrades.reduce((sum, trade) => sum + trade.pnl, 0) >= 0) ? 'emerald' : 'rose'} theme={theme} /></div>}
       </div>
 
-      {(model.dailyLimit || model.drawdown || model.evaluation || model.profitDays || model.consistency || (phaseFunded && rules && (rules.minPayoutUsd != null || rules.maxPayoutUsd != null))) && <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {(model.dailyLimit || model.drawdown || model.evaluation || model.profitDays || model.consistency || (phaseFunded && rules && (rules.minPayoutUsd != null || rules.maxPayoutUsd != null || rules.withdrawablePctOfProfit != null || rules.minBalanceToRequestUsd != null))) && <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {model.dailyLimit && profile?.dailyLossLimit != null && model.todayPnl != null && <CockpitGauge label="Denní limit" value={`${signed(model.todayPnl)} / ${money(profile.dailyLossLimit)}`} pct={model.dailyLimit.usedPct} level={model.dailyLimit.level} detail={model.dailyLimit.usedUsd === 0 ? 'v zisku — limit netknutý' : model.dailyLimit.level === 'danger' ? `zbývá jen ${money(model.dailyLimit.remainingUsd)} — zvaž stop na dnešek` : `zbývá ${money(model.dailyLimit.remainingUsd)} prostoru`} />}
         {model.drawdown && <CockpitGauge label="Trailing DD" value={`${money(model.drawdown.distance)} od flooru`} pct={model.drawdown.usage.usedPct} level={model.drawdown.usage.level} detail={`floor ${money(model.drawdown.floor)}`} />}
         {!phaseFunded && model.evaluation && <CockpitGauge label="Profit target" value={`${signed(model.evaluation.profitUsd)} / ${money(model.evaluation.targetUsd)}`} pct={model.evaluation.progressPct} level={model.evaluation.progressPct >= 80 ? 'warning' : 'ok'} detail={`${model.evaluation.progressPct.toFixed(0)} % — zbývá ${money(model.evaluation.remainingUsd)}`} />}
         {phaseFunded && model.profitDays && <CockpitGauge label={`Profit dny${rules?.minProfitPerDayUsd != null ? ` (≥ ${money(rules.minProfitPerDayUsd)})` : ''}`} value={`${model.profitDays.completed} / ${model.profitDays.required}`} pct={(model.profitDays.completed / Math.max(1, model.profitDays.required)) * 100} detail={model.profitDays.remaining ? `zbývá ${model.profitDays.remaining} zelených dnů` : 'podmínka splněna'} />}
         {model.consistency?.limit != null && <CockpitGauge label="Consistency" value={`${model.consistency.pct.toFixed(0)} % / ${model.consistency.limit} %`} pct={(model.consistency.pct / Math.max(1, model.consistency.limit)) * 100} level={consistencyLevel} detail={model.consistency.breached ? 'limit překročen' : consistencyLevel === 'warning' ? 'nejlepší den se blíží limitu' : 'v limitu'} />}
-        {phaseFunded && rules && (rules.minPayoutUsd != null || rules.maxPayoutUsd != null) && <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3"><p className="text-[10px] font-bold text-[var(--text-secondary)]">Payout</p><div className="mt-2 flex flex-wrap gap-2">{rules.minPayoutUsd != null && <span className="rounded border border-emerald-500/25 px-2 py-1 text-[10px] font-bold text-emerald-500 tabular-nums">min {money(rules.minPayoutUsd)}</span>}{rules.maxPayoutUsd != null && <span className="rounded border border-indigo-500/25 px-2 py-1 text-[10px] font-bold text-indigo-400 tabular-nums">max {money(rules.maxPayoutUsd)}</span>}</div><p className="mt-2 text-[10px] text-[var(--text-secondary)]">{model.payout?.eligible ? 'payout podmínky splněny' : model.payout?.missing.amountUsd != null ? `do minima chybí ${money(model.payout.missing.amountUsd)}` : 'čeká na další podmínky'}</p></div>}
+        {phaseFunded && rules && (rules.minPayoutUsd != null || rules.maxPayoutUsd != null || rules.withdrawablePctOfProfit != null || rules.minBalanceToRequestUsd != null) && <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3"><p className="text-[10px] font-bold text-[var(--text-secondary)]">Payout</p><div className="mt-2 flex flex-wrap gap-2">{rules.minPayoutUsd != null && <span className="rounded border border-emerald-500/25 px-2 py-1 text-[10px] font-bold text-emerald-500 tabular-nums">min {money(rules.minPayoutUsd)}</span>}{rules.maxPayoutUsd != null && <span className="rounded border border-indigo-500/25 px-2 py-1 text-[10px] font-bold text-indigo-400 tabular-nums">max {money(rules.maxPayoutUsd)}</span>}{rules.withdrawablePctOfProfit != null && <span className="rounded border border-violet-500/25 px-2 py-1 text-[10px] font-bold text-violet-400 tabular-nums">{rules.withdrawablePctOfProfit} % zisku</span>}{rules.minBalanceToRequestUsd != null && <span className="rounded border border-amber-500/25 px-2 py-1 text-[10px] font-bold text-amber-500 tabular-nums">balance ≥ {money(rules.minBalanceToRequestUsd)}</span>}</div><p className="mt-2 text-[10px] text-[var(--text-secondary)]">{model.payout?.eligible ? `lze vybrat ${money(model.payout.withdrawableUsd)}` : model.payout?.missing.amountUsd != null ? `chybí ${money(model.payout.missing.amountUsd)}` : 'čeká na další podmínky'}</p></div>}
       </div>}
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border-subtle)] pt-3">
@@ -1118,14 +1133,26 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       )}
 
       {failConfirmTarget && (
-        <AccountFuneralModal
-          account={failConfirmTarget}
-          trades={trades}
-          userId={user.id}
-          onConfirm={executeFail}
-          onClose={() => setFailConfirmTarget(null)}
-          theme={theme}
-        />
+        (() => {
+          const breachedIds = accounts.filter(candidate => candidate.status === 'Active'
+            && cockpitByAccount.get(candidate.id)?.breached).map(candidate => candidate.id);
+          const scope = funeralAccountScope({
+            accounts,
+            openedAccountId: failConfirmTarget.id,
+            breachedAccountIds: breachedIds,
+          });
+          return <AccountFuneralModal
+            account={failConfirmTarget}
+            accounts={scope.accounts}
+            initialSelectedAccountIds={scope.selectedAccountIds}
+            successorCandidates={accounts.filter(candidate => candidate.status === 'Active' && candidate.type !== 'Backtest')}
+            trades={trades}
+            userId={user.id}
+            onConfirm={executeFail}
+            onClose={() => setFailConfirmTarget(null)}
+            theme={theme}
+          />;
+        })()
       )}
 
       <ConfirmationModal
@@ -1143,10 +1170,19 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         const candidateSet = funeralCandidateIds ? new Set(funeralCandidateIds) : null;
         const targetAccounts = accounts.filter(a => (candidateSet ? candidateSet.has(a.id) : firmOf(a) === firmFuneralTarget) && a.status === 'Active' && a.type !== 'Backtest');
         if (!targetAccounts.length) return null;
+        const breachedIds = accounts.filter(candidate => candidate.status === 'Active'
+          && cockpitByAccount.get(candidate.id)?.breached).map(candidate => candidate.id);
+        const scope = funeralAccountScope({
+          accounts,
+          openedAccountId: targetAccounts[0].id,
+          breachedAccountIds: breachedIds,
+          preferredAccountIds: targetAccounts.map(account => account.id),
+        });
         return (
           <AccountFuneralModal
             account={targetAccounts[0]}
-            accounts={targetAccounts}
+            accounts={scope.accounts}
+            initialSelectedAccountIds={scope.selectedAccountIds}
             successorCandidates={accounts.filter(account => account.status === 'Active' && account.type !== 'Backtest')}
             compactMulti
             initialFailureDate={targetAccounts.flatMap(account => cockpitByAccount.get(account.id)?.breachDate ? [cockpitByAccount.get(account.id)!.breachDate!] : []).sort()[0]}
@@ -1164,7 +1200,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         const initialRules = firmRules[rulesDialogFirm] ?? defaultRulesForFirm(rulesDialogFirm) ?? {
           planName: firmLabel(rulesDialogFirm), profitDaysRequired: null, minProfitPerDayUsd: null,
           minPayoutUsd: null, maxPayoutUsd: null, payoutCycleDays: null, consistencyPct: null,
-          splitPct: null, drawdownType: null,
+          withdrawablePctOfProfit: null, minBalanceToRequestUsd: null, splitPct: null, drawdownType: null,
         } satisfies FirmPayoutRules;
         return <FirmPayoutRulesDialog firm={firmLabel(rulesDialogFirm)} initialRules={initialRules} theme={theme} saving={rulesSaving} error={rulesError} onSave={saveRules} onClose={() => { if (!rulesSaving) { setRulesDialogFirm(null); setRulesError(null); } }} />;
       })()}

@@ -7,6 +7,7 @@ import {
 interface StoredRow {
   external_account_id: string;
   captured_at: string;
+  auto_liq_level?: number | null;
 }
 
 const account = {
@@ -18,6 +19,7 @@ const account = {
   totalPnl: 125,
   canTrade: true,
   changesLocked: false,
+  autoLiqLevel: 48_750,
 };
 
 function mockDb() {
@@ -75,5 +77,6 @@ describe('account snapshot 15min throttle', () => {
       '2026-08-22T10:00:00.000Z',
       '2026-08-22T10:15:00.000Z',
     ]);
+    expect(rows.map(row => row.auto_liq_level)).toEqual([48_750, 48_750]);
   });
 });

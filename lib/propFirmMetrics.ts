@@ -28,6 +28,7 @@ export interface ConsistencyCheck {
 
 export interface PayoutEligibility {
   eligible: boolean;
+  withdrawableUsd: number;
   missing: {
     profitDays?: number;
     amountUsd?: number;
@@ -212,16 +213,43 @@ export function withdrawableProfit(currentBalance: number, accountSize: number):
 export function payoutEligibility(
   ledger: readonly DailyLedgerEntry[],
   rules: FirmPayoutRules,
-  withdrawable: number,
+  profitUsd: number,
+  currentBalance?: number | null,
 ): PayoutEligibility {
   const missing: PayoutEligibility['missing'] = {};
   const progress = profitDayProgress(ledger, rules);
   if (progress?.remaining) missing.profitDays = progress.remaining;
-  if (rules.minPayoutUsd != null && withdrawable < rules.minPayoutUsd) {
-    missing.amountUsd = rules.minPayoutUsd - Math.max(0, withdrawable);
+  const profit = Math.max(0, Number.isFinite(profitUsd) ? profitUsd : 0);
+  const limits = [profit];
+  if (rules.withdrawablePctOfProfit != null && Number.isFinite(rules.withdrawablePctOfProfit)) {
+    limits.push(profit * Math.max(0, rules.withdrawablePctOfProfit) / 100);
   }
+  if (rules.maxPayoutUsd != null && Number.isFinite(rules.maxPayoutUsd)) {
+    limits.push(Math.max(0, rules.maxPayoutUsd));
+  }
+  const amountShortfalls: number[] = [];
+  if (rules.minBalanceToRequestUsd != null && Number.isFinite(rules.minBalanceToRequestUsd)) {
+    if (currentBalance == null || !Number.isFinite(currentBalance)) {
+      return {
+        eligible: false,
+        withdrawableUsd: 0,
+        missing: progress?.remaining ? { profitDays: progress.remaining } : {},
+        ...(rules.maxPayoutUsd == null ? {} : { capUsd: rules.maxPayoutUsd }),
+      };
+    }
+    limits.push(Math.max(0, currentBalance - rules.minBalanceToRequestUsd));
+    if (currentBalance < rules.minBalanceToRequestUsd) {
+      amountShortfalls.push(rules.minBalanceToRequestUsd - currentBalance);
+    }
+  }
+  const withdrawableUsd = Math.max(0, Math.min(...limits));
+  if (rules.minPayoutUsd != null && withdrawableUsd < rules.minPayoutUsd) {
+    amountShortfalls.push(rules.minPayoutUsd - withdrawableUsd);
+  }
+  if (amountShortfalls.length > 0) missing.amountUsd = Math.min(...amountShortfalls);
   return {
     eligible: Object.keys(missing).length === 0,
+    withdrawableUsd,
     missing,
     ...(rules.maxPayoutUsd == null ? {} : { capUsd: rules.maxPayoutUsd }),
   };
