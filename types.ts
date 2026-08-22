@@ -158,6 +158,14 @@ export interface Account {
   failureGroupId?: string;
   /** Prop-firm maximum-loss konfigurace. Ukládá se do existujícího accounts.meta JSONu. */
   drawdownConfig?: AccountDrawdownConfig;
+  /** Trvalá vazba journal účtu na externí OAuth účet. Ukládá se v accounts.meta. */
+  oauth?: {
+    provider: 'tradovate';
+    environment: 'demo' | 'live';
+    externalAccountId: string;
+    connectionId: string;
+    firm: string | null;
+  };
 }
 
 export type PropDrawdownMode = 'eod_trailing' | 'intraday_trailing' | 'static';

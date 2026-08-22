@@ -12,6 +12,8 @@ import { clearAppStorage } from './utils/appStorage';
 import { firmOf } from './utils/accountFirm';
 import { adjustmentTotal, getFinancialAdjustments } from './services/tradingIncidents';
 import { calculateAccountDrawdown, portfolioFloorForDate } from './services/propDrawdown';
+import { useTradovateLiveData } from './components/useTradovateLiveData';
+import { buildOAuthAccountLiveStates } from './lib/oauthAccountLiveState';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
@@ -978,6 +980,22 @@ const App: React.FC = () => {
     const supportedDeepLinks = new Set(['dashboard', 'history', 'journal', 'ai', 'lab', 'business', 'live', 'network', 'accounts', 'settings']);
     return requestedPage && supportedDeepLinks.has(requestedPage) ? requestedPage : 'dashboard';
   });
+  const tradovateLiveEnabled = activePage === 'live'
+    || (activePage === 'accounts' && dashboardMode !== 'backtesting');
+  const tradovateLive = useTradovateLiveData(
+    isUserFromDb && currentUser.id !== 'default_user' ? currentUser.id : '',
+    {
+      accounts: isInitialLoadDone ? accounts : null,
+      onAccountsChanged: setAccounts,
+    },
+    tradovateLiveEnabled,
+  );
+  const oauthAccountLiveStates = useMemo(() => buildOAuthAccountLiveStates({
+    accounts,
+    status: tradovateLive.status,
+    connectionData: tradovateLive.connectionData,
+    profiles: tradovateLive.profiles,
+  }), [accounts, tradovateLive.connectionData, tradovateLive.profiles, tradovateLive.status]);
 
   /**
    * Wrapper kolem setActivePage — když je AI Coach v aktivním streamu a user
@@ -4197,6 +4215,7 @@ const App: React.FC = () => {
                         // Merge zpět Backtest účty, ať je AccountsManager nesmaže.
                         onUpdate={(next) => setAccounts([...next, ...accounts.filter(isBacktestAccount)])}
                         onDelete={handleDeleteAccount}
+                        oauthLiveStates={oauthAccountLiveStates}
                         theme={theme}
                         trades={trades}
                         onUpdateTrades={handleUpdateTrades}
@@ -4252,7 +4271,7 @@ const App: React.FC = () => {
                     />
                   )}
                   {activePage === 'live' && (
-                    <LiveDesk key={currentUser.id} theme={theme} userId={currentUser.id} />
+                    <LiveDesk key={currentUser.id} theme={theme} live={tradovateLive} />
                   )}
 
                   {activePage === 'settings' && (

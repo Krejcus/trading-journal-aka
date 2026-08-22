@@ -26,6 +26,7 @@ interface ProfileRow {
   profit_target: number | string | null;
   max_mini: number | null;
   max_micro: number | null;
+  mapped_account_id: string | null;
   status: TradovateProfileStatus;
   last_seen_at: string;
   created_at: string;
@@ -64,6 +65,14 @@ const cleanInteger = (value: unknown, label: string): number | null => {
   return cleaned;
 };
 
+const cleanUuid = (value: unknown, label: string): string | null => {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error(`${label}-invalid`);
+  }
+  return value.toLowerCase();
+};
+
 export function normalizeTradovateAccountProfileInput(value: unknown): TradovateAccountProfileInput {
   if (!value || typeof value !== 'object') throw new Error('profile-invalid');
   const input = value as Record<string, unknown>;
@@ -90,6 +99,7 @@ export function normalizeTradovateAccountProfileInput(value: unknown): Tradovate
     profitTarget: cleanNumber(input.profitTarget, 'profit-target'),
     maxMini: cleanInteger(input.maxMini, 'max-mini'),
     maxMicro: cleanInteger(input.maxMicro, 'max-micro'),
+    mappedAccountId: cleanUuid(input.mappedAccountId, 'mapped-account-id'),
   };
 }
 
@@ -99,7 +109,7 @@ const nullableNumber = (value: number | string | null): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const fromRow = (row: ProfileRow): TradovateAccountProfile => ({
+export const tradovateAccountProfileFromRow = (row: ProfileRow): TradovateAccountProfile => ({
   id: row.id,
   provider: row.provider,
   environment: row.environment,
@@ -117,10 +127,40 @@ const fromRow = (row: ProfileRow): TradovateAccountProfile => ({
   profitTarget: nullableNumber(row.profit_target),
   maxMini: row.max_mini,
   maxMicro: row.max_micro,
+  mappedAccountId: row.mapped_account_id,
   status: row.status,
   lastSeenAt: row.last_seen_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+});
+
+export const tradovateAccountProfileToRow = (
+  profile: TradovateAccountProfileInput,
+  userId: string,
+  environment: TradovateProfileEnvironment,
+  timestamp: string,
+) => ({
+  user_id: userId,
+  provider: 'tradovate',
+  environment,
+  external_account_id: profile.externalAccountId,
+  account_name: profile.accountName,
+  display_name: profile.displayName,
+  prop_firm: profile.propFirm,
+  plan_name: profile.planName,
+  account_type: profile.accountType,
+  account_size: profile.accountSize,
+  drawdown_type: profile.drawdownType,
+  max_loss: profile.maxLoss,
+  daily_loss_limit: profile.dailyLossLimit,
+  consistency_pct: profile.consistencyPct,
+  profit_target: profile.profitTarget,
+  max_mini: profile.maxMini,
+  max_micro: profile.maxMicro,
+  mapped_account_id: profile.mappedAccountId ?? null,
+  status: 'active',
+  last_seen_at: timestamp,
+  updated_at: timestamp,
 });
 
 export async function listTradovateAccountProfiles(
@@ -136,7 +176,7 @@ export async function listTradovateAccountProfiles(
     .eq('environment', environment)
     .order('updated_at', { ascending: false });
   if (error) throw new Error(`Tradovate account profiles load failed: ${error.message}`);
-  return ((data ?? []) as ProfileRow[]).map(fromRow);
+  return ((data ?? []) as ProfileRow[]).map(tradovateAccountProfileFromRow);
 }
 
 export async function saveTradovateAccountProfiles(options: {
@@ -153,28 +193,12 @@ export async function saveTradovateAccountProfiles(options: {
   const uniqueIds = new Set(normalized.map(profile => profile.externalAccountId));
   if (uniqueIds.size !== normalized.length) throw new Error('duplicate-external-account-id');
   const timestamp = new Date(options.now ?? Date.now()).toISOString();
-  const rows = normalized.map(profile => ({
-    user_id: options.userId,
-    provider: 'tradovate',
-    environment: options.environment,
-    external_account_id: profile.externalAccountId,
-    account_name: profile.accountName,
-    display_name: profile.displayName,
-    prop_firm: profile.propFirm,
-    plan_name: profile.planName,
-    account_type: profile.accountType,
-    account_size: profile.accountSize,
-    drawdown_type: profile.drawdownType,
-    max_loss: profile.maxLoss,
-    daily_loss_limit: profile.dailyLossLimit,
-    consistency_pct: profile.consistencyPct,
-    profit_target: profile.profitTarget,
-    max_mini: profile.maxMini,
-    max_micro: profile.maxMicro,
-    status: 'active',
-    last_seen_at: timestamp,
-    updated_at: timestamp,
-  }));
+  const rows = normalized.map(profile => tradovateAccountProfileToRow(
+    profile,
+    options.userId,
+    options.environment,
+    timestamp,
+  ));
   const { error } = await options.db.from('tradovate_account_profiles').upsert(rows, {
     onConflict: 'user_id,provider,environment,external_account_id',
   });

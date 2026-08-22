@@ -28,7 +28,7 @@ type FormProfile = Omit<TradovateAccountProfileInput,
   maxMicro: string;
 };
 
-type BulkProfile = Omit<FormProfile, 'externalAccountId' | 'accountName' | 'displayName'>;
+type BulkProfile = Omit<FormProfile, 'externalAccountId' | 'accountName' | 'displayName' | 'mappedAccountId'>;
 
 const numberText = (value: number | null | undefined) => value == null ? '' : String(value);
 
@@ -79,6 +79,7 @@ const fromAccount = (
     profitTarget: numberText(profile?.profitTarget),
     maxMini: numberText(profile?.maxMini),
     maxMicro: numberText(profile?.maxMicro),
+    mappedAccountId: profile?.mappedAccountId ?? null,
   };
   const preset = findTradovatePropPlanPreset(result.propFirm, result.planName);
   return preset ? fillMissingFromPreset(result, preset) : result;

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
+import type { Account } from '../types';
 import type { TradovateSourceCoverage } from '../lib/tradovateAccountDataTypes';
 import type { TradovateHistorySnapshot } from '../lib/tradovateHistoricalTypes';
 import { mergeTradovateHistoricalSnapshot } from '../lib/tradovateHistoricalMerge';
@@ -16,6 +17,7 @@ import {
   runTradovateReadOnlyPreflight,
   runTradovateHistoricalBackfill,
   runTradovateLivePnlTick,
+  saveTradovateAccountProfiles,
   TradovateRequestError,
   type TradovateOAuthStatus,
   type TradovatePreflightResult,
@@ -30,6 +32,8 @@ import {
   refreshTradovateApiTelemetry,
   subscribeTradovateApiTelemetry,
 } from '../lib/tradovateApiTelemetry';
+import { planTradovateJournalAccountLinks } from '../lib/tradovateJournalAccountRegistry';
+import { storageService } from '../services/storageService';
 
 type BusyState = 'status' | 'connect' | 'data' | 'disconnect' | null;
 
@@ -84,17 +88,21 @@ const IDLE_POSITION_INTERVAL_MS = 5_000;
 // reserved for the 2-second position/P&L read model.
 const FULL_REFRESH_INTERVAL_MS = 10 * 60_000;
 
-export function useTradovateLiveData(userId: string) {
+export function useTradovateLiveData(userId: string, journalOptions?: {
+  accounts: readonly Account[] | null;
+  onAccountsChanged: (accounts: Account[]) => void;
+}, enabled = true) {
   const apiTelemetry = useSyncExternalStore(
     subscribeTradovateApiTelemetry,
     getTradovateApiTelemetrySnapshot,
     getTradovateApiTelemetrySnapshot,
   );
   useEffect(() => {
+    if (!userId || !enabled) return;
     refreshTradovateApiTelemetry();
     const timer = window.setInterval(refreshTradovateApiTelemetry, 30_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [enabled, userId]);
   const persisted = useMemo(
     () => readTradovateConnectionShell(userId, typeof window === 'undefined' ? undefined : window.sessionStorage),
     [userId],
@@ -111,9 +119,26 @@ export function useTradovateLiveData(userId: string) {
   const livePnlCursorsRef = useRef<Record<string, number>>({});
   const livePnlMarksRef = useRef<Record<string, TradovateContractMarkMap>>({});
   const rateLimitUntilRef = useRef(0);
+  const journalLinkAttemptsRef = useRef(new Set<string>());
+  const previousUserIdRef = useRef(userId);
+  const activeUserIdRef = useRef(userId);
+  activeUserIdRef.current = userId;
   const [busy, setBusy] = useState<BusyState>('status');
   const [error, setError] = useState<string | null>(null);
   const [profileSetupOpen, setProfileSetupOpen] = useState(false);
+
+  useEffect(() => {
+    if (previousUserIdRef.current === userId) return;
+    previousUserIdRef.current = userId;
+    journalLinkAttemptsRef.current.clear();
+    setStatus(cached?.status ?? persisted?.status ?? null);
+    setConnectionData(cached?.connectionData ?? {});
+    setProfiles(cached?.profiles ?? []);
+    setHistorySnapshots(cached?.historySnapshots ?? {});
+    setHistoryError(null);
+    setError(null);
+    setProfileSetupOpen(false);
+  }, [cached, persisted, userId]);
 
   useEffect(() => {
     connectionDataRef.current = connectionData;
@@ -134,6 +159,38 @@ export function useTradovateLiveData(userId: string) {
       )),
     } : null;
   }, [connectionData, historySnapshots]);
+
+  useEffect(() => {
+    if (!userId || !enabled || !journalOptions?.accounts) return;
+    const unmapped = profiles.filter(profile => !profile.mappedAccountId && Object.values(connectionData).some(dataset => (
+      dataset.environment === profile.environment
+      && dataset.accounts.some(account => String(account.id) === profile.externalAccountId)
+    )));
+    if (unmapped.length === 0) return;
+    const attemptKey = unmapped
+      .map(profile => `${profile.id}:${profile.updatedAt}`)
+      .sort()
+      .join('|');
+    if (journalLinkAttemptsRef.current.has(attemptKey)) return;
+    journalLinkAttemptsRef.current.add(attemptKey);
+
+    const plan = planTradovateJournalAccountLinks({
+      accounts: journalOptions.accounts,
+      profiles,
+      connectionData,
+    });
+    if (!plan.changed) return;
+    void storageService.saveAccounts(plan.accounts).then(async savedAccounts => {
+      if (activeUserIdRef.current !== userId) return;
+      journalOptions.onAccountsChanged(savedAccounts);
+      const savedProfiles = await saveTradovateAccountProfiles(plan.profiles);
+      if (activeUserIdRef.current === userId) setProfiles(savedProfiles.profiles);
+    }).catch(reason => {
+      if (activeUserIdRef.current === userId) {
+        setError(reason instanceof Error ? reason.message : 'OAuth účet se nepodařilo propojit s journalem.');
+      }
+    });
+  }, [connectionData, enabled, journalOptions?.accounts, journalOptions?.onAccountsChanged, profiles, userId]);
 
   const connectionSummaries = useMemo(
     () => buildTradovateConnectionSummaries(
@@ -211,6 +268,7 @@ export function useTradovateLiveData(userId: string) {
   }, []);
 
   const refreshStatus = useCallback(async () => {
+    if (!userId) return null;
     setBusy('status');
     setError(null);
     try {
@@ -231,7 +289,7 @@ export function useTradovateLiveData(userId: string) {
     } finally {
       setBusy(null);
     }
-  }, [refreshData]);
+  }, [refreshData, userId]);
 
   const connect = useCallback(async (connectionId?: string) => {
     setBusy('connect');
@@ -257,6 +315,7 @@ export function useTradovateLiveData(userId: string) {
   }, [refreshStatus]);
 
   useEffect(() => {
+    if (!userId || !enabled) return;
     void refreshStatus();
     const params = new URLSearchParams(window.location.search);
     if (params.get('tradovate') === 'error') setError('Tradovate OAuth připojení se nepodařilo dokončit.');
@@ -267,16 +326,18 @@ export function useTradovateLiveData(userId: string) {
       const suffix = params.toString();
       window.history.replaceState({}, '', `${window.location.pathname}${suffix ? `?${suffix}` : ''}${window.location.hash}`);
     }
-  }, [refreshStatus]);
+  }, [enabled, refreshStatus, userId]);
 
   useEffect(() => {
+    if (!enabled) return;
     const ids = status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [];
     if (ids.length === 0) return;
     const interval = window.setInterval(() => void refreshData(ids, true), FULL_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [refreshData, status?.connections]);
+  }, [enabled, refreshData, status?.connections]);
 
   useEffect(() => {
+    if (!enabled) return;
     const ids = status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [];
     if (ids.length === 0) return;
     let cancelled = false;
@@ -363,9 +424,10 @@ export function useTradovateLiveData(userId: string) {
       cancelled = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [refreshData, status?.connections]);
+  }, [enabled, refreshData, status?.connections]);
 
   useEffect(() => {
+    if (!enabled) return;
     if (historyError) return;
     const datasets = Object.values(connectionData);
     if (datasets.length === 0) return;
@@ -380,7 +442,7 @@ export function useTradovateLiveData(userId: string) {
     if (!needsWork) return;
     const timeout = window.setTimeout(() => void advanceHistoricalBackfill(datasets), 1_500);
     return () => window.clearTimeout(timeout);
-  }, [advanceHistoricalBackfill, connectionData, historyError, historySnapshots]);
+  }, [advanceHistoricalBackfill, connectionData, enabled, historyError, historySnapshots]);
 
   return {
     status,
@@ -403,3 +465,5 @@ export function useTradovateLiveData(userId: string) {
     disconnect,
   };
 }
+
+export type TradovateLiveData = ReturnType<typeof useTradovateLiveData>;

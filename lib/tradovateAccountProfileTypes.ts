@@ -18,6 +18,7 @@ export interface TradovateAccountProfileInput {
   profitTarget: number | null;
   maxMini: number | null;
   maxMicro: number | null;
+  mappedAccountId?: string | null;
 }
 
 export interface TradovateAccountProfile extends TradovateAccountProfileInput {

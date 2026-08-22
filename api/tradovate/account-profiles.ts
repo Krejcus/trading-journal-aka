@@ -13,7 +13,7 @@ import { handleNativeCors } from '../../server/nativeCors.js';
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
   // preflight odpovedi selze fetch jako 'Load failed'. Web je same-origin.
-  if (handleNativeCors(req, res, ['GET', 'POST', 'DELETE'])) return;
+  if (handleNativeCors(req, res, ['GET', 'PUT'])) return;
   res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'GET' && req.method !== 'PUT') return res.status(405).json({ error: 'method-not-allowed' });
   try {
@@ -29,7 +29,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') {
       return res.status(401).json({ error: message });
     }
-    if (/^(profile|profiles|external-account-id|account-name|display-name|prop-firm|plan-name|account-type|drawdown-type|account-size|max-loss|daily-loss-limit|consistency-pct|profit-target|max-mini|max-micro|duplicate)/.test(message)) {
+    if (/^(profile|profiles|external-account-id|account-name|display-name|prop-firm|plan-name|account-type|drawdown-type|account-size|max-loss|daily-loss-limit|consistency-pct|profit-target|max-mini|max-micro|mapped-account-id|duplicate)/.test(message)) {
       return res.status(400).json({ error: message });
     }
     console.error('[tradovate-account-profiles] Failed:', message);

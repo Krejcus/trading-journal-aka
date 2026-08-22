@@ -30,6 +30,8 @@ import Graveyard, { MemorialModal, computeStats } from './Graveyard';
 import { firmOf, firmInitials, firmColor, firmLabel, FIRM_LOGOS, KNOWN_FIRMS } from '../utils/accountFirm';
 import { adjustmentForAccount, adjustmentTotal, directAdjustmentForFirm, getFinancialAdjustments } from '../services/tradingIncidents';
 import { calculateAccountDrawdown, inferDrawdownConfig } from '../services/propDrawdown';
+import { accountRemovalDecision } from '../lib/oauthAccountArchivePolicy';
+import type { OAuthAccountLiveState } from '../lib/oauthAccountLiveState';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -47,7 +49,18 @@ interface AccountsManagerProps {
   payouts: BusinessPayout[];
   reviews: DailyReview[];
   user: User;
+  oauthLiveStates?: Record<string, OAuthAccountLiveState>;
 }
+
+const formatOAuthLastSeen = (value: string | null | undefined) => {
+  if (!value || !Number.isFinite(Date.parse(value))) return null;
+  return new Intl.DateTimeFormat('cs-CZ', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
+};
 
 // Sparkline Helper Component
 const AccountSparkline = ({ trades, initialBalance, color, theme }: { trades: Trade[], initialBalance: number, theme: string, color: string }) => {
@@ -166,7 +179,8 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   user,
   onAddExpense,
   onOpenInDashboard,
-  onImportTradovate
+  onImportTradovate,
+  oauthLiveStates = {},
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -487,10 +501,11 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   };
 
   const executeDelete = () => {
-    if (accountToDelete) {
-      onDelete(accountToDelete.id);
-      setAccountToDelete(null);
-    }
+    if (!accountToDelete) return;
+    const decision = accountRemovalDecision(accounts, accountToDelete);
+    if (decision.kind === 'archive') onUpdate(decision.accounts);
+    else onDelete(decision.id);
+    setAccountToDelete(null);
   };
 
   const getAccountIcon = (type: string, status: string, phase?: string, size: number = 18, result?: 'Passed' | 'Failed') => {
@@ -518,6 +533,8 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     const currentPlatformBalance = acc.initialBalance + totalPnL - accumulatedChallengePnL - grossWithdrawals;
     const propDrawdown = drawdownByAccount.get(acc.id) || null;
     const performanceColor = totalPnL >= 0 ? 'emerald' : 'rose';
+    const oauthState = acc.oauth ? oauthLiveStates[acc.id] : undefined;
+    const oauthLastSeen = formatOAuthLastSeen(oauthState?.lastSeenAt);
 
     const cardPadding = isSlave ? 'p-4' : 'p-6';
     const cardHeight = isSlave ? 'min-h-[240px]' : 'min-h-[320px]';
@@ -558,6 +575,18 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                     : <span className={`${acc.phase === 'Funded' ? 'text-purple-500' : 'text-amber-500'}`}>{acc.phase || 'Challenge'}</span>
                   }
                 </div>
+                {acc.oauth && (
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[8px] font-bold text-slate-500">
+                    <span className="rounded-md border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 uppercase tracking-wider text-blue-400">
+                      Tradovate{acc.oauth.firm ? ` · ${acc.oauth.firm}` : ''}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className={`h-1.5 w-1.5 rounded-full ${oauthState?.status === 'connected' ? 'bg-emerald-500' : 'bg-slate-500'}`} />
+                      {oauthState?.status === 'connected' ? 'připojen' : oauthState?.status === 'disconnected' ? 'odpojen' : 'stav nedostupný'}
+                      {oauthLastSeen ? ` · naposledy viděn ${oauthLastSeen}` : ''}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex gap-1 transition-opacity">
@@ -677,7 +706,9 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
               </button>
             )}
           </div>
-          <button onClick={(e) => { e.stopPropagation(); setAccountToDelete(acc); }} className="text-[8px] font-black uppercase text-slate-600 hover:text-rose-500 transition-all flex items-center gap-1"><Trash2 size={10} /> Smazat</button>
+          <button onClick={(e) => { e.stopPropagation(); setAccountToDelete(acc); }} className="text-[8px] font-black uppercase text-slate-600 hover:text-rose-500 transition-all flex items-center gap-1">
+            {acc.oauth ? <><Archive size={10} /> Archivovat</> : <><Trash2 size={10} /> Smazat</>}
+          </button>
         </div>
       </div>
     );
@@ -983,7 +1014,16 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         />
       )}
 
-      <ConfirmationModal isOpen={!!accountToDelete} onClose={() => setAccountToDelete(null)} onConfirm={executeDelete} title="Smazat Účet" message={`Opravdu chcete smazat účet "${accountToDelete?.name}"? Smažou se i VŠECHNY jeho obchody — nevratně. Pro archivaci s historií použij lebku (Fail).`} theme={theme} />
+      <ConfirmationModal
+        isOpen={!!accountToDelete}
+        onClose={() => setAccountToDelete(null)}
+        onConfirm={executeDelete}
+        title={accountToDelete?.oauth ? 'Archivovat OAuth účet' : 'Smazat Účet'}
+        message={accountToDelete?.oauth
+          ? `Účet "${accountToDelete.name}" je trvale propojený s Tradovate a mohou se na něj vázat obchody. Místo smazání bude bezpečně přesunut do archivu.`
+          : `Opravdu chcete smazat účet "${accountToDelete?.name}"? Smažou se i VŠECHNY jeho obchody — nevratně. Pro archivaci s historií použij lebku (Fail).`}
+        theme={theme}
+      />
 
       {firmFuneralTarget && (() => {
         const targetAccounts = accounts.filter(a => firmOf(a) === firmFuneralTarget && a.status === 'Active' && a.type !== 'Backtest');

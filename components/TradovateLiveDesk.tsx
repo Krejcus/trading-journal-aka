@@ -49,7 +49,7 @@ import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tra
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
 import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
 import TradovateAddConnectionModal from './TradovateAddConnectionModal';
-import { useTradovateLiveData } from './useTradovateLiveData';
+import type { TradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
 import {
   resolveLocalExecutionGroup,
@@ -62,7 +62,7 @@ type LiveTab = 'connections' | 'overview' | 'accounts' | 'orders' | 'events';
 
 interface TradovateLiveDeskProps {
   theme: 'dark' | 'light' | 'oled';
-  userId: string;
+  live: TradovateLiveData;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -92,7 +92,7 @@ const OrganizationBrand = ({ name }: { name: string }) => {
   );
 };
 
-const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
+const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live }) => {
   const [tab, setTab] = useState<LiveTab>('connections');
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -146,7 +146,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId }) => {
     });
   }), []);
   const agentClient = useMemo(() => createLocalCopierAgentClient(), []);
-  const live = useTradovateLiveData(userId);
   const connectedConnectionIds = useMemo(
     () => live.status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [],
     [live.status?.connections],

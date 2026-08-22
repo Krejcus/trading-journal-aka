@@ -78,6 +78,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, OAuth účty v trvalém journal registru)
+Tradovate account profil dostal připravenou, ale NEAPLIKOVANOU migraci s
+`mapped_account_id`; service-role server/API mapping čte i zapisuje a browser
+dál nemá přímý přístup k tabulce. Sdílený `useTradovateLiveData` na stránkách
+Účty/LIVE po načtení profilů idempotentně dopojí existující journal účet podle
+OAuth identity, nebo založí Funded účet s broker metadaty v `accounts.meta`.
+Pád mezi založením účtu a zapsáním mappingu při dalším průchodu nevytvoří
+duplikát. AccountsManager ukazuje zdroj, firmu, připojení a poslední kontakt;
+stávající edit flow dál mění journalový název. Pokus o smazání OAuth účtu je
+nahrazen archivací s vysvětlením, takže vazby obchodů zůstávají zachované.
+Hook neběží v backtest světě ani na ostatních stránkách. Copier runtime,
+skripty, relay whitelist a broker-write cesty se neměnily. Ověření: TypeScript
+čistý, 168 souborů / 1341 Vitest testů a produkční Vite build prošly; první
+sandboxový full test selhal pouze na zákazu lokálního listen socketu a mimo
+sandbox prošel. Nic nebylo commitnuto, pushnuto, deploynuto ani aplikováno do
+Supabase.
+
 ### 2026-08-21 večer (Claude, Live Activity nešla — diagnóza a fix)
 Po polední upgrade instalaci kabelem přestala fungovat Live Activity úplně
 (push-to-start i lokální test): hláška o úspěchu, karta nikde, iOS po
