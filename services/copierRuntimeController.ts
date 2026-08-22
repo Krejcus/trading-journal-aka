@@ -703,6 +703,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           followerCount: group.followers.filter(follower => follower.mode !== 'off').length,
           openedAt: lot.openedAt ?? null,
           closedAt: at,
+          exitReason: leaderStopOrderIds.has(fill.brokerOrderId)
+            ? 'sl'
+            : leaderTargetOrderIds.has(fill.brokerOrderId) ? 'tp' : 'manual',
+          avgEntryPrice: lot.avgPrice,
+          avgExitPrice: fill.price,
         };
         stats.recentClosedTrades = [
           closedTrade,

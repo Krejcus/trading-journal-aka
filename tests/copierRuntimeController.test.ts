@@ -1790,6 +1790,12 @@ describe('order lifecycle notifikace (obchod zadán, SL/TP, atribuce exitu)', ()
     const exit = controller.status().recentCopyEvents?.find(event => event.kind === 'exit');
     // -100 bodů... 2 kontrakty × 100 bodů × 2 USD (MNQ) = -400 USD
     expect(exit).toMatchObject({ exitReason: 'sl', pnlUsd: -400 });
+    expect(controller.status().dailyStats?.recentClosedTrades?.[0]).toMatchObject({
+      id: 'lf-2',
+      exitReason: 'sl',
+      avgEntryPrice: 29_500,
+      avgExitPrice: 29_400,
+    });
     controller.stop();
   });
 });

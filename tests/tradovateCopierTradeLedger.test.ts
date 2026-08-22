@@ -28,16 +28,23 @@ describe('copier closed trade heartbeat ledger', () => {
       id: 'fill-42', symbol: 'MNQZ6', side: 'Long', quantity: 2,
       realizedPnlUsd: 125, followerCount: 5,
       openedAt: 1_777_777_000_000, closedAt: 1_777_777_060_000,
+      exitReason: 'tp', avgEntryPrice: 21_000.25, avgExitPrice: 21_040.5,
     }]))).toEqual([{
       tradeId: 'fill-42', symbol: 'MNQZ6', side: 'Long', quantity: 2,
       realizedPnlUsd: 125, followerCount: 5,
       openedAt: new Date(1_777_777_000_000).toISOString(),
       closedAt: new Date(1_777_777_060_000).toISOString(),
+      exitReason: 'tp', entryPrice: 21_000.25, exitPrice: 21_040.5,
     }]);
     expect(closedTradesFromStatus(status([{
       id: 'fill-unpriced', symbol: 'UNKNOWN', side: 'Short', quantity: 1,
       realizedPnlUsd: null, followerCount: 1, closedAt: 1_777_777_060_000,
     }]))[0].realizedPnlUsd).toBeNull();
+    expect(closedTradesFromStatus(status([{
+      id: 'fill-invalid-extra', symbol: 'MNQ', side: 'Long', quantity: 1,
+      realizedPnlUsd: 1, followerCount: 1, closedAt: 1_777_777_060_000,
+      exitReason: 'unknown', avgEntryPrice: Number.NaN, avgExitPrice: Number.POSITIVE_INFINITY,
+    }]))[0]).toMatchObject({ exitReason: null, entryPrice: null, exitPrice: null });
   });
 
   it('deduplicates by stable fill id and rejects malformed rows', () => {

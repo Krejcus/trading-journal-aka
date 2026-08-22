@@ -78,6 +78,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-22 (Codex, F1 copier close -> nezkontrolovaný journal draft)
+Durable statistika leader fillů nyní při uzavření ukládá volitelný důvod
+`sl/tp/manual`, průměrný vstup a cenu závěrečného fillu; změna zůstala pouze v
+`trackLeaderFill`/datovém typu a nijak nemění order, risk ani safety logiku.
+Heartbeat relay nová fakta validuje a propouští do ledgeru. Připravená migrace
+`20260822153000_copier_journal_trade_facts.sql` přidává tři nullable sloupce a
+authenticated SELECT vlastních řádků přes `(select auth.uid())`; ZÁMĚRNĚ NEBYLA
+APLIKOVANÁ.
+
+Nový `copierJournalSync` čte od lokálního cursoru (první průchod 30 dní),
+mapuje aktivního leadera přes `accounts.meta.oauth`, přeskakuje existující
+provenance a zapisuje pouze přes merge-safe `storageService`. Logické ID
+`copier-<trade_id>` zůstává v `copierTradeId`, protože fyzické `trades.id` je
+Supabase UUID. Bez mappingu nevznikne žádný obchod: Historie ukáže čekající
+banner a účet přiřadí až po explicitní volbě; volba doplní i F0 account/profile
+OAuth vazbu, je-li profil dostupný. Draft má fakta, `source=copier`,
+`needsReview=true`, badge a filtr/čítač; libovolné uživatelské uložení přes
+existující edit flow příznak shodí. Sync běží po přihlášení a z LIVE refresh
+lifecycle, nejvýše jednou za 60 s. Ověření: TypeScript čistý; 169 test files a
+1348/1348 Vitest testů prošlo (sandboxový první full run selhal pouze na
+zakázaném listen 127.0.0.1, mimo sandbox vše zelené). Nic nebylo commitnuto,
+pushnuto, deploynuto, aplikováno do Supabase ani reinstalováno. Worker změna
+začne fungovat až po bezpečném reinstallu v DISARMED/flat stavu.
+
 ### 2026-08-22 (Codex, OAuth účty v trvalém journal registru)
 Tradovate account profil dostal připravenou, ale NEAPLIKOVANOU migraci s
 `mapped_account_id`; service-role server/API mapping čte i zapisuje a browser

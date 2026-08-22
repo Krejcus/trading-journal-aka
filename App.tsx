@@ -14,6 +14,9 @@ import { adjustmentTotal, getFinancialAdjustments } from './services/tradingInci
 import { calculateAccountDrawdown, portfolioFloorForDate } from './services/propDrawdown';
 import { useTradovateLiveData } from './components/useTradovateLiveData';
 import { buildOAuthAccountLiveStates } from './lib/oauthAccountLiveState';
+import { syncCopierJournal, type PendingCopierJournalTrade } from './services/copierJournalSync';
+import { sanitizeCopyGroups, type CopyGroupConfig } from './services/liveCopyTrading';
+import { loadTradovateAccountProfiles, saveTradovateAccountProfiles } from './services/tradovateOAuthConnection';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
@@ -628,12 +631,72 @@ const App: React.FC = () => {
   const [tradovateImportAccount, setTradovateImportAccount] = useState<string | undefined>(undefined);
   // Průvodce doplněním importovaných obchodů — inkrement spustí wizard v TradeHistory.
   const [enrichSignal, setEnrichSignal] = useState(0);
+  const [pendingCopierTrades, setPendingCopierTrades] = useState<PendingCopierJournalTrade[]>([]);
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USER);
   // Locked feature modal pro non-owner roli (kamarád apod.)
   const [lockedFeatureModal, setLockedFeatureModal] = useState<string | null>(null);
   // True pokud currentUser obsahuje data z DB (ne jen DEFAULT_USER nebo JWT instant fallback).
   // Drží loader dokud role nedorazí z DB → eliminuje flash locked tabů pro ownery.
   const [isUserFromDb, setIsUserFromDb] = useState(false);
+  const copierJournalSyncBusyRef = useRef(false);
+  const copierJournalLastSyncRef = useRef(0);
+
+  const runCopierJournalSync = useCallback(async (
+    group: CopyGroupConfig | null,
+    options?: { force?: boolean; accountIdOverride?: string },
+  ) => {
+    const userId = session?.user?.id;
+    const leaderAccountId = group?.leaderAccountId ?? null;
+    if (!userId || leaderAccountId == null || copierJournalSyncBusyRef.current) return;
+    const now = Date.now();
+    if (!options?.force && now - copierJournalLastSyncRef.current < 60_000) return;
+    copierJournalSyncBusyRef.current = true;
+    try {
+      const result = await syncCopierJournal({
+        userId,
+        leaderAccountId,
+        accounts,
+        accountIdOverride: options?.accountIdOverride,
+      });
+      copierJournalLastSyncRef.current = now;
+      setPendingCopierTrades(result.pending);
+      if (result.created.length > 0) {
+        setTrades(current => {
+          const byId = new Map(current.map(trade => [String(trade.id), trade]));
+          const copierIds = new Set(current.map(trade => trade.copierTradeId).filter(Boolean));
+          for (const trade of result.created) {
+            if (!byId.has(String(trade.id)) && !copierIds.has(trade.copierTradeId)) byId.set(String(trade.id), trade);
+          }
+          return [...byId.values()].sort((a, b) => b.timestamp - a.timestamp);
+        });
+      }
+    } catch (reason) {
+      console.warn('[Copier journal] Sync selhal:', reason);
+    } finally {
+      copierJournalSyncBusyRef.current = false;
+    }
+  }, [accounts, session?.user?.id]);
+
+  // Start po přihlášení: použij poslední webovou konfiguraci skupiny. LIVE
+  // stránka níže dodá autoritativní runtime group při každém svém refreshi.
+  useEffect(() => {
+    if (!isInitialLoadDone || !session?.user?.id || accounts.length === 0) return;
+    try {
+      const parsed = JSON.parse(localStorage.getItem('alphatrade_live_copytrade_draft_groups') ?? '[]');
+      const groups = sanitizeCopyGroups(parsed) ?? [];
+      const active = groups.find(group => group.enabled && group.leaderAccountId != null)
+        ?? groups.find(group => group.leaderAccountId != null)
+        ?? null;
+      void runCopierJournalSync(active);
+    } catch {
+      // Poškozený lokální draft nesmí blokovat start aplikace; LIVE refresh
+      // později dodá validovaný runtime stav.
+    }
+  }, [accounts.length, isInitialLoadDone, runCopierJournalSync, session?.user?.id]);
+
+  const handleCopierJournalRefresh = useCallback((group: CopyGroupConfig | null) => {
+    void runCopierJournalSync(group);
+  }, [runCopierJournalSync]);
 
   // Safety timeout: pokud DB user load selže nebo trvá moc dlouho (>5s),
   // uvolnit loader s JWT user data. Lepší fallback než nekonečný spinner.
@@ -996,6 +1059,39 @@ const App: React.FC = () => {
     connectionData: tradovateLive.connectionData,
     profiles: tradovateLive.profiles,
   }), [accounts, tradovateLive.connectionData, tradovateLive.profiles, tradovateLive.status]);
+
+  const resolvePendingCopierAccount = useCallback(async (accountId: string) => {
+    const pending = pendingCopierTrades[0];
+    if (!pending || !accounts.some(account => account.id === accountId)) return;
+    try {
+      const stored = await loadTradovateAccountProfiles();
+      const profile = stored.profiles.find(item => item.externalAccountId === String(pending.leaderAccountId));
+      if (profile && pending.connectionId) {
+        const linkedAccounts = accounts.map(account => account.id === accountId ? {
+          ...account,
+          oauth: {
+            provider: 'tradovate' as const,
+            environment: stored.environment,
+            externalAccountId: String(pending.leaderAccountId),
+            connectionId: pending.connectionId!,
+            firm: profile.propFirm,
+          },
+        } : account);
+        const savedAccounts = await storageService.saveAccounts(linkedAccounts);
+        setAccounts(savedAccounts);
+        await saveTradovateAccountProfiles(stored.profiles.map(item => item.id === profile.id
+          ? { ...item, mappedAccountId: accountId }
+          : item));
+      }
+      await runCopierJournalSync({
+        id: 'copier-journal-pending', name: 'Copier journal', enabled: true,
+        leaderAccountId: pending.leaderAccountId, followers: [],
+      }, { force: true, accountIdOverride: accountId });
+    } catch (reason) {
+      console.error('[Copier journal] Přiřazení účtu selhalo:', reason);
+      setSyncError('Nepodařilo se přiřadit čekající copier obchody k účtu.');
+    }
+  }, [accounts, pendingCopierTrades, runCopierJournalSync]);
 
   /**
    * Wrapper kolem setActivePage — když je AI Coach v aktivním streamu a user
@@ -3088,6 +3184,7 @@ const App: React.FC = () => {
   }, [trades]);
 
   const handleUpdateTrade = useCallback((tradeId: string | number, updates: Partial<Trade>) => {
+    const reviewedUpdates: Partial<Trade> = { ...updates, needsReview: false };
     // ── COMBINED (agregovaný) obchod: id je syntetické `combined_<groupId>`, v DB neexistuje.
     // Editaci propíšeme na VŠECHNY reálné kopie skupiny (fan-out sdílí entry/SL/TP/setup).
     // Ekonomická pole (pnl/risk/target/objem) NEJDOU 1:1 — kopie mají různé multipliery
@@ -3096,7 +3193,7 @@ const App: React.FC = () => {
     // masterovi. Dřív se stripovaly úplně → změna objemu se propsala, pnl zůstalo staré.
     if (typeof tradeId === 'string' && tradeId.startsWith('combined_')) {
       const groupId = tradeId.slice('combined_'.length);
-      const { pnl: newPnl, riskAmount: newRisk, targetAmount: newTarget, positionSize: newSize, id: _id, ...rest } = updates as any;
+      const { pnl: newPnl, riskAmount: newRisk, targetAmount: newTarget, positionSize: newSize, id: _id, ...rest } = reviewedUpdates as any;
       const safe: Partial<Trade> = { ...rest };
       // notes v combined nesou suffix "(Kombinováno z N účtů)" — při zápisu ho odstraň.
       if (typeof (safe as any).notes === 'string') {
@@ -3151,12 +3248,12 @@ const App: React.FC = () => {
     let snapshot: Trade | undefined;
     setTrades(prev => {
       snapshot = prev.find(t => t.id === tradeId);
-      return prev.map(t => t.id === tradeId ? { ...t, ...updates } : t);
+      return prev.map(t => t.id === tradeId ? { ...t, ...reviewedUpdates } : t);
     });
 
     // Persist only the changed trade to DB (not ALL trades — prevents screenshot data loss)
     if (typeof tradeId === 'string' && tradeId.includes('-')) {
-      storageService.updateTrade(tradeId, updates).catch(err => {
+      storageService.updateTrade(tradeId, reviewedUpdates).catch(err => {
         console.error("Failed to persist trade update:", err);
         setSyncError("Nepodařilo se uložit změny obchodu. Změny byly vráceny zpět.");
         // Rollback optimistické aktualizace — vrať původní data
@@ -4048,7 +4145,7 @@ const App: React.FC = () => {
                   )}
 
                   {activePage === 'history' && (
-                    trades.length === 0 ? (
+                    trades.length === 0 && pendingCopierTrades.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
                         <div className="w-full max-w-md h-64">
                           <FileUpload onDataLoaded={handleFileUpload} />
@@ -4080,6 +4177,8 @@ const App: React.FC = () => {
                         setViewMode={setHistoryLayoutMode}
                         enrichSignal={enrichSignal}
                         userMistakes={userMistakes}
+                        pendingCopierTrades={pendingCopierTrades}
+                        onResolvePendingCopier={accountId => void resolvePendingCopierAccount(accountId)}
                         onImportTradovate={() => {
                           setTradovateImportAccount(viewMode === 'individual' ? activeAccountId : undefined);
                           setTradovateImportOpen(true);
@@ -4271,7 +4370,12 @@ const App: React.FC = () => {
                     />
                   )}
                   {activePage === 'live' && (
-                    <LiveDesk key={currentUser.id} theme={theme} live={tradovateLive} />
+                    <LiveDesk
+                      key={currentUser.id}
+                      theme={theme}
+                      live={tradovateLive}
+                      onCopierJournalRefresh={handleCopierJournalRefresh}
+                    />
                   )}
 
                   {activePage === 'settings' && (

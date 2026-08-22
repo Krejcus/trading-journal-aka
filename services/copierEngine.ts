@@ -152,6 +152,10 @@ export interface CopierClosedTrade {
   followerCount: number;
   openedAt: number | null;
   closedAt: number;
+  /** Volitelná fakta přidaná novějšími workery; staré durable snapshoty je nemají. */
+  exitReason?: 'sl' | 'tp' | 'manual';
+  avgEntryPrice?: number;
+  avgExitPrice?: number;
 }
 
 export interface CopierDailyStats {

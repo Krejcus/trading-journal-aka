@@ -249,6 +249,12 @@ export interface Trade {
   planAdherence?: 'Yes' | 'No' | 'Partial';
   isValid?: boolean;
   executionStatus?: 'Valid' | 'Invalid' | 'Missed';
+  /** Draft z automatického copier ledgeru čeká na uživatelovu reflexi. */
+  needsReview?: boolean;
+  /** Brokerem odvozený důvod uzavření copier obchodu. */
+  exitReason?: 'sl' | 'tp' | 'manual';
+  /** Stabilní logické ID copier close události; DB `trades.id` zůstává UUID. */
+  copierTradeId?: string;
   /** Ruční význam setupu. Automatický přepočet jej nesmí měnit. */
   setupType?: 'reaction' | 'break' | 'unclear';
   tags?: string[];

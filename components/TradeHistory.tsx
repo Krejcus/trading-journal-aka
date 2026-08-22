@@ -13,9 +13,10 @@ import {
   Maximize2, ArrowRight, Gauge, Hash, Ruler, Percent,
   Compass, Hourglass, Cpu, Terminal, Layers, ArrowUpRight, ArrowDownRight,
   Share2, Check, Copy, LayoutGrid, List, AlertOctagon, Clock, Timer, CheckCircle2, UploadCloud, Sparkles,
-  MoreHorizontal, CheckSquare
+  MoreHorizontal, CheckSquare, Inbox
 } from 'lucide-react';
 import { tradeNeedsEnrichment } from '../services/tradovateImport';
+import type { PendingCopierJournalTrade } from '../services/copierJournalSync';
 
 import TradeDetailModal from './TradeDetailModal';
 import ImageZoomModal from './ImageZoomModal';
@@ -83,6 +84,14 @@ const PendingBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
   )
 );
 
+const CopierReviewBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
+  <span className={`inline-flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-500/15 font-black text-indigo-400 ${
+    variant === 'card' ? 'px-2 py-1 text-[8px] uppercase tracking-wider' : 'px-1.5 py-0.5 text-[8px]'
+  }`} title="Fakta doplnila kopírka; otevři obchod a ulož vlastní reflexi">
+    <Inbox size={variant === 'card' ? 9 : 8} /> Kopírka · nezkontrolováno
+  </span>
+);
+
 interface TradeHistoryProps {
   trades: Trade[];
   accounts: Account[];
@@ -104,12 +113,15 @@ interface TradeHistoryProps {
   enrichSignal?: number;
   /** Uživatelské kategorie chyb (Settings → Strategie → Katalog Chyb) — pro bulk-tag importovaných obchodů. */
   userMistakes?: string[];
+  pendingCopierTrades?: PendingCopierJournalTrade[];
+  onResolvePendingCopier?: (accountId: string) => void;
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
   trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
   viewMode, setViewMode, onImportTradovate, onImportTradesyncer, enrichSignal, userMistakes = [],
+  pendingCopierTrades = [], onResolvePendingCopier,
 }) => {
   const isDark = theme !== 'light';
   const targetCurrency = user.currency || 'USD';
@@ -146,6 +158,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
   // --- ENRICHMENT (doplnění importovaných obchodů) ---
   const [enrichFilter, setEnrichFilter] = useState(false); // filtr „K doplnění"
+  const [copierReviewFilter, setCopierReviewFilter] = useState(false);
+  const [pendingAccountId, setPendingAccountId] = useState('');
   const [wizardMode, setWizardMode] = useState(false);      // průvodce: po zavření detailu otevři další
 
   // --- MULTI-SELECT STATE ---
@@ -267,6 +281,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   );
   const enrichCount = enrichTrades.length;
   const enrichIds = useMemo(() => new Set(enrichTrades.map(t => String(t.id))), [enrichTrades]);
+  const copierReviewCount = useMemo(
+    () => trades.filter(trade => trade.source === 'copier' && trade.needsReview === true).length,
+    [trades],
+  );
 
   // Jeden zdroj pravdy pro frontu průvodce: nedoplněné obchody chronologicky (nejstarší první),
   // volitelně bez konkrétního id (aktuálně řešený obchod).
@@ -280,14 +298,19 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
   // Řazeno podle ENTRY času (otevření pozice), nejnovější nahoře — ne podle exitu.
   const sortedTrades = useMemo(() => {
-    const base = enrichFilter ? trades.filter(tradeNeedsEnrichment) : trades;
+    const base = copierReviewFilter
+      ? trades.filter(trade => trade.source === 'copier' && trade.needsReview === true)
+      : enrichFilter ? trades.filter(tradeNeedsEnrichment) : trades;
     return [...base].sort((a, b) => entryMs(b) - entryMs(a));
-  }, [trades, enrichFilter]);
+  }, [trades, enrichFilter, copierReviewFilter]);
 
   // Pokud filtr „K doplnění" vyprázdní seznam (vše doplněno), vypni ho.
   useEffect(() => {
     if (enrichFilter && enrichCount === 0) setEnrichFilter(false);
   }, [enrichFilter, enrichCount]);
+  useEffect(() => {
+    if (copierReviewFilter && copierReviewCount === 0) setCopierReviewFilter(false);
+  }, [copierReviewCount, copierReviewFilter]);
 
   // --- PRŮVODCE DOPLNĚNÍM ---
   // Otevři frontu od prvního nedoplněného obchodu.
@@ -647,11 +670,32 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         theme={theme}
       />
 
+      {pendingCopierTrades.length > 0 && (
+        <div className={`mb-4 flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center ${theme === 'light' ? 'border-amber-200 bg-amber-50' : 'border-amber-500/25 bg-amber-500/[0.07]'}`}>
+          <AlertTriangle size={18} className="shrink-0 text-amber-500" />
+          <div className="min-w-0 flex-1">
+            <div className={`text-sm font-black ${theme === 'light' ? 'text-slate-800' : 'text-slate-100'}`}>
+              {pendingCopierTrades.length} {pendingCopierTrades.length === 1 ? 'obchod čeká' : 'obchodů čeká'} na přiřazení účtu
+            </div>
+            <div className="text-[11px] text-slate-500">Leader {pendingCopierTrades[0].leaderAccountId} nemá journal mapping. Vyber účet; nic se nepřiřadí potichu.</div>
+          </div>
+          <select value={pendingAccountId} onChange={event => setPendingAccountId(event.target.value)} className="h-9 min-w-[190px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-xs font-bold text-[var(--text-primary)]">
+            <option value="">Vyber journal účet…</option>
+            {accounts.filter(account => account.status === 'Active' && account.type !== 'Backtest').map(account => (
+              <option key={account.id} value={account.id}>{account.name}</option>
+            ))}
+          </select>
+          <button type="button" disabled={!pendingAccountId || !onResolvePendingCopier} onClick={() => onResolvePendingCopier?.(pendingAccountId)} className="h-9 rounded-md bg-indigo-600 px-4 text-xs font-black text-white disabled:opacity-40">
+            Přiřadit a vytvořit drafty
+          </button>
+        </div>
+      )}
+
       {/* Multi-Select Toolbar */}
       <div className="flex items-center gap-3 mb-4 px-2">
         {!isMultiSelectMode && enrichCount > 0 && (
           <button
-            onClick={() => setEnrichFilter(v => !v)}
+            onClick={() => { setEnrichFilter(v => !v); setCopierReviewFilter(false); }}
             className={`flex items-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm transition-all active:scale-95 ${
               enrichFilter
                 ? 'bg-amber-500 text-white'
@@ -660,6 +704,16 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             title="Zobrazit jen importované obchody bez screenshotu/konfluence"
           >
             <Sparkles size={14} /> K doplnění ({enrichCount})
+          </button>
+        )}
+
+        {!isMultiSelectMode && copierReviewCount > 0 && (
+          <button
+            onClick={() => { setCopierReviewFilter(value => !value); setEnrichFilter(false); }}
+            className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-bold transition-all active:scale-95 ${copierReviewFilter ? 'bg-indigo-600 text-white' : 'border border-indigo-500/30 bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25'}`}
+            title="Zobrazit jen automatické drafty z kopírky"
+          >
+            <Inbox size={14} /> Nezkontrolované ({copierReviewCount})
           </button>
         )}
 
@@ -978,6 +1032,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                           </span>
                         );
                       })()}
+                      {trade.source === 'copier' && trade.needsReview === true && <CopierReviewBadge variant="card" />}
                       {/* Execution Status badge — always show */}
                       {(() => {
                         const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
@@ -1231,6 +1286,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                             {trade.instrument}
                             {enrichIds.has(String(trade.id)) && <EnrichBadge variant="inline" />}
                             {(trade as any).excursionComplete === false && <PendingBadge variant="inline" />}
+                            {trade.source === 'copier' && trade.needsReview === true && <CopierReviewBadge variant="inline" />}
                           </span>
                           <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{getTradePhase(trade) || 'Standard'}</span>
                         </div>

@@ -63,6 +63,7 @@ type LiveTab = 'connections' | 'overview' | 'accounts' | 'orders' | 'events';
 interface TradovateLiveDeskProps {
   theme: 'dark' | 'light' | 'oled';
   live: TradovateLiveData;
+  onCopierJournalRefresh?: (group: CopyGroupConfig | null) => void;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -92,7 +93,7 @@ const OrganizationBrand = ({ name }: { name: string }) => {
   );
 };
 
-const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live }) => {
+const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJournalRefresh }) => {
   const [tab, setTab] = useState<LiveTab>('connections');
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -180,6 +181,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live }) => {
     if (!agentStatus) return null;
     return resolveLocalExecutionGroup(copyGroups, agentStatus.group);
   }, [agentStatus, copyGroups]);
+  useEffect(() => {
+    onCopierJournalRefresh?.(agentStatus?.group ?? executionGroup ?? null);
+  }, [agentStatus?.group, executionGroup, live.data?.capturedAt, onCopierJournalRefresh]);
   const executeAgent = async (command: Parameters<typeof agentClient.execute>[0]) => {
     if (agentTransport === 'local') return agentClient.execute(command);
     if (!relayConnectionId) throw new Error('Chybí aktivní Tradovate připojení pro Mac worker relay.');

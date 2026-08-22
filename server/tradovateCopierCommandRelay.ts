@@ -27,6 +27,9 @@ export interface PersistedCopierTradeInput {
   followerCount: number;
   openedAt: string | null;
   closedAt: string;
+  exitReason: 'sl' | 'tp' | 'manual' | null;
+  entryPrice: number | null;
+  exitPrice: number | null;
 }
 
 const finite = (value: unknown): number | null =>
@@ -43,6 +46,9 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
     const quantity = finite(candidate?.quantity);
     const closedAt = finite(candidate?.closedAt);
     const openedAt = finite(candidate?.openedAt);
+    const exitReason = candidate?.exitReason === 'sl' || candidate?.exitReason === 'tp' || candidate?.exitReason === 'manual'
+      ? candidate.exitReason
+      : null;
     if (!tradeId || !symbol || !quantity || quantity <= 0 || !closedAt || closedAt <= 0
       || (candidate?.side !== 'Long' && candidate?.side !== 'Short')) continue;
     unique.set(tradeId, {
@@ -54,6 +60,9 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
       followerCount: Math.max(0, Math.floor(finite(candidate.followerCount) ?? 0)),
       openedAt: openedAt && openedAt > 0 ? new Date(openedAt).toISOString() : null,
       closedAt: new Date(closedAt).toISOString(),
+      exitReason,
+      entryPrice: finite(candidate.avgEntryPrice),
+      exitPrice: finite(candidate.avgExitPrice),
     });
   }
   return [...unique.values()];
@@ -226,6 +235,9 @@ export async function heartbeatTradovateCopierDevice(options: {
         follower_count: trade.followerCount,
         opened_at: trade.openedAt,
         closed_at: trade.closedAt,
+        exit_reason: trade.exitReason,
+        entry_price: trade.entryPrice,
+        exit_price: trade.exitPrice,
         updated_at: new Date().toISOString(),
       })),
       { onConflict: 'device_id,trade_id' },
