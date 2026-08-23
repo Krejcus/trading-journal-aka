@@ -78,6 +78,39 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-23 (Claude, review mobilní appky — falešné ARM opraveno)
+Společná review appky na telefonu (Claude + Codex, dva statické passy
+a interaktivní kontrola). Nejcennější třída nálezů: **UI tvrdilo ARM, aniž
+mělo čím ověřit stav kopírky.** Všechny tři jsem před opravou potvrdil
+čtením kódu, ne jen z hlášení:
+1. Live Activity ignorovala `context.isStale` (nula výskytů v 1140 řádcích),
+   zatímco server posílá stale-date 180 s. Po pádu workeru nebo APNs zůstalo
+   na zamčené obrazovce svítit zelené „ARM LIVE". Nově se přepíše na
+   „ARM NEOVĚŘEN" a skryje se odpočet, který nejde ověřit.
+2. Kruhový widget odvozoval text z holého `live.armed`, takže vedle varovné
+   stale ikony mohl svítit nápis „ARM". Text teď vychází ze stejného
+   fail-safe stavu jako ikona (`?`/`STOP`/`LOCK`/`OFF`/`ARM`). Velká
+   obdélníková varianta to řešila správně už dřív.
+3. Cache broker snapshotu měla klíč jen `user_id:connection_id` a ignorovala
+   `allAccounts`; sběrač účtů tak Live Activity podstrčil pozice účtů mimo
+   copier skupinu. Klíč nově obsahuje rozsah dotazu.
+K tomu datový závod: správa observerů ActivityKit se dělala ze tří kontextů
+bez synchronizace (mohl shodit proces) — vše izolováno na `@MainActor`.
+
+Mobilní UI: bezpečnostní akce měly změřeno 82×28 / 71×28 / 56×28 px, tedy
+hluboko pod 44px cílem. Po opravě 44 px při zachovaném vzhledu; ověřeno, že
+řádky narostly o 1 px (44 → 45) a skupinový se zmenšil z 57 na 45. Stavové
+hlášky byly `fixed bottom-5`, tedy schované za nativní lištou (49 px +
+safe-area) — nová třída `.native-fixed-above-tab-bar` je zvedne.
+
+Metodická poznámka: simulátor pro přihlášení nepoužitelný — nepodepsaný
+build nemá keychain entitlement a padá na `-34018`. Interaktivní část se dá
+zastoupit prohlížečem v šířce 402 px; nativní věci (push, Live Activity,
+widgety) ale potřebují reálné zařízení a zůstávají neověřené.
+
+Otevřené: widget target má deployment target iOS 26, hlavní appka iOS 15 —
+na starších systémech by widgety ani Live Activity nebyly dostupné vůbec.
+
 ### 2026-08-23 (Codex, opravy mobilních UI nálezů z review)
 Bezpečnostní Connect/Disconnect, Flatten All a účtové Flatten v LIVE mají
 skutečný 44px dotykový cíl, ale zachovávají původní 28px vizuál. Účtové řádky
