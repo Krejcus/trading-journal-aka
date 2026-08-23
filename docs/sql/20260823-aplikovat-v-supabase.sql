@@ -46,10 +46,12 @@ comment on column public.tradovate_account_profiles.onboarded_at is
   'Čas explicitního potvrzení profilu uživatelem; NULL znamená nový účet ke kontrole.';
 
 -- ── Zápis do historie migrací ──────────────────────────────────────────────
-insert into supabase_migrations.schema_migrations (version, name)
+-- Jen `version`: sloupec `name` v téhle tabulce podle verze CLI nemusí
+-- existovat a celá transakce by kvůli němu spadla.
+insert into supabase_migrations.schema_migrations (version)
 values
-  ('20260823065352', 'tv_alert_webhook_settings'),
-  ('20260823070913', 'account_profile_onboarding')
+  ('20260823065352'),
+  ('20260823070913')
 on conflict (version) do nothing;
 
 commit;
