@@ -120,7 +120,7 @@ describe('TV alert dedicated chart navigation', () => {
     expect(navigation.params.expression).toContain('setRightOffset(40)');
     // Hustota svíček se počítá ze šířky panelu, ne natvrdo.
     expect(navigation.params.expression).toContain('setBarSpacing(barSpacing)');
-    expect(navigation.params.expression).toContain('paneWidth / 275');
+    expect(navigation.params.expression).toContain('paneWidth / 140');
     socket.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: true } } }) });
     // Teprve po dokreslení do plné šířky se měří bounds — jinak by byla
     // polovina snímku bílá.

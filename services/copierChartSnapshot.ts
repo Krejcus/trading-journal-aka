@@ -210,7 +210,7 @@ function evaluateExpression(symbol: string, timeframe: string): string {
     // rozprostřela jen do půlky plochy a zbytek zůstal prázdný.
     const pane = document.querySelector('.chart-container.active') || document.querySelector('.chart-container');
     const paneWidth = pane ? pane.getBoundingClientRect().width : 1675;
-    const barSpacing = Math.min(24, Math.max(6, Math.round(paneWidth / 275)));
+    const barSpacing = Math.min(40, Math.max(8, Math.round(paneWidth / 140)));
     // Plovoucí lišta kreslení se propisuje doprostřed snímku. Styl se po půl
     // minutě odstraní sám, aby v grafu nezůstal viset ani při pádu capture.
     const hideId = 'alphatrade-snapshot-hide';
