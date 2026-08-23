@@ -290,14 +290,29 @@ export function planModify(
  * Vychází z `links`, ne z přepočtu — rušit se dá jen to, co u brokera
  * skutečně existuje a čí `brokerOrderId` známe.
  */
-export function planCancel(event: LeaderEvent, state: CopierState): CancelCommand[] {
+export function planCancel(
+  event: LeaderEvent,
+  state: CopierState,
+  group?: CopyGroupConfig,
+): CancelCommand[] {
   if (event.kind !== 'canceled' && event.kind !== 'rejected') return [];
   const links = state.links.get(event.orderId) ?? [];
-  return links.map(link => ({
-    key: `cx:${link.key}`,
-    accountId: link.accountId,
-    brokerOrderId: link.brokerOrderId,
-  }));
+  return links.flatMap(link => {
+    // Stejná pojistka jako v `planModify`: lifecycle příkazy leadera platí
+    // jen pro on-submit kopie, které u brokera opravdu čekají. On-fill kopie
+    // je tržní příkaz vyplněný okamžitě — zrušit se nedá a pokus o zrušení
+    // skončí `cancel-failed`, tedy fail-closed a automatickým zavřením
+    // správných kopií kvůli falešnému poplachu.
+    if (group) {
+      const follower = group.followers.find(item => item.accountId === link.accountId);
+      if (!follower || follower.mode !== 'on-submit') return [];
+    }
+    return [{
+      key: `cx:${link.key}`,
+      accountId: link.accountId,
+      brokerOrderId: link.brokerOrderId,
+    }];
+  });
 }
 
 /**

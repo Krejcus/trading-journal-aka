@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { LocalCopierAgentCommand, LocalCopierAgentCommandResult, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol.js';
+import type { CopyGroupConfig } from '../services/liveCopyTrading.js';
+import { sanitizeCopyGroups } from '../services/liveCopyTrading.js';
 
 export interface CopierRelayCommand {
   id: string;
@@ -122,10 +124,28 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
   return command as Record<string, unknown>;
 };
 
+/**
+ * ARM nese konfiguraci skupiny, protože UI je autoritativní pro násobky,
+ * režimy a `safety` (denní ztrátový limit, cooldown, chování při expiraci).
+ * Relay ji dřív tiše zahazoval a worker se ozbrojil se svojí starou
+ * konfigurací — z telefonu se tak dal ARM provést bez denního limitu.
+ * Skupina je nedůvěryhodný vstup, proto prochází stejnou strukturální
+ * sanitizací na obou koncích.
+ */
+const validatedRelayGroup = (value: unknown): CopyGroupConfig => {
+  const groups = sanitizeCopyGroups([value]);
+  if (!groups || groups.length !== 1) throw new Error('invalid-relay-command');
+  return groups[0];
+};
+
 const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknown> => {
   if (!allowed.has(command.type) || command.type === 'device-paired') throw new Error('unsupported-relay-command');
   if (command.type === 'copy-command') {
     return { command: validatedRemoteCopyCommand((command as { command?: unknown }).command) };
+  }
+  const group = (command as { group?: unknown }).group;
+  if (command.type === 'arm-live' && group !== undefined) {
+    return { group: validatedRelayGroup(group) };
   }
   return {};
 };
@@ -134,6 +154,9 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
   if (!allowed.has(row.command_type) || row.command_type === 'device-paired') throw new Error('unsupported-relay-command');
   if (row.command_type === 'copy-command') {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
+  }
+  if (row.command_type === 'arm-live' && row.payload?.group !== undefined) {
+    return { type: 'arm-live', group: validatedRelayGroup(row.payload.group) } as LocalCopierAgentCommand;
   }
   return { type: row.command_type } as LocalCopierAgentCommand;
 };

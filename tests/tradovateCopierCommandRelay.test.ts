@@ -147,3 +147,50 @@ describe('Tradovate copier command relay', () => {
     })).rejects.toThrow('unsupported-remote-copy-command');
   });
 });
+
+describe('ARM přes relay nese konfiguraci skupiny', () => {
+  const skupina = {
+    id: 'group-1',
+    name: 'Hlavní',
+    enabled: true,
+    leaderAccountId: 62364058,
+    followers: [{ accountId: 62364057, mode: 'on-submit' as const, multiplier: 2 }],
+    safety: {
+      dailyLossLimitUsd: 500,
+      entryCooldownMinutes: 15,
+      armExpiryFlatten: 'followers' as const,
+      positionReconciler: true,
+      disableReplicationOnBreach: true,
+      autoCloseFollowerPositions: true,
+      preventHedging: true,
+    },
+  };
+
+  it('uloží safety do payloadu — bez toho worker ARMuje bez denního limitu', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      command: { type: 'arm-live', group: skupina } as unknown as LocalCopierAgentCommand,
+      idempotencyKey: 'arm-1',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+
+    expect(upsert).toHaveBeenCalledOnce();
+    const payload = upsert.mock.calls[0][0].payload as { group?: { safety?: Record<string, unknown> } };
+    expect(upsert.mock.calls[0][0].command_type).toBe('arm-live');
+    expect(payload.group?.safety).toMatchObject({ dailyLossLimitUsd: 500, entryCooldownMinutes: 15, armExpiryFlatten: 'followers' });
+  });
+
+  it('odmítne strukturálně vadnou skupinu místo tichého zahození', async () => {
+    const upsert = vi.fn();
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      command: { type: 'arm-live', group: { id: 'x' } } as unknown as LocalCopierAgentCommand,
+    })).rejects.toThrow('invalid-relay-command');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+});

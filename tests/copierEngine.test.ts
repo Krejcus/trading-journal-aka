@@ -7,9 +7,12 @@ import {
   createCopierState,
   followerQuantity,
   planFlatten,
+  planCancel,
   planModify,
   planReconciliation,
   planReplication,
+  type CopierState,
+  type FollowerOrderLink,
   type LeaderEvent,
 } from '../services/copierEngine';
 import { BROKER_TAG_MAX_LENGTH, brokerTag, stableHash } from '../services/copierKeys';
@@ -283,5 +286,44 @@ describe('planFlatten', () => {
 
   it('plochou pozici neřeší', () => {
     expect(planFlatten('g1', { accountId: 200, symbol: 'MNQU6', netQuantity: 0 }, 'f1')).toBeNull();
+  });
+});
+
+describe('planCancel respektuje režim followera', () => {
+  const stav = (): CopierState => ({
+    ...createCopierState(),
+    links: new Map<string, readonly FollowerOrderLink[]>([['o1', [
+      { key: 'k200', accountId: 200, brokerOrderId: 'b200', quantity: 1 },
+      { key: 'k300', accountId: 300, brokerOrderId: 'b300', quantity: 1 },
+    ]]]),
+  });
+
+  it('on-fill kopii neruší — není co zrušit a cancel-failed by shodil kopírku', () => {
+    // On-fill kopie je tržní příkaz vyplněný okamžitě. Pokus o zrušení
+    // skončí cancel-failed → fail-closed → zavření správných kopií.
+    const skupina = group({
+      followers: [
+        { accountId: 200, mode: 'on-submit', multiplier: 1 },
+        { accountId: 300, mode: 'on-fill', multiplier: 1 },
+      ],
+    });
+    const cancels = planCancel(event({ kind: 'canceled' }), stav(), skupina);
+    expect(cancels.map(c => c.accountId)).toEqual([200]);
+  });
+
+  it('bez skupiny zruší vše — zpětná kompatibilita volajících', () => {
+    const cancels = planCancel(event({ kind: 'canceled' }), stav());
+    expect(cancels.map(c => c.accountId)).toEqual([200, 300]);
+  });
+
+  it('vypnutého followera neruší', () => {
+    const skupina = group({
+      followers: [
+        { accountId: 200, mode: 'off', multiplier: 1 },
+        { accountId: 300, mode: 'on-submit', multiplier: 1 },
+      ],
+    });
+    const cancels = planCancel(event({ kind: 'canceled' }), stav(), skupina);
+    expect(cancels.map(c => c.accountId)).toEqual([300]);
   });
 });

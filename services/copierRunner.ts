@@ -837,11 +837,11 @@ export async function processLeaderEvent(
   // leader takovou objednávku ukončí, musíme použít právě durable link a cancel
   // dokončit; shadow mapa slouží jen událostem, které nikdy broker side effect
   // neměly.
-  const durableCancels = planCancel(event, state);
+  const durableCancels = planCancel(event, state, group);
   const planningState = context.shadowMode && durableCancels.length === 0
     ? { ...state, links: shadowLinks }
     : state;
-  const cancels = planCancel(event, planningState);
+  const cancels = planCancel(event, planningState, group);
   const modifications = planModify(event, planningState, group);
   const commands = [
     ...cancels.map(command => ({ ...command, operation: 'cancel' as const })),
@@ -849,7 +849,17 @@ export async function processLeaderEvent(
   ];
   if (commands.length > 0) {
     const isTerminalCancel = durableCancels.length > 0 && modifications.length === 0;
-    const commandHalt = isTerminalCancel
+    // Výjimka „risk-redukující cancel projde vždy" má chránit před osiřelou
+    // čekající objednávkou — tam zrušení expozici snižuje. Ochranná noha
+    // (SL/TP) nad otevřenou kopií je ale přesný opak: jejím zrušením zůstane
+    // pozice nechráněná a odzbrojená kopírka náhradu poslat nesmí. Taková
+    // musí projít plnou branou, aby ji kill switch a DISARM zastavily.
+    const protectiveLegIds = new Set<string>();
+    for (const entry of bracketOutbox.values()) {
+      protectiveLegIds.add(entry.leaderStopOrderId);
+      protectiveLegIds.add(entry.leaderTargetOrderId);
+    }
+    const commandHalt = isTerminalCancel && !protectiveLegIds.has(event.orderId)
       ? cancelLifecycleHaltReason(context)
       : haltReason({
           ...context,
