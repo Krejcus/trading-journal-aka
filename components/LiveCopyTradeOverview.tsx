@@ -232,6 +232,8 @@ interface Props {
   copierArmed?: boolean;
   /** Runtime je armed, ale pouze sleduje události a neodesílá příkazy. */
   copierObservingOnly?: boolean;
+  /** Stav runtime ještě nebyl zjištěn — nesmí se vydávat za odpojený. */
+  copierStatusPending?: boolean;
   copierKillSwitch?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
   onArmLive?: () => Promise<void> | void;
@@ -277,6 +279,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   commandAdapter,
   copierArmed = false,
   copierObservingOnly = false,
+  copierStatusPending = false,
   copierKillSwitch = false,
   apiTelemetry,
   onArmLive,
@@ -621,6 +624,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                       <GroupRow
                         group={group} rows={rows} connected={connected} armed={armed}
                         observingOnly={group.id === executionGroupId && copierObservingOnly}
+                        // Dokud stav neznáme, neznáme ani execution skupinu —
+                        // neznámý stav proto platí pro všechny řádky.
+                        statusPending={copierStatusPending && (executionGroupId == null || group.id === executionGroupId)}
                         runtimeReady={!!commandAdapter && group.id === executionGroupId}
                         transition={group.id === executionGroupId ? copierTransition : null}
                         connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || cooldownUntil > Date.now()}
@@ -964,21 +970,39 @@ function groupRows(
   return rows;
 }
 
-const CopierConnectionSwitch = ({ connected, runtimeReady, transition, connectBlocked, onToggle }: {
+export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady, transition, connectBlocked, onToggle }: {
   connected: boolean;
+  statusPending: boolean;
   runtimeReady: boolean;
   transition: 'connecting' | 'disconnecting' | null;
   connectBlocked: boolean;
   onToggle: () => void;
 }) => {
   const busy = transition != null;
-  const disabled = !runtimeReady || busy || (!connected && connectBlocked);
+  const disabled = statusPending || !runtimeReady || busy || (!connected && connectBlocked);
   const busyLabel = transition === 'connecting' ? 'ON…' : 'OFF…';
-  const title = !runtimeReady
-    ? 'Execution runtime není pro tuto skupinu dostupný.'
-    : !connected && connectBlocked
-      ? 'Connect blokuje kill switch, denní zámek nebo anti-revenge cooldown.'
-      : connected ? 'Kliknutím bezpečně DISARMovat copier.' : 'Kliknutím ARMovat copier naostro.';
+  const title = statusPending
+    ? 'Zjišťuji stav copieru…'
+    : !runtimeReady
+      ? 'Execution runtime není pro tuto skupinu dostupný.'
+      : !connected && connectBlocked
+        ? 'Connect blokuje kill switch, denní zámek nebo anti-revenge cooldown.'
+        : connected ? 'Kliknutím bezpečně DISARMovat copier.' : 'Kliknutím ARMovat copier naostro.';
+
+  // Dokud stav neznáme, nesmí přepínač tvrdit OFF — armovaný copier by se
+  // tvářil jako odpojený. Neutrální „?" místo toho přiznává, že se ptáme.
+  if (statusPending) {
+    return (
+      <span
+        role="status"
+        title={title}
+        className="flex h-7 w-[82px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.12em] text-[var(--text-secondary)]"
+      >
+        <RefreshCw size={12} className="animate-spin" />
+        ?
+      </span>
+    );
+  }
 
   return (
     <button
@@ -1021,9 +1045,10 @@ const CopierConnectionSwitch = ({ connected, runtimeReady, transition, connectBl
   );
 };
 
-const GroupRow = ({ group, rows, connected, armed, observingOnly, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns }: {
+const GroupRow = ({ group, rows, connected, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns }: {
   group: CopyGroupConfig; rows: Row[]; connected: boolean; armed: boolean; open: boolean; onToggle: () => void;
   observingOnly: boolean;
+  statusPending: boolean;
   runtimeReady: boolean;
   transition: 'connecting' | 'disconnecting' | null;
   connectBlocked: boolean;
@@ -1064,6 +1089,7 @@ const GroupRow = ({ group, rows, connected, armed, observingOnly, runtimeReady, 
         ) : (
           <CopierConnectionSwitch
             connected={armed}
+            statusPending={statusPending}
             runtimeReady={runtimeReady}
             transition={transition}
             connectBlocked={connectBlocked}

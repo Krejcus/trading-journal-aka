@@ -99,6 +99,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
+  // Než doběhne první dotaz, `agentStatus` je null a armovaný copier by se
+  // v přepínači ukázal jako OFF. Do té doby se stav zobrazuje jako neznámý.
+  const [agentStatusResolved, setAgentStatusResolved] = useState(false);
   // Dev háček (konvence at:dev:*): `localStorage['at:dev:copier-ui-demo']='1'`
   // podstrčí běžící cooldown a dvě stuck operace, aby šly stavové UI prvky
   // vidět bez čekání na reálnou situaci. Jen v dev buildu, prod ho neobsahuje.
@@ -223,6 +226,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
           if (!stopped) {
             directAgentProbe.current = 'available';
             setAgentStatus(next);
+            setAgentStatusResolved(true);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
             timer = window.setTimeout(poll, 2_000);
@@ -250,7 +254,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
       } catch {
         if (!stopped) { setAgentStatus(null); setAgentTransport(null); setRelayConnectionId(null); }
       } finally {
-        if (!stopped) timer = window.setTimeout(poll, 2_000);
+        if (!stopped) {
+          setAgentStatusResolved(true);
+          timer = window.setTimeout(poll, 2_000);
+        }
       }
     };
     void poll();
@@ -407,6 +414,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
               apiTelemetry={live.apiTelemetry}
               commandAdapter={commandAdapter}
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
+              copierStatusPending={!copierUiDemo && !agentStatusResolved}
               copierObservingOnly={!copierUiDemo && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
