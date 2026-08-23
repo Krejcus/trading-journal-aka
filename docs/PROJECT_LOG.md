@@ -78,6 +78,64 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-23 (Codex, LIVE karta: bezpečný Connect/Disconnect)
+Panel „Session řízení copieru“ a Shadow ovládání byly odstraněny z běžného
+LIVE UI. Stav ve sloupci Status nyní používá jediný animovaný
+Connect/Disconnect přepínač: Connect zachovává existující potvrzený ARM LIVE
+flow, Disconnect volá DISARM. Kill switch a ruční day-lock zůstaly dostupné
+v menu skupin. `copierArmed` už správně odráží každý armed runtime; výjimečný
+CLI stav `armed && shadowMode` se předává jen jako zobrazovací
+`copierObservingOnly` a místo tlačítka ukáže „Kopírka jen sleduje, neodesílá
+příkazy“, takže jej UI nemůže omylem přepnout na ostrý provoz. Runtime
+controller/runner/risk gate nebyly změněny.
+
+Lokálně prošel `npx tsc --noEmit` a celý `npx vitest run` (182 souborů,
+1 405 testů). V browseru ověřeno: výchozí Live Dashboard, automaticky
+rozbalená skupina, žádný Session/Shadow panel, jediný horizontální scroller,
+bezpečnostní položky v menu a DISCONNECTED přepínač. Connect/Disconnect nebyl
+prokliknut, aby test nezpůsobil ARM/DISARM. Výjimečný observing-only štítek
+nebyl živě vykreslen, protože aktuální runtime v tomto stavu nebyl.
+
+Následný UI polish odstranil inline Off/On Submit/On Fill select z Accounts
+tabulky: řádek nyní ukazuje jen „Kopíruje“ nebo „Vypnuto“, zatímco skutečný
+replikační režim zůstává upravitelný v Edit group. Connect ovladač používá
+sidebar morph: DISCONNECTED v klidu → zelený CONNECT při hoveru; po připojení
+zelený pulzující CONNECTED → červený DISCONNECT při hoveru, spinner při
+přechodu. Po změně znovu prošel typecheck i všech 1 405 testů; browser ověřil
+5 stavových štítků, žádný replication select a jediný horizontální scroller.
+DISCONNECT nebyl živě aktivován.
+
+Pravý account akční sloupec dostal pevnou šířku 92 px a GroupDetail už
+neodečítá horizontální padding od šířky společného scrolleru. Na maximálním
+pravém scrollu browser změřil všech 6 Flatten tlačítek jako plně viditelných
+(55,7 px); druhý scrollbar nevznikl. Typecheck a 1 405 testů znovu prošly.
+Runtime se během read-only kontroly sám zobrazil jako připojený, takže byla
+živě potvrzena červená varianta DISCONNECT bez kliknutí Codexu.
+
+Accounts tabulka už nemá samostatný Replication sloupec; On Submit/On Fill/Off
+zůstává pouze v Edit group. Leader je označen výraznější zlatou korunkou přímo
+napravo za názvem účtu v Account buňce. Browser ověřil nulový Replication header, právě jeden leader
+badge, jeden horizontální scroller a plně viditelné Flatten; typecheck i všech
+1 405 testů zůstávají zelené.
+
+Primární vizuální důraz byl stažen z pomocných akcí: Přidat skupinu je
+neutrální outline tlačítko a Flatten All má pouze jemný rose tint/outline;
+jejich potvrzovací a runtime chování se nezměnilo. Browser ověřil výsledné
+barvy a celý test suite zůstal zelený.
+
+Connect/Disconnect morph byl ztenčen na 28 px (řádek 41,5 px); browser změřil
+symetrický vnitřní odstup 6,75 px nahoře i dole, takže ovladač už řádek
+neroztahuje. Text byl následně zkrácen na stavový morph OFF → ON / ON → OFF a
+šířka na 82 px; ikona a typografie byly proporcionálně zmenšeny, potvrzení i
+runtime chování zůstalo. Přístupné Connect/Disconnect aria-labely jsou zachované.
+
+Opravena bezpečnostně důležitá stavová chyba: ON/OFF už není odvozeno z
+`connected && group.enabled && commandAdapter && copierArmed`, ale přímo z
+autoritativního `copierArmed` pro execution group. Skutečně armovaný runtime se
+tak nemůže maskovat jako OFF kvůli vedlejšímu UI/data stavu. Po uživatelově ARM
+browser read-only ověřil `aria-checked=true`, Disconnect aria-label a zelené
+pulzující ON; typecheck i všech 1 405 testů prošly.
+
 ### 2026-08-23 (Codex, onboarding vybírá katalogový plán)
 Dávkový onboarding už nevybírá samostatnou payout šablonu, ale stabilně
 identifikovaný preset z `TRADOVATE_PROP_PLAN_PRESETS`. Potvrzení z presetu

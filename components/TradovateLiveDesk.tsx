@@ -94,7 +94,7 @@ const OrganizationBrand = ({ name }: { name: string }) => {
 };
 
 const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJournalRefresh }) => {
-  const [tab, setTab] = useState<LiveTab>('connections');
+  const [tab, setTab] = useState<LiveTab>('overview');
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
@@ -406,12 +406,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
               onAccount={account => setSelectedAccountId(account.id)}
               apiTelemetry={live.apiTelemetry}
               commandAdapter={commandAdapter}
-              copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === false}
-              copierShadow={agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
+              copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
+              copierObservingOnly={!copierUiDemo && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
-              dayLockReason={agentStatus?.controller.dayLockReason ?? null}
-              dailyStats={agentStatus?.controller.dailyStats ?? null}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
               stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
               executionGroupId={executionGroup?.id ?? null}
@@ -428,7 +426,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
                 // round-trip; dva sériové dělaly z ARMu 5–6 s).
                 setAgentStatus((await executeAgent({ type: 'arm-live', group: executionGroup })).status);
               } : undefined}
-              onShadowMode={executionGroup ? async () => setAgentStatus((await executeAgent({ type: 'shadow' })).status) : undefined}
               onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
               onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
               onDayLock={async () => {

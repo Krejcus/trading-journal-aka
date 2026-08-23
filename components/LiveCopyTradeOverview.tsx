@@ -53,18 +53,13 @@ const plain = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
 /** Režim replikace follower účtu — hodnoty přebírají chování Tradecopie. */
 export type ReplicationMode = CopyReplicationMode;
-const REPLICATION_LABEL: Record<ReplicationMode, string> = {
-  'off': 'Off',
-  'on-submit': 'On Submit',
-  'on-fill': 'On Fill',
-};
 
 // ─── Sloupce tabulky účtů ────────────────────────────────────────────────────
 // Datově řízené, aby šly jednotlivé sloupce skrývat. `locked` sloupce skrýt nelze
 // — bez názvu účtu by řádky nešlo rozlišit.
 
 export type AccountColumnKey =
-  | 'replication' | 'account' | 'broker' | 'firm' | 'balance' | 'positions'
+  | 'account' | 'broker' | 'firm' | 'balance' | 'positions'
   | 'daily' | 'unreal' | 'distDd' | 'execLimit' | 'qtyMult' | 'actions';
 
 interface ColumnDef {
@@ -88,8 +83,7 @@ const ORDER_COLUMN_OPTIONS: Array<{ key: OrderColumnKey; label: string }> = [
 ];
 
 const ACCOUNT_COLUMNS: ColumnDef[] = [
-  { key: 'replication', label: 'Replication', widthPx: 132 },
-  { key: 'account', label: 'Account', locked: true, widthPx: 190 },
+  { key: 'account', label: 'Account', locked: true, widthPx: 220 },
   { key: 'broker', label: 'Broker', widthPx: 72 },
   { key: 'firm', label: 'Firm', widthPx: 120 },
   { key: 'balance', label: 'Balance', align: 'right', widthPx: 112 },
@@ -99,7 +93,7 @@ const ACCOUNT_COLUMNS: ColumnDef[] = [
   { key: 'distDd', label: 'Dist DD', align: 'right', widthPx: 76 },
   { key: 'execLimit', label: 'Exec/Limit', align: 'right', widthPx: 88 },
   { key: 'qtyMult', label: 'Násobek', align: 'right', widthPx: 96 },
-  { key: 'actions', label: 'Akce', align: 'right', widthPx: 78 },
+  { key: 'actions', label: 'Akce', align: 'right', widthPx: 92 },
 ];
 
 const COLUMNS_STORAGE_KEY = 'alphatrade_live_copytrade_columns';
@@ -236,19 +230,15 @@ interface Props {
   onRefreshOrders?: () => Promise<void> | void;
   commandAdapter?: LiveCopyTradingAdapter;
   copierArmed?: boolean;
-  copierShadow?: boolean;
+  /** Runtime je armed, ale pouze sleduje události a neodesílá příkazy. */
+  copierObservingOnly?: boolean;
   copierKillSwitch?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
   onArmLive?: () => Promise<void> | void;
-  onShadowMode?: () => Promise<void> | void;
   onDisarm?: () => Promise<void> | void;
   onEmergencyStop?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
   dayLockUntil?: number;
-  /** Důvod aktivního day-locku (ruční i auto) pro zobrazení v panelu. */
-  dayLockReason?: string | null;
-  /** Denní risk počítadlo leadera z runtime (auto day-lock). */
-  dailyStats?: { sessionEndAt: number; realizedPnlUsd: number; losingTrades: number; unpricedSymbols: string[] } | null;
   /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
   cooldownUntil?: number;
   /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
@@ -286,17 +276,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onRefreshOrders,
   commandAdapter,
   copierArmed = false,
-  copierShadow = false,
+  copierObservingOnly = false,
   copierKillSwitch = false,
   apiTelemetry,
   onArmLive,
-  onShadowMode,
   onDisarm,
   onEmergencyStop,
   onDayLock,
   dayLockUntil = 0,
-  dayLockReason = null,
-  dailyStats = null,
   cooldownUntil = 0,
   stuckOperations = [],
   executionGroupId = null,
@@ -305,6 +292,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(snapshot.groups.map(g => g.id)));
+  const didAutoExpandGroups = useRef(false);
   const [groupTab, setGroupTab] = useState<Record<string, 'accounts' | 'orders'>>({});
   const [apiPanelOpen, setApiPanelOpen] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumnKey>>(loadHiddenColumns);
@@ -322,6 +310,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [density, setDensity] = useState(initialViewSettings.density);
   const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
   const [busyCommand, setBusyCommand] = useState<string | null>(null);
+  const [copierTransition, setCopierTransition] = useState<'connecting' | 'disconnecting' | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string } | null>(null);
 
   // Volba sloupců přežívá reload — je to nastavení pohledu, ne stav relace.
@@ -347,6 +336,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         : merged;
     });
   }, [runtimeGroup, snapshot]);
+
+  useEffect(() => {
+    if (didAutoExpandGroups.current || groups.length === 0) return;
+    didAutoExpandGroups.current = true;
+    setExpanded(new Set(groups.map(group => group.id)));
+  }, [groups]);
 
   useEffect(() => {
     try {
@@ -403,6 +398,52 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   const anyLive = snapshot.accounts.some(isLive);
   const sourceGroupsById = useMemo(() => new Map(snapshot.groups.map(group => [group.id, group])), [snapshot.groups]);
+
+  const toggleCopierConnection = async () => {
+    if (copierTransition) return;
+    const connecting = !copierArmed;
+    const action = connecting ? onArmLive : onDisarm;
+    if (!action) return;
+    const startedAt = Date.now();
+    setCopierTransition(connecting ? 'connecting' : 'disconnecting');
+    try {
+      await action();
+      setToast(connecting
+        // Připojení znamená ostré odesílání příkazů brokerovi — potvrzení
+        // musí být stejně výrazné jako u odpojení, ne tiché.
+        ? { tone: 'success', text: 'Copier je připojený — příkazy leadera se kopírují naostro.' }
+        : { tone: 'info', text: 'Copier je bezpečně odpojený.' });
+    } catch (reason) {
+      setToast({
+        tone: 'error',
+        text: reason instanceof Error
+          ? reason.message
+          : connecting ? 'Copier se nepodařilo připojit.' : 'Copier se nepodařilo odpojit.',
+      });
+    } finally {
+      const remainingAnimation = Math.max(0, 650 - (Date.now() - startedAt));
+      if (remainingAnimation > 0) await new Promise(resolve => window.setTimeout(resolve, remainingAnimation));
+      setCopierTransition(null);
+    }
+  };
+
+  const triggerKillSwitch = onEmergencyStop ? async () => {
+    try {
+      await onEmergencyStop();
+      setToast({ tone: 'error', text: 'Execution runtime potvrdil kill switch. Brokerové akce copieru jsou zablokované.' });
+    } catch (reason) {
+      setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Kill switch se nepodařilo potvrdit.' });
+    }
+  } : undefined;
+
+  const triggerDayLock = onDayLock ? async () => {
+    try {
+      await onDayLock();
+      setToast({ tone: 'info', text: 'Execution runtime potvrdil zámek do konce aktuální broker session.' });
+    } catch (reason) {
+      setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Denní zámek se nepodařilo potvrdit.' });
+    }
+  } : undefined;
 
   const runCommand = async (command: LiveCopyTradingCommand, update?: () => void) => {
     const key = command.type === 'flatten-account' || command.type === 'set-replication' || command.type === 'set-multiplier'
@@ -509,57 +550,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         />
       ) : null}
 
-      <CopierSessionPanel
-        apiReady={!!commandAdapter}
-        armed={copierArmed && !copierKillSwitch}
-        shadow={copierShadow && !copierKillSwitch}
-        killSwitch={copierKillSwitch}
-        dayLocked={dayLockUntil > Date.now()}
-        dayLockReason={dayLockReason}
-        dailyStats={dailyStats}
-        cooldownUntil={cooldownUntil}
-        cooldownTotalMs={(runtimeGroup?.safety?.entryCooldownMinutes ?? 0) * 60_000}
-        onShadow={onShadowMode ? async () => {
-          try {
-            await onShadowMode();
-            setToast({ tone: 'info', text: 'Shadow režim potvrdil execution runtime: události se vyhodnocují, ale nic se neodesílá.' });
-          } catch (reason) {
-            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Shadow režim se nepodařilo zapnout.' });
-          }
-        } : undefined}
-        onArm={onArmLive ? async () => {
-          try {
-            await onArmLive();
-          } catch (reason) {
-            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'ARM LIVE se nepodařilo zapnout.' });
-          }
-        } : undefined}
-        onDisarm={onDisarm ? async () => {
-          try {
-            await onDisarm();
-            setToast({ tone: 'info', text: 'Execution runtime potvrdil DISARM.' });
-          } catch (reason) {
-            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'DISARM se nepodařilo potvrdit.' });
-          }
-        } : undefined}
-        onKill={onEmergencyStop ? async () => {
-          try {
-            await onEmergencyStop();
-            setToast({ tone: 'error', text: 'Execution runtime potvrdil kill switch. Brokerové akce copieru jsou zablokované.' });
-          } catch (reason) {
-            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Kill switch se nepodařilo potvrdit.' });
-          }
-        } : undefined}
-        onDayLock={onDayLock ? async () => {
-          try {
-            await onDayLock();
-            setToast({ tone: 'info', text: 'Execution runtime potvrdil zámek do konce aktuální broker session.' });
-          } catch (reason) {
-            setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Denní zámek se nepodařilo potvrdit.' });
-          }
-        } : undefined}
-      />
-
       <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
         <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 flex-wrap">
           <h3 className="text-lg font-black text-[var(--text-primary)]">Kopírovací skupiny</h3>
@@ -569,14 +559,21 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 id: createLocalCopyGroupId(), name: '', enabled: true, leaderAccountId: null,
                 followers: [], color: GROUP_COLORS[0], safety: { ...DEFAULT_COPY_GROUP_SAFETY }, localOnly: true,
               })}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500 transition-colors"
+              className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2 text-xs font-bold text-[var(--text-secondary)] transition-colors hover:border-indigo-500/30 hover:bg-indigo-500/[0.06] hover:text-indigo-500"
             >
               <Plus size={14} /> Přidat skupinu
             </button>
-            <button onClick={() => setHelpOpen(true)} title="Nápověda" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center"><HelpCircle size={14} /></button>
-            <button onClick={() => setTableSettingsOpen(true)} title="Table settings" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center"><Settings2 size={14} /></button>
-            <button onClick={() => setRedactNames(value => !value)} title={redactNames ? 'No redaction' : 'Redact account names'} className={`w-8 h-8 rounded-lg border border-[var(--border-subtle)] flex items-center justify-center ${redactNames ? 'bg-indigo-500/10 text-indigo-500' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>{redactNames ? <EyeOff size={14} /> : <Eye size={14} />}</button>
-            <TopActionsMenu onTemplates={() => setTemplatesOpen(true)} />
+            <button onClick={() => setHelpOpen(true)} title="Nápověda" className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><HelpCircle size={14} /></button>
+            <button onClick={() => setTableSettingsOpen(true)} title="Table settings" className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><Settings2 size={14} /></button>
+            <button onClick={() => setRedactNames(value => !value)} title={redactNames ? 'No redaction' : 'Redact account names'} className={`flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] ${redactNames ? 'bg-indigo-500/10 text-indigo-500' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>{redactNames ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+            <TopActionsMenu
+              onTemplates={() => setTemplatesOpen(true)}
+              onKillSwitch={triggerKillSwitch}
+              onDayLock={triggerDayLock}
+              killSwitchActive={copierKillSwitch}
+              dayLockActive={dayLockUntil > Date.now()}
+              runtimeReady={!!commandAdapter}
+            />
           </div>
         </header>
 
@@ -592,7 +589,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left">
+            <table
+              className="w-full text-left"
+              style={{ minWidth: `${Math.max(900, visibleColumns.reduce((total, column) => total + column.widthPx, 0))}px` }}
+            >
               <thead>
                 <tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-y border-[var(--border-subtle)]">
                   <th className="w-8" />
@@ -611,12 +611,20 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 {groups.map(group => {
                   const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id), profilesById);
                   const connected = rows.some(r => isLive(r.account));
-                  const armed = connected && group.enabled && !!commandAdapter && copierArmed;
+                  // Runtime je jediný autoritativní zdroj ARM stavu. Připojení
+                  // účtů, lokální group.enabled ani dostupnost adaptéru nesmí
+                  // skutečně armovaný copier v UI zamaskovat jako OFF.
+                  const armed = group.id === executionGroupId && copierArmed;
                   const tab = groupTab[group.id] || 'accounts';
                   return (
                     <React.Fragment key={group.id}>
                       <GroupRow
                         group={group} rows={rows} connected={connected} armed={armed}
+                        observingOnly={group.id === executionGroupId && copierObservingOnly}
+                        runtimeReady={!!commandAdapter && group.id === executionGroupId}
+                        transition={group.id === executionGroupId ? copierTransition : null}
+                        connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || cooldownUntil > Date.now()}
+                        onConnectionToggle={() => void toggleCopierConnection()}
                         open={expanded.has(group.id)}
                         onToggle={() => toggleGroup(group.id)}
                         onEdit={() => setEditorGroup(structuredClone(group))}
@@ -656,9 +664,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               orders={orders}
                               busyCommand={busyCommand}
                               onRefreshOrders={onRefreshOrders}
-                              onReplication={(accountId, mode) => {
-                                void runCommand({ type: 'set-replication', groupId: group.id, accountId, mode }, () => updateFollower(group.id, accountId, { mode }));
-                              }}
                               onMultiplier={(accountId, multiplier) => {
                                 void runCommand({ type: 'set-multiplier', groupId: group.id, accountId, multiplier }, () => updateFollower(group.id, accountId, { multiplier }));
                               }}
@@ -908,89 +913,6 @@ const StuckOperationsPanel = ({ operations, busy, onResolve }: {
   );
 };
 
-// Kruhové odpočítávání anti-revenge cooldownu. Sedí přímo u ARM tlačítka,
-// protože přesně to cooldown zamyká — je to brzda, ne alarm.
-const CooldownRing = ({ until, totalMs }: { until: number; totalMs: number }) => {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, []);
-  // Bez známé celkové délky (starší worker) se kruh odvíjí od prvního
-  // pozorovaného zbytku — pořád viditelně ubývá.
-  const [initialRemaining] = useState(() => Math.max(1, until - Date.now()));
-  const remaining = Math.max(0, until - now);
-  if (remaining <= 0) return null;
-  const effectiveTotal = totalMs > 0 ? totalMs : initialRemaining;
-  const fraction = Math.min(1, remaining / effectiveTotal);
-  const radius = 15;
-  const circumference = 2 * Math.PI * radius;
-  const minutes = Math.floor(remaining / 60_000);
-  const seconds = Math.floor((remaining % 60_000) / 1_000);
-  return (
-    <span className="flex items-center gap-2" title="Anti-revenge cooldown: ostrý ARM je blokovaný do konce odpočtu. Rozhodni s chladnou hlavou.">
-      <svg width="34" height="34" viewBox="0 0 36 36" className="-rotate-90">
-        <circle cx="18" cy="18" r={radius} fill="none" strokeWidth="3.5" className="stroke-amber-500/20" />
-        <circle
-          cx="18" cy="18" r={radius} fill="none" strokeWidth="3.5" strokeLinecap="round"
-          className="stroke-amber-500 transition-[stroke-dashoffset] duration-1000 ease-linear"
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - fraction)}
-        />
-      </svg>
-      <span className="text-xs font-black tabular-nums text-amber-600">
-        {minutes}:{String(seconds).padStart(2, '0')}
-      </span>
-    </span>
-  );
-};
-
-const CopierSessionPanel = ({ apiReady, armed, shadow, killSwitch, dayLocked, dayLockReason = null, dailyStats = null, cooldownUntil = 0, cooldownTotalMs = 0, onShadow, onArm, onDisarm, onKill, onDayLock }: {
-  apiReady: boolean;
-  armed: boolean;
-  shadow: boolean;
-  killSwitch: boolean;
-  dayLocked: boolean;
-  dayLockReason?: string | null;
-  dailyStats?: { sessionEndAt: number; realizedPnlUsd: number; losingTrades: number; unpricedSymbols: string[] } | null;
-  cooldownUntil?: number;
-  cooldownTotalMs?: number;
-  onShadow?: () => Promise<void> | void;
-  onArm?: () => Promise<void> | void;
-  onDisarm?: () => Promise<void> | void;
-  onKill?: () => Promise<void> | void;
-  onDayLock?: () => Promise<void> | void;
-}) => {
-  const cooldownActive = !armed && cooldownUntil > Date.now();
-  const status = killSwitch ? 'KILL SWITCH' : dayLocked ? 'LOCKED' : armed ? 'ARMED' : cooldownActive ? 'COOLDOWN' : shadow ? 'SHADOW' : 'DISARMED';
-  const color = killSwitch || dayLocked ? 'text-rose-500 bg-rose-500/10' : armed ? 'text-emerald-500 bg-emerald-500/10' : shadow ? 'text-indigo-500 bg-indigo-500/10' : 'text-amber-600 bg-amber-500/10';
-  return <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-3">
-    <div className="flex min-w-0 items-center gap-3">
-      <span className={`rounded-md px-2.5 py-1 text-[10px] font-black tracking-wide ${color}`}>{status}</span>
-      <div className="min-w-0">
-        <b className="block text-xs text-[var(--text-primary)]">Session řízení copieru</b>
-        <span className="block truncate text-[10px] text-[var(--text-secondary)]">{dayLocked && dayLockReason ? dayLockReason : apiReady ? 'Execution runtime připojen. Live ARM vyžaduje reconciliation a ruční potvrzení.' : 'Execution runtime není připojen. Shadow ani live příkazy nejsou aktivní.'}</span>
-      </div>
-      {dailyStats && (dailyStats.realizedPnlUsd !== 0 || dailyStats.losingTrades > 0) ? (
-        <span
-          title={`Denní realizovaný P&L leadera (auto day-lock počítadlo)${dailyStats.unpricedSymbols.length > 0 ? ` · bez USD ohodnocení: ${dailyStats.unpricedSymbols.join(', ')}` : ''}`}
-          className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-black ${dailyStats.realizedPnlUsd < 0 ? 'bg-rose-500/10 text-rose-500' : 'bg-emerald-500/10 text-emerald-600'}`}
-        >
-          Dnes {dailyStats.realizedPnlUsd >= 0 ? '+' : '−'}{Math.abs(Math.round(dailyStats.realizedPnlUsd))} $ · {dailyStats.losingTrades}L
-        </span>
-      ) : null}
-    </div>
-    <div className="flex flex-wrap items-center gap-2">
-      {cooldownActive ? <CooldownRing until={cooldownUntil} totalMs={cooldownTotalMs} /> : null}
-      <button type="button" onClick={() => void onShadow?.()} disabled={!apiReady || !onShadow || killSwitch || dayLocked || shadow || armed} title={!apiReady || !onShadow ? 'Shadow vyžaduje připojený execution runtime.' : 'Bezpečný shadow režim bez brokerových zápisů'} className="h-8 rounded-md border border-indigo-500/25 px-3 text-[10px] font-black text-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"><Eye size={12} className="mr-1.5 inline" />Shadow</button>
-      <button type="button" onClick={() => void onArm?.()} disabled={!apiReady || !onArm || killSwitch || dayLocked || armed || cooldownActive} title={cooldownActive ? 'Anti-revenge cooldown: ostrý ARM je blokovaný do konce odpočtu.' : !apiReady || !onArm ? 'ARM bude dostupný až po napojení runtime controlleru a úspěšné reconciliation.' : 'ARM LIVE session'} className="h-8 rounded-md bg-emerald-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-35"><Power size={12} className="mr-1.5 inline" />ARM LIVE</button>
-      <button type="button" onClick={() => void onDisarm?.()} disabled={!apiReady || !onDisarm || killSwitch || (!armed && !shadow)} className="h-8 rounded-md border border-[var(--border-subtle)] px-3 text-[10px] font-black text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40">DISARM</button>
-      <button type="button" onClick={() => void onKill?.()} disabled={!apiReady || !onKill || killSwitch} title={!apiReady || !onKill ? 'Kill switch vyžaduje připojený execution runtime.' : 'Okamžitě zablokovat copier'} className="h-8 rounded-md bg-rose-600 px-3 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-55"><AlertTriangle size={12} className="mr-1.5 inline" />Kill switch</button>
-      <button type="button" onClick={() => void onDayLock?.()} disabled={!apiReady || !onDayLock || killSwitch || dayLocked} title="Zablokovat nový ARM až do konce broker session" className="h-8 rounded-md border border-rose-500/25 px-3 text-[10px] font-black text-rose-500 disabled:cursor-not-allowed disabled:opacity-40"><ShieldAlert size={12} className="mr-1.5 inline" />Zamknout den</button>
-    </div>
-  </section>;
-};
-
 // ─── Řádek skupiny ───────────────────────────────────────────────────────────
 
 interface Row {
@@ -1042,8 +964,70 @@ function groupRows(
   return rows;
 }
 
-const GroupRow = ({ group, rows, connected, armed, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns }: {
+const CopierConnectionSwitch = ({ connected, runtimeReady, transition, connectBlocked, onToggle }: {
+  connected: boolean;
+  runtimeReady: boolean;
+  transition: 'connecting' | 'disconnecting' | null;
+  connectBlocked: boolean;
+  onToggle: () => void;
+}) => {
+  const busy = transition != null;
+  const disabled = !runtimeReady || busy || (!connected && connectBlocked);
+  const busyLabel = transition === 'connecting' ? 'ON…' : 'OFF…';
+  const title = !runtimeReady
+    ? 'Execution runtime není pro tuto skupinu dostupný.'
+    : !connected && connectBlocked
+      ? 'Connect blokuje kill switch, denní zámek nebo anti-revenge cooldown.'
+      : connected ? 'Kliknutím bezpečně DISARMovat copier.' : 'Kliknutím ARMovat copier naostro.';
+
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={connected}
+      aria-label={connected ? 'Disconnect copier' : 'Connect copier'}
+      title={title}
+      disabled={disabled}
+      onClick={event => {
+        event.stopPropagation();
+        onToggle();
+      }}
+      className={`group relative flex h-7 w-[82px] items-center justify-center overflow-hidden rounded-md border px-2 text-[9px] font-black uppercase tracking-[0.12em] transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-45 ${connected
+        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 hover:border-rose-500/40 hover:bg-rose-500/10 hover:text-rose-500'
+        : 'border-rose-500/40 bg-rose-500/10 text-rose-500 hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:text-emerald-500'}`}
+    >
+      {busy ? (
+        <span className="flex items-center gap-2">
+          <RefreshCw size={12} className="animate-spin" />
+          {busyLabel}
+        </span>
+      ) : (
+        <>
+          <span className={`absolute right-2 h-1.5 w-1.5 rounded-full bg-emerald-500 transition-opacity duration-200 ${connected ? 'opacity-100 group-hover:opacity-0' : 'opacity-0 group-hover:opacity-100'}`}>
+            <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400" />
+          </span>
+          <Power size={12} className="absolute left-2.5 transition-transform duration-300 group-hover:rotate-90" />
+          <span className="absolute left-7 right-4 overflow-hidden text-center">
+            <span className="block transition-all duration-300 ease-in-out group-hover:-translate-y-full group-hover:opacity-0">
+              {connected ? 'ON' : 'OFF'}
+            </span>
+            <span className="absolute inset-0 translate-y-full opacity-0 transition-all duration-300 ease-in-out group-hover:translate-y-0 group-hover:opacity-100">
+              {connected ? 'OFF' : 'ON'}
+            </span>
+          </span>
+        </>
+      )}
+    </button>
+  );
+};
+
+const GroupRow = ({ group, rows, connected, armed, observingOnly, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns }: {
   group: CopyGroupConfig; rows: Row[]; connected: boolean; armed: boolean; open: boolean; onToggle: () => void;
+  observingOnly: boolean;
+  runtimeReady: boolean;
+  transition: 'connecting' | 'disconnecting' | null;
+  connectBlocked: boolean;
+  onConnectionToggle: () => void;
   onEdit: () => void;
   onToggleEnabled: () => void;
   onFlatten: () => void;
@@ -1072,9 +1056,20 @@ const GroupRow = ({ group, rows, connected, armed, open, onToggle, onEdit, onTog
         <span className="flex items-center gap-2 text-xs font-bold" style={{ color: group.color ?? GROUP_COLORS[0] }}><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: group.color ?? GROUP_COLORS[0] }} />{group.name}</span>
       </td>
       {!hiddenGroupColumns.has('status') && <td className="px-3 py-1.5">
-        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wide ${armed ? 'bg-emerald-500/12 text-emerald-500' : connected ? 'bg-amber-500/10 text-amber-500' : 'bg-[var(--border-subtle)] text-[var(--text-muted)]'}`}>
-          {armed ? 'Active' : connected ? 'Disarmed' : 'Offline'}
-        </span>
+        {observingOnly ? (
+          <span className="inline-flex max-w-[170px] items-center gap-1.5 rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[9px] font-bold leading-tight text-amber-600">
+            <ShieldAlert size={12} className="shrink-0" />
+            Kopírka jen sleduje, neodesílá příkazy
+          </span>
+        ) : (
+          <CopierConnectionSwitch
+            connected={armed}
+            runtimeReady={runtimeReady}
+            transition={transition}
+            connectBlocked={connectBlocked}
+            onToggle={onConnectionToggle}
+          />
+        )}
       </td>}
       {!hiddenGroupColumns.has('leader') && <td className="px-3 py-1.5">
         <span className="flex items-center gap-1.5 text-xs text-[var(--text-primary)]">
@@ -1086,25 +1081,23 @@ const GroupRow = ({ group, rows, connected, armed, open, onToggle, onEdit, onTog
       {!hiddenGroupColumns.has('followers') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>}
       {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{money.format(capital)}</td>}
       {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(daily)}`}>{money.format(daily)}</td>}
-      {!hiddenGroupColumns.has('unreal') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'estimated' ? <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" /> : null}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
+      {!hiddenGroupColumns.has('unreal') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
       <td className="px-3 py-1.5">
         <div className="flex items-center justify-end gap-1.5" onClick={event => event.stopPropagation()}>
-          <button onClick={onToggleEnabled} title={group.enabled ? 'Vypnout kopírování' : 'Zapnout kopírování'}
-            className={`h-7 rounded-md border px-2.5 text-[10px] font-bold transition-colors ${group.enabled ? 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-amber-500' : 'border-emerald-500/25 text-emerald-500 bg-emerald-500/5'}`}>
-            {group.enabled ? 'Disable' : 'Enable'}
-          </button>
           <button onClick={onFlatten} title="Uzavřít všechny pozice ve skupině"
-            className="h-7 whitespace-nowrap rounded-md bg-rose-600 px-2.5 text-[10px] font-bold text-white transition-colors hover:bg-rose-500">
+            className="h-7 whitespace-nowrap rounded-md border border-rose-500/25 bg-rose-500/[0.06] px-2.5 text-[10px] font-bold text-rose-500 transition-colors hover:border-rose-500/40 hover:bg-rose-500/12">
             Flatten All
           </button>
-          <GroupActionMenu onEdit={onEdit} templates={templates} onApplyTemplate={onApplyTemplate} />
+          <GroupActionMenu groupEnabled={group.enabled} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} onApplyTemplate={onApplyTemplate} />
         </div>
       </td>
     </tr>
   );
 };
 
-const GroupActionMenu = ({ onEdit, templates, onApplyTemplate }: {
+const GroupActionMenu = ({ groupEnabled, onToggleEnabled, onEdit, templates, onApplyTemplate }: {
+  groupEnabled: boolean;
+  onToggleEnabled: () => void;
   onEdit: () => void;
   templates: CopyGroupTemplate[];
   onApplyTemplate: (template: CopyGroupTemplate) => void;
@@ -1125,6 +1118,7 @@ const GroupActionMenu = ({ onEdit, templates, onApplyTemplate }: {
       <button aria-label="Close group actions" className="fixed inset-0 z-[139] cursor-default" onClick={() => setOpen(false)} />
       <div className="fixed z-[140] w-52 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] py-1 shadow-xl" style={position}>
         <button onClick={() => { setOpen(false); onEdit(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]"><Settings2 size={13} />Edit group</button>
+        <button onClick={() => { setOpen(false); onToggleEnabled(); }} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold hover:bg-[var(--bg-page)] ${groupEnabled ? 'text-amber-600' : 'text-emerald-600'}`}><Power size={13} />{groupEnabled ? 'Disable group' : 'Enable group'}</button>
         {templates.length ? <>
           <div className="my-1 border-t border-[var(--border-subtle)]" />
           <div className="px-3 pb-1 pt-1 text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Apply template</div>
@@ -1135,7 +1129,14 @@ const GroupActionMenu = ({ onEdit, templates, onApplyTemplate }: {
   </div>;
 };
 
-const TopActionsMenu = ({ onTemplates }: { onTemplates: () => void }) => {
+const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive, dayLockActive, runtimeReady }: {
+  onTemplates: () => void;
+  onKillSwitch?: () => Promise<void> | void;
+  onDayLock?: () => Promise<void> | void;
+  killSwitchActive: boolean;
+  dayLockActive: boolean;
+  runtimeReady: boolean;
+}) => {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -1147,11 +1148,26 @@ const TopActionsMenu = ({ onTemplates }: { onTemplates: () => void }) => {
     setOpen(value => !value);
   };
   return <div>
-    <button ref={triggerRef} onClick={toggle} title="More actions" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center"><MoreVertical size={14} /></button>
+    <button ref={triggerRef} onClick={toggle} title="More actions" className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><MoreVertical size={14} /></button>
     {open ? createPortal(<>
       <button aria-label="Close more actions" className="fixed inset-0 z-[139] cursor-default" onClick={() => setOpen(false)} />
       <div className="fixed z-[140] w-48 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] py-1 shadow-xl" style={position}>
         <button onClick={() => { setOpen(false); onTemplates(); }} className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]"><Save size={13} />Group Templates</button>
+        <div className="my-1 border-t border-[var(--border-subtle)]" />
+        <button
+          disabled={!runtimeReady || !onDayLock || killSwitchActive || dayLockActive}
+          onClick={() => { setOpen(false); void onDayLock?.(); }}
+          className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-rose-500 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ShieldAlert size={13} />{dayLockActive ? 'Den je zamčený' : 'Zamknout den'}
+        </button>
+        <button
+          disabled={!runtimeReady || !onKillSwitch || killSwitchActive}
+          onClick={() => { setOpen(false); void onKillSwitch?.(); }}
+          className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-rose-600 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <AlertTriangle size={13} />{killSwitchActive ? 'Kill switch aktivní' : 'Kill switch'}
+        </button>
       </div>
     </>, document.body) : null}
   </div>;
@@ -1159,7 +1175,7 @@ const TopActionsMenu = ({ onTemplates }: { onTemplates: () => void }) => {
 
 // ─── Detail skupiny: Accounts / Orders ───────────────────────────────────────
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, busyCommand, onRefreshOrders, onReplication, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, busyCommand, onRefreshOrders, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -1169,7 +1185,6 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
   orders: LiveOrder[];
   busyCommand: string | null;
   onRefreshOrders?: () => Promise<void> | void;
-  onReplication: (accountId: number, mode: ReplicationMode) => void;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlattenAccount: (accountId: number) => void;
   onCancelOrder: (orderId: number) => void;
@@ -1180,8 +1195,8 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
   const accountIds = new Set(rows.flatMap(row => row.accountId != null ? [row.accountId] : []));
   const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
   return (
-  <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/40 px-3 pb-2 lg:px-4">
-    <div className="flex items-center justify-between gap-3 pt-1.5">
+  <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/40 pb-2">
+    <div className="flex items-center justify-between gap-3 px-3 pt-1.5 lg:px-4">
       <div className="flex items-center gap-1">
         {(['accounts', 'orders'] as const).map(t => (
           <button
@@ -1203,7 +1218,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
     </div>
 
     {tab === 'accounts' ? (
-      <div className="overflow-x-auto">
+      <div>
         <table
           className="w-full table-fixed text-left"
           style={{ minWidth: `${columns.reduce((total, column) => total + column.widthPx, 0)}px` }}
@@ -1228,7 +1243,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
               <AccountRow
                 key={`${row.name}-${i}`} row={row} live={isLive(row.account)} onAccount={onAccount} columns={columns}
                 busyCommand={busyCommand}
-                onReplication={onReplication} onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
+                onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
                 redactNames={redactNames} redaction={redaction}
               />
             ))}
@@ -1243,7 +1258,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
           <p className="text-xs text-[var(--text-secondary)] mt-1 max-w-sm mx-auto leading-snug">Ordery se objeví, jakmile leader zadá obchod, který se replikuje na followery.</p>
         </div>
       ) : (
-        <div className="overflow-x-auto pt-2">
+        <div className="pt-2">
           <table className="w-full min-w-[760px] text-left">
             <thead><tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-b border-[var(--border-subtle)]">
               {!hiddenOrderColumns.has('account') && <th className="px-3 py-2">Account</th>}{!hiddenOrderColumns.has('broker') && <th className="px-3 py-2">Broker</th>}{!hiddenOrderColumns.has('symbol') && <th className="px-3 py-2">Symbol</th>}{!hiddenOrderColumns.has('action') && <th className="px-3 py-2">Action</th>}{!hiddenOrderColumns.has('type') && <th className="px-3 py-2">Type</th>}{!hiddenOrderColumns.has('qty') && <th className="px-3 py-2 text-right">Qty</th>}{!hiddenOrderColumns.has('limit') && <th className="px-3 py-2 text-right">Limit Price</th>}{!hiddenOrderColumns.has('stop') && <th className="px-3 py-2 text-right">Stop Price</th>}{!hiddenOrderColumns.has('status') && <th className="px-3 py-2">Status</th>}{!hiddenOrderColumns.has('timestamp') && <th className="px-3 py-2">Timestamp</th>}{!hiddenOrderColumns.has('orderId') && <th className="px-3 py-2 text-right">Order ID</th>}<th className="px-3 py-2" />
@@ -1272,10 +1287,9 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication, onMultiplier, onFlatten, redactNames, redaction }: {
+const AccountRow = ({ row, live, onAccount, columns, busyCommand, onMultiplier, onFlatten, redactNames, redaction }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   busyCommand: string | null;
-  onReplication: (accountId: number, mode: ReplicationMode) => void;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlatten: (accountId: number) => void;
   redactNames: boolean;
@@ -1287,34 +1301,16 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
 
   const cell = (key: AccountColumnKey): React.ReactNode => {
     switch (key) {
-      case 'replication':
-        return row.isLeader ? (
-          <Crown size={15} className="text-amber-400" />
-        ) : (
-          <label onClick={event => event.stopPropagation()} className={`relative inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-[10px] font-bold ${live ? 'border-[var(--border-subtle)] text-[var(--text-primary)]' : 'border-[var(--border-subtle)] text-[var(--text-muted)]'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${row.mode === 'off' ? 'bg-slate-400' : 'bg-rose-500'}`} />
-            <select
-              aria-label={`Replication ${row.name}`}
-              value={row.mode}
-              disabled={busyCommand != null || accountId == null}
-              onChange={event => accountId != null && onReplication(accountId, event.target.value as ReplicationMode)}
-              className="appearance-none bg-transparent pr-3 outline-none cursor-pointer disabled:cursor-wait"
-            >
-              {Object.entries(REPLICATION_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-            <ChevronDown size={11} className="opacity-50" />
-          </label>
-        );
       case 'account':
         return (
           <span className="flex items-center gap-2 text-xs">
-            {/* Korunka jen když je sloupec Replication skrytý — jinak by leader
-                nešel poznat. */}
-            {row.isLeader && !columns.some(c => c.key === 'replication') && (
-              <Crown size={12} className="text-amber-400 shrink-0" />
-            )}
             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
             <span className={`truncate max-w-[190px] ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>{redactAccountName(row.name, redactNames, redaction)}</span>
+            {row.isLeader && (
+              <span title="Leader účet" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-400/35 bg-amber-400/12 text-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.12)]">
+                <Crown size={14} strokeWidth={2.4} />
+              </span>
+            )}
             {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
           </span>
         );
@@ -1336,7 +1332,6 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
             : a.unrealizedPnlSource === 'stale' ? 'Čeká na nový broker snapshot.' : 'Potvrzeno broker snapshotem.'}
         >
           {money.format(a.unrealizedPnl)}
-          {a.unrealizedPnlSource === 'estimated' ? <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" aria-label="Live odhad" /> : null}
           {a.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
         </span> : <span className="text-xs text-[var(--text-secondary)]">—</span>;
       case 'distDd':
@@ -1373,7 +1368,7 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onReplication,
             <button
               disabled={busyCommand != null}
               onClick={event => { event.stopPropagation(); onFlatten(a.id); }}
-              className="h-7 rounded-md border border-[var(--border-subtle)] px-2.5 text-[10px] font-bold text-[var(--text-secondary)] hover:border-rose-500/25 hover:text-rose-500 disabled:opacity-40"
+              className="h-7 whitespace-nowrap rounded-md border border-[var(--border-subtle)] px-2.5 text-[10px] font-bold text-[var(--text-secondary)] hover:border-rose-500/25 hover:text-rose-500 disabled:opacity-40"
             >Flatten</button>
           ) : cell(col.key)}
         </td>
@@ -1619,7 +1614,7 @@ const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenOrderCol
         <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Appearance</div><label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-3 py-2.5"><span className="text-xs font-bold text-[var(--text-primary)]">Table density</span><select value={density} onChange={event => onDensity(Number(event.target.value))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]"><option value={80}>80%</option><option value={90}>90%</option><option value={100}>100%</option><option value={110}>110%</option></select></label></div>
         <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Groups columns</div><div className="rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]"><label className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-[var(--text-muted)]"><input type="checkbox" checked disabled className="accent-indigo-600" />Group · Pinned</label>{GROUP_COLUMN_OPTIONS.map(column => <label key={column.key} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={!hiddenGroupColumns.has(column.key)} onChange={() => onToggleGroupColumn(column.key)} className="accent-indigo-600" />{column.label}</label>)}</div></div>
         <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Orders columns</div><div className="grid grid-cols-2 overflow-hidden rounded-lg border border-[var(--border-subtle)]">{ORDER_COLUMN_OPTIONS.map(column => <label key={column.key} className="flex items-center gap-2 border-b border-r border-[var(--border-subtle)] px-3 py-2 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={!hiddenOrderColumns.has(column.key)} onChange={() => onToggleOrderColumn(column.key)} className="accent-indigo-600" />{column.label}</label>)}</div></div>
-        <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Accounts columns</div><div className="grid grid-cols-2 overflow-hidden rounded-lg border border-[var(--border-subtle)]">{ACCOUNT_COLUMNS.map(column => { const pinned = column.key === 'replication' || column.key === 'actions' || column.locked; return <label key={column.key} className={`flex items-center gap-2 border-b border-r border-[var(--border-subtle)] px-3 py-2 text-xs font-bold ${pinned ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'}`}><input type="checkbox" checked={pinned || !hiddenColumns.has(column.key)} disabled={pinned} onChange={() => onToggleColumn(column.key)} className="accent-indigo-600" />{column.label}{pinned ? ' · Pinned' : ''}</label>; })}</div></div>
+        <div><div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Accounts columns</div><div className="grid grid-cols-2 overflow-hidden rounded-lg border border-[var(--border-subtle)]">{ACCOUNT_COLUMNS.map(column => { const pinned = column.key === 'actions' || column.locked; return <label key={column.key} className={`flex items-center gap-2 border-b border-r border-[var(--border-subtle)] px-3 py-2 text-xs font-bold ${pinned ? 'text-[var(--text-muted)]' : 'text-[var(--text-primary)]'}`}><input type="checkbox" checked={pinned || !hiddenColumns.has(column.key)} disabled={pinned} onChange={() => onToggleColumn(column.key)} className="accent-indigo-600" />{column.label}{pinned ? ' · Pinned' : ''}</label>; })}</div></div>
         <div>
           <div className="mb-2 text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">Account name redaction</div>
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-[var(--border-subtle)] p-3">
