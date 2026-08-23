@@ -920,7 +920,7 @@ private struct AlphaTradeLiveActivityLockScreen: View {
             if let risk = context.state.riskAtStopText, !context.isStale {
                 Text(risk)
                     .font(.system(size: 10, weight: .bold).monospacedDigit())
-                    .foregroundStyle(LiveActivityPalette.loss)
+                    .foregroundStyle(LiveActivityPalette.loss(colorScheme))
                     .privacySensitive()
             } else {
                 Text(context.state.detail)
@@ -1008,7 +1008,7 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                         .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
                     Text(timerInterval: Date()...expiry, countsDown: true)
                         .font(.caption2.bold().monospacedDigit())
-                        .foregroundStyle(LiveActivityPalette.indigo)
+                        .foregroundStyle(LiveActivityPalette.indigo(colorScheme))
                 }
             }
         }
@@ -1024,6 +1024,20 @@ private enum LiveActivityPalette {
     static let profit = Color(red: 5 / 255, green: 150 / 255, blue: 105 / 255)
     static let loss = Color(red: 220 / 255, green: 38 / 255, blue: 38 / 255)
     static let warning = Color(red: 217 / 255, green: 119 / 255, blue: 6 / 255)
+
+    /// Na tmavém pozadí (zamčená obrazovka je skoro vždy tmavá) mají tyhle
+    /// akcenty kontrast pod 4 : 1 a drobný text je špatně čitelný. Světlejší
+    /// varianty jsou určené jen pro tmavý režim.
+    static let indigoOnDark = Color(red: 165 / 255, green: 160 / 255, blue: 250 / 255)
+    static let lossOnDark = Color(red: 248 / 255, green: 113 / 255, blue: 113 / 255)
+
+    static func indigo(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? indigoOnDark : indigo
+    }
+
+    static func loss(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? lossOnDark : loss
+    }
 }
 
 private struct LiveActivityStatusPill: View {
