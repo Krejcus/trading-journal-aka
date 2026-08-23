@@ -88,7 +88,7 @@ const harness = () => {
 
 describe('plynulá obměna socketu', () => {
   it('úspěšný swap nikdy neukáže disconnect a starý socket zavře', async () => {
-    const { broker, sockets, connections, errors, unsubscribe } = harness();
+    const { broker, sockets, connections, errors, events, unsubscribe } = harness();
     await completeHandshake(sockets[0]);
     expect(connections()).toEqual([true]);
 
@@ -104,6 +104,14 @@ describe('plynulá obměna socketu', () => {
     // Jediné, co controller viděl: true (start) a true (po obnově).
     expect(connections()).toEqual([true, true]);
     expect(errors()).toHaveLength(0);
+    // Obnova se ale musí přiznat příznakem: v mezeře mezi zavřením a
+    // resyncem mohl uniknout celý vyplněný příkaz, takže si příjemce
+    // vynutí kontrolu pozic. Start spojení příznak nemá.
+    const spojeni = events.filter(
+      (event): event is Extract<BrokerEvent, { type: 'connection' }> => event.type === 'connection',
+    );
+    expect(spojeni[0].resynced).toBeUndefined();
+    expect(spojeni[1].resynced).toBe(true);
     unsubscribe();
   });
 

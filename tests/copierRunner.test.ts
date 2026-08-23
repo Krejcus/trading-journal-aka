@@ -1358,3 +1358,60 @@ describe('percentile', () => {
     expect(percentile([], 95)).toBe(0);
   });
 });
+
+describe('výpadek při ověřování zrušení nezablokuje další zápisy', () => {
+  it('chyba findOrderById skončí jako unknown, ne jako výjimka ven z cyklu', async () => {
+    // Write-ahead zápis už posunul revizi ve storu. Kdyby výjimka utekla,
+    // serial processor si podrží starou revizi a KAŽDÝ další zápis (včetně
+    // ručního Flattenu) padne na konflikt revizí až do restartu workeru.
+    const broker = createMockBroker();
+    const clock = stepClock();
+    const store = createMemoryCopierStore();
+
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 25_000 }),
+      group: soloGroup,
+      runtime: createRuntime(createCopierState()),
+      context: liveGate(),
+      broker,
+      clock,
+      store,
+    });
+
+    const padajiciBroker = {
+      ...broker,
+      async findOrderById() {
+        throw new Error('socket hung up');
+      },
+    };
+
+    const zruseno = await processLeaderEvent({
+      event: event({ id: 'e2', kind: 'canceled', sequence: 2 }),
+      group: soloGroup,
+      runtime: opened.runtime,
+      context: liveGate(),
+      broker: padajiciBroker,
+      clock,
+      store,
+    });
+
+    const zaznamy = [...zruseno.runtime.cancelOutbox.values()];
+    expect(zaznamy.length).toBeGreaterThan(0);
+    expect(zaznamy.every(entry => entry.status === 'unknown')).toBe(true);
+    expect(zaznamy[0].reason).toContain('ověření u brokera selhalo');
+    expect(zruseno.audit.some(entry => entry.kind === 'cancel-failed')).toBe(true);
+
+    // Klíčové: revize v runtime odpovídá tomu, co je ve storu, takže další
+    // zápis projde. Bez opravy by tenhle krok skončil konfliktem.
+    const dalsi = await processLeaderEvent({
+      event: event({ id: 'e3', kind: 'submitted', sequence: 3, orderId: 'o2' }),
+      group: soloGroup,
+      runtime: zruseno.runtime,
+      context: liveGate(),
+      broker,
+      clock,
+      store,
+    });
+    expect(dalsi.runtime.revision).toBeGreaterThan(opened.runtime.revision);
+  });
+});

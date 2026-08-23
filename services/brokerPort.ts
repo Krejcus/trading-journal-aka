@@ -98,7 +98,13 @@ export type BrokerEvent =
   | { type: 'position'; position: BrokerPosition }
   | { type: 'heartbeat'; at: number }
   | { type: 'error'; error: Error; at: number }
-  | { type: 'connection'; connected: boolean; at: number };
+  /**
+   * `resynced` značí dokončenou plánovanou obměnu socketu. Výpadek se
+   * záměrně nehlásí (nebyl to incident), ale v mezeře mezi zavřením a
+   * resyncem mohly uniknout události — příjemce si proto musí vynutit
+   * kontrolu pozic, jinak by mu unikl vstup vyplněný celý uvnitř mezery.
+   */
+  | { type: 'connection'; connected: boolean; at: number; resynced?: boolean };
 
 /**
  * Odpověď na `placeOrder`.

@@ -1131,7 +1131,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // Každý disconnect ruší ARM; reconnect ho nikdy sám neobnoví.
         armed: event.connected ? gate.armed : false,
       };
-      if (event.connected && source.needsReconciliation()) positionCheckComplete = false;
+      // Plánovaná obměna socketu výpadek nehlásí, aby nedělala falešné
+      // poplachy — jenže v mezeře mezi zavřením a resyncem mohl leader
+      // stihnout celý tržní příkaz a ten se pak nezkopíruje. Při zavírání
+      // by se ale zkopíroval a follower by otevřel opačnou pozici. Po
+      // obnově proto vždy vynutíme kontrolu pozic; když jsou účty
+      // synchronní, ARM pokračuje a uživatel nic nepozná.
+      if (event.connected && (source.needsReconciliation() || event.resynced)) {
+        positionCheckComplete = false;
+        if (event.resynced) pendingConnectionRecovery = true;
+      }
       if (event.connected) {
         // Boot po pádu: durable stopa říká, že kopie vznikly za živého ARM.
         if (!bootRecoveryChecked) {

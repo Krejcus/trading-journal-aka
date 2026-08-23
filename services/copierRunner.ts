@@ -963,8 +963,23 @@ export async function processLeaderEvent(
     // HTTP/command ack není potvrzení zrušení. Ověříme stav objednávky.
     let allConfirmed = true;
     for (const entry of [...cancelOutbox.values()].filter(item => item.leaderEventId === event.id)) {
-      const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
-      const resolved = resolveCancelLookup(entry, lookup.order, lookup.completeness, clock());
+      // Výpadek sítě nebo expirace tokenu uprostřed ověřování nesmí vyhodit
+      // výjimku ven z cyklu: write-ahead zápis už posunul revizi ve storu,
+      // ale serial processor si při chybě podrží tu starou — od té chvíle
+      // by selhal KAŽDÝ další zápis na konflikt revizí, včetně ručního
+      // Flattenu. Nepotvrzené ověření je legitimní `unknown`, který stejně
+      // vede na fail-closed, jen bez trvalé rozsynchronizace.
+      let resolved: CancelOutboxEntry;
+      try {
+        const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
+        resolved = resolveCancelLookup(entry, lookup.order, lookup.completeness, clock());
+      } catch (error) {
+        resolved = markCancelUnknown(
+          entry,
+          `ověření u brokera selhalo: ${error instanceof Error ? error.message : String(error)}`,
+          clock(),
+        );
+      }
       cancelOutbox.set(entry.key, resolved);
       if (resolved.status === 'confirmed') {
         waiveSupersededModifications(cancelOutbox, resolved, clock);

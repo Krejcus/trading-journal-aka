@@ -706,8 +706,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         syncReady = true;
         // Dokončená plánovaná obměna: controller výpadek nikdy neviděl,
         // redundantní `connected: true` je neškodné a srovná heartbeat.
+        const wasRenewal = renewalInProgress;
         if (renewalInProgress) finishRenewal();
-        emit({ type: 'connection', connected: true, at: clock() });
+        emit({ type: 'connection', connected: true, at: clock(), ...(wasRenewal ? { resynced: true } : {}) });
       }
       return;
     }
