@@ -43,7 +43,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const { data: pendingAlert, error: pendingAlertError } = await db.from('tv_alerts')
             .select('id').eq('id', input.episodeId).eq('user_id', device.userId)
             .is('snapshot_path', null)
-            .gt('created_at', new Date(Date.now() - 60_000).toISOString())
+            // Navigace, čekání na dokreslení, capture a upload včetně retry
+            // se dohromady vejdou do desítek sekund; minuta byla těsná.
+            .gt('created_at', new Date(Date.now() - 180_000).toISOString())
             .maybeSingle<{ id: string }>();
           if (pendingAlertError) throw new Error(`tv-alert-snapshot-validate-failed: ${pendingAlertError.message}`);
           if (!pendingAlert) return res.status(202).json({ accepted: false });

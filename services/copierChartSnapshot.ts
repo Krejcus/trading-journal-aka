@@ -140,6 +140,42 @@ export function captureScale(cssWidth: number): number {
   return Math.min(2, Math.max(1, Math.round((3200 / cssWidth) * 100) / 100));
 }
 
+/**
+ * Počká, až se plátno grafu roztáhne do plné šířky panelu. Po `setLayout('s')`
+ * se panel zvětší okamžitě, ale TradingView překresluje asynchronně — capture
+ * hned po navigaci proto vyfotí zpola bílou plochu.
+ */
+function renderReadyExpression(budgetMs: number): string {
+  return `(async () => {
+    const deadline = Date.now() + ${Math.max(200, Math.round(budgetMs))};
+    const painted = () => {
+      const el = document.querySelector('.chart-container.active')
+        || document.querySelector('.chart-container');
+      if (!el) return false;
+      const box = el.getBoundingClientRect();
+      if (box.width < 200) return false;
+      const canvases = Array.from(el.querySelectorAll('canvas'));
+      if (canvases.length === 0) return false;
+      const dpr = window.devicePixelRatio || 1;
+      // Element se roztáhne okamžitě, ale dokud TradingView nerealokuje
+      // bitmapu plátna, je nová plocha prázdná — proto se porovnává
+      // canvas.width (skutečná bitmapa), ne jen CSS rozměr.
+      return canvases.some(c => {
+        const css = c.getBoundingClientRect().width;
+        return css >= box.width * 0.9 && (c.width / dpr) >= box.width * 0.9;
+      });
+    };
+    while (Date.now() < deadline) {
+      if (painted()) {
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return true;
+      }
+      await new Promise(r => setTimeout(r, 80));
+    }
+    return false;
+  })()`;
+}
+
 function evaluateExpression(symbol: string, timeframe: string): string {
   return `(() => {
     const api = globalThis.TradingViewApi;
@@ -148,7 +184,14 @@ function evaluateExpression(symbol: string, timeframe: string): string {
     // dvojnásobné rozlišení oproti dvěma vedle sebe. Vyhrazený layout
     // existuje jen kvůli snímkům, takže ho srovnáme na jeden panel.
     if (typeof api.setLayout === 'function') {
-      try { if (api.layout() !== 's') api.setLayout('s'); } catch (layoutError) {}
+      try {
+        if (api.layout() !== 's') {
+          api.setLayout('s');
+          // Kompozitor po zvětšení panelu překreslí jen tu část, kde graf
+          // byl; bez vynuceného resize zůstane zbytek snímku bílý.
+          window.dispatchEvent(new Event('resize'));
+        }
+      } catch (layoutError) {}
     }
     // Konkrétní panel, ne „ten aktivní" — jinak snímek závisí na tom,
     // kam uživatel naposledy klikl.
@@ -162,14 +205,22 @@ function evaluateExpression(symbol: string, timeframe: string): string {
     if (typeof chart.executeActionById === 'function') {
       try { chart.executeActionById('chartReset'); } catch (resetError) {}
     }
+    // Hustota svíček se počítá ze šířky panelu, ne natvrdo: 3 px platilo pro
+    // poloviční panel a na roztaženém by se načtená historie (~550 svíček)
+    // rozprostřela jen do půlky plochy a zbytek zůstal prázdný.
+    const pane = document.querySelector('.chart-container.active') || document.querySelector('.chart-container');
+    const paneWidth = pane ? pane.getBoundingClientRect().width : 1675;
+    const barSpacing = Math.min(12, Math.max(3, Math.round(paneWidth / 550)));
     if (typeof chart.setRightOffset === 'function') chart.setRightOffset(40);
-    if (typeof chart.setBarSpacing === 'function') chart.setBarSpacing(3);
+    if (typeof chart.setBarSpacing === 'function') chart.setBarSpacing(barSpacing);
     const scale = typeof chart.timeScale === 'function' ? chart.timeScale() : null;
     if (scale && typeof scale.setRightOffset === 'function') scale.setRightOffset(40);
-    if (scale && typeof scale.setBarSpacing === 'function') scale.setBarSpacing(3);
-    const rightOffsetReady = typeof chart.setRightOffset === 'function' || (scale && typeof scale.setRightOffset === 'function');
-    const barSpacingReady = typeof chart.setBarSpacing === 'function' || (scale && typeof scale.setBarSpacing === 'function');
-    return Boolean(rightOffsetReady && barSpacingReady);
+    if (scale && typeof scale.setBarSpacing === 'function') scale.setBarSpacing(barSpacing);
+    // Úspěch = graf se přepnul na požadovaný symbol a timeframe. Offset ani
+    // hustota svíček nejsou podmínkou: desktopový build TradingView nemá na
+    // chart objektu timeScale() ani setRightOffset(), takže dřívější kontrola
+    // vracela vždy false a celý snímek padal na nouzovou fotku bez ořezu.
+    return true;
   })()`;
 }
 
@@ -245,7 +296,7 @@ export async function captureTradingViewAlertSnapshot(
   const webSocketFactory = options.webSocketFactory
     ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
   const sleepImpl = options.sleepImpl ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
-  const totalMs = Math.min(6_000, Math.max(1, options.timeoutMs ?? 6_000));
+  const totalMs = Math.min(12_000, Math.max(1, options.timeoutMs ?? 12_000));
   const started = Date.now();
   const remaining = () => Math.max(1, totalMs - (Date.now() - started));
   const cdpOrigin = options.cdpOrigin ?? DEFAULT_CDP_ORIGIN;
@@ -271,7 +322,7 @@ export async function captureTradingViewAlertSnapshot(
     }
     const resolved = { targetId: target.id, chartId: chartIdFromUrl(target.url) };
     await options.onDedicatedResolved?.(resolved);
-    const waitAfterNavigation = Math.min(1_500, Math.max(0, remaining() - 500));
+    const waitAfterNavigation = Math.min(6_000, Math.max(0, remaining() - 1_200));
     // Ořez na plochu grafu: bounds se měří až po navigaci a příkazy jdou
     // sekvenčně, takže clip parametry doplníme dynamicky mezi kroky. Bez
     // nalezených bounds se vyfotí celá stránka (fallback beze změny chování).
@@ -298,6 +349,13 @@ export async function captureTradingViewAlertSnapshot(
         { id: 11, method: 'Page.enable' },
         { id: 12, method: 'Page.setWebLifecycleState', params: { state: 'active' } },
         { id: 1, method: 'Runtime.evaluate', params: { expression: evaluateExpression(options.symbol, options.timeframe || '1'), returnByValue: true } },
+        // Přepnutí na jeden panel je velký reflow; bez čekání na dokreslení
+        // by polovina snímku zůstala bílá.
+        {
+          id: 4,
+          method: 'Runtime.evaluate',
+          params: { expression: renderReadyExpression(waitAfterNavigation), returnByValue: true, awaitPromise: true },
+        },
         { id: 2, method: 'Runtime.evaluate', params: { expression: boundsExpression, returnByValue: true } },
         captureCommand,
       ],
@@ -305,7 +363,11 @@ export async function captureTradingViewAlertSnapshot(
         if (id === 1) {
           const evaluation = result.result as { value?: unknown } | undefined;
           if (evaluation?.value !== true) throw new Error('snapshot-tv-render-navigation-failed');
-          await sleepImpl(waitAfterNavigation);
+          return;
+        }
+        if (id === 4) {
+          // Doběhlo čekání na dokreslení; ještě chvilka na poslední paint.
+          await sleepImpl(Math.min(700, Math.max(0, remaining() - 400)));
           return;
         }
         if (id !== 2) return;

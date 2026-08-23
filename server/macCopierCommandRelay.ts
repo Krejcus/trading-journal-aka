@@ -179,9 +179,12 @@ export function startMacCopierCommandRelay(options: {
       // controllerem a po vyčerpání pokusů pouze předá chybu SNAPSHOT logu.
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          const remaining = uploadOptions?.deadlineAt == null ? 3_000 : uploadOptions.deadlineAt - Date.now();
+          // Server během jednoho requestu ukládá do storage, linkuje alert
+          // a posílá APNs; tři sekundy na to nestačí a klient si po timeoutu
+          // vyrobil retry, který pak narazil na „alert už snímek má".
+          const remaining = uploadOptions?.deadlineAt == null ? 8_000 : uploadOptions.deadlineAt - Date.now();
           if (remaining <= 0) throw new Error('copier-snapshot-deadline');
-          const response = await request({ action: 'snapshot', ...snapshot }, Math.min(3_000, remaining));
+          const response = await request({ action: 'snapshot', ...snapshot }, Math.min(8_000, remaining));
           if (response.accepted !== true) throw new Error('copier-snapshot-store-rejected');
           return;
         } catch (error) {

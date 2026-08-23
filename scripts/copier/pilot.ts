@@ -433,12 +433,12 @@ async function runLocalAgent(
             // Poll callback pouze naplánuje práci. Navigace, render, capture i
             // upload mají společný 6s deadline a nikdy nejsou awaitované zde.
             void (async () => {
-              const deadlineAt = Date.now() + 6_000;
+              const deadlineAt = Date.now() + 30_000;
               const png = await captureTradingViewAlertSnapshot({
                 symbol: request.symbol,
                 timeframe: request.timeframe,
                 dedicated: dedicatedChartRef,
-                timeoutMs: Math.min(4_500, deadlineAt - Date.now()),
+                timeoutMs: Math.min(11_000, deadlineAt - Date.now()),
                 onDedicatedResolved: resolved => {
                   dedicatedChartRef = { ...dedicatedChartRef, ...resolved };
                   void saveDedicatedChartRef(dedicatedChartRef).catch(error => {

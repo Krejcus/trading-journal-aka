@@ -118,15 +118,23 @@ describe('TV alert dedicated chart navigation', () => {
     expect(navigation.params.expression).toContain("api.setLayout('s')");
     expect(navigation.params.expression).toContain('api.chart(0)');
     expect(navigation.params.expression).toContain('setRightOffset(40)');
-    expect(navigation.params.expression).toContain('setBarSpacing(3)');
+    // Hustota svíček se počítá ze šířky panelu, ne natvrdo.
+    expect(navigation.params.expression).toContain('setBarSpacing(barSpacing)');
+    expect(navigation.params.expression).toContain('paneWidth / 550');
     socket.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: true } } }) });
-    // Bounds aktivního panelu → capture s clipem (fromSurface + scale 2).
+    // Teprve po dokreslení do plné šířky se měří bounds — jinak by byla
+    // polovina snímku bílá.
     await vi.waitUntil(() => socket.sent.length === 5, { timeout: 1_000 });
-    expect(JSON.parse(socket.sent[4])).toMatchObject({ method: 'Runtime.evaluate' });
-    expect(JSON.parse(socket.sent[4]).params.expression).toContain('chart-container.active');
-    socket.emit('message', { data: JSON.stringify({ id: 2, result: { result: { value: { x: 10, y: 20, width: 800, height: 600 } } } }) });
+    const renderReady = JSON.parse(socket.sent[4]);
+    expect(renderReady).toMatchObject({ id: 4, params: { awaitPromise: true } });
+    expect(renderReady.params.expression).toContain('requestAnimationFrame');
+    socket.emit('message', { data: JSON.stringify({ id: 4, result: { result: { value: true } } }) });
+    // Bounds panelu → capture s clipem (fromSurface + dopočítané měřítko).
     await vi.waitUntil(() => socket.sent.length === 6, { timeout: 1_000 });
-    expect(JSON.parse(socket.sent[5])).toMatchObject({
+    expect(JSON.parse(socket.sent[5]).params.expression).toContain('chart-container.active');
+    socket.emit('message', { data: JSON.stringify({ id: 2, result: { result: { value: { x: 10, y: 20, width: 800, height: 600 } } } }) });
+    await vi.waitUntil(() => socket.sent.length === 7, { timeout: 1_000 });
+    expect(JSON.parse(socket.sent[6])).toMatchObject({
       method: 'Page.captureScreenshot',
       params: { fromSurface: true, clip: { x: 10, y: 20, width: 800, height: 600, scale: 2 } },
     });
