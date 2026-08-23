@@ -78,6 +78,40 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-23 (Claude, F2 obrázkové alerty — ladicí nálezy, pipeline ověřena end-to-end)
+TV alert → text push (~2 s) → tichá náhrada s obrázkem grafu (~5 s) funguje
+a je potvrzena uživatelem na iPhonu. Čtyři nálezy z ladění, které stojí za
+zapamatování:
+1. **Symbol regex**: TradingView tickery nesou `!` (kontinuální futures
+   `MNQ1!`) a `:` (prefix burzy `CME_MINI:`) — validace snapshot payloadu
+   v `server/copierSnapshotStore.ts` je musí povolit (`/^[A-Z0-9._:!-]+$/`),
+   jinak padá `invalid-snapshot-payload` a fotka tiše chybí.
+2. **Renderování na pozadí**: TradingView Desktop (Electron) throttluje
+   neaktivní záložky — snímek přes CDP je pak prázdný/zamrzlý. Lék je před
+   capture poslat `Emulation.setFocusEmulationEnabled` +
+   `Page.setWebLifecycleState active`; ořez na plochu grafu vyžaduje
+   `captureScreenshot` s `fromSurface: true` (jinak je `clip` ignorován).
+3. **Electron CDP neumí `/json/new`** — dedikovanou záložku nelze vytvořit
+   programově. Řešení: ručně vytvořený unikátní layout „AlphaTrade Snapshoty"
+   (chartId `JLtpkCHq`); worker ho hledá podle targetId (primárně) a chartId
+   z `~/Library/Application Support/AlphaTrade/copier/chart-snapshot.json`.
+   Bez nalezené záložky se hodí `snapshot-cdp-dedicated-tab-missing` a jede
+   pasivní fallback (screenshot aktuálního okna bez navigace) — hlavní
+   uživatelův layout se NIKDY nesmí přepínat.
+4. **Viewport**: navigace jde přes `TradingViewApi` (`setSymbol`,
+   `setResolution`, `timeScale().setRightOffset(40)` a `setBarSpacing(3)`);
+   bounds se čtou ze selektoru `.chart-container.active` s fallbackem
+   `.layout__area--center`, capture v `scale: 2`.
+Snapshot capture nikdy nesmí zdržet obchodní logiku ani textovou notifikaci
+(kick → text hned, obrázek dorazí náhradou přes `apns-collapse-id`).
+
+### 2026-08-23 (Codex, odstraněn starý TradeCopia shadow collector z Macu)
+LaunchAgent `com.alphatrade.tradecopia-shadow-sync` byl vypnut a jeho plist,
+runtime, konfigurace, stav i logy byly přesunuty do obnovitelné složky v Koši
+`alphatrade-tradecopia-shadow-sync-20260823-0632`. Důvodem byly opakované
+notifikace při krátkém SQLite `database is locked`; collector už není používán.
+TradeCopia databáze, původní import a aktuální Tradovate copier zůstaly beze změny.
+
 ### 2026-08-22 (Codex, Notification Service Extension pro obrázkové pushy)
 Do přímo spravovaného `App.xcodeproj` přibyl target `AlphaTradeNotifications`
 s bundle ID `app.alphatrade.native.notifications`, deployment targetem iOS 15.0
