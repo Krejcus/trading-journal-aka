@@ -1458,7 +1458,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   /** Autoritativní reconciliation — sdílí ji veřejné API i connection recovery. */
   const performReconciliation = async (): Promise<{ divergentAccounts: number[]; workingOrderAccounts: number[] }> => {
-      if (!gate.connected) throw new Error('Kontrolu pozic nelze provést bez broker spojení');
+      if (!gate.connected) {
+        // Holé „bez broker spojení" mate: uživatel vidí v kartě Připojení
+        // platné OAuth a myslí si, že spojení stojí. Padá ale živý WebSocket
+        // workeru, což je jiná vrstva — hláška proto říká i příčinu a co dál.
+        const reason = lastError?.message?.trim();
+        throw new Error([
+          'Kontrolu pozic nelze provést: worker nemá živé spojení s Tradovate.',
+          reason ? `Poslední chyba: ${reason}.` : '',
+          'OAuth přihlášení tím není dotčené — spojení se obnoví samo, zkus to za chvíli znovu.',
+        ].filter(Boolean).join(' '));
+      }
       if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');
       const accountIds = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
       const capabilities = await broker.listAccountCapabilities(accountIds);

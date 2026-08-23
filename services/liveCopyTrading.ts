@@ -170,11 +170,19 @@ export function adoptRuntimeCopyGroup(
   const runtimeKey = copyGroupAccountKey(runtimeGroup);
   const matching = current.find(group => group.id === runtimeGroup.id)
     ?? current.find(group => copyGroupAccountKey(group) === runtimeKey);
+  // Skupiny žijí v localStorage, tedy zvlášť na každém zařízení, zatímco
+  // worker je sdílený. Shoda id znamená, že worker tuhle skupinu zná
+  // z posledního uložení — jeho název je pak čerstvější a přejmenování
+  // z jiného zařízení se musí propsat. Spárování jen podle složení účtů
+  // je naopak uživatelova lokální skupina, kde by generický název workeru
+  // („Lokální DEMO agent") přepsal jeho vlastní.
+  const matchedById = matching != null && matching.id === runtimeGroup.id;
+  const preferLocal = matching != null && !matchedById;
   const authoritative: CopyGroupConfig = {
     ...runtimeGroup,
-    ...(matching?.name ? { name: matching.name } : {}),
-    ...(matching?.color ? { color: matching.color } : {}),
-    ...(matching?.safety ? { safety: matching.safety } : {}),
+    ...(matching?.name && (preferLocal || !runtimeGroup.name) ? { name: matching.name } : {}),
+    ...(matching?.color && (preferLocal || !runtimeGroup.color) ? { color: matching.color } : {}),
+    ...(matching?.safety && (preferLocal || !runtimeGroup.safety) ? { safety: matching.safety } : {}),
   };
   const retained = current.filter(group => {
     if (group.id === runtimeGroup.id || copyGroupAccountKey(group) === runtimeKey) return false;

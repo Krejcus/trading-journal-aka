@@ -83,7 +83,9 @@ describe('liveCopyTrading', () => {
 
     const [adopted] = adoptRuntimeCopyGroup([ui], [62364058, 62364057], runtime);
 
-    expect(adopted.name).toBe('Hlavní');
+    // Runtime je sdílený zdroj pravdy: přejmenování z jiného zařízení se
+    // musí propsat, jinak by každý přístroj držel svůj starý název.
+    expect(adopted.name).toBe('Runtime');
     expect(adopted.followers.map(follower => follower.accountId)).toEqual([62364057, 62364553]);
   });
 
