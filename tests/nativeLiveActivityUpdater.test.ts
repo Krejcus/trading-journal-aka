@@ -422,3 +422,52 @@ describe('remote native Live Activity', () => {
     });
   });
 });
+
+describe('Live Activity: divergence a riziko ke stopu', () => {
+  const now = Date.parse('2026-08-20T10:00:30.000Z');
+
+  it('divergence dostane vlastní stav, ne neutrální DISARMED', () => {
+    // Controller se při divergenci sám odzbrojí, takže bez vlastního stavu
+    // by na zamčené obrazovce svítilo jen „DISARMED" bez náznaku proč.
+    const plan = planNativeLiveActivityUpdate({
+      runtime: runtime({ armed: false, connected: true, divergentAccounts: [11, 12] }),
+      broker,
+      now,
+    });
+    expect(plan.update.state.status).toBe('DIVERGENCE');
+    expect(plan.update.state.detail).toContain('2 účtů');
+  });
+
+  it('kill switch má přednost před divergencí', () => {
+    const plan = planNativeLiveActivityUpdate({
+      runtime: runtime({ armed: false, connected: true, killSwitch: true, divergentAccounts: [11] }),
+      broker,
+      now,
+    });
+    expect(plan.update.state.status).toBe('KILL SWITCH');
+  });
+
+  it('spočítá riziko ke stopu přes všechny účty skupiny', () => {
+    // MNQ = $2 za bod, stop 50 bodů od entry, dohromady 3 kontrakty
+    // (leader 1 + follower 2) → 50 * 3 * 2 = $300.
+    const plan = planNativeLiveActivityUpdate({
+      runtime: runtime({ armed: true, connected: true }),
+      broker,
+      now,
+    });
+    expect(plan.update.state.riskAtStopText).toBe('−$300 na SL');
+  });
+
+  it('bez známé hodnoty bodu kontraktu riziko neposílá', () => {
+    const cizi = {
+      ...broker,
+      positions: broker.positions.map(p => ({ ...p, symbol: 'XYZU6' })),
+    };
+    const plan = planNativeLiveActivityUpdate({
+      runtime: runtime({ armed: true, connected: true }),
+      broker: cizi,
+      now,
+    });
+    expect(plan.update.state.riskAtStopText).toBeUndefined();
+  });
+});

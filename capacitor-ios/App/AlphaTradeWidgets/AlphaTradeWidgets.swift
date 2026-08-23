@@ -914,9 +914,20 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                 armCountdown
             }
 
-            Text("Read-only monitoring · žádná broker akce")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
+            // Dřív tu stálo „Read-only monitoring · žádná broker akce" — celý
+            // řádek jen na dvojznačnou poznámku, kterou šlo číst jako „kopírka
+            // nic nedělá". Místo toho ukazuje, co stojí zásah stopu.
+            if let risk = context.state.riskAtStopText, !context.isStale {
+                Text(risk)
+                    .font(.system(size: 10, weight: .bold).monospacedDigit())
+                    .foregroundStyle(LiveActivityPalette.loss)
+                    .privacySensitive()
+            } else {
+                Text(context.state.detail)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
+                    .lineLimit(1)
+            }
         }
         .padding(16)
         .foregroundStyle(ink)
@@ -1021,7 +1032,7 @@ private struct LiveActivityStatusPill: View {
     private var color: Color {
         switch status {
         case "ARM LIVE": return LiveActivityPalette.profit
-        case "KILL SWITCH", "DAY-LOCK": return LiveActivityPalette.loss
+        case "KILL SWITCH", "DAY-LOCK", "DIVERGENCE": return LiveActivityPalette.loss
         case "WORKER OFFLINE", "BROKER OFFLINE", "STUCK OUTBOX", "ARM NEOVĚŘEN": return LiveActivityPalette.warning
         case "SHADOW": return Color.blue
         default: return LiveActivityPalette.muted

@@ -12,6 +12,7 @@ import {
   type NativeLiveActivityBrokerSnapshot,
 } from './nativeLiveActivityBrokerSnapshot.js';
 import { tradovateApiBaseUrl } from './tradovateOAuth.js';
+import { tradovateValuePerPoint } from '../lib/tradovateLivePnl.js';
 import {
   getValidTradovateAccessToken,
   type TradovateServerConfig,
@@ -80,6 +81,9 @@ export function liveActivityAccountIds(runtime: NativeLiveActivityRuntimeRow): n
   ])];
 }
 
+/** Stavy, u kterých musí uživatel zasáhnout — na kartě vyhrává jejich důvod. */
+const CRITICAL_STATUSES = new Set(['DIVERGENCE', 'KILL SWITCH', 'STUCK OUTBOX']);
+
 function statusText(runtime: NativeLiveActivityRuntimeRow, now: number): { status: string; detail: string } {
   const controller = controllerOf(runtime);
   const lastSeen = Date.parse(runtime.last_seen_at);
@@ -87,6 +91,18 @@ function statusText(runtime: NativeLiveActivityRuntimeRow, now: number): { statu
     return { status: 'WORKER OFFLINE', detail: 'Heartbeat je starší než 90 sekund.' };
   }
   if (bool(controller.killSwitch)) return { status: 'KILL SWITCH', detail: String(controller.lastError || 'Runtime je zastavený.') };
+  // Divergence je jediný stav, který vyžaduje okamžitý ruční zásah: follower
+  // drží jinou pozici než leader. Controller se u ní sám odzbrojí, takže bez
+  // vlastního stavu by se na zamčené obrazovce ukázalo jen neutrální DISARMED.
+  const divergent = Array.isArray(controller.divergentAccounts) ? controller.divergentAccounts : [];
+  if (divergent.length > 0) {
+    return {
+      status: 'DIVERGENCE',
+      detail: divergent.length === 1
+        ? 'Jeden účet drží jinou pozici než leader.'
+        : `${divergent.length} účtů drží jinou pozici než leader.`,
+    };
+  }
   if (controller.connected === false) return { status: 'BROKER OFFLINE', detail: 'Tradovate spojení není dostupné.' };
   if (bool(controller.stuckOutbox)) return { status: 'STUCK OUTBOX', detail: 'Nejasná operace blokuje další ARM.' };
   if (finite(controller.dayLockUntil) > now) return { status: 'DAY-LOCK', detail: String(controller.dayLockReason || 'Denní zámek je aktivní.') };
@@ -172,6 +188,21 @@ export function planNativeLiveActivityUpdate(options: {
     && stopPrice !== targetPrice
     ? Math.min(1, Math.max(0, (currentPrice - stopPrice) / (targetPrice - stopPrice)))
     : null;
+  // Progress bar ukazuje, KDE cena je; tohle ukazuje, CO to stojí. Sčítá se
+  // přes všechny účty skupiny, protože v sázce je celá expozice, ne jen
+  // leaderova pozice, kterou karta zobrazuje jako velikost obchodu.
+  const riskAtStop = (() => {
+    if (!homogeneousPosition || stopPrice == null) return null;
+    const valuePerPoint = tradovateValuePerPoint(firstPosition.symbol ?? null);
+    if (valuePerPoint == null) return null;
+    const total = (options.broker?.positions ?? []).reduce((sum, item) => {
+      const entry = optionalFinite(item.entryPrice) ?? entryPrice;
+      const stop = optionalFinite(item.stopPrice) ?? stopPrice;
+      if (entry == null || stop == null || !(item.quantity > 0)) return sum;
+      return sum + Math.abs(entry - stop) * item.quantity * valuePerPoint;
+    }, 0);
+    return total > 0 ? total : null;
+  })();
   const pending = openPositionCount === 0 ? options.broker?.pendingOrder : null;
   const displayEntryPrice = entryPrice ?? pending?.price ?? null;
   const mode: 'idle' | 'pending' | 'position' | undefined = options.broker == null
@@ -211,7 +242,11 @@ export function planNativeLiveActivityUpdate(options: {
   const state: ApnsLiveActivityContentState = {
     status: status.status,
     headline,
-    detail: `${openPositionCount} pozic · ${workingOrderCount} příkazů · ${pnlLabel}`,
+    // U stavů, které volají po zásahu, je důvod cennější než počty pozic —
+    // jinak by u divergence na kartě stálo jen „2 pozic · 4 příkazů".
+    detail: CRITICAL_STATUSES.has(status.status)
+      ? status.detail
+      : `${openPositionCount} pozic · ${workingOrderCount} příkazů · ${pnlLabel}`,
     pnlText: signedMoney(pnl),
     isPositive: pnl >= 0,
     progress: bool(controller.killSwitch) ? 1 : bool(controller.armed) ? 0.75 : controller.connected === true ? 0.35 : 0.1,
@@ -229,6 +264,7 @@ export function planNativeLiveActivityUpdate(options: {
       ? { armExpiresAt: armExpiresAtMs / 1_000 } : {}),
     followersTotal: followerCount,
     ...(followersOk != null ? { followersOk } : {}),
+    ...(riskAtStop != null ? { riskAtStopText: `−$${riskAtStop.toFixed(0)} na SL` } : {}),
   };
   const fingerprint = {
     event: shouldEnd ? 'end' : 'update',

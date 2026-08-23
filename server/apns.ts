@@ -44,6 +44,7 @@ export interface ApnsLiveActivityContentState {
   armExpiresAt?: number;
   followersTotal?: number;
   followersOk?: number;
+  riskAtStopText?: string;
 }
 
 export interface ApnsLiveActivityUpdate {

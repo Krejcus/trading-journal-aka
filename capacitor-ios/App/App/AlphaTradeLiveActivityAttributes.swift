@@ -25,6 +25,9 @@ struct AlphaTradeLiveActivityAttributes: ActivityAttributes {
         var armExpiresAt: Double? = nil
         var followersTotal: Int? = nil
         var followersOk: Int? = nil
+        /// Kolik stojí zásah stopu napříč všemi účty skupiny. Server ho počítá
+        /// z hodnoty bodu kontraktu, kterou widget nezná.
+        var riskAtStopText: String? = nil
     }
 
     let sessionID: String
