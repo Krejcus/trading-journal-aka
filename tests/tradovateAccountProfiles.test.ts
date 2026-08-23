@@ -14,6 +14,10 @@ const journalLinkMigration = readFileSync(
   new URL('../supabase/migrations/20260822120000_account_profile_journal_link.sql', import.meta.url),
   'utf8',
 );
+const onboardingMigration = readFileSync(
+  new URL('../supabase/migrations/20260823070913_account_profile_onboarding.sql', import.meta.url),
+  'utf8',
+);
 
 describe('Tradovate account profiles', () => {
   it('normalizuje texty, zachová nuly a přijme podporovaná prop pravidla', () => {
@@ -73,6 +77,17 @@ describe('Tradovate account profiles', () => {
     } as any).mappedAccountId).toBe(mappedAccountId);
   });
 
+  it('rozliší chybějící onboarding sloupec od NULL a zachová potvrzovací čas', () => {
+    const base = normalizeTradovateAccountProfileInput({ externalAccountId: '123', accountName: 'TDFY123' });
+    expect(tradovateAccountProfileToRow(base, 'user-id', 'demo', '2026-08-23T07:00:00.000Z')).not.toHaveProperty('onboarded_at');
+    const confirmed = normalizeTradovateAccountProfileInput({
+      externalAccountId: '123', accountName: 'TDFY123', onboardedAt: '2026-08-23T07:10:00Z',
+    });
+    expect(tradovateAccountProfileToRow(confirmed, 'user-id', 'demo', '2026-08-23T07:00:00.000Z')).toHaveProperty(
+      'onboarded_at', '2026-08-23T07:10:00.000Z',
+    );
+  });
+
   it('odmítne neplatné limity a neznámé enumy', () => {
     const base = { externalAccountId: '1', accountName: 'A' };
     expect(() => normalizeTradovateAccountProfileInput({ ...base, maxLoss: -1 })).toThrow('max-loss-invalid');
@@ -90,5 +105,12 @@ describe('Tradovate account profiles', () => {
     expect(migration).not.toContain('encrypted_access_token');
     expect(journalLinkMigration).toContain('add column mapped_account_id uuid null');
     expect(journalLinkMigration).toContain('(user_id, mapped_account_id)');
+    expect(onboardingMigration).toContain('add column onboarded_at timestamptz null');
+    expect(onboardingMigration).toContain('set onboarded_at = now()');
+    // Onboarding nesmí prolomit pravidlo z 20260815040436: browser tuhle
+    // tabulku nikdy nečte ani nezapisuje přímo, všechno jde přes Vercel
+    // funkci se service_role klíčem.
+    expect(onboardingMigration).not.toContain('to authenticated');
+    expect(onboardingMigration).not.toContain('create policy');
   });
 });

@@ -19,6 +19,8 @@ export interface TradovateAccountProfileInput {
   maxMini: number | null;
   maxMicro: number | null;
   mappedAccountId?: string | null;
+  /** undefined = databázový sloupec ještě není dostupný; null = čeká na onboarding. */
+  onboardedAt?: string | null;
 }
 
 export interface TradovateAccountProfile extends TradovateAccountProfileInput {

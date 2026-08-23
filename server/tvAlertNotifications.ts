@@ -19,6 +19,11 @@ export interface TvAlertPendingRow extends TvAlertSnapshotRequest {
   snapshot_path: string | null;
 }
 
+interface TvAlertWebhookSettingsRow {
+  alerts_enabled?: boolean;
+  images_enabled?: boolean;
+}
+
 const text = (value: unknown): string => typeof value === 'string' || typeof value === 'number'
   ? String(value).trim()
   : '';
@@ -80,12 +85,31 @@ export function pendingTvAlertSnapshotRequests(
   }).map(({ id, symbol, timeframe }) => ({ id, symbol, timeframe }));
 }
 
+export async function loadTvAlertWebhookSettings(options: {
+  db: SupabaseClient;
+  userId: string;
+}): Promise<{ alertsEnabled: boolean; imagesEnabled: boolean }> {
+  const { data, error } = await options.db.from('tv_alert_webhooks')
+    .select('*')
+    .eq('user_id', options.userId)
+    .maybeSingle<TvAlertWebhookSettingsRow>();
+  if (error) throw new Error(`tv-alert-settings-query-failed: ${error.message}`);
+  if (!data) return { alertsEnabled: false, imagesEnabled: false };
+  return {
+    // Před aplikací F2 migrace sloupce v odpovědi nejsou; výchozí stav je true.
+    alertsEnabled: data.alerts_enabled !== false,
+    imagesEnabled: data.images_enabled !== false,
+  };
+}
+
 export async function loadPendingTvAlertSnapshotRequests(options: {
   db: SupabaseClient;
   userId: string;
   now?: number;
 }): Promise<TvAlertSnapshotRequest[]> {
   const now = options.now ?? Date.now();
+  const settings = await loadTvAlertWebhookSettings(options);
+  if (!settings.alertsEnabled || !settings.imagesEnabled) return [];
   const { data, error } = await options.db.from('tv_alerts')
     .select('id,symbol,timeframe,created_at,snapshot_path')
     .eq('user_id', options.userId)

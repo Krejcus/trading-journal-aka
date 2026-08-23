@@ -27,6 +27,7 @@ interface ProfileRow {
   max_mini: number | null;
   max_micro: number | null;
   mapped_account_id: string | null;
+  onboarded_at?: string | null;
   status: TradovateProfileStatus;
   last_seen_at: string;
   created_at: string;
@@ -73,6 +74,12 @@ const cleanUuid = (value: unknown, label: string): string | null => {
   return value.toLowerCase();
 };
 
+const cleanTimestamp = (value: unknown, label: string): string | null => {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw new Error(`${label}-invalid`);
+  return new Date(value).toISOString();
+};
+
 export function normalizeTradovateAccountProfileInput(value: unknown): TradovateAccountProfileInput {
   if (!value || typeof value !== 'object') throw new Error('profile-invalid');
   const input = value as Record<string, unknown>;
@@ -100,6 +107,9 @@ export function normalizeTradovateAccountProfileInput(value: unknown): Tradovate
     maxMini: cleanInteger(input.maxMini, 'max-mini'),
     maxMicro: cleanInteger(input.maxMicro, 'max-micro'),
     mappedAccountId: cleanUuid(input.mappedAccountId, 'mapped-account-id'),
+    ...(Object.prototype.hasOwnProperty.call(input, 'onboardedAt')
+      ? { onboardedAt: cleanTimestamp(input.onboardedAt, 'onboarded-at') }
+      : {}),
   };
 }
 
@@ -128,6 +138,9 @@ export const tradovateAccountProfileFromRow = (row: ProfileRow): TradovateAccoun
   maxMini: row.max_mini,
   maxMicro: row.max_micro,
   mappedAccountId: row.mapped_account_id,
+  ...(Object.prototype.hasOwnProperty.call(row, 'onboarded_at')
+    ? { onboardedAt: row.onboarded_at ?? null }
+    : {}),
   status: row.status,
   lastSeenAt: row.last_seen_at,
   createdAt: row.created_at,
@@ -158,6 +171,9 @@ export const tradovateAccountProfileToRow = (
   max_mini: profile.maxMini,
   max_micro: profile.maxMicro,
   mapped_account_id: profile.mappedAccountId ?? null,
+  ...(Object.prototype.hasOwnProperty.call(profile, 'onboardedAt')
+    ? { onboarded_at: profile.onboardedAt ?? null }
+    : {}),
   status: 'active',
   last_seen_at: timestamp,
   updated_at: timestamp,

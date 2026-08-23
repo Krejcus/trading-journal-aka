@@ -5,7 +5,7 @@ import {
   copyEventNotification,
   type CopierCopyEventRow,
 } from './copierIncidentWatchdog.js';
-import { tvAlertNotification } from './tvAlertNotifications.js';
+import { loadTvAlertWebhookSettings, tvAlertNotification } from './tvAlertNotifications.js';
 import type { CopierSnapshotInput } from './copierSnapshotStore.js';
 
 interface ImagePushContent {
@@ -111,6 +111,8 @@ export async function sendTvAlertSnapshotFollowUp(options: {
   alertId: string;
   storagePath: string;
 }): Promise<{ devices: number; sent: number } | null> {
+  const settings = await loadTvAlertWebhookSettings({ db: options.db, userId: options.userId });
+  if (!settings.alertsEnabled || !settings.imagesEnabled) return null;
   const { data, error } = await options.db.from('tv_alerts')
     .select('symbol,name,price,timeframe').eq('id', options.alertId).eq('user_id', options.userId)
     .maybeSingle<{ symbol: string; name: string; price: string | null; timeframe: string | null }>();

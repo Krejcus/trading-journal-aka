@@ -4322,6 +4322,7 @@ const App: React.FC = () => {
                         oauthLiveStates={oauthAccountLiveStates}
                         tradovateProfiles={tradovateLive.profiles}
                         tradovateConnectionData={tradovateLive.connectionData}
+                        onTradovateProfilesChanged={tradovateLive.setProfiles}
                         theme={theme}
                         trades={trades}
                         onUpdateTrades={handleUpdateTrades}

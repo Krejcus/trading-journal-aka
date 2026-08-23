@@ -33,6 +33,10 @@ import {
   subscribeTradovateApiTelemetry,
 } from '../lib/tradovateApiTelemetry';
 import { planTradovateJournalAccountLinks } from '../lib/tradovateJournalAccountRegistry';
+import {
+  buildMissingTradovateOnboardingProfileInputs,
+  isTradovateAccountOnboardingAvailable,
+} from '../lib/tradovateAccountOnboarding';
 import { storageService } from '../services/storageService';
 
 type BusyState = 'status' | 'connect' | 'data' | 'disconnect' | null;
@@ -258,7 +262,19 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       setConnectionData(Object.fromEntries(datasets.map(dataset => [dataset.connectionId, dataset])));
       if (stored) {
         const storedIds = new Set(stored.profiles.map(profile => profile.externalAccountId));
-        if (datasets.flatMap(dataset => dataset.accounts).some(account => !storedIds.has(String(account.id)))) {
+        const hasMissingProfiles = datasets.flatMap(dataset => dataset.accounts)
+          .some(account => !storedIds.has(String(account.id)));
+        if (hasMissingProfiles && isTradovateAccountOnboardingAvailable(stored.profiles)) {
+          const missing = buildMissingTradovateOnboardingProfileInputs({
+            brokerAccounts: datasets.flatMap(dataset => dataset.accounts),
+            profiles: stored.profiles,
+          });
+          if (missing.length > 0) {
+            const saved = await saveTradovateAccountProfiles([...stored.profiles, ...missing]);
+            setProfiles(saved.profiles);
+            setProfileSetupOpen(false);
+          }
+        } else if (hasMissingProfiles) {
           setProfileSetupOpen(true);
         }
       }

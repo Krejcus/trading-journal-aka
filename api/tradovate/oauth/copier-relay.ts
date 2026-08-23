@@ -15,7 +15,7 @@ import {
   validateCopierSnapshotPayload,
 } from '../../../server/copierSnapshotStore.js';
 import { sendCopierSnapshotFollowUp, sendTvAlertSnapshotFollowUp } from '../../../server/snapshotImagePush.js';
-import { loadPendingTvAlertSnapshotRequests } from '../../../server/tvAlertNotifications.js';
+import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '../../../server/tvAlertNotifications.js';
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
 
@@ -36,6 +36,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (action === 'snapshot') {
         const input = validateCopierSnapshotPayload(req.body);
         if (input.kind === 'tv-alert') {
+          const settings = await loadTvAlertWebhookSettings({ db, userId: device.userId });
+          if (!settings.alertsEnabled || !settings.imagesEnabled) {
+            return res.status(202).json({ accepted: false });
+          }
           const { data: pendingAlert, error: pendingAlertError } = await db.from('tv_alerts')
             .select('id').eq('id', input.episodeId).eq('user_id', device.userId)
             .is('snapshot_path', null)

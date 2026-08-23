@@ -84,6 +84,7 @@ import {
   presentNativeCalendarEvent,
 } from '../services/nativeCapabilities';
 import { shareTextNative } from '../services/nativeShare';
+import TradingViewAlertSettings from './TradingViewAlertSettings';
 
 export type SettingsTab = 'psychology' | 'strategy' | 'market' | 'notifications' | 'system';
 
@@ -1399,6 +1400,8 @@ const Settings: React.FC<SettingsProps> = ({
 
           {activeTab === 'notifications' && (
             <div className="space-y-6">
+              <TradingViewAlertSettings isDark={isDark} onToast={showToast} />
+
               <Card isDark={isDark}>
                 <SectionHeader icon={Bell} title="TradeCopia notifikace" subtitle="Jeden obchod · všechny kopírované účty" color="bg-gradient-to-br from-emerald-600 to-cyan-600" isDark={isDark} />
 

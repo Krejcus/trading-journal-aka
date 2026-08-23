@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  loadPendingTvAlertSnapshotRequests,
+  loadTvAlertWebhookSettings,
   pendingTvAlertSnapshotRequests,
   TvAlertRateLimiter,
   tvAlertNotification,
@@ -29,6 +31,41 @@ describe('TradingView alert webhook validation', () => {
 });
 
 describe('TV alert snapshot request freshness', () => {
+  it('treats settings missing before the migration as enabled', async () => {
+    const maybeSingle = async () => ({ data: {}, error: null });
+    const db = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ maybeSingle }),
+        }),
+      }),
+    };
+    await expect(loadTvAlertWebhookSettings({ db: db as any, userId: 'user-1' })).resolves.toEqual({
+      alertsEnabled: true,
+      imagesEnabled: true,
+    });
+  });
+
+  it('returns no snapshot requests when images are disabled', async () => {
+    let queriedAlerts = false;
+    const db = {
+      from: (table: string) => table === 'tv_alert_webhooks'
+        ? {
+            select: () => ({
+              eq: () => ({ maybeSingle: async () => ({ data: { images_enabled: false }, error: null }) }),
+            }),
+          }
+        : {
+            select: () => {
+              queriedAlerts = true;
+              throw new Error('tv_alerts should not be queried');
+            },
+          },
+    };
+    await expect(loadPendingTvAlertSnapshotRequests({ db: db as any, userId: 'user-1' })).resolves.toEqual([]);
+    expect(queriedAlerts).toBe(false);
+  });
+
   it('returns only pending alerts strictly younger than 60 seconds', () => {
     const now = Date.parse('2026-08-22T20:00:00.000Z');
     expect(pendingTvAlertSnapshotRequests([

@@ -78,6 +78,73 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-23 (Codex, onboarding vybírá katalogový plán)
+Dávkový onboarding už nevybírá samostatnou payout šablonu, ale stabilně
+identifikovaný preset z `TRADOVATE_PROP_PLAN_PRESETS`. Potvrzení z presetu
+zapíše firmu, plán, velikost, drawdown, loss/DLL/consistency/target a limity
+kontraktů; typ účtu preset předvyplní, ale uživatel ho může přepsat. Payout
+pravidla se odvozují jen pro Growth, Lightning, LucidFlex a LucidPro;
+nenamapovatelný nebo žádný plán pravidla nemaže ani nezapisuje. Automatické F0
+založení dál nechává `account_type` i rizikové parametry NULL až do potvrzení.
+
+UI má jediný select plánu v řádku i hromadné liště a pod ním ukazuje velikost,
+max loss a typ drawdownu. Cílených 7/7 onboarding testů a `npx tsc --noEmit`
+prošlo. Celá sada mimo sandbox doběhla na 180/182 souborů a 1403/1405 testů;
+dva reprodukovatelné pády jsou v nedotčeném cizím rozsahu: očekávání grantů v
+`tradovateAccountProfiles.test.ts` neodpovídá aktuální rozpracované migraci a
+`copierChartSnapshot.test.ts` timeoutuje před prvním CDP příkazem. Zakázané
+copier/TradingView soubory se neměnily. Nic nebylo commitnuto, pushnuto,
+deploynuto ani migrováno; UI nebylo vizuálně proklikáno.
+
+### 2026-08-23 (Codex, dávkový onboarding nových Tradovate účtů)
+Karta Účty má nahoře sekci „N nových účtů ke kontrole“ s výběrem řádků,
+inline názvem, firmou včetně nové vlastní hodnoty, typem účtu a payout šablonou.
+Společný řádek aplikuje firmu/typ/šablonu jen na zaškrtnuté účty. Potvrzení
+nejdřív upsertne pravidla přes existující `saveFirmPayoutRules` a teprve potom
+uloží všechny profily přes stávající account-profiles PUT s `onboarded_at`;
+„bez pravidel“ žádný existující řádek pravidel nemaže.
+
+Nové broker účty se po dostupnosti schématu založí automaticky s
+`onboarded_at = NULL`, ale `account_type = NULL`: UI typ předvyplní z názvu a
+teprve explicitní potvrzení ho uloží, aby zůstal zachovaný konzervativní F0
+healing evaluace/funded. Před migrací server z `select *` vrací profil bez
+klíče `onboardedAt`; sekce se pak úplně skryje a zůstane původní profilový
+dialog. Smíšené/neurčité schéma je také fail-safe skryté.
+
+Připravená migrace `20260823070913_account_profile_onboarding.sql` přidává
+nullable sloupec, backfilluje všechny dosavadní profily na `now()` a obsahuje
+omezené column granty i select/update-own RLS přes `(select auth.uid())`.
+ZÁMĚRNĚ NEBYLA APLIKOVANÁ; Supabase CLI soubor nevytvořilo kvůli lokální
+Keychain chybě `SecItemCopyMatching failed -50`, proto vznikl ručně v přesně
+požadovaném migračním formátu. Copier logika ani `scripts/copier/pilot.ts` se
+neměnily. Ověření: `npx tsc --noEmit`, 182/182 Vitest souborů a 1403/1403
+testů, `npm run build` i `git diff --check` prošly. UI nebylo vizuálně
+proklikáno s reálným post-migration profilem. Nic nebylo commitnuto, pushnuto,
+deploynuto ani aplikováno do Supabase.
+
+### 2026-08-23 (Codex, F2 nastavení TradingView webhooku)
+Do Nastavení → Notifikace přibyla sekce TradingView alerty. Klient čte vlastní
+`tv_alert_webhooks` přímo přes existující Supabase session/RLS, token ve URL
+výchozí maskuje a kopíruje vždy plnou URL. Chybějící řádek zakládá nový
+autentizovaný serverless endpoint; 256bit token vzniká výhradně na serveru a
+service-role upsert je odolný proti souběžnému provisioningu.
+
+Připravená migrace `20260823065352_tv_alert_webhook_settings.sql` přidává
+per-user `alerts_enabled` a `images_enabled`, omezený column UPDATE grant a
+update-own RLS přes `(select auth.uid())`; ZÁMĚRNĚ NEBYLA APLIKOVANÁ.
+Webhook před migrací zachovává oba defaulty jako true. Vypnuté alerty vracejí
+HTTP 200 `alerts-disabled` bez rate limitu, uložení, pushu i snapshotu. Vypnuté
+obrázky zachovají alert a okamžitý text, ale alert dostane ne-pending sentinel,
+worker nedostane request a pozdní upload/follow-up se znovu kontroluje a odmítne.
+Copier order/risk logika ani `scripts/copier/pilot.ts` se neměnily.
+
+Ověření: `npx tsc --noEmit` čistý; kompletní `npx vitest run` mimo loopback
+sandbox prošel 181/181 souborů a 1397/1397 testů; `npm run build` prošel.
+V relaci nebyl dostupný ovladatelný browser, proto dark/light render nebyl
+vizuálně proklikán. Nic nebylo commitnuto, pushnuto, deploynuto ani aplikováno
+do Supabase. Ruční aktivace vyžaduje aplikaci nové migrace přes Management API
+a následnou kontrolu security/performance advisory.
+
 ### 2026-08-23 (Claude, F2 obrázkové alerty — ladicí nálezy, pipeline ověřena end-to-end)
 TV alert → text push (~2 s) → tichá náhrada s obrázkem grafu (~5 s) funguje
 a je potvrzena uživatelem na iPhonu. Čtyři nálezy z ladění, které stojí za

@@ -139,6 +139,11 @@ function evaluateExpression(symbol: string, timeframe: string): string {
     if (!chart || typeof chart.setSymbol !== 'function' || typeof chart.setResolution !== 'function') return false;
     chart.setSymbol(${JSON.stringify(symbol)});
     chart.setResolution(${JSON.stringify(timeframe)});
+    // Reset view: vrátí odscrollovaný/odzoomovaný graf na výchozí pohled
+    // (čas i cena, auto-scale); náš offset a bar spacing se nastaví až po něm.
+    if (typeof chart.executeActionById === 'function') {
+      try { chart.executeActionById('chartReset'); } catch (resetError) {}
+    }
     if (typeof chart.setRightOffset === 'function') chart.setRightOffset(40);
     if (typeof chart.setBarSpacing === 'function') chart.setBarSpacing(3);
     const scale = typeof chart.timeScale === 'function' ? chart.timeScale() : null;

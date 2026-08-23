@@ -41,6 +41,7 @@ import { loadCopierAccountSnapshots, type CopierAccountSnapshotRow } from '../se
 import { buildAccountCockpitModel, sortAccountsRiskFirst, summarizeAccountCockpit, type AccountCockpitModel } from '../lib/accountCockpit';
 import { funeralAccountScope, planMultiAccountFuneral } from '../lib/accountFuneralPlan';
 import FirmPayoutRulesDialog from './FirmPayoutRulesDialog';
+import TradovateAccountOnboarding from './TradovateAccountOnboarding';
 
 interface AccountsManagerProps {
   accounts: Account[];
@@ -61,6 +62,7 @@ interface AccountsManagerProps {
   oauthLiveStates?: Record<string, OAuthAccountLiveState>;
   tradovateProfiles?: TradovateAccountProfile[];
   tradovateConnectionData?: Record<string, TradovatePreflightResult>;
+  onTradovateProfilesChanged?: (profiles: TradovateAccountProfile[]) => void;
 }
 
 const formatOAuthLastSeen = (value: string | null | undefined) => {
@@ -218,6 +220,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   oauthLiveStates = {},
   tradovateProfiles = [],
   tradovateConnectionData = {},
+  onTradovateProfilesChanged,
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
@@ -878,6 +881,18 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      {onTradovateProfilesChanged && <TradovateAccountOnboarding
+        profiles={tradovateProfiles}
+        firms={[...new Set([
+          ...KNOWN_FIRMS.map(firm => firm.label),
+          ...accounts.map(firmOf).filter(firm => firm !== 'OSTATNÍ').map(firmLabel),
+        ])].sort((a, b) => a.localeCompare(b, 'cs'))}
+        onProfilesSaved={onTradovateProfilesChanged}
+        onRulesSaved={entries => setFirmRules(current => ({
+          ...current,
+          ...Object.fromEntries(entries.map(entry => [entry.firmKey, entry.rules])),
+        }))}
+      />}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Celková equity</p><p className="mt-1 text-2xl font-black text-[var(--text-primary)] tabular-nums">{cockpitSummary.totalEquity == null ? '—' : `$${Math.round(cockpitSummary.totalEquity).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">{activeCockpitModels.length} OAuth účtů · {new Set(accounts.filter(account => account.status === 'Active' && account.oauth).map(firmOf)).size} firem</p></div>
         <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Dnes</p><p className={`mt-1 text-2xl font-black tabular-nums ${cockpitSummary.todayPnl == null ? 'text-[var(--text-primary)]' : cockpitSummary.todayPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{cockpitSummary.todayPnl == null ? '—' : `${cockpitSummary.todayPnl >= 0 ? '+' : '−'}$${Math.round(Math.abs(cockpitSummary.todayPnl)).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">z denních snapshot ledgerů</p></div>

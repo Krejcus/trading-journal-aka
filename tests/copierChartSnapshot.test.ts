@@ -101,6 +101,7 @@ describe('TV alert dedicated chart navigation', () => {
     expect(navigation.params.expression).toContain('TradingViewApi');
     expect(navigation.params.expression).toContain('setSymbol("MNQ1!")');
     expect(navigation.params.expression).toContain('setResolution("5")');
+    expect(navigation.params.expression).toContain("executeActionById('chartReset')");
     expect(navigation.params.expression).toContain('setRightOffset(40)');
     expect(navigation.params.expression).toContain('setBarSpacing(3)');
     socket.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: true } } }) });

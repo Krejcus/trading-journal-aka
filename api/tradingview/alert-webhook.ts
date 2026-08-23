@@ -56,24 +56,33 @@ const webhookUrl = (req: VercelRequest, token: string): string => {
   return `${origin}/api/tradingview/alert-webhook?token=${token}`;
 };
 
+interface WebhookConfigRow {
+  token: string;
+  created_at: string;
+  last_alert_at: string | null;
+  // Sloupce existují až po F2 settings migraci; do té doby platí default true.
+  alerts_enabled?: boolean;
+  images_enabled?: boolean;
+}
+
 async function webhookConfig(req: VercelRequest, res: VercelResponse, db: SupabaseClient, url: string, anonKey: string) {
   if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
   const userId = await authenticatedUserId(req, url, anonKey);
   let { data, error } = await db.from('tv_alert_webhooks')
-    .select('token,created_at,last_alert_at')
+    .select('*')
     .eq('user_id', userId)
-    .maybeSingle<{ token: string; created_at: string; last_alert_at: string | null }>();
+    .maybeSingle<WebhookConfigRow>();
   if (error) throw new Error(`tv-alert-webhook-query-failed: ${error.message}`);
   if (!data && req.method === 'POST') {
     const token = randomBytes(32).toString('hex');
     const created = await db.from('tv_alert_webhooks').insert({ user_id: userId, token })
-      .select('token,created_at,last_alert_at')
-      .single<{ token: string; created_at: string; last_alert_at: string | null }>();
+      .select('*')
+      .single<WebhookConfigRow>();
     if (created.error) {
       // Concurrent ensure: the unique user_id row is authoritative.
       const existing = await db.from('tv_alert_webhooks')
-        .select('token,created_at,last_alert_at').eq('user_id', userId)
-        .single<{ token: string; created_at: string; last_alert_at: string | null }>();
+        .select('*').eq('user_id', userId)
+        .single<WebhookConfigRow>();
       if (existing.error) throw new Error(`tv-alert-webhook-create-failed: ${created.error.message}`);
       data = existing.data;
     } else data = created.data;
@@ -84,6 +93,8 @@ async function webhookConfig(req: VercelRequest, res: VercelResponse, db: Supaba
     webhookUrl: webhookUrl(req, data.token),
     createdAt: data.created_at,
     lastAlertAt: data.last_alert_at,
+    alertsEnabled: data.alerts_enabled !== false,
+    imagesEnabled: data.images_enabled !== false,
   });
 }
 
@@ -119,10 +130,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!TOKEN.test(queryToken)) return res.status(401).json({ error: 'invalid-webhook-token' });
 
     const { data: webhook, error: webhookError } = await db.from('tv_alert_webhooks')
-      .select('id,user_id').eq('token', queryToken)
-      .maybeSingle<{ id: string; user_id: string }>();
+      .select('*').eq('token', queryToken)
+      .maybeSingle<{ id: string; user_id: string; alerts_enabled?: boolean; images_enabled?: boolean }>();
     if (webhookError) throw new Error(`tv-alert-webhook-lookup-failed: ${webhookError.message}`);
     if (!webhook) return res.status(401).json({ error: 'invalid-webhook-token' });
+    if (webhook.alerts_enabled === false) {
+      return res.status(200).json({ accepted: false, reason: 'alerts-disabled' });
+    }
     if (!localRateLimiter.consume(queryToken)) return res.status(429).json({ error: 'tv-alert-rate-limit' });
     const consumed = await db.rpc('consume_tv_alert_webhook_rate_limit', { target_webhook_id: webhook.id });
     if (consumed.error) throw new Error(`tv-alert-rate-limit-failed: ${consumed.error.message}`);
@@ -131,6 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const input = validateTradingViewAlertPayload(req.body);
     const alertId = randomUUID();
     const nowIso = new Date().toISOString();
+    const imagesEnabled = webhook.images_enabled !== false;
     const { error: insertError } = await db.from('tv_alerts').insert({
       id: alertId,
       user_id: webhook.user_id,
@@ -139,7 +154,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       price: input.price,
       timeframe: input.timeframe,
       created_at: nowIso,
-      snapshot_path: null,
+      // Prázdný řetězec je trvalý sentinel: alert vytvořený bez obrázků se
+      // nesmí při pozdějším znovuzapnutí dostat do pending fronty.
+      snapshot_path: imagesEnabled ? null : '',
     });
     if (insertError) throw new Error(`tv-alert-insert-failed: ${insertError.message}`);
     const touched = await db.from('tv_alert_webhooks').update({ last_alert_at: nowIso }).eq('id', webhook.id);
@@ -152,12 +169,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.warn('[tv-alert] text push failed', reason instanceof Error ? reason.message : String(reason));
     }
     // Teprve po dokončení textové cesty budíme worker pro best-effort obraz.
-    try {
-      await broadcastSnapshotKick({ db, userId: webhook.user_id, supabaseUrl: url, serviceKey });
-    } catch (reason) {
-      console.warn('[tv-alert] snapshot kick failed', reason instanceof Error ? reason.message : String(reason));
+    if (imagesEnabled) {
+      try {
+        await broadcastSnapshotKick({ db, userId: webhook.user_id, supabaseUrl: url, serviceKey });
+      } catch (reason) {
+        console.warn('[tv-alert] snapshot kick failed', reason instanceof Error ? reason.message : String(reason));
+      }
     }
-    return res.status(202).json({ accepted: true, id: alertId, snapshotPending: true });
+    return res.status(202).json({ accepted: true, id: alertId, snapshotPending: imagesEnabled });
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason);
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') return res.status(401).json({ error: message });

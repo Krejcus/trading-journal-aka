@@ -29,7 +29,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') {
       return res.status(401).json({ error: message });
     }
-    if (/^(profile|profiles|external-account-id|account-name|display-name|prop-firm|plan-name|account-type|drawdown-type|account-size|max-loss|daily-loss-limit|consistency-pct|profit-target|max-mini|max-micro|mapped-account-id|duplicate)/.test(message)) {
+    if (/^(profile|profiles|external-account-id|account-name|display-name|prop-firm|plan-name|account-type|drawdown-type|account-size|max-loss|daily-loss-limit|consistency-pct|profit-target|max-mini|max-micro|mapped-account-id|onboarded-at|duplicate)/.test(message)) {
       return res.status(400).json({ error: message });
     }
     console.error('[tradovate-account-profiles] Failed:', message);
