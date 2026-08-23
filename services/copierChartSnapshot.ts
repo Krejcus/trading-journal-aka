@@ -210,7 +210,19 @@ function evaluateExpression(symbol: string, timeframe: string): string {
     // rozprostřela jen do půlky plochy a zbytek zůstal prázdný.
     const pane = document.querySelector('.chart-container.active') || document.querySelector('.chart-container');
     const paneWidth = pane ? pane.getBoundingClientRect().width : 1675;
-    const barSpacing = Math.min(12, Math.max(3, Math.round(paneWidth / 550)));
+    const barSpacing = Math.min(24, Math.max(6, Math.round(paneWidth / 275)));
+    // Plovoucí lišta kreslení se propisuje doprostřed snímku. Styl se po půl
+    // minutě odstraní sám, aby v grafu nezůstal viset ani při pádu capture.
+    const hideId = 'alphatrade-snapshot-hide';
+    let hide = document.getElementById(hideId);
+    if (!hide) {
+      hide = document.createElement('style');
+      hide.id = hideId;
+      hide.textContent = '.tv-floating-toolbar,.floating-toolbar-react-widgets{display:none !important;}';
+      document.head.appendChild(hide);
+    }
+    clearTimeout(window.__alphatradeSnapshotHideTimer);
+    window.__alphatradeSnapshotHideTimer = setTimeout(() => { const el = document.getElementById(hideId); if (el) el.remove(); }, 30000);
     if (typeof chart.setRightOffset === 'function') chart.setRightOffset(40);
     if (typeof chart.setBarSpacing === 'function') chart.setBarSpacing(barSpacing);
     const scale = typeof chart.timeScale === 'function' ? chart.timeScale() : null;
