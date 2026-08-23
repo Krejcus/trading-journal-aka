@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { captureTradingViewAlertSnapshot, captureTradingViewChartSnapshot } from '../services/copierChartSnapshot';
+import { captureScale, captureTradingViewAlertSnapshot, captureTradingViewChartSnapshot } from '../services/copierChartSnapshot';
 
 class FakeSocket {
   listeners = new Map<string, Set<(event: any) => void>>();
@@ -70,6 +70,17 @@ describe('copier TradingView CDP snapshot', () => {
   });
 });
 
+describe('měřítko snímku', () => {
+  it('drží výslednou šířku pod limitem úložiště', () => {
+    // Úzký panel snese dvojnásobek, celá obrazovka už ne — 2MB strop.
+    expect(captureScale(800)).toBe(2);
+    expect(captureScale(1600)).toBe(2);
+    expect(captureScale(3335)).toBe(1);
+    expect(captureScale(2000)).toBeCloseTo(1.6, 2);
+    expect(captureScale(0)).toBe(2);
+  });
+});
+
 describe('TV alert dedicated chart navigation', () => {
   it('navigates only the configured target, sets chart viewport and captures after render', async () => {
     const socket = new FakeSocket();
@@ -102,6 +113,10 @@ describe('TV alert dedicated chart navigation', () => {
     expect(navigation.params.expression).toContain('setSymbol("MNQ1!")');
     expect(navigation.params.expression).toContain('setResolution("5")');
     expect(navigation.params.expression).toContain("executeActionById('chartReset')");
+    // Jeden panel přes celou šířku a vždy stejný panel — snímek nesmí
+    // záviset na tom, kam uživatel naposledy klikl.
+    expect(navigation.params.expression).toContain("api.setLayout('s')");
+    expect(navigation.params.expression).toContain('api.chart(0)');
     expect(navigation.params.expression).toContain('setRightOffset(40)');
     expect(navigation.params.expression).toContain('setBarSpacing(3)');
     socket.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: true } } }) });

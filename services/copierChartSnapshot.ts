@@ -131,11 +131,29 @@ const chartIdFromUrl = (url: string | undefined): string | undefined => {
   return match?.[1];
 };
 
+/**
+ * Dvojnásobné rozlišení na širokém panelu by přerostlo 2MB limit úložiště
+ * snímků, takže se měřítko dopočítá na cílovou šířku ~3200 px.
+ */
+export function captureScale(cssWidth: number): number {
+  if (!Number.isFinite(cssWidth) || cssWidth <= 0) return 2;
+  return Math.min(2, Math.max(1, Math.round((3200 / cssWidth) * 100) / 100));
+}
+
 function evaluateExpression(symbol: string, timeframe: string): string {
   return `(() => {
     const api = globalThis.TradingViewApi;
     if (!api) return false;
-    const chart = typeof api.activeChart === 'function' ? api.activeChart() : api;
+    // Notifikace na telefonu je malá: jeden graf přes celou šířku má
+    // dvojnásobné rozlišení oproti dvěma vedle sebe. Vyhrazený layout
+    // existuje jen kvůli snímkům, takže ho srovnáme na jeden panel.
+    if (typeof api.setLayout === 'function') {
+      try { if (api.layout() !== 's') api.setLayout('s'); } catch (layoutError) {}
+    }
+    // Konkrétní panel, ne „ten aktivní" — jinak snímek závisí na tom,
+    // kam uživatel naposledy klikl.
+    const chart = typeof api.chart === 'function' ? api.chart(0)
+      : typeof api.activeChart === 'function' ? api.activeChart() : api;
     if (!chart || typeof chart.setSymbol !== 'function' || typeof chart.setResolution !== 'function') return false;
     chart.setSymbol(${JSON.stringify(symbol)});
     chart.setResolution(${JSON.stringify(timeframe)});
@@ -297,7 +315,10 @@ export async function captureTradingViewAlertSnapshot(
           // clip funguje jen s fromSurface: true (bez surface ho CDP ignoruje).
           captureCommand.params = {
             format: 'png', fromSurface: true,
-            clip: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: 2 },
+            clip: {
+              x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+              scale: captureScale(bounds.width),
+            },
           };
         }
       },
