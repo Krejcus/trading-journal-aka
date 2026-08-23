@@ -60,9 +60,15 @@ export async function updateTradingViewAlertWebhookSettings(
   const update: Record<string, boolean> = {};
   if (patch.alertsEnabled !== undefined) update.alerts_enabled = patch.alertsEnabled;
   if (patch.imagesEnabled !== undefined) update.images_enabled = patch.imagesEnabled;
+  if (Object.keys(update).length === 0) throw new Error('Není co uložit.');
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Pro změnu nastavení je nutné přihlášení.');
+  // PostgREST odmítá UPDATE bez filtru; RLS by sice stejně pustila jen vlastní
+  // řádek, ale filtr na user_id musí být v dotazu explicitně.
   const { data, error } = await supabase
     .from('tv_alert_webhooks')
     .update(update)
+    .eq('user_id', session.user.id)
     .select('*')
     .single<TradingViewAlertWebhookRow>();
   if (error) throw new Error(`Nastavení TradingView alertů se nepodařilo uložit: ${error.message}`);
