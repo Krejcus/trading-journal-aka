@@ -661,7 +661,6 @@ const App: React.FC = () => {
           .map(follower => ({ accountId: follower.accountId, multiplier: follower.multiplier })),
         accountIdOverride: options?.accountIdOverride,
       });
-      copierJournalLastSyncRef.current = now;
       setPendingCopierTrades(result.pending);
       if (result.created.length > 0 || result.updated.length > 0) {
         setTrades(current => {
@@ -677,6 +676,10 @@ const App: React.FC = () => {
     } catch (reason) {
       console.warn('[Copier journal] Sync selhal:', reason);
     } finally {
+      // Throttle se musí posunout i po chybě. Dřív seděl uvnitř `try` za
+      // awaitem, takže neúspěšný sync ho nechal na staré hodnotě a
+      // dvousekundový poll pak spouštěl tentýž plný fetch pořád dokola.
+      copierJournalLastSyncRef.current = now;
       copierJournalSyncBusyRef.current = false;
     }
   }, [accounts, session?.user?.id]);
