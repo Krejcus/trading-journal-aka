@@ -223,11 +223,18 @@ function evaluateExpression(symbol: string, timeframe: string): string {
     }
     clearTimeout(window.__alphatradeSnapshotHideTimer);
     window.__alphatradeSnapshotHideTimer = setTimeout(() => { const el = document.getElementById(hideId); if (el) el.remove(); }, 30000);
-    if (typeof chart.setRightOffset === 'function') chart.setRightOffset(40);
+    // Desktopový build vystavuje časovou osu jako getTimeScale(); timeScale()
+    // na chart objektu není, takže se offset i hustota dřív tiše zahazovaly.
+    const scale = typeof chart.getTimeScale === 'function' ? chart.getTimeScale()
+      : typeof chart.timeScale === 'function' ? chart.timeScale() : null;
     if (typeof chart.setBarSpacing === 'function') chart.setBarSpacing(barSpacing);
-    const scale = typeof chart.timeScale === 'function' ? chart.timeScale() : null;
-    if (scale && typeof scale.setRightOffset === 'function') scale.setRightOffset(40);
     if (scale && typeof scale.setBarSpacing === 'function') scale.setBarSpacing(barSpacing);
+    // Volné místo vpravo, kam se vejde vykreslená pozice (entry, SL, TP
+    // i s popisky) — počítá se z počtu viditelných svíček, ne natvrdo.
+    const visibleBars = Math.max(20, Math.round(paneWidth / barSpacing));
+    const rightOffset = Math.min(60, Math.max(12, Math.round(visibleBars * 0.28)));
+    if (typeof chart.setRightOffset === 'function') chart.setRightOffset(rightOffset);
+    if (scale && typeof scale.setRightOffset === 'function') scale.setRightOffset(rightOffset);
     // Úspěch = graf se přepnul na požadovaný symbol a timeframe. Offset ani
     // hustota svíček nejsou podmínkou: desktopový build TradingView nemá na
     // chart objektu timeScale() ani setRightOffset(), takže dřívější kontrola

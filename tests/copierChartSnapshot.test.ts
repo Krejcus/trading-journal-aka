@@ -117,7 +117,7 @@ describe('TV alert dedicated chart navigation', () => {
     // záviset na tom, kam uživatel naposledy klikl.
     expect(navigation.params.expression).toContain("api.setLayout('s')");
     expect(navigation.params.expression).toContain('api.chart(0)');
-    expect(navigation.params.expression).toContain('setRightOffset(40)');
+    expect(navigation.params.expression).toContain('setRightOffset(rightOffset)');
     // Hustota svíček se počítá ze šířky panelu, ne natvrdo.
     expect(navigation.params.expression).toContain('setBarSpacing(barSpacing)');
     expect(navigation.params.expression).toContain('paneWidth / 140');
