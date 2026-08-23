@@ -648,7 +648,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           <p className="mt-0.5 truncate text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">{acc.oauth?.externalAccountId}{profile?.accountSize != null ? ` · ${money(profile.accountSize)}` : ''}{(acc.copyMultiplier ?? 1) > 1 ? ` · ×${acc.copyMultiplier}` : ''}{oauthState?.status === 'disconnected' && oauthLastSeen ? ` · naposledy ${oauthLastSeen}` : ''}</p>
         </div>
         <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${phaseFunded ? 'border-violet-500/30 bg-violet-500/10 text-violet-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-500'}`}>{phaseFunded ? 'Funded' : 'Challenge'}</span>
-        <button type="button" onClick={event => startEditing(event, acc)} className="rounded-lg p-1.5 text-slate-500 hover:bg-indigo-500/10 hover:text-indigo-500" aria-label={`Upravit ${acc.name}`}><Settings2 size={14} /></button>
+        <button type="button" onClick={event => { event.stopPropagation(); startEditing(event, acc); }} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-indigo-500/10 hover:text-indigo-500" aria-label={`Upravit ${acc.name}`}><Settings2 size={14} /></button>
       </div>
 
       <div className="mt-4 flex items-end justify-between gap-3">
@@ -670,8 +670,8 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         {model.payout?.eligible && <span className="rounded border border-emerald-500/30 px-2 py-1 text-[10px] font-bold text-emerald-500">Payout připraven</span>}
         {!model.breached && model.risk === 'ok' && <span className="rounded border border-emerald-500/25 px-2 py-1 text-[10px] font-bold text-emerald-500">V bezpečí</span>}
         <div className="ml-auto flex items-center gap-2">
-          {phaseFunded && <button type="button" onClick={event => { event.stopPropagation(); setPayoutTargetAccountId(acc.id); }} className="rounded-lg p-1.5 text-emerald-500 hover:bg-emerald-500/10" aria-label="Výplata"><HandCoins size={14} /></button>}
-          {onImportTradovate && <button type="button" onClick={event => { event.stopPropagation(); onImportTradovate(acc.id); }} className="rounded-lg p-1.5 text-indigo-500 hover:bg-indigo-500/10" aria-label="Importovat"><UploadCloud size={14} /></button>}
+          {phaseFunded && <button type="button" onClick={event => { event.stopPropagation(); setPayoutTargetAccountId(acc.id); }} className="flex h-11 w-11 items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-500/10" aria-label="Výplata"><HandCoins size={14} /></button>}
+          {onImportTradovate && <button type="button" onClick={event => { event.stopPropagation(); onImportTradovate(acc.id); }} className="flex h-11 w-11 items-center justify-center rounded-lg text-indigo-500 hover:bg-indigo-500/10" aria-label="Importovat"><UploadCloud size={14} /></button>}
           <button type="button" onClick={event => toggleAccountStatus(event, acc.id)} className="text-[9px] font-black uppercase text-slate-500 hover:text-amber-500">Archivovat</button>
         </div>
       </div>
@@ -752,14 +752,16 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             <div className="flex gap-1 transition-opacity">
               {acc.status === 'Active' && !isChallenge && (
                 <button
+                  type="button"
                   onClick={(e) => { e.preventDefault(); e.stopPropagation(); setPayoutTargetAccountId(acc.id); }}
-                  className="p-2 text-emerald-500 hover:bg-emerald-500/10 rounded-lg transition-all"
+                  className="flex h-11 w-11 items-center justify-center rounded-lg text-emerald-500 transition-all hover:bg-emerald-500/10"
                   title="Provést výplatu"
+                  aria-label={`Provést výplatu z ${acc.name}`}
                 >
                   <HandCoins size={isSlave ? 14 : 16} />
                 </button>
               )}
-              <button onClick={(e) => startEditing(e, acc)} className="p-2 text-slate-500 hover:text-blue-500 transition-all"><Settings2 size={isSlave ? 14 : 16} /></button>
+              <button onClick={(e) => { e.stopPropagation(); startEditing(e, acc); }} className="flex h-11 w-11 items-center justify-center text-slate-500 transition-all hover:text-blue-500" aria-label={`Upravit ${acc.name}`}><Settings2 size={isSlave ? 14 : 16} /></button>
             </div>
           </div>
 

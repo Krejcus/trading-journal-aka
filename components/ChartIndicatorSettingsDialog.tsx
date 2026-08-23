@@ -261,8 +261,8 @@ const titles: Record<IndicatorId, string> = {
 };
 
 const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <div className="grid min-h-10 grid-cols-[minmax(0,1fr)_280px] items-center gap-3 text-[13px] text-slate-800">
-    <span>{label}</span><span className="flex items-center justify-end gap-2">{children}</span>
+  <div className="grid min-h-10 grid-cols-1 items-stretch gap-1 py-1 text-[13px] text-slate-800 sm:grid-cols-[minmax(0,1fr)_280px] sm:items-center sm:gap-3 sm:py-0">
+    <span>{label}</span><span className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">{children}</span>
   </div>
 );
 
@@ -274,7 +274,7 @@ const Check: React.FC<{ checked: boolean; onChange: (checked: boolean) => void; 
 );
 
 const NumberInput: React.FC<{ value: number; min?: number; max?: number; step?: number; onChange: (value: number) => void }> = ({ value, min, max, step = 1, onChange }) => (
-  <input type="number" value={value} min={min} max={max} step={step} onChange={event => onChange(Number(event.target.value))} className="h-9 w-24 rounded-md border border-slate-300 px-2 text-right outline-none focus:border-[#2962ff]" />
+  <input type="number" value={value} min={min} max={max} step={step} onChange={event => onChange(Number(event.target.value))} className="h-9 w-20 rounded-md border border-slate-300 px-2 text-right outline-none focus:border-[#2962ff] sm:w-24" />
 );
 
 const LineStyleInput: React.FC<{ value: 'solid' | 'dashed' | 'dotted'; onChange: (value: 'solid' | 'dashed' | 'dotted') => void }> = ({ value, onChange }) => (
@@ -301,7 +301,7 @@ const ColorInput: React.FC<{
 
 const VisibilityEditor: React.FC<{ value: IndicatorVisibilitySettings; onChange: (value: IndicatorVisibilitySettings) => void }> = ({ value, onChange }) => {
   const row = (key: 'minutes' | 'hours' | 'days', label: string, fromKey: 'minuteFrom' | 'hourFrom' | 'dayFrom', toKey: 'minuteTo' | 'hourTo' | 'dayTo') => (
-    <div className="grid min-h-12 grid-cols-[150px_90px_90px] items-center gap-3">
+    <div className="grid min-h-12 grid-cols-[minmax(0,1fr)_5rem_5rem] items-center gap-2 sm:grid-cols-[150px_90px_90px] sm:gap-3">
       <Check checked={value[key]} onChange={checked => onChange({ ...value, [key]: checked })} label={label} />
       <NumberInput value={value[fromKey]} min={1} onChange={next => onChange({ ...value, [fromKey]: next })} />
       <NumberInput value={value[toKey]} min={1} onChange={next => onChange({ ...value, [toKey]: next })} />
@@ -471,14 +471,14 @@ export const ChartIndicatorSettingsDialog: React.FC<{
           </div>}
           {tab === 'visibility' && <VisibilityEditor value={current.visibility} onChange={visibility => update(indicator, { visibility } as never)} />}
         </div>
-        <footer className="relative flex h-16 shrink-0 items-center justify-between border-t border-slate-200 px-6">
+        <footer className="relative flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-6 py-3 sm:h-16 sm:flex-nowrap sm:py-0">
           <IndicatorTemplateMenu
             indicator={indicator}
             value={draft[indicator]}
             defaultValue={DEFAULT_INDICATOR_SETTINGS[indicator]}
             onApply={applyIndicatorTemplate}
           />
-          <div className="flex gap-3">
+          <div className="flex flex-wrap justify-end gap-3">
             <button type="button" onClick={onCancel} className="h-9 rounded-md border border-slate-300 px-5 text-[13px] font-medium hover:bg-slate-50">Cancel</button>
             <button
               type="button"

@@ -271,7 +271,13 @@ export function createNativeBrokerSnapshotLoader(options: {
 }): NativeBrokerSnapshotLoader {
   const brokerByConnection = new Map<string, Promise<NativeLiveActivityBrokerSnapshot | null>>();
   return (runtime, loadOptions) => {
-    const key = `${runtime.user_id}:${runtime.connection_id}`;
+    // Rozsah musí být součástí klíče: sběrač účtů si bere `allAccounts`, a bez
+    // něj by Live Activity dostala z cache i pozice účtů mimo copier skupinu —
+    // započetly by se do jejího P&L a bránily ukončení prázdné aktivity.
+    const scope = loadOptions?.allAccounts
+      ? 'all'
+      : liveActivityAccountIds(runtime).slice().sort().join(',');
+    const key = `${runtime.user_id}:${runtime.connection_id}:${scope}`;
     let pending = brokerByConnection.get(key);
     if (!pending) {
       pending = (async () => {

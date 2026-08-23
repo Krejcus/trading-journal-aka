@@ -403,7 +403,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
          {/* Toast notification */}
          {toastMsg && (
-            <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] px-4 py-3 rounded-2xl text-sm font-semibold shadow-xl flex items-center gap-2 transition-all ${toastMsg.type === 'error' ? 'bg-red-500 text-white' : 'bg-emerald-500 text-white'}`}>
+            <div className={`native-fixed-above-tab-bar fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] px-4 py-3 rounded-2xl text-sm font-semibold shadow-xl flex items-center gap-2 transition-all ${toastMsg.type === 'error' ? 'bg-red-500 text-white' : 'bg-emerald-500 text-white'}`}>
                {toastMsg.text}
             </div>
          )}

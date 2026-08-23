@@ -29,6 +29,8 @@ describe('Connect/Disconnect přepínač copieru', () => {
     expect(markup).toContain('role="switch"');
     expect(markup).toContain('aria-checked="true"');
     expect(markup).toContain('aria-label="Disconnect copier"');
+    expect(markup).toContain('h-11 w-[82px]');
+    expect(markup).toContain('h-7 w-full');
   });
 
   it('odpojený runtime nabízí připojení a hlásí ostrý provoz', () => {

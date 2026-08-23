@@ -78,6 +78,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-23 (Codex, opravy mobilních UI nálezů z review)
+Bezpečnostní Connect/Disconnect, Flatten All a účtové Flatten v LIVE mají
+skutečný 44px dotykový cíl, ale zachovávají původní 28px vizuál. Účtové řádky
+mají minimální 44px rozteč, takže šest cílů pod sebou se nepřekrývá. Payout
+dialog má pevnou hlavičku/patičku a samostatně scrollující obsah; nastavení
+grafu pod `sm` používá horní horizontální taby a skládaná pole; nastavení
+indikátorů pod `sm` skládá 280px pole do jednoho sloupce a zalamuje patičku.
+Ikonové account akce a onboarding checkbox labely mají 44px cíle a kliknutí
+account akcí se nepropaguje do karty.
+
+Portálový LIVE toast i další nalezené fixní stavové zprávy (Nastavení,
+Network Hub a backtest loading/error) používají společný native-only offset
+nad `49px + safe-area` lištou; desktopové pozice zůstaly stejné. React kontrola
+nenašla změnu hooků, datového toku ani obchodní logiky. Prošlo `npx tsc
+--noEmit`, cílených 24/24 testů a celá sada `npx vitest run` (183 souborů,
+1 410 testů). Vizuální browser/device kontrola v této relaci neproběhla. Nic
+nebylo commitnuto, pushnuto ani deploynuto; tato práce neměnila copier runtime,
+iOS widgety ani native live-activity updater.
+
 ### 2026-08-23 (Codex, LIVE karta: bezpečný Connect/Disconnect)
 Panel „Session řízení copieru“ a Shadow ovládání byly odstraněny z běžného
 LIVE UI. Stav ve sloupci Status nyní používá jediný animovaný

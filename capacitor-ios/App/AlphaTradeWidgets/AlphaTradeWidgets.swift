@@ -706,6 +706,17 @@ private struct LockLiveView: View {
         return live?.connected == true ? "pause.circle.fill" : "wifi.slash"
     }
 
+    /// Text musí vycházet ze stejného fail-safe stavu jako ikona. Dřív se bral
+    /// jen z `live.armed`, takže vedle varovné ikony mohlo svítit „ARM“
+    /// i při zastaralých datech, kill switchi nebo odpojeném workeru.
+    private var compactLabel: String {
+        if entry.snapshot.isLiveStale { return "?" }
+        if live?.killSwitch == true { return "STOP" }
+        if (live?.dayLockUntil ?? 0) > Date().timeIntervalSince1970 * 1_000 { return "LOCK" }
+        if live?.connected != true { return "OFF" }
+        return live?.armed == true ? "ARM" : "LIVE"
+    }
+
     @ViewBuilder
     var body: some View {
         if family == .accessoryCircular {
@@ -713,7 +724,7 @@ private struct LockLiveView: View {
                 AccessoryWidgetBackground()
                 VStack(spacing: 2) {
                     Image(systemName: icon).font(.headline).widgetAccentable()
-                    Text(live?.armed == true ? "ARM" : "LIVE").font(.caption2.bold())
+                    Text(compactLabel).font(.caption2.bold())
                 }
             }
         } else if family == .accessoryInline {
@@ -875,7 +886,10 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                     .font(.caption.weight(.black))
                     .tracking(0.7)
                 Spacer()
-                LiveActivityStatusPill(status: context.state.status)
+                // Po vypršení stale-date už nemáme čerstvá data. Zelené
+                // „ARM LIVE" by pak tvrdilo, že se kopíruje, i když je worker
+                // dávno mrtvý — fail-closed proto přepíše stav na neověřený.
+                LiveActivityStatusPill(status: context.isStale ? "ARM NEOVĚŘEN" : context.state.status)
             }
 
             switch context.state.mode {
@@ -973,7 +987,8 @@ private struct AlphaTradeLiveActivityLockScreen: View {
     }
 
     @ViewBuilder private var armCountdown: some View {
-        if let seconds = context.state.armExpiresAt {
+        // Bez čerstvých dat neodpočítáváme — ARM mohl mezitím skončit.
+        if let seconds = context.state.armExpiresAt, !context.isStale {
             let expiry = Date(timeIntervalSince1970: seconds)
             if expiry > Date() {
                 HStack(spacing: 4) {
@@ -1007,7 +1022,7 @@ private struct LiveActivityStatusPill: View {
         switch status {
         case "ARM LIVE": return LiveActivityPalette.profit
         case "KILL SWITCH", "DAY-LOCK": return LiveActivityPalette.loss
-        case "WORKER OFFLINE", "BROKER OFFLINE", "STUCK OUTBOX": return LiveActivityPalette.warning
+        case "WORKER OFFLINE", "BROKER OFFLINE", "STUCK OUTBOX", "ARM NEOVĚŘEN": return LiveActivityPalette.warning
         case "SHADOW": return Color.blue
         default: return LiveActivityPalette.muted
         }

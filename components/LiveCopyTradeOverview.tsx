@@ -1016,31 +1016,33 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
         event.stopPropagation();
         onToggle();
       }}
-      className={`group relative flex h-7 w-[82px] items-center justify-center overflow-hidden rounded-md border px-2 text-[9px] font-black uppercase tracking-[0.12em] transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-45 ${connected
-        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 hover:border-rose-500/40 hover:bg-rose-500/10 hover:text-rose-500'
-        : 'border-rose-500/40 bg-rose-500/10 text-rose-500 hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:text-emerald-500'}`}
+      className="group flex h-11 w-[82px] items-center justify-center text-[9px] font-black uppercase tracking-[0.12em] disabled:cursor-not-allowed disabled:opacity-45"
     >
-      {busy ? (
-        <span className="flex items-center gap-2">
-          <RefreshCw size={12} className="animate-spin" />
-          {busyLabel}
-        </span>
-      ) : (
-        <>
-          <span className={`absolute right-2 h-1.5 w-1.5 rounded-full bg-emerald-500 transition-opacity duration-200 ${connected ? 'opacity-100 group-hover:opacity-0' : 'opacity-0 group-hover:opacity-100'}`}>
-            <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400" />
+      <span className={`relative flex h-7 w-full items-center justify-center overflow-hidden rounded-md border px-2 transition-all duration-300 ${connected
+        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 group-hover:border-rose-500/40 group-hover:bg-rose-500/10 group-hover:text-rose-500'
+        : 'border-rose-500/40 bg-rose-500/10 text-rose-500 group-hover:border-emerald-500/40 group-hover:bg-emerald-500/10 group-hover:text-emerald-500'}`}>
+        {busy ? (
+          <span className="flex items-center gap-2">
+            <RefreshCw size={12} className="animate-spin" />
+            {busyLabel}
           </span>
-          <Power size={12} className="absolute left-2.5 transition-transform duration-300 group-hover:rotate-90" />
-          <span className="absolute left-7 right-4 overflow-hidden text-center">
-            <span className="block transition-all duration-300 ease-in-out group-hover:-translate-y-full group-hover:opacity-0">
-              {connected ? 'ON' : 'OFF'}
+        ) : (
+          <>
+            <span className={`absolute right-2 h-1.5 w-1.5 rounded-full bg-emerald-500 transition-opacity duration-200 ${connected ? 'opacity-100 group-hover:opacity-0' : 'opacity-0 group-hover:opacity-100'}`}>
+              <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400" />
             </span>
-            <span className="absolute inset-0 translate-y-full opacity-0 transition-all duration-300 ease-in-out group-hover:translate-y-0 group-hover:opacity-100">
-              {connected ? 'OFF' : 'ON'}
+            <Power size={12} className="absolute left-2.5 transition-transform duration-300 group-hover:rotate-90" />
+            <span className="absolute left-7 right-4 overflow-hidden text-center">
+              <span className="block transition-all duration-300 ease-in-out group-hover:-translate-y-full group-hover:opacity-0">
+                {connected ? 'ON' : 'OFF'}
+              </span>
+              <span className="absolute inset-0 translate-y-full opacity-0 transition-all duration-300 ease-in-out group-hover:translate-y-0 group-hover:opacity-100">
+                {connected ? 'OFF' : 'ON'}
+              </span>
             </span>
-          </span>
-        </>
-      )}
+          </>
+        )}
+      </span>
     </button>
   );
 };
@@ -1080,7 +1082,7 @@ const GroupRow = ({ group, rows, connected, armed, observingOnly, statusPending,
       <td className="px-3 py-1.5">
         <span className="flex items-center gap-2 text-xs font-bold" style={{ color: group.color ?? GROUP_COLORS[0] }}><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: group.color ?? GROUP_COLORS[0] }} />{group.name}</span>
       </td>
-      {!hiddenGroupColumns.has('status') && <td className="px-3 py-1.5">
+      {!hiddenGroupColumns.has('status') && <td className="px-3 py-0">
         {observingOnly ? (
           <span className="inline-flex max-w-[170px] items-center gap-1.5 rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[9px] font-bold leading-tight text-amber-600">
             <ShieldAlert size={12} className="shrink-0" />
@@ -1108,11 +1110,11 @@ const GroupRow = ({ group, rows, connected, armed, observingOnly, statusPending,
       {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{money.format(capital)}</td>}
       {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(daily)}`}>{money.format(daily)}</td>}
       {!hiddenGroupColumns.has('unreal') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
-      <td className="px-3 py-1.5">
+      <td className="px-3 py-0">
         <div className="flex items-center justify-end gap-1.5" onClick={event => event.stopPropagation()}>
           <button onClick={onFlatten} title="Uzavřít všechny pozice ve skupině"
-            className="h-7 whitespace-nowrap rounded-md border border-rose-500/25 bg-rose-500/[0.06] px-2.5 text-[10px] font-bold text-rose-500 transition-colors hover:border-rose-500/40 hover:bg-rose-500/12">
-            Flatten All
+            className="group flex h-11 items-center whitespace-nowrap text-[10px] font-bold text-rose-500">
+            <span className="flex h-7 items-center rounded-md border border-rose-500/25 bg-rose-500/[0.06] px-2.5 transition-colors group-hover:border-rose-500/40 group-hover:bg-rose-500/12">Flatten All</span>
           </button>
           <GroupActionMenu groupEnabled={group.enabled} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} onApplyTemplate={onApplyTemplate} />
         </div>
@@ -1389,13 +1391,13 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onMultiplier, 
       className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''} ${live ? '' : 'opacity-55'}`}
     >
       {columns.map(col => (
-        <td key={col.key} className={`px-3 py-1.5 ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''}`}>
+        <td key={col.key} className={`px-3 ${col.key === 'actions' ? 'py-0' : 'py-1.5'} ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''}`}>
           {col.key === 'actions' && a ? (
             <button
               disabled={busyCommand != null}
               onClick={event => { event.stopPropagation(); onFlatten(a.id); }}
-              className="h-7 whitespace-nowrap rounded-md border border-[var(--border-subtle)] px-2.5 text-[10px] font-bold text-[var(--text-secondary)] hover:border-rose-500/25 hover:text-rose-500 disabled:opacity-40"
-            >Flatten</button>
+              className="group flex h-11 items-center whitespace-nowrap text-[10px] font-bold text-[var(--text-secondary)] hover:text-rose-500 disabled:opacity-40"
+            ><span className="flex h-7 items-center rounded-md border border-[var(--border-subtle)] px-2.5 group-hover:border-rose-500/25">Flatten</span></button>
           ) : cell(col.key)}
         </td>
       ))}
@@ -1855,7 +1857,7 @@ const CopyTradingHelpDialog = ({ onClose, apiReady }: { onClose: () => void; api
 );
 
 const StatusToast = ({ tone, text }: { tone: 'success' | 'info' | 'error'; text: string }) => createPortal(
-  <div role="status" className={`fixed z-[180] right-5 bottom-5 max-w-sm rounded-lg border bg-[var(--bg-card)] shadow-xl px-4 py-3 flex items-start gap-2.5 ${tone === 'error' ? 'border-rose-500/30' : tone === 'success' ? 'border-emerald-500/30' : 'border-blue-500/30'}`}>
+  <div role="status" className={`native-fixed-above-tab-bar fixed z-[180] right-5 bottom-5 max-w-sm rounded-lg border bg-[var(--bg-card)] shadow-xl px-4 py-3 flex items-start gap-2.5 ${tone === 'error' ? 'border-rose-500/30' : tone === 'success' ? 'border-emerald-500/30' : 'border-blue-500/30'}`}>
     {tone === 'error' ? <AlertTriangle size={17} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={17} className={tone === 'success' ? 'text-emerald-500 shrink-0' : 'text-blue-500 shrink-0'} />}<span className="text-xs font-bold text-[var(--text-primary)] leading-relaxed">{text}</span>
   </div>, document.body,
 );

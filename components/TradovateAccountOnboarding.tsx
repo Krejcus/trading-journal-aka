@@ -207,13 +207,13 @@ export default function TradovateAccountOnboarding({
     <div className="overflow-x-auto">
       <table className="w-full min-w-[1040px] text-left text-xs">
         <thead className="bg-[var(--bg-card)] text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><tr>
-          <th className="w-12 px-4 py-2"><input type="checkbox" aria-label="Vybrat všechny nové účty" checked={allSelected} onChange={() => setSelectedIds(allSelected ? new Set() : new Set(newProfiles.map(profile => profile.id)))} /></th>
+          <th className="w-12 p-0"><label className="flex h-11 w-11 cursor-pointer items-center justify-center"><input type="checkbox" aria-label="Vybrat všechny nové účty" checked={allSelected} onChange={() => setSelectedIds(allSelected ? new Set() : new Set(newProfiles.map(profile => profile.id)))} /></label></th>
           <th className="px-2 py-2">Jméno</th><th className="px-2 py-2">Firma</th><th className="px-2 py-2">Typ</th><th className="px-2 py-2">Plán</th>
         </tr></thead>
         <tbody>{drafts.map(draft => {
           const profile = newProfiles.find(candidate => candidate.id === draft.profileId);
           return <tr key={draft.profileId} className="border-t border-[var(--border-subtle)] align-top">
-            <td className="px-4 py-3"><input type="checkbox" aria-label={`Vybrat ${draft.displayName}`} checked={selectedIds.has(draft.profileId)} onChange={() => toggleSelected(draft.profileId)} /></td>
+            <td className="px-0 py-2"><label className="flex h-11 w-11 cursor-pointer items-center justify-center"><input type="checkbox" aria-label={`Vybrat ${draft.displayName}`} checked={selectedIds.has(draft.profileId)} onChange={() => toggleSelected(draft.profileId)} /></label></td>
             <td className="px-2 py-3"><input className={inputClass} value={draft.displayName} onChange={event => patchDraft(draft.profileId, { displayName: event.target.value })} /><p className="mt-1 truncate font-mono text-[9px] text-[var(--text-secondary)]">{profile?.accountName}</p></td>
             <td className="px-2 py-3"><FirmField value={draft.propFirm} firms={firms} onChange={propFirm => patchDraft(draft.profileId, { propFirm, planPresetKey: null })} /></td>
             <td className="px-2 py-3"><select className={inputClass} value={draft.accountType} onChange={event => patchDraft(draft.profileId, { accountType: event.target.value as TradovateProfileAccountType })}>{Object.entries(accountTypeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>

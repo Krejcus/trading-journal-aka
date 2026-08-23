@@ -858,13 +858,13 @@ const BacktestWorkspace: React.FC<Props> = ({
       {/* Dotahování dat za běhu bylo dřív neviditelné — kurzor na hraně vypadal
           jako zamrznutí. Pill říká, že se pracuje. */}
       {loadingAhead && !error && initialCandles.length > 0 && (
-        <div className="fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3.5 py-1.5 backdrop-blur">
+        <div className="native-fixed-above-tab-bar fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3.5 py-1.5 backdrop-blur">
           <Loader2 size={12} className="animate-spin text-blue-400" />
           <span className="text-[11px] font-bold text-blue-400">Načítám další data…</span>
         </div>
       )}
       {error && initialCandles.length > 0 && (
-        <div className="fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 backdrop-blur">
+        <div className="native-fixed-above-tab-bar fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 backdrop-blur">
           <span className="text-xs font-bold text-rose-500">{error}</span>
           <button
             onClick={() => void loadSegment(loadedUntilRef.current)}

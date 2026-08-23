@@ -2149,7 +2149,7 @@ const Settings: React.FC<SettingsProps> = ({
             initial={{ opacity: 0, y: 50, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="fixed bottom-12 left-1/2 -translate-x-1/2 z-[300] pointer-events-none"
+            className="native-fixed-above-tab-bar fixed bottom-12 left-1/2 -translate-x-1/2 z-[300] pointer-events-none"
           >
             <div className={`px-6 py-3 rounded-2xl border shadow-2xl flex items-center gap-3 backdrop-blur-xl ${isDark ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' : 'bg-emerald-600 border-emerald-500 text-white'}`}>
               <Check size={16} strokeWidth={3} className={isDark ? 'text-emerald-400' : 'text-white'} />

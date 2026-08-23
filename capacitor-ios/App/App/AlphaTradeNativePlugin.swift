@@ -70,10 +70,12 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     override public func load() {
         super.load()
         guard #available(iOS 16.2, *) else { return }
-        for activity in Activity<AlphaTradeLiveActivityAttributes>.activities {
-            observeLiveActivityPushToken(activity)
+        Task { @MainActor [weak self] in
+            for activity in Activity<AlphaTradeLiveActivityAttributes>.activities {
+                self?.observeLiveActivityPushToken(activity)
+            }
         }
-        liveActivityDiscoveryTask = Task { [weak self] in
+        liveActivityDiscoveryTask = Task { @MainActor [weak self] in
             for await activity in Activity<AlphaTradeLiveActivityAttributes>.activityUpdates {
                 guard !Task.isCancelled else { return }
                 self?.observeLiveActivityPushToken(activity)
@@ -301,10 +303,15 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         )
     }
 
+    /// Veškerá správa observerů je izolovaná na hlavní vlákno. Dřív do stejných
+    /// slovníků sahal discovery task, state-update task i start/end cesta bez
+    /// synchronizace — souběh serverem vytvořené aktivity s jejím ukončením byl
+    /// datový závod nad `Dictionary`, který může shodit celý proces.
     @available(iOS 16.2, *)
+    @MainActor
     private func observeLiveActivityPushToken(_ activity: Activity<AlphaTradeLiveActivityAttributes>) {
         if liveActivityTokenTasks[activity.id] == nil {
-            liveActivityTokenTasks[activity.id] = Task { [weak self] in
+            liveActivityTokenTasks[activity.id] = Task { @MainActor [weak self] in
                 for await tokenData in activity.pushTokenUpdates {
                     guard !Task.isCancelled else { return }
                     let token = tokenData.map { String(format: "%02x", $0) }.joined()
@@ -317,7 +324,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             }
         }
         if liveActivityStateTasks[activity.id] == nil {
-            liveActivityStateTasks[activity.id] = Task { [weak self] in
+            liveActivityStateTasks[activity.id] = Task { @MainActor [weak self] in
                 for await state in activity.activityStateUpdates {
                     guard !Task.isCancelled else { return }
                     guard state == .ended || state == .dismissed else { continue }

@@ -66,10 +66,10 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title
 );
 
 const Row: React.FC<{ label?: string; children: React.ReactNode }> = ({ label, children }) => (
-  <div className="grid min-h-10 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-1 text-[13px] text-slate-800">
+  <div className="grid min-h-10 grid-cols-1 items-stretch gap-1 py-1 text-[13px] text-slate-800 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-3">
     <span className="min-w-0">{label}</span>
     {/* Užší dialog: ovládací prvky se v těsném řádku zalomí místo přetečení. */}
-    <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5">{children}</span>
+    <span className="flex flex-wrap items-center justify-start gap-x-2 gap-y-1.5 sm:justify-end">{children}</span>
   </div>
 );
 
@@ -162,9 +162,9 @@ const PriceLabelRow: React.FC<{
   onChange: (value: ChartPriceLabelSettings) => void;
   children?: React.ReactNode;
 }> = ({ label, value, withName = false, withAppearance = true, onChange, children }) => (
-  <div className="grid min-h-10 grid-cols-[minmax(0,1fr)_auto] items-start gap-3 py-1 text-[13px] text-slate-800">
+  <div className="grid min-h-10 grid-cols-1 items-start gap-1 py-1 text-[13px] text-slate-800 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-3">
     <span className="pt-1.5">{label}</span>
-    <div className="flex flex-col items-end gap-1.5">
+    <div className="flex flex-col items-start gap-1.5 sm:items-end">
       <span className="flex items-center gap-3">
         {withName && (
           <label className="flex cursor-pointer items-center gap-1.5 text-[12px]">
@@ -182,7 +182,7 @@ const PriceLabelRow: React.FC<{
         </label>
       </span>
       {withAppearance && value.appearance && (
-        <span className="flex items-center gap-2">
+        <span className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
           {/* Rozsah dává smysl jen když čára vůbec je — jinak by šlo o mrtvý ovladač. */}
           {value.line && (
             <select
@@ -302,8 +302,8 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
           </button>
         </header>
 
-        <div className="flex min-h-0 flex-1">
-          <nav className="w-[158px] shrink-0 border-r border-slate-200 py-2" aria-label="Sekce nastavení">
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <nav className="flex w-full shrink-0 overflow-x-auto border-b border-slate-200 py-1 sm:block sm:w-[158px] sm:overflow-visible sm:border-b-0 sm:border-r sm:py-2" aria-label="Sekce nastavení">
             {TABS.map(item => (
               <button
                 key={item.id}
@@ -311,7 +311,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                 role="tab"
                 aria-selected={tab === item.id}
                 onClick={() => setTab(item.id)}
-                className={`flex h-9 w-full items-center gap-2 px-3 text-left text-[12.5px] ${tab === item.id ? 'bg-slate-100 font-semibold text-slate-950' : 'text-slate-600 hover:bg-slate-50'}`}
+                className={`flex h-11 w-auto shrink-0 items-center gap-2 whitespace-nowrap px-3 text-left text-[12.5px] sm:h-9 sm:w-full ${tab === item.id ? 'bg-slate-100 font-semibold text-slate-950' : 'text-slate-600 hover:bg-slate-50'}`}
               >
                 <span className="text-slate-500">{item.icon}</span>
                 {item.label}
@@ -669,7 +669,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
           </div>
         </div>
 
-        <footer className="relative flex h-14 shrink-0 items-center justify-between border-t border-slate-200 px-5">
+        <footer className="relative flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-3 sm:h-14 sm:flex-nowrap sm:py-0">
           <IndicatorTemplateMenu
             indicator={CHART_SETTINGS_TEMPLATE_NAMESPACE}
             value={draft}
@@ -681,7 +681,7 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
             // s výchozím nastavením, ne aplikuje přímo.
             onApply={value => commit(mergeChartSettings(value, isDark))}
           />
-          <div className="flex gap-3">
+          <div className="flex flex-wrap justify-end gap-3">
             <button type="button" onClick={onCancel} className="h-8 rounded-md border border-slate-300 px-5 text-[13px] font-medium hover:bg-slate-50">Zrušit</button>
             <button
               type="button"
