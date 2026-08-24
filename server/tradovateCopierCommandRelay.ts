@@ -143,9 +143,12 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
   if (command.type === 'copy-command') {
     return { command: validatedRemoteCopyCommand((command as { command?: unknown }).command) };
   }
-  const group = (command as { group?: unknown }).group;
-  if (command.type === 'arm-live' && group !== undefined) {
-    return { group: validatedRelayGroup(group) };
+  if (command.type === 'arm-live') {
+    // ARM bez skupiny se dřív tiše převedl na {} a worker se ozbrojil se
+    // svou zastaralou konfigurací — 24. 8. s enabled:false, takže se první
+    // obchod nezkopíroval. UI skupinu posílá vždy; její absence je chyba
+    // volajícího a musí selhat nahlas, ne potichu změnit význam příkazu.
+    return { group: validatedRelayGroup((command as { group?: unknown }).group) };
   }
   return {};
 };
@@ -155,8 +158,8 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
   if (row.command_type === 'copy-command') {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
   }
-  if (row.command_type === 'arm-live' && row.payload?.group !== undefined) {
-    return { type: 'arm-live', group: validatedRelayGroup(row.payload.group) } as LocalCopierAgentCommand;
+  if (row.command_type === 'arm-live') {
+    return { type: 'arm-live', group: validatedRelayGroup(row.payload?.group) } as LocalCopierAgentCommand;
   }
   return { type: row.command_type } as LocalCopierAgentCommand;
 };

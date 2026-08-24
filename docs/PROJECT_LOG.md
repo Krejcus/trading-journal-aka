@@ -78,6 +78,41 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-24 (Claude, incident: první živý obchod se nezkopíroval)
+Postmortem provedl Codex (DB forensika), nálezy jsem ověřil v kódu a opravil.
+Řetěz příčin:
+1. **Verzní rozjezd** — noční opravy z auditu (mj. relay přenos skupiny,
+   commit 3dd8078d) zůstaly jen lokálně; produkce jela 8cefc75f a worker byl
+   z 23. 8. 17:25. Frontend posílal `{type:'arm-live', group}` — relay ale
+   payload zredukoval na `{}`, worker se ozbrojil se svou zastaralou
+   konfigurací (skupina `enabled:false`).
+2. **OCO/OSO cesty obcházely `group.enabled`** — `planReplication` vypnutou
+   skupinu přeskočí, ale `processBracketPair`/`processOsoPair` bránu neměly
+   (v celém copierRunner.ts nebyl jediný výskyt `group.enabled`). Proto se
+   první obchod nekopíroval a pozdější brackety ano — zdánlivě chaotické
+   chování.
+3. Neznámý DISARM 2 min před vstupem (tabulka příkazů neukládá actora).
+
+Opravy (obě s testy, které bez opravy prokazatelně padají):
+- brána `group.enabled` v processBracketPair i processOsoPair — POUZE tam;
+  hlavní cesta ji nedostala schválně, protože přes ni jedou risk-redukující
+  rušení už zkopírovaných příkazů, která vypnutá skupina osiřet nesmí;
+- relay `arm-live` BEZ skupiny nyní selže nahlas (`invalid-relay-command`)
+  na enqueue i claim straně — nikdy se tiše nepřevede na `{}`. Starý řádek
+  s payload `{}` po nasazení selže na claim straně = fail-loud, žádný ARM
+  se zastaralou konfigurací.
+
+Procesní poučení (závazné): oprava klasifikovaná jako bezpečnostní se
+nesmí nechat nepushnutá přes obchodní den. Frontend, relay a worker musí
+běžet ze stejného commitu; před ostrým během ověřit
+`git log origin/main..HEAD` prázdný a worker build čas > čas posledního
+copier commitu.
+
+Zbývá (viz Codex doporučení): rozlišit v UI OAuth/snapshot/worker/WS/ARM
+stavy (dnes splývají — Lucid „zešednul" bez skutečného výpadku),
+skupina Connected přes some(), telemetrie follower_count ukazuje
+konfiguraci místo výsledku, actor u příkazů v DB.
+
 ### 2026-08-23 (Claude, review mobilní appky — falešné ARM opraveno)
 Společná review appky na telefonu (Claude + Codex, dva statické passy
 a interaktivní kontrola). Nejcennější třída nálezů: **UI tvrdilo ARM, aniž

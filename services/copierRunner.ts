@@ -400,6 +400,28 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
   }
 
   state = applyLeaderProgress(state, event, group);
+  // Stejná brána jako v planReplication: vypnutá skupina nesmí odeslat
+  // žádný follower příkaz. Bez ní se běžný event přeskočil jako
+  // group-disabled, ale bracket/OSO cesta příkazy poslala — přesně tahle
+  // nekonzistence stála za incidentem z 24. 8. (první obchod se
+  // nezkopíroval, pozdější brackety ano). Risk-redukující rušení jede
+  // hlavní cestou v processLeaderEvent, té se brána netýká.
+  if (!group.enabled) {
+    for (const follower of group.followers) {
+      audit.push({
+        at: clock(), leaderEventId: event.id, kind: 'skipped', accountId: follower.accountId,
+        reason: 'group-disabled',
+      });
+    }
+    const disabledState = applyResolved(state, [], event.sequence);
+    revision = await persistRuntime(store, disabledState, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision);
+    return {
+      runtime: { state: disabledState, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
+      plan: { leaderEventId: event.id, orders: [], skipped: group.followers.map(follower => ({ followerAccountId: follower.accountId, reason: 'group-disabled' })) },
+      audit,
+      metrics,
+    };
+  }
   const jobs = group.followers.flatMap(follower => {
     if (follower.mode === 'off') {
       audit.push({
@@ -643,6 +665,28 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
     };
   }
   state = applyLeaderProgress(state, event, group);
+  // Stejná brána jako v planReplication: vypnutá skupina nesmí odeslat
+  // žádný follower příkaz. Bez ní se běžný event přeskočil jako
+  // group-disabled, ale bracket/OSO cesta příkazy poslala — přesně tahle
+  // nekonzistence stála za incidentem z 24. 8. (první obchod se
+  // nezkopíroval, pozdější brackety ano). Risk-redukující rušení jede
+  // hlavní cestou v processLeaderEvent, té se brána netýká.
+  if (!group.enabled) {
+    for (const follower of group.followers) {
+      audit.push({
+        at: clock(), leaderEventId: event.id, kind: 'skipped', accountId: follower.accountId,
+        reason: 'group-disabled',
+      });
+    }
+    const disabledState = applyResolved(state, [], event.sequence);
+    revision = await persistRuntime(store, disabledState, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision);
+    return {
+      runtime: { state: disabledState, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
+      plan: { leaderEventId: event.id, orders: [], skipped: group.followers.map(follower => ({ followerAccountId: follower.accountId, reason: 'group-disabled' })) },
+      audit,
+      metrics,
+    };
+  }
 
   const dispatchable: OsoOutboxEntry[] = [];
   const resolvedKeys: string[] = [];

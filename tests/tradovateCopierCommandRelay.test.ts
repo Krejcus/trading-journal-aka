@@ -183,6 +183,19 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
     expect(payload.group?.safety).toMatchObject({ dailyLossLimitUsd: 500, entryCooldownMinutes: 15, armExpiryFlatten: 'followers' });
   });
 
+  it('odmítne ARM úplně bez skupiny — nikdy ho tiše nepřevede na {}', async () => {
+    // 24. 8.: payload {} → worker se ozbrojil se zastaralou konfigurací
+    // (enabled:false) a první obchod se nezkopíroval.
+    const upsert = vi.fn();
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      command: { type: 'arm-live' } as unknown as LocalCopierAgentCommand,
+    })).rejects.toThrow('invalid-relay-command');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it('odmítne strukturálně vadnou skupinu místo tichého zahození', async () => {
     const upsert = vi.fn();
     await expect(enqueueTradovateCopierCommand({

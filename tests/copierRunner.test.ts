@@ -1415,3 +1415,58 @@ describe('výpadek při ověřování zrušení nezablokuje další zápisy', ()
     expect(dalsi.runtime.revision).toBeGreaterThan(opened.runtime.revision);
   });
 });
+
+describe('vypnutá skupina blokuje i OCO/OSO cesty (incident 24. 8.)', () => {
+  it('processOsoPair s enabled:false neodešle žádný broker příkaz', async () => {
+    // Běžná cesta event přeskočila jako group-disabled, ale OSO cesta
+    // bránu neměla a příkazy poslala — jeden obchod se nekopíroval,
+    // pozdější brackety ano.
+    const broker = createMockBroker();
+    const result = await processOsoPair({
+      pair: {
+        entryOrderId: 'entry-oso', stopOrderId: 'stop-oso', targetOrderId: 'target-oso',
+        accountId: 100, symbol: 'MNQU6', entrySide: 'Buy', quantity: 1,
+        entryOrderType: 'Limit', entryLimitPrice: 30_000,
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: event({
+        id: 'oso-stop', orderId: 'stop-oso', kind: 'submitted', sequence: 3,
+        side: 'Sell', orderType: 'Stop', stopPrice: 29_950,
+      }),
+      group: { ...soloGroup, enabled: false },
+      runtime: createRuntime(createCopierState([], 2)),
+      context: liveGate(), broker, clock: stepClock(), store: createMemoryCopierStore(),
+    });
+
+    expect(broker.placedOsoRequests()).toHaveLength(0);
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(result.plan.skipped.every(item => item.reason === 'group-disabled')).toBe(true);
+    expect(result.plan.skipped.length).toBeGreaterThan(0);
+    expect(result.runtime.state.lastSequence).toBe(3);
+  });
+
+  it('processBracketPair s enabled:false neodešle žádný broker příkaz', async () => {
+    const broker = createMockBroker();
+    const result = await processBracketPair({
+      pair: {
+        entryOrderId: 'entry-br', stopOrderId: 'stop-br', targetOrderId: 'target-br',
+        accountId: 100, symbol: 'MNQU6', quantity: 1, side: 'Buy',
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: event({
+        id: 'br-stop', orderId: 'stop-br', kind: 'submitted', sequence: 3,
+        side: 'Sell', orderType: 'Stop', stopPrice: 29_950,
+      }),
+      group: { ...soloGroup, enabled: false },
+      runtime: createRuntime(createCopierState([], 2)),
+      context: liveGate(), broker, clock: stepClock(), store: createMemoryCopierStore(),
+    });
+
+    expect(broker.placedOcoRequests()).toHaveLength(0);
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(result.plan.skipped.every(item => item.reason === 'group-disabled')).toBe(true);
+    expect(result.runtime.state.lastSequence).toBe(3);
+  });
+});
