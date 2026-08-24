@@ -78,6 +78,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-24 večer (Claude, forenzika otočení followerů + trojitá obrana)
+Doplnění ranního incidentu: followeři se otočili do long 1, protože jejich
+stopy byly u brokera navýšeny z qty 6 na qty 7. Forenzika orderVersion +
+command entit prokázala, že fatální Modify (14:59:19.148Z, všech 5 účtů
+v 16ms rozestupech) **neposlal náš worker**: příkaz nemá `userSessionId`
+(server-generated, Tradovate engine), worker log i audit jsou v tom čase
+prázdné a náš rytmus je ~150 ms/účet. Náš poslední zásah byl :09.8 s qty 6.
+Follower brackety jsou nativní OSO spravované venue enginem — přímé modify
+stop nohy s totálem závodí s jeho správou. KOREKCE dřívějšího závěru:
+copier fatální modify nevygeneroval; regresní test „engine spočítá 7"
+napsat nejde, engine 7 nikdy nespočítal.
+
+Trojitá obrana (testy všech tří větví ověřeně padají bez opravy):
+1. **Flat sweep** — follower přechod pozice ≠0 → 0 okamžitě ruší jeho
+   ochranné nohy (bracket/OSO outbox), bez čekání na kopii leaderova
+   cancelu. Risk-redukující, funguje i po DISARM. Incidentní okno bylo
+   980 ms; sweep ho zavírá na jednotky RTT. Vstupní limitky neruší.
+2. **Autoritativní lookup před modify** — částečně vyplněný příkaz nikdy
+   nedostane zastaralý total: fill ≥ cíl ⇒ skip; čistý posun ceny drží
+   venue total; nikdy se neposílá total < už vyplněné množství.
+3. **Detekce cizího zásahu** — venue total > náš cíl ⇒ modify se neodešle,
+   operace unknown ⇒ standardní fail-closed řetěz.
+
+Pozn.: venue si o vlastní vůli navýšil follower stop i bez našeho
+souběžného příkazu — flat sweep je proto primární pojistka, lookup a
+detekce zmenšují prostor závodu. Před ostrým ARM zopakovat DEMO sekvenci
+z incidentu (OSO vstup, 3× posun SL, částečné filly stopu).
+
 ### 2026-08-24 (Codex, Lucid po zavření leadera falešně zešednul)
 Deterministická příčina byla v částečném post-close refreshi LIVE dat, ne
 v OAuth ani broker spojení. Po přechodu Tradeify leadera do flat stavu hook

@@ -992,7 +992,35 @@ export async function processLeaderEvent(
         if (entry.operation === 'cancel') {
           await broker.cancelOrder(entry.accountId, entry.brokerOrderId);
         } else if (entry.changes) {
-          await broker.modifyOrder(entry.accountId, entry.brokerOrderId, entry.changes);
+          // Incident 24. 8.: náš modify (total 6) čekal AtExecution, mezitím
+          // se stop částečně vyplnil a venue engine Tradovate ho přeasertoval
+          // na total 7 → followeři se otočili do long. Modify částečně
+          // vyplněného příkazu proto nikdy neposílá zastaralý total: těsně
+          // před odesláním se čte autoritativní stav a
+          //  - fill ≥ zamýšlený total ⇒ není co upravovat, příkaz doběhne sám;
+          //  - fill > 0 a jde o čistý posun ceny ⇒ total zůstává venue
+          //    hodnota, mění se jen cena — závod o množství tak nevznikne;
+          //  - venue total > náš zamýšlený ⇒ cizí zásah do našeho příkazu,
+          //    modify se neodešle a operace skončí jako unknown (fail-closed).
+          const changes = { ...entry.changes };
+          const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId).catch(() => null);
+          const live = lookup?.order;
+          if (live && live.filledQuantity > 0) {
+            if (live.filledQuantity >= changes.quantity) {
+              cancelOutbox.set(entry.key, markCancelUnknown(
+                entry, `modify přeskočen: vyplněno ${live.filledQuantity}/${changes.quantity}`, clock(),
+              ));
+              return;
+            }
+            if (live.quantity > changes.quantity) {
+              cancelOutbox.set(entry.key, markCancelUnknown(
+                entry, `cizí navýšení množství u brokera (${live.quantity} > ${changes.quantity})`, clock(),
+              ));
+              return;
+            }
+            changes.quantity = live.quantity;
+          }
+          await broker.modifyOrder(entry.accountId, entry.brokerOrderId, changes);
         }
         cancelOutbox.set(entry.key, markCancelUnknown(entry, 'čeká na potvrzení order streamem', clock()));
       } catch (error) {

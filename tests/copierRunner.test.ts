@@ -1470,3 +1470,61 @@ describe('vypnutá skupina blokuje i OCO/OSO cesty (incident 24. 8.)', () => {
     expect(result.runtime.state.lastSequence).toBe(3);
   });
 });
+
+describe('modify částečně vyplněné objednávky (incident 24. 8.)', () => {
+  const opened = async (broker: ReturnType<typeof createMockBroker>, clock: () => number) =>
+    processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+
+  it('cizí navýšení množství u brokera modify zablokuje (fail-closed)', async () => {
+    // Venue engine přeasertoval follower stop na total 7, zatímco my chtěli 6.
+    // Poslat modify se zastaralým totálem by závod jen prohloubilo.
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const first = await opened(broker, clock);
+    const skutecny = broker.orders()[0];
+    const nafouknuty = {
+      ...broker,
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        const lookup = await broker.findOrderById(accountId, brokerOrderId);
+        return lookup.order
+          ? { ...lookup, order: { ...lookup.order, quantity: 7, filledQuantity: 5 } }
+          : lookup;
+      },
+    };
+    const modified = await processLeaderEvent({
+      event: event({ id: 'e2', kind: 'replaced', quantity: 6, limitPrice: 29_600, orderType: 'Limit', sequence: 2 }),
+      group: soloGroup, runtime: first.runtime, context: liveGate(), broker: nafouknuty, clock,
+    });
+
+    expect(broker.orders()[0]).toMatchObject({ quantity: skutecny.quantity, limitPrice: 29_500 });
+    const zaznam = [...modified.runtime.cancelOutbox.values()].find(entry => entry.operation === 'modify');
+    expect(zaznam?.status).toBe('unknown');
+    expect(zaznam?.reason).toContain('cizí navýšení');
+  });
+
+  it('vyplněno ≥ cíl → modify se přeskočí, příkaz doběhne sám', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const first = await opened(broker, clock);
+    const dokonceny = {
+      ...broker,
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        const lookup = await broker.findOrderById(accountId, brokerOrderId);
+        return lookup.order
+          ? { ...lookup, order: { ...lookup.order, filledQuantity: lookup.order.quantity } }
+          : lookup;
+      },
+    };
+    const modified = await processLeaderEvent({
+      event: event({ id: 'e2', kind: 'replaced', quantity: 1, limitPrice: 29_600, orderType: 'Limit', sequence: 2 }),
+      group: soloGroup, runtime: first.runtime, context: liveGate(), broker: dokonceny, clock,
+    });
+
+    expect(broker.orders()[0]).toMatchObject({ limitPrice: 29_500 });
+    const zaznam = [...modified.runtime.cancelOutbox.values()].find(entry => entry.operation === 'modify');
+    expect(zaznam?.reason).toContain('modify přeskočen');
+  });
+});

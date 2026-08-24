@@ -448,6 +448,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     throw new Error('maxLeaderOrders musí být kladné celé číslo');
   }
 
+  /** Už zametené nohy; brání smyčce cancel → position event → cancel. */
+  const sweptProtectiveLegs = new Set<string>();
+  const sweepFollowerProtectiveLegs = async (accountId: number, at: number) => {
+    const runtime = currentRuntime();
+    const legs: string[] = [];
+    for (const entry of [...runtime.bracketOutbox.values(), ...runtime.osoOutbox.values()]) {
+      if (entry.request.accountId !== accountId) continue;
+      for (const brokerOrderId of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
+        if (brokerOrderId && !sweptProtectiveLegs.has(brokerOrderId)) legs.push(brokerOrderId);
+      }
+    }
+    for (const brokerOrderId of legs) {
+      sweptProtectiveLegs.add(brokerOrderId);
+      try {
+        await broker.cancelOrder(accountId, brokerOrderId);
+        options.onAudit?.([{
+          at, leaderEventId: `flat-sweep-${accountId}-${brokerOrderId}`, kind: 'canceled',
+          accountId, brokerOrderId, reason: 'follower flat — ochranná noha zrušena okamžitě',
+        }]);
+      } catch {
+        // Noha už je terminální (vyplněná/zrušená) nebo výpadek — nechá se
+        // standardní reconciliaci; sweep je best-effort navíc, ne náhrada.
+      }
+    }
+  };
+
   const currentRuntime = () => processor.currentRuntime();
   const currentStuckOperations = (): CopierStuckOperation[] => {
     const current = currentRuntime();
@@ -1154,8 +1180,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     await maybeHandleArmExpiry(now);
     if (event.type === 'position') {
       const accountPositions = positionsByAccount.get(event.position.accountId) ?? new Map<string, number>();
+      const previousAccountNet = accountPositions.get(event.position.symbol) ?? 0;
       accountPositions.set(event.position.symbol, event.position.netQuantity);
       positionsByAccount.set(event.position.accountId, accountPositions);
+      // Incident 24. 8.: follower byl flat v 19.198, ale jeho stop u brokera
+      // dál pracoval (venue ho přeasertoval na vyšší total) a o 980 ms
+      // později ho otočil do protipozice. Jakmile follower dosáhne flat,
+      // jeho ochranné nohy okamžitě rušíme sami — risk-redukující cancel,
+      // který smí proběhnout i po DISARM. Zrušení už vyplněné/zrušené nohy
+      // broker odmítne a to je v pořádku.
+      if (
+        event.position.accountId !== group.leaderAccountId
+        && previousAccountNet !== 0
+        && event.position.netQuantity === 0
+      ) {
+        await sweepFollowerProtectiveLegs(event.position.accountId, now);
+      }
       if (event.position.accountId === group.leaderAccountId) {
         const previousNet = leaderPositions.get(event.position.symbol) ?? 0;
         leaderPositions.set(event.position.symbol, event.position.netQuantity);

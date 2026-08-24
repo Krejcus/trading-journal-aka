@@ -3,6 +3,9 @@ import type { BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
 import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
 import { createMockBroker } from '../services/mockBroker';
+import { processOsoPair } from '../services/copierRunner';
+import { createCopierState } from '../services/copierEngine';
+import { createRiskGateContext } from '../services/copierRiskGate';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 
 /**
@@ -365,5 +368,71 @@ describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () =
     expect(broker.placedRequests()).toHaveLength(placedBefore);
     expect(restarted.status().autoClose).toBeNull();
     restarted.stop();
+  });
+});
+
+describe('flat sweep ochranných nohou (incident 24. 8.)', () => {
+  it('follower flat → jeho ochranné nohy se okamžitě zruší, i po DISARM', async () => {
+    // Venue engine dnes přeasertoval follower stop na vyšší total a 980 ms
+    // po dosažení flat ho vyplnil do protipozice. Sweep tohle okno zavírá:
+    // flat follower nesmí mít u brokera pracující ochranu ani sekundu déle,
+    // než je nutné — bez čekání na kopii leaderova cancelu.
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore();
+
+    // Skutečný follower OSO (entry + SL + TP) přes runner, persistovaný.
+    const oso = await processOsoPair({
+      pair: {
+        entryOrderId: 'entry-1', stopOrderId: 'stop-1', targetOrderId: 'target-1',
+        accountId: 100, symbol: 'MNQU6', entrySide: 'Buy', quantity: 2,
+        entryOrderType: 'Limit', entryLimitPrice: 30_000,
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: {
+        id: 'oso-stop', orderId: 'stop-1', kind: 'submitted', accountId: 100,
+        symbol: 'MNQU6', side: 'Sell', quantity: 2, orderType: 'Stop',
+        stopPrice: 29_950, sequence: 1, receivedAt: 0,
+      },
+      group,
+      runtime: {
+        state: createCopierState(), outbox: new Map(), cancelOutbox: new Map(),
+        bracketOutbox: new Map(), osoOutbox: new Map(), revision: 0,
+      },
+      context: {
+        ...createRiskGateContext({
+          armed: true, connected: true, shadowMode: false,
+          brokerEnvironment: 'demo', expectedEnvironment: 'demo',
+          lastHeartbeatAt: 1, maxHeartbeatAgeMs: 1_000_000, now: 1,
+        }),
+      },
+      broker, clock: stepClock(), store,
+    });
+    const followerLegs = broker.orders().filter(order => order.accountId === 200 && order.status === 'working');
+    expect(followerLegs.length).toBeGreaterThan(0);
+    expect([...oso.runtime.osoOutbox.values()][0]?.status).toBe('acknowledged');
+
+    // Controller startuje nad stejným store (jako po restartu workeru).
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    // DISARM (jako dnes) a follower dosáhne flat.
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 2 } });
+    await controller.waitForIdle();
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+
+    // Sweep míří jen na ochranné nohy (SL/TP). Nevyplněná vstupní limitka
+    // není ochrana — o tu se stará běžný lifecycle kopírování cancelů.
+    const entry = [...oso.runtime.osoOutbox.values()][0];
+    const zbyleOchranne = broker.orders().filter(order =>
+      order.accountId === 200
+      && order.status === 'working'
+      && [entry?.firstBrokerOrderId, entry?.secondBrokerOrderId].includes(order.brokerOrderId));
+    expect(zbyleOchranne).toHaveLength(0);
+    controller.stop();
   });
 });
