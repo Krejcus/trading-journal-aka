@@ -23,8 +23,10 @@ import {
   type TradovatePreflightResult,
 } from '../services/tradovateOAuthConnection';
 import {
+  applyTradovateConnectionDataRefresh,
   buildTradovateConnectionSummaries,
   readTradovateConnectionShell,
+  type TradovateConnectionDataRefreshMode,
   writeTradovateConnectionShell,
 } from '../lib/tradovateLiveConnectionCache';
 import {
@@ -245,7 +247,11 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     }
   }, []);
 
-  const refreshData = useCallback(async (connectionIds: string[], quiet = false) => {
+  const refreshData = useCallback(async (
+    connectionIds: string[],
+    quiet = false,
+    mode: TradovateConnectionDataRefreshMode = 'replace',
+  ) => {
     if (!quiet) setBusy('data');
     setError(null);
     try {
@@ -259,7 +265,11 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       if (stored) setProfiles(stored.profiles);
       if (datasetsResult.status === 'rejected') throw datasetsResult.reason;
       const datasets = datasetsResult.value;
-      setConnectionData(Object.fromEntries(datasets.map(dataset => [dataset.connectionId, dataset])));
+      setConnectionData(current => {
+        const next = applyTradovateConnectionDataRefresh(current, datasets, mode);
+        connectionDataRef.current = next;
+        return next;
+      });
       if (stored) {
         const storedIds = new Set(stored.profiles.map(profile => profile.externalAccountId));
         const hasMissingProfiles = datasets.flatMap(dataset => dataset.accounts)
@@ -421,8 +431,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         // A flat live tick has no cash anchor by design. Refresh exactly once
         // after the close so balance, realized daily P&L, fills and orders do
         // not remain stale until the ten-minute reconciliation or page reload.
+        // This is a partial refresh: replacing the whole map here would make
+        // unrelated connections (for example Lucid) look disconnected.
         if (becameFlat.length > 0) {
-          await refreshData(becameFlat, true);
+          await refreshData(becameFlat, true, 'merge');
         }
         const rateLimited = results.find(result =>
           result.status === 'rejected'

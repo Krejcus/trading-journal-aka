@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyTradovateConnectionDataRefresh,
   buildTradovateConnectionSummaries,
   readTradovateConnectionShell,
   writeTradovateConnectionShell,
@@ -59,5 +60,46 @@ describe('Tradovate LIVE connection shell cache', () => {
     expect(buildTradovateConnectionSummaries(status, { 'connection-1': dataset }, [], {
       'connection-1': { accountCount: 5, organizationName: 'Tradeify' },
     })['connection-1'].accountCount).toBe(2);
+  });
+
+  it('keeps unrelated broker connections during a partial post-close refresh', () => {
+    const tradeify = {
+      connectionId: 'connection-tradeify',
+      accounts: [{ id: 1, balance: 50_000 }],
+    } as unknown as TradovatePreflightResult;
+    const updatedTradeify = {
+      connectionId: 'connection-tradeify',
+      accounts: [{ id: 1, balance: 49_900 }],
+    } as unknown as TradovatePreflightResult;
+    const lucid = {
+      connectionId: 'connection-lucid',
+      accounts: [{ id: 2, balance: 50_000 }],
+    } as unknown as TradovatePreflightResult;
+
+    const refreshed = applyTradovateConnectionDataRefresh({
+      [tradeify.connectionId]: tradeify,
+      [lucid.connectionId]: lucid,
+    }, [updatedTradeify], 'merge');
+
+    expect(refreshed['connection-tradeify']).toBe(updatedTradeify);
+    expect(refreshed['connection-lucid']).toBe(lucid);
+  });
+
+  it('still removes absent connections during a complete refresh', () => {
+    const tradeify = {
+      connectionId: 'connection-tradeify',
+      accounts: [{ id: 1 }],
+    } as unknown as TradovatePreflightResult;
+    const lucid = {
+      connectionId: 'connection-lucid',
+      accounts: [{ id: 2 }],
+    } as unknown as TradovatePreflightResult;
+
+    const refreshed = applyTradovateConnectionDataRefresh({
+      [tradeify.connectionId]: tradeify,
+      [lucid.connectionId]: lucid,
+    }, [tradeify], 'replace');
+
+    expect(refreshed).toEqual({ 'connection-tradeify': tradeify });
   });
 });

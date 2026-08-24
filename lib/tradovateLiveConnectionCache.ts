@@ -9,6 +9,8 @@ export interface TradovateConnectionSummary {
   organizationName: string | null;
 }
 
+export type TradovateConnectionDataRefreshMode = 'replace' | 'merge';
+
 interface PersistedTradovateConnectionShell {
   version: 1;
   status: TradovateOAuthStatus;
@@ -25,6 +27,15 @@ const CACHE_PREFIX = 'alphatrade:tradovate-live-shell:v1:';
 const cacheKey = (userId: string) => `${CACHE_PREFIX}${userId}`;
 
 const isEnvironment = (value: unknown): value is 'demo' | 'live' => value === 'demo' || value === 'live';
+
+export const applyTradovateConnectionDataRefresh = (
+  current: Record<string, TradovatePreflightResult>,
+  datasets: TradovatePreflightResult[],
+  mode: TradovateConnectionDataRefreshMode,
+): Record<string, TradovatePreflightResult> => {
+  const incoming = Object.fromEntries(datasets.map(dataset => [dataset.connectionId, dataset]));
+  return mode === 'merge' ? { ...current, ...incoming } : incoming;
+};
 
 const sanitizedStatus = (status: TradovateOAuthStatus): TradovateOAuthStatus => ({
   connected: status.connected,

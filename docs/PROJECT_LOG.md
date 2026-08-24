@@ -78,6 +78,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-24 (Codex, Lucid po zavření leadera falešně zešednul)
+Deterministická příčina byla v částečném post-close refreshi LIVE dat, ne
+v OAuth ani broker spojení. Po přechodu Tradeify leadera do flat stavu hook
+načetl jen dotčené Tradeify connection ID, ale výsledkem nahradil celou mapu
+`connectionData`. Lucid tak dočasně zmizel ze snapshotu a UI ho vykreslilo
+jako offline, přestože připojení zůstalo aktivní.
+
+Oprava rozlišuje dva režimy: úplný refresh dál nahrazuje mapu a může odstranit
+skutečně odpojené spojení, zatímco cílený post-close refresh data slučuje a
+zachová ostatní prop firmy. Regresní testy ověřují oba směry. Ověření: 1425
+testů, typecheck a produkční build čisté. Změna je zatím pouze lokální — nebyla
+pushnuta ani nasazena.
+
 ### 2026-08-24 (Claude, incident: první živý obchod se nezkopíroval)
 Postmortem provedl Codex (DB forensika), nálezy jsem ověřil v kódu a opravil.
 Řetěz příčin:
