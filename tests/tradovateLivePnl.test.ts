@@ -71,6 +71,36 @@ describe('Tradovate lightweight live P&L reader', () => {
     expect(second.nextContractCursor).toBe(0);
     expect(fetchImpl).toHaveBeenCalledTimes(6);
   });
+
+  it('enriches a broker working order from its newest orderVersion', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith('/position/list')) return json([]);
+      if (path.endsWith('/order/list')) return json([{
+        id: 91, accountId: 10, contractId: 7, timestamp: '2026-08-15T10:00:00.000Z',
+        action: 'Sell', ordStatus: 'Working',
+      }]);
+      if (path.endsWith('/orderVersion/list')) return json([
+        { id: 910, orderId: 91, orderType: 'Stop', orderQty: 2, stopPrice: 30_900 },
+        { id: 911, orderId: 91, orderType: 'Stop', orderQty: 1, stopPrice: 30_950 },
+      ]);
+      return json({}, 404);
+    }) as unknown as typeof fetch;
+
+    const tick = await loadTradovateLivePnlTick({
+      baseUrl: 'https://demo.example.test/v1', accessToken: 'token', connectionId: 'c',
+      environment: 'demo', fetchImpl,
+    });
+
+    expect(tick.orders).toEqual([expect.objectContaining({
+      id: 91,
+      orderType: 'Stop',
+      quantity: 1,
+      stopPrice: 30_950,
+      status: 'Working',
+    })]);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
 });
 
 const coverage = { availability: 'available' as const, count: 1, httpStatus: 200 };
@@ -175,6 +205,32 @@ describe('Tradovate follower live P&L estimation', () => {
     expect(result.data.accounts[0].workingOrderCount).toBe(1);
     expect(result.data.accounts[0].activity).toMatchObject({ workingOrderCount: 1, orderCount: 1 });
     expect(result.data.coverage.orders).toEqual({ availability: 'available', count: 1, httpStatus: 200 });
+  });
+
+  it('does not treat Suspended or unknown orders as working protection', () => {
+    const tick: TradovateLivePnlTick = {
+      connectionId: 'c', environment: 'demo', capturedAt: '2026-08-15T10:00:00.000Z',
+      positions: [],
+      orders: [
+        {
+          id: 92, accountId: 10, contractId: 7, timestamp: null,
+          action: 'Sell', orderType: 'Stop', quantity: 1, price: null, stopPrice: 31_000,
+          status: 'Suspended', admin: false, ocoId: null, parentId: null, linkedId: null,
+        },
+        {
+          id: 93, accountId: 10, contractId: 7, timestamp: null,
+          action: 'Sell', orderType: 'Stop', quantity: 1, price: null, stopPrice: 31_000,
+          status: null, admin: false, ocoId: null, parentId: null, linkedId: null,
+        },
+      ],
+      anchor: null, activeContractCount: 0, nextContractCursor: 0,
+    };
+
+    const result = applyTradovateLivePnlTick(dataset, tick);
+
+    expect(result.data.accounts[0].orders).toHaveLength(2);
+    expect(result.data.accounts[0].workingOrderCount).toBe(0);
+    expect(result.data.accounts[0].activity.workingOrderCount).toBe(0);
   });
 
   it('supports only explicitly verified contract values', () => {

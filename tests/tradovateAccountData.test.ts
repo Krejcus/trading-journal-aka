@@ -113,8 +113,11 @@ describe('Tradovate read-only account data', () => {
         netPrice: 20_000,
       }]);
       if (url.pathname.endsWith('/order/list')) return json([
-        { id: 30, accountId: 10, contractId: 99, timestamp: '2026-08-14T09:30:00Z', action: 'Buy', orderType: 'Limit', orderQty: 1, price: 20_000, ordStatus: 'Filled' },
+        { id: 30, accountId: 10, contractId: 99, timestamp: '2026-08-14T09:30:00Z', action: 'Buy', ordStatus: 'Filled' },
         { id: 31, accountId: 10, contractId: 99, timestamp: '2026-08-14T10:00:00Z', action: 'Sell', ordStatus: 'Filled' },
+      ]);
+      if (url.pathname.endsWith('/orderVersion/list')) return json([
+        { id: 300, orderId: 30, orderType: 'Limit', orderQty: 1, price: 20_000 },
       ]);
       if (url.pathname.endsWith('/fill/list')) return json([
         { id: 40, orderId: 30, contractId: 99, timestamp: '2026-08-14T09:30:00Z', tradeDate: { year: 2026, month: 8, day: 14 }, action: 'Buy', qty: 1, price: 20_000 },
@@ -205,6 +208,41 @@ describe('Tradovate read-only account data', () => {
     });
     expect(requests.every(request => request.method === 'GET' || request.path.endsWith('/cashBalance/getcashbalancesnapshot'))).toBe(true);
     expect(JSON.stringify(requests)).not.toContain('secret-token');
+  });
+
+  it('doplní working order z nejnovější orderVersion a Suspended nepočítá jako aktivní', async () => {
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/account/list')) return json([{ id: 10, name: 'DEMO-10' }]);
+      if (path.endsWith('/position/list')) return json([]);
+      if (path.endsWith('/order/list')) return json([
+        { id: 30, accountId: 10, contractId: 99, timestamp: '2026-08-14T09:30:00Z', action: 'Buy', ordStatus: 'Working' },
+        { id: 31, accountId: 10, contractId: 99, timestamp: '2026-08-14T09:31:00Z', action: 'Sell', ordStatus: 'Working' },
+        { id: 32, accountId: 10, contractId: 99, timestamp: '2026-08-14T09:32:00Z', action: 'Sell', ordStatus: 'Suspended' },
+      ]);
+      if (path.endsWith('/orderVersion/list')) return json([
+        { id: 300, orderId: 30, orderType: 'Limit', orderQty: 1, price: 31_000 },
+        { id: 301, orderId: 30, orderType: 'Limit', orderQty: 2, price: 31_001 },
+        { id: 302, orderId: 31, orderType: 'Stop', orderQty: 2, stopPrice: 30_900 },
+        { id: 303, orderId: 32, orderType: 'Stop', orderQty: 2, stopPrice: 30_800 },
+      ]);
+      if (path.endsWith('/contract/items')) return json([{ id: 99, name: 'MNQZ6' }]);
+      if (path.endsWith('/cashBalance/getcashbalancesnapshot')) return json({ totalCashValue: 50_000 });
+      return json([]);
+    }) as typeof fetch;
+
+    const result = await loadTradovateAccountData({
+      baseUrl: 'https://demo.tradovateapi.com/v1',
+      accessToken: 'token',
+      fetchImpl,
+    });
+    const byId = new Map(result.accounts[0].orders.map(order => [order.id, order]));
+
+    expect(byId.get(30)).toMatchObject({ orderType: 'Limit', quantity: 2, price: 31_001 });
+    expect(byId.get(31)).toMatchObject({ orderType: 'Stop', quantity: 2, stopPrice: 30_900 });
+    expect(byId.get(32)).toMatchObject({ status: 'Suspended', orderType: 'Stop' });
+    expect(result.accounts[0].workingOrderCount).toBe(2);
+    expect(result.accounts[0].activity.workingOrderCount).toBe(2);
   });
 
   it('přiřadí historické filly k účtu i přes cash ledger, když už order/list příkaz neobsahuje', async () => {

@@ -4,6 +4,10 @@ import type {
   TradovateLivePnlPosition,
   TradovateLivePnlTick,
 } from '../lib/tradovateLivePnlTypes.js';
+import {
+  latestTradovateOrderVersionsByOrderId,
+  type TradovateOrderVersionEntity,
+} from '../lib/tradovateOrderReadModel.js';
 
 interface PositionEntity {
   id?: number;
@@ -96,7 +100,10 @@ const normalizePositions = (value: unknown): TradovateLivePnlPosition[] => {
   });
 };
 
-const normalizeOrders = (value: unknown): TradovateLiveOrder[] => {
+const normalizeOrders = (
+  value: unknown,
+  versionsByOrderId: ReadonlyMap<number, TradovateOrderVersionEntity>,
+): TradovateLiveOrder[] => {
   if (!Array.isArray(value)) throw new TradovateLivePnlError('Tradovate returned invalid orders');
   return value.flatMap((candidate): TradovateLiveOrder[] => {
     if (!candidate || typeof candidate !== 'object') return [];
@@ -104,16 +111,19 @@ const normalizeOrders = (value: unknown): TradovateLiveOrder[] => {
     const id = finite(raw.id);
     const accountId = finite(raw.accountId);
     if (id == null || accountId == null) return [];
+    const version = versionsByOrderId.get(id);
     return [{
       id,
       accountId,
       contractId: finite(raw.contractId),
       timestamp: timestamp(raw.timestamp),
       action: raw.action === 'Buy' || raw.action === 'Sell' ? raw.action : null,
-      orderType: typeof raw.orderType === 'string' ? raw.orderType : null,
-      quantity: finite(raw.orderQty),
-      price: finite(raw.price),
-      stopPrice: finite(raw.stopPrice),
+      orderType: typeof version?.orderType === 'string'
+        ? version.orderType
+        : typeof raw.orderType === 'string' ? raw.orderType : null,
+      quantity: finite(version?.orderQty) ?? finite(raw.orderQty),
+      price: finite(version?.price) ?? finite(raw.price),
+      stopPrice: finite(version?.stopPrice) ?? finite(raw.stopPrice),
       status: typeof raw.ordStatus === 'string' ? raw.ordStatus : null,
       admin: typeof raw.admin === 'boolean' ? raw.admin : null,
       ocoId: finite(raw.ocoId),
@@ -138,7 +148,7 @@ export async function loadTradovateLivePnlTick(options: {
   now?: number;
 }): Promise<TradovateLivePnlTick> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const [positions, orders] = await Promise.all([
+  const [positions, rawOrders] = await Promise.all([
     tradovateRequest<PositionEntity[]>({
       ...options,
       path: '/position/list',
@@ -148,8 +158,24 @@ export async function loadTradovateLivePnlTick(options: {
       ...options,
       path: '/order/list',
       fetchImpl,
-    }).then(normalizeOrders),
+    }),
   ]);
+  // Order versions carry the mutable order details, but avoid spending an
+  // extra request on every lightweight tick while the account has no orders.
+  const rawOrderVersions = Array.isArray(rawOrders) && rawOrders.length > 0
+    ? await tradovateRequest<TradovateOrderVersionEntity[]>({
+      ...options,
+      path: '/orderVersion/list',
+      fetchImpl,
+    })
+    : [];
+  if (!Array.isArray(rawOrderVersions)) {
+    throw new TradovateLivePnlError('Tradovate returned invalid order versions');
+  }
+  const orders = normalizeOrders(
+    rawOrders,
+    latestTradovateOrderVersionsByOrderId(rawOrderVersions),
+  );
   const open = positions.filter(position => position.netPosition !== 0);
   const openCountByAccount = new Map<number, number>();
   for (const position of open) {

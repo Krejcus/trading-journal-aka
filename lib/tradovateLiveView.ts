@@ -4,6 +4,7 @@ import type {
   TradovateAccountOrder,
 } from './tradovateAccountDataTypes';
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
+import { isTradovateWorkingStatus } from './tradovateOrderReadModel';
 
 export interface TradovateLiveTotals {
   balance: number;
@@ -69,12 +70,10 @@ export interface TradovateLiveDay {
   pairedTradeCount: number;
 }
 
-const terminalOrderStatuses = new Set(['filled', 'canceled', 'cancelled', 'rejected', 'expired', 'completed']);
-
 const value = (candidate: number | null) => candidate ?? 0;
 
 export const isWorkingTradovateOrder = (order: TradovateAccountOrder) =>
-  !terminalOrderStatuses.has((order.status ?? '').toLowerCase());
+  isTradovateWorkingStatus(order.status);
 
 export const aggregateTradovateLive = (accounts: TradovateAccountDataAccount[]): TradovateLiveTotals =>
   accounts.reduce<TradovateLiveTotals>((totals, account) => ({

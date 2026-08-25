@@ -143,6 +143,8 @@ describe('tradovate LIVE view model', () => {
     const value = account();
     expect(isWorkingTradovateOrder(value.orders[0])).toBe(true);
     expect(isWorkingTradovateOrder({ ...value.orders[0], status: 'Filled' })).toBe(false);
+    expect(isWorkingTradovateOrder({ ...value.orders[0], status: 'Suspended' })).toBe(false);
+    expect(isWorkingTradovateOrder({ ...value.orders[0], status: null })).toBe(false);
     const events = buildTradovateLiveActivity([value]);
     expect(events.map(event => event.kind)).toEqual(['cash', 'trade', 'fill', 'order']);
     expect(events[1].pnl).toBe(95.8);

@@ -1,7 +1,6 @@
 import type { TradovateAccountDataResult, TradovateAccountPosition } from './tradovateAccountDataTypes';
 import type { TradovateLivePnlTick } from './tradovateLivePnlTypes';
-
-const terminalOrderStatuses = new Set(['filled', 'canceled', 'cancelled', 'rejected', 'expired', 'completed']);
+import { isTradovateWorkingStatus } from './tradovateOrderReadModel';
 
 export interface TradovateContractMark {
   contractId: number;
@@ -122,8 +121,7 @@ export function applyTradovateLivePnlTick(
       parentId: order.parentId,
       linkedId: order.linkedId,
     })).sort((a, b) => Date.parse(b.timestamp ?? '') - Date.parse(a.timestamp ?? ''));
-    const workingOrderCount = orders.filter(order =>
-      !terminalOrderStatuses.has((order.status ?? '').toLowerCase())).length;
+    const workingOrderCount = orders.filter(order => isTradovateWorkingStatus(order.status)).length;
     const openPositions = positions.filter(position => position.netPosition !== 0);
     const exact = tick.anchor?.accountId === account.id ? tick.anchor : null;
     const estimatedParts = openPositions.map(position => {

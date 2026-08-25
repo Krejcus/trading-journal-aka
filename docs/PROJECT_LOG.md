@@ -106,8 +106,21 @@ neznámou příčinu bez auto-close, přesný protective reversal a přímý sig
 Copier runtime + chaos: 75/75; celý repo: 1456/1456; typecheck a produkční build
 čisté. První souběžný full test měl tři časové flaky pády pod zátěží; všechny
 tři prošly samostatně a celý full run následně prošel bez souběžného tsc.
-Nic nebylo commitnuto, pushnuto, nasazeno ani reinstalováno; worker zůstává
-DISARMED. Souběžné rozpracované LIVE pill/SL read-model změny byly zachovány.
+Oprava je lokálně commitnutá jako `dbad27de`, ale nebyla pushnuta, nasazena ani
+reinstalována; worker zůstává DISARMED. Souběžné rozpracované LIVE pill/SL
+read-model změny byly zachovány.
+
+### 2026-08-25 (Codex, čekající limit a přesné rozpoznání ochranného SL)
+Tradovate mutable údaje příkazu nemusí spolehlivě vracet přímo v `/order/list`;
+typ, množství a ceny jsou autoritativně v nejnovější `/orderVersion/list`.
+Společný read model proto vybírá poslední verzi podle `orderId` a obohacuje jí
+úplný snapshot i lehký LIVE P&L tick. Díky tomu se čekající Limit může vykreslit
+jako pill i bez otevřené pozice a Stop/StopLimit se při otevřené pozici správně
+pozná jako ochranný SL. Za aktivní se nově považuje pouze broker stav `Working`;
+`Suspended`, neznámé a terminální stavy nesmějí v UI předstírat ochranu.
+Cílené ověření: 37/37 testů; společně s incidentní opravou následně prošlo
+1456/1456 testů, TypeScript typecheck a produkční build. Změna je lokálně
+commitnutá spolu s tímto zápisem, ale nebyla pushnuta ani nasazena.
 
 ### 2026-08-25 (Codex, integrační debug chybějícího Positions pillu)
 Hypotéza C se pro flat leader účet s numericky shodným account ID a working

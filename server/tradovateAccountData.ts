@@ -11,6 +11,11 @@ import type {
   TradovateFeeBreakdown,
   TradovateSourceCoverage,
 } from '../lib/tradovateAccountDataTypes.js';
+import {
+  isTradovateWorkingStatus,
+  latestTradovateOrderVersionsByOrderId,
+  type TradovateOrderVersionEntity,
+} from '../lib/tradovateOrderReadModel.js';
 
 export type {
   TradovateAccountDataAccount,
@@ -161,8 +166,6 @@ interface Probe<T> {
   status: number | null;
   partial?: boolean;
 }
-
-const terminalOrderStatuses = new Set(['Filled', 'Canceled', 'Cancelled', 'Rejected', 'Expired', 'Completed']);
 
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -444,16 +447,19 @@ const normalizePosition = (
 const normalizeOrder = (
   order: OrderEntity & { id: number },
   symbols: Map<number, string>,
+  version: TradovateOrderVersionEntity | undefined,
 ): TradovateAccountOrder => ({
   id: order.id,
   contractId: finite(order.contractId),
   symbol: typeof order.contractId === 'number' ? symbols.get(order.contractId) ?? null : null,
   timestamp: timestampOrNull(order.timestamp),
   action: order.action === 'Buy' || order.action === 'Sell' ? order.action : null,
-  orderType: typeof order.orderType === 'string' ? order.orderType : null,
-  quantity: finite(order.orderQty),
-  price: finite(order.price),
-  stopPrice: finite(order.stopPrice),
+  orderType: typeof version?.orderType === 'string'
+    ? version.orderType
+    : typeof order.orderType === 'string' ? order.orderType : null,
+  quantity: finite(version?.orderQty) ?? finite(order.orderQty),
+  price: finite(version?.price) ?? finite(order.price),
+  stopPrice: finite(version?.stopPrice) ?? finite(order.stopPrice),
   status: typeof order.ordStatus === 'string' ? order.ordStatus : null,
   admin: typeof order.admin === 'boolean' ? order.admin : null,
   ocoId: finite(order.ocoId),
@@ -540,10 +546,11 @@ export async function loadTradovateAccountData(options: {
 }): Promise<TradovateAccountDataResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const call = <T>(path: string) => request<T>({ ...options, path, fetchImpl });
-  const [accountsProbe, positionsProbe, ordersProbe, fillsProbe, fillPairsProbe, fillFeesProbe, cashBalancesProbe] = await Promise.all([
+  const [accountsProbe, positionsProbe, ordersProbe, orderVersionsProbe, fillsProbe, fillPairsProbe, fillFeesProbe, cashBalancesProbe] = await Promise.all([
     call<AccountEntity[]>('/account/list'),
     call<PositionEntity[]>('/position/list'),
     call<OrderEntity[]>('/order/list'),
+    call<TradovateOrderVersionEntity[]>('/orderVersion/list'),
     call<FillEntity[]>('/fill/list'),
     call<FillPairEntity[]>('/fillPair/list'),
     call<FillFeeEntity[]>('/fillFee/list'),
@@ -556,6 +563,7 @@ export async function loadTradovateAccountData(options: {
   }
   const positions = requireList(positionsProbe);
   const orders = requireList(ordersProbe);
+  const orderVersionsByOrderId = latestTradovateOrderVersionsByOrderId(requireList(orderVersionsProbe));
   const fills = requireList(fillsProbe);
   const fillPairs = requireList(fillPairsProbe);
   const fillFees = requireList(fillFeesProbe);
@@ -632,7 +640,7 @@ export async function loadTradovateAccountData(options: {
       active: account.active !== false,
       canTrade: account.readonly !== true,
       netPositionCount: accountPositions.filter(position => position.netPos !== 0).length,
-      workingOrderCount: accountOrders.filter(order => !terminalOrderStatuses.has(order.ordStatus ?? '')).length,
+      workingOrderCount: accountOrders.filter(order => isTradovateWorkingStatus(order.ordStatus)).length,
       balance: {
         coverage: coverage(snapshotProbe, snapshot ? 1 : 0),
         totalCashValue: finite(snapshot?.totalCashValue),
@@ -656,7 +664,7 @@ export async function loadTradovateAccountData(options: {
       activity: {
         positionCount: accountPositions.length,
         netPositionCount: accountPositions.filter(position => position.netPos !== 0).length,
-        workingOrderCount: accountOrders.filter(order => !terminalOrderStatuses.has(order.ordStatus ?? '')).length,
+        workingOrderCount: accountOrders.filter(order => isTradovateWorkingStatus(order.ordStatus)).length,
         orderCount: accountOrders.length,
         fillCount: accountFills.length,
         fillPairCount: accountFillPairs.length,
@@ -689,7 +697,7 @@ export async function loadTradovateAccountData(options: {
         .sort((a, b) => (a.symbol ?? String(a.contractId)).localeCompare(b.symbol ?? String(b.contractId))),
       orders: accountOrders
         .filter((order): order is OrderEntity & { id: number } => typeof order.id === 'number')
-        .map(order => normalizeOrder(order, symbols))
+        .map(order => normalizeOrder(order, symbols, orderVersionsByOrderId.get(order.id)))
         .sort((a, b) => Date.parse(b.timestamp ?? '') - Date.parse(a.timestamp ?? '')),
       fills: accountFills
         .filter((fill): fill is FillEntity & { id: number } => typeof fill.id === 'number')
