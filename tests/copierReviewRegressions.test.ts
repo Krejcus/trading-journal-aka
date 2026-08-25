@@ -144,12 +144,52 @@ describe('copier regressions po review 25. 8.', () => {
         inFlight.cancelOutbox,
         followerOrder.brokerOrderId,
       );
-      const foreignInterventionDetected = asserted != null && followerOrder.quantity > asserted;
       expect(asserted).toBe(6);
-      expect(foreignInterventionDetected).toBe(false);
     } finally {
       releaseModify();
       await replacement;
+    }
+
+    // Controller publikuje runtime až po dokončení serializovaného leader
+    // eventu, proto současný `sending` stav výše ověřuje runner kontrakt.
+    // Veřejný controller průchod pak potvrzuje výsledný bezpečnostní stav:
+    // jeho vlastní 5→6 event nesmí skupinu odzbrojit ani objednávku rušit.
+    const controllerBroker = createMockBroker({ clock, behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker: controllerBroker,
+      store: createMemoryCopierStore(),
+      group,
+      clock,
+      osoCorrelationWindowMs: 5,
+      wait: async () => undefined,
+    });
+    try {
+      controllerBroker.setConnected(true);
+      await controller.waitForIdle();
+      await controller.reconcile();
+      controller.arm();
+
+      controllerBroker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'leader-own-increase',
+        sourceVersion: '1:Working',
+        updatedAt: clock(),
+      }) });
+      controllerBroker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'leader-own-increase',
+        quantity: 6,
+        limitPrice: 30_001,
+        sourceVersion: '2:Working',
+        updatedAt: clock(),
+      }) });
+      await controller.waitForIdle();
+
+      const controllerFollower = controllerBroker.orders().find(order => order.accountId === 200);
+      if (!controllerFollower) throw new Error('Test setup: controller follower qty 6 nevznikl');
+      expect(controllerFollower.quantity).toBe(6);
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(controllerBroker.cancelRequestCount(controllerFollower.brokerOrderId)).toBe(0);
+    } finally {
+      controller.stop();
     }
   });
 

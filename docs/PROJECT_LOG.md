@@ -78,6 +78,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-25 (Claude+Codex, rate limit breaker + tržní research kopírek)
+Codex web research komerčních kopírek uložen v docs/COPIER_MARKET_RESEARCH.md.
+Klíčové: Replikanto changelog 22.11.2024 opravoval přesně třídu našeho
+incidentu (venue OCO snížení leader exitu po partial fillu) — potvrzuje
+správnost dnešního preflightu; nikdo z komerčních nemá preventivní reversal
+ochranu (TradeSyncer reaguje s 1,5–3 s delay), reduce-only na Tradovate
+neexistuje, divergence se řeší alarmem+vypnutím (ne delta-tradem, shodné
+s naší politikou). Nejtvrdší mezera u nás: Tradovate 429 = hodinové okno,
+které KAŽDÝ další pokus restartuje, a p-ticket chodí i v HTTP 200. Adapter
+p-ticket/429 detekoval, ale nikdo nectil retryAfterMs → přidán circuit
+breaker přímo v tradovateBroker (fail-fast lokálně po celou penalizaci,
+p-ticket blokuje jen p-time). Testy breakeru padají bez opravy; 1439/1439.
+
 ### 2026-08-25 (Claude, dvě vlny oprav po adversariální review obrany 24. 8.)
 Codex review trojité obrany našla 14 děr (8 kritických). Vlna 1 — detekce:
 `assertedFollowerQuantity` čte i rozletěné modify intence z cancelOutboxu

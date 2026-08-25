@@ -206,6 +206,32 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let socketMessageTail: Promise<void> = Promise.resolve();
   let lastSocketMessageAt = 0;
   let lastHeartbeatSentAt = 0;
+  /**
+   * Circuit breaker rate limitu. Po HTTP 429 Tradovate počítá hodinové okno
+   * ZNOVU od každého dalšího pokusu — jediný „testovací“ retry prodlouží
+   * blokaci o další hodinu. Po dobu penalizace se proto každý request
+   * odmítá lokálně (fail-fast), bez dotyku API. `p-ticket` s `p-time`
+   * blokuje jen na svůj interval.
+   */
+  let rateLimitedUntil = 0;
+  let rateLimitedReason = '';
+  const armRateLimitBreaker = (error: TradovateRateLimitError) => {
+    if (error.retryAfterMs == null || error.retryAfterMs <= 0) return;
+    const until = clock() + error.retryAfterMs;
+    if (until > rateLimitedUntil) {
+      rateLimitedUntil = until;
+      rateLimitedReason = error.message;
+    }
+  };
+  const assertNotRateLimited = () => {
+    const remaining = rateLimitedUntil - clock();
+    if (remaining <= 0) return;
+    throw new TradovateRateLimitError(
+      `Tradovate rate limit breaker aktivní ještě ${Math.ceil(remaining / 1_000)} s (${rateLimitedReason})`,
+      remaining,
+      false,
+    );
+  };
   let reconnectBackoffMs: number | null = null;
   let requestId = 2;
   let syncReady = false;
@@ -263,6 +289,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const request = async <T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> => {
     if (!fetchImpl) throw new TradovateTransportError('fetch is unavailable');
+    assertNotRateLimited();
     const accessToken = await token();
     const response = await fetchImpl(`${hosts.rest}${path}`, {
       ...init,
@@ -277,13 +304,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     const text = await response.text();
     if (!response.ok) {
       if (response.status === 423 || response.status === 429) {
-        throw new TradovateRateLimitError(
+        const error = new TradovateRateLimitError(
           `Tradovate ${path} rate limited (${response.status})`,
           response.status === 429 ? 60 * 60 * 1_000 : null,
           response.status === 429,
           undefined,
           response.status,
         );
+        armRateLimitBreaker(error);
+        throw error;
       }
       throw new TradovateTransportError(
         `Tradovate ${path} failed (${response.status}): ${text.slice(0, 500)}`,
@@ -299,12 +328,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         'p-message'?: string;
       };
       if (parsed && typeof parsed === 'object' && parsed['p-ticket']) {
-        throw new TradovateRateLimitError(
+        const error = new TradovateRateLimitError(
           parsed['p-message'] ?? `Tradovate ${path} returned a penalty ticket`,
           Number.isFinite(parsed['p-time']) ? (parsed['p-time'] as number) * 1_000 : null,
           parsed['p-captcha'] === true,
           parsed['p-ticket'],
         );
+        armRateLimitBreaker(error);
+        throw error;
       }
       return parsed;
     } catch (error) {
@@ -637,13 +668,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     if (!message || typeof message !== 'object') return;
     const value = message as { e?: string; d?: unknown; i?: number; s?: number };
     if (value.s === 423 || value.s === 429) {
-      throw new TradovateRateLimitError(
+      const error = new TradovateRateLimitError(
         `Tradovate WebSocket rate limited (${value.s})`,
         value.s === 429 ? 60 * 60 * 1_000 : null,
         value.s === 429,
         undefined,
         value.s,
       );
+      armRateLimitBreaker(error);
+      throw error;
     }
     if (value.d && typeof value.d === 'object' && !Array.isArray(value.d)) {
       const penalty = value.d as {
