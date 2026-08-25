@@ -4,7 +4,7 @@ import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
 import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
 import { createOutboxEntry, markRejected, markUnknown } from '../services/copierOutbox';
 import { createModifyEntry, markCancelUnknown } from '../services/copierCancelOutbox';
-import { createOsoOutboxEntry, markOsoRejected } from '../services/copierOsoOutbox';
+import { createOsoOutboxEntry, markOsoAcknowledged, markOsoRejected } from '../services/copierOsoOutbox';
 import { createMockBroker } from '../services/mockBroker';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 
@@ -23,6 +23,52 @@ const stepClock = () => {
   let value = 100;
   return () => ++value;
 };
+
+const acknowledgedFollowerOso = ({
+  key,
+  tag,
+  side,
+  entryBrokerOrderId,
+  firstBrokerOrderId,
+  secondBrokerOrderId,
+  sequence,
+}: {
+  key: string;
+  tag: string;
+  side: 'Buy' | 'Sell';
+  entryBrokerOrderId: string;
+  firstBrokerOrderId: string;
+  secondBrokerOrderId: string;
+  sequence: number;
+}) => markOsoAcknowledged(createOsoOutboxEntry({
+  key,
+  tag,
+  leaderEntryOrderId: `leader-${key}-entry`,
+  leaderStopOrderId: `leader-${key}-stop`,
+  leaderTargetOrderId: `leader-${key}-target`,
+  leaderEventId: `event-${key}`,
+  leaderSequence: sequence,
+  request: {
+    tag,
+    accountId: 200,
+    symbol: 'MNQU6',
+    side,
+    quantity: 13,
+    orderType: 'Limit',
+    limitPrice: 29_250,
+    first: {
+      side: side === 'Buy' ? 'Sell' : 'Buy',
+      orderType: 'Stop',
+      stopPrice: side === 'Buy' ? 29_200 : 29_300,
+    },
+    second: {
+      side: side === 'Buy' ? 'Sell' : 'Buy',
+      orderType: 'Limit',
+      limitPrice: side === 'Buy' ? 29_350 : 29_150,
+    },
+  },
+  updatedAt: sequence,
+}), entryBrokerOrderId, firstBrokerOrderId, secondBrokerOrderId, sequence);
 
 describe('bootstrapCopierRuntime', () => {
   it('odmítne neplatnou skupinu před subscribem nebo broker akcí', async () => {
@@ -1802,6 +1848,270 @@ describe('order lifecycle notifikace (obchod zadán, SL/TP, atribuce exitu)', ()
       avgEntryPrice: 29_500,
       avgExitPrice: 29_400,
     });
+    controller.stop();
+  });
+});
+
+describe('kauzalita follower fill → position (incident 25.8.2026)', () => {
+  const connectReconcileAndArm = async (
+    osoOutbox: ReturnType<typeof acknowledgedFollowerOso>[],
+    followerTransitionCorrelationWindowMs = 25,
+  ) => {
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore({
+      ...emptySnapshot(),
+      lastSequence: Math.max(...osoOutbox.map(entry => entry.leaderSequence)),
+      osoOutbox,
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store,
+      group,
+      clock: stepClock(),
+      followerTransitionCorrelationWindowMs,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    return { broker, controller };
+  };
+
+  it('stará ochranná Buy noha nesestřelí nový legitimní long vstup', async () => {
+    const oldShort = acknowledgedFollowerOso({
+      key: 'old-short',
+      tag: 'old-short',
+      side: 'Sell',
+      entryBrokerOrderId: 'old-short-entry',
+      firstBrokerOrderId: 'old-short-stop-buy',
+      secondBrokerOrderId: 'old-short-target-buy',
+      sequence: 1,
+    });
+    const newLong = acknowledgedFollowerOso({
+      key: 'new-long',
+      tag: 'new-long',
+      side: 'Buy',
+      entryBrokerOrderId: 'new-long-entry',
+      firstBrokerOrderId: 'new-long-stop-sell',
+      secondBrokerOrderId: 'new-long-target-sell',
+      sequence: 2,
+    });
+    const { broker, controller } = await connectReconcileAndArm([oldShort, newLong]);
+
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'new-long-fill',
+        tag: 'new-long',
+        brokerOrderId: 'new-long-entry',
+        accountId: 200,
+        symbol: 'MNQU6',
+        side: 'Buy',
+        quantity: 13,
+        price: 29_251.5,
+        filledAt: 1_000,
+      },
+    });
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 200, symbol: 'MNQU6', netQuantity: 13 },
+    });
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('position event před follower fillem se v kauzálním okně spáruje a neflattenuje', async () => {
+    const newLong = acknowledgedFollowerOso({
+      key: 'position-first',
+      tag: 'position-first',
+      side: 'Buy',
+      entryBrokerOrderId: 'position-first-entry',
+      firstBrokerOrderId: 'position-first-stop',
+      secondBrokerOrderId: 'position-first-target',
+      sequence: 1,
+    });
+    const { broker, controller } = await connectReconcileAndArm([newLong]);
+
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 200, symbol: 'MNQU6', netQuantity: 13 },
+    });
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'position-first-fill',
+        tag: 'position-first',
+        brokerOrderId: 'position-first-entry',
+        accountId: 200,
+        symbol: 'MNQU6',
+        side: 'Buy',
+        quantity: 13,
+        price: 29_251.5,
+        filledAt: 1_000,
+      },
+    });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('přesný fill ochranné nohy do protipozice dál failne nahlas', async () => {
+    const oldShort = acknowledgedFollowerOso({
+      key: 'protective-reversal',
+      tag: 'protective-reversal',
+      side: 'Sell',
+      entryBrokerOrderId: 'protective-reversal-entry',
+      firstBrokerOrderId: 'protective-reversal-stop-buy',
+      secondBrokerOrderId: 'protective-reversal-target-buy',
+      sequence: 1,
+    });
+    const { broker, controller } = await connectReconcileAndArm([oldShort]);
+
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'protective-reversal-fill',
+        tag: 'protective-reversal',
+        brokerOrderId: 'protective-reversal-stop-buy',
+        accountId: 200,
+        symbol: 'MNQU6',
+        side: 'Buy',
+        quantity: 1,
+        price: 29_300,
+        filledAt: 1_000,
+      },
+    });
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 },
+    });
+    await controller.waitForIdle();
+
+    expect(controller.status().armed).toBe(false);
+    expect(controller.status().lastError).toContain('protective-reversal-stop-buy');
+    expect(controller.status().lastError).toContain('ochranná noha');
+    controller.stop();
+  });
+
+  it('přesný ochranný fill odhalí i přímé otočení z long do short bez mezilehlého flat eventu', async () => {
+    const oldLong = acknowledgedFollowerOso({
+      key: 'direct-sign-flip',
+      tag: 'direct-sign-flip',
+      side: 'Buy',
+      entryBrokerOrderId: 'direct-sign-flip-entry',
+      firstBrokerOrderId: 'direct-sign-flip-stop-sell',
+      secondBrokerOrderId: 'direct-sign-flip-target-sell',
+      sequence: 1,
+    });
+    const { broker, controller } = await connectReconcileAndArm([oldLong]);
+
+    // Runtime nejprve zná původní long expozici followera i leadera.
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 },
+    });
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 },
+    });
+    // Leader je poté flat; oversized ochrana followera ho jediným venue
+    // eventem přehodí z +1 rovnou do -1 (bez samostatného flat eventu).
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 },
+    });
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'direct-sign-flip-fill',
+        tag: 'direct-sign-flip',
+        brokerOrderId: 'direct-sign-flip-stop-sell',
+        accountId: 200,
+        symbol: 'MNQU6',
+        side: 'Sell',
+        quantity: 2,
+        price: 29_200,
+        filledAt: 1_000,
+      },
+    });
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 200, symbol: 'MNQU6', netQuantity: -1 },
+    });
+    await controller.waitForIdle();
+
+    expect(controller.status().armed).toBe(false);
+    expect(controller.status().lastError).toContain('direct-sign-flip-stop-sell');
+    expect(controller.status().lastError).toContain('ochranná noha');
+    controller.stop();
+  });
+
+  it('bez fill eventu zachová legitimní kopii, když broker autoritativně potvrdí stejný směr leadera', async () => {
+    const history = acknowledgedFollowerOso({
+      key: 'authoritative-same-direction',
+      tag: 'authoritative-same-direction',
+      side: 'Buy',
+      entryBrokerOrderId: 'authoritative-entry',
+      firstBrokerOrderId: 'authoritative-stop',
+      secondBrokerOrderId: 'authoritative-target',
+      sequence: 1,
+    });
+    const { broker, controller } = await connectReconcileAndArm([history]);
+    broker.listPositions = async accountId => ([{
+      accountId,
+      symbol: 'MNQU6',
+      netQuantity: 13,
+    }]);
+
+    // Simulace ztraceného/opožděného fill eventu: position followera dorazí,
+    // leader websocket cache je ještě flat, ale broker už oba účty vidí long.
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 200, symbol: 'MNQU6', netQuantity: 13 },
+    });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null, autoClose: null });
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('neznámou follower pozici bezpečně odzbrojí, ale bez důkazu ji automaticky nezavře', async () => {
+    const history = acknowledgedFollowerOso({
+      key: 'unknown-cause',
+      tag: 'unknown-cause',
+      side: 'Buy',
+      entryBrokerOrderId: 'unknown-entry',
+      firstBrokerOrderId: 'unknown-stop',
+      secondBrokerOrderId: 'unknown-target',
+      sequence: 1,
+    });
+    const { broker, controller } = await connectReconcileAndArm([history]);
+    broker.listPositions = async accountId => (accountId === 200
+      ? [{ accountId, symbol: 'MNQU6', netQuantity: 13 }]
+      : []);
+
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 200, symbol: 'MNQU6', netQuantity: 13 },
+    });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await controller.waitForIdle();
+
+    expect(controller.status().armed).toBe(false);
+    expect(controller.status().lastError).toContain('příčinu nelze bezpečně přiřadit');
+    expect(controller.status().autoClose).toBeNull();
+    expect(broker.placedRequests()).toHaveLength(0);
     controller.stop();
   });
 });

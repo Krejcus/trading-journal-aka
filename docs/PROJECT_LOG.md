@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1026 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1456 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -65,6 +65,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       neproklikaný na produkci.
 - [x] Multi-follower DEMO test — 18. 8. potvrzen OCO/SL lifecycle na čtyřech
       Tradeify followerech a jednom Lucid followerovi; všichni skončili flat.
+- [ ] Incident 25. 8. „validní follower vstup okamžitě zploštěn“ — lokální
+      kauzální oprava a deterministické regrese jsou hotové (zápis níže), ale
+      před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
+      ze stejného commitu a řízený DEMO test.
 - [ ] UI políčko pro `entryCooldownMinutes` (config i agent flag existují).
 - [ ] Cross-firm kopírování: technický fan-out Tradeify -> Lucid v DEMO prošel;
       stále chybí písemné potvrzení pravidel obou prop firem pro ostré použití.
@@ -77,6 +81,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-25 (Codex, kauzální oprava falešného auto-flattenu followerů)
+Forenzika runtime logu prokázala nový incident: nativní OSO vstupy qty 13 byly
+na všech pět followerů přijaty, leader position event LONG 13 dorazil v
+07:13:31.358Z, ale follower position event o ~130 ms později vyhodnotila stará
+znaménková heuristika proti ještě neaktualizované leader cache jako
+„neobjednanou pozici“. `failClosed` pak zrušil ochrany a auto-close zploštil
+všech pět legitimních kopií; leader zůstal otevřený až do SL v 07:16:45Z.
+
+Oprava už nerozhoduje podle existence libovolné historické ochranné nohy
+stejného znaménka. Fill se klasifikuje pouze přes přesné broker `orderId` jako
+náš copied-entry nebo protective leg. Follower position předbíhající fill či
+leader event dostane 2s kauzální okno a potom autoritativní read-only
+`listPositions` kontrolu. Stejný směr leader/follower je legitimní; přesně
+prokázaný protective reversal dál fail-closed a auto-flattenuje. Neznámá
+pozice bez prokazatelné příčiny pouze DISARMuje a eskaluje — bez neodůvodněného
+market close. Guard kryje i přímý sign flip bez mezilehlého flat eventu a
+časovače se čistí při flat/stopu.
+
+Regrese kryjí: starou historickou ochranu vs. nový validní vstup, pořadí
+position→fill, fill→position, ztracený fill s autoritativně shodným směrem,
+neznámou příčinu bez auto-close, přesný protective reversal a přímý sign flip.
+Copier runtime + chaos: 75/75; celý repo: 1456/1456; typecheck a produkční build
+čisté. První souběžný full test měl tři časové flaky pády pod zátěží; všechny
+tři prošly samostatně a celý full run následně prošel bez souběžného tsc.
+Nic nebylo commitnuto, pushnuto, nasazeno ani reinstalováno; worker zůstává
+DISARMED. Souběžné rozpracované LIVE pill/SL read-model změny byly zachovány.
 
 ### 2026-08-25 (Codex, integrační debug chybějícího Positions pillu)
 Hypotéza C se pro flat leader účet s numericky shodným account ID a working

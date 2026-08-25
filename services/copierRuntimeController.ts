@@ -203,6 +203,12 @@ export interface BootstrapCopierOptions {
   flattenConfirmationPollMs?: number;
   flattenAccountConcurrency?: number;
   wait?: (ms: number) => Promise<void>;
+  /**
+   * Bounded okno pro spárování follower position 0→nonzero s konkrétním
+   * broker fill eventem. Po vypršení následuje autoritativní read-only
+   * kontrola; nikdy nejde o autorizaci k automatickému zavření nejasné pozice.
+   */
+  followerTransitionCorrelationWindowMs?: number;
 }
 
 const errorOf = (reason: unknown) => reason instanceof Error ? reason : new Error(String(reason));
@@ -450,6 +456,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const pendingOsoEvents = new Map<string, LeaderEvent>();
   const pendingOsoFlushes = new Map<string, Promise<void>>();
   const pendingOsoResolvers = new Map<string, () => void>();
+  type FollowerFillRole = 'copied-entry' | 'protective';
+  interface RecentFollowerFillCause {
+    role: FollowerFillRole;
+    sign: 1 | -1;
+    brokerOrderId: string;
+    observedAt: number;
+  }
+  interface PendingFollowerTransition {
+    accountId: number;
+    symbol: string;
+    netQuantity: number;
+    timer: ReturnType<typeof setTimeout>;
+  }
+  const recentFollowerFillCauses = new Map<string, RecentFollowerFillCause>();
+  const pendingFollowerTransitions = new Map<string, PendingFollowerTransition>();
+  const followerTransitionCorrelationWindowMs = options.followerTransitionCorrelationWindowMs ?? 2_000;
+
+  if (!Number.isFinite(followerTransitionCorrelationWindowMs) || followerTransitionCorrelationWindowMs < 1) {
+    throw new Error('followerTransitionCorrelationWindowMs musí být kladné číslo');
+  }
 
   if (
     options.maxLeaderOrders != null
@@ -464,13 +490,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * cancel se tvářil jako hotový a už se nikdy neopakoval.
    */
   const sweptProtectiveLegs = new Set<string>();
-  /**
-   * Jak noha skončila. `canceled` nohu vyřazuje ze znaménkové detekce
-   * otočení (nemohla nic vyplnit), `filled` ji tam nechává — přesně tak
-   * skončila incidentní noha 24. 8., fatální fill přišel před formálním
-   * zametením.
-   */
-  const sweptLegOutcomes = new Map<string, 'canceled' | 'filled'>();
   /** Rušení právě běží; brání smyčce cancel → position event → cancel. */
   const sweepingProtectiveLegs = new Set<string>();
   /**
@@ -497,33 +516,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
   /**
-   * Mohla by pozice tohoto znaménka vzniknout filly naší ochranné nohy?
-   *
-   * Rozlišuje incidentní otočení od legitimní on-fill kopie: Sell nohy
-   * (ochrana long vstupu) vyrábějí přefillem zápornou pozici, Buy nohy
-   * kladnou — zatímco náš vlastní vstup má znaménko vždy opačné než jeho
-   * nohy. Kontroluje se i noha už zametená/terminální: přesně ta 24. 8.
-   * stihla svůj fatální fill dřív, než ji sweep formálně doprovodil.
+   * Kauzalita podle přesného broker orderId. Historické znaménko ochranných
+   * nohou nestačí: po restartu v durable outboxu zůstávají staré strategie a
+   * nová legitimní long kopie pak může vypadat jako fill staré Buy ochrany.
    */
-  const protectiveLegsCouldProduceSign = (accountId: number, symbol: string, sign: number): boolean => {
+  const followerFillRole = (accountId: number, brokerOrderId: string): FollowerFillRole | null => {
     const runtime = currentRuntime();
-    for (const entry of [...runtime.bracketOutbox.values(), ...runtime.osoOutbox.values()]) {
+    for (const entry of runtime.osoOutbox.values()) {
       if (entry.request.accountId !== accountId) continue;
-      // Bez symbol filtru by hedge na jiném trhu spouštěl poplach tady.
-      if (entry.request.symbol !== symbol) continue;
-      const legPairs: Array<[string | undefined, { side: 'Buy' | 'Sell' }]> = [
-        [entry.firstBrokerOrderId, entry.request.first],
-        [entry.secondBrokerOrderId, entry.request.second],
-      ];
-      for (const [brokerOrderId, leg] of legPairs) {
-        // Prokazatelně zrušená noha nemohla nic vyplnit — bez téhle výjimky
-        // by stará epizoda (short → Buy nohy) falešně střílela na každou
-        // novou legitimní long kopii. `filled` nohy zůstávají podezřelé.
-        if (brokerOrderId && sweptLegOutcomes.get(brokerOrderId) === 'canceled') continue;
-        if ((leg.side === 'Sell' ? -1 : 1) === sign) return true;
+      if (entry.entryBrokerOrderId === brokerOrderId) return 'copied-entry';
+      if (entry.firstBrokerOrderId === brokerOrderId || entry.secondBrokerOrderId === brokerOrderId) {
+        return 'protective';
       }
     }
-    return false;
+    for (const entry of runtime.bracketOutbox.values()) {
+      if (entry.request.accountId !== accountId) continue;
+      if (entry.firstBrokerOrderId === brokerOrderId || entry.secondBrokerOrderId === brokerOrderId) {
+        return 'protective';
+      }
+    }
+    for (const entry of runtime.outbox.values()) {
+      if (entry.request.accountId === accountId && entry.brokerOrderId === brokerOrderId) {
+        return 'copied-entry';
+      }
+    }
+    return null;
   };
   const sweepFollowerProtectiveLegs = async (accountId: number, symbol: string, at: number) => {
     const runtime = currentRuntime();
@@ -565,7 +582,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           throw new Error('lookup bez autoritativní odpovědi');
         }
         sweptProtectiveLegs.add(brokerOrderId);
-        sweptLegOutcomes.set(brokerOrderId, outcome === 'filled' ? 'filled' : 'canceled');
         options.onAudit?.([{
           at, leaderEventId, accountId, brokerOrderId,
           // Audit podle skutečného výsledku: vyplněná ani rejectnutá noha
@@ -959,7 +975,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }]);
   };
 
-  const failClosed = (reason: unknown, failure: { transportLost?: boolean } = {}) => {
+  const failClosed = (
+    reason: unknown,
+    failure: { transportLost?: boolean; autoClose?: boolean } = {},
+  ) => {
     const wasLiveArmed = gate.armed && !gate.shadowMode;
     lastError = errorOf(reason);
     gate = {
@@ -977,7 +996,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // dozoru (živý incident: rejected modify zabil follower SL a exit
     // leadera o 9 s později už byl blokovaný). Bez transportu zavřít nejde
     // a kill switch je explicitní freeze — obojí kryje jen notifikace.
-    if (wasLiveArmed && !failure.transportLost && !gate.killSwitch) {
+    if (wasLiveArmed && !failure.transportLost && !gate.killSwitch && failure.autoClose !== false) {
       scheduleAutoClose('fail-closed');
     }
     if (wasLiveArmed && failure.transportLost && hasFollowerExposure()) {
@@ -1007,6 +1026,124 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         autoCloseInFlight = false;
         failClosed(reason);
       });
+  };
+
+  const followerTransitionKey = (accountId: number, symbol: string) => `${accountId}:${symbol}`;
+
+  const clearPendingFollowerTransition = (key: string) => {
+    const pending = pendingFollowerTransitions.get(key);
+    if (pending) clearTimeout(pending.timer);
+    pendingFollowerTransitions.delete(key);
+  };
+
+  const failOnExactProtectiveReversal = (
+    accountId: number,
+    symbol: string,
+    netQuantity: number,
+    brokerOrderId: string,
+  ) => {
+    failClosed(new Error(
+      `Copier fail-closed: ochranná noha ${brokerOrderId} otevřela followerovi ${accountId} `
+      + `neobjednanou pozici ${netQuantity} na ${symbol}, zatímco leader je flat`,
+    ));
+    // Když už byl runtime odzbrojený jinou chybou, failClosed další auto-close
+    // nenaplánuje. Přesně prokázaný fill naší ochranné nohy je ale nový,
+    // risk-zvyšující fakt a musí se zploštit i v takové epizodě.
+    scheduleAutoClose('fail-closed');
+  };
+
+  const verifyPendingFollowerTransition = async (key: string) => {
+    const pending = pendingFollowerTransitions.get(key);
+    if (!pending || stopped) return;
+    pendingFollowerTransitions.delete(key);
+
+    const localFollowerNet = positionsByAccount.get(pending.accountId)?.get(pending.symbol) ?? 0;
+    if (localFollowerNet === 0) return;
+
+    const localLeaderNet = leaderPositions.get(pending.symbol) ?? 0;
+    if (localLeaderNet !== 0 && Math.sign(localLeaderNet) === Math.sign(localFollowerNet)) return;
+
+    const cause = recentFollowerFillCauses.get(key);
+    if (
+      cause
+      && cause.sign === Math.sign(localFollowerNet)
+      && clock() - cause.observedAt <= followerTransitionCorrelationWindowMs
+    ) {
+      recentFollowerFillCauses.delete(key);
+      if (cause.role === 'copied-entry') return;
+      failOnExactProtectiveReversal(
+        pending.accountId, pending.symbol, localFollowerNet, cause.brokerOrderId,
+      );
+      return;
+    }
+
+    try {
+      // Po krátkém kauzálním okně rozhoduje broker, ne pořadí lokálního
+      // websocket streamu. Čtení je autoritativní a nic u brokera nemění.
+      const [leaderSnapshot, followerSnapshot] = await Promise.all([
+        broker.listPositions(group.leaderAccountId),
+        broker.listPositions(pending.accountId),
+      ]);
+      const brokerLeaderNet = leaderSnapshot.find(item => item.symbol === pending.symbol)?.netQuantity ?? 0;
+      const brokerFollowerNet = followerSnapshot.find(item => item.symbol === pending.symbol)?.netQuantity ?? 0;
+
+      leaderPositions.set(pending.symbol, brokerLeaderNet);
+      const followerPositions = positionsByAccount.get(pending.accountId) ?? new Map<string, number>();
+      followerPositions.set(pending.symbol, brokerFollowerNet);
+      positionsByAccount.set(pending.accountId, followerPositions);
+
+      if (brokerFollowerNet === 0) return;
+      if (brokerLeaderNet !== 0 && Math.sign(brokerLeaderNet) === Math.sign(brokerFollowerNet)) return;
+
+      // Bez přesného fill orderId nevíme, zda jde o cizí pozici, opožděný
+      // legitimní vstup, nebo ztracenou událost. Automatický market close by
+      // byl neodůvodněný side effect — bezpečně odzbrojíme a eskalujeme.
+      failClosed(new Error(
+        `Copier fail-closed: follower ${pending.accountId} má autoritativně pozici ${brokerFollowerNet} `
+        + `na ${pending.symbol}, leader ${brokerLeaderNet}; příčinu nelze bezpečně přiřadit ke konkrétnímu fillu`,
+      ), { autoClose: false });
+    } catch (error) {
+      failClosed(new Error(
+        `Copier fail-closed: autoritativní kontrola přechodu followera ${pending.accountId} `
+        + `na ${pending.symbol} selhala: ${errorOf(error).message}`,
+      ), { autoClose: false });
+    }
+  };
+
+  const scheduleFollowerTransitionVerification = (
+    accountId: number,
+    symbol: string,
+    netQuantity: number,
+  ) => {
+    const key = followerTransitionKey(accountId, symbol);
+    clearPendingFollowerTransition(key);
+    const timer = setTimeout(() => {
+      eventTail = eventTail
+        .then(() => verifyPendingFollowerTransition(key))
+        .catch(reason => failClosed(reason, { autoClose: false }));
+    }, followerTransitionCorrelationWindowMs);
+    pendingFollowerTransitions.set(key, { accountId, symbol, netQuantity, timer });
+  };
+
+  const rememberFollowerFillCause = (fill: BrokerFill, observedAt: number) => {
+    const role = followerFillRole(fill.accountId, fill.brokerOrderId);
+    if (!role) return;
+    const key = followerTransitionKey(fill.accountId, fill.symbol);
+    const sign = fill.side === 'Buy' ? 1 : -1;
+    const cause: RecentFollowerFillCause = {
+      role, sign, brokerOrderId: fill.brokerOrderId, observedAt,
+    };
+    recentFollowerFillCauses.set(key, cause);
+
+    const pending = pendingFollowerTransitions.get(key);
+    if (!pending || Math.sign(pending.netQuantity) !== sign) return;
+    clearPendingFollowerTransition(key);
+    recentFollowerFillCauses.delete(key);
+    if (role === 'protective') {
+      failOnExactProtectiveReversal(
+        pending.accountId, pending.symbol, pending.netQuantity, fill.brokerOrderId,
+      );
+    }
   };
 
   const failClosedOnCriticalAudit = (entries: readonly CopierAuditEntry[]) => {
@@ -1347,6 +1484,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     await maybeHandleArmExpiry(now);
+    if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
+      rememberFollowerFillCause(event.fill, now);
+    }
     // Cizí zásah se musí poznat z order streamu sám. Čekat, až ho odhalí
     // náš příští modify, znamená čekat na náhodu — 24. 8. žádný další modify
     // nepřišel a oversized noha vydržela pracovat až do fatálního fillu.
@@ -1400,39 +1540,60 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         && previousAccountNet !== 0
         && event.position.netQuantity === 0
       ) {
+        const transitionKey = followerTransitionKey(event.position.accountId, event.position.symbol);
+        clearPendingFollowerTransition(transitionKey);
+        recentFollowerFillCauses.delete(transitionKey);
         await sweepFollowerProtectiveLegs(event.position.accountId, event.position.symbol, now);
       }
-      // Follower otevřel pozici, kterou jsme nikdy neobjednali: leader na tom
-      // symbolu nic nemá a follower se z flat rozjel do nenuly. Přesně tvar
-      // incidentu 24. 8. Úmyslně úzké — „opačné znaménko než leader“ by
-      // falešně střílelo pokaždé, když leader zavře dřív než follower, což je
-      // normální zpoždění. Znaménková podmínka drží stranou on-fill kopie,
-      // kde follower vstup legitimně předběhne leader position event: vstup
-      // má vždy opačné znaménko než jeho ochranné nohy.
+      // Follower může legitimně dostat fill kopie dřív, než websocket doručí
+      // position event leadera. Historické „existuje někde ochranná noha se
+      // stejným znaménkem“ tady způsobilo incident 25. 8.: validní vstup všech
+      // pěti followerů byl po ~130 ms automaticky zploštěn. Rozhodujeme proto
+      // jen z přesného brokerOrderId fillu; bez něj dáme streamu krátké
+      // kauzální okno a potom provedeme read-only kontrolu u brokera.
       if (
         event.position.accountId !== group.leaderAccountId
-        && previousAccountNet === 0
         && event.position.netQuantity !== 0
-        && (leaderPositions.get(event.position.symbol) ?? 0) === 0
-        && protectiveLegsCouldProduceSign(
-          event.position.accountId, event.position.symbol, Math.sign(event.position.netQuantity),
+        && (
+          previousAccountNet === 0
+          || Math.sign(previousAccountNet) !== Math.sign(event.position.netQuantity)
         )
+        && (leaderPositions.get(event.position.symbol) ?? 0) === 0
       ) {
-        failClosed(new Error(
-          `Copier fail-closed: follower ${event.position.accountId} se otočil do neobjednané pozice ${
-            event.position.netQuantity} na ${event.position.symbol}, zatímco leader je flat`,
-        ));
-        // failClosed po dřívějším odzbrojení už auto-close neplánuje (brání
-        // smyčce flatten-selhal → failClosed → flatten). Otočená pozice je
-        // ale nový fakt s novou expozicí a jediná risk-redukující reakce je
-        // zavřít ji. Smyčka nevznikne: spouštěčem je jen venue přechod
-        // 0→nenula a flatten expozici pouze snižuje — takový přechod sám
-        // vyrobit neumí. Guardy (killSwitch, běžící close) drží uvnitř.
-        scheduleAutoClose('fail-closed');
+        const transitionKey = followerTransitionKey(event.position.accountId, event.position.symbol);
+        const cause = recentFollowerFillCauses.get(transitionKey);
+        const sign = Math.sign(event.position.netQuantity);
+        if (
+          cause
+          && cause.sign === sign
+          && now - cause.observedAt <= followerTransitionCorrelationWindowMs
+        ) {
+          recentFollowerFillCauses.delete(transitionKey);
+          if (cause.role === 'protective') {
+            failOnExactProtectiveReversal(
+              event.position.accountId,
+              event.position.symbol,
+              event.position.netQuantity,
+              cause.brokerOrderId,
+            );
+          }
+        } else {
+          scheduleFollowerTransitionVerification(
+            event.position.accountId, event.position.symbol, event.position.netQuantity,
+          );
+        }
       }
       if (event.position.accountId === group.leaderAccountId) {
         const previousNet = leaderPositions.get(event.position.symbol) ?? 0;
         leaderPositions.set(event.position.symbol, event.position.netQuantity);
+        if (event.position.netQuantity !== 0) {
+          for (const [key, pending] of pendingFollowerTransitions) {
+            if (
+              pending.symbol === event.position.symbol
+              && Math.sign(pending.netQuantity) === Math.sign(event.position.netQuantity)
+            ) clearPendingFollowerTransition(key);
+          }
+        }
         // Obchod rozjetý před startem počítadla skončil — další vstup na
         // tomto symbolu se už do denního limitu počítá normálně.
         if (event.position.netQuantity === 0) untrackedTradeSymbols.delete(event.position.symbol);
@@ -2063,6 +2224,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       for (const timer of pendingOsoTimers.values()) clearTimeout(timer);
       pendingOsoTimers.clear();
       pendingOsoEvents.clear();
+      for (const pending of pendingFollowerTransitions.values()) clearTimeout(pending.timer);
+      pendingFollowerTransitions.clear();
+      recentFollowerFillCauses.clear();
       for (const entryOrderId of [...pendingOsoResolvers.keys()]) settleOsoFlush(entryOrderId);
       unsubscribe();
     },
