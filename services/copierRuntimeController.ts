@@ -20,6 +20,7 @@ import {
   type CopierAuditEntry,
   type CopierMetrics,
   type CopierRuntime,
+  assertedFollowerQuantity,
 } from './copierRunner';
 import type { CopierStore } from './copierStore';
 import { toSnapshot } from './copierStore';
@@ -430,6 +431,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const untrackedTradeSymbols = new Set<string>();
   let lastAutoClose: CopierAutoClose | null = null;
   let autoCloseInFlight = false;
+  /**
+   * Mez na auto-close v jedné fail-closed epizodě. Flatten bez reduce-only
+   * podpory venue teoreticky umí přestřelit (externí zavření mezi čtením
+   * pozice a odesláním) a detektor otočení by pak plánoval další close —
+   * konvergence je pravděpodobná, ale nesmí být nekonečná. Po vyčerpání
+   * zbývá DISARMED stav, audit a notifikace; reset až úspěšným flat/ARM.
+   */
+  const AUTO_CLOSE_MAX_ATTEMPTS_PER_EPISODE = 3;
+  let autoCloseEpisodeAttempts = 0;
   /** Po reconnectu/bootu se má rozhodnout o osudu otevřených kopií. */
   let pendingConnectionRecovery = false;
   let recoveryInFlight = false;
@@ -448,29 +458,162 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     throw new Error('maxLeaderOrders musí být kladné celé číslo');
   }
 
-  /** Už zametené nohy; brání smyčce cancel → position event → cancel. */
+  /**
+   * Nohy prokazatelně vyřízené u brokera. Zapisuje se až po autoritativním
+   * ověření — dřívější zápis dělal z pojistky jednorázový pokus: selhaný
+   * cancel se tvářil jako hotový a už se nikdy neopakoval.
+   */
   const sweptProtectiveLegs = new Set<string>();
-  const sweepFollowerProtectiveLegs = async (accountId: number, at: number) => {
+  /**
+   * Jak noha skončila. `canceled` nohu vyřazuje ze znaménkové detekce
+   * otočení (nemohla nic vyplnit), `filled` ji tam nechává — přesně tak
+   * skončila incidentní noha 24. 8., fatální fill přišel před formálním
+   * zametením.
+   */
+  const sweptLegOutcomes = new Map<string, 'canceled' | 'filled'>();
+  /** Rušení právě běží; brání smyčce cancel → position event → cancel. */
+  const sweepingProtectiveLegs = new Set<string>();
+  /**
+   * Sweep běží uvnitř serializovaného event tailu — jeden zaseknutý REST
+   * request bez deadlinu by držel celý order stream (a s ním i detektor
+   * otočení). V testech s injektovaným `wait` se deadline vypíná: fake
+   * timers by z něj udělaly okamžitý timeout a testy řídí zdržení samy.
+   */
+  const SWEEP_CALL_DEADLINE_MS = 1_500;
+  /** Restart pojistka: flat po obnově nesmí spustit cancel bouři historie. */
+  const SWEEP_MAX_LEGS_PER_CALL = 6;
+  const withSweepDeadline = async <T>(work: Promise<T>): Promise<T> => {
+    if (options.wait) return work;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`deadline ${SWEEP_CALL_DEADLINE_MS} ms`)), SWEEP_CALL_DEADLINE_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  /**
+   * Mohla by pozice tohoto znaménka vzniknout filly naší ochranné nohy?
+   *
+   * Rozlišuje incidentní otočení od legitimní on-fill kopie: Sell nohy
+   * (ochrana long vstupu) vyrábějí přefillem zápornou pozici, Buy nohy
+   * kladnou — zatímco náš vlastní vstup má znaménko vždy opačné než jeho
+   * nohy. Kontroluje se i noha už zametená/terminální: přesně ta 24. 8.
+   * stihla svůj fatální fill dřív, než ji sweep formálně doprovodil.
+   */
+  const protectiveLegsCouldProduceSign = (accountId: number, symbol: string, sign: number): boolean => {
+    const runtime = currentRuntime();
+    for (const entry of [...runtime.bracketOutbox.values(), ...runtime.osoOutbox.values()]) {
+      if (entry.request.accountId !== accountId) continue;
+      // Bez symbol filtru by hedge na jiném trhu spouštěl poplach tady.
+      if (entry.request.symbol !== symbol) continue;
+      const legPairs: Array<[string | undefined, { side: 'Buy' | 'Sell' }]> = [
+        [entry.firstBrokerOrderId, entry.request.first],
+        [entry.secondBrokerOrderId, entry.request.second],
+      ];
+      for (const [brokerOrderId, leg] of legPairs) {
+        // Prokazatelně zrušená noha nemohla nic vyplnit — bez téhle výjimky
+        // by stará epizoda (short → Buy nohy) falešně střílela na každou
+        // novou legitimní long kopii. `filled` nohy zůstávají podezřelé.
+        if (brokerOrderId && sweptLegOutcomes.get(brokerOrderId) === 'canceled') continue;
+        if ((leg.side === 'Sell' ? -1 : 1) === sign) return true;
+      }
+    }
+    return false;
+  };
+  const sweepFollowerProtectiveLegs = async (accountId: number, symbol: string, at: number) => {
     const runtime = currentRuntime();
     const legs: string[] = [];
     for (const entry of [...runtime.bracketOutbox.values(), ...runtime.osoOutbox.values()]) {
       if (entry.request.accountId !== accountId) continue;
+      // Flat na MNQ nesmí zrušit ochranu stále otevřeného NQ na stejném
+      // účtu — sweep je pojistka jedné epizody, ne úklid celého účtu.
+      if (entry.request.symbol !== symbol) continue;
       for (const brokerOrderId of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
-        if (brokerOrderId && !sweptProtectiveLegs.has(brokerOrderId)) legs.push(brokerOrderId);
+        if (
+          brokerOrderId
+          && !sweptProtectiveLegs.has(brokerOrderId)
+          && !sweepingProtectiveLegs.has(brokerOrderId)
+        ) legs.push(brokerOrderId);
       }
     }
-    for (const brokerOrderId of legs) {
-      sweptProtectiveLegs.add(brokerOrderId);
+    // Restart pojistka: bez capu by první flat po obnově rušil nohy celé
+    // durable historie a rate limit by zadusil cancel té skutečně nebezpečné.
+    // Nejnovější epizody mají přednost; zbytek doprovodí eskalace níže.
+    const cappedLegs = legs.slice(-SWEEP_MAX_LEGS_PER_CALL);
+    for (const brokerOrderId of cappedLegs) sweepingProtectiveLegs.add(brokerOrderId);
+    // Souběžně: incidentní okno bylo 980 ms a sekvenční rušení do něj
+    // přidávalo jeden round-trip za každou nohu navíc.
+    const failures: string[] = [];
+    await Promise.all(cappedLegs.map(async brokerOrderId => {
+      const leaderEventId = `flat-sweep-${accountId}-${brokerOrderId}`;
       try {
-        await broker.cancelOrder(accountId, brokerOrderId);
+        // Cancel chyba sama o sobě nerozhoduje (noha už mohla být terminální);
+        // rozhoduje autoritativní lookup NÍŽE. Jediný inline pokus: retry
+        // smyčka tady držela event stream ~15 s, eskalace je rychlejší.
+        await withSweepDeadline(broker.cancelOrder(accountId, brokerOrderId)).catch(() => undefined);
+        const lookup = await withSweepDeadline(broker.findOrderById(accountId, brokerOrderId));
+        const outcome = lookup.order?.status;
+        if (outcome === 'working') throw new Error('noha po cancellu stále working');
+        if (!lookup.order && lookup.completeness !== 'authoritative') {
+          // Eventual prázdno není důkaz neexistence — nesmí se zapsat
+          // jako zameteno (portová díra z review, bod 14).
+          throw new Error('lookup bez autoritativní odpovědi');
+        }
+        sweptProtectiveLegs.add(brokerOrderId);
+        sweptLegOutcomes.set(brokerOrderId, outcome === 'filled' ? 'filled' : 'canceled');
         options.onAudit?.([{
-          at, leaderEventId: `flat-sweep-${accountId}-${brokerOrderId}`, kind: 'canceled',
-          accountId, brokerOrderId, reason: 'follower flat — ochranná noha zrušena okamžitě',
+          at, leaderEventId, accountId, brokerOrderId,
+          // Audit podle skutečného výsledku: vyplněná ani rejectnutá noha
+          // se nesmí vydávat za zrušenou.
+          kind: outcome === 'filled' ? 'filled' : outcome === 'rejected' ? 'rejected' : 'canceled',
+          reason: outcome === 'filled'
+            ? 'follower flat — ochranná noha se mezitím vyplnila'
+            : outcome === 'rejected'
+              ? 'follower flat — ochranná noha skončila rejectem'
+              : 'follower flat — ochranná noha zrušena okamžitě',
         }]);
-      } catch {
-        // Noha už je terminální (vyplněná/zrušená) nebo výpadek — nechá se
-        // standardní reconciliaci; sweep je best-effort navíc, ne náhrada.
+        // Zrušená noha činí bezpředmětnými i rozletěné modify na ni — bez
+        // waivu by stale `unknown` navždy blokoval ruční Flatten (review 13).
+        if (outcome !== 'filled') {
+          await processor.mutate(async current => {
+            const cancelOutbox = new Map(current.cancelOutbox);
+            for (const [key, entry] of cancelOutbox) {
+              if (
+                entry.operation === 'modify'
+                && entry.brokerOrderId === brokerOrderId
+                && (entry.status === 'unknown' || entry.status === 'sending')
+              ) {
+                cancelOutbox.set(key, waiveCancelEntry(entry, 'nahrazeno flat sweep cancelem', clock()));
+              }
+            }
+            return { ...current, cancelOutbox };
+          }).catch(() => undefined);
+        }
+      } catch (error) {
+        failures.push(brokerOrderId);
+        // Neúspěch se NEZAHAZUJE: noha zůstává nezametená a selhání jde
+        // do auditu i eskalace, ne do ticha.
+        options.onAudit?.([{
+          at, leaderEventId, accountId, brokerOrderId, kind: 'cancel-failed',
+          reason: `flat sweep neuspěl: ${error instanceof Error ? error.message : String(error)}`,
+        }]);
+      } finally {
+        sweepingProtectiveLegs.delete(brokerOrderId);
       }
+    }));
+    if (failures.length > 0 || legs.length > cappedLegs.length) {
+      // Eskalace místo lokální retry smyčky: fail-closed + auto-flatten mají
+      // vlastní potvrzovací mašinerii a durable stopu. Sweep bez ní je jen
+      // rychlá první rána.
+      failClosed(new Error(
+        `Flat sweep nedokončen (${failures.length} selhání, ${legs.length - cappedLegs.length} odloženo) — účet ${accountId} ${symbol}`,
+      ));
+      scheduleAutoClose('fail-closed');
     }
   };
 
@@ -529,8 +672,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * maxContracts odmítl OSO, pět rejected položek pak zablokovalo Flatten
    * uprostřed otevřené pozice.) ARM dál blokuje každá stuck položka.
    */
-  const hasBrokerUncertainOutbox = () => currentStuckOperations()
-    .some(operation => operation.status === 'sending' || operation.status === 'unknown');
+  // `neverSent` unknown je preflight odmítnutí — na brokera nic neodešlo,
+  // takže Flatten nemá co zdvojit. Blokovat jím nouzové zavření by
+  // znamenalo, že detekce cizího zásahu zablokuje vlastní reakci na sebe.
+  // Nový ARM tyhle záznamy blokují dál (currentStuckOperations je nese).
+  const brokerUncertainInRuntime = (runtime: CopierRuntime) =>
+    [...runtime.cancelOutbox.values()].some(entry =>
+      (entry.status === 'sending' || entry.status === 'unknown') && !entry.neverSent)
+    || [...runtime.outbox.values()].some(entry => entry.status === 'sending' || entry.status === 'unknown')
+    || [...runtime.bracketOutbox.values()].some(entry => entry.status === 'sending' || entry.status === 'unknown')
+    || [...runtime.osoOutbox.values()].some(entry => entry.status === 'sending' || entry.status === 'unknown');
+  const hasBrokerUncertainOutbox = () => brokerUncertainInRuntime(currentRuntime());
 
   /**
    * Reject je konečný, známý výsledek bez nejasného side effectu. Během
@@ -886,6 +1038,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     let result: ManualFlattenResult | null = null;
     try {
       await processor.mutate(async current => {
+        // Recheck UVNITŘ serializace: vnější kontrola mohla číst runtime
+        // před právě dobíhajícím modify, který mezitím skončil `unknown`
+        // (review, bod 13). Broker I/O nesmí startovat nad starým čtením.
+        if (brokerUncertainInRuntime(current)) {
+          throw new Error('Flatten nelze spustit: objednávka s nejistým osudem u brokera (sending/unknown) čeká na dohledání');
+        }
         const processed = await processManualFlatten({
           runtime: current,
           broker,
@@ -939,6 +1097,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const hasExposure = accountIds.some(accountId =>
       [...(positionsByAccount.get(accountId)?.values() ?? [])].some(quantity => quantity !== 0));
     if (!hasExposure) return;
+    if (autoCloseEpisodeAttempts >= AUTO_CLOSE_MAX_ATTEMPTS_PER_EPISODE) {
+      options.onAudit?.([{
+        at: clock(), leaderEventId: `auto-close-limit:${trigger}:${seed}`, kind: 'blocked',
+        reason: `auto-close vyčerpal ${AUTO_CLOSE_MAX_ATTEMPTS_PER_EPISODE} pokusů v epizodě — nutný ruční zásah`,
+      }]);
+      return;
+    }
+    autoCloseEpisodeAttempts += 1;
     const operationId = `auto-close:${trigger}:${seed}`;
     const at = clock();
     try {
@@ -951,7 +1117,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         at: clock(), leaderEventId: operationId, kind: 'blocked',
         reason: `auto-close (${trigger}, ${scope}): zrušeno ${result.canceledOrders} příkazů, zavřeno ${result.submittedClosures} pozic`,
       }]);
-      if (result.flat) await syncLiveCopyExposureFlag('clear');
+      if (result.flat) {
+        autoCloseEpisodeAttempts = 0;
+        await syncLiveCopyExposureFlag('clear');
+      }
     } catch (error) {
       lastAutoClose = {
         at, operationId, trigger, scope, accountIds, flat: false,
@@ -1178,6 +1347,43 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     await maybeHandleArmExpiry(now);
+    // Cizí zásah se musí poznat z order streamu sám. Čekat, až ho odhalí
+    // náš příští modify, znamená čekat na náhodu — 24. 8. žádný další modify
+    // nepřišel a oversized noha vydržela pracovat až do fatálního fillu.
+    if (event.type === 'order' && event.order.accountId !== group.leaderAccountId) {
+      const runtime = currentRuntime();
+      const asserted = assertedFollowerQuantity(runtime.state, runtime.cancelOutbox, event.order.brokerOrderId);
+      // `null` = objednávka není naše; do cizích účtů kopírce nic není.
+      if (asserted != null && event.order.quantity > asserted) {
+        failClosed(new Error(
+          `Copier fail-closed: cizí navýšení množství u brokera — objednávka ${
+            event.order.brokerOrderId} má ${event.order.quantity}, uplatnili jsme nejvýš ${asserted}`,
+        ));
+        // Odzbrojení nestačí: pokud je lokální expozice nula, auto-close
+        // nemá co zavírat a oversized noha by u brokera dál pracovala —
+        // její pozdější fill by otevřel protipozici už v DISARMED runtime.
+        // Cancel cizím zásahem nafouknuté nohy je risk-redukující vždy.
+        const { accountId, brokerOrderId } = event.order;
+        if (event.order.status === 'working') {
+          try {
+            await broker.cancelOrder(accountId, brokerOrderId);
+            options.onAudit?.([{
+              at: now, leaderEventId: `foreign-inflation-${accountId}-${brokerOrderId}`,
+              kind: 'canceled', accountId, brokerOrderId,
+              reason: `cizí navýšení množství (${event.order.quantity} > ${asserted}) — noha zrušena`,
+            }]);
+          } catch (error) {
+            options.onAudit?.([{
+              at: now, leaderEventId: `foreign-inflation-${accountId}-${brokerOrderId}`,
+              kind: 'cancel-failed', accountId, brokerOrderId,
+              reason: `cizí navýšení množství — cancel selhal: ${
+                error instanceof Error ? error.message : String(error)}`,
+            }]);
+          }
+        }
+        scheduleAutoClose('fail-closed');
+      }
+    }
     if (event.type === 'position') {
       const accountPositions = positionsByAccount.get(event.position.accountId) ?? new Map<string, number>();
       const previousAccountNet = accountPositions.get(event.position.symbol) ?? 0;
@@ -1194,7 +1400,35 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         && previousAccountNet !== 0
         && event.position.netQuantity === 0
       ) {
-        await sweepFollowerProtectiveLegs(event.position.accountId, now);
+        await sweepFollowerProtectiveLegs(event.position.accountId, event.position.symbol, now);
+      }
+      // Follower otevřel pozici, kterou jsme nikdy neobjednali: leader na tom
+      // symbolu nic nemá a follower se z flat rozjel do nenuly. Přesně tvar
+      // incidentu 24. 8. Úmyslně úzké — „opačné znaménko než leader“ by
+      // falešně střílelo pokaždé, když leader zavře dřív než follower, což je
+      // normální zpoždění. Znaménková podmínka drží stranou on-fill kopie,
+      // kde follower vstup legitimně předběhne leader position event: vstup
+      // má vždy opačné znaménko než jeho ochranné nohy.
+      if (
+        event.position.accountId !== group.leaderAccountId
+        && previousAccountNet === 0
+        && event.position.netQuantity !== 0
+        && (leaderPositions.get(event.position.symbol) ?? 0) === 0
+        && protectiveLegsCouldProduceSign(
+          event.position.accountId, event.position.symbol, Math.sign(event.position.netQuantity),
+        )
+      ) {
+        failClosed(new Error(
+          `Copier fail-closed: follower ${event.position.accountId} se otočil do neobjednané pozice ${
+            event.position.netQuantity} na ${event.position.symbol}, zatímco leader je flat`,
+        ));
+        // failClosed po dřívějším odzbrojení už auto-close neplánuje (brání
+        // smyčce flatten-selhal → failClosed → flatten). Otočená pozice je
+        // ale nový fakt s novou expozicí a jediná risk-redukující reakce je
+        // zavřít ji. Smyčka nevznikne: spouštěčem je jen venue přechod
+        // 0→nenula a flatten expozici pouze snižuje — takový přechod sám
+        // vyrobit neumí. Guardy (killSwitch, běžící close) drží uvnitř.
+        scheduleAutoClose('fail-closed');
       }
       if (event.position.accountId === group.leaderAccountId) {
         const previousNet = leaderPositions.get(event.position.symbol) ?? 0;
@@ -1584,6 +1818,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
         }
       }
+      // Durable dokončení sweep povinnosti: pád workeru mezi follower flat
+      // a potvrzeným cancelem nesmí povinnost ztratit (review, bod 5).
+      // Reconciliation je autoritativní moment, kdy se osiřelé working
+      // ochranné nohy nad flat followerem dají najít a doprovodit.
+      for (const follower of group.followers) {
+        const snapshot = byAccount.get(follower.accountId);
+        if (!snapshot) continue;
+        const workingIds = new Set(
+          snapshot.orders.filter(order => order.status === 'working').map(order => order.brokerOrderId),
+        );
+        if (workingIds.size === 0) continue;
+        const flatSymbols = new Set<string>();
+        const runtime = currentRuntime();
+        for (const entry of [...runtime.bracketOutbox.values(), ...runtime.osoOutbox.values()]) {
+          if (entry.request.accountId !== follower.accountId) continue;
+          const net = snapshot.positions.find(item => item.symbol === entry.request.symbol)?.netQuantity ?? 0;
+          if (net !== 0) continue;
+          const hasWorkingLeg = [entry.firstBrokerOrderId, entry.secondBrokerOrderId]
+            .some(id => id && workingIds.has(id));
+          if (hasWorkingLeg) flatSymbols.add(entry.request.symbol);
+        }
+        for (const symbol of flatSymbols) {
+          await sweepFollowerProtectiveLegs(follower.accountId, symbol, clock());
+        }
+      }
       gate = { ...gate, divergentAccounts: divergent, sequenceBroken: false, armed: false };
       positionCheckComplete = divergent.size === 0 && workingOrderAccounts.size === 0;
       if (positionCheckComplete) {
@@ -1626,6 +1885,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const armTtlMs = ttlMs != null ? Math.min(ttlMs, defaultArmTtlMs) : defaultArmTtlMs;
       gate = { ...gate, armed: true, armedAt: now, now, shadowMode, armTtlMs };
       lastResumeOffer = null;
+      // Nová epizoda: ARM prošel všemi branami (flat, žádný stuck outbox),
+      // takže počítadlo nouzových zavření začíná znovu.
+      autoCloseEpisodeAttempts = 0;
     },
     disarm() {
       gate = { ...gate, armed: false };

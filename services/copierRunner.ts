@@ -1,4 +1,4 @@
-import type { BrokerEvent, BrokerOcoRequest, BrokerOrderRequest, BrokerOsoRequest, BrokerPort } from './brokerPort';
+import type { BrokerEvent, BrokerOcoRequest, BrokerOrder, BrokerOrderRequest, BrokerOsoRequest, BrokerPort } from './brokerPort';
 import {
   applyResolved,
   applyLeaderProgress,
@@ -9,6 +9,7 @@ import {
   planCancel,
   planModify,
   planReplication,
+  updateFollowerLinkQuantity,
   type CopierState,
   type FollowerOrderLink,
   type LeaderEvent,
@@ -28,6 +29,7 @@ import {
 import {
   createCancelEntry,
   createModifyEntry,
+  markCancelRefused,
   markCancelSending,
   markCancelUnknown,
   resolveCancelLookup,
@@ -92,6 +94,8 @@ export type CopierAuditKind =
   | 'abandoned'
   | 'canceled'
   | 'modified'
+  /** Noha skončila vyplněná, ne zrušená — audit to nesmí zaměňovat. */
+  | 'filled'
   | 'cancel-failed'
   | 'sequence-broken';
 
@@ -244,6 +248,46 @@ function waiveSupersededModifications(
       ));
     }
   }
+}
+
+/**
+ * Nejvyšší množství, které jsme pro follower objednávku kdy uplatnili.
+ *
+ * Referenční bod pro detekci cizího zásahu. Porovnávat venue stav proti
+ * *nové* intenci nejde: při legitimním snížení leadera (5 → 3) má venue
+ * pořád 5 a každý downsize by hlásil falešný poplach. Legitimní navýšení
+ * naopak vlastní referenci zvedá samo — `planModify` počítá množství vždy
+ * znovu z aktuálního leader příkazu, takže vyšší intence je součástí maxima.
+ * Co zbude nad tímto maximem, jsme neposlali my.
+ */
+export function assertedFollowerQuantity(
+  state: CopierState,
+  cancelOutbox: ReadonlyMap<string, CancelOutboxEntry>,
+  brokerOrderId: string,
+): number | null {
+  let asserted: number | null = null;
+  for (const links of state.links.values()) {
+    for (const link of links) {
+      if (link.brokerOrderId === brokerOrderId) asserted = Math.max(asserted ?? 0, link.quantity);
+    }
+  }
+  // Rozletěný modify: intence je write-ahead persistnutá PŘED odesláním,
+  // takže venue event s naší novou hodnotou dorazí až ve chvíli, kdy už ji
+  // tady vidíme — vlastní legitimní navýšení tak neprojde jako cizí zásah.
+  // Terminální stavy se nepočítají: po potvrzení nese hodnotu link a staré
+  // maximum by navždy maskovalo venue návrat po legitimním snížení.
+  for (const entry of cancelOutbox.values()) {
+    if (
+      entry.operation === 'modify'
+      && entry.brokerOrderId === brokerOrderId
+      && entry.changes
+      && !entry.neverSent
+      && (entry.status === 'planned' || entry.status === 'sending' || entry.status === 'unknown')
+    ) {
+      asserted = Math.max(asserted ?? 0, entry.changes.quantity);
+    }
+  }
+  return asserted;
 }
 
 export function runtimeFromSnapshot(snapshot: CopierSnapshot): CopierRuntime {
@@ -899,7 +943,10 @@ export async function processLeaderEvent(
     // pozice nechráněná a odzbrojená kopírka náhradu poslat nesmí. Taková
     // musí projít plnou branou, aby ji kill switch a DISARM zastavily.
     const protectiveLegIds = new Set<string>();
-    for (const entry of bracketOutbox.values()) {
+    // OSO nohy jsou stejné SL/TP jako bracket — vynechat je znamenalo, že
+    // leader cancel OSO stopu prošel po DISARM „risk-redukující“ výjimkou
+    // a follower zůstal bez ochrany (nález review 25. 8.).
+    for (const entry of [...bracketOutbox.values(), ...osoOutbox.values()]) {
       protectiveLegIds.add(entry.leaderStopOrderId);
       protectiveLegIds.add(entry.leaderTargetOrderId);
     }
@@ -994,32 +1041,69 @@ export async function processLeaderEvent(
         } else if (entry.changes) {
           // Incident 24. 8.: náš modify (total 6) čekal AtExecution, mezitím
           // se stop částečně vyplnil a venue engine Tradovate ho přeasertoval
-          // na total 7 → followeři se otočili do long. Modify částečně
-          // vyplněného příkazu proto nikdy neposílá zastaralý total: těsně
-          // před odesláním se čte autoritativní stav a
-          //  - fill ≥ zamýšlený total ⇒ není co upravovat, příkaz doběhne sám;
-          //  - fill > 0 a jde o čistý posun ceny ⇒ total zůstává venue
-          //    hodnota, mění se jen cena — závod o množství tak nevznikne;
-          //  - venue total > náš zamýšlený ⇒ cizí zásah do našeho příkazu,
-          //    modify se neodešle a operace skončí jako unknown (fail-closed).
+          // na total 7 → followeři se otočili do long. Modify proto nikdy
+          // neposílá zastaralý total. Pozn.: na drátě nese `orderQty` KAŽDÝ
+          // modify (viz tradovateBroker), „jen posun ceny“ na téhle úrovni
+          // neexistuje — o množství se závodí vždy. Těsně před odesláním se
+          // proto čte autoritativní stav a platí:
+          //  - lookup selhal nebo příkaz není ⇒ neodesílá se nic (fail-closed);
+          //  - venue total > nejvyšší námi uplatněný ⇒ cizí zásah, refused;
+          //  - fill ≥ zamýšlený total ⇒ zbytek příkazu se risk-redukčně ruší;
+          //  - jinak se posílá aktuální intence leadera.
           const changes = { ...entry.changes };
-          const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId).catch(() => null);
-          const live = lookup?.order;
-          if (live && live.filledQuantity > 0) {
-            if (live.filledQuantity >= changes.quantity) {
-              cancelOutbox.set(entry.key, markCancelUnknown(
-                entry, `modify přeskočen: vyplněno ${live.filledQuantity}/${changes.quantity}`, clock(),
-              ));
-              return;
-            }
-            if (live.quantity > changes.quantity) {
-              cancelOutbox.set(entry.key, markCancelUnknown(
-                entry, `cizí navýšení množství u brokera (${live.quantity} > ${changes.quantity})`, clock(),
-              ));
-              return;
-            }
-            changes.quantity = live.quantity;
+          // Nedostupný autoritativní stav NENÍ důvod poslat modify naslepo:
+          // právě zastaralý total pozici otočil. Bez odpovědi se neodesílá nic.
+          let live: BrokerOrder | undefined;
+          try {
+            live = (await broker.findOrderById(entry.accountId, entry.brokerOrderId)).order;
+          } catch (error) {
+            cancelOutbox.set(entry.key, markCancelRefused(
+              entry,
+              `modify neodeslán: autoritativní stav nedostupný (${error instanceof Error ? error.message : String(error)})`,
+              clock(),
+            ));
+            return;
           }
+          if (!live) {
+            cancelOutbox.set(entry.key, markCancelRefused(
+              entry, 'modify neodeslán: objednávka u brokera nenalezena', clock(),
+            ));
+            return;
+          }
+          // Kontrola cizího zásahu běží VŽDY, i při nule fillů — venue engine
+          // umí přeasertovat i příkaz, do kterého se ještě nic nevyplnilo.
+          const asserted = Math.max(
+            changes.quantity,
+            assertedFollowerQuantity(state, cancelOutbox, entry.brokerOrderId) ?? 0,
+          );
+          if (live.quantity > asserted) {
+            cancelOutbox.set(entry.key, markCancelRefused(
+              entry, `cizí navýšení množství u brokera (${live.quantity} > ${asserted})`, clock(),
+            ));
+            return;
+          }
+          if (live.filledQuantity >= changes.quantity) {
+            // Cíl je ≤ už vyplněnému: modify nemá smysl. Nevyplněný zbytek
+            // příkazu je ale čistá nadexpozice — nechat ho pracovat znamená
+            // opakovat otočení z 24. 8. Risk-redukující cancel zbytku.
+            if (live.quantity > live.filledQuantity) {
+              await broker.cancelOrder(entry.accountId, entry.brokerOrderId);
+              cancelOutbox.set(entry.key, markCancelUnknown(
+                entry,
+                `modify nahrazen cancelem zbytku: vyplněno ${live.filledQuantity}/${changes.quantity}, u brokera ${live.quantity}`,
+                clock(),
+              ));
+              return;
+            }
+            cancelOutbox.set(entry.key, markCancelRefused(
+              entry, `modify bezpředmětný: vyplněno ${live.filledQuantity}/${changes.quantity}, nic neběží`, clock(),
+            ));
+            return;
+          }
+          // Posílá se INTENCE, ne venue total: venue hodnota by tiše vracela
+          // legitimní snížení zpět nahoru. Fill, který se vplíží mezi lookup
+          // a odeslání, zachytí stream detekce (qty > asserted) — okno bez
+          // CAS na venue API zavřít nejde, jen ho držet v milisekundách.
           await broker.modifyOrder(entry.accountId, entry.brokerOrderId, changes);
         }
         cancelOutbox.set(entry.key, markCancelUnknown(entry, 'čeká na potvrzení order streamem', clock()));
@@ -1055,6 +1139,11 @@ export async function processLeaderEvent(
       cancelOutbox.set(entry.key, resolved);
       if (resolved.status === 'confirmed') {
         waiveSupersededModifications(cancelOutbox, resolved, clock);
+        // Broker potvrdil novou hodnotu — link ji musí převzít, jinak by
+        // detekce cizího zásahu navždy měřila proti množství z prvního place.
+        if (entry.operation === 'modify' && resolved.outcome === 'working' && entry.changes) {
+          state = updateFollowerLinkQuantity(state, entry.brokerOrderId, entry.changes.quantity);
+        }
         audit.push({
           at: clock(), leaderEventId: event.id,
           kind: entry.operation === 'cancel' ? 'canceled' : 'modified', accountId: entry.accountId,

@@ -15,6 +15,14 @@ export interface CancelOutboxEntry {
   outcome?: BrokerOrder['status'];
   reason?: string;
   updatedAt: number;
+  /**
+   * Preflight operaci odmítl a na brokera NIC neodešlo. Takový `unknown`
+   * pořád blokuje nový ARM (do reconciliation), ale nesmí blokovat nouzový
+   * Flatten: neexistuje žádný nejistý side effect, který by Flatten mohl
+   * zdvojit — a bez této výjimky by detekce cizího zásahu zablokovala
+   * přesně to zavření, které sama vyvolala.
+   */
+  neverSent?: boolean;
 }
 
 export function createCancelEntry(
@@ -49,6 +57,11 @@ export function markCancelSending(entry: CancelOutboxEntry, now: number): Cancel
 
 export function markCancelUnknown(entry: CancelOutboxEntry, reason: string, now: number): CancelOutboxEntry {
   return { ...entry, status: 'unknown', reason, updatedAt: now };
+}
+
+/** Preflight odmítl operaci PŘED odesláním — viz `neverSent`. */
+export function markCancelRefused(entry: CancelOutboxEntry, reason: string, now: number): CancelOutboxEntry {
+  return { ...entry, status: 'unknown', reason, updatedAt: now, neverSent: true };
 }
 
 export function waiveCancelEntry(entry: CancelOutboxEntry, reason: string, now: number): CancelOutboxEntry {

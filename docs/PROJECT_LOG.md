@@ -78,6 +78,48 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-25 (Claude, dvě vlny oprav po adversariální review obrany 24. 8.)
+Codex review trojité obrany našla 14 děr (8 kritických). Vlna 1 — detekce:
+`assertedFollowerQuantity` čte i rozletěné modify intence z cancelOutboxu
+(vlastní navýšení už není „cizí zásah“) a potvrzený modify srovnává link
+`updateFollowerLinkQuantity` (venue návrat po legitimním snížení je vidět);
+modify preflight posílá intenci leadera, cíl ≤ filled ruší živý zbytek
+příkazu; preflight odmítnutí má nový příznak `neverSent` — blokuje ARM, ale
+už ne nouzový Flatten; stream detekce cizího navýšení sama ruší oversized
+nohu i při nulové expozici; OSO nohy doplněny do protective-cancel
+klasifikace; sweep i detektor otočení jsou symbolově izolované a znaménková
+heuristika ignoruje prokazatelně zrušené nohy (filled zůstávají podezřelé).
+Vlna 2 — robustnost: sweep má jediný inline pokus s 1,5s deadlinem
+(jen mimo testy), cap 6 nohou proti restart bouři, audit podle skutečného
+výsledku (filled/rejected/canceled), waive nahrazených modify a eskalaci
+selhání do failClosed + auto-flatten; auto-close má mez 3 pokusů na epizodu
+(reset úspěšným flat/ARM) proti ping-pongu; reconciliation doprovodí osiřelé
+working nohy nad flat followerem (durable povinnost přes pád workeru);
+Flatten recheckuje nejistý outbox uvnitř serializace. Nevyřešené a přiznané:
+TOCTOU okno lookup→modify bez CAS na venue API (kryté stream detekcí),
+prune durable outbox historie, deadliny mimo sweep. Ověření: 6 nových
+regresí padá bez oprav a prochází s nimi, celkem 1437/1437, tsc čistý.
+
+### 2026-08-25 (Codex, šest regresí copieru po review)
+Přibyl samostatný testovací soubor se šesti deterministickými regresními
+scénáři: vlastní rozletěné navýšení 5→6, potvrzený downsize 5→3 a venue návrat,
+cancel živého zbytku při cíli ≤ filled, `neverSent` preflight vs. Flatten/ARM,
+přímé zrušení oversized ochranné nohy při flat followerovi a symbolově
+izolovaný MNQ/NQ sweep. Každý test míří na vlastní hunk aktuálního `services/`
+diffu a bez něj by zčervenal; produkční kód se v této práci neměnil. Prošlo
+6/6 nových testů, celé `copierChaosScenarios` 15/15, celý `copierRunner` 56/56,
+společně 77/77, `npx tsc --noEmit` a `git diff --check`.
+
+### 2026-08-24 (Codex, RED test prevence venue-side OSO qty=7)
+K recovery chaos testu incidentu přibyl sesterský PREVENCE scénář bez
+umělého zdržení cancelu. Sdílený lokální helper přehrává follower OSO qty 5,
+částečné filly 1 až 5 a cizí venue OrderVersion qty 7; prevenční test ukládá
+stav ještě před leader flat, aby pozdější flat sweep nemohl výsledek falešně
+zazelenit. Na aktuálním kódu oba incidentní testy záměrně padají: recovery
+končí followerem -2 při leaderovi 0, prevence vidí oversized stop stále
+`working` a skupinu stále ARMED. Zbylých 12 chaos testů a TypeScript prošlo.
+Produkční soubory změněné souběžnou cizí prací tento zásah neupravoval.
+
 ### 2026-08-24 večer (Claude, forenzika otočení followerů + trojitá obrana)
 Doplnění ranního incidentu: followeři se otočili do long 1, protože jejich
 stopy byly u brokera navýšeny z qty 6 na qty 7. Forenzika orderVersion +

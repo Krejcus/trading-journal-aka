@@ -247,6 +247,29 @@ export function linkFollowerOrder(
   return { ...state, links };
 }
 
+/**
+ * Srovná množství linku s brokerem potvrzeným modify.
+ *
+ * Bez toho by link navždy nesl hodnotu z prvního place: po legitimním
+ * snížení 5→3 by detekce cizího zásahu dál měřila proti 5 a venue návrat
+ * 3→5 by prošel bez povšimnutí — přesný mechanismus incidentu 24. 8.
+ */
+export function updateFollowerLinkQuantity(
+  state: CopierState,
+  brokerOrderId: string,
+  quantity: number,
+): CopierState {
+  let changed = false;
+  const links = new Map(state.links);
+  for (const [leaderOrderId, list] of links) {
+    if (!list.some(link => link.brokerOrderId === brokerOrderId && link.quantity !== quantity)) continue;
+    changed = true;
+    links.set(leaderOrderId, list.map(link =>
+      link.brokerOrderId === brokerOrderId ? { ...link, quantity } : link));
+  }
+  return changed ? { ...state, links } : state;
+}
+
 export interface CancelCommand {
   key: string;
   accountId: number;

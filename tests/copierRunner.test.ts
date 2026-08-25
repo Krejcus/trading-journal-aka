@@ -1525,6 +1525,8 @@ describe('modify částečně vyplněné objednávky (incident 24. 8.)', () => {
 
     expect(broker.orders()[0]).toMatchObject({ limitPrice: 29_500 });
     const zaznam = [...modified.runtime.cancelOutbox.values()].find(entry => entry.operation === 'modify');
-    expect(zaznam?.reason).toContain('modify přeskočen');
+    expect(zaznam?.reason).toContain('modify bezpředmětný');
+    // Preflight odmítnutí bez odeslání — nesmí blokovat nouzový Flatten.
+    expect(zaznam?.neverSent).toBe(true);
   });
 });
