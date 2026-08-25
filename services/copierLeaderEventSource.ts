@@ -57,7 +57,6 @@ export class CopierLeaderEventSource {
     sequence: number,
     receivedAt: number,
   ): LeaderEvent | null {
-    if (order.accountId !== leaderAccountId) return null;
     const shape = [
       order.orderType,
       order.quantity,
@@ -76,6 +75,10 @@ export class CopierLeaderEventSource {
     const previousShape = this.orderShapes.get(order.brokerOrderId);
     this.orderSignatures.set(order.brokerOrderId, signature);
     this.orderShapes.set(order.brokerOrderId, shape);
+    // Baseline držíme pro všechny účty v připojení, ne pouze pro právě
+    // zvoleného leadera. Když se follower bezpečně povýší na leadera přes
+    // UI, jeho historický working/fill event se tím nemůže vydávat za nový.
+    if (order.accountId !== leaderAccountId) return null;
     if (!this.ready || previous === signature) return null;
 
     let kind: LeaderEventKind | null = null;
@@ -116,11 +119,13 @@ export class CopierLeaderEventSource {
     sequence: number,
     receivedAt: number,
   ): LeaderEvent | null {
-    if (fill.accountId !== leaderAccountId || this.seenFillIds.has(fill.fillId)) return null;
+    if (this.seenFillIds.has(fill.fillId)) return null;
     this.seenFillIds.add(fill.fillId);
-    if (!this.ready) return null;
     const cumulativeQuantity = (this.liveFillTotals.get(fill.brokerOrderId) ?? 0) + fill.quantity;
     this.liveFillTotals.set(fill.brokerOrderId, cumulativeQuantity);
+    // Stejně jako u orderů se fill ID všech připojených účtů baselinuje
+    // ještě před filtrem leadera. Změna role pak nikdy nepřehrává historii.
+    if (fill.accountId !== leaderAccountId || !this.ready) return null;
     return {
       id: `fill:${fill.fillId}`,
       orderId: fill.brokerOrderId,

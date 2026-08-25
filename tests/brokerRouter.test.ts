@@ -135,4 +135,32 @@ describe('reconnect grace nekritických spojení', () => {
     expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true, false]);
     unsubscribe();
   });
+
+  it('po změně leadera přehodí kritickou OAuth route bez restartu routeru', async () => {
+    const events: BrokerEvent[] = [];
+    const first = createMockBroker();
+    const second = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: first, accountIds: [100], critical: true },
+      { broker: second, accountIds: [200], critical: false },
+    ], { reconnectGraceMs: 1_000 });
+    const unsubscribe = router.subscribe(event => events.push(event));
+    first.setConnected(true);
+    second.setConnected(true);
+    expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true]);
+
+    router.setCriticalAccounts?.([200]);
+
+    // Původní leader route je už follower-only, takže její krátký výpadek
+    // zůstane v grace okně a nesestřelí skupinu okamžitě.
+    first.setConnected(false);
+    expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true]);
+
+    // Nový leader je kritický ihned.
+    second.emitEvent({ type: 'error', error: new Error('new leader transport error'), at: 5 });
+    second.setConnected(false);
+    expect(events.some(event => event.type === 'error')).toBe(true);
+    expect(events.filter(event => event.type === 'connection').map(event => event.connected)).toEqual([true, false]);
+    unsubscribe();
+  });
 });

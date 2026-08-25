@@ -503,6 +503,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const saveGroup = async (group: CopyGroupConfig) => {
     const exists = groups.some(candidate => candidate.id === group.id);
     const command: LiveCopyTradingCommand = exists ? { type: 'update-group', group } : { type: 'create-group', group };
+    // Editor se smí přepnout na nový leader až po potvrzení execution
+    // runtime. Když broker preflight změnu odmítne, runCommand callback
+    // nespustí a UI tak nikdy nelže o jiné topologii než drží worker.
     await runCommand(command, () => {
       setGroups(current => exists ? current.map(candidate => candidate.id === group.id ? group : candidate) : [...current, group]);
       setExpanded(current => new Set(current).add(group.id));

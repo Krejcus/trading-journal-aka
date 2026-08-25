@@ -175,6 +175,11 @@ export interface BrokerOrderStateLookup {
 
 export interface BrokerPort {
   readonly environment: BrokerEnvironment;
+  /**
+   * Router více OAuth spojení může za běhu přesunout kritickou roli na
+   * spojení aktuálního leadera. Obyčejný broker metodu nepotřebuje.
+   */
+  setCriticalAccounts?(accountIds: readonly number[]): void;
   placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderAck>;
   /** Nativní atomický OCO pár. Chybějící implementace znamená fail-closed. */
   placeOco?(request: BrokerOcoRequest): Promise<BrokerOcoAck>;

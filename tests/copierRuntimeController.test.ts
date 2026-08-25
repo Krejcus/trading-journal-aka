@@ -270,6 +270,86 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('bezpečně změní leader epochu, odzbrojí a po nové reconciliation kopíruje opačným směrem', async () => {
+    const setCriticalAccounts = vi.fn();
+    const broker = Object.assign(
+      createMockBroker({ behavior: () => ({ kind: 'working' }) }),
+      { setCriticalAccounts },
+    );
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    await controller.reconfigureGroup({
+      ...group,
+      leaderAccountId: 200,
+      followers: [{ accountId: 100, mode: 'on-submit', multiplier: 1 }],
+    });
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      shadowMode: true,
+      reconciliationRequired: true,
+      lastSequence: 0,
+    });
+    expect(setCriticalAccounts).toHaveBeenLastCalledWith([200]);
+
+    await controller.reconcile();
+    controller.arm();
+    // Starý leader už není zdroj událostí.
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ brokerOrderId: 'old-leader-after-swap', accountId: 100 }),
+    });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(0);
+
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ brokerOrderId: 'new-leader-after-swap', accountId: 200 }),
+    });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toEqual([
+      expect.objectContaining({ accountId: 100, quantity: 2 }),
+    ]);
+    controller.stop();
+  });
+
+  it('změnu leadera odmítne, dokud má kterýkoli starý nebo nový účet working order', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const seeded = await broker.placeOrder({
+      tag: 'working-follower', accountId: 200, symbol: 'MNQU6', side: 'Buy',
+      quantity: 1, orderType: 'Limit', limitPrice: 1,
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconfigureGroup({
+      ...group,
+      leaderAccountId: 200,
+      followers: [{ accountId: 100, mode: 'on-submit', multiplier: 1 }],
+    })).rejects.toThrow('working=200');
+    expect(controller.status()).toMatchObject({ armed: false });
+
+    await broker.cancelOrder(200, seeded.brokerOrderId);
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ brokerOrderId: 'old-leader-still-active', accountId: 100 }),
+    });
+    await controller.waitForIdle();
+    expect(broker.placedRequests().at(-1)).toMatchObject({ accountId: 200 });
+    controller.stop();
+  });
+
   it('odmítne neplatný maxContracts ještě před startem runtime', async () => {
     const broker = createMockBroker();
     await expect(bootstrapCopierRuntime({

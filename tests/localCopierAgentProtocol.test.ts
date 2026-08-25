@@ -33,6 +33,15 @@ describe('local copier agent group matching', () => {
     expect(resolveLocalExecutionGroup([edited], runtime)).toEqual(edited);
   });
 
+  it('keeps the runtime attached by stable group id while UI changes the leader epoch', () => {
+    const runtime = group('stable-slot', 11, [22]);
+    const edited = group('stable-slot', 22, [11]);
+    expect(resolveLocalExecutionGroup([
+      group('other', 11, [33]),
+      edited,
+    ], runtime)).toEqual(edited);
+  });
+
   it('prefers an exact topology and fails closed when leader matching is ambiguous', () => {
     const runtime = group('runtime', 11, [22]);
     const exact = group('exact', 11, [22]);

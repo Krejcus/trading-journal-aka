@@ -80,4 +80,36 @@ describe('CopierLeaderEventSource', () => {
     source.acknowledgeReconciliation();
     expect(source.needsReconciliation()).toBe(false);
   });
+
+  it('baselineuje i follower účty, takže změna leadera nepřehraje jejich starou historii', () => {
+    const source = new CopierLeaderEventSource();
+    source.connection(true);
+    const oldFollowerOrder = order({
+      accountId: 200,
+      brokerOrderId: 'old-follower-order',
+      status: 'canceled',
+      sourceVersion: 'v3:Canceled',
+    });
+    const oldFollowerFill = fill({
+      accountId: 200,
+      brokerOrderId: 'old-follower-order',
+      fillId: 'old-follower-fill',
+    });
+
+    expect(source.observe({ type: 'order', order: oldFollowerOrder }, 100, 1, 10)).toBeNull();
+    expect(source.observe({ type: 'fill', fill: oldFollowerFill }, 100, 2, 11)).toBeNull();
+
+    // Po bezpečné výměně rolí jsou stejné entity pořád historie, ne nový
+    // leader submit/fill. Až nový brokerOrderId smí založit novou epizodu.
+    expect(source.observe({ type: 'order', order: oldFollowerOrder }, 200, 1, 12)).toBeNull();
+    expect(source.observe({ type: 'fill', fill: oldFollowerFill }, 200, 2, 13)).toBeNull();
+    expect(source.observe({
+      type: 'order',
+      order: order({ accountId: 200, brokerOrderId: 'new-leader-order' }),
+    }, 200, 1, 14)).toMatchObject({
+      kind: 'submitted',
+      accountId: 200,
+      orderId: 'new-leader-order',
+    });
+  });
 });

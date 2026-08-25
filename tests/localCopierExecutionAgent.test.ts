@@ -39,6 +39,7 @@ const controller = () => {
     disarm: vi.fn(() => { status = { ...status, armed: false }; }),
     engageKillSwitch: vi.fn(() => { status = { ...status, armed: false, killSwitch: true }; }),
     reconcile: vi.fn(async () => ({ divergentAccounts: [], workingOrderAccounts: [] })),
+    reconfigureGroup: vi.fn(async () => undefined),
     updateGroup: vi.fn(),
     flattenAccount: vi.fn(async () => ({ flat: true })),
     flattenGroup: vi.fn(async () => ({ flat: true })),
@@ -141,23 +142,9 @@ describe('local copier execution agent', () => {
     expect(outside.status).toBe(409);
     expect(runtime.flattenAccount).not.toHaveBeenCalled();
 
-    const swappedTopology = await post(running, running.status().nonce, {
-      type: 'copy-command',
-      command: {
-        type: 'update-group',
-        group: {
-          ...group(),
-          id: 'ui-test',
-          leaderAccountId: 22,
-          followers: [{ accountId: 11, mode: 'on-submit', multiplier: 1 }],
-        },
-      },
-    });
-    expect(swappedTopology.status).toBe(409);
-    expect(runtime.updateGroup).not.toHaveBeenCalled();
   });
 
-  it('allows changing follower topology but keeps the runtime leader fixed', async () => {
+  it('allows changing follower topology without opening a new leader epoch', async () => {
     const runtime = controller();
     const onGroupChanged = vi.fn(async () => undefined);
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, onGroupChanged });
@@ -183,6 +170,32 @@ describe('local copier execution agent', () => {
     }));
   });
 
+  it('changes the leader from UI through the safe epoch transition', async () => {
+    const runtime = controller();
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, onGroupChanged });
+    const swapped = {
+      ...group(),
+      id: 'ui-test',
+      leaderAccountId: 22,
+      followers: [{ accountId: 11, mode: 'on-submit' as const, multiplier: 1 }],
+    };
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command', command: { type: 'update-group', group: swapped },
+    });
+
+    expect(response.status).toBe(200);
+    expect(runtime.reconfigureGroup).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'runtime-test',
+      leaderAccountId: 22,
+      followers: [expect.objectContaining({ accountId: 11 })],
+    }));
+    expect(runtime.updateGroup).not.toHaveBeenCalled();
+    expect(running.status().group).toMatchObject({ leaderAccountId: 22 });
+    expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({ leaderAccountId: 22 }));
+  });
+
   it('rolls configuration back and remains disarmed when persistence fails', async () => {
     const runtime = controller();
     running = await startLocalCopierExecutionAgent({
@@ -203,6 +216,32 @@ describe('local copier execution agent', () => {
     expect(runtime.updateGroup).toHaveBeenNthCalledWith(2, expect.objectContaining({
       followers: [expect.objectContaining({ multiplier: 1 })],
     }));
+  });
+
+  it('rolls a leader epoch back through the same safe path when persistence fails', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onGroupChanged: async () => { throw new Error('disk-full'); },
+    });
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: {
+          ...group(),
+          leaderAccountId: 22,
+          followers: [{ accountId: 11, mode: 'on-submit', multiplier: 1 }],
+        },
+      },
+    });
+
+    expect(response.status).toBe(409);
+    expect(running.status().group.leaderAccountId).toBe(11);
+    expect(runtime.reconfigureGroup).toHaveBeenNthCalledWith(1, expect.objectContaining({ leaderAccountId: 22 }));
+    expect(runtime.reconfigureGroup).toHaveBeenNthCalledWith(2, expect.objectContaining({ leaderAccountId: 11 }));
   });
 
   it('reconciles before ARM and remains disarmed when reconciliation fails', async () => {

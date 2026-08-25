@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1456 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1464 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -69,6 +69,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       kauzální oprava a deterministické regrese jsou hotové (zápis níže), ale
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
       ze stejného commitu a řízený DEMO test.
+- [ ] Změna leadera pouze z LIVE UI — bezpečná atomická runtime epocha je
+      lokálně hotová a otestovaná (zápis níže); před praktickým použitím čeká
+      na explicitní push, deploy, reinstall stejného commitu a DEMO ověření.
 - [ ] UI políčko pro `entryCooldownMinutes` (config i agent flag existují).
 - [ ] Cross-firm kopírování: technický fan-out Tradeify -> Lucid v DEMO prošel;
       stále chybí písemné potvrzení pravidel obou prop firem pro ostré použití.
@@ -81,6 +84,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-25 (Codex, bezpečná změna leadera čistě z LIVE UI)
+Změna leader účtu už nevyžaduje edit CLI argumentu, env ani reinstall workeru.
+Existující `update-group` UI příkaz při změně leadera nově spustí samostatný
+`reconfigureGroup`: okamžitě DISARMuje, zařadí změnu do stejné sériové fronty
+jako broker eventy a vyžádá autoritativní preflight sjednocení staré i nové
+topologie. Všechny účty musí být aktivní, obchodovatelné, flat a bez working
+příkazů; broker reads mají 2,5s deadline a Tradovate adapterův rate-limit
+breaker. Nejasný stav pouze odmítne změnu — neposílá žádný broker příkaz.
+
+Po úspěšném preflightu se přes CAS založí čistá durable lifecycle epocha,
+teprve potom se přepne leader, event source, dynamický critical OAuth route a
+uložená skupina. Staré order/fill eventy všech účtů jsou průběžně baselinované,
+takže nový leader po přepnutí nereplayuje historii. Příští ARM vždy vyžaduje
+novou reconciliation. Když durable zápis konfigurace selže, runtime se bezpečně
+vrátí na původní epochu; UI se aktualizuje jen po potvrzení execution runtime.
+
+Regrese pokrývají změnu směru kopírování, working-order odmítnutí, persistence
+rollback, stabilní group ID přes relay, all-account event baseline a dynamickou
+critical connection. Původní incidenty venue qty=7, opožděný cancel i timeout
+neznámé follower pozice bez auto-close zůstaly zelené. Ověření: cíleně 101/101,
+incidentně 21/21, širší copier sada 389/389, celý repo 1464/1464, ESLint bez
+chyb, typecheck a produkční build čisté. Nic nebylo pushnuto, deploynuto ani
+reinstalováno; worker zůstává na dosavadní verzi a má zůstat DISARMED.
 
 ### 2026-08-25 (Codex, kauzální oprava falešného auto-flattenu followerů)
 Forenzika runtime logu prokázala nový incident: nativní OSO vstupy qty 13 byly

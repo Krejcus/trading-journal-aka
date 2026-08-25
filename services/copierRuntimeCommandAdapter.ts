@@ -19,10 +19,19 @@ export interface CopierRuntimeCommandAdapterOptions {
 export function createCopierRuntimeCommandAdapter(
   options: CopierRuntimeCommandAdapterOptions,
 ): LiveCopyTradingAdapter {
-  const update = (mutate: (group: CopyGroupConfig) => CopyGroupConfig) => {
-    const next = mutate(options.getGroup());
-    options.controller.updateGroup(next);
+  const applyGroup = async (next: CopyGroupConfig) => {
+    const current = options.getGroup();
+    if (current.leaderAccountId !== next.leaderAccountId) {
+      await options.controller.reconfigureGroup(next);
+    } else {
+      options.controller.updateGroup(next);
+    }
     options.setGroup(next);
+  };
+
+  const update = async (mutate: (group: CopyGroupConfig) => CopyGroupConfig) => {
+    const next = mutate(options.getGroup());
+    await applyGroup(next);
   };
 
   return {
@@ -33,14 +42,13 @@ export function createCopierRuntimeCommandAdapter(
       }
       switch (command.type) {
         case 'update-group':
-          options.controller.updateGroup(command.group);
-          options.setGroup(command.group);
+          await applyGroup(command.group);
           return { type: 'configuration', group: command.group };
         case 'set-group-enabled':
-          update(group => ({ ...group, enabled: command.enabled }));
+          await update(group => ({ ...group, enabled: command.enabled }));
           return { type: 'configuration', group: options.getGroup() };
         case 'set-replication':
-          update(group => ({
+          await update(group => ({
             ...group,
             followers: group.followers.map(follower => follower.accountId === command.accountId
               ? { ...follower, mode: command.mode }
@@ -48,7 +56,7 @@ export function createCopierRuntimeCommandAdapter(
           }));
           return { type: 'configuration', group: options.getGroup() };
         case 'set-multiplier':
-          update(group => ({
+          await update(group => ({
             ...group,
             followers: group.followers.map(follower => follower.accountId === command.accountId
               ? { ...follower, multiplier: normalizeMultiplier(command.multiplier) }

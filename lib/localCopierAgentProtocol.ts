@@ -87,6 +87,11 @@ export const resolveLocalExecutionGroup = (
   groups: readonly CopyGroupConfig[],
   runtimeGroup: CopyGroupConfig,
 ): CopyGroupConfig | null => {
+  // Během leader transition se topologie úmyslně neshoduje. Stabilní ID je
+  // proto nejsilnější korelace, pokud je v UI unikátní.
+  const sameId = groups.filter(group => group.id === runtimeGroup.id);
+  if (sameId.length === 1) return sameId[0];
+  if (sameId.length > 1) return null;
   const exact = groups.filter(group => sameCopyGroupAccounts(group, runtimeGroup));
   if (exact.length === 1) return exact[0];
   if (exact.length > 1) return null;

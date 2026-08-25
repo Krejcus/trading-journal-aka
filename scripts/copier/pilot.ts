@@ -282,9 +282,9 @@ async function runLocalAgent(
     localOnly: true,
   };
   const persistedGroup = await groupStore.load();
-  if (persistedGroup?.leaderAccountId !== undefined && persistedGroup.leaderAccountId !== leaderId) {
-    throw new Error('Uložená copy group má jiného leadera než tento Mac agent');
-  }
+  // CLI leader určuje jen stabilní instalační slot/soubor. Po první bezpečné
+  // změně z UI je autoritativní uložená skupina, takže reinstall nepřepíše
+  // leadera zpět na původní hodnotu.
   const group = persistedGroup ?? fallbackGroup;
   const broker = baseBroker;
   const validation = validateCopyGroup(group, accounts.map(account => account.id));

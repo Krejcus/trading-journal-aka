@@ -39,4 +39,46 @@ describe('createCopierRuntimeCommandAdapter', () => {
     expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
     controller.stop();
   });
+
+  it('přepne leadera jedním UI příkazem a po nové reconciliation obrátí směr kopírování', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: initialGroup,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    let group = initialGroup;
+    const adapter = createCopierRuntimeCommandAdapter({
+      controller,
+      getGroup: () => group,
+      setGroup: next => { group = next; },
+    });
+
+    await adapter.execute({
+      type: 'update-group',
+      group: {
+        ...initialGroup,
+        leaderAccountId: 200,
+        followers: [{ accountId: 100, mode: 'on-submit', multiplier: 1 }],
+      },
+    });
+    expect(group).toMatchObject({ leaderAccountId: 200 });
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({
+      type: 'order',
+      order: {
+        tag: '', brokerOrderId: 'leader-200', accountId: 200, symbol: 'MNQU6',
+        side: 'Buy', orderType: 'Limit', quantity: 1, filledQuantity: 0,
+        limitPrice: 30_000, status: 'working', sourceVersion: '1:Working', updatedAt: 1,
+      },
+    });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toEqual([
+      expect.objectContaining({ accountId: 100, quantity: 1 }),
+    ]);
+    controller.stop();
+  });
 });

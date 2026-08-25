@@ -46,6 +46,9 @@ export function createBrokerRouter(
   const environment = routes[0].broker.environment;
   const byAccount = new Map<number, BrokerPort>();
   const seenBrokers = new Set<BrokerPort>();
+  const criticalBrokers = new Set(
+    routes.filter(route => route.critical !== false).map(route => route.broker),
+  );
   for (const route of routes) {
     if (seenBrokers.has(route.broker)) {
       throw new Error('Stejné OAuth spojení nesmí být ve více broker routes');
@@ -71,6 +74,12 @@ export function createBrokerRouter(
 
   return {
     environment,
+    setCriticalAccounts(accountIds) {
+      const next = new Set<BrokerPort>();
+      for (const accountId of accountIds) next.add(brokerFor(accountId));
+      criticalBrokers.clear();
+      for (const broker of next) criticalBrokers.add(broker);
+    },
     placeOrder: request => brokerFor(request.accountId).placeOrder(request),
     placeOco: async request => {
       const broker = brokerFor(request.accountId);
@@ -148,7 +157,7 @@ export function createBrokerRouter(
           listener(event);
           return;
         }
-        const grace = route.critical === false && graceMs > 0;
+        const grace = !criticalBrokers.has(route.broker) && graceMs > 0;
         if (event.type === 'error') {
           if (!grace) {
             listener(event);

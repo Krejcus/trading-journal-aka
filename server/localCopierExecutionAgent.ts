@@ -76,12 +76,8 @@ const assertGroupTarget = (group: CopyGroupConfig, groupId: string): void => {
 };
 
 const mappedGroup = (runtimeGroup: CopyGroupConfig, incoming: CopyGroupConfig): CopyGroupConfig => {
-  if (runtimeGroup.leaderAccountId !== incoming.leaderAccountId) {
-    throw new Error('Leader běžícího execution agenta se nesmí změnit');
-  }
-  // Followery se smějí přidat/odebrat za běhu. Controller změnu vždy
-  // odzbrojí a před dalším ARM vyžaduje OAuth capability preflight,
-  // pozice i working orders celé nové topologie.
+  // Stabilní runtime ID je instalační slot; leader i followery se smějí
+  // změnit z UI pouze přes controller preflight + novou durable epochu.
   return {
     ...incoming,
     id: runtimeGroup.id,
@@ -97,7 +93,7 @@ export async function startLocalCopierExecutionAgent(
   const nonce = randomUUID();
   const startedAt = options.startedAt ?? new Date().toISOString();
   let group = structuredClone(options.group);
-  let devices = (options.devices ?? (options.device ? [options.device] : [])).map(item => structuredClone(item));
+  const devices = (options.devices ?? (options.device ? [options.device] : [])).map(item => structuredClone(item));
   if (new Set(devices.map(item => item.deviceId)).size !== devices.length) {
     throw new Error('Lokální execution agent dostal duplicitní deviceId');
   }
@@ -124,14 +120,22 @@ export async function startLocalCopierExecutionAgent(
 
   const applyGroup = async (next: CopyGroupConfig): Promise<LiveCopyTradingCommandResult> => {
     const previous = group;
-    options.controller.updateGroup(next);
+    const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
+    let runtimeChanged = false;
     try {
+      if (leaderChanged) await options.controller.reconfigureGroup(next);
+      else options.controller.updateGroup(next);
+      runtimeChanged = true;
       await options.onGroupChanged?.(structuredClone(next));
       group = next;
     } catch (error) {
-      // updateGroup always DISARMs. Roll back the in-memory/runtime topology as
-      // well, so a failed disk write can never acknowledge a volatile config.
-      options.controller.updateGroup(previous);
+      // Po úspěšném runtime přepnutí, ale neúspěšném durable zápisu, vrať
+      // původní epochu stejnou bezpečnou cestou. Když selhal už preflight,
+      // controller původní skupinu vůbec nezměnil.
+      if (runtimeChanged) {
+        if (leaderChanged) await options.controller.reconfigureGroup(previous);
+        else options.controller.updateGroup(previous);
+      }
       throw error;
     }
     return configurationResult();

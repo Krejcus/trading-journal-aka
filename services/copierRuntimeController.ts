@@ -1,7 +1,7 @@
 import type { BrokerEvent, BrokerFill, BrokerPort } from './brokerPort';
 import { msUntilTradovateSessionEnd } from './copierArmSession';
 import { pointValueUsd } from './futuresContractSpecs';
-import type { CopierClosedTrade, CopierDailyStats } from './copierEngine';
+import { createCopierState, type CopierClosedTrade, type CopierDailyStats } from './copierEngine';
 import { CopierLeaderEventSource } from './copierLeaderEventSource';
 import { CopierBracketCorrelator, type LeaderBracketPair } from './copierBracketCorrelator';
 import { CopierOsoCorrelator } from './copierOsoCorrelator';
@@ -14,6 +14,7 @@ import { applyResolved, type LeaderEvent } from './copierEngine';
 import { createRiskGateContext, type RiskGateContext } from './copierRiskGate';
 import {
   createCopierMetrics,
+  createRuntime,
   createSerialCopierProcessor,
   recoverOutbox,
   runtimeFromSnapshot,
@@ -150,6 +151,13 @@ export interface CopierRuntimeController {
   lockUntil(until: number, reason: string): Promise<void>;
   /** Autoritativně porovná pozice a ověří, že nikde nezůstaly working orders. */
   reconcile(): Promise<{ divergentAccounts: number[]; workingOrderAccounts: number[] }>;
+  /**
+   * Bezpečně změní leader epochu. Vyžaduje flat + bez working příkazů na
+   * sjednocení staré a nové topologie a zahodí pouze order-lifecycle stav
+   * předchozího leadera. Nikdy neposílá brokerový příkaz.
+   */
+  reconfigureGroup(group: CopyGroupConfig): Promise<void>;
+  /** Synchronní změna follower/risk konfigurace při nezměněném leaderovi. */
   updateGroup(group: CopyGroupConfig): void;
   /** Explicitní ruční Flatten jednoho účtu. Nikdy se nespouští automaticky. */
   flattenAccount(accountId: number, operationId: string): Promise<ManualFlattenResult>;
@@ -254,6 +262,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
   let group = options.group;
+  options.broker.setCriticalAccounts?.([group.leaderAccountId]);
   const broker = createExposureCappedBroker(
     options.broker,
     accountId => group.followers.find(item => item.accountId === accountId)?.maxContracts,
@@ -272,8 +281,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   const processor = createSerialCopierProcessor(runtime);
   const source = new CopierLeaderEventSource();
-  const bracketCorrelator = new CopierBracketCorrelator();
-  const osoCorrelator = new CopierOsoCorrelator(options.osoCorrelationWindowMs);
+  let bracketCorrelator = new CopierBracketCorrelator();
+  let osoCorrelator = new CopierOsoCorrelator(options.osoCorrelationWindowMs);
   let gate = createRiskGateContext({
     brokerEnvironment: broker.environment,
     expectedEnvironment: broker.environment,
@@ -2016,6 +2025,175 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       };
   };
 
+  const LEADER_EPOCH_READ_DEADLINE_MS = 2_500;
+  const withLeaderEpochDeadline = async <T>(label: string, work: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${label}: broker read deadline ${LEADER_EPOCH_READ_DEADLINE_MS} ms`)),
+            LEADER_EPOCH_READ_DEADLINE_MS,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  /**
+   * Přepnutí leadera je změna celé order-lifecycle epochy, ne obyčejný
+   * edit jednoho ID. Operace se řadí do stejné fronty jako broker eventy:
+   * event, který dorazil před klikem, doběhne pod starým leaderem; event po
+   * potvrzené změně už pod novým. Chyba se vrátí UI a frontu nezabije.
+   */
+  const reconfigureLeaderEpoch = async (nextGroup: CopyGroupConfig): Promise<void> => {
+    const run = eventTail.then(async () => {
+      if (stopped) throw new Error('Copier runtime is stopped');
+      if (nextGroup.id !== group.id) throw new Error('Nelze změnit runtime na jinou copy group');
+      assertRuntimeGroup(nextGroup);
+      if (nextGroup.leaderAccountId === group.leaderAccountId) {
+        group = nextGroup;
+        positionCheckComplete = false;
+        source.requireReconciliation();
+        return;
+      }
+      if (!gate.connected) {
+        throw new Error('Změnu leadera nelze potvrdit bez živého broker syncu workeru');
+      }
+      if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
+        throw new Error('Změnu leadera blokuje nevyřešený durable outbox');
+      }
+      const pendingReasons = [
+        pendingBracketTimers.size > 0 ? 'bracket correlation' : '',
+        pendingOsoTimers.size > 0 || pendingOsoEvents.size > 0 || pendingOsoFlushes.size > 0
+          ? 'OSO correlation'
+          : '',
+        pendingFollowerTransitions.size > 0 ? 'follower transition' : '',
+        sweepingProtectiveLegs.size > 0 ? 'protective sweep' : '',
+        autoCloseInFlight ? 'auto-close' : '',
+        recoveryInFlight || pendingConnectionRecovery ? 'connection recovery' : '',
+        cooldownPending ? 'cooldown transition' : '',
+        dayLockPendingReason ? 'day-lock transition' : '',
+      ].filter(Boolean);
+      if (pendingReasons.length > 0) {
+        throw new Error(`Změnu leadera blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
+      }
+      const openLots = currentRuntime().state.safety.dailyStats?.openLots
+        .filter(lot => lot.netQuantity !== 0) ?? [];
+      if (openLots.length > 0) {
+        throw new Error('Změnu leadera blokuje otevřená durable pozice leadera');
+      }
+
+      const accountIds = [...new Set([
+        group.leaderAccountId,
+        ...group.followers.map(item => item.accountId),
+        nextGroup.leaderAccountId,
+        ...nextGroup.followers.map(item => item.accountId),
+      ])];
+      const capabilities = await withLeaderEpochDeadline(
+        'leader capability preflight',
+        broker.listAccountCapabilities(accountIds),
+      );
+      const capabilityByAccount = new Map(capabilities.map(item => [item.accountId, item]));
+      const unavailable = accountIds.filter(accountId => {
+        const capability = capabilityByAccount.get(accountId);
+        return !capability || !capability.active || !capability.canTrade;
+      });
+      if (unavailable.length > 0) {
+        throw new Error(`Změnu leadera blokují neaktivní/read-only účty: ${unavailable.join(',')}`);
+      }
+      const snapshots = await Promise.all(accountIds.map(async accountId => {
+        const [positions, orders] = await Promise.all([
+          withLeaderEpochDeadline(`leader position preflight ${accountId}`, broker.listPositions(accountId)),
+          withLeaderEpochDeadline(`leader order preflight ${accountId}`, broker.listOrders(accountId)),
+        ]);
+        return { accountId, positions, orders };
+      }));
+      const nonFlat = snapshots.filter(snapshot =>
+        snapshot.positions.some(position => position.netQuantity !== 0));
+      const withWorkingOrders = snapshots.filter(snapshot =>
+        snapshot.orders.some(order => order.status === 'working'));
+      if (nonFlat.length > 0 || withWorkingOrders.length > 0) {
+        const details = [
+          nonFlat.length > 0 ? `nonFlat=${nonFlat.map(item => item.accountId).join(',')}` : '',
+          withWorkingOrders.length > 0
+            ? `working=${withWorkingOrders.map(item => item.accountId).join(',')}`
+            : '',
+        ].filter(Boolean).join(' ');
+        throw new Error(`Změna leadera vyžaduje všechny staré i nové účty flat a bez příkazů: ${details}`);
+      }
+
+      runtime = await processor.mutate(async current => {
+        const { liveCopyOpenSince: _dropOpenFlag, ...preservedSafety } = current.state.safety;
+        const cleanState = createCopierState([], 0, [], [], [], preservedSafety);
+        const committed = await options.store.commit(
+          toSnapshot(cleanState, [], [], current.revision, [], []),
+          current.revision,
+        );
+        return createRuntime(cleanState, [], [], committed.revision, [], []);
+      });
+
+      // Od tohoto bodu je durable stará epocha pryč a teprve teď se stává
+      // nový leader autoritativní pro event source i risk vrstvu.
+      group = nextGroup;
+      options.broker.setCriticalAccounts?.([nextGroup.leaderAccountId]);
+      bracketCorrelator = new CopierBracketCorrelator();
+      osoCorrelator = new CopierOsoCorrelator(options.osoCorrelationWindowMs);
+      recentCopyEvents.length = 0;
+      copyEventCounter = 0;
+      leaderStopOrderIds.clear();
+      leaderTargetOrderIds.clear();
+      lastLeaderFillOrderId.clear();
+      plannedEntryBySymbol.clear();
+      admittedLeaderOrders.clear();
+      admittedFlatExitOrders.clear();
+      leaderPositions.clear();
+      positionsByAccount.clear();
+      for (const snapshot of snapshots) {
+        positionsByAccount.set(snapshot.accountId, new Map(
+          snapshot.positions.map(position => [position.symbol, position.netQuantity]),
+        ));
+      }
+      untrackedTradeSymbols.clear();
+      recentFollowerFillCauses.clear();
+      sweptProtectiveLegs.clear();
+      sweepingProtectiveLegs.clear();
+      workingOrderAccounts = new Set();
+      lastAutoClose = null;
+      lastResumeOffer = null;
+      autoCloseEpisodeAttempts = 0;
+      pendingConnectionRecovery = false;
+      recoveryInFlight = false;
+      bootRecoveryChecked = true;
+      positionCheckComplete = false;
+      lastError = null;
+      source.requireReconciliation();
+      gate = {
+        ...gate,
+        armed: false,
+        armedAt: 0,
+        now: clock(),
+        shadowMode: true,
+        divergentAccounts: new Set(),
+        sequenceBroken: false,
+        stuckOutbox: false,
+      };
+      void syncLiveCopyExposureFlag('clear').catch(() => undefined);
+    });
+    eventTail = run.then(() => undefined, () => undefined);
+    try {
+      await run;
+    } catch (reason) {
+      const error = errorOf(reason);
+      lastError = error;
+      options.onError?.(error);
+      throw error;
+    }
+  };
+
   const unsubscribe = broker.subscribe(event => {
     eventTail = eventTail.then(() => handleBrokerEvent(event)).catch(failClosed);
   });
@@ -2085,11 +2263,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     async reconcile() {
       return performReconciliation();
     },
+    async reconfigureGroup(nextGroup) {
+      // UI dostane okamžitě fail-safe DISARM ještě před čekáním na eventTail.
+      gate = { ...gate, armed: false };
+      positionCheckComplete = false;
+      await reconfigureLeaderEpoch(nextGroup);
+    },
     updateGroup(nextGroup) {
       // Jakýkoli pokus o změnu konfigurace nejdřív zavře live dispatch.
       gate = { ...gate, armed: false };
       if (nextGroup.id !== group.id) throw new Error('Nelze změnit runtime na jinou copy group');
       assertRuntimeGroup(nextGroup);
+      if (nextGroup.leaderAccountId !== group.leaderAccountId) {
+        throw new Error('Změna leadera vyžaduje bezpečný reconfigureGroup preflight');
+      }
       group = nextGroup;
       positionCheckComplete = false;
       source.requireReconciliation();
