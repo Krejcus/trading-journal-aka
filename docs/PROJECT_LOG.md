@@ -78,6 +78,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-25 (Codex, integrační debug chybějícího Positions pillu)
+Hypotéza C se pro flat leader účet s numericky shodným account ID a working
+Limitem nepotvrdila. Nový SSR integrační test renderuje celý
+`LiveCopyTradeOverview`, projde `groupRows -> groupOrders -> AccountRow` a v
+leaderově Positions buňce prokáže pending MNQ pill; příkaz jiného účtu se do ní
+nepropíše.
+Globální „Pozice a příkazy“ i copy-trade `orders` prop čtou tentýž
+`live.data.accounts[*].orders`, používají stejnou klasifikaci working statusu a
+refresh nahrazuje snapshot novým objektem. Positions má 260 px, jeho `td` nemá
+overflow/truncate a jeden pill CSS nemůže oříznout do neviditelnosti.
+
+Produkční kód se neměnil; zbývají klientská stará bundle/PWA nebo jiný pohled či
+stav (zejména jiný account ID, terminální status, nepodporovaný order type,
+stejný symbol jako otevřená pozice, sbalená skupina nebo skrytý/odscrollovaný
+sloupec). Prošlo 5 souvisejících Vitest souborů / 27 testů, `npx tsc --noEmit`
+a `git diff --check`. Nic nebylo commitnuto, pushnuto ani nasazeno.
+
 ### 2026-08-25 (Codex, LIVE copy-trading Positions pills)
 Sloupec Positions v rozbalené Accounts tabulce už neukazuje pouhý počet.
 Každá otevřená pozice má jednořádkový long/short pill se zkráceným futures
