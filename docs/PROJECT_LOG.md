@@ -78,6 +78,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-25 (Codex, LIVE copy-trading Positions pills)
+Sloupec Positions v rozbalené Accounts tabulce už neukazuje pouhý počet.
+Každá otevřená pozice má jednořádkový long/short pill se zkráceným futures
+kořenem; chybějící working stop zvýrazní amber badge „bez SL“ a štít se ukáže
+jen tehdy, když opačné working Stop/StopLimit i Limit příkazy na stejném plném
+kontraktu množstevně pokrývají celou pozici. Working Limit/Stop na symbolu bez
+otevřené pozice se zobrazí jako neutrální čekající entry s hodinami, takže vedle
+sebe fungují i různé symboly. Vše vzniká pouze z existujících `rows` a `orders`;
+žádný fetch, broker příkaz ani změna `services/`/`server/` nepřibyla.
+
+Přímý GroupDetail snapshot v repu neexistoval, proto přibyl cílený SSR render
+test buňky včetně long/short, úplné i částečné ochrany, split nohou, chybného
+účtu/kontraktu/strany, flat entry a více symbolů. Prošlo 5 souvisejících Vitest
+souborů / 22 testů, `npx tsc --noEmit` a `git diff --check`. Vizuální browser
+kontrola s reálnými multi-symbol daty v této relaci neproběhla. Nic nebylo
+commitnuto, pushnuto ani deploynuto.
+
 ### 2026-08-25 (Claude+Codex, rate limit breaker + tržní research kopírek)
 Codex web research komerčních kopírek uložen v docs/COPIER_MARKET_RESEARCH.md.
 Klíčové: Replikanto changelog 22.11.2024 opravoval přesně třídu našeho

@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
   RefreshCw, Inbox, Check, RotateCcw, X, Save, Trash2, Power,
-  EyeOff, AlertTriangle, CheckCircle2, SlidersHorizontal, ShieldAlert,
+  EyeOff, AlertTriangle, CheckCircle2, SlidersHorizontal, ShieldAlert, ShieldCheck, Clock3,
 } from 'lucide-react';
-import type { LiveAccount, LiveGroup, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
+import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
+import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
 import type { CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
@@ -87,7 +88,7 @@ const ACCOUNT_COLUMNS: ColumnDef[] = [
   { key: 'broker', label: 'Broker', widthPx: 72 },
   { key: 'firm', label: 'Firm', widthPx: 120 },
   { key: 'balance', label: 'Balance', align: 'right', widthPx: 112 },
-  { key: 'positions', label: 'Positions', align: 'right', widthPx: 82 },
+  { key: 'positions', label: 'Positions', align: 'right', widthPx: 260 },
   { key: 'daily', label: 'Daily P&L', align: 'right', widthPx: 96 },
   { key: 'unreal', label: 'Unreal P&L', align: 'right', widthPx: 104 },
   { key: 'distDd', label: 'Dist DD', align: 'right', widthPx: 76 },
@@ -1203,6 +1204,95 @@ const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive
 
 // ─── Detail skupiny: Accounts / Orders ───────────────────────────────────────
 
+const orderTypeKey = (orderType: string) => orderType.trim().toLowerCase().replace(/[^a-z]/g, '');
+const isStopOrder = (order: LiveOrder) => {
+  const type = orderTypeKey(order.orderType);
+  return type === 'stop' || type === 'stoplimit';
+};
+const isLimitOrder = (order: LiveOrder) => orderTypeKey(order.orderType) === 'limit';
+const isPendingEntryOrder = (order: LiveOrder) => isStopOrder(order) || isLimitOrder(order);
+const fullSymbolKey = (symbol: string) => symbol.trim().toUpperCase();
+const displaySymbol = (symbol: string) => futuresSymbolRoot(symbol) || fullSymbolKey(symbol) || '—';
+const contractQuantity = (quantity: number) => Number.isFinite(quantity)
+  ? Math.abs(quantity).toLocaleString('en-US', { maximumFractionDigits: 2 })
+  : '—';
+const workingQuantity = (order: LiveOrder) => Number.isFinite(order.quantity) ? Math.max(0, Math.abs(order.quantity)) : 0;
+const hasProtectiveAction = (order: LiveOrder, netPosition: number) => {
+  const action = order.action.trim().toLowerCase();
+  return netPosition > 0 ? action.includes('sell') : action.includes('buy');
+};
+
+/**
+ * Compact position/order status for one account. Protection is intentionally
+ * conservative: only a working opposite-side order on the exact contract can
+ * protect a position. The shortened futures root is display-only.
+ */
+export const CopyTradePositionsCell = ({ accountId, positions, orders }: {
+  accountId: number | null;
+  positions: LivePosition[];
+  orders: LiveOrder[];
+}) => {
+  const openPositions = positions.filter(position => position.netPosition !== 0);
+  const workingOrders = accountId == null
+    ? []
+    : orders.filter(order => order.accountId === accountId && order.working);
+  const openSymbols = new Set(openPositions.map(position => fullSymbolKey(position.symbol)));
+  const entryOrders = workingOrders.filter(order =>
+    isPendingEntryOrder(order) && !openSymbols.has(fullSymbolKey(order.symbol)));
+
+  if (openPositions.length === 0 && entryOrders.length === 0) {
+    return <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
+  }
+
+  return <span className="inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
+    {openPositions.map((position, index) => {
+      const symbol = displaySymbol(position.symbol);
+      const protectiveOrders = workingOrders.filter(order =>
+        fullSymbolKey(order.symbol) === fullSymbolKey(position.symbol)
+        && hasProtectiveAction(order, position.netPosition));
+      const stopOrders = protectiveOrders.filter(isStopOrder);
+      const targetOrders = protectiveOrders.filter(isLimitOrder);
+      const hasStop = stopOrders.length > 0;
+      const positionQuantity = Math.abs(position.netPosition);
+      const stopCoverage = stopOrders.reduce((total, order) => total + workingQuantity(order), 0);
+      const targetCoverage = targetOrders.reduce((total, order) => total + workingQuantity(order), 0);
+      const stopCoverageComplete = stopCoverage >= positionQuantity;
+      const protectionComplete = stopCoverageComplete && targetCoverage >= positionQuantity;
+      const signedQuantity = `${position.netPosition > 0 ? '+' : '−'}${contractQuantity(position.netPosition)}`;
+      const positionLabel = `${symbol} ${position.netPosition > 0 ? 'long' : 'short'} ${contractQuantity(position.netPosition)}`;
+      const protectionLabel = protectionComplete
+        ? 'working SL a target'
+        : !hasStop ? 'bez working SL' : stopCoverageComplete ? 'working SL' : 'working SL nepokrývá celou pozici';
+
+      return <span key={`${fullSymbolKey(position.symbol)}-${index}`} className="inline-flex items-center gap-1">
+        <span
+          aria-label={`${positionLabel}, ${protectionLabel}`}
+          className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-black leading-none tabular-nums ${position.netPosition > 0
+            ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600'
+            : 'border-rose-500/25 bg-rose-500/10 text-rose-600'}`}
+        >
+          <span>{symbol}</span><span>{signedQuantity}</span>
+          {protectionComplete ? <ShieldCheck aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" /> : null}
+        </span>
+        {!hasStop ? <span
+          aria-label={`${symbol} bez working stop lossu`}
+          title={`${symbol}: pozice nemá working stop loss`}
+          className="inline-flex items-center gap-0.5 rounded-md border border-amber-500/40 bg-amber-500/15 px-1.5 py-1 text-[9px] font-black leading-none text-amber-600"
+        ><AlertTriangle aria-hidden="true" size={9} strokeWidth={2.8} className="shrink-0" />bez SL</span> : null}
+      </span>;
+    })}
+    {entryOrders.map(order => {
+      const symbol = displaySymbol(order.symbol);
+      return <span
+        key={`${order.accountId}-${order.id}`}
+        aria-label={`Čekající vstup ${symbol}, ${contractQuantity(order.quantity)} kontraktů`}
+        title={`${order.orderType} entry čeká na fill`}
+        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 py-1 text-[10px] font-bold leading-none text-[var(--text-secondary)] tabular-nums"
+      ><Clock3 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" /><span>{symbol}</span><span>{contractQuantity(order.quantity)}</span></span>;
+    })}
+  </span>;
+};
+
 const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, busyCommand, onRefreshOrders, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
@@ -1270,6 +1360,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
             {rows.map((row, i) => (
               <AccountRow
                 key={`${row.name}-${i}`} row={row} live={isLive(row.account)} onAccount={onAccount} columns={columns}
+                orders={groupOrders}
                 busyCommand={busyCommand}
                 onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
                 redactNames={redactNames} redaction={redaction}
@@ -1315,8 +1406,9 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, busyCommand, onMultiplier, onFlatten, redactNames, redaction }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, busyCommand, onMultiplier, onFlatten, redactNames, redaction }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
+  orders: LiveOrder[];
   busyCommand: string | null;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlatten: (accountId: number) => void;
@@ -1349,7 +1441,9 @@ const AccountRow = ({ row, live, onAccount, columns, busyCommand, onMultiplier, 
       case 'balance':
         return <span className="text-xs tabular-nums text-[var(--text-primary)]">{a ? money.format(a.balance) : '—'}</span>;
       case 'positions':
-        return <span className="text-xs tabular-nums text-[var(--text-secondary)]">{a?.positions.length ? a.positions.length : '—'}</span>;
+        return a
+          ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} />
+          : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
         return <span className={`text-xs tabular-nums ${a ? pnlClass(a.realizedPnl) : ''}`}>{a ? money.format(a.realizedPnl) : '—'}</span>;
       case 'unreal':
