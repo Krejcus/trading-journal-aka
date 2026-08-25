@@ -109,6 +109,15 @@ incidentně 21/21, širší copier sada 389/389, celý repo 1464/1464, ESLint be
 chyb, typecheck a produkční build čisté. Nic nebylo pushnuto, deploynuto ani
 reinstalováno; worker zůstává na dosavadní verzi a má zůstat DISARMED.
 
+Lokální UI průchod navíc odhalil, že pouhý výběr jiného leadera původního
+leadera tiše vyřadil ze skupiny. Editor nyní provede atomický role swap: nový
+leader se odebere z followerů a původní leader převezme jeho replikační režim,
+násobek i `maxContracts`; celková topologie tak při běžné výměně zůstane
+zachovaná. UI výslovně popisuje, že se původní leader přesune mezi followery.
+Regrese změny leadera a navazující runtime vrstvy prošly 95/95, TypeScript
+typecheck je čistý a lokální browser průchod potvrdil 4/4 followerů po swapu.
+Dialog byl zavřen bez uložení, takže nevznikl žádný broker side effect.
+
 ### 2026-08-25 (Codex, kauzální oprava falešného auto-flattenu followerů)
 Forenzika runtime logu prokázala nový incident: nativní OSO vstupy qty 13 byly
 na všech pět followerů přijaty, leader position event LONG 13 dorazil v
