@@ -4,11 +4,12 @@ import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
   RefreshCw, Inbox, Check, RotateCcw, X, Save, Trash2, Power,
   EyeOff, AlertTriangle, CheckCircle2, SlidersHorizontal, ShieldAlert, ShieldCheck, Clock3,
+  Lock, Ban, Unplug,
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
-import type { CopierStuckOperation } from '../services/copierRuntimeController';
+import type { CopierAccountEligibility, CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
@@ -60,7 +61,7 @@ export type ReplicationMode = CopyReplicationMode;
 // — bez názvu účtu by řádky nešlo rozlišit.
 
 export type AccountColumnKey =
-  | 'account' | 'broker' | 'firm' | 'balance' | 'positions'
+  | 'account' | 'status' | 'broker' | 'firm' | 'balance' | 'positions'
   | 'daily' | 'unreal' | 'distDd' | 'execLimit' | 'qtyMult' | 'actions';
 
 interface ColumnDef {
@@ -85,6 +86,7 @@ const ORDER_COLUMN_OPTIONS: Array<{ key: OrderColumnKey; label: string }> = [
 
 const ACCOUNT_COLUMNS: ColumnDef[] = [
   { key: 'account', label: 'Account', locked: true, widthPx: 220 },
+  { key: 'status', label: 'Status', widthPx: 170 },
   { key: 'broker', label: 'Broker', widthPx: 72 },
   { key: 'firm', label: 'Firm', widthPx: 120 },
   { key: 'balance', label: 'Balance', align: 'right', widthPx: 112 },
@@ -246,6 +248,7 @@ interface Props {
   cooldownUntil?: number;
   /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
   stuckOperations?: CopierStuckOperation[];
+  accountEligibility?: CopierAccountEligibility[];
   executionGroupId?: string | null;
   runtimeGroup?: CopyGroupConfig | null;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
@@ -290,11 +293,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   dayLockUntil = 0,
   cooldownUntil = 0,
   stuckOperations = [],
+  accountEligibility = [],
   executionGroupId = null,
   runtimeGroup = null,
   onGroupsChange,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
+  const eligibilityByAccount = useMemo(
+    () => new Map(accountEligibility.map(entry => [entry.accountId, entry])),
+    [accountEligibility],
+  );
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(snapshot.groups.map(g => g.id)));
   const didAutoExpandGroups = useRef(false);
   const [groupTab, setGroupTab] = useState<Record<string, 'accounts' | 'orders'>>({});
@@ -672,6 +680,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               rows={rows} tab={tab} isLive={isLive} onAccount={onAccount}
                               columns={visibleColumns}
                               orders={orders}
+                              eligibilityByAccount={eligibilityByAccount}
                               busyCommand={busyCommand}
                               onRefreshOrders={onRefreshOrders}
                               onMultiplier={(accountId, multiplier) => {
@@ -1296,7 +1305,39 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders }: {
   </span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, busyCommand, onRefreshOrders, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
+const timeLabel = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+
+/**
+ * Eligibility pill. Connection status (tečka), způsobilost účtu (pill)
+ * a poslední execution událost (řádek pod jménem) jsou tři různé věci —
+ * záměrně se neslučují do jednoho zašedlého řádku.
+ */
+export const AccountEligibilityPill = ({ eligibility, live }: {
+  eligibility?: CopierAccountEligibility;
+  live: boolean;
+}) => {
+  if (!live) {
+    return <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 py-1 text-[10px] font-bold leading-none text-[var(--text-secondary)]">
+      <Unplug aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Odpojeno</span>;
+  }
+  const state = eligibility?.state ?? 'active';
+  if (state === 'dll-locked') {
+    return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[10px] font-black leading-none text-amber-600">
+      <Lock aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />DLL · do konce session</span>;
+  }
+  if (state === 'breached') {
+    return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-[10px] font-black leading-none text-rose-600">
+      <Ban aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />BREACHED</span>;
+  }
+  if (state === 'unverifiable') {
+    return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-slate-500/40 bg-slate-500/20 px-2 py-1 text-[10px] font-black leading-none text-slate-500">
+      <HelpCircle aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />Stav nelze ověřit</span>;
+  }
+  return <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold leading-none text-emerald-600">
+    <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
+};
+
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -1304,6 +1345,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
   onAccount?: (a: LiveAccount) => void;
   columns: ColumnDef[];
   orders: LiveOrder[];
+  eligibilityByAccount: Map<number, CopierAccountEligibility>;
   busyCommand: string | null;
   onRefreshOrders?: () => Promise<void> | void;
   onMultiplier: (accountId: number, multiplier: number) => void;
@@ -1332,6 +1374,20 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
       </div>
       {tab === 'orders' && (
         <div className="flex items-center gap-1.5">
+          {(() => {
+            const followers = rows.filter(row => !row.isLeader && row.accountId != null);
+            const active = followers.filter(row =>
+              (eligibilityByAccount.get(row.accountId as number)?.state ?? 'active') === 'active');
+            const excluded = followers.length - active.length;
+            return <span className="inline-flex items-center gap-1.5">
+              <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${excluded > 0
+                ? 'border border-amber-500/40 bg-amber-500/15 text-amber-600'
+                : 'border border-emerald-500/25 bg-emerald-500/10 text-emerald-600'}`}>
+                Followeři {active.length}/{followers.length} aktivní
+              </span>
+              {excluded > 0 ? <span className="text-[10px] font-bold text-amber-600">{excluded}× vyřazen z kopírování</span> : null}
+            </span>;
+          })()}
           <span className="text-[10px] font-bold text-[var(--text-muted)]">{groupOrders.filter(order => order.working).length} working</span>
           <button onClick={() => void onRefreshOrders?.()} title="Obnovit příkazy" className="w-7 h-7 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-indigo-500 flex items-center justify-center"><RefreshCw size={13} /></button>
         </div>
@@ -1364,6 +1420,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
               <AccountRow
                 key={`${row.name}-${i}`} row={row} live={isLive(row.account)} onAccount={onAccount} columns={columns}
                 orders={groupOrders}
+                eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
                 busyCommand={busyCommand}
                 onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
                 redactNames={redactNames} redaction={redaction}
@@ -1409,9 +1466,10 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, bus
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, orders, busyCommand, onMultiplier, onFlatten, redactNames, redaction }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onMultiplier, onFlatten, redactNames, redaction }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
+  eligibility?: CopierAccountEligibility;
   busyCommand: string | null;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlatten: (accountId: number) => void;
@@ -1426,7 +1484,8 @@ const AccountRow = ({ row, live, onAccount, columns, orders, busyCommand, onMult
     switch (key) {
       case 'account':
         return (
-          <span className="flex items-center gap-2 text-xs">
+          <span className="block">
+            <span className="flex items-center gap-2 text-xs">
             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
             <span className={`truncate max-w-[190px] ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>{redactAccountName(row.name, redactNames, redaction)}</span>
             {row.isLeader && (
@@ -1435,8 +1494,18 @@ const AccountRow = ({ row, live, onAccount, columns, orders, busyCommand, onMult
               </span>
             )}
             {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
+            </span>
+            {eligibility?.lastExecution ? (
+              <span className="block pl-3.5 text-[10px] leading-tight text-rose-500/90">
+                Příkaz odmítnut · {eligibility.lastExecution.reason ?? 'bez důvodu'} · {timeLabel(eligibility.lastExecution.at)}
+              </span>
+            ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
+              <span className="block pl-3.5 text-[10px] leading-tight text-[var(--text-muted)]">{eligibility.reason}</span>
+            ) : null}
           </span>
         );
+      case 'status':
+        return <AccountEligibilityPill eligibility={eligibility} live={live} />;
       case 'broker':
         return <TradovateMark size="h-5 w-5" />;
       case 'firm':

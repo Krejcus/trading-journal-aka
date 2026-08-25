@@ -24,7 +24,9 @@ export type RiskBlockReason =
   | 'stuck-outbox'
   | 'quantity-limit'
   | 'symbol-not-allowed'
-  | 'zero-quantity';
+  | 'zero-quantity'
+  /** Účet je dočasně vyřazen z nových vstupů (DLL, breach, neověřený stav). */
+  | 'account-ineligible';
 
 /**
  * Jak se zachovat při rozdílu pozic.
@@ -65,6 +67,13 @@ export interface RiskGateContext {
   stuckOutbox: boolean;
   /** Strop množství na jednu objednávku, per účet. */
   maxQuantityPerAccount: ReadonlyMap<number, number>;
+  /**
+   * Účty vyřazené z NOVÝCH vstupů (DLL lock, breach, neověřený stav po
+   * nové session). Blokuje se jen replikace nových příkazů — risk-redukující
+   * cancel/close cesty tudy nejdou, vyřazený účet se nikdy neopravuje
+   * obchodem. Hodnota je lidsky čitelný důvod do auditu.
+   */
+  ineligibleAccounts: ReadonlyMap<number, string>;
   /** Prázdná množina = bez omezení symbolů. */
   allowedSymbols: ReadonlySet<string>;
   /**
@@ -109,6 +118,7 @@ export function createRiskGateContext(
     sequenceBroken: false,
     stuckOutbox: false,
     maxQuantityPerAccount: new Map(),
+    ineligibleAccounts: new Map(),
     allowedSymbols: new Set(),
     shadowMode: true,
     ...overrides,
@@ -158,6 +168,7 @@ function requestBlockReason(
   context: RiskGateContext,
 ): RiskBlockReason | null {
   if (request.quantity <= 0) return 'zero-quantity';
+  if (context.ineligibleAccounts.has(request.accountId)) return 'account-ineligible';
   if (context.divergentAccounts.has(request.accountId)) return 'position-divergence';
   if (context.allowedSymbols.size > 0 && !context.allowedSymbols.has(request.symbol)) {
     return 'symbol-not-allowed';

@@ -1146,8 +1146,15 @@ export async function processLeaderEvent(
         }
         audit.push({
           at: clock(), leaderEventId: event.id,
-          kind: entry.operation === 'cancel' ? 'canceled' : 'modified', accountId: entry.accountId,
+          // Kind podle skutečného výsledku, ne podle operace: cancel nad
+          // objednávkou, která zemřela rejectem (DLL apod.), NENÍ zrušení —
+          // incident TDFYG: rejected příkaz se vykázal jako canceled.
+          kind: entry.operation === 'cancel'
+            ? (resolved.outcome === 'rejected' ? 'rejected' : 'canceled')
+            : 'modified',
+          accountId: entry.accountId,
           key: entry.key, brokerOrderId: entry.brokerOrderId,
+          ...(resolved.outcome === 'rejected' && resolved.reason ? { reason: resolved.reason } : {}),
         });
       } else {
         allConfirmed = false;

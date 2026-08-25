@@ -85,6 +85,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-25 večer (Claude, account-eligibility systém + oprava execution sémantiky)
+Incident TDFYG (DLL reject vykázaný jako dispatched/canceled) → nový
+account-status systém. Eligibility je oddělená vrstva od connection
+statusu, poslední execution události i členství ve skupině: enum
+active | dll-locked | breached | unverifiable v copierRuntimeController
+(recordFollowerRejection klasifikuje broker reject string konzervativně;
+breach je sticky). Async Rejected event po REST acku přepisuje outbox:
+vysvětlený reject (DLL/breach) se auto-waivne, aby stuck-outbox nezastavil
+zdravé followery — nevysvětlený zůstává fail-closed pro celou skupinu.
+Potvrzovací smyčka audituje kind podle resolved.outcome (rejected ≠
+canceled). Risk gate má ineligibleAccounts (nový block reason
+account-ineligible) ve všech třech cestách — vyřazení je vždy jen skip
+s auditem, nikdy obchod. DLL se NIKDY neodemyká časem: po sessionEndAt
+(fallback msUntilTradovateSessionEnd) jen zpřísní na unverifiable a
+reaktivaci smí provést jedině autoritativní reconciliation po nové
+session. Status vystavuje accountEligibility → UI: pill sloupec Status
+(Aktivní/DLL/BREACHED/Odpojeno/Nelze ověřit), důvod pod jménem, hlavička
+„Followeři X/Y aktivní“, ARM dialog jmenuje vyřazené a tlačítko říká
+„ARM · N followerů“. Testy: 3 eligibility scénáře padají bez oprav
+(incident 4+1, audit pravda, reaktivace jen ověřením) + 5 SSR render
+testů pillu; celkem 1475/1475, tsc čistý. Nepushnuto, nenasazeno.
+
 ### 2026-08-25 (Codex, bezpečná změna leadera čistě z LIVE UI)
 Změna leader účtu už nevyžaduje edit CLI argumentu, env ani reinstall workeru.
 Existující `update-group` UI příkaz při změně leadera nově spustí samostatný

@@ -420,14 +420,24 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
               stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
+              accountEligibility={agentStatus?.controller.accountEligibility ?? []}
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
               onGroupsChange={setCopyGroups}
               onArmLive={executionGroup ? async () => {
+                const ineligible = (agentStatus?.controller.accountEligibility ?? [])
+                  .filter(entry => entry.state !== 'active'
+                    && executionGroup.followers.some(follower => follower.accountId === entry.accountId));
+                const participating = executionGroup.followers.length - ineligible.length;
+                const exclusionNote = ineligible.length > 0
+                  ? ` POZOR: ${ineligible.map(entry =>
+                      `účet ${entry.accountId} se NEBUDE účastnit (${entry.state}: ${entry.reason ?? 'bez důvodu'})`,
+                    ).join('; ')}.`
+                  : '';
                 if (!(await confirmAction({
                   title: 'ARM LIVE',
-                  message: `ARM LIVE skupinu ${executionGroup.name}? Runtime nejdřív provede reconciliation a při jakémkoli rozdílu ARM odmítne. Platnost skončí nejpozději v 17:00 Chicago.`,
-                  confirmLabel: 'ARM LIVE',
+                  message: `ARM LIVE skupinu ${executionGroup.name}?${exclusionNote} Runtime nejdřív provede reconciliation a při jakémkoli rozdílu ARM odmítne. Platnost skončí nejpozději v 17:00 Chicago.`,
+                  confirmLabel: `ARM · ${participating} follower${participating === 1 ? '' : participating < 5 ? 'ři' : 'ů'}`,
                 }))) return;
                 // UI je autoritativní pro aktuální násobky/módy — sync
                 // konfigurace jde atomicky uvnitř arm-live (jeden relay

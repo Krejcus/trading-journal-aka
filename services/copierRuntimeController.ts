@@ -1,4 +1,4 @@
-import type { BrokerEvent, BrokerFill, BrokerPort } from './brokerPort';
+import type { BrokerEvent, BrokerFill, BrokerOrder, BrokerPort } from './brokerPort';
 import { msUntilTradovateSessionEnd } from './copierArmSession';
 import { pointValueUsd } from './futuresContractSpecs';
 import { createCopierState, type CopierClosedTrade, type CopierDailyStats } from './copierEngine';
@@ -7,7 +7,7 @@ import { CopierBracketCorrelator, type LeaderBracketPair } from './copierBracket
 import { CopierOsoCorrelator } from './copierOsoCorrelator';
 import { stuckCancelEntries } from './copierCancelOutbox';
 import { waiveCancelEntry } from './copierCancelOutbox';
-import { stuckEntries, waiveOutboxEntry } from './copierOutbox';
+import { markRejected as markOutboxRejected, stuckEntries, waiveOutboxEntry } from './copierOutbox';
 import { stuckBracketEntries, waiveBracketOutboxEntry } from './copierBracketOutbox';
 import { stuckOsoEntries, waiveOsoOutboxEntry } from './copierOsoOutbox';
 import { applyResolved, type LeaderEvent } from './copierEngine';
@@ -30,6 +30,31 @@ import { processManualFlatten, type ManualFlattenResult } from './copierManualAc
 import { createExposureCappedBroker } from './exposureCappedBroker';
 
 export type CopierStuckOperationKind = 'place' | 'bracket' | 'oso' | 'cancel-or-modify';
+
+/**
+ * Způsobilost účtu k NOVÝM vstupům. Oddělená od broker connection statusu
+ * (ten nese per-účet live tečka v UI) i od poslední execution události.
+ * 'disconnected' tu záměrně není — odpojení je vlastnost spojení, ne účtu.
+ */
+export type CopierAccountEligibilityState = 'active' | 'dll-locked' | 'breached' | 'unverifiable';
+
+export interface CopierAccountEligibility {
+  accountId: number;
+  state: CopierAccountEligibilityState;
+  /** Lidsky čitelný důvod (broker string / vysvětlení přechodu). */
+  reason?: string;
+  at: number;
+  /** Hranice obchodní session platná v okamžiku DLL locku. */
+  lockSessionEndAt?: number;
+  /** Poslední execution událost účtu — zobrazuje se pod jménem, není to stav. */
+  lastExecution?: {
+    kind: 'rejected';
+    reason?: string;
+    symbol?: string;
+    brokerOrderId?: string;
+    at: number;
+  };
+}
 
 export interface CopierStuckOperation {
   kind: CopierStuckOperationKind;
@@ -55,6 +80,8 @@ export interface CopierControllerStatus {
   stuckOutbox: boolean;
   /** Bezpečný, redigovaný seznam položek čekajících na zásah operátora. */
   stuckOperations: CopierStuckOperation[];
+  /** Odchylky způsobilosti účtů (active se nevykazuje). */
+  accountEligibility?: CopierAccountEligibility[];
   lastError: string | null;
   revision: number;
   lastSequence: number;
@@ -296,6 +323,79 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Deník vstupů/exitů pro notifikace; jen poslední položky, jen tento běh. */
   const recentCopyEvents: CopierCopyEvent[] = [];
   let copyEventCounter = 0;
+  // ── Account eligibility ────────────────────────────────────────────────
+  // Oddělená vrstva od connection statusu a od poslední execution události.
+  // Drží jen odchylky od 'active'; účet bez záznamu je způsobilý.
+  const accountEligibility = new Map<number, CopierAccountEligibility>();
+  const DLL_REASON_PATTERN = /daily\s*loss|loss\s*limit|\bdll\b/i;
+  const BREACH_REASON_PATTERN = /breach|trailing\s*(max\s*)?drawdown|account\s*(disabled|locked|suspended)/i;
+  const setEligibility = (accountId: number, next: CopierAccountEligibility) => {
+    // Breach je trvalý a nesmí ho přepsat slabší klasifikace téhož streamu;
+    // odemyká ho jedině autoritativní reaktivace v reconciliaci.
+    const current = accountEligibility.get(accountId);
+    if (current?.state === 'breached' && next.state !== 'breached' && next.state !== 'active') return;
+    accountEligibility.set(accountId, next);
+  };
+  const recordFollowerRejection = (order: BrokerOrder, at: number) => {
+    const reason = order.rejectReason?.trim() || 'broker odmítl příkaz';
+    const lastExecution = {
+      kind: 'rejected' as const, reason, symbol: order.symbol, brokerOrderId: order.brokerOrderId, at,
+    };
+    const current = accountEligibility.get(order.accountId);
+    if (BREACH_REASON_PATTERN.test(reason)) {
+      setEligibility(order.accountId, {
+        accountId: order.accountId, state: 'breached', reason, at, lastExecution,
+      });
+      return;
+    }
+    if (DLL_REASON_PATTERN.test(reason)) {
+      setEligibility(order.accountId, {
+        accountId: order.accountId, state: 'dll-locked', reason, at, lastExecution,
+        // Hranice obchodní session v době locku: po jejím přejetí se stav
+        // NEuvolní časem, jen přejde do 'unverifiable' a čeká na ověření.
+        // Bez denních statistik se hranice odvodí ze session kalendáře.
+        lockSessionEndAt: currentRuntime().state.safety.dailyStats?.sessionEndAt
+          ?? (at + msUntilTradovateSessionEnd(at)),
+      });
+      return;
+    }
+    // Neurčitý reject: jen execution událost, eligibility se nemění.
+    setEligibility(order.accountId, {
+      accountId: order.accountId,
+      state: current?.state ?? 'active',
+      reason: current?.reason,
+      at: current?.at ?? at,
+      lockSessionEndAt: current?.lockSessionEndAt,
+      lastExecution,
+    });
+  };
+  /** DLL po začátku nové session nesmí zůstat odemčený ani zamčený „časem“. */
+  const rollEligibilityToNewSession = (now: number) => {
+    for (const [accountId, entry] of accountEligibility) {
+      if (
+        entry.state === 'dll-locked'
+        && entry.lockSessionEndAt != null
+        && entry.lockSessionEndAt > 0
+        && now >= entry.lockSessionEndAt
+      ) {
+        accountEligibility.set(accountId, {
+          ...entry, state: 'unverifiable', at: now,
+          reason: 'DLL session skončila — čeká na autoritativní ověření u brokera',
+        });
+      }
+    }
+  };
+  const currentIneligibleAccounts = (): ReadonlyMap<number, string> => {
+    rollEligibilityToNewSession(clock());
+    const ineligible = new Map<number, string>();
+    for (const [accountId, entry] of accountEligibility) {
+      if (entry.state !== 'active') {
+        ineligible.set(accountId, `${entry.state}: ${entry.reason ?? 'bez důvodu'}`);
+      }
+    }
+    return ineligible;
+  };
+
   /** Leader ochranné nohy (SL/TP) podle brokerOrderId — pro atribuci exitu
    *  a odfiltrování šumu (OCO auto-cancel druhé nohy po výstupu). */
   const leaderStopOrderIds = new Set<string>();
@@ -1414,6 +1514,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           now: clock(),
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+          ineligibleAccounts: currentIneligibleAccounts(),
         },
         broker,
         clock,
@@ -1495,6 +1596,45 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     await maybeHandleArmExpiry(now);
     if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
       rememberFollowerFillCause(event.fill, now);
+    }
+    // Asynchronní reject: REST ack s orderId NENÍ úspěch. Broker může
+    // příkaz odmítnout až následným eventem (incident TDFYG: DLL reject
+    // po acku) — outbox i eligibility to musí promítnout, jinak audit
+    // vykazuje „dispatched“ nad mrtvým příkazem.
+    if (
+      event.type === 'order'
+      && event.order.accountId !== group.leaderAccountId
+      && event.order.status === 'rejected'
+    ) {
+      const order = event.order;
+      recordFollowerRejection(order, now);
+      const acknowledged = [...currentRuntime().outbox.values()].find(entry =>
+        entry.brokerOrderId === order.brokerOrderId && entry.status === 'acknowledged');
+      if (acknowledged) {
+        const reason = order.rejectReason?.trim() || 'broker odmítl příkaz (async reject)';
+        // Vysvětlený reject (DLL/breach) NESMÍ přes stuck-outbox zastavit
+        // zdravé followery: účet už vyřadila eligibility, položka se
+        // waivne s důvodem. Nevysvětlený reject zůstává 'rejected', tedy
+        // fail-closed pro celou skupinu — leader a follower se rozešli
+        // z neznámé příčiny.
+        const classified = accountEligibility.get(order.accountId)?.state;
+        const explained = classified === 'dll-locked' || classified === 'breached';
+        await processor.mutate(async current => {
+          const outbox = new Map(current.outbox);
+          const entry = outbox.get(acknowledged.key);
+          if (entry && entry.status === 'acknowledged') {
+            outbox.set(entry.key, explained
+              ? waiveOutboxEntry(markOutboxRejected(entry, reason, now), `${reason} — účet vyřazen z nových vstupů (${classified})`, now)
+              : markOutboxRejected(entry, reason, now));
+          }
+          return { ...current, outbox };
+        }).catch(() => undefined);
+        options.onAudit?.([{
+          at: now, leaderEventId: acknowledged.leaderEventId ?? `async-reject-${order.brokerOrderId}`,
+          kind: 'rejected', accountId: order.accountId, key: acknowledged.key,
+          brokerOrderId: order.brokerOrderId, reason,
+        }]);
+      }
     }
     // Cizí zásah se musí poznat z order streamu sám. Čekat, až ho odhalí
     // náš příští modify, znamená čekat na náhodu — 24. 8. žádný další modify
@@ -1682,6 +1822,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           now,
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+          ineligibleAccounts: currentIneligibleAccounts(),
         },
         broker,
         clock,
@@ -1784,6 +1925,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           now,
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+          ineligibleAccounts: currentIneligibleAccounts(),
         },
         broker,
         clock,
@@ -1858,6 +2000,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         now,
         sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
         stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+        ineligibleAccounts: currentIneligibleAccounts(),
       },
       broker,
       clock,
@@ -1985,6 +2128,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           if ((followerPositions.get(symbol) ?? 0) !== expected) {
             divergent.add(follower.accountId);
             break;
+          }
+        }
+      }
+      // Reaktivace eligibility: JEDINÉ místo, kde se DLL/unverifiable vrací
+      // do 'active' — autoritativní snapshot účtu se povedl. Čas sám nikdy
+      // nestačí (rollEligibilityToNewSession umí jen zpřísnit na
+      // 'unverifiable'). Breach zůstává trvale, dokud ho operátor neřeší.
+      {
+        const reactivationNow = clock();
+        rollEligibilityToNewSession(reactivationNow);
+        for (const [accountId, entry] of accountEligibility) {
+          if (!byAccount.has(accountId)) continue;
+          const newSessionBegan = entry.lockSessionEndAt != null
+            && entry.lockSessionEndAt > 0
+            && reactivationNow >= entry.lockSessionEndAt;
+          if (entry.state === 'unverifiable' || (entry.state === 'dll-locked' && newSessionBegan)) {
+            accountEligibility.set(accountId, {
+              ...entry, state: 'active', at: reactivationNow,
+              reason: 'autoritativně ověřeno při reconciliaci po nové session',
+            });
+            options.onAudit?.([{
+              at: reactivationNow, leaderEventId: `eligibility-reactivate-${accountId}`,
+              kind: 'recovered', accountId,
+              reason: 'účet znovu způsobilý — autoritativní ověření po nové session',
+            }]);
           }
         }
       }
@@ -2370,6 +2538,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         workingOrderAccounts: [...workingOrderAccounts],
         stuckOutbox: stuckOperations.length > 0,
         stuckOperations,
+        accountEligibility: (() => {
+          rollEligibilityToNewSession(clock());
+          return [...accountEligibility.values()]
+            .filter(entry => entry.state !== 'active' || entry.lastExecution != null)
+            .map(entry => ({ ...entry, lastExecution: entry.lastExecution ? { ...entry.lastExecution } : undefined }));
+        })(),
         lastError: lastError?.message ?? null,
         revision: current.revision,
         lastSequence: current.state.lastSequence,
