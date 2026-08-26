@@ -19,7 +19,9 @@ import {
   DEFAULT_COPY_GROUP_SAFETY,
   mergeCopyGroups,
   normalizeMultiplier,
+  replaceCopyGroupFollowerAccount,
   sanitizeCopyGroups,
+  unavailableCopyGroupAccounts,
   validateCopyGroup,
   type CopyGroupConfig,
   type CopyFollowerConfig,
@@ -431,6 +433,21 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const toggleCopierConnection = async () => {
     if (copierTransition) return;
     const connecting = !copierArmed;
+    if (connecting) {
+      const selectedGroup = executionGroupId != null
+        ? groups.find(group => group.id === executionGroupId) ?? (runtimeGroup?.id === executionGroupId ? runtimeGroup : null)
+        : runtimeGroup;
+      if (selectedGroup) {
+        const validation = validateCopyGroup(selectedGroup, snapshot.accounts.map(account => account.id));
+        if (!validation.valid) {
+          setToast({
+            tone: 'error',
+            text: `ARM blokován: ${validation.errors.join(' ')} Oprav skupinu přes menu ⋮ → Edit group.`,
+          });
+          return;
+        }
+      }
+    }
     const action = connecting ? onArmLive : onDisarm;
     if (!action) return;
     const startedAt = Date.now();
@@ -706,6 +723,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               confirmLabel: 'Aktivovat',
                               run: async () => {
                                 if (!onActivateGroup) throw new Error('Execution runtime nepodporuje bezpečné přepnutí skupiny.');
+                                const validation = validateCopyGroup(group, snapshot.accounts.map(account => account.id));
+                                if (!validation.valid) {
+                                  throw new Error(`Skupinu nelze aktivovat: ${validation.errors.join(' ')} Oprav ji přes Edit group.`);
+                                }
                                 await onActivateGroup({ ...group, enabled: true, localOnly: true });
                                 setGroups(current => current.map(candidate => ({
                                   ...candidate,
@@ -1141,7 +1162,11 @@ const GroupRow = ({ group, rows, active, armed, eligibility, observingOnly, stat
     : rows.some(row => row.account?.unrealizedPnlSource === 'estimated') ? 'estimated' : 'broker';
   const firm = rows.find(r => r.isLeader)?.firm;
   const enabledFollowerCount = group.followers.filter(follower => follower.mode !== 'off').length;
-  const inactiveFollowerCount = eligibility.filter(entry => entry && entry.state !== 'active').length;
+  const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
+  const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
+  const unavailableFollowerCount = enabledFollowerRows.filter(row => !row.account).length;
+  const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
+    !row.account || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')).length;
   const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
@@ -1162,6 +1187,8 @@ const GroupRow = ({ group, rows, active, armed, eligibility, observingOnly, stat
           </span>
           {dllCount > 0 ? <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[9px] font-black text-amber-600">{dllCount}× DLL</span> : null}
           {breachedCount > 0 ? <span className="rounded-full bg-rose-500/12 px-1.5 py-0.5 text-[9px] font-black text-rose-600">{breachedCount}× BREACHED</span> : null}
+          {unavailableFollowerCount > 0 ? <span className="rounded-full bg-slate-500/15 px-1.5 py-0.5 text-[9px] font-black text-slate-600">{unavailableFollowerCount}× nedostupný</span> : null}
+          {unavailableLeader ? <span className="rounded-full bg-rose-500/12 px-1.5 py-0.5 text-[9px] font-black text-rose-600">leader nedostupný</span> : null}
         </span>
       </td>
       {!hiddenGroupColumns.has('status') && <td className="px-3 py-0">
@@ -1385,10 +1412,15 @@ const timeLabel = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hou
  * a poslední execution událost (řádek pod jménem) jsou tři různé věci —
  * záměrně se neslučují do jednoho zašedlého řádku.
  */
-export const AccountEligibilityPill = ({ eligibility, live }: {
+export const AccountEligibilityPill = ({ eligibility, live, unavailable = false }: {
   eligibility?: CopierAccountEligibility;
   live: boolean;
+  unavailable?: boolean;
 }) => {
+  if (unavailable) {
+    return <span title="Účet není v aktuálním OAuth snapshotu" className="inline-flex items-center gap-1 rounded-md border border-slate-500/40 bg-slate-500/15 px-2 py-1 text-[10px] font-black leading-none text-slate-600">
+      <Unplug aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Nedostupný účet</span>;
+  }
   const state = eligibility?.state ?? 'active';
   if (state === 'dll-locked') {
     return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[10px] font-black leading-none text-amber-600">
@@ -1449,8 +1481,8 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
         <div className="flex items-center gap-1.5">
           {(() => {
             const followers = rows.filter(row => !row.isLeader && row.accountId != null);
-            const active = followers.filter(row =>
-              (eligibilityByAccount.get(row.accountId as number)?.state ?? 'active') === 'active');
+            const active = followers.filter(row => row.account
+              && (eligibilityByAccount.get(row.accountId as number)?.state ?? 'active') === 'active');
             const excluded = followers.length - active.length;
             return <span className="inline-flex items-center gap-1.5">
               <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${excluded > 0
@@ -1568,7 +1600,11 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
             )}
             {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
             </span>
-            {eligibility?.lastExecution ? (
+            {!a && accountId != null ? (
+              <span className="block pl-3.5 text-[10px] font-bold leading-tight text-slate-500">
+                Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.
+              </span>
+            ) : eligibility?.lastExecution ? (
               <span className="block pl-3.5 text-[10px] leading-tight text-rose-500/90">
                 Příkaz odmítnut · {eligibility.lastExecution.reason ?? 'bez důvodu'} · {timeLabel(eligibility.lastExecution.at)}
               </span>
@@ -1578,7 +1614,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           </span>
         );
       case 'status':
-        return <AccountEligibilityPill eligibility={eligibility} live={live} />;
+        return <AccountEligibilityPill eligibility={eligibility} live={live} unavailable={!a && accountId != null} />;
       case 'broker':
         return <TradovateMark size="h-5 w-5" />;
       case 'firm':
@@ -1646,14 +1682,20 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
 
 // ─── Dialogy a lokální command režim ────────────────────────────────────────
 
-export const changeCopyGroupLeader = (group: CopyGroupConfig, nextLeaderAccountId: number): CopyGroupConfig => {
+export const changeCopyGroupLeader = (
+  group: CopyGroupConfig,
+  nextLeaderAccountId: number,
+  availableAccountIds?: Iterable<number>,
+): CopyGroupConfig => {
   if (group.leaderAccountId === nextLeaderAccountId) return group;
 
   const previousLeaderAccountId = group.leaderAccountId;
   const promotedFollower = group.followers.find(follower => follower.accountId === nextLeaderAccountId);
   const followers = group.followers.filter(follower => follower.accountId !== nextLeaderAccountId);
 
-  if (previousLeaderAccountId != null && !followers.some(follower => follower.accountId === previousLeaderAccountId)) {
+  const previousLeaderAvailable = previousLeaderAccountId != null
+    && (availableAccountIds == null || new Set(availableAccountIds).has(previousLeaderAccountId));
+  if (previousLeaderAvailable && !followers.some(follower => follower.accountId === previousLeaderAccountId)) {
     followers.push(promotedFollower
       ? { ...promotedFollower, accountId: previousLeaderAccountId }
       : { accountId: previousLeaderAccountId, mode: 'on-submit', multiplier: 1 });
@@ -1686,6 +1728,9 @@ const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, on
   }, [onClose, saving]);
 
   const followerById = new Map(draft.followers.map(follower => [follower.accountId, follower]));
+  const availableAccountIds = useMemo(() => accounts.map(account => account.id), [accounts]);
+  const unavailable = unavailableCopyGroupAccounts(draft, availableAccountIds);
+  const unavailableFollowers = draft.followers.filter(follower => unavailable.followerAccountIds.includes(follower.accountId));
   const followerCandidates = accounts.filter(account => account.id !== draft.leaderAccountId);
   const allFollowersSelected = followerCandidates.length > 0
     && followerCandidates.every(account => followerById.has(account.id));
@@ -1723,7 +1768,9 @@ const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, on
   const next = () => {
     if (step === 0 && !draft.name.trim()) return setErrors(['Zadej název skupiny.']);
     if (step === 1 && draft.leaderAccountId == null) return setErrors(['Vyber leader účet.']);
+    if (step === 1 && unavailable.leaderAccountId != null) return setErrors([`Uložený leader účet ${unavailable.leaderAccountId} není dostupný. Vyber aktuální leader účet.`]);
     if (step === 2 && draft.followers.length === 0) return setErrors(['Vyber alespoň jeden follower účet.']);
+    if (step === 2 && unavailableFollowers.length > 0) return setErrors([`Nahraď nebo odeber ${unavailableFollowers.length} nedostupný follower účet.`]);
     setErrors([]);
     setStep(current => Math.min(3, current + 1));
   };
@@ -1750,17 +1797,20 @@ const GroupEditorDialog = ({ group, isNew, accounts, saving, onClose, onSave, on
         <div className="p-5 overflow-y-auto custom-scrollbar min-h-[360px]">
           {step === 0 ? <div className="mx-auto max-w-xl space-y-6"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Pojmenuj skupinu</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Zvol název, který snadno poznáš v tabulce kopírování. Později ho můžeš změnit.</p></div><label className="block space-y-2"><span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Název skupiny</span><input autoFocus value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} placeholder="např. Tradeify 50K" className="h-11 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-sm font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500" /></label><div><div className="mb-2 text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Barva</div><div className="flex flex-wrap gap-2.5">{GROUP_COLORS.map(color => <button key={color} type="button" aria-label={`Barva ${color}`} onClick={() => setDraft(current => ({ ...current, color }))} className={`h-8 w-8 rounded-full border-4 transition-transform ${draft.color === color ? 'scale-110 border-[var(--text-primary)]' : 'border-transparent'}`} style={{ backgroundColor: color }} />)}</div><p className="mt-2 text-[11px] text-[var(--text-muted)]">Pomůže ti rychle rozlišit jednotlivé skupiny.</p></div></div> : null}
 
-          {step === 1 ? <div className="space-y-4"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber leader účet</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Obchody leadera se budou kopírovat na všechny followery v této skupině. Stejný účet může být uložený i v jiných skupinách; execution-aktivní bude vždy pouze jedna.</p></div><div className="grid gap-2 sm:grid-cols-2">{accounts.map(account => {
+          {step === 1 ? <div className="space-y-4"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber leader účet</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Obchody leadera se budou kopírovat na všechny followery v této skupině. Stejný účet může být uložený i v jiných skupinách; execution-aktivní bude vždy pouze jedna.</p></div>{unavailable.leaderAccountId != null ? <div className="flex gap-2.5 rounded-lg border border-amber-500/35 bg-amber-500/[0.08] p-3 text-amber-700"><AlertTriangle size={16} className="mt-0.5 shrink-0" /><div><b className="block text-xs">Uložený leader {unavailable.leaderAccountId} už není dostupný</b><span className="mt-0.5 block text-[11px] leading-relaxed">Vyber níže aktuální účet. AlphaTrade náhradu nikdy nehádá automaticky.</span></div></div> : null}<div className="grid gap-2 sm:grid-cols-2">{accounts.map(account => {
             const active = draft.leaderAccountId === account.id;
             return <button
               key={account.id}
               type="button"
-              onClick={() => setDraft(current => changeCopyGroupLeader(current, account.id))}
+              onClick={() => setDraft(current => changeCopyGroupLeader(current, account.id, availableAccountIds))}
               className={`flex items-center gap-3 rounded-lg border p-3 text-left ${active ? 'border-indigo-500 bg-indigo-500/[0.06]' : 'border-[var(--border-subtle)] hover:bg-[var(--bg-page)]'}`}
             ><span className={`flex h-9 w-9 items-center justify-center rounded-full ${active ? 'bg-indigo-600 text-white' : 'bg-[var(--bg-page)] text-[var(--text-secondary)]'}`}><Crown size={16} /></span><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="mt-0.5 block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span>{active ? <Check size={16} className="ml-auto text-indigo-500" /> : null}</button>;
           })}</div></div> : null}
 
-          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera. Uložené skupiny se mohou překrývat; současně se spustí jen jedna execution skupina.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={followerCandidates.length === 0} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div><div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]"><div className="grid grid-cols-[minmax(0,1fr)_130px_84px_64px] gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span><span className="text-right" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</span></div>{followerCandidates.map(account => {
+          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera. Uložené skupiny se mohou překrývat; současně se spustí jen jedna execution skupina.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={followerCandidates.length === 0} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div>{unavailableFollowers.length > 0 ? <div className="rounded-lg border border-amber-500/35 bg-amber-500/[0.07] p-3"><div className="flex gap-2.5"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" /><div><b className="block text-xs text-amber-700">Nedostupné účty v uložené skupině</b><span className="mt-0.5 block text-[11px] text-amber-700/80">Vyber přesnou náhradu z OAuth snapshotu, nebo starý účet odeber. Nic se nepáruje automaticky.</span></div></div><div className="mt-3 space-y-2">{unavailableFollowers.map(follower => {
+            const replacementCandidates = accounts.filter(account => account.id !== draft.leaderAccountId && !draft.followers.some(item => item.accountId === account.id));
+            return <div key={follower.accountId} className="grid gap-2 rounded-md border border-amber-500/20 bg-[var(--bg-card)] p-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(190px,1fr)_auto] sm:items-center"><span><b className="block text-xs text-[var(--text-primary)]">Účet {follower.accountId}</b><span className="block text-[10px] text-[var(--text-secondary)]">{follower.mode === 'on-fill' ? 'Při vyplnění' : follower.mode === 'off' ? 'Vypnuto' : 'Při zadání'} · násobek {follower.multiplier}</span></span><select aria-label={`Nahradit nedostupný účet ${follower.accountId}`} defaultValue="" onChange={event => { const replacementId = Number(event.target.value); if (Number.isSafeInteger(replacementId)) setDraft(current => replaceCopyGroupFollowerAccount(current, follower.accountId, replacementId)); }} className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]"><option value="">Vyber náhradu…</option>{replacementCandidates.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}</select><button type="button" onClick={() => setDraft(current => ({ ...current, followers: current.followers.filter(item => item.accountId !== follower.accountId) }))} className="h-9 rounded-md border border-rose-500/25 px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10">Odebrat</button></div>;
+          })}</div></div> : null}<div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]"><div className="grid grid-cols-[minmax(0,1fr)_130px_84px_64px] gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span><span className="text-right" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</span></div>{followerCandidates.map(account => {
             const follower = followerById.get(account.id);
             return <div key={account.id} className={`grid grid-cols-[minmax(0,1fr)_130px_84px_64px] items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}><label className="flex min-w-0 cursor-pointer items-center gap-2.5"><input type="checkbox" checked={!!follower} onChange={() => toggleFollower(account.id)} className="accent-indigo-600" /><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span></label><select disabled={!follower} value={follower?.mode ?? 'on-submit'} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, mode: event.target.value as ReplicationMode } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35"><option value="off">Vypnuto</option><option value="on-submit">Při zadání</option><option value="on-fill">Při vyplnění</option></select><input aria-label={`Násobek ${account.name}`} disabled={!follower} type="number" min="0.01" max="100" step="0.25" value={follower?.multiplier ?? 1} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, multiplier: Number(event.target.value) } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /><input aria-label={`Max kontrakty ${account.name}`} title="Tvrdý strop expozice na symbol; překročení odmítne celý příkaz a odzbrojí copier; prázdné = bez limitu" disabled={!follower} type="number" min="1" step="1" placeholder="∞" value={follower?.maxContracts ?? ''} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, maxContracts: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /></div>;
           })}</div></div> : null}

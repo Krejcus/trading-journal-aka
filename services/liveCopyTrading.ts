@@ -112,6 +112,53 @@ export interface CopyGroupValidation {
   errors: string[];
 }
 
+export interface CopyGroupUnavailableAccounts {
+  leaderAccountId: number | null;
+  followerAccountIds: number[];
+}
+
+/**
+ * Vrátí členy uložené skupiny, které v aktuálním autoritativním OAuth
+ * snapshotu vůbec nejsou. Snapshot může být během refresh krátce neúplný,
+ * proto tahle funkce topologii sama nemění — jen ji zpřístupní UI a ARM bráně.
+ */
+export function unavailableCopyGroupAccounts(
+  group: CopyGroupConfig,
+  availableAccountIds: Iterable<number>,
+): CopyGroupUnavailableAccounts {
+  const available = new Set(availableAccountIds);
+  return {
+    leaderAccountId: group.leaderAccountId != null && !available.has(group.leaderAccountId)
+      ? group.leaderAccountId
+      : null,
+    followerAccountIds: group.followers
+      .filter(follower => !available.has(follower.accountId))
+      .map(follower => follower.accountId),
+  };
+}
+
+/**
+ * Ruční oprava stale follower ID. Nikdy nehádá náhradu podle názvu nebo
+ * podobného čísla; nové ID musí uživatel vybrat z aktuálního OAuth snapshotu.
+ * Nastavení replikace, násobek i maxContracts se zachovají.
+ */
+export function replaceCopyGroupFollowerAccount(
+  group: CopyGroupConfig,
+  staleAccountId: number,
+  replacementAccountId: number,
+): CopyGroupConfig {
+  if (staleAccountId === replacementAccountId) return group;
+  if (replacementAccountId === group.leaderAccountId) return group;
+  if (group.followers.some(follower => follower.accountId === replacementAccountId)) return group;
+  if (!group.followers.some(follower => follower.accountId === staleAccountId)) return group;
+  return {
+    ...group,
+    followers: group.followers.map(follower => follower.accountId === staleAccountId
+      ? { ...follower, accountId: replacementAccountId }
+      : follower),
+  };
+}
+
 export function copyGroupsFromSnapshot(snapshot: LiveSnapshot): CopyGroupConfig[] {
   return snapshot.groups.map(group => ({
     id: group.id,

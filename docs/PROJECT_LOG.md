@@ -93,9 +93,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-26 (Codex, stale účet je opravitelný čistě z LIVE UI)
+Read-only kontrola všech spárovaných OAuth `/account/list` potvrdila, že
+uložený follower `63338592` není účet vracený Tradovate. Lucid OAuth vrací
+aktivní účet `63338752` (`LFE05066846490016`). Dynamický router proto správně
+selhal nahlas: odstranění statického `connections.json` routingu nemůže udělat
+z neplatného účtu platný a AlphaTrade nesmí podobné ID automaticky zaměnit.
+
+LIVE UI nyní takového člena neskrývá ani nepočítá jako aktivního. Skupina
+ukáže čip `nedostupný`, řádek explicitní stav a důvod a editor nabídne ruční
+volbu přesné náhrady z aktuálního OAuth snapshotu nebo odebrání. Při náhradě
+se zachová režim replikace, násobek i `maxContracts`. Nedostupný bývalý leader
+se při volbě nového leadera už nepřenese mezi followery. Aktivace skupiny i
+ARM jsou v UI fail-closed blokované, dokud validace proti aktuálním účtům
+neprojde; stejnou kontrolu nezávisle zopakuje worker před side effectem.
+
+Nic se nepáruje automaticky a tento krok neposlal žádný broker příkaz. Změna
+je zatím pouze lokální na větvi `codex/ios-native-checkpoint-20260814`; před
+push/deploy/reinstallem workeru čeká na samostatné potvrzení uživatele. Ověření:
+kompletní sada 1515/1515, `npx tsc --noEmit`, `git diff --check` a produkční
+build čisté (pouze existující upozornění na velikost bundlu). Canonical Vite
+preview navíc s dočasnou stale fixture vizuálně potvrdil čip `1× nedostupný`,
+explicitní řádek i ruční náhradu v editoru; po volbě náhrady staré ID a
+varování zmizely při zachování počtu followerů a bez error overlay. Fixture
+byla po ověření odstraněna.
+
 ### 2026-08-26 (Codex, dynamický account -> OAuth routing z LIVE UI)
-Lokálně je dokončená oprava chyby `Pro účet 63338592 není nakonfigurované
-OAuth spojení`. `accountIds` v Mac connection manifestu už nejsou autoritou
+Lokálně je dokončený dynamický account -> OAuth routing, který odstraňuje
+nutnost ručně dopisovat platné nově zjištěné účty do connection manifestu.
+Pozdější read-only kontrola upřesnila, že konkrétní `63338592` je stale ID;
+jeho oprava je popsaná v novějším zápisu výše. `accountIds` v Mac connection manifestu už nejsou autoritou
 pro vlastnictví účtu; slouží pouze jako instalační/bootstrap metadata. Worker
 si při startu, změně topologie skupiny, aktivaci uloženého profilu, SHADOW i
 před každým ARM znovu read-only načte `/account/list` ze všech už spárovaných
@@ -117,7 +144,7 @@ Přidání úplně nového OAuth spojení stále vyžaduje jeho bezpečné devic
 samotné přidání účtu nebo změna skupiny v rámci existujících spojení už žádný
 ruční manifest zásah nevyžaduje. Ověření: cílené router/runtime/Tradovate testy
 75/75, kompletní sada 1512/1512, `npx tsc --noEmit` a produkční build čisté.
-Změna zatím není commitnutá, pushnutá, nasazená ani nainstalovaná do Mac workeru;
+Změna je lokálně commitnutá jako `b842640f`, ale není pushnutá, nasazená ani nainstalovaná do Mac workeru;
 worker zůstává na `dfdc4d9e` a DISARMED do samostatného schválení nasazení.
 
 ### 2026-08-26 (Codex, řízený DEMO důkaz OSO parent cascade)

@@ -6,7 +6,9 @@ import {
   mergeCopyGroups,
   DEFAULT_COPY_GROUP_SAFETY,
   normalizeMultiplier,
+  replaceCopyGroupFollowerAccount,
   sanitizeCopyGroups,
+  unavailableCopyGroupAccounts,
   validateCopyGroup,
   type CopyGroupConfig,
 } from '../services/liveCopyTrading';
@@ -96,6 +98,31 @@ describe('liveCopyTrading', () => {
     };
     expect(validateCopyGroup(valid, [1, 2]).valid).toBe(true);
     expect(validateCopyGroup({ ...valid, followers: [{ accountId: 1, mode: 'on-fill', multiplier: 0 }] }, [1, 2]).errors).toHaveLength(2);
+  });
+
+  it('odhalí stale člena skupiny a ručně ho nahradí bez ztráty nastavení', () => {
+    const group: CopyGroupConfig = {
+      id: 'g', name: 'Test', enabled: false, leaderAccountId: 1,
+      followers: [{ accountId: 63338592, mode: 'on-fill', multiplier: 2, maxContracts: 3 }],
+    };
+
+    expect(unavailableCopyGroupAccounts(group, [1, 63338752])).toEqual({
+      leaderAccountId: null,
+      followerAccountIds: [63338592],
+    });
+    expect(replaceCopyGroupFollowerAccount(group, 63338592, 63338752).followers).toEqual([
+      { accountId: 63338752, mode: 'on-fill', multiplier: 2, maxContracts: 3 },
+    ]);
+  });
+
+  it('při volbě nového leadera nepřenese nedostupného starého leadera mezi followery', async () => {
+    const { changeCopyGroupLeader } = await import('../components/LiveCopyTradeOverview');
+    const group: CopyGroupConfig = {
+      id: 'g', name: 'Test', enabled: false, leaderAccountId: 63338592,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
+    };
+
+    expect(changeCopyGroupLeader(group, 1, [1, 2]).followers.map(item => item.accountId)).toEqual([2]);
   });
 
   it('dovolí uložit stejný účet ve více neaktivních profilech', () => {

@@ -160,4 +160,24 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup.match(/Uložená/g)).toHaveLength(2);
     expect(markup).not.toContain('Execution aktivní');
   });
+
+  it('zobrazí stale followera jako nedostupného a nepočítá ho mezi aktivní', () => {
+    const staleFollowerId = 63_338_592;
+    const staleGroup = {
+      ...snapshot.groups[0],
+      followers: [{
+        ...snapshot.groups[0].followers[0],
+        accountId: staleFollowerId,
+        accountName: `Účet ${staleFollowerId}`,
+      }],
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, groups: [staleGroup] },
+    }));
+
+    expect(markup).toContain('0/1 aktivních');
+    expect(markup).toContain('1× nedostupný');
+    expect(markup).toContain('Nedostupný účet');
+    expect(markup).toContain('Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.');
+  });
 });
