@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { LiveCopyTradeOverview } from '../components/LiveCopyTradeOverview';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
-import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 
 const liveAccount = (id: number, name: string): LiveAccount => ({
   id,
@@ -113,7 +112,7 @@ describe('GroupDetail Positions integrace', () => {
     expect(positionsCell).not.toContain('Čekající vstup NQ,');
   });
 
-  it('překrývající profily vykreslí jako uložené a jen jeden jako execution aktivní', () => {
+  it('překrývající profily vykreslí jako vypnuté, dokud runtime není ARMED', () => {
     const second = {
       ...snapshot.groups[0],
       id: 'group-second',
@@ -135,7 +134,8 @@ describe('GroupDetail Positions integrace', () => {
 
     expect(markup).toContain('Hlavni');
     expect(markup).toContain('Druhy profil');
-    expect(markup.match(/Uložená/g)).toHaveLength(1);
+    expect(markup.match(/VYPNUTÁ/g)).toHaveLength(2);
+    expect(markup).not.toContain('ZAPNUTÁ');
   });
 
   it('vybraný, ale vypnutý execution profil nezobrazuje jako aktivní', () => {
@@ -158,8 +158,34 @@ describe('GroupDetail Positions integrace', () => {
       runtimeGroup,
     }));
 
-    expect(markup.match(/Uložená/g)).toHaveLength(2);
+    expect(markup.match(/VYPNUTÁ/g)).toHaveLength(2);
     expect(markup).not.toContain('Execution aktivní');
+  });
+
+  it('jedinou ZAPNUTOU skupinu řadí před ostatní vypnuté profily', () => {
+    const second = {
+      ...snapshot.groups[0],
+      id: 'group-second',
+      name: 'Druhy profil',
+    };
+    const runtimeGroup = {
+      id: 'group-second',
+      name: 'Druhy profil',
+      enabled: true,
+      leaderAccountId: leaderId,
+      followers: [{ accountId: followerId, mode: 'on-submit' as const, multiplier: 1 }],
+      localOnly: true,
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, groups: [snapshot.groups[0], second] },
+      executionGroupId: 'group-second',
+      runtimeGroup,
+      copierArmed: true,
+    }));
+
+    expect(markup.match(/ZAPNUTÁ/g)).toHaveLength(1);
+    expect(markup.match(/VYPNUTÁ/g)).toHaveLength(1);
+    expect(markup.indexOf('Druhy profil')).toBeLessThan(markup.indexOf('Hlavni'));
   });
 
   it('zobrazí stale followera jako nedostupného a nepočítá ho mezi aktivní', () => {
@@ -189,7 +215,7 @@ describe('GroupDetail Positions integrace', () => {
       ...snapshot,
       accounts: [
         snapshot.accounts[0],
-        { ...liveAccount(dllId, 'Lucid DLL'), firm: 'Lucid', realizedPnl: -1_206.5 },
+        { ...liveAccount(dllId, 'Lucid DLL'), firm: 'Lucid', dailyLossLimit: 1_200, realizedPnl: -1_206.5 },
         { ...liveAccount(breachedId, 'Tradeify breached'), cushion: -33 },
       ],
       connections: [
@@ -204,19 +230,9 @@ describe('GroupDetail Positions integrace', () => {
         ],
       }],
     };
-    const dllProfile: TradovateAccountProfile = {
-      id: 'profile-dll', provider: 'tradovate', environment: 'demo', status: 'active',
-      externalAccountId: String(dllId), accountName: 'Lucid DLL', displayName: null,
-      propFirm: 'Lucid', planName: 'LucidDaily 50K', accountType: 'evaluation',
-      accountSize: 50_000, drawdownType: 'eod_trailing', maxLoss: 2_000,
-      dailyLossLimit: 1_200, consistencyPct: null, profitTarget: 3_000,
-      maxMini: null, maxMicro: null, lastSeenAt: '2026-08-26T12:00:00.000Z',
-      createdAt: '2026-08-26T12:00:00.000Z', updatedAt: '2026-08-26T12:00:00.000Z',
-    };
-
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       snapshot: riskSnapshot,
-      accountProfiles: [dllProfile],
+      accountProfiles: [],
       accountEligibility: [],
     }));
 

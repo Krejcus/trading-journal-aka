@@ -38,6 +38,7 @@ const controller = () => {
     }),
     disarm: vi.fn(() => { status = { ...status, armed: false }; }),
     engageKillSwitch: vi.fn(() => { status = { ...status, armed: false, killSwitch: true }; }),
+    applyAccountEligibilityExclusions: vi.fn(async () => undefined),
     reconcile: vi.fn(async () => ({ divergentAccounts: [], workingOrderAccounts: [] })),
     activateGroup: vi.fn(async () => undefined),
     reconfigureGroup: vi.fn(async () => undefined),
@@ -49,7 +50,7 @@ const controller = () => {
     waitForIdle: vi.fn(),
     stop: vi.fn(),
   };
-  return value as unknown as CopierRuntimeController;
+  return value as typeof value & CopierRuntimeController;
 };
 
 const post = async (agent: LocalCopierExecutionAgent, nonce: string, command: unknown) => fetch(`${agent.origin}/v1/command`, {
@@ -574,6 +575,46 @@ describe('atomický arm-live s konfigurací', () => {
     }
   });
 
+  it('arm-live před reconciliation durable předá jen safety exclusions', async () => {
+    const runtime = controller();
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      await agent.execute({
+        type: 'arm-live',
+        group: group(),
+        accountEligibilityExclusions: [{
+          accountId: 22,
+          state: 'dll-locked',
+          reason: 'LIVE denní P&L dosáhlo DLL',
+        }],
+      });
+      expect(runtime.applyAccountEligibilityExclusions).toHaveBeenCalledWith([{
+        accountId: 22,
+        state: 'dll-locked',
+        reason: 'LIVE denní P&L dosáhlo DLL',
+      }]);
+      expect(runtime.applyAccountEligibilityExclusions.mock.invocationCallOrder[0])
+        .toBeLessThan(runtime.reconcile.mock.invocationCallOrder[0]);
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it('odmítne active nebo účet mimo runtime skupinu ještě před ARM', async () => {
+    const runtime = controller();
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      await expect(agent.execute({
+        type: 'arm-live',
+        group: group(),
+        accountEligibilityExclusions: [{ accountId: 22, state: 'active', reason: 'nepovoleno' }],
+      } as never)).rejects.toThrow('nepovolený stav');
+      expect(runtime.arm).not.toHaveBeenCalled();
+    } finally {
+      await agent.close();
+    }
+  });
+
   it('arm-live bez group armuje beze změny konfigurace', async () => {
     const runtime = controller();
     const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
@@ -586,16 +627,41 @@ describe('atomický arm-live s konfigurací', () => {
     }
   });
 
-  it('arm-live nikdy nepřepne na jiný profil bokem mimo activate-group preflight', async () => {
+  it('arm-live přepne jiný čistý profil výhradně přes activate-group preflight a až potom ARM', async () => {
     const runtime = controller();
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      await agent.execute({
+        type: 'arm-live',
+        group: { ...group(), id: 'jiny-profil' },
+      });
+      expect(runtime.disarm).toHaveBeenCalled();
+      expect(runtime.activateGroup).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'jiny-profil', enabled: true,
+      }));
+      expect(runtime.activateGroup.mock.invocationCallOrder[0])
+        .toBeLessThan(runtime.reconcile.mock.invocationCallOrder[0]);
+      expect(runtime.reconcile.mock.invocationCallOrder[0])
+        .toBeLessThan(runtime.arm.mock.invocationCallOrder[0]);
+      expect(agent.status().group.id).toBe('jiny-profil');
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it('arm-live zůstane DISARMED, když bezpečný preflight jiného profilu selže', async () => {
+    const runtime = controller();
+    runtime.activateGroup.mockRejectedValueOnce(new Error('working=22'));
     const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
     try {
       await expect(agent.execute({
         type: 'arm-live',
         group: { ...group(), id: 'jiny-profil' },
-      })).rejects.toThrow('Nejdřív ji bezpečně aktivuj');
-      expect(runtime.activateGroup).not.toHaveBeenCalled();
+      })).rejects.toThrow('working=22');
+      expect(runtime.disarm).toHaveBeenCalled();
+      expect(runtime.reconcile).not.toHaveBeenCalled();
       expect(runtime.arm).not.toHaveBeenCalled();
+      expect(agent.status().group.id).toBe('runtime-test');
     } finally {
       await agent.close();
     }

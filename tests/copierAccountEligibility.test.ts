@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
-import { createMemoryCopierStore } from '../services/copierStore';
+import { createMemoryCopierStore, emptySnapshot, type CopierSnapshot } from '../services/copierStore';
 import { createMockBroker } from '../services/mockBroker';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 
@@ -29,11 +29,11 @@ const leaderOrder = (partial: Partial<BrokerOrder> = {}): BrokerOrder => ({
   status: 'working', sourceVersion: '1:Working', updatedAt: 1, ...partial,
 });
 
-const harness = async () => {
+const harness = async (initial?: CopierSnapshot, skipInitialReconcile = false) => {
   let now = 1_000;
   const clock = () => ++now;
   const broker = createMockBroker({ clock, behavior: () => ({ kind: 'working' }) });
-  const store = createMemoryCopierStore();
+  const store = createMemoryCopierStore(initial);
   const audit: { kind: string; accountId?: number; reason?: string }[] = [];
   const controller = await bootstrapCopierRuntime({
     broker, store, group, clock,
@@ -44,8 +44,10 @@ const harness = async () => {
   });
   broker.setConnected(true);
   await controller.waitForIdle();
-  await controller.reconcile();
-  controller.arm();
+  if (!skipInitialReconcile) {
+    await controller.reconcile();
+    controller.arm();
+  }
   return { broker, store, controller, audit, clock, setNow: (value: number) => { now = value; } };
 };
 
@@ -72,6 +74,58 @@ const asyncDllReject = async (harnessed: Awaited<ReturnType<typeof harness>>, ac
 };
 
 describe('account eligibility — DLL incident', () => {
+  it('LIVE preflight exclusion je durable a další vstup DLL followerovi neodešle', async () => {
+    const h = await harness();
+    h.controller.disarm();
+    await h.controller.applyAccountEligibilityExclusions([{
+      accountId: 205,
+      state: 'dll-locked',
+      reason: 'LIVE denní P&L -1206.50 USD dosáhlo DLL 1200.00 USD',
+    }]);
+
+    expect(h.controller.status().accountEligibility).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 205, state: 'dll-locked' }),
+    ]));
+    h.controller.arm();
+    await emitLeaderEntry(h, 'leader-preflight', '1:Working');
+    expect(followerOrdersFor(h.broker, 205)).toHaveLength(0);
+    for (const accountId of [201, 202, 203, 204]) {
+      expect(followerOrdersFor(h.broker, accountId)).toHaveLength(1);
+    }
+    expect((await h.store.load()).safety?.accountEligibility)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ accountId: 205, state: 'dll-locked' })]));
+    h.controller.stop();
+  });
+
+  it('LIVE DLL exclusion nesmí zeslabit fail-closed unverifiable stav', async () => {
+    const initial = emptySnapshot();
+    initial.safety = {
+      entryCooldownUntil: 0,
+      dayLockUntil: 0,
+      accountEligibility: [{
+        accountId: 205,
+        state: 'unverifiable',
+        reason: 'broker snapshot nelze ověřit',
+        at: 900,
+      }],
+    };
+    const h = await harness(initial, true);
+    h.controller.disarm();
+    expect(h.controller.status().accountEligibility).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 205, state: 'unverifiable' }),
+    ]));
+
+    await h.controller.applyAccountEligibilityExclusions([{
+      accountId: 205,
+      state: 'dll-locked',
+      reason: 'LIVE denní P&L dosáhlo DLL',
+    }]);
+    expect(h.controller.status().accountEligibility).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 205, state: 'unverifiable' }),
+    ]));
+    h.controller.stop();
+  });
+
   it('async DLL reject: 4 aktivní / 1 dll-locked, audit rejected (ne canceled), skupina jede dál', async () => {
     const h = await harness();
     await emitLeaderEntry(h, 'leader-entry-1', '1:Working');

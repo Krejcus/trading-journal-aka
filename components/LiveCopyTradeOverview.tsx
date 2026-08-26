@@ -242,8 +242,8 @@ interface Props {
   copierStatusPending?: boolean;
   copierKillSwitch?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
-  /** Bezpečně přepne jedinou execution skupinu; runtime po přepnutí zůstává DISARMED. */
-  onActivateGroup?: (group: CopyGroupConfig) => Promise<void> | void;
+  /** Atomicky vybere čistou skupinu, provede reconciliation a ARM LIVE. */
+  onSwitchAndArm?: (group: CopyGroupConfig) => Promise<void> | void;
   onArmLive?: () => Promise<void> | void;
   onDisarm?: () => Promise<void> | void;
   onEmergencyStop?: () => Promise<void> | void;
@@ -267,6 +267,8 @@ interface PendingAction {
   command?: LiveCopyTradingCommand;
   run?: () => Promise<void>;
   successText?: string;
+  /** Informační fail-closed dialog; potvrzení pouze zavře dialog. */
+  blocked?: boolean;
 }
 
 function loadDraftGroups(snapshot: LiveSnapshot): CopyGroupConfig[] {
@@ -292,7 +294,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   copierStatusPending = false,
   copierKillSwitch = false,
   apiTelemetry,
-  onActivateGroup,
+  onSwitchAndArm,
   onArmLive,
   onDisarm,
   onEmergencyStop,
@@ -334,6 +336,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
   const [busyCommand, setBusyCommand] = useState<string | null>(null);
   const [copierTransition, setCopierTransition] = useState<'connecting' | 'disconnecting' | null>(null);
+  const [transitionGroupId, setTransitionGroupId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string } | null>(null);
 
   // Volba sloupců přežívá reload — je to nastavení pohledu, ne stav relace.
@@ -435,27 +438,42 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const anyLive = snapshot.accounts.some(isLive);
   const sourceGroupsById = useMemo(() => new Map(snapshot.groups.map(group => [group.id, group])), [snapshot.groups]);
 
-  const toggleCopierConnection = async () => {
+  const activityForGroup = (candidate: CopyGroupConfig) => {
+    const accountIds = new Set([
+      candidate.leaderAccountId,
+      ...candidate.followers.map(follower => follower.accountId),
+    ].filter((accountId): accountId is number => accountId != null));
+    const positionAccounts = snapshot.accounts
+      .filter(account => accountIds.has(account.id)
+        && account.positions.some(position => position.netPosition !== 0))
+      .map(account => account.id);
+    const workingOrderAccounts = [...new Set(orders
+      .filter(order => order.accountId != null && accountIds.has(order.accountId) && order.working)
+      .map(order => order.accountId as number))];
+    return { positionAccounts, workingOrderAccounts };
+  };
+
+  const groupActivityDetail = (candidate: CopyGroupConfig): string | null => {
+    const activity = activityForGroup(candidate);
+    const parts = [
+      activity.positionAccounts.length > 0
+        ? `otevřená pozice: ${activity.positionAccounts.join(', ')}`
+        : '',
+      activity.workingOrderAccounts.length > 0
+        ? `pracovní příkaz/SL/TP: ${activity.workingOrderAccounts.join(', ')}`
+        : '',
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(' · ') : null;
+  };
+
+  const runCopierTransition = async (
+    groupId: string,
+    connecting: boolean,
+    action: () => Promise<void> | void,
+  ) => {
     if (copierTransition) return;
-    const connecting = !copierArmed;
-    if (connecting) {
-      const selectedGroup = executionGroupId != null
-        ? groups.find(group => group.id === executionGroupId) ?? (runtimeGroup?.id === executionGroupId ? runtimeGroup : null)
-        : runtimeGroup;
-      if (selectedGroup) {
-        const validation = validateCopyGroup(selectedGroup, snapshot.accounts.map(account => account.id));
-        if (!validation.valid) {
-          setToast({
-            tone: 'error',
-            text: `ARM blokován: ${validation.errors.join(' ')} Oprav skupinu přes menu ⋮ → Edit group.`,
-          });
-          return;
-        }
-      }
-    }
-    const action = connecting ? onArmLive : onDisarm;
-    if (!action) return;
     const startedAt = Date.now();
+    setTransitionGroupId(groupId);
     setCopierTransition(connecting ? 'connecting' : 'disconnecting');
     try {
       await action();
@@ -475,7 +493,68 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       const remainingAnimation = Math.max(0, 650 - (Date.now() - startedAt));
       if (remainingAnimation > 0) await new Promise(resolve => window.setTimeout(resolve, remainingAnimation));
       setCopierTransition(null);
+      setTransitionGroupId(null);
     }
+  };
+
+  const requestGroupPower = (candidate: CopyGroupConfig) => {
+    if (copierTransition || copierStatusPending) return;
+    const powered = copierArmed && candidate.id === executionGroupId;
+    const currentGroup = runtimeGroup
+      ?? groups.find(group => group.id === executionGroupId)
+      ?? null;
+    const candidateActivity = groupActivityDetail(candidate);
+    const currentActivity = currentGroup ? groupActivityDetail(currentGroup) : null;
+
+    if (powered) {
+      if (candidateActivity) {
+        setPendingAction({
+          title: 'Skupinu teď nelze vypnout',
+          detail: `Skupina ${candidate.name} stále obsahuje ${candidateActivity}. Nejprve použij výslovné Flatten All a ověř, že jsou všechny účty flat a bez pracovních příkazů. Copier zůstává ZAPNUTÝ.`,
+          confirmLabel: 'Rozumím',
+          danger: true,
+          blocked: true,
+        });
+        return;
+      }
+      if (!onDisarm) return;
+      setPendingAction({
+        title: 'Vypnout kopírování?',
+        detail: `Skupina ${candidate.name} je flat a bez pracovních příkazů. Po potvrzení se nové příkazy leadera přestanou kopírovat.`,
+        confirmLabel: 'Vypnout',
+        run: () => runCopierTransition(candidate.id, false, onDisarm),
+        successText: `Skupina ${candidate.name} je VYPNUTÁ.`,
+      });
+      return;
+    }
+
+    const validation = validateCopyGroup(candidate, snapshot.accounts.map(account => account.id));
+    if (!validation.valid) {
+      setToast({ tone: 'error', text: `Zapnutí blokováno: ${validation.errors.join(' ')} Oprav skupinu přes menu ⋮ → Edit group.` });
+      return;
+    }
+    const activity = currentActivity || candidateActivity;
+    if (activity) {
+      setPendingAction({
+        title: 'Přepnutí skupiny je zablokované',
+        detail: `${currentActivity ? `Současná execution skupina obsahuje ${currentActivity}. ` : ''}${candidateActivity && candidate.id !== currentGroup?.id ? `Cílová skupina obsahuje ${candidateActivity}. ` : ''}AlphaTrade nic nezavře ani nepřepne automaticky. Použij Flatten All, ověř flat stav a potom zapnutí zopakuj.`,
+        confirmLabel: 'Rozumím',
+        danger: true,
+        blocked: true,
+      });
+      return;
+    }
+    const armAction = onSwitchAndArm ?? (candidate.id === executionGroupId ? onArmLive : undefined);
+    if (!armAction) return;
+    setPendingAction({
+      title: candidate.id === executionGroupId ? 'Zapnout kopírování?' : 'Přepnout a zapnout skupinu?',
+      detail: candidate.id === executionGroupId
+        ? `Skupina ${candidate.name} je flat a bez pracovních příkazů. Runtime znovu ověří všechny účty a teprve potom provede ARM LIVE.`
+        : `AlphaTrade nejprve DISARMuje současnou skupinu, autoritativně ověří starou i novou topologii jako flat a bez pracovních příkazů a potom zapne skupinu ${candidate.name}. Při jakékoli nejistotě zůstane vše VYPNUTÉ.`,
+      confirmLabel: 'Zapnout',
+      run: () => runCopierTransition(candidate.id, true, () => armAction(candidate)),
+      successText: `Skupina ${candidate.name} je ZAPNUTÁ.`,
+    });
   };
 
   const triggerKillSwitch = onEmergencyStop ? async () => {
@@ -674,13 +753,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody>
-                {groups.map(group => {
+                {[...groups].sort((left, right) => {
+                  const leftPowered = copierArmed && left.id === executionGroupId;
+                  const rightPowered = copierArmed && right.id === executionGroupId;
+                  return leftPowered === rightPowered ? 0 : leftPowered ? -1 : 1;
+                }).map(group => {
                   const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id), profilesById);
                   const selected = group.id === executionGroupId;
                   // `groups` se po mountu synchronizují efektem, ale už první
                   // render musí respektovat autoritativní runtime `enabled`.
                   // Jinak po reloadu na okamžik svítí vypnutá skupina jako aktivní.
-                  const active = selected && (runtimeGroup?.enabled ?? group.enabled);
                   // Runtime je jediný autoritativní zdroj ARM stavu. Připojení
                   // účtů, lokální group.enabled ani dostupnost adaptéru nesmí
                   // skutečně armovaný copier v UI zamaskovat jako OFF.
@@ -689,7 +771,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   return (
                     <React.Fragment key={group.id}>
                       <GroupRow
-                        group={group} rows={rows} active={active} armed={armed}
+                        group={group} rows={rows} armed={armed}
                         eligibility={group.followers
                           .filter(follower => follower.mode !== 'off')
                           .map(follower => eligibilityByAccount.get(follower.accountId))}
@@ -697,10 +779,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         // Dokud stav neznáme, neznáme ani execution skupinu —
                         // neznámý stav proto platí pro všechny řádky.
                         statusPending={copierStatusPending && (executionGroupId == null || selected)}
-                        runtimeReady={!!commandAdapter && selected}
-                        transition={selected ? copierTransition : null}
+                        runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
+                        transition={transitionGroupId === group.id ? copierTransition : null}
                         connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || cooldownUntil > Date.now()}
-                        onConnectionToggle={() => void toggleCopierConnection()}
+                        onConnectionToggle={() => requestGroupPower(group)}
                         open={expanded.has(group.id)}
                         onToggle={() => toggleGroup(group.id)}
                         onEdit={() => setEditorGroup(structuredClone(group))}
@@ -714,32 +796,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           };
                           void saveGroup(updated);
                         }}
-                        onToggleEnabled={() => active
-                          ? setPendingAction({
-                              title: 'Deaktivovat execution skupinu?',
-                              detail: `Skupina ${group.name} zůstane uložená, ale nové leader příkazy se nebudou kopírovat. Runtime zůstane DISARMED.`,
-                              confirmLabel: 'Deaktivovat',
-                              danger: true,
-                              command: { type: 'set-group-enabled', groupId: group.id, enabled: false },
-                            })
-                          : setPendingAction({
-                              title: 'Aktivovat execution skupinu?',
-                              detail: `Skupina ${group.name} nahradí současnou execution skupinu. Runtime nejprve DISARMuje a ověří starou i novou topologii jako flat a bez pracovních příkazů. Po úspěchu zůstane DISARMED; ostrý ARM je samostatný krok.`,
-                              confirmLabel: 'Aktivovat',
-                              run: async () => {
-                                if (!onActivateGroup) throw new Error('Execution runtime nepodporuje bezpečné přepnutí skupiny.');
-                                const validation = validateCopyGroup(group, snapshot.accounts.map(account => account.id));
-                                if (!validation.valid) {
-                                  throw new Error(`Skupinu nelze aktivovat: ${validation.errors.join(' ')} Oprav ji přes Edit group.`);
-                                }
-                                await onActivateGroup({ ...group, enabled: true, localOnly: true });
-                                setGroups(current => current.map(candidate => ({
-                                  ...candidate,
-                                  enabled: candidate.id === group.id,
-                                })));
-                              },
-                              successText: `Skupina ${group.name} je jediná aktivní execution skupina. Runtime zůstává DISARMED.`,
-                            })}
+                        onToggleEnabled={() => requestGroupPower(group)}
                         onFlatten={() => setPendingAction({
                           title: 'Flatten All?', detail: `Připraví uzavření všech otevřených pozic ve skupině ${group.name}.`,
                           confirmLabel: 'Flatten All', danger: true, command: {
@@ -819,6 +876,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           onClose={() => setPendingAction(null)}
           onConfirm={() => {
             const action = pendingAction;
+            if (action.blocked) {
+              setPendingAction(null);
+              return;
+            }
             if (action.run) {
               if (busyCommand) return;
               setBusyCommand('confirmed-runtime-action');
@@ -1074,7 +1135,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
 }) => {
   const busy = transition != null;
   const disabled = statusPending || !runtimeReady || busy || (!connected && connectBlocked);
-  const busyLabel = transition === 'connecting' ? 'ON…' : 'OFF…';
+  const busyLabel = transition === 'connecting' ? 'ZAPÍNÁM…' : 'VYPÍNÁM…';
   const title = statusPending
     ? 'Zjišťuji stav copieru…'
     : !runtimeReady
@@ -1090,7 +1151,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
       <span
         role="status"
         title={title}
-        className="flex h-7 w-[82px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.12em] text-[var(--text-secondary)]"
+        className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-secondary)]"
       >
         <RefreshCw size={12} className="animate-spin" />
         ?
@@ -1103,14 +1164,14 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
       type="button"
       role="switch"
       aria-checked={connected}
-      aria-label={connected ? 'Disconnect copier' : 'Connect copier'}
+      aria-label={connected ? 'Vypnout kopírovací skupinu' : 'Zapnout kopírovací skupinu'}
       title={title}
       disabled={disabled}
       onClick={event => {
         event.stopPropagation();
         onToggle();
       }}
-      className="group flex h-11 w-[82px] items-center justify-center text-[9px] font-black uppercase tracking-[0.12em] disabled:cursor-not-allowed disabled:opacity-45"
+      className="group flex h-11 w-[108px] items-center justify-center text-[9px] font-black uppercase tracking-[0.08em] disabled:cursor-not-allowed disabled:opacity-45"
     >
       <span className={`relative flex h-7 w-full items-center justify-center overflow-hidden rounded-md border px-2 transition-all duration-300 ${connected
         ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 group-hover:border-rose-500/40 group-hover:bg-rose-500/10 group-hover:text-rose-500'
@@ -1128,10 +1189,10 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
             <Power size={12} className="absolute left-2.5 transition-transform duration-300 group-hover:rotate-90" />
             <span className="absolute left-7 right-4 overflow-hidden text-center">
               <span className="block transition-all duration-300 ease-in-out group-hover:-translate-y-full group-hover:opacity-0">
-                {connected ? 'ON' : 'OFF'}
+                {connected ? 'ZAPNUTÁ' : 'VYPNUTÁ'}
               </span>
               <span className="absolute inset-0 translate-y-full opacity-0 transition-all duration-300 ease-in-out group-hover:translate-y-0 group-hover:opacity-100">
-                {connected ? 'OFF' : 'ON'}
+                {connected ? 'VYPNOUT' : 'ZAPNOUT'}
               </span>
             </span>
           </>
@@ -1141,8 +1202,8 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, active, armed, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns }: {
-  group: CopyGroupConfig; rows: Row[]; active: boolean; armed: boolean; open: boolean; onToggle: () => void;
+const GroupRow = ({ group, rows, armed, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns }: {
+  group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
   eligibility: (CopierAccountEligibility | undefined)[];
   observingOnly: boolean;
   statusPending: boolean;
@@ -1197,16 +1258,7 @@ const GroupRow = ({ group, rows, active, armed, eligibility, observingOnly, stat
         </span>
       </td>
       {!hiddenGroupColumns.has('status') && <td className="px-3 py-0">
-        {!active ? (
-          <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 py-1 text-[9px] font-black uppercase tracking-wide text-[var(--text-secondary)]">
-            Uložená
-          </span>
-        ) : observingOnly ? (
-          <span className="inline-flex max-w-[170px] items-center gap-1.5 rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[9px] font-bold leading-tight text-amber-600">
-            <ShieldAlert size={12} className="shrink-0" />
-            Kopírka jen sleduje, neodesílá příkazy
-          </span>
-        ) : (
+        <div className="flex items-center gap-1.5">
           <CopierConnectionSwitch
             connected={armed}
             statusPending={statusPending}
@@ -1215,7 +1267,12 @@ const GroupRow = ({ group, rows, active, armed, eligibility, observingOnly, stat
             connectBlocked={connectBlocked}
             onToggle={onConnectionToggle}
           />
-        )}
+          {observingOnly ? (
+            <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 text-[8px] font-black uppercase text-amber-600">
+              <ShieldAlert size={10} /> Shadow
+            </span>
+          ) : null}
+        </div>
       </td>}
       {!hiddenGroupColumns.has('leader') && <td className="px-3 py-1.5">
         <span className="flex items-center gap-1.5 text-xs text-[var(--text-primary)]">
@@ -1234,7 +1291,7 @@ const GroupRow = ({ group, rows, active, armed, eligibility, observingOnly, stat
             className="group flex h-11 items-center whitespace-nowrap text-[10px] font-bold text-rose-500">
             <span className="flex h-7 items-center rounded-md border border-rose-500/25 bg-rose-500/[0.06] px-2.5 transition-colors group-hover:border-rose-500/40 group-hover:bg-rose-500/12">Flatten All</span>
           </button>
-          <GroupActionMenu active={active} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} onApplyTemplate={onApplyTemplate} />
+          <GroupActionMenu active={armed} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} onApplyTemplate={onApplyTemplate} />
         </div>
       </td>
     </tr>
@@ -1264,7 +1321,7 @@ const GroupActionMenu = ({ active, onToggleEnabled, onEdit, templates, onApplyTe
       <button aria-label="Close group actions" className="fixed inset-0 z-[139] cursor-default" onClick={() => setOpen(false)} />
       <div className="fixed z-[140] w-52 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] py-1 shadow-xl" style={position}>
         <button onClick={() => { setOpen(false); onEdit(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]"><Settings2 size={13} />Edit group</button>
-        <button onClick={() => { setOpen(false); onToggleEnabled(); }} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold hover:bg-[var(--bg-page)] ${active ? 'text-amber-600' : 'text-emerald-600'}`}><Power size={13} />{active ? 'Deaktivovat execution skupinu' : 'Aktivovat pro execution'}</button>
+        <button onClick={() => { setOpen(false); onToggleEnabled(); }} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold hover:bg-[var(--bg-page)] ${active ? 'text-amber-600' : 'text-emerald-600'}`}><Power size={13} />{active ? 'Vypnout skupinu' : 'Zapnout skupinu'}</button>
         {templates.length ? <>
           <div className="my-1 border-t border-[var(--border-subtle)]" />
           <div className="px-3 pb-1 pt-1 text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Apply template</div>
@@ -2153,14 +2210,21 @@ const ConfirmActionDialog = ({ action, busy, apiReady, onClose, onConfirm }: { a
     <section role="alertdialog" aria-modal="true" className="w-full max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl p-5">
       <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${action.danger ? 'bg-rose-500/10 text-rose-500' : 'bg-indigo-500/10 text-indigo-500'}`}>{action.danger ? <AlertTriangle size={21} /> : <Power size={21} />}</div>
       <h3 className="text-lg font-black text-[var(--text-primary)] mt-4">{action.title}</h3><p className="text-sm text-[var(--text-secondary)] mt-1.5 leading-relaxed">{action.detail}</p>
-      {!action.run && (
+      {action.blocked ? (
+        <div className="mt-4 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2.5 text-[11px] font-bold text-rose-600">
+          Žádný brokerový příkaz ani změna runtime nebyly odeslány.
+        </div>
+      ) : !action.run ? (
         <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
           {apiReady
             ? 'Execution adaptér je připojen. Potvrzená akce bude předána lokálnímu DEMO runtime.'
             : 'Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.'}
         </div>
-      )}
-      <div className="flex justify-end gap-2 mt-5"><button onClick={onClose} disabled={busy} className="h-10 px-4 rounded-xl border border-[var(--border-subtle)] text-xs font-bold text-[var(--text-secondary)]">Zrušit</button><button onClick={onConfirm} disabled={busy} className={`h-10 px-4 rounded-xl text-white text-xs font-bold disabled:opacity-50 ${action.danger ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{busy ? 'Připravuji…' : action.confirmLabel}</button></div>
+      ) : null}
+      <div className="flex justify-end gap-2 mt-5">
+        {!action.blocked ? <button onClick={onClose} disabled={busy} className="h-10 px-4 rounded-xl border border-[var(--border-subtle)] text-xs font-bold text-[var(--text-secondary)]">Zrušit</button> : null}
+        <button onClick={onConfirm} disabled={busy} className={`h-10 px-4 rounded-xl text-white text-xs font-bold disabled:opacity-50 ${action.danger ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{busy ? 'Připravuji…' : action.confirmLabel}</button>
+      </div>
     </section>
   </div>, document.body,
 );

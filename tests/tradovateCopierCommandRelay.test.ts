@@ -173,15 +173,78 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
       db: enqueueDb(upsert),
       userId,
       connectionId,
-      command: { type: 'arm-live', group: skupina } as unknown as LocalCopierAgentCommand,
+      command: {
+        type: 'arm-live',
+        group: skupina,
+        accountEligibilityExclusions: [{
+          accountId: 62364057,
+          state: 'dll-locked',
+          reason: 'LIVE denní P&L dosáhlo DLL',
+        }],
+      } as LocalCopierAgentCommand,
       idempotencyKey: 'arm-1',
       now: Date.parse('2026-08-21T12:00:00.000Z'),
     });
 
     expect(upsert).toHaveBeenCalledOnce();
-    const payload = upsert.mock.calls[0][0].payload as { group?: { safety?: Record<string, unknown> } };
+    const payload = upsert.mock.calls[0][0].payload as {
+      group?: { safety?: Record<string, unknown> };
+      accountEligibilityExclusions?: unknown[];
+    };
     expect(upsert.mock.calls[0][0].command_type).toBe('arm-live');
     expect(payload.group?.safety).toMatchObject({ dailyLossLimitUsd: 500, entryCooldownMinutes: 15, armExpiryFlatten: 'followers' });
+    expect(payload.accountEligibilityExclusions).toEqual([{
+      accountId: 62364057,
+      state: 'dll-locked',
+      reason: 'LIVE denní P&L dosáhlo DLL',
+    }]);
+  });
+
+  it('odmítne pokus přes relay eligibility aktivovat nebo odemknout', async () => {
+    const upsert = vi.fn();
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      command: {
+        type: 'arm-live',
+        group: skupina,
+        accountEligibilityExclusions: [{ accountId: 62364057, state: 'active', reason: 'odemknout' }],
+      } as unknown as LocalCopierAgentCommand,
+    })).rejects.toThrow('invalid-relay-command-payload');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('claim vrátí ARM safety exclusions beze ztráty', async () => {
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'arm-command-id',
+        command_type: 'arm-live',
+        payload: {
+          group: skupina,
+          accountEligibilityExclusions: [{
+            accountId: 62364057,
+            state: 'dll-locked',
+            reason: 'LIVE denní P&L dosáhlo DLL',
+          }],
+        },
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed',
+        result: null,
+        error: null,
+      }),
+      deviceId,
+    });
+
+    expect(claimed?.command).toMatchObject({
+      type: 'arm-live',
+      group: skupina,
+      accountEligibilityExclusions: [{
+        accountId: 62364057,
+        state: 'dll-locked',
+        reason: 'LIVE denní P&L dosáhlo DLL',
+      }],
+    });
   });
 
   it('odmítne ARM úplně bez skupiny — nikdy ho tiše nepřevede na {}', async () => {

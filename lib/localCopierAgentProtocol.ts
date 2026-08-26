@@ -34,6 +34,16 @@ export interface LocalCopierAgentStatus {
   devices?: LocalCopierAgentDevice[];
 }
 
+/**
+ * Bezpečnostní zpřísnění odvozené z čerstvého LIVE broker snapshotu.
+ * Klient smí účet pouze vyřadit; nikdy touto cestou nesmí obnovit `active`.
+ */
+export interface LocalCopierAccountExclusion {
+  accountId: number;
+  state: 'dll-locked' | 'breached';
+  reason: string;
+}
+
 export type LocalCopierAgentCommand =
   | { type: 'copy-command'; command: LiveCopyTradingCommand }
   /**
@@ -41,10 +51,14 @@ export type LocalCopierAgentCommand =
    * jeden relay round-trip místo dvou (update-group + arm-live dělaly
    * z ARMu 5–6 s). Bez `group` se armuje aktuální runtime konfigurace.
    */
-  | { type: 'arm-live'; group?: CopyGroupConfig }
+  | {
+      type: 'arm-live';
+      group?: CopyGroupConfig;
+      accountEligibilityExclusions?: LocalCopierAccountExclusion[];
+    }
   /** Bezpečně vybere jedinou execution skupinu; vždy zůstane DISARMED. */
   | { type: 'activate-group'; group: CopyGroupConfig }
-  | { type: 'shadow' }
+  | { type: 'shadow'; accountEligibilityExclusions?: LocalCopierAccountExclusion[] }
   | { type: 'disarm' }
   | { type: 'kill-switch' }
   | { type: 'reconcile' }

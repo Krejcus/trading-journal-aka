@@ -97,6 +97,33 @@ const sameAccountTopology = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   return leftIds.length === rightIds.length && leftIds.every((value, index) => value === rightIds[index]);
 };
 
+const validatedAccountEligibilityExclusions = (value: unknown) => {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new Error('Neplatný seznam eligibility exclusions');
+  }
+  const unique = new Map<number, { accountId: number; state: 'dll-locked' | 'breached'; reason: string }>();
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object') throw new Error('Neplatná eligibility exclusion');
+    const entry = candidate as { accountId?: unknown; state?: unknown; reason?: unknown };
+    if (typeof entry.accountId !== 'number' || !Number.isSafeInteger(entry.accountId) || entry.accountId <= 0) {
+      throw new Error('Eligibility exclusion obsahuje neplatné accountId');
+    }
+    if (entry.state !== 'dll-locked' && entry.state !== 'breached') {
+      throw new Error('Eligibility exclusion obsahuje nepovolený stav');
+    }
+    if (typeof entry.reason !== 'string' || entry.reason.trim().length < 3 || entry.reason.trim().length > 500) {
+      throw new Error('Eligibility exclusion vyžaduje konkrétní důvod');
+    }
+    unique.set(entry.accountId, {
+      accountId: entry.accountId,
+      state: entry.state,
+      reason: entry.reason.trim(),
+    });
+  }
+  return [...unique.values()];
+};
+
 export async function startLocalCopierExecutionAgent(
   options: LocalCopierExecutionAgentOptions,
 ): Promise<LocalCopierExecutionAgent> {
@@ -245,13 +272,27 @@ export async function startLocalCopierExecutionAgent(
         let routingPrepared = false;
         if (command.group) {
           if (command.group.id !== group.id) {
-            throw new Error('ARM míří na jinou skupinu. Nejdřív ji bezpečně aktivuj.');
+            // Jediná atomická cesta pro bezpečné UI přepnutí bez brokerových
+            // side effectů: DISARM, read-only preflight staré i nové
+            // topologie, změna durable epochy a teprve potom reconciliation
+            // + ARM. Jakákoli pozice nebo working příkaz přepnutí zablokuje.
+            const next: CopyGroupConfig = {
+              ...structuredClone(command.group),
+              enabled: true,
+              localOnly: true,
+            };
+            await applyGroup(next, 'activate');
+            routingPrepared = true;
+          } else {
+            const next = mappedGroup(group, command.group);
+            routingPrepared = !sameAccountTopology(group, next);
+            await applyGroup(next);
           }
-          const next = mappedGroup(group, command.group);
-          routingPrepared = !sameAccountTopology(group, next);
-          await applyGroup(next);
         }
         options.controller.disarm();
+        await options.controller.applyAccountEligibilityExclusions(
+          validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
+        );
         if (!routingPrepared) await options.prepareGroupAccounts?.(copyGroupAccountIds(group));
         const reconciliation = await options.controller.reconcile();
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
@@ -265,6 +306,9 @@ export async function startLocalCopierExecutionAgent(
       }
       case 'shadow': {
         options.controller.disarm();
+        await options.controller.applyAccountEligibilityExclusions(
+          validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
+        );
         await options.prepareGroupAccounts?.(copyGroupAccountIds(group));
         const reconciliation = await options.controller.reconcile();
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {

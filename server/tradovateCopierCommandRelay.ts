@@ -138,17 +138,57 @@ const validatedRelayGroup = (value: unknown): CopyGroupConfig => {
   return groups[0];
 };
 
+const validatedEligibilityExclusions = (value: unknown) => {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 100) throw new Error('invalid-relay-command-payload');
+  const unique = new Map<number, { accountId: number; state: 'dll-locked' | 'breached'; reason: string }>();
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object') throw new Error('invalid-relay-command-payload');
+    const entry = candidate as { accountId?: unknown; state?: unknown; reason?: unknown };
+    if (typeof entry.accountId !== 'number' || !Number.isSafeInteger(entry.accountId) || entry.accountId <= 0) {
+      throw new Error('invalid-relay-command-payload');
+    }
+    if (entry.state !== 'dll-locked' && entry.state !== 'breached') {
+      throw new Error('invalid-relay-command-payload');
+    }
+    if (typeof entry.reason !== 'string' || entry.reason.trim().length < 3 || entry.reason.trim().length > 500) {
+      throw new Error('invalid-relay-command-payload');
+    }
+    unique.set(entry.accountId, {
+      accountId: entry.accountId,
+      state: entry.state,
+      reason: entry.reason.trim(),
+    });
+  }
+  return [...unique.values()];
+};
+
 const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknown> => {
   if (!allowed.has(command.type) || command.type === 'device-paired') throw new Error('unsupported-relay-command');
   if (command.type === 'copy-command') {
     return { command: validatedRemoteCopyCommand((command as { command?: unknown }).command) };
   }
-  if (command.type === 'arm-live' || command.type === 'activate-group') {
+  if (command.type === 'arm-live') {
     // ARM bez skupiny se dřív tiše převedl na {} a worker se ozbrojil se
     // svou zastaralou konfigurací — 24. 8. s enabled:false, takže se první
     // obchod nezkopíroval. UI skupinu posílá vždy; její absence je chyba
     // volajícího a musí selhat nahlas, ne potichu změnit význam příkazu.
+    return {
+      group: validatedRelayGroup((command as { group?: unknown }).group),
+      accountEligibilityExclusions: validatedEligibilityExclusions(
+        (command as { accountEligibilityExclusions?: unknown }).accountEligibilityExclusions,
+      ),
+    };
+  }
+  if (command.type === 'activate-group') {
     return { group: validatedRelayGroup((command as { group?: unknown }).group) };
+  }
+  if (command.type === 'shadow') {
+    return {
+      accountEligibilityExclusions: validatedEligibilityExclusions(
+        (command as { accountEligibilityExclusions?: unknown }).accountEligibilityExclusions,
+      ),
+    };
   }
   return {};
 };
@@ -158,8 +198,21 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
   if (row.command_type === 'copy-command') {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
   }
-  if (row.command_type === 'arm-live' || row.command_type === 'activate-group') {
-    return { type: row.command_type, group: validatedRelayGroup(row.payload?.group) } as LocalCopierAgentCommand;
+  if (row.command_type === 'arm-live') {
+    return {
+      type: 'arm-live',
+      group: validatedRelayGroup(row.payload?.group),
+      accountEligibilityExclusions: validatedEligibilityExclusions(row.payload?.accountEligibilityExclusions),
+    };
+  }
+  if (row.command_type === 'activate-group') {
+    return { type: 'activate-group', group: validatedRelayGroup(row.payload?.group) };
+  }
+  if (row.command_type === 'shadow') {
+    return {
+      type: 'shadow',
+      accountEligibilityExclusions: validatedEligibilityExclusions(row.payload?.accountEligibilityExclusions),
+    };
   }
   return { type: row.command_type } as LocalCopierAgentCommand;
 };

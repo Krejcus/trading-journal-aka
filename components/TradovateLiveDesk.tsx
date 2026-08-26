@@ -46,6 +46,7 @@ import {
 } from '../services/tradovateOAuthConnection';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
+import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
 import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
 import TradovateAddConnectionModal from './TradovateAddConnectionModal';
@@ -170,6 +171,27 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
     () => live.data ? tradovateCopyTradeOrders(live.data) : [],
     [live.data],
   );
+  const effectiveAccountEligibility = useMemo(
+    () => copyTradeSnapshot
+      ? effectiveCopyTradeAccountEligibility(
+          copyTradeSnapshot.accounts,
+          live.profiles,
+          agentStatus?.controller.accountEligibility ?? [],
+        )
+      : (agentStatus?.controller.accountEligibility ?? []),
+    [agentStatus?.controller.accountEligibility, copyTradeSnapshot, live.profiles],
+  );
+  const accountEligibilityExclusions = useMemo(
+    () => effectiveAccountEligibility
+      .filter((entry): entry is typeof entry & { state: 'dll-locked' | 'breached' } =>
+        entry.state === 'dll-locked' || entry.state === 'breached')
+      .map(entry => ({
+        accountId: entry.accountId,
+        state: entry.state,
+        reason: entry.reason ?? `LIVE účet je ${entry.state}`,
+      })),
+    [effectiveAccountEligibility],
+  );
 
   // Jeden autoritativní read-only snapshot pro Home/Lock Screen widgety a
   // Live Activity. Neobsahuje OAuth token ani žádnou broker akci.
@@ -190,13 +212,41 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
   useEffect(() => {
     onCopierJournalRefresh?.(agentStatus?.group ?? executionGroup ?? null);
   }, [agentStatus?.group, executionGroup, live.data?.capturedAt, onCopierJournalRefresh]);
-  const executeAgent = async (command: Parameters<typeof agentClient.execute>[0]) => {
+  const executeAgent = useCallback(async (command: Parameters<typeof agentClient.execute>[0]) => {
     if (agentTransport === 'local') return agentClient.execute(command);
     if (!relayConnectionId) throw new Error('Chybí aktivní Tradovate připojení pro Mac worker relay.');
     const result = await executeTradovateCopierRelayCommand(relayConnectionId, command);
     setAgentStatus(result.status);
     return result;
-  };
+  }, [agentClient, agentTransport, relayConnectionId]);
+  const armLiveGroup = useCallback(async (targetGroup: CopyGroupConfig) => {
+    if (!targetGroup.enabled) {
+      targetGroup = { ...targetGroup, enabled: true, localOnly: true };
+    }
+    const leaderEligibility = effectiveAccountEligibility.find(entry =>
+      entry.accountId === targetGroup.leaderAccountId && entry.state !== 'active');
+    if (leaderEligibility) {
+      throw new Error(`ARM blokován: leader není způsobilý (${leaderEligibility.state}: ${leaderEligibility.reason ?? 'bez důvodu'}).`);
+    }
+    const enabledFollowers = targetGroup.followers.filter(follower => follower.mode !== 'off');
+    const enabledFollowerIds = new Set(enabledFollowers.map(follower => follower.accountId));
+    const ineligible = effectiveAccountEligibility.filter(entry =>
+      entry.state !== 'active' && enabledFollowerIds.has(entry.accountId));
+    const participating = enabledFollowers.length - ineligible.length;
+    if (participating <= 0) {
+      throw new Error('ARM blokován: skupina nemá žádný způsobilý follower účet.');
+    }
+    const memberIds = new Set([
+      targetGroup.leaderAccountId,
+      ...targetGroup.followers.map(follower => follower.accountId),
+    ]);
+    const exclusions = accountEligibilityExclusions.filter(entry => memberIds.has(entry.accountId));
+    setAgentStatus((await executeAgent({
+      type: 'arm-live',
+      group: targetGroup,
+      accountEligibilityExclusions: exclusions,
+    })).status);
+  }, [accountEligibilityExclusions, effectiveAccountEligibility, executeAgent]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
     return {
@@ -211,7 +261,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
         return payload.result;
       },
     };
-  }, [agentClient, agentTransport, executionGroup, relayConnectionId]);
+  }, [executeAgent, executionGroup]);
 
   // Přímý loopback agent zkoušíme i z produkčního HTTPS webu: na Macu
   // s běžícím workerem to sráží ARM/Flatten z relay sekund na stovky ms
@@ -423,49 +473,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
               stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
-              accountEligibility={agentStatus?.controller.accountEligibility ?? []}
+              accountEligibility={effectiveAccountEligibility}
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
               onGroupsChange={setCopyGroups}
-              onActivateGroup={async group => {
-                const nextGroup: CopyGroupConfig = {
-                  ...group,
-                  enabled: true,
-                  localOnly: true,
-                };
-                setAgentStatus((await executeAgent({ type: 'activate-group', group: nextGroup })).status);
-              }}
-              onArmLive={executionGroup ? async () => {
-                if (!executionGroup.enabled) throw new Error('ARM blokován: skupina je vypnutá.');
-                const eligibility = agentStatus?.controller.accountEligibility ?? [];
-                const leaderEligibility = eligibility.find(entry =>
-                  entry.accountId === executionGroup.leaderAccountId && entry.state !== 'active');
-                if (leaderEligibility) {
-                  throw new Error(`ARM blokován: leader není způsobilý (${leaderEligibility.state}: ${leaderEligibility.reason ?? 'bez důvodu'}).`);
-                }
-                const enabledFollowers = executionGroup.followers.filter(follower => follower.mode !== 'off');
-                const ineligible = (agentStatus?.controller.accountEligibility ?? [])
-                  .filter(entry => entry.state !== 'active'
-                    && enabledFollowers.some(follower => follower.accountId === entry.accountId));
-                const participating = enabledFollowers.length - ineligible.length;
-                if (participating <= 0) {
-                  throw new Error('ARM blokován: skupina nemá žádný způsobilý follower účet.');
-                }
-                const exclusionNote = ineligible.length > 0
-                  ? ` POZOR: ${ineligible.map(entry =>
-                      `účet ${entry.accountId} se NEBUDE účastnit (${entry.state}: ${entry.reason ?? 'bez důvodu'})`,
-                    ).join('; ')}.`
-                  : '';
-                if (!(await confirmAction({
-                  title: 'ARM LIVE',
-                  message: `ARM LIVE skupinu ${executionGroup.name}?${exclusionNote} Runtime nejdřív provede reconciliation a při jakémkoli rozdílu ARM odmítne. Platnost skončí nejpozději v 17:00 Chicago.`,
-                  confirmLabel: `ARM · ${participating} follower${participating === 1 ? '' : participating < 5 ? 'ři' : 'ů'}`,
-                }))) return;
-                // UI je autoritativní pro aktuální násobky/módy — sync
-                // konfigurace jde atomicky uvnitř arm-live (jeden relay
-                // round-trip; dva sériové dělaly z ARMu 5–6 s).
-                setAgentStatus((await executeAgent({ type: 'arm-live', group: executionGroup })).status);
-              } : undefined}
+              onSwitchAndArm={armLiveGroup}
+              onArmLive={executionGroup ? async () => armLiveGroup(executionGroup) : undefined}
               onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
               onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
               onDayLock={async () => {

@@ -13,7 +13,7 @@ const data = {
     id: 42, name: 'TDFY42', active: true, canTrade: true, netPositionCount: 1, workingOrderCount: 1,
     balance: { totalCashValue: 49_000, netLiq: 48_900, realizedPnL: 120, weekRealizedPnL: 220, openPnL: -100 },
     activity: { fillCount: 2 },
-    risk: { minNetLiq: null, maxNetLiq: null },
+    risk: { minNetLiq: null, maxNetLiq: null, dailyLossAutoLiq: 1_200 },
     positions: [{ id: 1, contractId: 7, symbol: 'MNQZ6', timestamp: null, tradeDate: null, netPosition: 1, bought: 1, boughtValue: null, sold: 0, soldValue: null, previousPosition: 0, averagePrice: 20_000, previousPrice: null }],
     orders: [{ id: 3, contractId: 7, symbol: 'MNQZ6', timestamp: '2026-08-15T08:00:00.000Z', action: 'Buy', orderType: 'Limit', quantity: 1, price: 20_000, stopPrice: null, status: 'Working', admin: false, ocoId: null, parentId: null, linkedId: null }],
     fills: [], fillPairs: [], daily: [{
@@ -32,7 +32,7 @@ const profiles = [{
 describe('Tradovate copy-trade bridge', () => {
   it('feeds the TradeCopia-style UI exclusively from the OAuth account snapshot', () => {
     const snapshot = tradovateCopyTradeSnapshot(data, profiles);
-    expect(snapshot.accounts[0]).toMatchObject({ name: 'Leader 50K', firm: 'Tradeify', balance: 49_000, equity: 48_900, realizedPnl: 95, unrealizedPnl: -100, cushion: 900 });
+    expect(snapshot.accounts[0]).toMatchObject({ name: 'Leader 50K', firm: 'Tradeify', dailyLossLimit: 1_200, balance: 49_000, equity: 48_900, realizedPnl: 95, unrealizedPnl: -100, cushion: 900 });
     expect(snapshot.connections).toEqual([expect.objectContaining({ firm: 'Tradeify', connected: true, accountCount: 1 })]);
     expect(snapshot.groups).toEqual([]);
   });

@@ -45,6 +45,7 @@ export function tradovateCopyTradeSnapshot(
       firm: profileFirm(profile),
       phase: profile?.accountType ?? null,
       accountSize: profile?.accountSize ?? null,
+      dailyLossLimit: profile?.dailyLossLimit ?? account.risk.dailyLossAutoLiq,
       balance: account.balance.totalCashValue ?? 0,
       equity: account.balance.netLiq ?? account.balance.totalCashValue ?? 0,
       // Copy Trade's Daily P&L must not reuse the lifetime/cumulative balance

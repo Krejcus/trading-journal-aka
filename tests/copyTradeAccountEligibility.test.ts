@@ -73,6 +73,15 @@ describe('copy trade account eligibility read-model', () => {
     expect(result[0].reason).toContain('DLL 1200.00 USD');
   });
 
+  it('odvodí DLL i přímo z broker limitu, když profil limit neobsahuje', () => {
+    const result = inferredCopyTradeAccountEligibility([
+      account({ id: 16, dailyLossLimit: 1_200, realizedPnl: -1_206.5 }),
+    ], []);
+
+    expect(result).toMatchObject([{ accountId: 16, state: 'dll-locked' }]);
+    expect(result[0].reason).toContain('DLL 1200.00 USD');
+  });
+
   it('runtime důvod zachová, ale závažnější LIVE breach smí stav zpřísnit', () => {
     const sameState = effectiveCopyTradeAccountEligibility([
       account({ id: 16, realizedPnl: -1_206.5 }),

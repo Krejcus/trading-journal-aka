@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1512 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1528 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -95,6 +95,57 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-26 (Codex, skupiny se přepínají jedním bezpečným ZAPNOUT/VYPNOUT)
+LIVE už nerozlišuje uložený profil a skutečně běžící copier matoucím
+`ULOŽENÁ`/`ON`/`OFF`. Každý řádek nyní ukazuje pouze autoritativní runtime
+stav `ZAPNUTÁ` nebo `VYPNUTÁ`; právě ARMED skupina je vždy první. Kliknutí na
+čistou vypnutou skupinu provede po jednom výslovném potvrzení jediný atomický
+tok: DISARM současné epochy, read-only preflight sjednocení staré a nové
+topologie, aktivaci cílové skupiny, reconciliation a teprve potom ARM LIVE.
+Worker tím přepíná i překrývající se profily bez restartu a bez mezistavu,
+kdy by byly aktivní dvě skupiny.
+
+Přepnutí ani obyčejný DISARM se nesmí stát skrytým riskem. Klient blokuje
+akci, pokud současná nebo cílová skupina ukazuje otevřenou pozici či jakýkoli
+working entry/SL/TP, a nic neodesílá. Nezávislá autoritativní brána ve workeru
+znovu ověří obě topologie proti brokerovi; pozice, working příkaz nebo
+nečitelný lookup nechají runtime DISARMED. Automatické `Flatten + switch +
+ARM` nebylo přidáno: destruktivní brokerová akce zůstává samostatné výslovné
+`Flatten All`, po kterém musí uživatel ověřit flat stav a zapnutí zopakovat.
+
+Regrese ověřují české stavy přepínače, dva vypnuté překrývající se profily,
+ZAPNUTOU skupinu seřazenou nahoře, úspěšné pořadí `DISARM -> activate-group
+preflight -> reconcile -> ARM` i fail-closed selhání preflightu bez ARM.
+Ověření: plná sada 192 souborů a 1530/1530 testů, TypeScript, produkční build a
+`git diff --check` čisté. Lokální preview vizuálně potvrdilo `VYPNUTÁ` a
+čekající entry pill. Změna zatím není commitnutá, pushnutá, nasazená ani
+nainstalovaná do Mac workeru; během práce neproběhl ARM, Flatten ani jiný
+broker side effect.
+
+### 2026-08-26 (Codex, LIVE DLL je nově execution brána, ne jen badge)
+Účet `LFE05066846490016` měl v čerstvém LIVE snapshotu denní P&L
+`-1 206,50 USD`, ale skupina ho stále vykazovala jako aktivní. Příčina byla
+mezi dvěma read-modely: detail účtu znal brokerové `dailyLossAutoLiq`, zatímco
+group eligibility používala pouze ručně uložený profil. Navíc webový ARM
+posílal workeru celou skupinu a odvozený DLL stav používal jen pro vzhled a
+klientskou kontrolu; nebyl durable execution vstupem.
+
+Lokální oprava přenáší broker/profile DLL do společného LIVE snapshotu a před
+ARM i SHADOW posílá explicitní safety exclusions (`dll-locked`/`breached`)
+přes validovaný relay protokol. Mac agent je aplikuje durable ještě před
+reconciliation a runtime je kontroluje ve všech stávajících dispatch cestách.
+Tato cesta umí účet pouze vyřadit nebo zpřísnit; nikdy neaktivuje účet a DLL
+nesmí zeslabit `unverifiable` ani `breached`. Po začátku nové session zůstává
+stávající fail-closed reaktivace přes autoritativní reconciliaci.
+
+Regrese dokazují broker DLL inference bez profilu, badge/souhrn ve skupině,
+neztracený web → relay → worker payload, validaci proti odemknutí a skutečné
+vynechání DLL followera při dalších vstupech. Ověření: cíleně 56/56, plná sada
+192 souborů a 1528/1528 testů, TypeScript, produkční build, ESLint změněných
+souborů a `git diff --check` čisté. Změna zatím není commitnutá, pushnutá,
+nasazená ani nainstalovaná do Mac workeru; během práce neproběhl broker side
+effect ani ARM.
 
 ### 2026-08-26 (Codex, uložené skupiny už nefalšují aktivní účty)
 LIVE UI dříve počítalo eligibility pouze z právě dostupného Mac workeru.

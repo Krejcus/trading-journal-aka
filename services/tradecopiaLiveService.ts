@@ -48,6 +48,8 @@ export interface LiveAccount {
   firm: string;
   phase: string | null;
   accountSize: number | null;
+  /** Broker/profile daily loss limit used by copier eligibility read-model. */
+  dailyLossLimit?: number | null;
   balance: number;
   equity: number;
   realizedPnl: number;

@@ -28,15 +28,17 @@ describe('Connect/Disconnect přepínač copieru', () => {
     const markup = render({ connected: true });
     expect(markup).toContain('role="switch"');
     expect(markup).toContain('aria-checked="true"');
-    expect(markup).toContain('aria-label="Disconnect copier"');
-    expect(markup).toContain('h-11 w-[82px]');
+    expect(markup).toContain('aria-label="Vypnout kopírovací skupinu"');
+    expect(markup).toContain('ZAPNUTÁ');
+    expect(markup).toContain('h-11 w-[108px]');
     expect(markup).toContain('h-7 w-full');
   });
 
   it('odpojený runtime nabízí připojení a hlásí ostrý provoz', () => {
     const markup = render();
     expect(markup).toContain('aria-checked="false"');
-    expect(markup).toContain('aria-label="Connect copier"');
+    expect(markup).toContain('aria-label="Zapnout kopírovací skupinu"');
+    expect(markup).toContain('VYPNUTÁ');
     expect(markup).toContain('naostro');
   });
 

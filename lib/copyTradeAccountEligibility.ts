@@ -45,7 +45,8 @@ export function inferredCopyTradeAccountEligibility(
       continue;
     }
 
-    const dailyLossLimit = profilesByAccount.get(account.id)?.dailyLossLimit;
+    const dailyLossLimit = profilesByAccount.get(account.id)?.dailyLossLimit
+      ?? account.dailyLossLimit;
     const currentDailyPnl = account.realizedPnl + account.unrealizedPnl;
     if (
       dailyLossLimit != null

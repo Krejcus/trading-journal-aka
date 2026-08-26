@@ -106,6 +106,12 @@ export interface CopierControllerStatus {
   } | null;
 }
 
+export interface CopierAccountEligibilityExclusion {
+  accountId: number;
+  state: 'dll-locked' | 'breached';
+  reason: string;
+}
+
 export interface CopierAutoClose {
   at: number;
   operationId: string;
@@ -163,6 +169,11 @@ export interface CopierRuntimeController {
   engageKillSwitch(reason?: string): void;
   /** Trvalý lock do zadaného času; restart workeru ho nesmí obejít. */
   lockUntil(until: number, reason: string): Promise<void>;
+  /**
+   * Zpřísní eligibility podle čerstvého LIVE broker snapshotu. Tato cesta
+   * umí pouze vyřazovat účty; `active` se obnovuje výhradně reconciliací.
+   */
+  applyAccountEligibilityExclusions(exclusions: readonly CopierAccountEligibilityExclusion[]): Promise<void>;
   /** Autoritativně porovná pozice a ověří, že nikde nezůstaly working orders. */
   reconcile(): Promise<{ divergentAccounts: number[]; workingOrderAccounts: number[] }>;
   /**
@@ -2601,6 +2612,68 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         dayLockUntil: until,
         dayLockReason: explanation,
       });
+    },
+    async applyAccountEligibilityExclusions(exclusions) {
+      // Safety metadata může přijet z webu těsně před ARM/SHADOW. Nikdy
+      // nesmí za běžícího dispatchu změnit účast bez fail-safe DISARMu.
+      gate = { ...gate, armed: false };
+      const members = new Set([
+        group.leaderAccountId,
+        ...group.followers.map(follower => follower.accountId),
+      ]);
+      const now = clock();
+      let changed = false;
+      for (const exclusion of exclusions) {
+        if (!Number.isSafeInteger(exclusion.accountId) || exclusion.accountId <= 0) {
+          throw new Error('Eligibility exclusion obsahuje neplatné accountId');
+        }
+        if (!members.has(exclusion.accountId)) {
+          throw new Error(`Eligibility exclusion míří mimo aktivní skupinu: ${exclusion.accountId}`);
+        }
+        if (exclusion.state !== 'dll-locked' && exclusion.state !== 'breached') {
+          throw new Error('Eligibility exclusion smí účet pouze zamknout jako DLL nebo BREACHED');
+        }
+        const reason = exclusion.reason.trim();
+        if (reason.length < 3 || reason.length > 500) {
+          throw new Error('Eligibility exclusion vyžaduje konkrétní důvod');
+        }
+        const current = accountEligibility.get(exclusion.accountId);
+        // Stav z LIVE smí runtime jen zpřísnit. `unverifiable` je
+        // fail-closed a nesmí se změnit na slabší DLL lock; BREACHED je
+        // nejsilnější trvalá západka.
+        const currentSeverity = current?.state === 'breached'
+          ? 3
+          : current?.state === 'unverifiable'
+            ? 2
+            : current?.state === 'dll-locked'
+              ? 1
+              : 0;
+        const nextSeverity = exclusion.state === 'breached' ? 3 : 1;
+        if (nextSeverity < currentSeverity) continue;
+        const existingDllSessionEnd = current?.state === 'dll-locked'
+          && current.lockSessionEndAt != null
+          && current.lockSessionEndAt > now
+          ? current.lockSessionEndAt
+          : null;
+        const next: CopierAccountEligibility = {
+          ...(current ?? {}),
+          accountId: exclusion.accountId,
+          state: exclusion.state,
+          reason,
+          at: now,
+          lockSessionEndAt: exclusion.state === 'dll-locked'
+            ? existingDllSessionEnd ?? now + msUntilTradovateSessionEnd(now)
+            : undefined,
+        };
+        if (
+          current?.state === next.state
+          && current.reason === next.reason
+          && current.lockSessionEndAt === next.lockSessionEndAt
+        ) continue;
+        setEligibility(exclusion.accountId, next);
+        changed = true;
+      }
+      if (changed) await persistEligibility();
     },
     async reconcile() {
       return performReconciliation();
