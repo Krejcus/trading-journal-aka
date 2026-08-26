@@ -11,6 +11,7 @@ import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
 import type { CopierAccountEligibility, CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
+import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
   adoptRuntimeCopyGroup,
@@ -305,9 +306,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onGroupsChange,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
+  const effectiveEligibility = useMemo(
+    () => effectiveCopyTradeAccountEligibility(snapshot.accounts, accountProfiles, accountEligibility),
+    [accountEligibility, accountProfiles, snapshot.accounts],
+  );
   const eligibilityByAccount = useMemo(
-    () => new Map(accountEligibility.map(entry => [entry.accountId, entry])),
-    [accountEligibility],
+    () => new Map(effectiveEligibility.map(entry => [entry.accountId, entry])),
+    [effectiveEligibility],
   );
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(snapshot.groups.map(g => g.id)));
   const didAutoExpandGroups = useRef(false);

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { LiveCopyTradeOverview } from '../components/LiveCopyTradeOverview';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
+import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 
 const liveAccount = (id: number, name: string): LiveAccount => ({
   id,
@@ -179,5 +180,52 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).toContain('1× nedostupný');
     expect(markup).toContain('Nedostupný účet');
     expect(markup).toContain('Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.');
+  });
+
+  it('u uložené skupiny dopočítá DLL a BREACHED i bez dostupného worker statusu', () => {
+    const dllId = 62_364_553;
+    const breachedId = 62_364_058;
+    const riskSnapshot: LiveSnapshot = {
+      ...snapshot,
+      accounts: [
+        snapshot.accounts[0],
+        { ...liveAccount(dllId, 'Lucid DLL'), firm: 'Lucid', realizedPnl: -1_206.5 },
+        { ...liveAccount(breachedId, 'Tradeify breached'), cushion: -33 },
+      ],
+      connections: [
+        ...snapshot.connections,
+        { ...snapshot.connections[0], id: 'tradovate-oauth-2', firm: 'Lucid', accountCount: 1 },
+      ],
+      groups: [{
+        ...snapshot.groups[0],
+        followers: [
+          { ...snapshot.groups[0].followers[0], accountId: dllId, accountName: 'Lucid DLL' },
+          { ...snapshot.groups[0].followers[0], accountId: breachedId, accountName: 'Tradeify breached' },
+        ],
+      }],
+    };
+    const dllProfile: TradovateAccountProfile = {
+      id: 'profile-dll', provider: 'tradovate', environment: 'demo', status: 'active',
+      externalAccountId: String(dllId), accountName: 'Lucid DLL', displayName: null,
+      propFirm: 'Lucid', planName: 'LucidDaily 50K', accountType: 'evaluation',
+      accountSize: 50_000, drawdownType: 'eod_trailing', maxLoss: 2_000,
+      dailyLossLimit: 1_200, consistencyPct: null, profitTarget: 3_000,
+      maxMini: null, maxMicro: null, lastSeenAt: '2026-08-26T12:00:00.000Z',
+      createdAt: '2026-08-26T12:00:00.000Z', updatedAt: '2026-08-26T12:00:00.000Z',
+    };
+
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: riskSnapshot,
+      accountProfiles: [dllProfile],
+      accountEligibility: [],
+    }));
+
+    expect(markup).toContain('0/2 aktivních');
+    expect(markup).toContain('1× DLL');
+    expect(markup).toContain('1× BREACHED');
+    expect(markup).toContain('DLL · do konce session');
+    expect(markup).toContain('LIVE denní P&amp;L -1206.50 USD');
+    expect(markup).toContain('BREACHED');
+    expect(markup).toContain('LIVE equity dosáhla drawdown flooru');
   });
 });

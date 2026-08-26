@@ -96,6 +96,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-26 (Codex, uložené skupiny už nefalšují aktivní účty)
+LIVE UI dříve počítalo eligibility pouze z právě dostupného Mac workeru.
+Když worker/relay nebyl dosažitelný nebo se zobrazovala jiná uložená skupina,
+prázdný stav se chybně změnil na `active` a skupina například ukazovala
+`7/7 aktivních`, přestože jeden účet byl za DLL a druhý pod drawdown floorem.
+Read-model nyní konzervativně slučuje durable runtime klasifikaci s LIVE
+snapshotem: rezerva `<= 0` znamená `BREACHED`, denní P&L pod explicitně
+nastaveným DLL znamená `DLL · do konce session`; inference smí stav pouze
+doplnit nebo zpřísnit. Brokerové side effecty ani ARM logika se nemění.
+Regrese ověřuje souhrn `0/2 aktivních`, oba badge i důvody v řádcích; celkem
+1521 testů, TypeScript, produkční build a `git diff --check` jsou čisté.
+
 ### 2026-08-26 (Codex, flat cleanup už nerozhoduje podle délky historie)
 Read-only forenzika posledního uživatelova DEMO obchodu potvrdila, že kopírování
 i opakované posuny ochrany fungovaly správně: od `14:47:20Z` do `15:10:59Z`
