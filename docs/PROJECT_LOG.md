@@ -109,8 +109,9 @@ ARM jsou v UI fail-closed blokované, dokud validace proti aktuálním účtům
 neprojde; stejnou kontrolu nezávisle zopakuje worker před side effectem.
 
 Nic se nepáruje automaticky a tento krok neposlal žádný broker příkaz. Změna
-je zatím pouze lokální na větvi `codex/ios-native-checkpoint-20260814`; před
-push/deploy/reinstallem workeru čeká na samostatné potvrzení uživatele. Ověření:
+je nasazená v produkci v commitu `d7c206a2`: `origin/main` je shodný, Vercel
+deployment `dpl_5o3Cvg6ZSNZ197hV47ezoxhzJ7io` je READY a Mac worker byl ze
+stejného canonical checkoutu bezpečně reinstalován DISARMED. Ověření:
 kompletní sada 1515/1515, `npx tsc --noEmit`, `git diff --check` a produkční
 build čisté (pouze existující upozornění na velikost bundlu). Canonical Vite
 preview navíc s dočasnou stale fixture vizuálně potvrdil čip `1× nedostupný`,
@@ -144,8 +145,9 @@ Přidání úplně nového OAuth spojení stále vyžaduje jeho bezpečné devic
 samotné přidání účtu nebo změna skupiny v rámci existujících spojení už žádný
 ruční manifest zásah nevyžaduje. Ověření: cílené router/runtime/Tradovate testy
 75/75, kompletní sada 1512/1512, `npx tsc --noEmit` a produkční build čisté.
-Změna je lokálně commitnutá jako `b842640f`, ale není pushnutá, nasazená ani nainstalovaná do Mac workeru;
-worker zůstává na `dfdc4d9e` a DISARMED do samostatného schválení nasazení.
+Změna byla commitnutá jako `b842640f` a spolu s navazující opravou stale členů
+`d7c206a2` je pushnutá na `origin/main`, nasazená na Vercelu a nainstalovaná do
+Mac workeru. Worker po reinstalaci zůstal bezpečně DISARMED.
 
 ### 2026-08-26 (Codex, řízený DEMO důkaz OSO parent cascade)
 Commit `dfdc4d9e5cffe71a2ab3835deff5d980323dc6a5` byl ověřen na produkčním
