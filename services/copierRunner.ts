@@ -9,7 +9,7 @@ import {
   planCancel,
   planModify,
   planReplication,
-  updateFollowerLinkQuantity,
+  updateFollowerLink,
   type CopierState,
   type FollowerOrderLink,
   type LeaderEvent,
@@ -62,6 +62,7 @@ import {
   type OsoOutboxEntry,
 } from './copierOsoOutbox';
 import type { LeaderOsoPair } from './copierOsoCorrelator';
+import { planOsoModifyCascade } from './copierOsoModifyCascade';
 import { brokerTag } from './copierKeys';
 import {
   cancelLifecycleHaltReason,
@@ -351,6 +352,11 @@ export interface CopierRunResult {
   metrics: CopierMetrics;
 }
 
+type StagedLifecycleCommand = (
+  | (ReturnType<typeof planCancel>[number] & { operation: 'cancel' })
+  | (ReturnType<typeof planModify>[number] & { operation: 'modify' })
+) & { stage: number };
+
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
   limit: number,
@@ -367,6 +373,245 @@ async function mapWithConcurrency<T, R>(
     }
   }));
   return results;
+}
+
+async function processStagedLifecycleCommands(options: {
+  commands: readonly StagedLifecycleCommand[];
+  event: LeaderEvent;
+  state: CopierState;
+  outbox: Map<string, OutboxEntry>;
+  cancelOutbox: Map<string, CancelOutboxEntry>;
+  bracketOutbox: Map<string, BracketOutboxEntry>;
+  osoOutbox: Map<string, OsoOutboxEntry>;
+  broker: BrokerPort;
+  clock: () => number;
+  store?: CopierStore;
+  revision: number;
+  maxConcurrentDispatches?: number;
+}): Promise<{
+  state: CopierState;
+  revision: number;
+  allConfirmed: boolean;
+  audit: CopierAuditEntry[];
+}> {
+  const {
+    commands, event, outbox, cancelOutbox, bracketOutbox, osoOutbox,
+    broker, clock, store,
+  } = options;
+  let state = options.state;
+  let revision = options.revision;
+  const audit: CopierAuditEntry[] = [];
+  const stagedEntries = new Map<string, { command: StagedLifecycleCommand; entry: CancelOutboxEntry }>();
+
+  // Všechny tři kroky vzniknou jako durable `planned`, ale side effect smí
+  // dostat pouze aktuální vrstva. Po pádu tak recovery přesně ví, které nohy
+  // ještě nikdy neopustily proces.
+  for (const command of commands) {
+    const existing = cancelOutbox.get(command.key);
+    const entry = existing ?? (command.operation === 'cancel'
+      ? createCancelEntry(
+          command.key, event.id, event.sequence, command.accountId, command.brokerOrderId, clock(),
+        )
+      : createModifyEntry(
+          command.key,
+          event.id,
+          event.sequence,
+          command.accountId,
+          command.brokerOrderId,
+          {
+            quantity: command.quantity,
+            orderType: command.orderType,
+            ...(command.limitPrice != null ? { limitPrice: command.limitPrice } : {}),
+            ...(command.stopPrice != null ? { stopPrice: command.stopPrice } : {}),
+          },
+          clock(),
+        ));
+    cancelOutbox.set(entry.key, entry);
+    stagedEntries.set(entry.key, { command, entry });
+  }
+
+  const dispatchEntry = async (initialEntry: CancelOutboxEntry): Promise<void> => {
+    let entry = initialEntry;
+    try {
+      if (entry.operation === 'cancel') {
+        await broker.cancelOrder(entry.accountId, entry.brokerOrderId);
+      } else if (entry.changes) {
+        const changes = { ...entry.changes };
+        let live: BrokerOrder | undefined;
+        try {
+          const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
+          if (lookup.completeness !== 'authoritative') {
+            cancelOutbox.set(entry.key, markCancelRefused(
+              entry, 'modify neodeslán: stav objednávky není autoritativní', clock(),
+            ));
+            return;
+          }
+          live = lookup.order;
+        } catch (error) {
+          cancelOutbox.set(entry.key, markCancelRefused(
+            entry,
+            `modify neodeslán: autoritativní stav nedostupný (${error instanceof Error ? error.message : String(error)})`,
+            clock(),
+          ));
+          return;
+        }
+        if (!live) {
+          cancelOutbox.set(entry.key, markCancelRefused(
+            entry, 'modify neodeslán: objednávka u brokera nenalezena', clock(),
+          ));
+          return;
+        }
+        const asserted = Math.max(
+          changes.quantity,
+          assertedFollowerQuantity(state, cancelOutbox, entry.brokerOrderId) ?? 0,
+        );
+        if (live.quantity > asserted) {
+          cancelOutbox.set(entry.key, markCancelRefused(
+            entry, `cizí navýšení množství u brokera (${live.quantity} > ${asserted})`, clock(),
+          ));
+          return;
+        }
+        if (live.filledQuantity >= changes.quantity) {
+          if (live.quantity > live.filledQuantity) {
+            await broker.cancelOrder(entry.accountId, entry.brokerOrderId);
+            cancelOutbox.set(entry.key, markCancelUnknown(
+              entry,
+              `modify nahrazen cancelem zbytku: vyplněno ${live.filledQuantity}/${changes.quantity}, u brokera ${live.quantity}`,
+              clock(),
+            ));
+            return;
+          }
+          cancelOutbox.set(entry.key, markCancelRefused(
+            entry, `modify bezpředmětný: vyplněno ${live.filledQuantity}/${changes.quantity}, nic neběží`, clock(),
+          ));
+          return;
+        }
+        await broker.modifyOrder(entry.accountId, entry.brokerOrderId, changes);
+      }
+      entry = markCancelUnknown(entry, 'čeká na potvrzení order streamem', clock());
+      cancelOutbox.set(entry.key, entry);
+    } catch (error) {
+      cancelOutbox.set(entry.key, markCancelUnknown(
+        entry,
+        error instanceof Error ? error.message : String(error),
+        clock(),
+      ));
+    }
+  };
+
+  let allConfirmed = true;
+  const stageSuccess = new Map<string, boolean>();
+  const stages = [...new Set(commands.map(command => command.stage))].sort((a, b) => a - b);
+  for (const stage of stages) {
+    const stageItems = commands
+      .filter(command => command.stage === stage)
+      .map(command => stagedEntries.get(command.key)!)
+      .filter(Boolean);
+    const eligible = stageItems.filter(({ command }) => (
+      stage === 0 || stageSuccess.get(`${command.accountId}:${stage - 1}`) === true
+    ));
+    for (const { command } of stageItems) {
+      if (!eligible.some(item => item.command.key === command.key)) {
+        allConfirmed = false;
+        stageSuccess.set(`${command.accountId}:${stage}`, false);
+      }
+    }
+
+    const sendableKeys = new Set<string>();
+    for (const item of eligible) {
+      const current = cancelOutbox.get(item.entry.key) ?? item.entry;
+      item.entry = current;
+      if (current.status !== 'planned') continue;
+      const sending = markCancelSending(current, clock());
+      cancelOutbox.set(sending.key, sending);
+      item.entry = sending;
+      sendableKeys.add(sending.key);
+    }
+    if (sendableKeys.size > 0) {
+      revision = await persistRuntime(
+        store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision,
+      );
+    }
+
+    await mapWithConcurrency(
+      eligible.filter(item => sendableKeys.has(item.entry.key)),
+      options.maxConcurrentDispatches ?? 4,
+      async item => dispatchEntry(item.entry),
+    );
+
+    const currentStageSuccess = new Map<number, boolean>();
+    for (const { command, entry: originalEntry } of eligible) {
+      const entry = cancelOutbox.get(originalEntry.key) ?? originalEntry;
+      let resolved = entry;
+      if (entry.status !== 'confirmed') {
+        try {
+          const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
+          resolved = lookup.completeness === 'authoritative'
+            ? resolveCancelLookup(entry, lookup.order, lookup.completeness, clock())
+            : markCancelUnknown(entry, 'potvrzení není autoritativní', clock());
+        } catch (error) {
+          resolved = markCancelUnknown(
+            entry,
+            `ověření u brokera selhalo: ${error instanceof Error ? error.message : String(error)}`,
+            clock(),
+          );
+        }
+      }
+      // Obecná lifecycle cesta smí považovat modify nad mezitím zrušenou
+      // objednávkou za potvrzený no-op: následný leader cancel ji dočistí.
+      // Ve vícefázové OSO opravě je ale `working` skutečný precondition
+      // další vrstvy. Zrušený parent nesmí pustit reassert SL a zrušený SL
+      // nesmí pustit target. Převod na durable `abandoned` drží runtime
+      // fail-closed i po restartu, dokud stav nevyřeší reconciliation.
+      if (
+        resolved.status === 'confirmed'
+        && resolved.operation === 'modify'
+        && resolved.outcome !== 'working'
+      ) {
+        resolved = {
+          ...resolved,
+          status: 'abandoned',
+          reason: `staged modify nebyl potvrzen jako working (${resolved.outcome ?? 'unknown'})`,
+          updatedAt: clock(),
+        };
+      }
+      cancelOutbox.set(entry.key, resolved);
+      const confirmed = resolved.status === 'confirmed';
+      currentStageSuccess.set(
+        command.accountId,
+        (currentStageSuccess.get(command.accountId) ?? true) && confirmed,
+      );
+      if (confirmed) {
+        waiveSupersededModifications(cancelOutbox, resolved, clock);
+        if (entry.operation === 'modify' && resolved.outcome === 'working' && entry.changes) {
+          state = updateFollowerLink(state, entry.brokerOrderId, entry.changes);
+        }
+        audit.push({
+          at: clock(), leaderEventId: event.id,
+          kind: entry.operation === 'cancel'
+            ? (resolved.outcome === 'rejected' ? 'rejected' : 'canceled')
+            : 'modified',
+          accountId: entry.accountId,
+          key: entry.key, brokerOrderId: entry.brokerOrderId,
+          ...(resolved.outcome === 'rejected' && resolved.reason ? { reason: resolved.reason } : {}),
+        });
+      } else {
+        allConfirmed = false;
+        audit.push({
+          at: clock(), leaderEventId: event.id, kind: 'cancel-failed', accountId: entry.accountId,
+          key: entry.key, brokerOrderId: entry.brokerOrderId, reason: resolved.reason,
+        });
+      }
+    }
+    for (const [accountId, confirmed] of currentStageSuccess) {
+      stageSuccess.set(`${accountId}:${stage}`, confirmed);
+    }
+    revision = await persistRuntime(
+      store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision,
+    );
+  }
+
+  return { state, revision, allConfirmed, audit };
 }
 
 export interface ProcessBracketPairOptions {
@@ -792,9 +1037,9 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       audit.push({ at: clock(), leaderEventId: event.id, kind: 'shadow', accountId: follower.accountId, key, reason: 'native-oso' });
       if (context.shadowMode) {
         const links: Array<[string, FollowerOrderLink]> = [
-          [pair.entryOrderId, { key: `${key}:entry`, accountId: follower.accountId, brokerOrderId: `shadow:${key}:entry`, quantity, limitPrice: pair.entryLimitPrice, stopPrice: pair.entryStopPrice }],
-          [pair.stopOrderId, { key: `${key}:stop`, accountId: follower.accountId, brokerOrderId: `shadow:${key}:stop`, quantity, stopPrice: pair.stopPrice }],
-          [pair.targetOrderId, { key: `${key}:target`, accountId: follower.accountId, brokerOrderId: `shadow:${key}:target`, quantity, limitPrice: pair.targetPrice }],
+          [pair.entryOrderId, { key: `${key}:entry`, accountId: follower.accountId, brokerOrderId: `shadow:${key}:entry`, quantity, limitPrice: pair.entryLimitPrice, stopPrice: pair.entryStopPrice, nativeOsoRole: 'entry' }],
+          [pair.stopOrderId, { key: `${key}:stop`, accountId: follower.accountId, brokerOrderId: `shadow:${key}:stop`, quantity, stopPrice: pair.stopPrice, nativeOsoRole: 'stop' }],
+          [pair.targetOrderId, { key: `${key}:target`, accountId: follower.accountId, brokerOrderId: `shadow:${key}:target`, quantity, limitPrice: pair.targetPrice, nativeOsoRole: 'target' }],
         ];
         for (const [leaderOrderId, link] of links) {
           const linked = linkFollowerOrder({ ...state, links: shadowLinks }, leaderOrderId, link);
@@ -851,14 +1096,15 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       state = linkFollowerOrder(state, entry.leaderEntryOrderId, {
         key: `${entry.key}:entry`, accountId: entry.request.accountId, brokerOrderId: entry.entryBrokerOrderId,
         quantity: entry.request.quantity, limitPrice: entry.request.limitPrice, stopPrice: entry.request.stopPrice,
+        nativeOsoRole: 'entry',
       });
       state = linkFollowerOrder(state, entry.leaderStopOrderId, {
         key: `${entry.key}:stop`, accountId: entry.request.accountId, brokerOrderId: entry.firstBrokerOrderId,
-        quantity: entry.request.quantity, stopPrice: entry.request.first.stopPrice,
+        quantity: entry.request.quantity, stopPrice: entry.request.first.stopPrice, nativeOsoRole: 'stop',
       });
       state = linkFollowerOrder(state, entry.leaderTargetOrderId, {
         key: `${entry.key}:target`, accountId: entry.request.accountId, brokerOrderId: entry.secondBrokerOrderId,
-        quantity: entry.request.quantity, limitPrice: entry.request.second.limitPrice,
+        quantity: entry.request.quantity, limitPrice: entry.request.second.limitPrice, nativeOsoRole: 'target',
       });
       audit.push({ at, leaderEventId: event.id, kind: 'dispatched', accountId: entry.request.accountId, key: entry.key,
         brokerOrderId: `${entry.entryBrokerOrderId},${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`, reason: 'native-oso' });
@@ -1002,6 +1248,57 @@ export async function processLeaderEvent(
         plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
       };
     }
+    // Tradovate po změně ceny nativního OSO parentu relativně přecení jeho
+    // child SL/TP. Jen pro tuto přesně prokázanou cestu proto použijeme
+    // třífázový dispatch. Ostatní cancel/modify lifecycle zůstává na původní
+    // cestě níže, aby oprava neměnila širší execution chování.
+    const cascade = await planOsoModifyCascade({ event, group, modifications, osoOutbox, broker });
+    if (cascade.error) {
+      for (const command of modifications) {
+        audit.push({
+          at: clock(), leaderEventId: event.id, kind: 'blocked', accountId: command.accountId,
+          key: command.key, brokerOrderId: command.brokerOrderId, reason: cascade.error,
+        });
+      }
+      return {
+        runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
+        plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
+      };
+    }
+    if (cascade.commands.length > 0) {
+      const stagedCommands: StagedLifecycleCommand[] = [
+        ...cancels.map(command => ({ ...command, operation: 'cancel' as const, stage: 0 })),
+        ...modifications.map(command => ({ ...command, operation: 'modify' as const, stage: 0 })),
+        ...cascade.commands.map(command => ({ ...command, operation: 'modify' as const })),
+      ];
+      const lifecycle = await processStagedLifecycleCommands({
+        commands: stagedCommands,
+        event,
+        state,
+        outbox,
+        cancelOutbox,
+        bracketOutbox,
+        osoOutbox,
+        broker,
+        clock,
+        store,
+        revision,
+        maxConcurrentDispatches: options.maxConcurrentDispatches,
+      });
+      state = lifecycle.state;
+      revision = lifecycle.revision;
+      audit.push(...lifecycle.audit);
+      if (lifecycle.allConfirmed) state = applyResolved(state, [], event.sequence);
+      revision = await persistRuntime(
+        store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision,
+      );
+      return {
+        runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
+        plan: { leaderEventId: event.id, orders: [], skipped: [] },
+        audit,
+        metrics,
+      };
+    }
     const sendableKeys = new Set<string>();
     const sending = commands.map(command => {
       const existing = cancelOutbox.get(command.key);
@@ -1140,9 +1437,10 @@ export async function processLeaderEvent(
       if (resolved.status === 'confirmed') {
         waiveSupersededModifications(cancelOutbox, resolved, clock);
         // Broker potvrdil novou hodnotu — link ji musí převzít, jinak by
-        // detekce cizího zásahu navždy měřila proti množství z prvního place.
+        // detekce cizího zásahu navždy měřila proti množství/ceně z prvního
+        // place. Přímý posun SL/TP proto zapisuje i potvrzenou novou cenu.
         if (entry.operation === 'modify' && resolved.outcome === 'working' && entry.changes) {
-          state = updateFollowerLinkQuantity(state, entry.brokerOrderId, entry.changes.quantity);
+          state = updateFollowerLink(state, entry.brokerOrderId, entry.changes);
         }
         audit.push({
           at: clock(), leaderEventId: event.id,
@@ -1653,16 +1951,17 @@ export async function recoverOutbox(options: RecoverOutboxOptions): Promise<Copi
         key: `${resolved.key}:entry`, accountId: resolved.request.accountId,
         brokerOrderId: resolved.entryBrokerOrderId, quantity: resolved.request.quantity,
         limitPrice: resolved.request.limitPrice, stopPrice: resolved.request.stopPrice,
+        nativeOsoRole: 'entry',
       });
       state = linkFollowerOrder(state, resolved.leaderStopOrderId, {
         key: `${resolved.key}:stop`, accountId: resolved.request.accountId,
         brokerOrderId: resolved.firstBrokerOrderId, quantity: resolved.request.quantity,
-        stopPrice: resolved.request.first.stopPrice,
+        stopPrice: resolved.request.first.stopPrice, nativeOsoRole: 'stop',
       });
       state = linkFollowerOrder(state, resolved.leaderTargetOrderId, {
         key: `${resolved.key}:target`, accountId: resolved.request.accountId,
         brokerOrderId: resolved.secondBrokerOrderId, quantity: resolved.request.quantity,
-        limitPrice: resolved.request.second.limitPrice,
+        limitPrice: resolved.request.second.limitPrice, nativeOsoRole: 'target',
       });
       audit.push({
         at, leaderEventId: resolved.leaderEventId, kind: 'recovered',

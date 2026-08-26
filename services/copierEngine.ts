@@ -75,6 +75,8 @@ export interface ReplicationPlan {
 }
 
 /** Follower objednávka vzniklá z konkrétní leader objednávky. */
+export type NativeOsoRole = 'entry' | 'stop' | 'target';
+
 export interface FollowerOrderLink {
   key: string;
   accountId: number;
@@ -82,6 +84,11 @@ export interface FollowerOrderLink {
   quantity: number;
   limitPrice?: number;
   stopPrice?: number;
+  /**
+   * Explicitní role nohy nativního OSO. Prefix `oso:` nestačí: stejný prefix
+   * mají parent, stop i target a lifecycle modify je musí rozlišit fail-closed.
+   */
+  nativeOsoRole?: NativeOsoRole;
 }
 
 /**
@@ -282,20 +289,45 @@ export function linkFollowerOrder(
  * snížení 5→3 by detekce cizího zásahu dál měřila proti 5 a venue návrat
  * 3→5 by prošel bez povšimnutí — přesný mechanismus incidentu 24. 8.
  */
+export function updateFollowerLink(
+  state: CopierState,
+  brokerOrderId: string,
+  changes: Pick<FollowerOrderLink, 'quantity' | 'limitPrice' | 'stopPrice'>,
+): CopierState {
+  let changed = false;
+  const links = new Map(state.links);
+  for (const [leaderOrderId, list] of links) {
+    if (!list.some(link => (
+      link.brokerOrderId === brokerOrderId
+      && (
+        link.quantity !== changes.quantity
+        || link.limitPrice !== changes.limitPrice
+        || link.stopPrice !== changes.stopPrice
+      )
+    ))) continue;
+    changed = true;
+    links.set(leaderOrderId, list.map(link =>
+      link.brokerOrderId === brokerOrderId ? { ...link, ...changes } : link));
+  }
+  return changed ? { ...state, links } : state;
+}
+
 export function updateFollowerLinkQuantity(
   state: CopierState,
   brokerOrderId: string,
   quantity: number,
 ): CopierState {
-  let changed = false;
-  const links = new Map(state.links);
-  for (const [leaderOrderId, list] of links) {
-    if (!list.some(link => link.brokerOrderId === brokerOrderId && link.quantity !== quantity)) continue;
-    changed = true;
-    links.set(leaderOrderId, list.map(link =>
-      link.brokerOrderId === brokerOrderId ? { ...link, quantity } : link));
+  for (const links of state.links.values()) {
+    const link = links.find(item => item.brokerOrderId === brokerOrderId);
+    if (link) {
+      return updateFollowerLink(state, brokerOrderId, {
+        quantity,
+        ...(link.limitPrice != null ? { limitPrice: link.limitPrice } : {}),
+        ...(link.stopPrice != null ? { stopPrice: link.stopPrice } : {}),
+      });
+    }
   }
-  return changed ? { ...state, links } : state;
+  return state;
 }
 
 export interface CancelCommand {
@@ -309,6 +341,7 @@ export interface ModifyCommand extends CancelCommand {
   orderType: OrderType;
   limitPrice?: number;
   stopPrice?: number;
+  nativeOsoRole?: NativeOsoRole;
 }
 
 export function planModify(
@@ -331,6 +364,7 @@ export function planModify(
       orderType: event.orderType,
       ...(event.limitPrice != null ? { limitPrice: event.limitPrice } : {}),
       ...(event.stopPrice != null ? { stopPrice: event.stopPrice } : {}),
+      ...(link.nativeOsoRole ? { nativeOsoRole: link.nativeOsoRole } : {}),
     }];
   });
 }

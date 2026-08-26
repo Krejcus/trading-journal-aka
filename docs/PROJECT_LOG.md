@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1489 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1503 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -69,6 +69,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       kauzální oprava a deterministické regrese jsou hotové (zápis níže), ale
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
       ze stejného commitu a řízený DEMO test.
+- [ ] Incident 26. 8. „změna nativního OSO parentu relativně posunula follower
+      SL/TP“ — úzká lokální oprava a deterministické regrese jsou hotové
+      (zápis níže), ale čekají na explicitní commit/push, deploy, reinstall
+      workeru ze stejného commitu a řízený DEMO test.
 - [ ] Durable account eligibility + více uložených překrývajících se profilů
       s nejvýše jednou execution-aktivní skupinou jsou lokálně hotové a
       otestované (zápis níže), ale čekají na explicitně schválený commit/push,
@@ -88,6 +92,60 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-26 (Codex, absolutní SL/TP po změně nativního OSO parentu)
+Read-only broker forenzika potvrdila, že Tradovate po změně ceny nativního OSO
+parentu automaticky relativně posunul child ochrany followerů: parent ceny se
+shodovaly s leaderem, ale všech pět follower SL i TP skončilo o bod výš.
+Původní lifecycle měnil pouze parent, takže UI sice hlásilo potvrzený modify,
+ale ochranné ceny už nebyly absolutní kopií leadera.
+
+Oprava je záměrně omezena jen na potvrzený OSO-parent replace. Před prvním
+follower side effectem načte přes exact order IDs autoritativní leader SL a TP;
+bez úplných dat se nepohne parent ani ochrany. Každý follower potom prochází
+durable sekvencí parent modify -> autoritativní potvrzení -> absolutní SL
+reassert -> potvrzení -> absolutní TP reassert -> potvrzení. Followeři mohou
+běžet souběžně, ale kroky jednoho účtu se nikdy nepředběhnou. První nejasnost
+nebo chyba ponechá pozdější kroky `planned`, neposílá blind retry, neposune
+leader sequence a stuck outbox dál blokuje nový ARM.
+
+Každý durable follower link nativního OSO nově explicitně nese roli
+`entry | stop | target`. Parent replace proto nelze zaměnit za přímý posun
+SL/TP jen podle společného textového prefixu `oso:`. Starší snapshot bez role
+se rozliší přes přesná leader/follower child ID v durable OSO outboxu; při
+poškozeném snapshotu bez bezpečného důkazu se cesta fail-closed zablokuje.
+Přímý SL/TP modify dál používá obecnou lifecycle cestu a po autoritativním
+potvrzení se do follower linku zapíše nejen množství, ale i nová cena.
+
+Pokud není úplný OSO mapping pro každý follower nebo nejsou autoritativní
+leader child data, nevznikne žádný follower side effect: vrátí se kritický
+`blocked` audit, runtime se fail-closed odzbrojí a vyžádá novou reconciliation.
+Smíšená situace, kdy by se parent posunul jen části followerů s opravenou
+ochranou, je samostatně zakázaná. Mapping se vybírá přes exact klíč aktuální
+skupiny (`group + leader entry + follower`), takže stará durable vazba z jiné
+skupiny nemůže přesměrovat modify na cizí child order IDs. Duplicitní follower
+modify je rovněž fail-closed. OSO původ se navíc pozná i z durable follower
+linku: pokud se poškodí snapshot a zmizí úplně všechny OSO mapping položky,
+parent nespadne do obecné parent-only cesty, ale zablokuje se před brokerem.
+
+Ve staged cestě je `working` skutečný precondition další vrstvy: parent, který
+byl po modify zrušen, nepustí reassert SL a zrušený SL nepustí target. Pokud
+proces spadne po zahájení předchozí vrstvy, zbývající durable `planned` kroky
+se nově počítají jako stuck operace a blokují ARM až do reconciliation; nikdy
+nezahájená čistě planned sada broker nejistotu nevytváří.
+
+Mock broker nově umí simulovat venue-side relativní child reprice a oba druhy
+modify timeoutu. Regrese pokrývají přesný návrat SL/TP na leader ceny, zastavení
+targetu po chybě stop korekce, izolaci chyby jednoho followera, úplnost OSO
+mapování, ignorování staré vazby jiné skupiny, zrušený staged parent,
+restart/ARM bránu a nulový follower side effect bez autoritativních leader child
+dat. Ověření: cílená copier sada 138/138, celý repo 190 test files a 1503/1503
+testů, TypeScript typecheck, produkční build, lint změněných copier souborů i
+`git diff --check` čisté. Celorepový lint zůstává neplatná brána kvůli tisícům
+starých chyb ve vygenerovaných `capacitor-ios/.../assets` a `dist-native`
+bundlech mimo tuto změnu. Změny jsou pouze lokální; nebyly commitnuté,
+pushnuté, deploynuté ani instalované do workeru. Běžící Mac worker zůstává
+DISARMED.
 
 ### 2026-08-26 (Codex, překrývající se profily + jediná execution skupina)
 Uživatel může uložit více kopírovacích skupin se stejným leaderem, followery i

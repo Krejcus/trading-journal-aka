@@ -53,6 +53,13 @@ export interface MockBrokerOptions {
     order: BrokerOrder | undefined,
     attempt: number,
   ) => 'success' | 'timeout-before-cancel' | 'timeout-after-cancel';
+  modifyBehavior?: (
+    order: BrokerOrder | undefined,
+    changes: { quantity: number; orderType: import('./brokerPort').OrderType; limitPrice?: number; stopPrice?: number },
+    attempt: number,
+  ) => 'success' | 'timeout-before-modify' | 'timeout-after-modify';
+  /** Simuluje Tradovate: změna ceny OSO parentu relativně posune i child SL/TP. */
+  osoChildrenFollowParentReprice?: boolean;
   accountCapabilities?: readonly BrokerAccountCapability[];
 }
 
@@ -72,6 +79,11 @@ export interface MockBroker extends BrokerPort {
   placedRequests(): readonly BrokerOrderRequest[];
   placedOcoRequests(): readonly BrokerOcoRequest[];
   placedOsoRequests(): readonly BrokerOsoRequest[];
+  modifyRequests(): readonly {
+    accountId: number;
+    brokerOrderId: string;
+    changes: { quantity: number; orderType: import('./brokerPort').OrderType; limitPrice?: number; stopPrice?: number };
+  }[];
   orders(): readonly BrokerOrder[];
   cancelRequestCount(brokerOrderId: string): number;
 }
@@ -84,6 +96,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
   const lookupCompleteness = options.lookupCompleteness ?? 'authoritative';
   const lookupVisibilityDelay = options.lookupVisibilityDelay ?? 0;
   const cancelBehavior = options.cancelBehavior ?? (() => 'success' as const);
+  const modifyBehavior = options.modifyBehavior ?? (() => 'success' as const);
 
   const listeners = new Set<(event: BrokerEvent) => void>();
   /** Objednávky podle brokerId — tag NENÍ unikátní klíč. */
@@ -92,8 +105,14 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
   const placed: BrokerOrderRequest[] = [];
   const placedOco: BrokerOcoRequest[] = [];
   const placedOso: BrokerOsoRequest[] = [];
+  const modified: Array<{
+    accountId: number;
+    brokerOrderId: string;
+    changes: { quantity: number; orderType: import('./brokerPort').OrderType; limitPrice?: number; stopPrice?: number };
+  }> = [];
   const attemptsByTag = new Map<string, number>();
   const cancelAttempts = new Map<string, number>();
+  const modifyAttempts = new Map<string, number>();
   let tagLookupCount = 0;
   let connected = true;
   let orderSequence = 0;
@@ -293,18 +312,45 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
     },
 
     async modifyOrder(
-      _accountId: number,
+      accountId: number,
       brokerOrderId: string,
       changes: { quantity: number; orderType: import('./brokerPort').OrderType; limitPrice?: number; stopPrice?: number },
     ): Promise<void> {
       const order = ordersById.get(brokerOrderId);
+      const attempt = (modifyAttempts.get(brokerOrderId) ?? 0) + 1;
+      modifyAttempts.set(brokerOrderId, attempt);
+      const outcome = modifyBehavior(order, changes, attempt);
+      if (outcome === 'timeout-before-modify') {
+        throw new MockBrokerTimeoutError('mock broker: modify timed out before reaching broker');
+      }
       if (!order || order.status !== 'working') return;
+      modified.push({ accountId, brokerOrderId, changes: { ...changes } });
+      const oldReferencePrice = order.limitPrice ?? order.stopPrice;
+      const newReferencePrice = changes.limitPrice ?? changes.stopPrice;
       order.quantity = changes.quantity;
       order.orderType = changes.orderType;
       order.limitPrice = changes.limitPrice;
       order.stopPrice = changes.stopPrice;
       order.updatedAt = clock();
       emit({ type: 'order', order });
+      if (
+        options.osoChildrenFollowParentReprice
+        && oldReferencePrice != null
+        && newReferencePrice != null
+        && oldReferencePrice !== newReferencePrice
+      ) {
+        const delta = newReferencePrice - oldReferencePrice;
+        for (const child of ordersById.values()) {
+          if (child.parentOrderId !== brokerOrderId || child.status !== 'working') continue;
+          if (child.limitPrice != null) child.limitPrice += delta;
+          if (child.stopPrice != null) child.stopPrice += delta;
+          child.updatedAt = clock();
+          emit({ type: 'order', order: child });
+        }
+      }
+      if (outcome === 'timeout-after-modify') {
+        throw new MockBrokerTimeoutError('mock broker: modify response lost after modification');
+      }
     },
 
     async listPositions(accountId: number): Promise<BrokerPosition[]> {
@@ -356,6 +402,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
     placedRequests: () => placed,
     placedOcoRequests: () => placedOco,
     placedOsoRequests: () => placedOso,
+    modifyRequests: () => modified,
     orders: () => [...ordersById.values()],
     cancelRequestCount: brokerOrderId => cancelAttempts.get(brokerOrderId) ?? 0,
   };

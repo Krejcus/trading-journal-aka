@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { BrokerOrder } from '../services/brokerPort';
-import { createCancelEntry, createModifyEntry, resolveCancelLookup } from '../services/copierCancelOutbox';
+import {
+  createCancelEntry,
+  createModifyEntry,
+  markCancelSending,
+  resolveCancelLookup,
+  stuckCancelEntries,
+} from '../services/copierCancelOutbox';
 
 /**
  * Tolerance lifecycle races (živý incident 2026-08-20): rychlé ruční
@@ -53,5 +59,34 @@ describe('modify resolution', () => {
   it('working se shodnými parametry = potvrzeno', () => {
     expect(resolveCancelLookup(modifyEntry(), order('working', { stopPrice: 20_000 }), 'authoritative', 9))
       .toMatchObject({ status: 'confirmed', outcome: 'working' });
+  });
+});
+
+describe('staged lifecycle recovery gate', () => {
+  it('planned další vrstva blokuje ARM, jakmile předchozí vrstva začala', () => {
+    const parent = markCancelSending(
+      createModifyEntry('parent', 'ev-staged', 4, 200, 'parent-id', {
+        quantity: 1, orderType: 'Limit', limitPrice: 30_001,
+      }, 1),
+      2,
+    );
+    const stop = createModifyEntry('stop', 'ev-staged', 4, 200, 'stop-id', {
+      quantity: 1, orderType: 'Stop', stopPrice: 29_950,
+    }, 1);
+
+    expect(stuckCancelEntries([parent, stop]).map(entry => entry.key)).toEqual([
+      'parent', 'stop',
+    ]);
+  });
+
+  it('samotné nikdy nezahájené planned položky nejsou broker nejistota', () => {
+    const parent = createModifyEntry('parent', 'ev-not-started', 4, 200, 'parent-id', {
+      quantity: 1, orderType: 'Limit', limitPrice: 30_001,
+    }, 1);
+    const stop = createModifyEntry('stop', 'ev-not-started', 4, 200, 'stop-id', {
+      quantity: 1, orderType: 'Stop', stopPrice: 29_950,
+    }, 1);
+
+    expect(stuckCancelEntries([parent, stop])).toEqual([]);
   });
 });

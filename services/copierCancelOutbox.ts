@@ -133,6 +133,19 @@ export function resolveCancelLookup(
 }
 
 export function stuckCancelEntries(entries: Iterable<CancelOutboxEntry>): CancelOutboxEntry[] {
-  return [...entries].filter(entry =>
-    entry.status === 'sending' || entry.status === 'unknown' || entry.status === 'abandoned');
+  const all = [...entries];
+  // Staged OSO modify uloží další vrstvy jako `planned` dřív, než odešle
+  // parent. Pokud proces spadne přesně po potvrzení parentu, tyto planned
+  // nohy nejsou "nová práce", kterou smíme zahodit: dokazují nedokončenou
+  // transakci. Jakmile pro stejnou leader událost začal libovolný krok,
+  // blokují ARM spolu se sending/unknown/abandoned až do reconciliation.
+  const startedEvents = new Set(all
+    .filter(entry => entry.status !== 'planned' && entry.status !== 'waived')
+    .map(entry => entry.leaderEventId));
+  return all.filter(entry => (
+    entry.status === 'sending'
+    || entry.status === 'unknown'
+    || entry.status === 'abandoned'
+    || (entry.status === 'planned' && startedEvents.has(entry.leaderEventId))
+  ));
 }
