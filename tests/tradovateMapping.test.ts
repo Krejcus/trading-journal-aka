@@ -284,6 +284,30 @@ describe('createTradovateBroker REST', () => {
     expect(lookup.orders[0]).toMatchObject({ brokerOrderId: '42', symbol: 'MNQU6' });
   });
 
+  it('hydratuje více kontraktů jedním comma-separated ids parametrem', async () => {
+    let contractItemsUrl = '';
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes('/position/list')) return jsonResponse([
+        { id: 42, accountId: 200, contractId: 7, netPos: 1 },
+        { id: 43, accountId: 200, contractId: 8, netPos: -1 },
+      ]);
+      if (url.includes('/contract/items')) {
+        contractItemsUrl = url;
+        return jsonResponse([{ id: 7, name: 'MNQU6' }, { id: 8, name: 'NQU6' }]);
+      }
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+    });
+
+    await broker.listPositions(200);
+
+    expect(contractItemsUrl).toContain('/contract/items?ids=7,8');
+    expect(contractItemsUrl).not.toContain('&ids=');
+  });
+
   it('penalty ticket nikdy automaticky neopakuje', async () => {
     let calls = 0;
     const broker = createTradovateBroker({

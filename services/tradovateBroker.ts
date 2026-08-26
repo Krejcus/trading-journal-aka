@@ -375,9 +375,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const hydrateContracts = async (ids: readonly number[]) => {
     const missing = [...new Set(ids)].filter(id => !contracts.has(id));
     if (missing.length === 0) return;
-    const params = new URLSearchParams();
-    for (const id of missing) params.append('ids', String(id));
-    const result = await request<TradovateContractEntity[]>(`/contract/items?${params.toString()}`);
+    const encodedIds = missing.map(id => encodeURIComponent(String(id))).join(',');
+    const result = await request<TradovateContractEntity[]>(`/contract/items?ids=${encodedIds}`);
     for (const item of result ?? []) contracts.set(item.id, item.name);
     const unresolved = missing.filter(id => !contracts.has(id));
     if (unresolved.length > 0) {
