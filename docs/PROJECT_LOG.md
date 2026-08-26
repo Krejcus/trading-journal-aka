@@ -120,9 +120,13 @@ Regrese reprodukuje dnešní stav s 12 terminálními historickými nohami nad
 limitem a dokazuje, že nová živá epizoda po ochranném fillu zůstane ARMED.
 Protiscénář ponechá skutečnou pracovní orphan nohu a potvrzuje DISARM +
 `Flat sweep nedokončen`. Ověření: chaos sada 17/17, všech 25 copier testovacích
-souborů 361/361 a `npx tsc --noEmit` čisté. Změna je pouze lokální v canonical
-checkoutu; bez nového explicitního souhlasu nebyl proveden commit, push,
-Vercel deploy, reinstall workeru ani žádný broker side effect.
+souborů 361/361 a `npx tsc --noEmit` čisté. Po následném explicitním souhlasu
+uživatele byla oprava commitnuta jako `d67c2fd5` a nasazena do produkce jako
+Vercel deployment `dpl_44aJNbLPyPBh8KoRjnLDaqE2eW4F` (`READY`, produkční
+alias HTTP 200). Mac worker byl přeinstalován z totožného canonical commitu a
+zůstal `DISARMED`/SHADOW; read-only reconciliation potvrdila `groupFlat: true`,
+žádné divergentní účty, žádné working orders, žádný stuck outbox a žádný nový
+`lastError`. Během deploye a kontroly nebyl odeslán žádný broker příkaz.
 
 ### 2026-08-26 (Codex, stale účet je opravitelný čistě z LIVE UI)
 Read-only kontrola všech spárovaných OAuth `/account/list` potvrdila, že
