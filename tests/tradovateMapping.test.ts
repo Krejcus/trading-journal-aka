@@ -185,6 +185,29 @@ describe('createTradovateBroker REST', () => {
     ]);
   });
 
+  it('refresh adresáře doplní Account.name nového účtu pro následný order', async () => {
+    const calls: Array<{ url: string; body?: Record<string, unknown> }> = [];
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpecsByAccountId: { 100: 'OLD-ACCOUNT' },
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.endsWith('/account/list')) return jsonResponse([
+          { id: 100, name: 'OLD-ACCOUNT', active: true, readonly: false },
+          { id: 63338592, name: 'LUCID-NEW', active: true, readonly: false },
+        ]);
+        return jsonResponse({ orderId: 42, failureReason: 'Success' });
+      },
+    });
+
+    await expect(broker.refreshAccountDirectory()).resolves.toEqual([
+      { accountId: 100, accountSpec: 'OLD-ACCOUNT', active: true, canTrade: true },
+      { accountId: 63338592, accountSpec: 'LUCID-NEW', active: true, canTrade: true },
+    ]);
+    await broker.placeOrder(request({ accountId: 63338592 }));
+    expect(calls.at(-1)?.body).toMatchObject({ accountId: 63338592, accountSpec: 'LUCID-NEW' });
+  });
+
   it('odmítne prázdný token ještě před síťovým requestem', async () => {
     let calls = 0;
     const broker = createTradovateBroker({

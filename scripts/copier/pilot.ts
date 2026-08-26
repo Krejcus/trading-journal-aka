@@ -15,6 +15,11 @@ import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
 import { createTradovateBroker, type TradovateBrokerPort } from '../../services/tradovateBroker';
 import { createBrokerRouter } from '../../services/brokerRouter';
 import type { BrokerPort } from '../../services/brokerPort';
+import {
+  refreshDynamicBrokerRoutes,
+  resolveDynamicBrokerRoutes,
+  type DynamicOAuthConnection,
+} from '../../services/dynamicBrokerRouting';
 import { dryRunTradovateOrder } from '../../services/tradovateDryRun';
 import {
   bootstrapCopierRuntime,
@@ -83,6 +88,8 @@ interface PilotContextOptions {
   connectionId?: string;
   accountSpec?: string;
 }
+
+type ExecutionAccount = Pick<TradovateAccountDataAccount, 'id' | 'name' | 'active' | 'canTrade'>;
 
 const dedicatedChartConfigPath = resolve(homedir(), 'Library/Application Support/AlphaTrade/copier/chart-snapshot.json');
 
@@ -185,13 +192,6 @@ async function runMultiConnectionAgent(): Promise<void> {
       baseUrl: tradovateApiBaseUrl(context.environment),
       accessToken: await context.getAccessToken(),
     });
-    const visible = new Map(data.accounts.map(account => [account.id, account]));
-    const accounts = entry.accountIds.map(accountId => {
-      const account = visible.get(accountId);
-      if (!account) throw new Error(`OAuth ${entry.connectionId} nevidí routovaný účet ${accountId}`);
-      if (!account.active || !account.canTrade) throw new Error(`Routovaný účet ${account.name} není aktivní pro execution`);
-      return account;
-    });
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
     const broker = createTradovateBroker({
       environment: 'demo',
@@ -202,24 +202,42 @@ async function runMultiConnectionAgent(): Promise<void> {
       // spojení (propfirma) vypadlo.
       connectionLabel: `conn:${entry.connectionId.slice(0, 8)}`,
     });
-    console.log(`CONNECTION conn:${entry.connectionId.slice(0, 8)} účty=${entry.accountIds.join(',')}`);
-    return { context, accountIds: entry.accountIds, accounts, accountSpecsByAccountId, broker };
+    return { context, accounts: data.accounts, broker };
   }));
-  const accounts = loaded.flatMap(item => item.accounts);
   const leaderId = integerFlag('leader');
   const followerId = integerFlag('follower');
-  validatePair(accounts, leaderId, followerId);
+  const routingConnections: DynamicOAuthConnection[] = loaded.map(item => ({
+    connectionId: item.context.connectionId,
+    broker: item.broker,
+  }));
+  const initialSnapshots = new Map(loaded.map(item => [
+    item.context.connectionId,
+    item.accounts.map(account => ({
+      accountId: account.id,
+      accountSpec: account.name,
+      active: account.active,
+      canTrade: account.canTrade,
+    })),
+  ]));
+  const initialRouting = resolveDynamicBrokerRoutes(routingConnections, initialSnapshots);
+  const accounts = initialRouting.accounts;
   // Spojení nesoucí leader stream je kritické (výpadek = okamžitý DISARM);
   // follower-only propfirmy dostávají reconnect lhůtu, aby token cyklus
   // jedné z nich nezastavoval kopírování všech ostatních.
-  const broker = createBrokerRouter(loaded.map(item => ({
-    broker: item.broker,
-    accountIds: item.accountIds,
-    critical: item.accountIds.includes(leaderId),
+  const broker = createBrokerRouter(initialRouting.routes.map(route => ({
+    ...route,
+    critical: route.accountIds.includes(leaderId),
   })));
+  for (const route of initialRouting.routes) {
+    const connection = loaded.find(item => item.broker === route.broker);
+    console.log(`CONNECTION conn:${connection?.context.connectionId.slice(0, 8) ?? 'unknown'} účty=${route.accountIds.join(',')}`);
+  }
   await runLocalAgent(
     loaded.map(item => item.context), leaderId, followerId, accounts, broker,
     loaded.map(item => ({ broker: item.broker, label: `conn:${item.context.connectionId.slice(0, 8)}` })),
+    async accountIds => {
+      await refreshDynamicBrokerRoutes(routingConnections, broker, accountIds);
+    },
   );
 }
 
@@ -227,9 +245,10 @@ async function runLocalAgent(
   contexts: PilotContext[],
   leaderId: number,
   followerId: number,
-  accounts: TradovateAccountDataAccount[],
+  accounts: ExecutionAccount[],
   baseBroker: BrokerPort,
   renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string }> = [],
+  prepareGroupAccounts?: (accountIds: readonly number[]) => Promise<void>,
 ): Promise<void> {
   const context = contexts[0];
   if (!context) throw new Error('Lokální agent potřebuje alespoň jedno OAuth spojení');
@@ -249,7 +268,7 @@ async function runLocalAgent(
   // bez něj platí původní dvojice `--follower/--multiplier` (mac-install).
   const followersFlag = stringFlag('followers', false);
   const followers: CopyFollowerConfig[] = followersFlag
-    ? parseFollowersFlag(followersFlag, leaderId, accounts)
+    ? parseFollowersFlag(followersFlag, leaderId)
     : [{ accountId: followerId, mode: 'on-submit', multiplier: Number(multiplierValue) }];
   for (const candidate of contexts) {
     if (!candidate.renewable && candidate.expiresAt && Date.parse(candidate.expiresAt) - Date.now() <= (Number(minutesValue) + 5) * 60_000) {
@@ -393,6 +412,7 @@ async function runLocalAgent(
       onGroupChanged: async changed => {
         await groupStore.save(changed);
       },
+      prepareGroupAccounts,
     });
     if (context.relay) {
       relay = startMacCopierCommandRelay({
@@ -635,11 +655,11 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
   return { environment: 'demo', connectionId: connection.id, accountSpec, expiresAt: null, renewable: true, getAccessToken };
 }
 
-function validatePair(
-  accounts: TradovateAccountDataAccount[],
+function validatePair<T extends ExecutionAccount>(
+  accounts: T[],
   leaderId: number,
   followerId: number,
-): TradovateAccountDataAccount[] {
+): T[] {
   if (leaderId === followerId) throw new Error('Leader a follower musí být různé účty');
   const selected = [leaderId, followerId].map(id => {
     const account = accounts.find(item => item.id === id);
@@ -660,7 +680,6 @@ function validatePair(
 function parseFollowersFlag(
   raw: string,
   leaderId: number,
-  accounts: TradovateAccountDataAccount[],
 ): CopyFollowerConfig[] {
   const followers = raw.split(',').map(part => part.trim()).filter(Boolean).map(part => {
     const [idPart, multiplierPart, maxPart, ...rest] = part.split('@');
@@ -690,11 +709,6 @@ function parseFollowersFlag(
     if (follower.accountId === leaderId) throw new Error('Leader nemůže být zároveň follower');
     if (seen.has(follower.accountId)) throw new Error(`Follower ${follower.accountId} je uveden vícekrát`);
     seen.add(follower.accountId);
-    const account = accounts.find(item => item.id === follower.accountId);
-    if (!account) throw new Error(`Tradovate účet ${follower.accountId} nebyl nalezen`);
-    if (!account.active || !account.canTrade) {
-      throw new Error(`Účet ${account.name} není aktivní pro execution`);
-    }
   }
   return followers;
 }

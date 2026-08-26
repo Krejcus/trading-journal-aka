@@ -30,6 +30,11 @@ export interface BrokerRouterOptions {
   clearTimeoutImpl?: typeof clearTimeout;
 }
 
+export interface BrokerRouterPort extends BrokerPort {
+  /** Atomicky nahradí account -> OAuth routy; underlying sockety zůstávají stejné. */
+  replaceRoutes(routes: readonly BrokerRoute[]): void;
+}
+
 /**
  * Složí několik OAuth spojení do jednoho broker portu.
  *
@@ -41,30 +46,48 @@ export interface BrokerRouterOptions {
 export function createBrokerRouter(
   routes: readonly BrokerRoute[],
   options: BrokerRouterOptions = {},
-): BrokerPort {
+): BrokerRouterPort {
   if (routes.length === 0) throw new Error('Broker router vyžaduje alespoň jedno spojení');
   const environment = routes[0].broker.environment;
-  const byAccount = new Map<number, BrokerPort>();
-  const seenBrokers = new Set<BrokerPort>();
+  let byAccount = new Map<number, BrokerPort>();
+  let accountIdsByBroker = new Map<BrokerPort, Set<number>>();
+  const fixedBrokers = routes.map(route => route.broker);
+  const configuredBrokers = new Set(fixedBrokers);
   const criticalBrokers = new Set(
     routes.filter(route => route.critical !== false).map(route => route.broker),
   );
-  for (const route of routes) {
-    if (seenBrokers.has(route.broker)) {
-      throw new Error('Stejné OAuth spojení nesmí být ve více broker routes');
-    }
-    seenBrokers.add(route.broker);
-    if (route.broker.environment !== environment) {
-      throw new Error('Broker router nesmí míchat DEMO a LIVE prostředí');
-    }
-    for (const accountId of route.accountIds) {
-      if (!Number.isSafeInteger(accountId) || accountId <= 0) {
-        throw new Error('Broker route obsahuje neplatný accountId');
+  const validateRoutes = (nextRoutes: readonly BrokerRoute[], requireFixedSet: boolean) => {
+    const nextByAccount = new Map<number, BrokerPort>();
+    const nextAccountIdsByBroker = new Map<BrokerPort, Set<number>>();
+    const seenBrokers = new Set<BrokerPort>();
+    for (const route of nextRoutes) {
+      if (seenBrokers.has(route.broker)) {
+        throw new Error('Stejné OAuth spojení nesmí být ve více broker routes');
       }
-      if (byAccount.has(accountId)) throw new Error(`Účet ${accountId} je ve více broker routes`);
-      byAccount.set(accountId, route.broker);
+      seenBrokers.add(route.broker);
+      if (requireFixedSet && !configuredBrokers.has(route.broker)) {
+        throw new Error('Dynamická broker route obsahuje neznámé OAuth spojení');
+      }
+      if (route.broker.environment !== environment) {
+        throw new Error('Broker router nesmí míchat DEMO a LIVE prostředí');
+      }
+      const ids = new Set<number>();
+      for (const accountId of route.accountIds) {
+        if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+          throw new Error('Broker route obsahuje neplatný accountId');
+        }
+        if (nextByAccount.has(accountId)) throw new Error(`Účet ${accountId} je ve více broker routes`);
+        nextByAccount.set(accountId, route.broker);
+        ids.add(accountId);
+      }
+      nextAccountIdsByBroker.set(route.broker, ids);
     }
-  }
+    if (requireFixedSet && (seenBrokers.size !== configuredBrokers.size || fixedBrokers.some(item => !seenBrokers.has(item)))) {
+      throw new Error('Dynamická změna rout nesmí přidat ani odebrat OAuth spojení');
+    }
+    return { nextByAccount, nextAccountIdsByBroker };
+  };
+  ({ nextByAccount: byAccount, nextAccountIdsByBroker: accountIdsByBroker } = validateRoutes(routes, false));
 
   const brokerFor = (accountId: number): BrokerPort => {
     const broker = byAccount.get(accountId);
@@ -74,6 +97,13 @@ export function createBrokerRouter(
 
   return {
     environment,
+    replaceRoutes(nextRoutes) {
+      const validated = validateRoutes(nextRoutes, true);
+      // Přepnutí je synchronní a atomické: při jediné validační chybě zůstane
+      // původní mapa i event filtr beze změny.
+      byAccount = validated.nextByAccount;
+      accountIdsByBroker = validated.nextAccountIdsByBroker;
+    },
     setCriticalAccounts(accountIds) {
       const next = new Set<BrokerPort>();
       for (const accountId of accountIds) next.add(brokerFor(accountId));
@@ -112,12 +142,8 @@ export function createBrokerRouter(
       const setTimeoutImpl = options.setTimeoutImpl ?? setTimeout;
       const clearTimeoutImpl = options.clearTimeoutImpl ?? clearTimeout;
       const graceMs = options.reconnectGraceMs ?? 10_000;
-      const connected = new Map(routes.map(route => [route.broker, false]));
+      const connected = new Map(fixedBrokers.map(broker => [broker, false]));
       let aggregateConnected = false;
-      const accountIdsByBroker = new Map(routes.map(route => [
-        route.broker,
-        new Set(route.accountIds),
-      ]));
       /** Zadržené error/connection eventy nekritické route během reconnect lhůty. */
       const pendingOutage = new Map<BrokerPort, {
         timer: ReturnType<typeof setTimeout>;
@@ -143,7 +169,7 @@ export function createBrokerRouter(
         }
       };
 
-      const unsubs = routes.map(route => route.broker.subscribe((event: BrokerEvent) => {
+      const unsubs = fixedBrokers.map(routeBroker => routeBroker.subscribe((event: BrokerEvent) => {
         if (event.type === 'order' || event.type === 'fill' || event.type === 'position') {
           const accountId = event.type === 'order'
             ? event.order.accountId
@@ -153,11 +179,11 @@ export function createBrokerRouter(
           // Jedno OAuth může vidět více účtů, než mu bylo svěřeno v route.
           // Takové entity sem nesmí projít: při překryvu OAuth viditelnosti by
           // se leader lifecycle zpracoval dvakrát.
-          if (!accountIdsByBroker.get(route.broker)?.has(accountId)) return;
+          if (!accountIdsByBroker.get(routeBroker)?.has(accountId)) return;
           listener(event);
           return;
         }
-        const grace = !criticalBrokers.has(route.broker) && graceMs > 0;
+        const grace = !criticalBrokers.has(routeBroker) && graceMs > 0;
         if (event.type === 'error') {
           if (!grace) {
             listener(event);
@@ -166,13 +192,13 @@ export function createBrokerRouter(
           // Transport chyba nekritické route předchází jejímu disconnect
           // eventu — zadržíme ji ve stejné lhůtě. Objednávky mají vlastní
           // fail-closed cestu, tady jde jen o plané poplachy.
-          const outage = pendingOutage.get(route.broker);
+          const outage = pendingOutage.get(routeBroker);
           if (outage) {
             outage.held.push(event);
           } else {
-            pendingOutage.set(route.broker, {
+            pendingOutage.set(routeBroker, {
               held: [event],
-              timer: setTimeoutImpl(() => flushOutage(route.broker), graceMs),
+              timer: setTimeoutImpl(() => flushOutage(routeBroker), graceMs),
             });
           }
           return;
@@ -182,17 +208,17 @@ export function createBrokerRouter(
           return;
         }
         if (!grace) {
-          applyConnection(route.broker, event);
+          applyConnection(routeBroker, event);
           return;
         }
-        const outage = pendingOutage.get(route.broker);
+        const outage = pendingOutage.get(routeBroker);
         if (!event.connected) {
           if (outage) {
             outage.held.push(event);
           } else {
-            pendingOutage.set(route.broker, {
+            pendingOutage.set(routeBroker, {
               held: [event],
-              timer: setTimeoutImpl(() => flushOutage(route.broker), graceMs),
+              timer: setTimeoutImpl(() => flushOutage(routeBroker), graceMs),
             });
           }
           return;
@@ -201,11 +227,11 @@ export function createBrokerRouter(
           // Reconnect ve lhůtě: mrknutí se nikdy nestalo — zadržené eventy
           // se zahodí a agregát zůstává beze změny.
           clearTimeoutImpl(outage.timer);
-          pendingOutage.delete(route.broker);
-          connected.set(route.broker, true);
+          pendingOutage.delete(routeBroker);
+          connected.set(routeBroker, true);
           return;
         }
-        applyConnection(route.broker, event);
+        applyConnection(routeBroker, event);
       }));
       return () => {
         for (const outage of pendingOutage.values()) clearTimeoutImpl(outage.timer);

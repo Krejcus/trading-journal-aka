@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1503 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1512 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -69,11 +69,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       kauzální oprava a deterministické regrese jsou hotové (zápis níže), ale
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
       ze stejného commitu a řízený DEMO test.
-- [ ] Incident 26. 8. „změna nativního OSO parentu relativně posunula follower
-      SL/TP“ — první oprava byla nasazena, ale řízený DEMO test odhalil, že
-      TradingView leader child entity nemají `parentId`; přesná lokální oprava
-      a regrese jsou hotové (zápis níže), čekají na schválené nasazení a nový
-      DEMO test absolutních SL/TP cen.
+- [x] Incident 26. 8. „změna nativního OSO parentu relativně posunula follower
+      SL/TP“ — VYŘEŠENO 26. 8. (zápis „řízený DEMO důkaz OSO parent cascade“):
+      přesná oprava bez povinného `parentId` je nasazená a skutečný Tradovate
+      DEMO test potvrdil absolutní shodu parentu, SL i TP na 4 followerech.
 - [ ] Durable account eligibility + více uložených překrývajících se profilů
       s nejvýše jednou execution-aktivní skupinou jsou lokálně hotové a
       otestované (zápis níže), ale čekají na explicitně schválený commit/push,
@@ -93,6 +92,58 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-26 (Codex, dynamický account -> OAuth routing z LIVE UI)
+Lokálně je dokončená oprava chyby `Pro účet 63338592 není nakonfigurované
+OAuth spojení`. `accountIds` v Mac connection manifestu už nejsou autoritou
+pro vlastnictví účtu; slouží pouze jako instalační/bootstrap metadata. Worker
+si při startu, změně topologie skupiny, aktivaci uloženého profilu, SHADOW i
+před každým ARM znovu read-only načte `/account/list` ze všech už spárovaných
+OAuth spojení. Z přesné viditelnosti účtu sestaví account -> OAuth mapu a
+přepne ji atomicky bez restartu socketů a bez broker order side effectu.
+
+Nové Account.name se stejným refreshem doplní přímo do Tradovate brokeru, takže
+nově detekovaný účet lze následně použít pro execution bez ruční editace
+`connections.json` a bez reinstallu workeru. Při chybějícím, duplicitně
+viditelném, neaktivním nebo read-only účtu se změna odmítne nahlas, původní
+routing zůstane beze změny a runtime zůstane DISARMED. Změna followerů i
+leadera jde přes DISARM -> refresh routing -> reconfigure/activate preflight;
+ARM jde přes DISARM -> refresh routing -> reconciliation -> ARM. Uložená UI
+skupina je po restartu autoritativní i tehdy, když původní instalační
+leader/follower už není aktivní.
+
+Rozsah je záměrně omezen na účty viditelné v už spárovaných OAuth spojeních.
+Přidání úplně nového OAuth spojení stále vyžaduje jeho bezpečné device pairing;
+samotné přidání účtu nebo změna skupiny v rámci existujících spojení už žádný
+ruční manifest zásah nevyžaduje. Ověření: cílené router/runtime/Tradovate testy
+75/75, kompletní sada 1512/1512, `npx tsc --noEmit` a produkční build čisté.
+Změna zatím není commitnutá, pushnutá, nasazená ani nainstalovaná do Mac workeru;
+worker zůstává na `dfdc4d9e` a DISARMED do samostatného schválení nasazení.
+
+### 2026-08-26 (Codex, řízený DEMO důkaz OSO parent cascade)
+Commit `dfdc4d9e5cffe71a2ab3835deff5d980323dc6a5` byl ověřen na produkčním
+Vercelu i Mac workeru a řízeným Tradovate DEMO testem leadera `62364553` se
+čtyřmi záměrnými followery `62364057`, `62364060`, `62364059`, `62364055`.
+Pátý dřívější follower `62364058` uživatel úmyslně odebral a test jej správně
+nezasáhl.
+
+Shadow fáze rozpoznala nativní OSO vytvoření, změnu parentu i tři cancel větve
+v přesném fan-outu 4 účtů bez broker side effectu. V následném live DEMO byl
+leader Buy Limit 1 MNQU6 @ 29126 se SL 29110,5 a TP 29136,5 zkopírován na
+všechny čtyři followery se správnými parent/OCO vazbami. Změna leader parentu
+na 29123 vytvořila přesně 12 autoritativně potvrzených modify výsledků:
+4 parent modify, 4 absolutní SL reassert a 4 absolutní TP reassert. Read-only
+broker kontrola potvrdila na všech followerech parent 29123, SL 29110,5 a
+TP 29136,5; žádná ochrana se relativně neposunula.
+
+Zrušení celého leader bracketu vytvořilo přesně 12 potvrzených follower cancel
+výsledků (parent, SL, TP × 4). Následná broker kontrola před i po read-only
+reconciliation potvrdila na leaderovi i všech followerech nulové pozice a
+nulové working příkazy. Runtime skončil `DISARMED`, připojený, bez divergence,
+bez `reconciliationRequired`, bez stuck outboxu/operace a bez `lastError`.
+Reconciliation vrátila `ok: true` a žádný broker příkaz neodeslala. Tento test
+prokazuje opravu konkrétního nativního OSO parent-modify incidentu; není důkazem
+všech možných partial-fill a venue race scénářů.
 
 ### 2026-08-26 (Codex, TradingView OSO child bez parentId)
 Řízený DEMO test změny čekajícího nativního OSO parentu zablokoval všech pět

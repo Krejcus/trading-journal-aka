@@ -35,6 +35,12 @@ interface LocalCopierExecutionAgentOptions {
   onDevicePaired?: (deviceId: string) => Promise<void>;
   /** Crash-safe persistence hook. A failed save rolls the runtime back DISARMED. */
   onGroupChanged?: (group: CopyGroupConfig) => Promise<void>;
+  /**
+   * Před změnou topologie/ARM obnoví account -> OAuth routing. Callback smí
+   * pouze číst broker adresáře a atomicky přepnout lokální router; žádný
+   * broker order side effect. Chyba musí nechat runtime DISARMED.
+   */
+  prepareGroupAccounts?: (accountIds: readonly number[]) => Promise<void>;
 }
 
 export interface LocalCopierExecutionAgent {
@@ -85,6 +91,12 @@ const mappedGroup = (runtimeGroup: CopyGroupConfig, incoming: CopyGroupConfig): 
   };
 };
 
+const sameAccountTopology = (left: CopyGroupConfig, right: CopyGroupConfig): boolean => {
+  const leftIds = [...copyGroupAccountIds(left)].sort((a, b) => a - b);
+  const rightIds = [...copyGroupAccountIds(right)].sort((a, b) => a - b);
+  return leftIds.length === rightIds.length && leftIds.every((value, index) => value === rightIds[index]);
+};
+
 export async function startLocalCopierExecutionAgent(
   options: LocalCopierExecutionAgentOptions,
 ): Promise<LocalCopierExecutionAgent> {
@@ -124,10 +136,20 @@ export async function startLocalCopierExecutionAgent(
   ): Promise<LiveCopyTradingCommandResult> => {
     const previous = group;
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
+    const topologyChanged = !sameAccountTopology(previous, next);
     let runtimeChanged = false;
     try {
+      if (mode === 'activate' || topologyChanged) {
+        // Routing se nikdy nemění za běžícího ARM. Nejdřív odzbrojit, potom
+        // read-only discovery; teprve controller provede flat/no-working
+        // preflight nad sjednocením staré a nové topologie.
+        options.controller.disarm();
+        await options.prepareGroupAccounts?.([
+          ...new Set([...copyGroupAccountIds(previous), ...copyGroupAccountIds(next)]),
+        ]);
+      }
       if (mode === 'activate') await options.controller.activateGroup(next);
-      else if (leaderChanged) await options.controller.reconfigureGroup(next);
+      else if (leaderChanged || topologyChanged) await options.controller.reconfigureGroup(next);
       else options.controller.updateGroup(next);
       runtimeChanged = true;
       await options.onGroupChanged?.(structuredClone(next));
@@ -138,7 +160,7 @@ export async function startLocalCopierExecutionAgent(
       // controller původní skupinu vůbec nezměnil.
       if (runtimeChanged) {
         if (mode === 'activate') await options.controller.activateGroup(previous);
-        else if (leaderChanged) await options.controller.reconfigureGroup(previous);
+        else if (leaderChanged || topologyChanged) await options.controller.reconfigureGroup(previous);
         else options.controller.updateGroup(previous);
       }
       throw error;
@@ -220,12 +242,17 @@ export async function startLocalCopierExecutionAgent(
       case 'arm-live': {
         // Volitelný atomický sync konfigurace: dřív UI posílalo update-group
         // + arm-live jako dva relay round-tripy (~5 s); teď jde obojí naráz.
+        let routingPrepared = false;
         if (command.group) {
           if (command.group.id !== group.id) {
             throw new Error('ARM míří na jinou skupinu. Nejdřív ji bezpečně aktivuj.');
           }
-          await applyGroup(mappedGroup(group, command.group));
+          const next = mappedGroup(group, command.group);
+          routingPrepared = !sameAccountTopology(group, next);
+          await applyGroup(next);
         }
+        options.controller.disarm();
+        if (!routingPrepared) await options.prepareGroupAccounts?.(copyGroupAccountIds(group));
         const reconciliation = await options.controller.reconcile();
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
@@ -237,6 +264,8 @@ export async function startLocalCopierExecutionAgent(
         return;
       }
       case 'shadow': {
+        options.controller.disarm();
+        await options.prepareGroupAccounts?.(copyGroupAccountIds(group));
         const reconciliation = await options.controller.reconcile();
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('SHADOW odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');

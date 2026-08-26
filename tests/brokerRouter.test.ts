@@ -75,6 +75,55 @@ describe('broker router', () => {
     const router = createBrokerRouter([{ broker: demo, accountIds: [11] }]);
     expect(() => router.listPositions(22)).toThrow('není nakonfigurované OAuth');
   });
+
+  it('atomicky přepne nový účet i event filtr bez restartu socketů', async () => {
+    const first = createMockBroker();
+    const second = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: first, accountIds: [11] },
+      { broker: second, accountIds: [22] },
+    ]);
+    const listener = vi.fn();
+    router.subscribe(listener);
+
+    router.replaceRoutes([
+      { broker: first, accountIds: [11] },
+      { broker: second, accountIds: [22, 33] },
+    ]);
+    await router.placeOrder({
+      tag: 'new-account', accountId: 33, symbol: 'MNQ', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    expect(second.placedRequests()).toEqual([expect.objectContaining({ accountId: 33 })]);
+    listener.mockClear();
+
+    first.emitEvent({ type: 'position', position: { accountId: 33, symbol: 'MNQ', netQuantity: 1 } });
+    expect(listener).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'position', position: expect.objectContaining({ accountId: 33 }),
+    }));
+    second.emitEvent({ type: 'position', position: { accountId: 33, symbol: 'MNQ', netQuantity: 1 } });
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'position', position: expect.objectContaining({ accountId: 33 }),
+    }));
+  });
+
+  it('vadnou dynamickou routu odmítne bez poškození předchozí mapy', async () => {
+    const first = createMockBroker();
+    const second = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: first, accountIds: [11] },
+      { broker: second, accountIds: [22] },
+    ]);
+    expect(() => router.replaceRoutes([
+      { broker: first, accountIds: [11, 33] },
+      { broker: second, accountIds: [22, 33] },
+    ])).toThrow('ve více broker routes');
+
+    await router.placeOrder({
+      tag: 'old-route-survives', accountId: 22, symbol: 'MNQ', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    expect(second.placedRequests()).toEqual([expect.objectContaining({ accountId: 22 })]);
+    expect(() => router.listPositions(33)).toThrow('není nakonfigurované OAuth');
+  });
 });
 
 describe('reconnect grace nekritických spojení', () => {

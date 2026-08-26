@@ -30,7 +30,7 @@ import {
 } from './tradovateMapping';
 
 interface TradovateContractEntity { id: number; name: string }
-interface TradovateAccountEntity { id: number; active: boolean; readonly?: boolean }
+interface TradovateAccountEntity { id: number; name?: string; active: boolean; readonly?: boolean }
 interface TradovatePositionEntity { accountId: number; contractId: number; netPos: number }
 interface TradovateRawOrderEntity {
   id: number;
@@ -166,6 +166,12 @@ const supportedOrderType = (value: string): OrderType => {
 
 export interface TradovateBrokerPort extends BrokerPort {
   /**
+   * Obnoví autoritativní adresář účtů viditelných tímto OAuth spojením.
+   * Kromě oprávnění aktualizuje i Account.name používané při order side
+   * effectu, takže nově přidaný prop účet nevyžaduje restart workeru.
+   */
+  refreshAccountDirectory(): Promise<TradovateVisibleAccount[]>;
+  /**
    * Plánovaná plynulá obměna WebSocketu (cyklus Tradovate access tokenu).
    * Zavře socket BEZ disconnect eventu a hned se připojí s čerstvým tokenem;
    * resync doplní stav z autoritativního snapshotu (order sourceVersion a
@@ -174,6 +180,11 @@ export interface TradovateBrokerPort extends BrokerPort {
    * spustit (socket není v plném provozu nebo už běží).
    */
   renewSocket(): boolean;
+}
+
+export interface TradovateVisibleAccount extends BrokerAccountCapability {
+  /** Exact Tradovate Account.name; null znamená, že účet nelze bezpečně použít pro execution. */
+  accountSpec: string | null;
 }
 
 export function createTradovateBroker(config: TradovateBrokerConfig): TradovateBrokerPort {
@@ -185,6 +196,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const timeouts = config.setTimeoutImpl ?? setTimeout;
   const clearTimeouts = config.clearTimeoutImpl ?? clearTimeout;
   const listeners = new Set<(event: BrokerEvent) => void>();
+  const accountSpecsByAccountId = new Map<number, string>(
+    Object.entries(config.accountSpecsByAccountId ?? {}).flatMap(([rawId, rawName]) => {
+      const accountId = Number(rawId);
+      const accountSpec = rawName?.trim();
+      return Number.isSafeInteger(accountId) && accountId > 0 && accountSpec
+        ? [[accountId, accountSpec] as const]
+        : [];
+    }),
+  );
   const contracts = new Map<number, string>();
   const rawOrders = new Map<number, TradovateRawOrderEntity>();
   const orderVersions = new Map<number, TradovateOrderVersionEntity>();
@@ -280,7 +300,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
 
   const accountSpecFor = (accountId: number): string => {
-    const value = config.accountSpecsByAccountId?.[accountId] ?? config.accountSpec;
+    const value = accountSpecsByAccountId.get(accountId) ?? config.accountSpec;
     if (typeof value !== 'string' || value.trim().length === 0) {
       throw new TradovateTransportError(`Tradovate accountSpec is missing for account ${accountId}`);
     }
@@ -842,6 +862,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   return {
     environment: config.environment,
+    async refreshAccountDirectory(): Promise<TradovateVisibleAccount[]> {
+      const entities = await listAccountEntities();
+      return (entities ?? []).filter(item => Number.isSafeInteger(item.id) && item.id > 0).map(item => {
+        const freshName = item.name?.trim();
+        if (freshName) accountSpecsByAccountId.set(item.id, freshName);
+        return {
+          accountId: item.id,
+          accountSpec: accountSpecsByAccountId.get(item.id) ?? null,
+          active: item.active === true,
+          canTrade: item.active === true && item.readonly !== true,
+        };
+      });
+    },
     async placeOrder(requestBody: BrokerOrderRequest): Promise<BrokerOrderAck> {
       const result = await post<TradovatePlaceOrderResult>(
         '/order/placeorder',
