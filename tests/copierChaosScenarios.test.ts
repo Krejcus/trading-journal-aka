@@ -3,7 +3,7 @@ import type { BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
 import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
 import { createMockBroker } from '../services/mockBroker';
-import { processOsoPair } from '../services/copierRunner';
+import { createRuntime, processOsoPair } from '../services/copierRunner';
 import { createCopierState } from '../services/copierEngine';
 import { createRiskGateContext } from '../services/copierRiskGate';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
@@ -587,6 +587,203 @@ describe('flat sweep ochranných nohou (incident 24. 8.)', () => {
       && order.status === 'working'
       && [entry?.firstBrokerOrderId, entry?.secondBrokerOrderId].includes(order.brokerOrderId));
     expect(zbyleOchranne).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('terminální historie nad limitem sweepu nezpůsobí falešný DISARM po úspěšném flat', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    let runtime = createRuntime(createCopierState());
+    const historicalProtectiveIds: string[] = [];
+
+    // Šest starých OSO epizod = 12 ochranných noh v durable historii.
+    // Všechny jsou u brokera terminální a nesmějí se počítat jako nehotový
+    // úklid nové epizody jen proto, že překročí cap šesti REST požadavků.
+    for (let index = 1; index <= 6; index += 1) {
+      const entryOrderId = `historical-entry-${index}`;
+      const result = await processOsoPair({
+        pair: {
+          entryOrderId,
+          stopOrderId: `historical-stop-${index}`,
+          targetOrderId: `historical-target-${index}`,
+          accountId: 100,
+          symbol: 'MNQU6',
+          entrySide: 'Buy',
+          quantity: 1,
+          entryOrderType: 'Limit',
+          entryLimitPrice: 30_000,
+          stopPrice: 29_950,
+          targetPrice: 30_100,
+          detectedAt: index,
+          correlation: 'inferred-window',
+        },
+        event: {
+          id: `historical-event-${index}`,
+          orderId: `historical-stop-${index}`,
+          kind: 'submitted',
+          accountId: 100,
+          symbol: 'MNQU6',
+          side: 'Sell',
+          quantity: 1,
+          orderType: 'Stop',
+          stopPrice: 29_950,
+          sequence: runtime.state.lastSequence + 1,
+          receivedAt: index,
+        },
+        group,
+        runtime,
+        context: createRiskGateContext({
+          armed: true,
+          connected: true,
+          shadowMode: false,
+          brokerEnvironment: 'demo',
+          expectedEnvironment: 'demo',
+          lastHeartbeatAt: index,
+          maxHeartbeatAgeMs: 1_000_000,
+          now: index,
+        }),
+        broker,
+        clock: stepClock(),
+        store,
+      });
+      runtime = result.runtime;
+      const entry = runtime.osoOutbox.get(`oso:${group.id}:${entryOrderId}:200`);
+      if (!entry?.entryBrokerOrderId || !entry.firstBrokerOrderId || !entry.secondBrokerOrderId) {
+        throw new Error('Test setup: historický follower OSO nebyl potvrzen');
+      }
+      historicalProtectiveIds.push(entry.firstBrokerOrderId, entry.secondBrokerOrderId);
+      await Promise.all([
+        broker.cancelOrder(200, entry.entryBrokerOrderId),
+        broker.cancelOrder(200, entry.firstBrokerOrderId),
+        broker.cancelOrder(200, entry.secondBrokerOrderId),
+      ]);
+    }
+    expect(historicalProtectiveIds).toHaveLength(12);
+    expect(broker.orders().filter(order => order.accountId === 200 && order.status === 'working')).toHaveLength(0);
+
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store,
+      group,
+      clock: stepClock(),
+      osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    // Nová živá epizoda. Po fillu SL musí sweep zrušit jen její TP a po
+    // autoritativním flat/zero-working důkazu nechat session ARMED.
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'current-entry', orderType: 'Limit', quantity: 1,
+      limitPrice: 30_000, sourceVersion: 'current-entry:working',
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'current-stop', parentOrderId: 'current-entry',
+      side: 'Sell', orderType: 'Stop', quantity: 1, stopPrice: 29_950,
+      sourceVersion: 'current-stop:working',
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'current-target', parentOrderId: 'current-entry',
+      side: 'Sell', orderType: 'Limit', quantity: 1, limitPrice: 30_100,
+      sourceVersion: 'current-target:working',
+    }) });
+    await controller.waitForIdle();
+
+    const currentEntry = ((await store.load()).osoOutbox ?? [])
+      .find(entry => entry.leaderEntryOrderId === 'current-entry');
+    if (!currentEntry?.firstBrokerOrderId || !currentEntry.secondBrokerOrderId) {
+      throw new Error('Test setup: aktuální follower OSO nebyl potvrzen');
+    }
+    const currentStop = broker.orders().find(order => (
+      order.brokerOrderId === currentEntry.firstBrokerOrderId && order.orderType === 'Stop'
+    )) ?? broker.orders().find(order => (
+      order.brokerOrderId === currentEntry.secondBrokerOrderId && order.orderType === 'Stop'
+    ));
+    if (!currentStop) throw new Error('Test setup: aktuální follower stop nebyl nalezen');
+    const currentSiblingId = currentStop.brokerOrderId === currentEntry.firstBrokerOrderId
+      ? currentEntry.secondBrokerOrderId
+      : currentEntry.firstBrokerOrderId;
+
+    broker.emitEvent({
+      type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 },
+    });
+    currentStop.status = 'filled';
+    currentStop.filledQuantity = 1;
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'current-stop-fill', tag: currentStop.tag,
+        brokerOrderId: currentStop.brokerOrderId, accountId: 200,
+        symbol: 'MNQU6', side: 'Sell', quantity: 1, price: 29_950, filledAt: 500,
+      },
+    });
+    broker.emitEvent({
+      type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 0 },
+    });
+    await controller.waitForIdle();
+
+    expect((await broker.findOrderById(200, currentSiblingId)).order?.status).toBe('canceled');
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null, autoClose: null });
+    for (const brokerOrderId of historicalProtectiveIds) {
+      // Jediný cancel pochází z přípravy terminální historie; nový flat sweep
+      // se starých ID vůbec nedotkne.
+      expect(broker.cancelRequestCount(brokerOrderId)).toBe(1);
+    }
+    controller.stop();
+  });
+
+  it('skutečně pracovní ochranná noha po flat zůstává fail-closed', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const oso = await processOsoPair({
+      pair: {
+        entryOrderId: 'orphan-entry', stopOrderId: 'orphan-stop', targetOrderId: 'orphan-target',
+        accountId: 100, symbol: 'MNQU6', entrySide: 'Buy', quantity: 1,
+        entryOrderType: 'Limit', entryLimitPrice: 30_000,
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: {
+        id: 'orphan-event', orderId: 'orphan-stop', kind: 'submitted', accountId: 100,
+        symbol: 'MNQU6', side: 'Sell', quantity: 1, orderType: 'Stop',
+        stopPrice: 29_950, sequence: 1, receivedAt: 0,
+      },
+      group,
+      runtime: createRuntime(createCopierState()),
+      context: createRiskGateContext({
+        armed: true, connected: true, shadowMode: false,
+        brokerEnvironment: 'demo', expectedEnvironment: 'demo',
+        lastHeartbeatAt: 1, maxHeartbeatAgeMs: 1_000_000, now: 1,
+      }),
+      broker, clock: stepClock(), store,
+    });
+    const entry = [...oso.runtime.osoOutbox.values()][0];
+    if (!entry?.firstBrokerOrderId || !entry.secondBrokerOrderId) {
+      throw new Error('Test setup: ochranné nohy nebyly potvrzeny');
+    }
+    const orphanOrderId = entry.secondBrokerOrderId;
+    const realCancelOrder = broker.cancelOrder.bind(broker);
+    broker.cancelOrder = async (accountId, brokerOrderId) => {
+      if (brokerOrderId === orphanOrderId) return;
+      await realCancelOrder(accountId, brokerOrderId);
+    };
+
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 } });
+    await controller.waitForIdle();
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+
+    expect((await broker.findOrderById(200, orphanOrderId)).order?.status).toBe('working');
+    expect(controller.status()).toMatchObject({ armed: false });
+    expect(controller.status().lastError).toContain('Flat sweep nedokončen');
     controller.stop();
   });
 

@@ -69,6 +69,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       kauzální oprava a deterministické regrese jsou hotové (zápis níže), ale
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
       ze stejného commitu a řízený DEMO test.
+- [ ] Incident 26. 8. „úspěšný flat zbytečně DISARMoval session“ — přesná
+      příčina i lokální oprava jsou ověřené (zápis níže), ale změna zatím není
+      commitnutá, pushnutá, nasazená ani nainstalovaná do Mac workeru.
 - [x] Incident 26. 8. „změna nativního OSO parentu relativně posunula follower
       SL/TP“ — VYŘEŠENO 26. 8. (zápis „řízený DEMO důkaz OSO parent cascade“):
       přesná oprava bez povinného `parentId` je nasazená a skutečný Tradovate
@@ -92,6 +95,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-26 (Codex, flat cleanup už nerozhoduje podle délky historie)
+Read-only forenzika posledního uživatelova DEMO obchodu potvrdila, že kopírování
+i opakované posuny ochrany fungovaly správně: od `14:47:20Z` do `15:10:59Z`
+worker zapsal 85 potvrzených follower `modified` výsledků, tedy 17 kompletních
+fan-outů na všech pět účtů bez rejectu. Chyba nastala až při ukončení pozic.
+Na čtyřech followerech se po úspěšném cleanupu objevilo přesně
+`Flat sweep nedokončen (0 selhání, 6 odloženo)` a session následně přešla do
+DISARMED. Všechna skutečná zrušení přitom proběhla; starý kód ale považoval
+každou ochrannou nohu z celé durable historie za aktuální cancel kandidát a
+samotné překročení dávkového limitu šesti noh vyhodnotil jako incident.
+
+Lokální oprava vybírá cancel kandidáty podle aktuální broker reality, ne podle
+délky historie. Při známém protective fillu pracuje jen s přesnou bracket/OSO
+epizodou; bez této kauzality načte autoritativní working snapshot a vezme pouze
+skutečně pracovní ID. Po cleanupu vždy znovu ověří `flat + zero working
+protective legs`. Teprve nečitelný broker, nezrušená pracovní noha nebo
+ne-flat pozice dál spouští fail-closed. Po prokázaném flat se pouze terminálně
+označí odpovídající pending cancel/modify outbox položky; auditní historie se
+nemaže.
+
+Regrese reprodukuje dnešní stav s 12 terminálními historickými nohami nad
+limitem a dokazuje, že nová živá epizoda po ochranném fillu zůstane ARMED.
+Protiscénář ponechá skutečnou pracovní orphan nohu a potvrzuje DISARM +
+`Flat sweep nedokončen`. Ověření: chaos sada 17/17, všech 25 copier testovacích
+souborů 361/361 a `npx tsc --noEmit` čisté. Změna je pouze lokální v canonical
+checkoutu; bez nového explicitního souhlasu nebyl proveden commit, push,
+Vercel deploy, reinstall workeru ani žádný broker side effect.
 
 ### 2026-08-26 (Codex, stale účet je opravitelný čistě z LIVE UI)
 Read-only kontrola všech spárovaných OAuth `/account/list` potvrdila, že
