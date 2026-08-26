@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1528 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1530 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -119,8 +119,13 @@ ZAPNUTOU skupinu seřazenou nahoře, úspěšné pořadí `DISARM -> activate-gr
 preflight -> reconcile -> ARM` i fail-closed selhání preflightu bez ARM.
 Ověření: plná sada 192 souborů a 1530/1530 testů, TypeScript, produkční build a
 `git diff --check` čisté. Lokální preview vizuálně potvrdilo `VYPNUTÁ` a
-čekající entry pill. Změna zatím není commitnutá, pushnutá, nasazená ani
-nainstalovaná do Mac workeru; během práce neproběhl ARM, Flatten ani jiný
+čekající entry pill. Implementační commit `55f020cc` byl po explicitním
+souhlasu pushnut na `origin/main`; Vercel production deployment
+`dpl_7g2gw7EidsohCYEAKtTXQuWhQmqj` je `READY`, build log potvrzuje commit
+`55f020c` a hlavní alias vrací HTTP 200. Mac worker byl z téhož canonical
+checkoutu přeinstalován, nastartoval `DISARMED` a závěrečná read-only
+reconciliation potvrdila `connected=true`, `groupFlat=true`, žádné divergentní
+účty ani working orders. Během rollout kontroly neproběhl ARM, Flatten ani jiný
 broker side effect.
 
 ### 2026-08-26 (Codex, LIVE DLL je nově execution brána, ne jen badge)
