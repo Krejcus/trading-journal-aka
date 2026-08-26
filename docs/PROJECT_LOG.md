@@ -70,9 +70,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
       ze stejného commitu a řízený DEMO test.
 - [ ] Incident 26. 8. „změna nativního OSO parentu relativně posunula follower
-      SL/TP“ — úzká lokální oprava a deterministické regrese jsou hotové
-      (zápis níže), ale čekají na explicitní commit/push, deploy, reinstall
-      workeru ze stejného commitu a řízený DEMO test.
+      SL/TP“ — oprava byla commitnuta, nasazena a Mac worker reinstalován
+      26. 8. (zápis níže). Zbývá řízený DEMO test absolutních SL/TP cen.
 - [ ] Durable account eligibility + více uložených překrývajících se profilů
       s nejvýše jednou execution-aktivní skupinou jsou lokálně hotové a
       otestované (zápis níže), ale čekají na explicitně schválený commit/push,
@@ -143,9 +142,13 @@ dat. Ověření: cílená copier sada 138/138, celý repo 190 test files a 1503/
 testů, TypeScript typecheck, produkční build, lint změněných copier souborů i
 `git diff --check` čisté. Celorepový lint zůstává neplatná brána kvůli tisícům
 starých chyb ve vygenerovaných `capacitor-ios/.../assets` a `dist-native`
-bundlech mimo tuto změnu. Změny jsou pouze lokální; nebyly commitnuté,
-pushnuté, deploynuté ani instalované do workeru. Běžící Mac worker zůstává
-DISARMED.
+bundlech mimo tuto změnu. Oprava byla commitnuta jako `8a252f1f`, pushnuta na
+`origin/main` a produkční Vercel deployment
+`dpl_HxBTaZ8EAwr32oma3UDntmKf6d6v` je `READY`; build log potvrzuje branch
+`main` a commit `8a252f1`. Mac worker byl ze stejného canonical repa
+reinstalován a read-only reconciliation potvrdila připojení, flat skupinu,
+nulové working příkazy, nulovou divergenci i nulový stuck outbox. Runtime
+zůstal `DISARMED`; před dalším ostrým ARM zbývá řízený DEMO test.
 
 ### 2026-08-26 (Codex, překrývající se profily + jediná execution skupina)
 Uživatel může uložit více kopírovacích skupin se stejným leaderem, followery i
