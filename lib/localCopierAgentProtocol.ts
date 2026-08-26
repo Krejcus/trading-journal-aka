@@ -42,6 +42,8 @@ export type LocalCopierAgentCommand =
    * z ARMu 5–6 s). Bez `group` se armuje aktuální runtime konfigurace.
    */
   | { type: 'arm-live'; group?: CopyGroupConfig }
+  /** Bezpečně vybere jedinou execution skupinu; vždy zůstane DISARMED. */
+  | { type: 'activate-group'; group: CopyGroupConfig }
   | { type: 'shadow' }
   | { type: 'disarm' }
   | { type: 'kill-switch' }

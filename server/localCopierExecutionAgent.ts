@@ -118,12 +118,16 @@ export async function startLocalCopierExecutionAgent(
     group: structuredClone(group),
   });
 
-  const applyGroup = async (next: CopyGroupConfig): Promise<LiveCopyTradingCommandResult> => {
+  const applyGroup = async (
+    next: CopyGroupConfig,
+    mode: 'update' | 'activate' = 'update',
+  ): Promise<LiveCopyTradingCommandResult> => {
     const previous = group;
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     let runtimeChanged = false;
     try {
-      if (leaderChanged) await options.controller.reconfigureGroup(next);
+      if (mode === 'activate') await options.controller.activateGroup(next);
+      else if (leaderChanged) await options.controller.reconfigureGroup(next);
       else options.controller.updateGroup(next);
       runtimeChanged = true;
       await options.onGroupChanged?.(structuredClone(next));
@@ -133,7 +137,8 @@ export async function startLocalCopierExecutionAgent(
       // původní epochu stejnou bezpečnou cestou. Když selhal už preflight,
       // controller původní skupinu vůbec nezměnil.
       if (runtimeChanged) {
-        if (leaderChanged) await options.controller.reconfigureGroup(previous);
+        if (mode === 'activate') await options.controller.activateGroup(previous);
+        else if (leaderChanged) await options.controller.reconfigureGroup(previous);
         else options.controller.updateGroup(previous);
       }
       throw error;
@@ -203,10 +208,22 @@ export async function startLocalCopierExecutionAgent(
     switch (command.type) {
       case 'copy-command':
         return executeCopyCommand(command.command);
+      case 'activate-group': {
+        const next: CopyGroupConfig = {
+          ...structuredClone(command.group),
+          enabled: true,
+          localOnly: true,
+        };
+        await applyGroup(next, 'activate');
+        return;
+      }
       case 'arm-live': {
         // Volitelný atomický sync konfigurace: dřív UI posílalo update-group
         // + arm-live jako dva relay round-tripy (~5 s); teď jde obojí naráz.
         if (command.group) {
+          if (command.group.id !== group.id) {
+            throw new Error('ARM míří na jinou skupinu. Nejdřív ji bezpečně aktivuj.');
+          }
           await applyGroup(mappedGroup(group, command.group));
         }
         const reconciliation = await options.controller.reconcile();

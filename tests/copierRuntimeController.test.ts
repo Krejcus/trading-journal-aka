@@ -319,6 +319,51 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('aktivace jiného profilu provede plný epoch preflight a nikdy sama neARMuje', async () => {
+    const setCriticalAccounts = vi.fn();
+    const broker = Object.assign(
+      createMockBroker({ behavior: () => ({ kind: 'working' }) }),
+      { setCriticalAccounts },
+    );
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    const nextGroup: CopyGroupConfig = {
+      id: 'g2',
+      name: 'Druhý profil',
+      enabled: true,
+      leaderAccountId: 300,
+      followers: [{ accountId: 400, mode: 'on-submit', multiplier: 1 }],
+    };
+    await controller.activateGroup(nextGroup);
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      shadowMode: true,
+      reconciliationRequired: true,
+      lastSequence: 0,
+    });
+    expect(setCriticalAccounts).toHaveBeenLastCalledWith([300]);
+    expect(() => controller.arm()).toThrow('nutná kontrola pozic');
+
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ brokerOrderId: 'new-profile-order', accountId: 300 }),
+    });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toEqual([
+      expect.objectContaining({ accountId: 400, quantity: 2 }),
+    ]);
+    controller.stop();
+  });
+
   it('změnu leadera odmítne, dokud má kterýkoli starý nebo nový účet working order', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const seeded = await broker.placeOrder({

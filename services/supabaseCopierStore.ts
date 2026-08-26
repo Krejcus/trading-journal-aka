@@ -105,7 +105,20 @@ function validSafety(value: unknown): boolean {
   return value == null || (isRecord(value)
     && finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
     && finite(value.dayLockUntil) && Number(value.dayLockUntil) >= 0
-    && optionalString(value.dayLockReason));
+    && optionalString(value.dayLockReason)
+    && (value.accountEligibility == null || (Array.isArray(value.accountEligibility)
+      && value.accountEligibility.every(entry => isRecord(entry)
+        && integer(entry.accountId) && Number(entry.accountId) > 0
+        && (entry.state === 'active' || entry.state === 'dll-locked'
+          || entry.state === 'breached' || entry.state === 'unverifiable')
+        && finite(entry.at) && optionalString(entry.reason)
+        && (entry.lockSessionEndAt == null || finite(entry.lockSessionEndAt))
+        && (entry.lastExecution == null || (isRecord(entry.lastExecution)
+          && entry.lastExecution.kind === 'rejected'
+          && finite(entry.lastExecution.at)
+          && optionalString(entry.lastExecution.reason)
+          && optionalString(entry.lastExecution.symbol)
+          && optionalString(entry.lastExecution.brokerOrderId)))))));
 }
 
 const unique = (values: readonly string[]) => new Set(values).size === values.length;

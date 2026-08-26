@@ -1,7 +1,12 @@
 import type { BrokerEvent, BrokerFill, BrokerOrder, BrokerPort } from './brokerPort';
 import { msUntilTradovateSessionEnd } from './copierArmSession';
 import { pointValueUsd } from './futuresContractSpecs';
-import { createCopierState, type CopierClosedTrade, type CopierDailyStats } from './copierEngine';
+import {
+  createCopierState,
+  type CopierAccountEligibility,
+  type CopierClosedTrade,
+  type CopierDailyStats,
+} from './copierEngine';
 import { CopierLeaderEventSource } from './copierLeaderEventSource';
 import { CopierBracketCorrelator, type LeaderBracketPair } from './copierBracketCorrelator';
 import { CopierOsoCorrelator } from './copierOsoCorrelator';
@@ -36,25 +41,7 @@ export type CopierStuckOperationKind = 'place' | 'bracket' | 'oso' | 'cancel-or-
  * (ten nese per-účet live tečka v UI) i od poslední execution události.
  * 'disconnected' tu záměrně není — odpojení je vlastnost spojení, ne účtu.
  */
-export type CopierAccountEligibilityState = 'active' | 'dll-locked' | 'breached' | 'unverifiable';
-
-export interface CopierAccountEligibility {
-  accountId: number;
-  state: CopierAccountEligibilityState;
-  /** Lidsky čitelný důvod (broker string / vysvětlení přechodu). */
-  reason?: string;
-  at: number;
-  /** Hranice obchodní session platná v okamžiku DLL locku. */
-  lockSessionEndAt?: number;
-  /** Poslední execution událost účtu — zobrazuje se pod jménem, není to stav. */
-  lastExecution?: {
-    kind: 'rejected';
-    reason?: string;
-    symbol?: string;
-    brokerOrderId?: string;
-    at: number;
-  };
-}
+export type { CopierAccountEligibility, CopierAccountEligibilityState } from './copierEngine';
 
 export interface CopierStuckOperation {
   kind: CopierStuckOperationKind;
@@ -184,6 +171,11 @@ export interface CopierRuntimeController {
    * předchozího leadera. Nikdy neposílá brokerový příkaz.
    */
   reconfigureGroup(group: CopyGroupConfig): Promise<void>;
+  /**
+   * Bezpečně vybere jinou uloženou skupinu jako jedinou execution skupinu.
+   * Vždy založí novou durable epochu a končí DISARMED.
+   */
+  activateGroup(group: CopyGroupConfig): Promise<void>;
   /** Synchronní změna follower/risk konfigurace při nezměněném leaderovi. */
   updateGroup(group: CopyGroupConfig): void;
   /** Explicitní ruční Flatten jednoho účtu. Nikdy se nespouští automaticky. */
@@ -326,7 +318,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // ── Account eligibility ────────────────────────────────────────────────
   // Oddělená vrstva od connection statusu a od poslední execution události.
   // Drží jen odchylky od 'active'; účet bez záznamu je způsobilý.
-  const accountEligibility = new Map<number, CopierAccountEligibility>();
+  const accountEligibility = new Map<number, CopierAccountEligibility>(
+    (runtime.state.safety.accountEligibility ?? []).map(entry => [entry.accountId, {
+      ...entry,
+      ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),
+    }]),
+  );
+  let persistEligibility = async (): Promise<void> => undefined;
   const DLL_REASON_PATTERN = /daily\s*loss|loss\s*limit|\bdll\b/i;
   const BREACH_REASON_PATTERN = /breach|trailing\s*(max\s*)?drawdown|account\s*(disabled|locked|suspended)/i;
   const setEligibility = (accountId: number, next: CopierAccountEligibility) => {
@@ -336,7 +334,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (current?.state === 'breached' && next.state !== 'breached' && next.state !== 'active') return;
     accountEligibility.set(accountId, next);
   };
-  const recordFollowerRejection = (order: BrokerOrder, at: number) => {
+  const recordAccountRejection = async (order: BrokerOrder, at: number) => {
     const reason = order.rejectReason?.trim() || 'broker odmítl příkaz';
     const lastExecution = {
       kind: 'rejected' as const, reason, symbol: order.symbol, brokerOrderId: order.brokerOrderId, at,
@@ -346,6 +344,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       setEligibility(order.accountId, {
         accountId: order.accountId, state: 'breached', reason, at, lastExecution,
       });
+      await persistEligibility();
       return;
     }
     if (DLL_REASON_PATTERN.test(reason)) {
@@ -357,6 +356,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         lockSessionEndAt: currentRuntime().state.safety.dailyStats?.sessionEndAt
           ?? (at + msUntilTradovateSessionEnd(at)),
       });
+      await persistEligibility();
       return;
     }
     // Neurčitý reject: jen execution událost, eligibility se nemění.
@@ -368,9 +368,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       lockSessionEndAt: current?.lockSessionEndAt,
       lastExecution,
     });
+    await persistEligibility();
   };
   /** DLL po začátku nové session nesmí zůstat odemčený ani zamčený „časem“. */
-  const rollEligibilityToNewSession = (now: number) => {
+  const rollEligibilityToNewSession = (now: number): boolean => {
+    let changed = false;
     for (const [accountId, entry] of accountEligibility) {
       if (
         entry.state === 'dll-locked'
@@ -382,13 +384,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ...entry, state: 'unverifiable', at: now,
           reason: 'DLL session skončila — čeká na autoritativní ověření u brokera',
         });
+        changed = true;
       }
     }
+    return changed;
   };
+  const eligibilityAt = (entry: CopierAccountEligibility, now: number): CopierAccountEligibility => (
+    entry.state === 'dll-locked'
+      && entry.lockSessionEndAt != null
+      && entry.lockSessionEndAt > 0
+      && now >= entry.lockSessionEndAt
+      ? {
+        ...entry,
+        state: 'unverifiable',
+        at: now,
+        reason: 'DLL session skončila — čeká na autoritativní ověření u brokera',
+      }
+      : entry
+  );
   const currentIneligibleAccounts = (): ReadonlyMap<number, string> => {
-    rollEligibilityToNewSession(clock());
+    const now = clock();
     const ineligible = new Map<number, string>();
-    for (const [accountId, entry] of accountEligibility) {
+    for (const [accountId, stored] of accountEligibility) {
+      const entry = eligibilityAt(stored, now);
       if (entry.state !== 'active') {
         ineligible.set(accountId, `${entry.state}: ${entry.reason ?? 'bez důvodu'}`);
       }
@@ -892,6 +910,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         current.revision,
       );
       return { ...current, state, revision: committed.revision };
+    });
+  };
+
+  persistEligibility = async () => {
+    await persistSafety({
+      ...currentRuntime().state.safety,
+      accountEligibility: [...accountEligibility.values()].map(entry => ({
+        ...entry,
+        ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),
+      })),
     });
   };
 
@@ -1594,6 +1622,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     await maybeHandleArmExpiry(now);
+    if (rollEligibilityToNewSession(now)) await persistEligibility();
     if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
       rememberFollowerFillCause(event.fill, now);
     }
@@ -1601,13 +1630,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // příkaz odmítnout až následným eventem (incident TDFYG: DLL reject
     // po acku) — outbox i eligibility to musí promítnout, jinak audit
     // vykazuje „dispatched“ nad mrtvým příkazem.
-    if (
-      event.type === 'order'
-      && event.order.accountId !== group.leaderAccountId
+    if (event.type === 'order'
       && event.order.status === 'rejected'
-    ) {
+      && [group.leaderAccountId, ...group.followers.map(item => item.accountId)]
+        .includes(event.order.accountId)) {
       const order = event.order;
-      recordFollowerRejection(order, now);
+      await recordAccountRejection(order, now);
+      // Leader reject se musí propsat do eligibility stejně jako follower
+      // reject, ale nemá follower outbox položku, kterou by bylo co waivnout.
+      if (order.accountId === group.leaderAccountId) {
+        options.onAudit?.([{
+          at: now, leaderEventId: `leader-reject-${order.brokerOrderId}`,
+          kind: 'rejected', accountId: order.accountId,
+          brokerOrderId: order.brokerOrderId,
+          reason: order.rejectReason?.trim() || 'broker odmítl leader příkaz',
+        }]);
+      }
       const acknowledged = [...currentRuntime().outbox.values()].find(entry =>
         entry.brokerOrderId === order.brokerOrderId && entry.status === 'acknowledged');
       if (acknowledged) {
@@ -2137,7 +2175,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // 'unverifiable'). Breach zůstává trvale, dokud ho operátor neřeší.
       {
         const reactivationNow = clock();
-        rollEligibilityToNewSession(reactivationNow);
+        let eligibilityChanged = rollEligibilityToNewSession(reactivationNow);
         for (const [accountId, entry] of accountEligibility) {
           if (!byAccount.has(accountId)) continue;
           const newSessionBegan = entry.lockSessionEndAt != null
@@ -2148,6 +2186,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               ...entry, state: 'active', at: reactivationNow,
               reason: 'autoritativně ověřeno při reconciliaci po nové session',
             });
+            eligibilityChanged = true;
             options.onAudit?.([{
               at: reactivationNow, leaderEventId: `eligibility-reactivate-${accountId}`,
               kind: 'recovered', accountId,
@@ -2155,6 +2194,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             }]);
           }
         }
+        if (eligibilityChanged) await persistEligibility();
       }
       // Durable dokončení sweep povinnosti: pád workeru mezi follower flat
       // a potvrzeným cancelem nesmí povinnost ztratit (review, bod 5).
@@ -2217,22 +2257,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * event, který dorazil před klikem, doběhne pod starým leaderem; event po
    * potvrzené změně už pod novým. Chyba se vrátí UI a frontu nezabije.
    */
-  const reconfigureLeaderEpoch = async (nextGroup: CopyGroupConfig): Promise<void> => {
+  const reconfigureLeaderEpoch = async (
+    nextGroup: CopyGroupConfig,
+    switchOptions: { allowGroupChange?: boolean; forceEpoch?: boolean } = {},
+  ): Promise<void> => {
+    const operation = switchOptions.forceEpoch ? 'Aktivaci skupiny' : 'Změnu leadera';
     const run = eventTail.then(async () => {
       if (stopped) throw new Error('Copier runtime is stopped');
-      if (nextGroup.id !== group.id) throw new Error('Nelze změnit runtime na jinou copy group');
+      if (nextGroup.id !== group.id && !switchOptions.allowGroupChange) {
+        throw new Error('Nelze změnit runtime na jinou copy group bez explicitní aktivace');
+      }
       assertRuntimeGroup(nextGroup);
-      if (nextGroup.leaderAccountId === group.leaderAccountId) {
+      if (nextGroup.leaderAccountId === group.leaderAccountId && !switchOptions.forceEpoch) {
         group = nextGroup;
         positionCheckComplete = false;
         source.requireReconciliation();
         return;
       }
       if (!gate.connected) {
-        throw new Error('Změnu leadera nelze potvrdit bez živého broker syncu workeru');
+        throw new Error(`${operation} nelze potvrdit bez živého broker syncu workeru`);
       }
       if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
-        throw new Error('Změnu leadera blokuje nevyřešený durable outbox');
+        throw new Error(`${operation} blokuje nevyřešený durable outbox`);
       }
       const pendingReasons = [
         pendingBracketTimers.size > 0 ? 'bracket correlation' : '',
@@ -2247,12 +2293,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         dayLockPendingReason ? 'day-lock transition' : '',
       ].filter(Boolean);
       if (pendingReasons.length > 0) {
-        throw new Error(`Změnu leadera blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
+        throw new Error(`${operation} blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
       }
       const openLots = currentRuntime().state.safety.dailyStats?.openLots
         .filter(lot => lot.netQuantity !== 0) ?? [];
       if (openLots.length > 0) {
-        throw new Error('Změnu leadera blokuje otevřená durable pozice leadera');
+        throw new Error(`${operation} blokuje otevřená durable pozice leadera`);
       }
 
       const accountIds = [...new Set([
@@ -2271,7 +2317,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return !capability || !capability.active || !capability.canTrade;
       });
       if (unavailable.length > 0) {
-        throw new Error(`Změnu leadera blokují neaktivní/read-only účty: ${unavailable.join(',')}`);
+        throw new Error(`${operation} blokují neaktivní/read-only účty: ${unavailable.join(',')}`);
       }
       const snapshots = await Promise.all(accountIds.map(async accountId => {
         const [positions, orders] = await Promise.all([
@@ -2291,7 +2337,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ? `working=${withWorkingOrders.map(item => item.accountId).join(',')}`
             : '',
         ].filter(Boolean).join(' ');
-        throw new Error(`Změna leadera vyžaduje všechny staré i nové účty flat a bez příkazů: ${details}`);
+        throw new Error(`${operation} vyžaduje všechny staré i nové účty flat a bez příkazů: ${details}`);
       }
 
       runtime = await processor.mutate(async current => {
@@ -2374,6 +2420,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('ARM TTL musí být kladný počet milisekund');
       }
       const now = clock();
+      if (!group.enabled) throw new Error('Copier nelze armovat: skupina je vypnutá');
       if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
       if (source.needsReconciliation()) throw new Error('Po reconnectu je nutná kontrola pozic');
       const safety = currentRuntime().state.safety;
@@ -2388,6 +2435,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
       if (gate.divergentAccounts.size > 0) throw new Error('Pozice leader/follower se rozcházejí');
       if (workingOrderAccounts.size > 0) throw new Error('Před ARM musí být všechny účty bez pracovních příkazů');
+      const ineligible = currentIneligibleAccounts();
+      const leaderReason = ineligible.get(group.leaderAccountId);
+      if (leaderReason) throw new Error(`Leader účet není způsobilý pro nové vstupy: ${leaderReason}`);
+      if (!shadowMode) {
+        const participatingFollowers = group.followers.filter(follower =>
+          follower.mode !== 'off' && !ineligible.has(follower.accountId));
+        if (participatingFollowers.length === 0) {
+          throw new Error('ARM blokován: skupina nemá žádný způsobilý follower účet');
+        }
+      }
       // Kratší z limitů vyhrává: session TTL nesmí ARM prodloužit za výchozí strop.
       const armTtlMs = ttlMs != null ? Math.min(ttlMs, defaultArmTtlMs) : defaultArmTtlMs;
       gate = { ...gate, armed: true, armedAt: now, now, shadowMode, armTtlMs };
@@ -2436,6 +2493,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       gate = { ...gate, armed: false };
       positionCheckComplete = false;
       await reconfigureLeaderEpoch(nextGroup);
+    },
+    async activateGroup(nextGroup) {
+      // Aktivace není ARM. Nejprve fail-safe DISARM, potom plný preflight
+      // staré i nové topologie a nová durable epocha.
+      gate = { ...gate, armed: false };
+      positionCheckComplete = false;
+      await reconfigureLeaderEpoch(nextGroup, { allowGroupChange: true, forceEpoch: true });
     },
     updateGroup(nextGroup) {
       // Jakýkoli pokus o změnu konfigurace nejdřív zavře live dispatch.
@@ -2539,8 +2603,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         stuckOutbox: stuckOperations.length > 0,
         stuckOperations,
         accountEligibility: (() => {
-          rollEligibilityToNewSession(clock());
+          const now = clock();
           return [...accountEligibility.values()]
+            .map(entry => eligibilityAt(entry, now))
             .filter(entry => entry.state !== 'active' || entry.lastExecution != null)
             .map(entry => ({ ...entry, lastExecution: entry.lastExecution ? { ...entry.lastExecution } : undefined }));
         })(),

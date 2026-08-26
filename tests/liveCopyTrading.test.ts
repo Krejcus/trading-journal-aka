@@ -98,6 +98,40 @@ describe('liveCopyTrading', () => {
     expect(validateCopyGroup({ ...valid, followers: [{ accountId: 1, mode: 'on-fill', multiplier: 0 }] }, [1, 2]).errors).toHaveLength(2);
   });
 
+  it('dovolí uložit stejný účet ve více neaktivních profilech', () => {
+    const existing: CopyGroupConfig = {
+      id: 'existing', name: 'První', enabled: false, leaderAccountId: 1,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
+    };
+    const duplicate: CopyGroupConfig = {
+      id: 'duplicate', name: 'Druhá', enabled: true, leaderAccountId: 3,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
+    };
+
+    expect(validateCopyGroup(existing, [1, 2, 3]).valid).toBe(true);
+    expect(validateCopyGroup(duplicate, [1, 2, 3]).valid).toBe(true);
+  });
+
+  it('při duplicitní topologii adoptuje runtime jen podle stabilního id', () => {
+    const first: CopyGroupConfig = {
+      id: 'first', name: 'První', enabled: false, leaderAccountId: 1,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }], localOnly: true,
+    };
+    const second: CopyGroupConfig = {
+      id: 'second', name: 'Druhá', enabled: false, leaderAccountId: 1,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 2 }], localOnly: true,
+    };
+    const runtime: CopyGroupConfig = {
+      id: 'second', name: 'Druhá runtime', enabled: true, leaderAccountId: 1,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 3 }], localOnly: true,
+    };
+
+    expect(adoptRuntimeCopyGroup([first, second], [1, 2], runtime)).toEqual([
+      runtime,
+      first,
+    ]);
+  });
+
   it('normalizuje multiplier a vytváří stabilní lokální id', () => {
     expect(normalizeMultiplier(1.234)).toBe(1.23);
     expect(normalizeMultiplier(0)).toBe(0.01);

@@ -56,7 +56,10 @@ import {
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
-import type { CopyGroupConfig, LiveCopyTradingAdapter } from '../services/liveCopyTrading';
+import {
+  type CopyGroupConfig,
+  type LiveCopyTradingAdapter,
+} from '../services/liveCopyTrading';
 
 type LiveTab = 'connections' | 'overview' | 'accounts' | 'orders' | 'events';
 
@@ -424,11 +427,30 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
               onGroupsChange={setCopyGroups}
+              onActivateGroup={async group => {
+                const nextGroup: CopyGroupConfig = {
+                  ...group,
+                  enabled: true,
+                  localOnly: true,
+                };
+                setAgentStatus((await executeAgent({ type: 'activate-group', group: nextGroup })).status);
+              }}
               onArmLive={executionGroup ? async () => {
+                if (!executionGroup.enabled) throw new Error('ARM blokován: skupina je vypnutá.');
+                const eligibility = agentStatus?.controller.accountEligibility ?? [];
+                const leaderEligibility = eligibility.find(entry =>
+                  entry.accountId === executionGroup.leaderAccountId && entry.state !== 'active');
+                if (leaderEligibility) {
+                  throw new Error(`ARM blokován: leader není způsobilý (${leaderEligibility.state}: ${leaderEligibility.reason ?? 'bez důvodu'}).`);
+                }
+                const enabledFollowers = executionGroup.followers.filter(follower => follower.mode !== 'off');
                 const ineligible = (agentStatus?.controller.accountEligibility ?? [])
                   .filter(entry => entry.state !== 'active'
-                    && executionGroup.followers.some(follower => follower.accountId === entry.accountId));
-                const participating = executionGroup.followers.length - ineligible.length;
+                    && enabledFollowers.some(follower => follower.accountId === entry.accountId));
+                const participating = enabledFollowers.length - ineligible.length;
+                if (participating <= 0) {
+                  throw new Error('ARM blokován: skupina nemá žádný způsobilý follower účet.');
+                }
                 const exclusionNote = ineligible.length > 0
                   ? ` POZOR: ${ineligible.map(entry =>
                       `účet ${entry.accountId} se NEBUDE účastnit (${entry.state}: ${entry.reason ?? 'bez důvodu'})`,

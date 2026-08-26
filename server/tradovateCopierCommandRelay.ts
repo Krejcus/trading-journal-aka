@@ -76,7 +76,7 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
 }
 
 const allowed = new Set<LocalCopierAgentCommand['type']>([
-  'copy-command', 'arm-live', 'shadow', 'disarm', 'kill-switch',
+  'copy-command', 'arm-live', 'activate-group', 'shadow', 'disarm', 'kill-switch',
 ]);
 
 // The browser relay exists to synchronize the already configured group before
@@ -143,7 +143,7 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
   if (command.type === 'copy-command') {
     return { command: validatedRemoteCopyCommand((command as { command?: unknown }).command) };
   }
-  if (command.type === 'arm-live') {
+  if (command.type === 'arm-live' || command.type === 'activate-group') {
     // ARM bez skupiny se dřív tiše převedl na {} a worker se ozbrojil se
     // svou zastaralou konfigurací — 24. 8. s enabled:false, takže se první
     // obchod nezkopíroval. UI skupinu posílá vždy; její absence je chyba
@@ -158,8 +158,8 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
   if (row.command_type === 'copy-command') {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
   }
-  if (row.command_type === 'arm-live') {
-    return { type: 'arm-live', group: validatedRelayGroup(row.payload?.group) } as LocalCopierAgentCommand;
+  if (row.command_type === 'arm-live' || row.command_type === 'activate-group') {
+    return { type: row.command_type, group: validatedRelayGroup(row.payload?.group) } as LocalCopierAgentCommand;
   }
   return { type: row.command_type } as LocalCopierAgentCommand;
 };

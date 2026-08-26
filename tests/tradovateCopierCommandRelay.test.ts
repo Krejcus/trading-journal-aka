@@ -157,6 +157,7 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
     followers: [{ accountId: 62364057, mode: 'on-submit' as const, multiplier: 2 }],
     safety: {
       dailyLossLimitUsd: 500,
+      dailyMaxLosingTrades: 0,
       entryCooldownMinutes: 15,
       armExpiryFlatten: 'followers' as const,
       positionReconciler: true,
@@ -205,5 +206,36 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
       command: { type: 'arm-live', group: { id: 'x' } } as unknown as LocalCopierAgentCommand,
     })).rejects.toThrow('invalid-relay-command');
     expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('activate-group projde relay beze ztráty konfigurace a nejde zaměnit za ARM', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      command: { type: 'activate-group', group: skupina },
+      idempotencyKey: 'activate-group-1',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+
+    expect(upsert.mock.calls[0][0]).toMatchObject({
+      command_type: 'activate-group',
+      payload: { group: skupina },
+    });
+
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'command-id',
+        command_type: 'activate-group',
+        payload: { group: skupina },
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed',
+        result: null,
+        error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toMatchObject({ type: 'activate-group', group: skupina });
   });
 });

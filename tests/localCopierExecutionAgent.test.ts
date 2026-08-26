@@ -39,6 +39,7 @@ const controller = () => {
     disarm: vi.fn(() => { status = { ...status, armed: false }; }),
     engageKillSwitch: vi.fn(() => { status = { ...status, armed: false, killSwitch: true }; }),
     reconcile: vi.fn(async () => ({ divergentAccounts: [], workingOrderAccounts: [] })),
+    activateGroup: vi.fn(async () => undefined),
     reconfigureGroup: vi.fn(async () => undefined),
     updateGroup: vi.fn(),
     flattenAccount: vi.fn(async () => ({ flat: true })),
@@ -194,6 +195,33 @@ describe('local copier execution agent', () => {
     expect(runtime.updateGroup).not.toHaveBeenCalled();
     expect(running.status().group).toMatchObject({ leaderAccountId: 22 });
     expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({ leaderAccountId: 22 }));
+  });
+
+  it('aktivuje jiný uložený profil přes samostatný fail-closed příkaz a zůstane DISARMED', async () => {
+    const runtime = controller();
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, onGroupChanged });
+    const next: CopyGroupConfig = {
+      id: 'lucid-profile',
+      name: 'Lucid profil',
+      enabled: false,
+      leaderAccountId: 33,
+      followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }],
+      localOnly: true,
+    };
+
+    const result = await running.execute({ type: 'activate-group', group: next });
+
+    expect(result.ok).toBe(true);
+    expect(runtime.activateGroup).toHaveBeenCalledWith({
+      ...next,
+      enabled: true,
+      localOnly: true,
+    });
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(running.status().controller.armed).toBe(false);
+    expect(running.status().group).toMatchObject({ id: 'lucid-profile', enabled: true });
+    expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({ id: 'lucid-profile' }));
   });
 
   it('rolls configuration back and remains disarmed when persistence fails', async () => {
@@ -482,6 +510,21 @@ describe('atomický arm-live s konfigurací', () => {
       await agent.execute({ type: 'arm-live' });
       expect(runtime.updateGroup).not.toHaveBeenCalled();
       expect(runtime.arm).toHaveBeenCalled();
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it('arm-live nikdy nepřepne na jiný profil bokem mimo activate-group preflight', async () => {
+    const runtime = controller();
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      await expect(agent.execute({
+        type: 'arm-live',
+        group: { ...group(), id: 'jiny-profil' },
+      })).rejects.toThrow('Nejdřív ji bezpečně aktivuj');
+      expect(runtime.activateGroup).not.toHaveBeenCalled();
+      expect(runtime.arm).not.toHaveBeenCalled();
     } finally {
       await agent.close();
     }

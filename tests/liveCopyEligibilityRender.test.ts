@@ -16,10 +16,14 @@ describe('AccountEligibilityPill', () => {
     expect(render({ live: true })).toContain('Aktivní');
   });
 
-  it('odpojené spojení má přednost — connection je jiná vrstva než eligibility', () => {
+  it('DLL/BREACH eligibility nezmizí ani při odpojeném broker spojení', () => {
     const html = render({ live: false, eligibility: eligibility({ state: 'dll-locked' }) });
-    expect(html).toContain('Odpojeno');
-    expect(html).not.toContain('DLL');
+    expect(html).toContain('DLL · do konce session');
+    expect(html).not.toContain('Odpojeno');
+  });
+
+  it('odpojení se ukazuje samostatně, pokud účet nemá závažnější eligibility stav', () => {
+    expect(render({ live: false })).toContain('Odpojeno');
   });
 
   it('dll-locked ukazuje zámek do konce session s důvodem v tooltip', () => {

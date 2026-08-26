@@ -168,8 +168,11 @@ export function adoptRuntimeCopyGroup(
   }
 
   const runtimeKey = copyGroupAccountKey(runtimeGroup);
-  const matching = current.find(group => group.id === runtimeGroup.id)
-    ?? current.find(group => copyGroupAccountKey(group) === runtimeKey);
+  const sameId = current.find(group => group.id === runtimeGroup.id);
+  const exactTopology = current.filter(group => copyGroupAccountKey(group) === runtimeKey);
+  // Překrývající uložené šablony jsou povolené. Bez shody stabilního ID
+  // proto topologii adoptujeme jen tehdy, když je kandidát právě jeden.
+  const matching = sameId ?? (exactTopology.length === 1 ? exactTopology[0] : undefined);
   // Skupiny žijí v localStorage, tedy zvlášť na každém zařízení, zatímco
   // worker je sdílený. Shoda id znamená, že worker tuhle skupinu zná
   // z posledního uložení — jeho název je pak čerstvější a přejmenování
@@ -185,7 +188,7 @@ export function adoptRuntimeCopyGroup(
     ...(matching?.safety && (preferLocal || !runtimeGroup.safety) ? { safety: matching.safety } : {}),
   };
   const retained = current.filter(group => {
-    if (group.id === runtimeGroup.id || copyGroupAccountKey(group) === runtimeKey) return false;
+    if (group.id === authoritative.id || group === matching) return false;
     if (!group.localOnly) return true;
     const ids = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
     return ids.every(accountId => Number.isSafeInteger(accountId) && available.has(Number(accountId)));

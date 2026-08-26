@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
 import { createMemoryCopierStore } from '../services/copierStore';
@@ -151,5 +151,94 @@ describe('account eligibility — DLL incident', () => {
     expect(afterReconcile?.state).toBe('active');
 
     h.controller.stop();
+  });
+
+  it('DLL eligibility přežije restart runtime ze stejného durable store', async () => {
+    const h = await harness();
+    await emitLeaderEntry(h, 'leader-entry-1', '1:Working');
+    await asyncDllReject(h, 205);
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 205)?.state)
+      .toBe('dll-locked');
+    h.controller.stop();
+
+    const restarted = await bootstrapCopierRuntime({
+      broker: h.broker,
+      store: h.store,
+      group,
+      clock: h.clock,
+      wait: async () => undefined,
+    });
+
+    const restored = restarted.status().accountEligibility?.find(entry => entry.accountId === 205);
+    expect(restored).toMatchObject({
+      accountId: 205,
+      state: 'dll-locked',
+      reason: expect.stringContaining('daily loss limit'),
+      lastExecution: {
+        kind: 'rejected',
+        brokerOrderId: expect.any(String),
+      },
+    });
+    restarted.stop();
+  });
+
+  it('DLL reject leadera vyřadí leader účet a ARM selže nahlas', async () => {
+    const h = await harness();
+    h.controller.disarm();
+    h.broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        status: 'rejected',
+        rejectReason: 'Violation: daily loss limit reached',
+        sourceVersion: 'leader-dll-reject',
+      }),
+    });
+    await h.controller.waitForIdle();
+
+    expect(h.controller.status().accountEligibility?.find(entry => entry.accountId === 100)?.state)
+      .toBe('dll-locked');
+    expect(() => h.controller.arm()).toThrow(/Leader účet není způsobilý/);
+    h.controller.stop();
+  });
+
+  it('live ARM selže, když nezůstane žádný způsobilý follower', async () => {
+    const singleGroup: CopyGroupConfig = {
+      ...group,
+      id: 'g-single',
+      followers: [{ accountId: 205, mode: 'on-submit', multiplier: 1 }],
+    };
+    let now = 5_000;
+    const clock = () => ++now;
+    const broker = createMockBroker({ clock, behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: singleGroup,
+      clock,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({ brokerOrderId: 'single-entry', sourceVersion: '1:Working' }),
+    });
+    await controller.waitForIdle();
+    const [copied] = broker.orders().filter(order => order.accountId === 205);
+    expect(copied).toBeDefined();
+    copied.status = 'rejected';
+    copied.rejectReason = 'Violation: daily loss limit reached';
+    copied.sourceVersion = 'single-dll-reject';
+    broker.emitEvent({ type: 'order', order: { ...copied } });
+    await controller.waitForIdle();
+
+    controller.disarm();
+    expect(() => controller.arm()).toThrow(/žádný způsobilý follower/);
+    // Shadow zůstává dostupný pro bezpečnou diagnostiku bez broker side effectu.
+    expect(() => controller.arm({ shadowMode: true })).not.toThrow();
+    controller.stop();
   });
 });

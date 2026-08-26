@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1464 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1489 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -69,6 +69,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       kauzální oprava a deterministické regrese jsou hotové (zápis níže), ale
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
       ze stejného commitu a řízený DEMO test.
+- [ ] Durable account eligibility + více uložených překrývajících se profilů
+      s nejvýše jednou execution-aktivní skupinou jsou lokálně hotové a
+      otestované (zápis níže), ale čekají na explicitně schválený commit/push,
+      migraci, deploy a reinstall workeru.
 - [ ] Změna leadera pouze z LIVE UI — bezpečná atomická runtime epocha je
       lokálně hotová a otestovaná (zápis níže); před praktickým použitím čeká
       na explicitní push, deploy, reinstall stejného commitu a DEMO ověření.
@@ -84,6 +88,57 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-26 (Codex, překrývající se profily + jediná execution skupina)
+Uživatel může uložit více kopírovacích skupin se stejným leaderem, followery i
+účty; užitečné jsou jako pojmenované varianty násobků a safety pravidel. Účet
+už proto není globálně rezervovaný jednou uloženou skupinou. Execution runtime
+ale smí mít vybranou nejvýše jednu skupinu: explicitní `activate-group` nejprve
+DISARMuje, v jedné serializované operaci autoritativně ověří starou i novou
+topologii jako flat a bez working příkazů, založí novou durable epochu a po
+úspěchu zůstane DISARMED s povinnou novou reconciliation. Samotné přepnutí
+profilu nikdy automaticky neARMuje ani neposílá broker příkaz.
+
+Identita skupiny je založená na stabilním `group.id`; shodná topologie se bez
+ID adoptuje jen při jediném jednoznačném kandidátovi. ARM příkaz pro jinou
+skupinu musí nejdřív projít bezpečnou aktivací a relay podporuje nový typ
+`activate-group` včetně databázového CHECK rozšíření. UI rozlišuje profil
+vybraný runtime slotem od skutečně `enabled` skupiny, takže aktivních může být
+nula nebo jedna a vypnutý profil ani při prvním renderu krátce nesvítí jako
+aktivní. Ostatní profily zůstávají pouze „Uložená“ a jejich editace nemění
+běžící runtime.
+
+Regrese pokrývají překryv účtů, duplicitní topologii, stabilní ID, relay
+round-trip, bezpečný preflight a novou epochu, zákaz side-switch přes ARM,
+zachování DISARMED i první UI render. Ověření: 190 test files, 1489/1489 testů,
+115/115 cílených testů, TypeScript typecheck, scoped ESLint, produkční build a
+`git diff --check` čisté (build má pouze existující upozornění na velké chunky).
+Změny jsou pouze lokální: nebyly commitnuté, pushnuté, migrované, deploynuté
+ani instalované do workeru.
+
+### 2026-08-25 (Codex, durable eligibility + jeden účet právě v jedné skupině)
+Account eligibility už není pouze procesová `Map`: ukládá se do existujícího
+durable safety snapshotu a po restartu se obnoví včetně DLL/BREACHED,
+session-end a posledního execution výsledku. Reject klasifikace zahrnuje i
+leadera; leader s DLL/BREACH nesmí být ARMován. LIVE ARM bez jediného
+způsobilého followera nyní selže nahlas, zatímco shadow zůstává dostupný.
+Connection status a eligibility jsou v UI samostatné vrstvy — odpojení už
+neskryje silnější DLL/BREACHED stav ani neztlumí celý řádek.
+
+Zavedeno výhradní globální členství `accountId`: leader i follower smí patřit
+právě do jedné kopírovací skupiny, včetně skupin momentálně disabled. Editor
+už obsazený účet označí názvem skupiny a nedovolí jej vybrat; stejný invariant
+znovu vynucuje doménová validace při uložení, ARM preflight a runtime resolver.
+Starší nebo ručně poškozená konfigurace s duplicitou proto fail-closed —
+nemůže způsobit dvojité kopírování.
+
+Regrese kryjí restart s DLL stavem, reject leadera, nulovou LIVE účast,
+oddělení disconnected/eligibility, kolize skupin i fail-closed runtime.
+Ověření: 190 test files, 1482/1482 testů, TypeScript typecheck a produkční
+build čisté; scoped ESLint změněných souborů bez chyb (jedno starší hook
+warning v `TradovateLiveDesk`). Globální lint nadále nabírá generované
+Capacitor/dist soubory a hlásí jejich existující chyby. Změny jsou pouze
+lokální: nebyly commitnuté, pushnuté, deploynuté ani instalované do workeru.
 
 ### 2026-08-25 večer (Claude, account-eligibility systém + oprava execution sémantiky)
 Incident TDFYG (DLL reject vykázaný jako dispatched/canceled) → nový

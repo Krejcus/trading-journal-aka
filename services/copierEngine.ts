@@ -84,6 +84,28 @@ export interface FollowerOrderLink {
   stopPrice?: number;
 }
 
+/**
+ * Způsobilost účtu k NOVÝM vstupům. Je záměrně oddělená od transportního
+ * connection statusu a patří do durable safety snapshotu: restart workeru
+ * nesmí zapomenout DLL/BREACH a znovu účet tiše pustit do kopírování.
+ */
+export type CopierAccountEligibilityState = 'active' | 'dll-locked' | 'breached' | 'unverifiable';
+
+export interface CopierAccountEligibility {
+  accountId: number;
+  state: CopierAccountEligibilityState;
+  reason?: string;
+  at: number;
+  lockSessionEndAt?: number;
+  lastExecution?: {
+    kind: 'rejected';
+    reason?: string;
+    symbol?: string;
+    brokerOrderId?: string;
+    at: number;
+  };
+}
+
 export interface CopierState {
   /**
    * Klíče replikací, které jsou u brokera vyřízené (potvrzené nebo
@@ -123,6 +145,8 @@ export interface CopierState {
      * Maže se při zploštění skupiny, ručním DISARM a kill switchi.
      */
     liveCopyOpenSince?: number;
+    /** Durable eligibility západky účtů; chybějící položka znamená active. */
+    accountEligibility?: CopierAccountEligibility[];
   };
 }
 
@@ -191,6 +215,10 @@ export function createCopierState(
     followerFillTargets: new Map(followerFillTargets),
     safety: {
       ...safety,
+      accountEligibility: safety.accountEligibility?.map(entry => ({
+        ...entry,
+        ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),
+      })) ?? [],
       ...(safety.dailyStats
         ? {
           dailyStats: {

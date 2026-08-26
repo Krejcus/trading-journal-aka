@@ -59,7 +59,7 @@ export function emptySnapshot(): CopierSnapshot {
     links: [],
     leaderCumQty: [],
     followerFillTargets: [],
-    safety: { entryCooldownUntil: 0, dayLockUntil: 0 },
+    safety: { entryCooldownUntil: 0, dayLockUntil: 0, accountEligibility: [] },
   };
 }
 
@@ -134,6 +134,10 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
   const base = safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 };
   return {
     ...base,
+    accountEligibility: base.accountEligibility?.map(entry => ({
+      ...entry,
+      ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),
+    })) ?? [],
     ...(base.dailyStats
       ? {
         dailyStats: {

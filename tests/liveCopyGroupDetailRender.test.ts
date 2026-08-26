@@ -111,4 +111,53 @@ describe('GroupDetail Positions integrace', () => {
     expect(positionsCell).toContain('lucide-clock-3');
     expect(positionsCell).not.toContain('Čekající vstup NQ,');
   });
+
+  it('překrývající profily vykreslí jako uložené a jen jeden jako execution aktivní', () => {
+    const second = {
+      ...snapshot.groups[0],
+      id: 'group-second',
+      name: 'Druhy profil',
+    };
+    const runtimeGroup = {
+      id: 'group-main',
+      name: 'Hlavni',
+      enabled: true,
+      leaderAccountId: leaderId,
+      followers: [{ accountId: followerId, mode: 'on-submit' as const, multiplier: 1 }],
+      localOnly: true,
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, groups: [snapshot.groups[0], second] },
+      executionGroupId: 'group-main',
+      runtimeGroup,
+    }));
+
+    expect(markup).toContain('Hlavni');
+    expect(markup).toContain('Druhy profil');
+    expect(markup.match(/Uložená/g)).toHaveLength(1);
+  });
+
+  it('vybraný, ale vypnutý execution profil nezobrazuje jako aktivní', () => {
+    const second = {
+      ...snapshot.groups[0],
+      id: 'group-second',
+      name: 'Druhy profil',
+    };
+    const runtimeGroup = {
+      id: 'group-main',
+      name: 'Hlavni',
+      enabled: false,
+      leaderAccountId: leaderId,
+      followers: [{ accountId: followerId, mode: 'on-submit' as const, multiplier: 1 }],
+      localOnly: true,
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, groups: [snapshot.groups[0], second] },
+      executionGroupId: 'group-main',
+      runtimeGroup,
+    }));
+
+    expect(markup.match(/Uložená/g)).toHaveLength(2);
+    expect(markup).not.toContain('Execution aktivní');
+  });
 });
