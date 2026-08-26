@@ -27,7 +27,12 @@ function validateLeaderChild(
   if (!order) return `${options.role} ${options.expectedOrderId} nebyl nalezen`;
   if (order.brokerOrderId !== options.expectedOrderId) return `${options.role} lookup vrátil jiné order ID`;
   if (order.accountId !== options.leaderAccountId) return `${options.role} patří jinému účtu`;
-  if (order.parentOrderId !== options.leaderEntryOrderId) return `${options.role} není child očekávaného parentu`;
+  // TradingView/Tradovate native OSO leader child entity nemusí parentId vůbec
+  // publikovat. Přesná durable stop/target ID už bracket bezpečně kotví; pokud
+  // ale broker parent ID poskytne, nesmí odporovat očekávanému entry orderu.
+  if (order.parentOrderId != null && order.parentOrderId !== options.leaderEntryOrderId) {
+    return `${options.role} není child očekávaného parentu`;
+  }
   if (order.symbol !== options.symbol) return `${options.role} má jiný kontrakt`;
   if (order.side !== oppositeSide(options.side)) return `${options.role} má nesprávnou stranu`;
   if (order.status !== 'working') return `${options.role} není working (${order.status})`;

@@ -70,8 +70,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
       ze stejného commitu a řízený DEMO test.
 - [ ] Incident 26. 8. „změna nativního OSO parentu relativně posunula follower
-      SL/TP“ — oprava byla commitnuta, nasazena a Mac worker reinstalován
-      26. 8. (zápis níže). Zbývá řízený DEMO test absolutních SL/TP cen.
+      SL/TP“ — první oprava byla nasazena, ale řízený DEMO test odhalil, že
+      TradingView leader child entity nemají `parentId`; přesná lokální oprava
+      a regrese jsou hotové (zápis níže), čekají na schválené nasazení a nový
+      DEMO test absolutních SL/TP cen.
 - [ ] Durable account eligibility + více uložených překrývajících se profilů
       s nejvýše jednou execution-aktivní skupinou jsou lokálně hotové a
       otestované (zápis níže), ale čekají na explicitně schválený commit/push,
@@ -91,6 +93,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-26 (Codex, TradingView OSO child bez parentId)
+Řízený DEMO test změny čekajícího nativního OSO parentu zablokoval všech pět
+followerů před prvním side effectem s chybou `stop není child očekávaného
+parentu`. Read-only forenzika přes raw Tradovate `/order/item`, orderVersion,
+command report i execution report potvrdila, že leader bracket vytvořený přes
+TradingView nemá na stopu ani targetu `parentId`; nejde o chybu našeho mapperu.
+Follower brackety vytvořené copierem explicitní parent/OCO vazby mají.
+
+Validátor teď nepovažuje chybějící parent metadata za rozpor, protože bracket
+už bezpečně kotví durable mapping přes přesná leader entry/stop/target order
+ID. Všechny ostatní autoritativní kontroly zůstaly povinné: exact order ID,
+leader účet, kontrakt, opačná strana, working stav, množství/fill, typ a cena.
+Pokud broker `parentOrderId` poskytne a liší se od očekávaného entry orderu,
+cesta dál fail-closed skončí před jakýmkoli follower modify.
+
+Regrese pro skutečný TradingView tvar bez `parentId` prochází celou sekvencí
+parent modify -> absolutní SL reassert -> absolutní TP reassert; sesterská
+regrese s explicitně cizím parentem ověřuje nulový broker side effect a
+neposunutou leader sekvenci. Ověření: cílený `copierRunner` 68/68, širší
+incidentní/recovery sada 98/98, celé repo 190 test files a 1504/1504 testů,
+TypeScript typecheck, produkční build i `git diff --check` čisté. Změna je jen
+lokální: nebyla commitnuta, pushnuta, deploynuta ani instalována do Mac workeru;
+runtime zůstává DISARMED. Záměrné odebrání jednoho followera uživatelem není
+součást incidentu ani chyba konfigurace.
 
 ### 2026-08-26 (Codex, absolutní SL/TP po změně nativního OSO parentu)
 Read-only broker forenzika potvrdila, že Tradovate po změně ceny nativního OSO

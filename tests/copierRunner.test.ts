@@ -224,7 +224,7 @@ describe('ostrý režim', () => {
     }));
   });
 
-  it('po změně nativního OSO parentu vrátí follower SL/TP na absolutní ceny leadera', async () => {
+  it('po změně nativního OSO parentu vrátí follower SL/TP i když leader child nemají parentId', async () => {
     const broker = createMockBroker({
       behavior: () => ({ kind: 'working' }),
       osoChildrenFollowParentReprice: true,
@@ -255,7 +255,7 @@ describe('ostrý režim', () => {
             order: {
               tag: 'leader-stop', brokerOrderId, accountId, symbol: 'MNQU6', side: 'Sell' as const,
               orderType: 'Stop' as const, quantity: 1, filledQuantity: 0, stopPrice: 29_950,
-              parentOrderId: 'entry-rebase', status: 'working' as const, updatedAt: clock(),
+              status: 'working' as const, updatedAt: clock(),
             },
             completeness: 'authoritative' as const,
             observedAt: clock(),
@@ -266,7 +266,7 @@ describe('ostrý režim', () => {
             order: {
               tag: 'leader-target', brokerOrderId, accountId, symbol: 'MNQU6', side: 'Sell' as const,
               orderType: 'Limit' as const, quantity: 1, filledQuantity: 0, limitPrice: 30_100,
-              parentOrderId: 'entry-rebase', status: 'working' as const, updatedAt: clock(),
+              status: 'working' as const, updatedAt: clock(),
             },
             completeness: 'authoritative' as const,
             observedAt: clock(),
@@ -302,6 +302,75 @@ describe('ostrý režim', () => {
       limitPrice: 30_100, quantity: 1, status: 'working',
     });
     expect(modified.runtime.state.lastSequence).toBe(4);
+  });
+
+  it('explicitně cizí parentId leader ochrany zablokuje OSO parent modify před brokerem', async () => {
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'working' }),
+      osoChildrenFollowParentReprice: true,
+    });
+    const clock = stepClock();
+    const store = createMemoryCopierStore();
+    const opened = await processOsoPair({
+      pair: {
+        entryOrderId: 'entry-parent-mismatch', stopOrderId: 'stop-parent-mismatch',
+        targetOrderId: 'target-parent-mismatch', accountId: 100, symbol: 'MNQU6',
+        entrySide: 'Buy', quantity: 1, entryOrderType: 'Limit', entryLimitPrice: 30_000,
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: event({ id: 'oso-parent-mismatch', orderId: 'stop-parent-mismatch', sequence: 3 }),
+      group: soloGroup, runtime: createRuntime(createCopierState([], 2)),
+      context: liveGate(), broker, clock, store,
+    });
+    const mapped = opened.runtime.osoOutbox.get('oso:g1:entry-parent-mismatch:200');
+    expect(mapped).toMatchObject({ status: 'acknowledged' });
+
+    const leaderBroker = {
+      ...broker,
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        if (accountId === 100 && brokerOrderId === 'stop-parent-mismatch') {
+          return {
+            order: {
+              tag: 'leader-stop', brokerOrderId, accountId, symbol: 'MNQU6', side: 'Sell' as const,
+              orderType: 'Stop' as const, quantity: 1, filledQuantity: 0, stopPrice: 29_950,
+              parentOrderId: 'different-entry', status: 'working' as const, updatedAt: clock(),
+            },
+            completeness: 'authoritative' as const,
+            observedAt: clock(),
+          };
+        }
+        if (accountId === 100 && brokerOrderId === 'target-parent-mismatch') {
+          return {
+            order: {
+              tag: 'leader-target', brokerOrderId, accountId, symbol: 'MNQU6', side: 'Sell' as const,
+              orderType: 'Limit' as const, quantity: 1, filledQuantity: 0, limitPrice: 30_100,
+              parentOrderId: 'entry-parent-mismatch', status: 'working' as const, updatedAt: clock(),
+            },
+            completeness: 'authoritative' as const,
+            observedAt: clock(),
+          };
+        }
+        return broker.findOrderById(accountId, brokerOrderId);
+      },
+    };
+
+    const modified = await processLeaderEvent({
+      event: event({
+        id: 'entry-parent-mismatch-move', orderId: 'entry-parent-mismatch', kind: 'replaced',
+        sequence: 4, orderType: 'Limit', limitPrice: 30_001,
+      }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(),
+      broker: leaderBroker, clock, store,
+    });
+
+    expect(broker.modifyRequests()).toHaveLength(0);
+    expect(modified.runtime.cancelOutbox.size).toBe(0);
+    expect(modified.audit).toContainEqual(expect.objectContaining({
+      kind: 'blocked',
+      reason: expect.stringContaining('stop není child očekávaného parentu'),
+    }));
+    expect(modified.runtime.state.lastSequence).toBe(3);
   });
 
   it('přímý posun OSO targetu mění jen target a nespouští parent rebase cascade', async () => {
