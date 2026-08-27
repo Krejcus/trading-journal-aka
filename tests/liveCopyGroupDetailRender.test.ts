@@ -186,6 +186,7 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup.match(/ZAPNUTÁ/g)).toHaveLength(1);
     expect(markup.match(/VYPNUTÁ/g)).toHaveLength(1);
     expect(markup.indexOf('Druhy profil')).toBeLessThan(markup.indexOf('Hlavni'));
+    expect(markup).toContain('data-group-layout-motion="true"');
   });
 
   it('zobrazí stale followera jako nedostupného a nepočítá ho mezi aktivní', () => {
@@ -206,6 +207,33 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).toContain('1× nedostupný');
     expect(markup).toContain('Nedostupný účet');
     expect(markup).toContain('Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.');
+  });
+
+  it('u chybějícího OAuth účtu zachová autoritativní BREACHED místo obecného nedostupný', () => {
+    const staleFollowerId = 63_338_592;
+    const staleGroup = {
+      ...snapshot.groups[0],
+      followers: [{
+        ...snapshot.groups[0].followers[0],
+        accountId: staleFollowerId,
+        accountName: `Účet ${staleFollowerId}`,
+      }],
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, groups: [staleGroup] },
+      accountEligibility: [{
+        accountId: staleFollowerId,
+        state: 'breached',
+        reason: 'LIVE equity dosáhla drawdown flooru',
+        at: 123,
+      }],
+    }));
+
+    expect(markup).toContain('0/1 aktivních');
+    expect(markup).toContain('1× BREACHED');
+    expect(markup).not.toContain('1× nedostupný');
+    expect(markup).toContain('LIVE equity dosáhla drawdown flooru · účet není v aktuálním OAuth snapshotu');
+    expect(markup).toContain('>BREACHED<');
   });
 
   it('u uložené skupiny dopočítá DLL a BREACHED i bez dostupného worker statusu', () => {

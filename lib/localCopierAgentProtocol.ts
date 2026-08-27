@@ -62,6 +62,8 @@ export type LocalCopierAgentCommand =
   | { type: 'disarm' }
   | { type: 'kill-switch' }
   | { type: 'reconcile' }
+  /** Cílená read-only kontrola jednoho účtu; nemění execution skupinu ani ARM. */
+  | { type: 'verify-account-eligibility'; accountId: number }
   | { type: 'resolve-stuck-operation'; kind: CopierStuckOperationKind; key: string; reason: string }
   | { type: 'lock-until-session-end'; reason: string }
   | { type: 'device-paired'; deviceId: string };

@@ -8,7 +8,7 @@ import {
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
 import { msUntilTradovateSessionEnd } from '../services/copierArmSession';
-import type { CopierRuntimeController } from '../services/copierRuntimeController';
+import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController';
 import {
   normalizeMultiplier,
   type CopyGroupConfig,
@@ -97,6 +97,24 @@ const sameAccountTopology = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   return leftIds.length === rightIds.length && leftIds.every((value, index) => value === rightIds[index]);
 };
 
+const accountsRequiredForRoutingChange = (
+  previous: CopyGroupConfig,
+  next: CopyGroupConfig,
+  status: CopierControllerStatus,
+): number[] => {
+  const leaderIds = new Set([previous.leaderAccountId, next.leaderAccountId]);
+  const ineligible = new Set(
+    (status.accountEligibility ?? [])
+      .filter(entry => entry.state !== 'active')
+      .map(entry => entry.accountId),
+  );
+  return [...new Set([...copyGroupAccountIds(previous), ...copyGroupAccountIds(next)])]
+    // Vyřazený follower může po BREACH/DLL zmizet z OAuth adresáře. Takový
+    // účet už není routovatelný a nesmí navždy zablokovat jeho odebrání.
+    // Leader zůstává vždy povinný a aktivní follower se dál ověřuje přísně.
+    .filter(accountId => leaderIds.has(accountId) || !ineligible.has(accountId));
+};
+
 const validatedAccountEligibilityExclusions = (value: unknown) => {
   if (value == null) return [];
   if (!Array.isArray(value) || value.length > 100) {
@@ -171,9 +189,9 @@ export async function startLocalCopierExecutionAgent(
         // read-only discovery; teprve controller provede flat/no-working
         // preflight nad sjednocením staré a nové topologie.
         options.controller.disarm();
-        await options.prepareGroupAccounts?.([
-          ...new Set([...copyGroupAccountIds(previous), ...copyGroupAccountIds(next)]),
-        ]);
+        await options.prepareGroupAccounts?.(
+          accountsRequiredForRoutingChange(previous, next, options.controller.status()),
+        );
       }
       if (mode === 'activate') await options.controller.activateGroup(next);
       else if (leaderChanged || topologyChanged) await options.controller.reconfigureGroup(next);
@@ -324,7 +342,17 @@ export async function startLocalCopierExecutionAgent(
         options.controller.engageKillSwitch('Kill switch z AlphaTrade LIVE UI');
         return;
       case 'reconcile':
+        // Samostatná read-only kontrola musí obnovit stejné multi-OAuth
+        // routování jako ARM/SHADOW. Jinak účet z druhého připojení zůstane
+        // po nové session navždy `unverifiable`, i když je u brokera zdravý.
+        await options.prepareGroupAccounts?.(copyGroupAccountIds(group));
         return options.controller.reconcile();
+      case 'verify-account-eligibility':
+        // Cílené ověření nesmí kvůli účtu z jiné uložené skupiny měnit
+        // execution skupinu. Připraví jen jeho OAuth route a provede read-only
+        // capability + positions + orders kontrolu.
+        await options.prepareGroupAccounts?.([command.accountId]);
+        return options.controller.verifyAccountEligibility(command.accountId);
       case 'resolve-stuck-operation':
         await options.controller.waiveStuckOperation({
           kind: command.kind,

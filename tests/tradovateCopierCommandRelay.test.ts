@@ -50,6 +50,43 @@ function claimDb(row: Record<string, unknown>): SupabaseClient {
 }
 
 describe('Tradovate copier command relay', () => {
+  it('přenese cílené read-only ověření účtu beze změny payloadu', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      command: { type: 'verify-account-eligibility', accountId: 63338752 },
+      idempotencyKey: 'verify-account-63338752',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({
+      command_type: 'verify-account-eligibility',
+      payload: { accountId: 63338752 },
+    });
+
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'verify-command-id',
+        command_type: 'verify-account-eligibility',
+        payload: { accountId: 63338752 },
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'verify-account-eligibility', accountId: 63338752 });
+  });
+
+  it('odmítne neplatné ID cíleného ověření', async () => {
+    const upsert = vi.fn();
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert), userId, connectionId,
+      command: { type: 'verify-account-eligibility', accountId: 0 },
+    })).rejects.toThrow('invalid-relay-command-payload');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it.each<CopyCommand>([
     {
       type: 'copy-command',

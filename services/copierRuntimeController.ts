@@ -177,9 +177,17 @@ export interface CopierRuntimeController {
   /** Autoritativně porovná pozice a ověří, že nikde nezůstaly working orders. */
   reconcile(): Promise<{ divergentAccounts: number[]; workingOrderAccounts: number[] }>;
   /**
+   * Autoritativně ověří jediný účet u brokera bez změny execution skupiny.
+   * Je to čistě read-only cesta pro ruční reaktivaci po skončené DLL session.
+   */
+  verifyAccountEligibility(accountId: number): Promise<CopierAccountEligibility>;
+  /**
    * Bezpečně změní leader epochu. Vyžaduje flat + bez working příkazů na
-   * sjednocení staré a nové topologie a zahodí pouze order-lifecycle stav
-   * předchozího leadera. Nikdy neposílá brokerový příkaz.
+   * všech routovatelných účtech sjednocené staré a nové topologie. Známý
+   * vyřazený follower (BREACHED/DLL/unverifiable), který už není v OAuth,
+   * smí být pouze odpojen; leader a aktivní účty zůstávají vždy povinné.
+   * Zahodí pouze order-lifecycle stav předchozího leadera a nikdy neposílá
+   * brokerový příkaz.
    */
   reconfigureGroup(group: CopyGroupConfig): Promise<void>;
   /**
@@ -2231,12 +2239,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');
       const accountIds = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
+      const eligibilityNow = clock();
+      const eligibilityByAccount = new Map<number, CopierAccountEligibility>();
+      for (const [accountId, stored] of accountEligibility) {
+        eligibilityByAccount.set(accountId, eligibilityAt(stored, eligibilityNow));
+      }
+      // Známý vyřazený follower nesmí zablokovat autoritativní kontrolu
+      // zdravých účtů jen proto, že ho prop firma po BREACH/DLL přestala
+      // vracet v account/list. Leader je vždy povinný. `unverifiable` účet
+      // se naopak při dostupné capability dále načte a může se reaktivovat.
+      const optionalFollowerIds = new Set(group.followers
+        .filter(follower => (eligibilityByAccount.get(follower.accountId)?.state ?? 'active') !== 'active')
+        .map(follower => follower.accountId));
       const capabilities = await broker.listAccountCapabilities(accountIds);
       const byCapability = new Map(capabilities.map(item => [item.accountId, item]));
-      const missing = accountIds.filter(accountId => !byCapability.has(accountId));
-      const inactive = accountIds.filter(accountId => byCapability.get(accountId)?.active === false);
+      const missing = accountIds.filter(accountId => !byCapability.has(accountId) && !optionalFollowerIds.has(accountId));
+      const inactive = accountIds.filter(accountId =>
+        byCapability.get(accountId)?.active === false && !optionalFollowerIds.has(accountId));
       const readOnlyFollowers = group.followers.filter(
-        follower => byCapability.get(follower.accountId)?.canTrade === false,
+        follower => byCapability.get(follower.accountId)?.canTrade === false
+          && !optionalFollowerIds.has(follower.accountId),
       ).map(follower => follower.accountId);
       if (missing.length > 0 || inactive.length > 0 || readOnlyFollowers.length > 0) {
         gate = { ...gate, armed: false };
@@ -2248,7 +2270,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ].filter(Boolean).join(' ');
         throw new Error(`OAuth/account preflight selhal: ${details}`);
       }
-      const snapshots = await Promise.all(accountIds.map(async accountId => {
+      const snapshotAccountIds = accountIds.filter(accountId => {
+        const capability = byCapability.get(accountId);
+        if (!capability?.active || !capability.canTrade) return false;
+        const state = eligibilityByAccount.get(accountId)?.state ?? 'active';
+        // BREACHED a stále platný DLL jsou známé exclusions. Expirující DLL
+        // už eligibilityAt převedlo na `unverifiable`, takže se načte a po
+        // úspěšném snapshotu může bezpečně vrátit do active.
+        return state !== 'breached' && state !== 'dll-locked';
+      });
+      const snapshots = await Promise.all(snapshotAccountIds.map(async accountId => {
         const [positions, orders] = await Promise.all([
           broker.listPositions(accountId),
           broker.listOrders(accountId),
@@ -2282,19 +2313,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       workingOrderAccounts = new Set(
         snapshots.filter(item => item.orders.some(order => order.status === 'working')).map(item => item.accountId),
       );
-      for (const follower of group.followers) {
-        const followerPositions = new Map(
-          (byAccount.get(follower.accountId)?.positions ?? []).map(item => [item.symbol, item.netQuantity]),
-        );
-        const symbols = new Set([...reconciledLeaderPositions.keys(), ...followerPositions.keys()]);
-        for (const symbol of symbols) {
-          const expected = Math.trunc((reconciledLeaderPositions.get(symbol) ?? 0) * follower.multiplier);
-          if ((followerPositions.get(symbol) ?? 0) !== expected) {
-            divergent.add(follower.accountId);
-            break;
-          }
-        }
-      }
       // Reaktivace eligibility: JEDINÉ místo, kde se DLL/unverifiable vrací
       // do 'active' — autoritativní snapshot účtu se povedl. Čas sám nikdy
       // nestačí (rollEligibilityToNewSession umí jen zpřísnit na
@@ -2321,6 +2339,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
         }
         if (eligibilityChanged) await persistEligibility();
+      }
+      const ineligibleAfterReactivation = currentIneligibleAccounts();
+      for (const follower of group.followers) {
+        // Účet s autoritativní eligibility exclusion není participantem
+        // copieru. Jeho chybějící snapshot proto není divergence zdravých
+        // participantů; po reaktivaci se automaticky vrátí do této kontroly.
+        if (ineligibleAfterReactivation.has(follower.accountId)) continue;
+        const followerPositions = new Map(
+          (byAccount.get(follower.accountId)?.positions ?? []).map(item => [item.symbol, item.netQuantity]),
+        );
+        const symbols = new Set([...reconciledLeaderPositions.keys(), ...followerPositions.keys()]);
+        for (const symbol of symbols) {
+          const expected = Math.trunc((reconciledLeaderPositions.get(symbol) ?? 0) * follower.multiplier);
+          if ((followerPositions.get(symbol) ?? 0) !== expected) {
+            divergent.add(follower.accountId);
+            break;
+          }
+        }
       }
       // Durable dokončení sweep povinnosti: pád workeru mezi follower flat
       // a potvrzeným cancelem nesmí povinnost ztratit (review, bod 5).
@@ -2396,7 +2432,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Nelze změnit runtime na jinou copy group bez explicitní aktivace');
       }
       assertRuntimeGroup(nextGroup);
-      if (nextGroup.leaderAccountId === group.leaderAccountId && !switchOptions.forceEpoch) {
+      const currentTopology = new Set([
+        group.leaderAccountId,
+        ...group.followers.map(item => item.accountId),
+      ]);
+      const nextTopology = new Set([
+        nextGroup.leaderAccountId,
+        ...nextGroup.followers.map(item => item.accountId),
+      ]);
+      const topologyChanged = currentTopology.size !== nextTopology.size
+        || [...currentTopology].some(accountId => !nextTopology.has(accountId));
+      if (nextGroup.leaderAccountId === group.leaderAccountId && !topologyChanged && !switchOptions.forceEpoch) {
         group = nextGroup;
         positionCheckComplete = false;
         source.requireReconciliation();
@@ -2435,19 +2481,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         nextGroup.leaderAccountId,
         ...nextGroup.followers.map(item => item.accountId),
       ])];
+      const leaderIds = new Set([group.leaderAccountId, nextGroup.leaderAccountId]);
+      const eligibilityNow = clock();
+      const optionalFollowerIds = new Set(accountIds.filter(accountId => {
+        if (leaderIds.has(accountId)) return false;
+        const stored = accountEligibility.get(accountId);
+        return stored != null && eligibilityAt(stored, eligibilityNow).state !== 'active';
+      }));
+      const requiredAccountIds = accountIds.filter(accountId => !optionalFollowerIds.has(accountId));
       const capabilities = await withLeaderEpochDeadline(
         'leader capability preflight',
-        broker.listAccountCapabilities(accountIds),
+        broker.listAccountCapabilities(requiredAccountIds),
       );
       const capabilityByAccount = new Map(capabilities.map(item => [item.accountId, item]));
-      const unavailable = accountIds.filter(accountId => {
+      const unavailable = requiredAccountIds.filter(accountId => {
         const capability = capabilityByAccount.get(accountId);
         return !capability || !capability.active || !capability.canTrade;
       });
       if (unavailable.length > 0) {
         throw new Error(`${operation} blokují neaktivní/read-only účty: ${unavailable.join(',')}`);
       }
-      const snapshots = await Promise.all(accountIds.map(async accountId => {
+      const snapshots = await Promise.all(requiredAccountIds.map(async accountId => {
         const [positions, orders] = await Promise.all([
           withLeaderEpochDeadline(`leader position preflight ${accountId}`, broker.listPositions(accountId)),
           withLeaderEpochDeadline(`leader order preflight ${accountId}`, broker.listOrders(accountId)),
@@ -2677,6 +2731,61 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     },
     async reconcile() {
       return performReconciliation();
+    },
+    async verifyAccountEligibility(accountId) {
+      if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+        throw new Error('Neplatné ID účtu pro ověření');
+      }
+      if (!gate.connected) {
+        const reason = lastError?.message?.trim();
+        throw new Error([
+          'Stav účtu nelze ověřit: worker nemá živé spojení s Tradovate.',
+          reason ? `Poslední chyba: ${reason}.` : '',
+          'OAuth přihlášení tím není dotčené — spojení se obnoví samo, zkus to za chvíli znovu.',
+        ].filter(Boolean).join(' '));
+      }
+
+      const now = clock();
+      const current = accountEligibility.get(accountId);
+      const effective = current ? eligibilityAt(current, now) : undefined;
+      if (effective?.state === 'breached') {
+        throw new Error(`Účet je BREACHED a nelze ho automaticky reaktivovat: ${effective.reason ?? 'bez důvodu'}`);
+      }
+      if (effective?.state === 'dll-locked') {
+        throw new Error(`DLL stále platí do konce broker session: ${effective.reason ?? 'bez důvodu'}`);
+      }
+
+      const capabilities = await broker.listAccountCapabilities([accountId]);
+      const capability = capabilities.find(item => item.accountId === accountId);
+      if (!capability) throw new Error(`Broker účet ${accountId} v OAuth spojení nevrátil`);
+      if (!capability.active) throw new Error(`Broker účet ${accountId} stále hlásí jako neaktivní`);
+      if (!capability.canTrade) throw new Error(`Broker účet ${accountId} zatím nepovoluje obchodování`);
+
+      // Oba read-only dotazy jsou součástí důkazu: samotný account/list může
+      // účet vrátit, i když jeho obchodní snapshot zatím není dostupný.
+      await Promise.all([
+        broker.listPositions(accountId),
+        broker.listOrders(accountId),
+      ]);
+
+      const verified: CopierAccountEligibility = {
+        ...(current ?? {}),
+        accountId,
+        state: 'active',
+        reason: 'autoritativně ověřeno u brokera po nové session',
+        at: now,
+        lockSessionEndAt: undefined,
+      };
+      accountEligibility.set(accountId, verified);
+      await persistEligibility();
+      options.onAudit?.([{
+        at: now,
+        leaderEventId: `eligibility-verify-${accountId}`,
+        kind: 'recovered',
+        accountId,
+        reason: 'účet znovu způsobilý — cílené read-only ověření u brokera',
+      }]);
+      return verified;
     },
     async reconfigureGroup(nextGroup) {
       // UI dostane okamžitě fail-safe DISARM ještě před čekáním na eventTail.

@@ -207,6 +207,151 @@ describe('account eligibility — DLL incident', () => {
     h.controller.stop();
   });
 
+  it('chybějící BREACHED follower neblokuje ověření jiného účtu po nové session', async () => {
+    const initial = emptySnapshot();
+    initial.safety = {
+      entryCooldownUntil: 0,
+      dayLockUntil: 0,
+      accountEligibility: [
+        { accountId: 204, state: 'breached', reason: 'account disabled after breach', at: 800 },
+        {
+          accountId: 205,
+          state: 'unverifiable',
+          reason: 'DLL session skončila — čeká na autoritativní ověření u brokera',
+          at: 900,
+          lockSessionEndAt: 850,
+        },
+      ],
+    };
+    let now = 1_000;
+    const clock = () => ++now;
+    const broker = createMockBroker({
+      clock,
+      behavior: () => ({ kind: 'working' }),
+      accountCapabilities: [100, 201, 202, 203, 205].map(accountId => ({
+        accountId, active: true, canTrade: true,
+      })),
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(initial), group, clock,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconcile()).resolves.toEqual({
+      divergentAccounts: [], workingOrderAccounts: [],
+    });
+    expect(controller.status().accountEligibility).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 204, state: 'breached' }),
+    ]));
+    // Zdravý účet se z fail-closed status seznamu odstraní; `undefined`
+    // zde znamená standardní active stav, ne chybějící broker snapshot.
+    expect(controller.status().accountEligibility?.find(entry => entry.accountId === 205))
+      .toBeUndefined();
+    controller.stop();
+  });
+
+  it('cílené read-only ověření reaktivuje účet i mimo aktuální execution skupinu', async () => {
+    const initial = emptySnapshot();
+    initial.safety = {
+      entryCooldownUntil: 0,
+      dayLockUntil: 0,
+      accountEligibility: [{
+        accountId: 63338752,
+        state: 'unverifiable',
+        reason: 'DLL session skončila — čeká na autoritativní ověření u brokera',
+        at: 900,
+        lockSessionEndAt: 850,
+      }],
+    };
+    let now = 1_000;
+    const clock = () => ++now;
+    const broker = createMockBroker({
+      clock,
+      behavior: () => ({ kind: 'working' }),
+      accountCapabilities: [{ accountId: 63338752, active: true, canTrade: true }],
+    });
+    const store = createMemoryCopierStore(initial);
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock, wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.verifyAccountEligibility(63338752)).resolves.toMatchObject({
+      accountId: 63338752,
+      state: 'active',
+    });
+    // Standardní active bez execution události se z kompaktního statusu
+    // odfiltruje; absence z fail-closed seznamu je zde očekávaný stav.
+    expect(controller.status().accountEligibility?.find(entry => entry.accountId === 63338752))
+      .toBeUndefined();
+    expect((await store.load()).safety?.accountEligibility)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ accountId: 63338752, state: 'active' })]));
+    controller.stop();
+  });
+
+  it('bezpečně odebere BREACHED follower, který už není v broker account/list', async () => {
+    const initial = emptySnapshot();
+    initial.safety = {
+      entryCooldownUntil: 0,
+      dayLockUntil: 0,
+      accountEligibility: [{
+        accountId: 205,
+        state: 'breached',
+        reason: 'account disabled after breach',
+        at: 900,
+      }],
+    };
+    const nextGroup: CopyGroupConfig = {
+      ...group,
+      followers: group.followers.filter(follower => follower.accountId !== 205),
+    };
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'working' }),
+      accountCapabilities: [100, 201, 202, 203, 204].map(accountId => ({
+        accountId, active: true, canTrade: true,
+      })),
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(initial), group,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconfigureGroup(nextGroup)).resolves.toBeUndefined();
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+    });
+    controller.stop();
+  });
+
+  it('odebrání aktivního followera dál fail-closed vyžaduje dostupný broker účet', async () => {
+    const nextGroup: CopyGroupConfig = {
+      ...group,
+      followers: group.followers.filter(follower => follower.accountId !== 205),
+    };
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'working' }),
+      accountCapabilities: [100, 201, 202, 203, 204].map(accountId => ({
+        accountId, active: true, canTrade: true,
+      })),
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconfigureGroup(nextGroup))
+      .rejects.toThrow('neaktivní/read-only účty: 205');
+    controller.stop();
+  });
+
   it('DLL eligibility přežije restart runtime ze stejného durable store', async () => {
     const h = await harness();
     await emitLeaderEntry(h, 'leader-entry-1', '1:Working');

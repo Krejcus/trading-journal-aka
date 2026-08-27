@@ -40,6 +40,9 @@ const controller = () => {
     engageKillSwitch: vi.fn(() => { status = { ...status, armed: false, killSwitch: true }; }),
     applyAccountEligibilityExclusions: vi.fn(async () => undefined),
     reconcile: vi.fn(async () => ({ divergentAccounts: [], workingOrderAccounts: [] })),
+    verifyAccountEligibility: vi.fn(async accountId => ({
+      accountId, state: 'active' as const, reason: 'ověřeno', at: 1,
+    })),
     activateGroup: vi.fn(async () => undefined),
     reconfigureGroup: vi.fn(async () => undefined),
     updateGroup: vi.fn(),
@@ -214,6 +217,44 @@ describe('local copier execution agent', () => {
     expect(running.status().group.followers).toHaveLength(1);
   });
 
+  it('dovolí odebrat známý BREACHED follower, i když už zmizel z OAuth routingu', async () => {
+    const runtime = controller();
+    vi.mocked(runtime.status).mockReturnValue({
+      ...runtime.status(),
+      accountEligibility: [{
+        accountId: 22,
+        state: 'breached',
+        reason: 'account disabled after breach',
+        at: 123,
+      }],
+    });
+    const prepareGroupAccounts = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      prepareGroupAccounts,
+    });
+
+    const replacement = {
+      ...group(),
+      followers: [{ accountId: 33, mode: 'on-submit' as const, multiplier: 1 }],
+    };
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: { type: 'update-group', group: replacement },
+    });
+
+    expect(response.status).toBe(200);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith([11, 33]);
+    expect(runtime.reconfigureGroup).toHaveBeenCalledWith(expect.objectContaining({
+      followers: [expect.objectContaining({ accountId: 33 })],
+    }));
+    expect(running.status().group.followers).toEqual([
+      expect.objectContaining({ accountId: 33 }),
+    ]);
+  });
+
   it('changes the leader from UI through the safe epoch transition', async () => {
     const runtime = controller();
     const onGroupChanged = vi.fn(async () => undefined);
@@ -353,6 +394,24 @@ describe('local copier execution agent', () => {
       .toBeLessThan(vi.mocked(runtime.arm).mock.invocationCallOrder[0]);
   });
 
+  it('cíleně ověří účet bez změny execution skupiny nebo ARM', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+
+    const result = await running.execute({ type: 'verify-account-eligibility', accountId: 63338752 });
+
+    expect(result.ok).toBe(true);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith([63338752]);
+    expect(prepareGroupAccounts.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(runtime.verifyAccountEligibility).mock.invocationCallOrder[0]);
+    expect(runtime.verifyAccountEligibility).toHaveBeenCalledWith(63338752);
+    expect(runtime.activateGroup).not.toHaveBeenCalled();
+    expect(runtime.arm).not.toHaveBeenCalled();
+  });
+
   it('executes the same serialized command path for the authenticated server relay', async () => {
     const runtime = controller();
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
@@ -365,9 +424,15 @@ describe('local copier execution agent', () => {
 
   it('exposes read-only reconciliation and audited stuck resolution as separate commands', async () => {
     const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const prepareGroupAccounts = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
 
     expect((await post(running, running.status().nonce, { type: 'reconcile' })).status).toBe(200);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith([11, 22]);
+    expect(prepareGroupAccounts.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(runtime.reconcile).mock.invocationCallOrder[0]);
     expect(runtime.reconcile).toHaveBeenCalledTimes(1);
 
     expect((await post(running, running.status().nonce, {

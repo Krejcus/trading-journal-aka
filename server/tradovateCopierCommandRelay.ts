@@ -77,6 +77,7 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
 
 const allowed = new Set<LocalCopierAgentCommand['type']>([
   'copy-command', 'arm-live', 'activate-group', 'shadow', 'disarm', 'kill-switch',
+  'verify-account-eligibility',
 ]);
 
 // The browser relay exists to synchronize the already configured group before
@@ -190,6 +191,12 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
       ),
     };
   }
+  if (command.type === 'verify-account-eligibility') {
+    if (!Number.isSafeInteger(command.accountId) || command.accountId <= 0) {
+      throw new Error('invalid-relay-command-payload');
+    }
+    return { accountId: command.accountId };
+  }
   return {};
 };
 
@@ -213,6 +220,13 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
       type: 'shadow',
       accountEligibilityExclusions: validatedEligibilityExclusions(row.payload?.accountEligibilityExclusions),
     };
+  }
+  if (row.command_type === 'verify-account-eligibility') {
+    const accountId = row.payload?.accountId;
+    if (typeof accountId !== 'number' || !Number.isSafeInteger(accountId) || accountId <= 0) {
+      throw new Error('invalid-relay-command-payload');
+    }
+    return { type: 'verify-account-eligibility', accountId };
   }
   return { type: row.command_type } as LocalCopierAgentCommand;
 };

@@ -474,6 +474,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
               stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
               accountEligibility={effectiveAccountEligibility}
+              onVerifyEligibility={async accountId => {
+                const result = await executeAgent({ type: 'verify-account-eligibility', accountId });
+                setAgentStatus(result.status);
+                await live.refreshData();
+                const remaining = result.status.controller.accountEligibility
+                  ?.find(entry => entry.accountId === accountId && entry.state !== 'active');
+                if (remaining) {
+                  throw new Error(`Broker účet stále nepotvrdil jako způsobilý: ${remaining.reason ?? remaining.state}`);
+                }
+              }}
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
               onGroupsChange={setCopyGroups}

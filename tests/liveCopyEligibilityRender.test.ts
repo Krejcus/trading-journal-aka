@@ -8,7 +8,12 @@ const eligibility = (partial: Partial<CopierAccountEligibility>): CopierAccountE
   accountId: 205, state: 'active', at: 1_000, ...partial,
 });
 
-const render = (props: { eligibility?: CopierAccountEligibility; live: boolean }) =>
+const render = (props: {
+  eligibility?: CopierAccountEligibility;
+  live: boolean;
+  onVerify?: () => void;
+  verifying?: boolean;
+}) =>
   renderToStaticMarkup(React.createElement(AccountEligibilityPill, props));
 
 describe('AccountEligibilityPill', () => {
@@ -41,5 +46,24 @@ describe('AccountEligibilityPill', () => {
 
   it('unverifiable je fail-closed stav, ne šedý odstín aktivního', () => {
     expect(render({ live: true, eligibility: eligibility({ state: 'unverifiable' }) })).toContain('Stav nelze ověřit');
+  });
+
+  it('unverifiable účet nabízí explicitní read-only ověření a busy stav', () => {
+    const ready = render({
+      live: true,
+      eligibility: eligibility({ state: 'unverifiable' }),
+      onVerify: () => undefined,
+    });
+    const busy = render({
+      live: true,
+      eligibility: eligibility({ state: 'unverifiable' }),
+      onVerify: () => undefined,
+      verifying: true,
+    });
+
+    expect(ready).toContain('aria-label="Ověřit stav účtu u brokera"');
+    expect(ready).toContain('Ověřit');
+    expect(busy).toContain('Ověřuji…');
+    expect(busy).toContain('disabled=""');
   });
 });

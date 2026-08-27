@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { motion, useReducedMotion } from 'framer-motion';
 import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
   RefreshCw, Inbox, Check, RotateCcw, X, Save, Trash2, Power,
@@ -254,6 +255,8 @@ interface Props {
   /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
   stuckOperations?: CopierStuckOperation[];
   accountEligibility?: CopierAccountEligibility[];
+  /** Read-only broker reconciliation for a currently unverifiable account. */
+  onVerifyEligibility?: (accountId: number) => Promise<void> | void;
   executionGroupId?: string | null;
   runtimeGroup?: CopyGroupConfig | null;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
@@ -303,6 +306,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   cooldownUntil = 0,
   stuckOperations = [],
   accountEligibility = [],
+  onVerifyEligibility,
   executionGroupId = null,
   runtimeGroup = null,
   onGroupsChange,
@@ -335,9 +339,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [density, setDensity] = useState(initialViewSettings.density);
   const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
   const [busyCommand, setBusyCommand] = useState<string | null>(null);
+  const [verifyingAccountId, setVerifyingAccountId] = useState<number | null>(null);
   const [copierTransition, setCopierTransition] = useState<'connecting' | 'disconnecting' | null>(null);
   const [transitionGroupId, setTransitionGroupId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string } | null>(null);
+  const reduceMotion = useReducedMotion() === true;
 
   // Volba sloupců přežívá reload — je to nastavení pohledu, ne stav relace.
   useEffect(() => {
@@ -405,6 +411,22 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => ACCOUNT_COLUMNS.filter(c => !hiddenColumns.has(c.key)),
     [hiddenColumns],
   );
+
+  const verifyAccountEligibility = async (accountId: number) => {
+    if (!onVerifyEligibility || verifyingAccountId != null) return;
+    setVerifyingAccountId(accountId);
+    try {
+      await onVerifyEligibility(accountId);
+      setToast({ tone: 'success', text: 'Účet byl autoritativně ověřen u brokera.' });
+    } catch (reason) {
+      setToast({
+        tone: 'error',
+        text: reason instanceof Error ? reason.message : 'Účet se u brokera nepodařilo ověřit.',
+      });
+    } finally {
+      setVerifyingAccountId(null);
+    }
+  };
 
   const toggleColumn = (key: AccountColumnKey) =>
     setHiddenColumns(prev => {
@@ -772,6 +794,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                     <React.Fragment key={group.id}>
                       <GroupRow
                         group={group} rows={rows} armed={armed}
+                        reduceMotion={reduceMotion}
                         eligibility={group.followers
                           .filter(follower => follower.mode !== 'off')
                           .map(follower => eligibilityByAccount.get(follower.accountId))}
@@ -807,7 +830,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         redaction={redaction}
                         hiddenGroupColumns={hiddenGroupColumns}
                       />
-                      <tr aria-hidden={!expanded.has(group.id)}>
+                      <motion.tr
+                        layout="position"
+                        data-group-layout-motion="true"
+                        transition={reduceMotion
+                          ? { duration: 0 }
+                          : { type: 'spring', stiffness: 360, damping: 34, mass: 0.7 }}
+                        aria-hidden={!expanded.has(group.id)}
+                      >
                         <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">
                           <div className={`grid overflow-hidden transition-all duration-300 ease-out ${expanded.has(group.id) ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0'}`}>
                             <div className="min-h-0 overflow-hidden"><GroupDetail
@@ -815,6 +845,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               columns={visibleColumns}
                               orders={orders}
                               eligibilityByAccount={eligibilityByAccount}
+                              onVerifyEligibility={verifyAccountEligibility}
+                              verifyingAccountId={verifyingAccountId}
                               busyCommand={busyCommand}
                               onRefreshOrders={onRefreshOrders}
                               onMultiplier={(accountId, multiplier) => {
@@ -837,7 +869,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                             /></div>
                           </div>
                         </td>
-                      </tr>
+                      </motion.tr>
                     </React.Fragment>
                   );
                 })}
@@ -1202,8 +1234,9 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, armed, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns }: {
+const GroupRow = ({ group, rows, armed, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns, reduceMotion }: {
   group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
+  reduceMotion: boolean;
   eligibility: (CopierAccountEligibility | undefined)[];
   observingOnly: boolean;
   statusPending: boolean;
@@ -1230,7 +1263,8 @@ const GroupRow = ({ group, rows, armed, eligibility, observingOnly, statusPendin
   const enabledFollowerCount = group.followers.filter(follower => follower.mode !== 'off').length;
   const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
   const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
-  const unavailableFollowerCount = enabledFollowerRows.filter(row => !row.account).length;
+  const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
+    !row.account && (eligibility[index]?.state ?? 'active') === 'active').length;
   const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')).length;
   const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount);
@@ -1238,7 +1272,15 @@ const GroupRow = ({ group, rows, armed, eligibility, observingOnly, statusPendin
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
 
   return (
-    <tr onClick={onToggle} className="h-10 cursor-pointer border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--bg-page)]">
+    <motion.tr
+      layout="position"
+      data-group-layout-motion="true"
+      transition={reduceMotion
+        ? { duration: 0 }
+        : { type: 'spring', stiffness: 360, damping: 34, mass: 0.7 }}
+      onClick={onToggle}
+      className="h-10 cursor-pointer border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--bg-page)]"
+    >
       <td className="pl-3">
         <button onClick={event => { event.stopPropagation(); onToggle(); }} className="w-6 h-6 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center transition-colors">
           <ChevronRight size={14} className={`transition-transform duration-300 ${open ? 'rotate-90' : ''}`} />
@@ -1294,7 +1336,7 @@ const GroupRow = ({ group, rows, armed, eligibility, observingOnly, statusPendin
           <GroupActionMenu active={armed} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} onApplyTemplate={onApplyTemplate} />
         </div>
       </td>
-    </tr>
+    </motion.tr>
   );
 };
 
@@ -1474,15 +1516,13 @@ const timeLabel = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hou
  * a poslední execution událost (řádek pod jménem) jsou tři různé věci —
  * záměrně se neslučují do jednoho zašedlého řádku.
  */
-export const AccountEligibilityPill = ({ eligibility, live, unavailable = false }: {
+export const AccountEligibilityPill = ({ eligibility, live, unavailable = false, onVerify, verifying = false }: {
   eligibility?: CopierAccountEligibility;
   live: boolean;
   unavailable?: boolean;
+  onVerify?: () => void;
+  verifying?: boolean;
 }) => {
-  if (unavailable) {
-    return <span title="Účet není v aktuálním OAuth snapshotu" className="inline-flex items-center gap-1 rounded-md border border-slate-500/40 bg-slate-500/15 px-2 py-1 text-[10px] font-black leading-none text-slate-600">
-      <Unplug aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Nedostupný účet</span>;
-  }
   const state = eligibility?.state ?? 'active';
   if (state === 'dll-locked') {
     return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[10px] font-black leading-none text-amber-600">
@@ -1493,8 +1533,26 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false 
       <Ban aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />BREACHED</span>;
   }
   if (state === 'unverifiable') {
-    return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-slate-500/40 bg-slate-500/20 px-2 py-1 text-[10px] font-black leading-none text-slate-500">
-      <HelpCircle aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />Stav nelze ověřit</span>;
+    return <span className="inline-flex items-center gap-1.5">
+      <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-slate-500/40 bg-slate-500/20 px-2 py-1 text-[10px] font-black leading-none text-slate-500">
+        <HelpCircle aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />Stav nelze ověřit
+      </span>
+      {onVerify ? <button
+        type="button"
+        disabled={verifying}
+        title="Spustí pouze read-only broker kontrolu; neodešle žádný příkaz"
+        aria-label="Ověřit stav účtu u brokera"
+        onClick={event => { event.stopPropagation(); onVerify(); }}
+        className="inline-flex h-6 items-center gap-1 rounded-md border border-indigo-500/25 bg-indigo-500/[0.06] px-2 text-[10px] font-black text-indigo-600 transition-colors hover:bg-indigo-500/12 disabled:cursor-wait disabled:opacity-55"
+      >
+        <RefreshCw aria-hidden="true" size={10} strokeWidth={2.6} className={verifying ? 'animate-spin' : ''} />
+        {verifying ? 'Ověřuji…' : 'Ověřit'}
+      </button> : null}
+    </span>;
+  }
+  if (unavailable) {
+    return <span title="Účet není v aktuálním OAuth snapshotu" className="inline-flex items-center gap-1 rounded-md border border-slate-500/40 bg-slate-500/15 px-2 py-1 text-[10px] font-black leading-none text-slate-600">
+      <Unplug aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Nedostupný účet</span>;
   }
   if (!live) {
     return <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 py-1 text-[10px] font-bold leading-none text-[var(--text-secondary)]">
@@ -1504,7 +1562,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false 
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -1515,6 +1573,8 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   eligibilityByAccount: Map<number, CopierAccountEligibility>;
   busyCommand: string | null;
   onRefreshOrders?: () => Promise<void> | void;
+  onVerifyEligibility?: (accountId: number) => void;
+  verifyingAccountId: number | null;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlattenAccount: (accountId: number) => void;
   onCancelOrder: (orderId: number) => void;
@@ -1589,6 +1649,8 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
                 orders={groupOrders}
                 eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
                 busyCommand={busyCommand}
+                onVerifyEligibility={onVerifyEligibility}
+                verifying={row.accountId != null && verifyingAccountId === row.accountId}
                 onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
                 redactNames={redactNames} redaction={redaction}
               />
@@ -1633,11 +1695,13 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onMultiplier, onFlatten, redactNames, redaction }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, onMultiplier, onFlatten, redactNames, redaction }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
   eligibility?: CopierAccountEligibility;
   busyCommand: string | null;
+  onVerifyEligibility?: (accountId: number) => void;
+  verifying: boolean;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlatten: (accountId: number) => void;
   redactNames: boolean;
@@ -1662,21 +1726,31 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
             )}
             {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
             </span>
-            {!a && accountId != null ? (
-              <span className="block pl-3.5 text-[10px] font-bold leading-tight text-slate-500">
-                Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.
-              </span>
-            ) : eligibility?.lastExecution ? (
+            {eligibility?.lastExecution ? (
               <span className="block pl-3.5 text-[10px] leading-tight text-rose-500/90">
                 Příkaz odmítnut · {eligibility.lastExecution.reason ?? 'bez důvodu'} · {timeLabel(eligibility.lastExecution.at)}
               </span>
             ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
-              <span className="block pl-3.5 text-[10px] leading-tight text-[var(--text-muted)]">{eligibility.reason}</span>
+              <span className="block pl-3.5 text-[10px] leading-tight text-[var(--text-muted)]">
+                {eligibility.reason}{!a ? ' · účet není v aktuálním OAuth snapshotu' : ''}
+              </span>
+            ) : !a && accountId != null ? (
+              <span className="block pl-3.5 text-[10px] font-bold leading-tight text-slate-500">
+                Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.
+              </span>
             ) : null}
           </span>
         );
       case 'status':
-        return <AccountEligibilityPill eligibility={eligibility} live={live} unavailable={!a && accountId != null} />;
+        return <AccountEligibilityPill
+          eligibility={eligibility}
+          live={live}
+          unavailable={!a && accountId != null}
+          verifying={verifying}
+          onVerify={eligibility?.state === 'unverifiable' && accountId != null && onVerifyEligibility
+            ? () => onVerifyEligibility(accountId)
+            : undefined}
+        />;
       case 'broker':
         return <TradovateMark size="h-5 w-5" />;
       case 'firm':
