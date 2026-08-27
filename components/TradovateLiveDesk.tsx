@@ -53,6 +53,7 @@ import TradovateAddConnectionModal from './TradovateAddConnectionModal';
 import type { TradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
 import {
+  preserveAgentStatusReference,
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
@@ -274,10 +275,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
   // re-renderů a efektů (widget snapshot, notifikace, execution adaptér),
   // které jinak běžely s každým tikem naprázdno.
   const applyPolledAgentStatus = useCallback((next: LocalCopierAgentStatus | null) => {
-    setAgentStatus(previous => previous === next
-      || (previous != null && next != null && JSON.stringify(previous) === JSON.stringify(next))
-      ? previous
-      : next);
+    setAgentStatus(previous => preserveAgentStatusReference(previous, next));
   }, []);
   useEffect(() => {
     let stopped = false;
@@ -408,6 +406,17 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
         <div className="flex items-center gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-amber-600">
           <Database size={16} className="shrink-0" />
           <span className="flex-1 text-xs font-semibold">Historický backfill čeká na dostupné úložiště: {live.historyError}</span>
+        </div>
+      )}
+
+      {/* Karta zatím ukazuje hydratovanou cache, ne živě potvrzený broker
+          stav. Banner zmizí až po prvním úspěšném plném preflightu. */}
+      {live.cacheRestoredAsOf != null && (
+        <div role="status" className="flex items-center gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-amber-600">
+          <RefreshCw size={14} className="shrink-0 animate-spin" />
+          <span className="flex-1 text-xs font-semibold">
+            Obnovuji · data z {new Date(live.cacheRestoredAsOf).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
         </div>
       )}
 

@@ -165,6 +165,21 @@ describe('Tradovate LIVE connection data cache', () => {
     expect(readTradovateConnectionDataCache('user-1', storage, now)).toBeNull();
   });
 
+  it('drops only the stale connection when another one is fresh', () => {
+    const storage = makeStorage();
+    const fresh = dataset('2026-08-27T11:59:00.000Z');
+    const staleCapturedAt = new Date(now - TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS - 1_000).toISOString();
+    const stale = { ...dataset(staleCapturedAt), connectionId: 'connection-2' };
+    writeTradovateConnectionDataCache('user-1', {
+      'connection-1': fresh,
+      'connection-2': stale,
+    }, storage, now);
+
+    // Čerstvé připojení nesmí protáhnout do UI výrazně starší dataset
+    // jiného připojení — každý se posuzuje samostatně.
+    expect(readTradovateConnectionDataCache('user-1', storage, now)).toEqual({ 'connection-1': fresh });
+  });
+
   it('rejects malformed datasets and other users', () => {
     const storage = makeStorage();
     writeTradovateConnectionDataCache('user-1', {

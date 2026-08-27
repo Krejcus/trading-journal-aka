@@ -100,6 +100,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-27 (Claude, zapracování review k rychlosti LIVE UI kopírky)
+Review commitu 5cad39e potvrdila směr, ale správně našla díru ve freshness
+kontrole cache: rozhodoval nejnovější capturedAt napříč connections, takže
+jedno čerstvé připojení mohlo do UI protáhnout výrazně starší dataset jiného.
+Opraveno per-connection filtrem — stale dataset se zahodí, čerstvé zůstanou.
+Dále UI nově přiznává hydratovaný stav: dokud kartu drží cache a ne živě
+potvrzený broker read, desk ukazuje banner „Obnovuji · data z HH:MM:SS";
+zhasíná ho až první úspěšný plný preflight (P&L tick záměrně ne — oživuje jen
+pozice/PnL, balance zůstávají z cache), a při selhání sítě tak zůstává vidět.
+Oba reference-preserving bailouty jsou vytažené do čistých funkcí
+(`preserveAgentStatusReference` v localCopierAgentProtocol,
+`mergeCopyGroupsPreservingReference` v liveCopyTrading) a mají přímé testy
+zachování reference; přibyl i multi-connection freshness test (fresh+stale).
+Ověření: typecheck, 1576/1577 testů (fail jen známý sandbox
+copierChartSnapshot CDP timeout), lint změněných souborů (1 předexistující
+warning), produkční build.
+
 ### 2026-08-27 (Claude, rychlost LIVE UI kopírky — instant karta a klid mezi tiky)
 Tři čistě UI/datové změny, copier runtime nedotčen. (1) Poslední broker
 preflight se ukládá do sessionStorage (`tradovate-live-data:v1`, bez OAuth

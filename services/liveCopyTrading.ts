@@ -392,3 +392,20 @@ function sanitizeSafety(value: unknown): CopyGroupSafetySettings {
 export function createLocalCopyGroupId(now = Date.now()): string {
   return `local-${now}`;
 }
+
+/**
+ * Merge skupin běží s každým 2s P&L snapshotem. Při obsahové shodě musí
+ * vrátit původní referenci, jinak každý tik zapisoval draft skupin do
+ * localStorage a přes onGroupsChange překresloval celý LIVE desk.
+ */
+export function mergeCopyGroupsPreservingReference(
+  current: CopyGroupConfig[],
+  snapshot: LiveSnapshot,
+  runtimeGroup: CopyGroupConfig | null,
+): CopyGroupConfig[] {
+  const merged = mergeCopyGroups(current, snapshot);
+  const next = runtimeGroup
+    ? adoptRuntimeCopyGroup(merged, snapshot.accounts.map(account => account.id), runtimeGroup)
+    : merged;
+  return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+}

@@ -25,6 +25,7 @@ import {
 import {
   applyTradovateConnectionDataRefresh,
   buildTradovateConnectionSummaries,
+  newestTradovateConnectionCapturedAt,
   readTradovateConnectionDataCache,
   readTradovateConnectionShell,
   type TradovateConnectionDataRefreshMode,
@@ -125,6 +126,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const cached = userId ? tradovateLiveCache.get(userId) : undefined;
   const [status, setStatus] = useState<TradovateOAuthStatus | null>(() => cached?.status ?? persisted?.status ?? null);
   const [connectionData, setConnectionData] = useState<Record<string, TradovatePreflightResult>>(() => cached?.connectionData ?? persistedData ?? {});
+  // Dokud kartu drží jen hydratovaná cache (ne živě potvrzený broker read),
+  // UI to musí přiznat. Nuluje se prvním úspěšným preflightem nebo P&L tikem.
+  const [cacheRestoredAsOf, setCacheRestoredAsOf] = useState<number | null>(() =>
+    !cached?.connectionData && persistedData ? newestTradovateConnectionCapturedAt(persistedData) : null);
   const [profiles, setProfiles] = useState<TradovateAccountProfile[]>(() => cached?.profiles ?? []);
   const [historySnapshots, setHistorySnapshots] = useState<Record<string, TradovateHistorySnapshot>>(() => cached?.historySnapshots ?? {});
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -148,6 +153,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     journalLinkAttemptsRef.current.clear();
     setStatus(cached?.status ?? persisted?.status ?? null);
     setConnectionData(cached?.connectionData ?? persistedData ?? {});
+    setCacheRestoredAsOf(!cached?.connectionData && persistedData ? newestTradovateConnectionCapturedAt(persistedData) : null);
     setProfiles(cached?.profiles ?? []);
     setHistorySnapshots(cached?.historySnapshots ?? {});
     setHistoryError(null);
@@ -290,6 +296,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         connectionDataRef.current = next;
         return next;
       });
+      // Živě potvrzený preflight — hydratovaná cache už kartu nedrží.
+      if (datasets.length > 0) setCacheRestoredAsOf(null);
       if (stored) {
         const storedIds = new Set(stored.profiles.map(profile => profile.externalAccountId));
         const hasMissingProfiles = datasets.flatMap(dataset => dataset.accounts)
@@ -329,6 +337,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         await refreshData(activeConnectionIds, true);
       } else {
         setConnectionData({});
+        setCacheRestoredAsOf(null);
         const stored = await loadTradovateAccountProfiles().catch(() => null);
         setProfiles(stored?.profiles ?? []);
       }
@@ -504,6 +513,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     profiles,
     historySnapshots,
     historyError,
+    /** Epoch ms broker capturedAt hydratované cache; null = data jsou živě potvrzená. */
+    cacheRestoredAsOf,
     apiTelemetry,
     busy,
     error,

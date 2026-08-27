@@ -121,3 +121,18 @@ export const resolveLocalExecutionGroup = (
     && group.followers.length > 0);
   return sameLeader.length === 1 ? sameLeader[0] : null;
 };
+
+/**
+ * Status poll vrací pokaždé nový objekt i beze změny obsahu. Zachování
+ * předchozí reference při obsahové shodě šetří kaskádu React efektů
+ * (widget snapshot, notifikace, execution adaptér) běžících naprázdno.
+ */
+export function preserveAgentStatusReference(
+  previous: LocalCopierAgentStatus | null,
+  next: LocalCopierAgentStatus | null,
+): LocalCopierAgentStatus | null {
+  return previous === next
+    || (previous != null && next != null && JSON.stringify(previous) === JSON.stringify(next))
+    ? previous
+    : next;
+}

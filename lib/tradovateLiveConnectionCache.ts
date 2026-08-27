@@ -145,14 +145,27 @@ export const readTradovateConnectionDataCache = (
     if (!valid || entries.length === 0) return null;
     // Freshness podle capturedAt datasetů, ne podle savedAt zápisu: hydratace
     // zapisuje cache znovu, a savedAt by tak staré snapshoty držel naživu.
-    const newestCapturedAt = entries
-      .map(([, dataset]) => Date.parse(dataset.capturedAt))
-      .reduce((newest, value) => Number.isFinite(value) ? Math.max(newest, value) : newest, Number.NEGATIVE_INFINITY);
-    if (!Number.isFinite(newestCapturedAt) || now - newestCapturedAt > TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS) return null;
-    return connectionData;
+    // Každé připojení se posuzuje samostatně — čerstvý dataset jednoho
+    // připojení nesmí do UI protáhnout výrazně starší dataset jiného.
+    const fresh = entries.filter(([, dataset]) => {
+      const capturedAt = Date.parse(dataset.capturedAt);
+      return Number.isFinite(capturedAt) && now - capturedAt <= TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS;
+    });
+    if (fresh.length === 0) return null;
+    return Object.fromEntries(fresh);
   } catch {
     return null;
   }
+};
+
+/** Nejnovější broker capturedAt napříč datasety — pro „data z HH:MM:SS" v UI. */
+export const newestTradovateConnectionCapturedAt = (
+  connectionData: Record<string, TradovatePreflightResult>,
+): number | null => {
+  const newest = Object.values(connectionData)
+    .map(dataset => Date.parse(dataset.capturedAt))
+    .reduce((current, value) => Number.isFinite(value) ? Math.max(current, value) : current, Number.NEGATIVE_INFINITY);
+  return Number.isFinite(newest) ? newest : null;
 };
 
 export const writeTradovateConnectionDataCache = (
