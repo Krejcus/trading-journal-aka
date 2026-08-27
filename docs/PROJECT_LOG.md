@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1530 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1542 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -76,10 +76,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       SL/TP“ — VYŘEŠENO 26. 8. (zápis „řízený DEMO důkaz OSO parent cascade“):
       přesná oprava bez povinného `parentId` je nasazená a skutečný Tradovate
       DEMO test potvrdil absolutní shodu parentu, SL i TP na 4 followerech.
-- [ ] Durable account eligibility + více uložených překrývajících se profilů
-      s nejvýše jednou execution-aktivní skupinou jsou lokálně hotové a
-      otestované (zápis níže), ale čekají na explicitně schválený commit/push,
-      migraci, deploy a reinstall workeru.
+- [x] Durable account eligibility + více uložených překrývajících se profilů
+      s nejvýše jednou execution-aktivní skupinou — VYŘEŠENO 27. 8. včetně
+      cíleného read-only ověření, zachování BREACHED po zmizení z OAuth,
+      bezpečného odebrání nedostupného followera a DISARMED restartu workeru.
 - [ ] Změna leadera pouze z LIVE UI — bezpečná atomická runtime epocha je
       lokálně hotová a otestovaná (zápis níže); před praktickým použitím čeká
       na explicitní push, deploy, reinstall stejného commitu a DEMO ověření.
@@ -95,6 +95,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-27 (Codex, BREACHED se už neztratí po zmizení účtu z OAuth)
+Účet `62364058` byl durable označený jako `BREACHED`, ale po zmizení z
+aktuálního Tradovate OAuth snapshotu UI jeho závažnější stav přebilo obecným
+`Nedostupný účet`. Read-model nyní dává durable `DLL`/`BREACHED`/`nelze
+ověřit` přednost před dostupností spojení, takže řádek i souhrn skupiny dál
+ukazují skutečný risk stav a nepřidávají k němu zavádějící druhý čip
+`nedostupný`.
+
+Skupinu lze nově bezpečně uložit po odebrání followera, který už není v OAuth,
+pokud jeho durable eligibility prokazatelně není aktivní. Leader a každý
+neznámý nebo aktivní chybějící účet zůstávají fail-closed povinné. Cílené
+`Ověřit` používá nový read-only relay příkaz `verify-account-eligibility`;
+stav se vrátí na aktivní až po úspěšném ověření přesného OAuth routingu,
+capability, pozic a working příkazů. Supabase CHECK migrace byla aplikovaná do
+projektu `kopinlpdvjfgmvxydohk`.
+
+Během rollout kontroly se ukázala ještě startup mezera: uložená skupina se
+známým BREACHED followerem mimo OAuth shodila Mac worker dřív, než načetl
+durable eligibility, a UI ho proto nemohlo odebrat. Startup nyní povolí pouze
+takového známého neaktivního followera, načte stejný durable snapshot a
+nastartuje DISARMED; chybějící leader nebo účet bez prokázaného neaktivního
+stavu stále start zablokuje. Opravy jsou v commitech `f40bb9f3` a `89a8a4aa`,
+`origin/main` je shodný a Vercel production pro `89a8a4aa` je `READY`
+(`alphatrade-mentor-15-dx2vgrkng-krejcus-projects.vercel.app`). Ověření:
+192 souborů, 1542/1542 testů, TypeScript, produkční build a `git diff --check`
+čisté. Mac worker byl reinstalován z canonical checkoutu; běží připojený,
+`armed=false`, `groupFlat=true`, bez working orders a stuck outboxu. Během
+opravy, migrace a deploye neproběhl ARM, Flatten ani brokerový side effect.
 
 ### 2026-08-26 (Codex, skupiny se přepínají jedním bezpečným ZAPNOUT/VYPNOUT)
 LIVE už nerozlišuje uložený profil a skutečně běžící copier matoucím
