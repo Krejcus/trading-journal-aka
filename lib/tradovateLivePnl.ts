@@ -1,6 +1,6 @@
-import type { TradovateAccountDataResult, TradovateAccountPosition } from './tradovateAccountDataTypes';
-import type { TradovateLivePnlTick } from './tradovateLivePnlTypes';
-import { isTradovateWorkingStatus } from './tradovateOrderReadModel';
+import type { TradovateAccountDataResult, TradovateAccountPosition } from './tradovateAccountDataTypes.js';
+import type { TradovateLivePnlTick } from './tradovateLivePnlTypes.js';
+import { isTradovateWorkingStatus } from './tradovateOrderReadModel.js';
 
 export interface TradovateContractMark {
   contractId: number;

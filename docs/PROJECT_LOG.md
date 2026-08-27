@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1560 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1562 testů, typecheck, lint a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -99,6 +99,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-27 (Codex, úplný post-incident audit — serverless ESM a pending-order gate)
+Produkční runtime audit našel 65 odpovědí HTTP 500 v hodinovém okně: 59×
+`/api/cron/send-alerts` a 6× `/api/native-widget-snapshot`. Oba endpointy
+padaly ještě před handlerem, protože TypeScript ve Vercel funkci zachoval
+extensionless ESM import z `lib/tradovateLivePnl.ts`; Node 24 pak nenašel
+existující `tradovateOrderReadModel.js`. Stejná chyba byla i v deploymentu
+před SL/Flatten incident fixem, takže ji incidentní commit nezpůsobil.
+Všechny serverless importy sdíleného modulu teď explicitně používají `.js` a
+regresní test drží tento Node ESM packaging kontrakt. Lokální `vercel build`
+po opravě vytvořil nula extensionless relativních importů a oba vzniklé
+`tradovateLivePnl.js` moduly se v Node načetly.
+
+Safety průchod oddělil dva významy order stavu. Zelený štít a SL coverage dál
+vyžadují pouze přesný broker stav `Working`; `PendingNew`, `Suspended` ani
+unknown se nikdy nevydávají za funkční ochranu. Pro vypnutí/přepnutí skupiny
+je ale každý neterminální stav aktivní riziko, takže přechodný příkaz už UI
+nepřehlédne. Audit znovu potvrdil, že Flatten účtu i skupiny obchází kill
+switch a starý outbox, používá čerstvý stavový `liquidatePosition`, dočistí
+aktivní ordery a úspěch vrací až po flat/no-active kontrole; ARM vyžaduje
+autoritativní flat stav a bez pracovních/pending orderů.
+
+Globální lint dřív chybně analyzoval vygenerované `.vercel/output`,
+`dist-native` a nativní web bundle; ignore seznam je nyní úplný. Ověření:
+194 souborů a 1562/1562 testů, cílených 223 copier safety testů, TypeScript,
+globální lint bez errorů, produkční Vite build, lokální Vercel build a
+`git diff --check` čisté. Během auditu neproběhl ARM, Flatten ani jiný
+brokerový side effect; worker zůstal DISARMED.
 
 ### 2026-08-27 (Codex, fatal SL/Flatten incident — stavový emergency close a flat-first ARM)
 Incident vznikl při partial fillu nativního Tradovate OSO: broker přechodně

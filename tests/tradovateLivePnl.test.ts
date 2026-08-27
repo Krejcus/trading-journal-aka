@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import {
@@ -15,6 +16,13 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 });
 
 describe('Tradovate lightweight live P&L reader', () => {
+  it('keeps the shared serverless import resolvable by Node ESM', () => {
+    const source = readFileSync(new URL('../lib/tradovateLivePnl.ts', import.meta.url), 'utf8');
+
+    expect(source).toContain("from './tradovateOrderReadModel.js';");
+    expect(source).not.toContain("from './tradovateOrderReadModel';");
+  });
+
   it('takes only one anchor snapshot for many accounts on the same contract', async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       const path = new URL(String(url)).pathname;

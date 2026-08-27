@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   commandBlockedByCopierKillSwitch,
   copyGroupPowerBlocker,
+  liveOrderIsOpenForSafety,
 } from '../components/LiveCopyTradeOverview';
 
 const base = {
@@ -64,5 +65,14 @@ describe('LIVE copy group ON/OFF dialog policy', () => {
     expect(commandBlockedByCopierKillSwitch({
       type: 'cancel-order', groupId: 'group-main', orderId: 123,
     })).toBe(true);
+  });
+
+  it('považuje PendingNew, Suspended a neznámý stav za aktivní riziko, ne za terminální příkaz', () => {
+    expect(liveOrderIsOpenForSafety({ status: 'PendingNew' })).toBe(true);
+    expect(liveOrderIsOpenForSafety({ status: 'Suspended' })).toBe(true);
+    expect(liveOrderIsOpenForSafety({ status: 'Unknown' })).toBe(true);
+    expect(liveOrderIsOpenForSafety({ status: 'Filled' })).toBe(false);
+    expect(liveOrderIsOpenForSafety({ status: 'Canceled' })).toBe(false);
+    expect(liveOrderIsOpenForSafety({ status: 'Rejected' })).toBe(false);
   });
 });

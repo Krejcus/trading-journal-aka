@@ -332,6 +332,18 @@ export function copyGroupPowerBlocker({
 export const commandBlockedByCopierKillSwitch = (command: LiveCopyTradingCommand) =>
   command.type !== 'flatten-account' && command.type !== 'flatten-group';
 
+const TERMINAL_LIVE_ORDER_STATUSES = new Set([
+  'filled', 'canceled', 'cancelled', 'rejected', 'expired',
+]);
+
+/**
+ * `order.working` je schválně přísný signál pro potvrzenou venue ochranu:
+ * PendingNew/Suspended SL se nesmí tvářit jako funkční. Pro vypnutí nebo
+ * přepnutí skupiny je ale každý neterminální stav pořád aktivní riziko.
+ */
+export const liveOrderIsOpenForSafety = (order: Pick<LiveOrder, 'status'>): boolean =>
+  !TERMINAL_LIVE_ORDER_STATUSES.has(order.status.trim().toLowerCase());
+
 function loadDraftGroups(snapshot: LiveSnapshot): CopyGroupConfig[] {
   try {
     const raw = localStorage.getItem(GROUPS_STORAGE_KEY);
@@ -528,7 +540,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         && account.positions.some(position => position.netPosition !== 0))
       .map(account => account.id);
     const workingOrderAccounts = [...new Set(orders
-      .filter(order => order.accountId != null && accountIds.has(order.accountId) && order.working)
+      .filter(order => order.accountId != null
+        && accountIds.has(order.accountId)
+        && liveOrderIsOpenForSafety(order))
       .map(order => order.accountId as number))];
     return { positionAccounts, workingOrderAccounts };
   };

@@ -10,6 +10,9 @@ export default tseslint.config(
   {
     ignores: [
       'dist/**',
+      'dist-native/**',
+      '.vercel/**',
+      'capacitor-ios/App/App/public/**',
       'extension/dist/**',
       'extension/*.js',    // volné test/debug skripty (get_roles.js, test_*.js)
       '**/*.mjs',          // volné Node skripty (migrate-screenshots.mjs, test_*.mjs)
