@@ -10,6 +10,7 @@ import {
   sanitizeCopyGroups,
   unavailableCopyGroupAccounts,
   validateCopyGroup,
+  validateStoredCopyGroupForStartup,
   type CopyGroupConfig,
 } from '../services/liveCopyTrading';
 import type { LiveSnapshot } from '../services/tradecopiaLiveService';
@@ -98,6 +99,49 @@ describe('liveCopyTrading', () => {
     };
     expect(validateCopyGroup(valid, [1, 2]).valid).toBe(true);
     expect(validateCopyGroup({ ...valid, followers: [{ accountId: 1, mode: 'on-fill', multiplier: 0 }] }, [1, 2]).errors).toHaveLength(2);
+  });
+
+  it('dovolí workeru naběhnout DISARMED se známým BREACHED followerem mimo OAuth snapshot', () => {
+    const group: CopyGroupConfig = {
+      id: 'g', name: 'Test', enabled: true, leaderAccountId: 1,
+      followers: [
+        { accountId: 2, mode: 'on-submit', multiplier: 1 },
+        { accountId: 3, mode: 'on-submit', multiplier: 1 },
+      ],
+    };
+    const accounts = [
+      { id: 1, active: true, canTrade: true },
+      { id: 2, active: true, canTrade: true },
+    ];
+
+    expect(validateStoredCopyGroupForStartup(group, accounts, [{ accountId: 3, state: 'breached' }]))
+      .toEqual({ valid: true, errors: [] });
+    expect(validateStoredCopyGroupForStartup(group, accounts, []))
+      .toMatchObject({ valid: false, errors: ['Follower účet 3 není dostupný.'] });
+  });
+
+  it('nikdy nepovolí chybějícího leadera ani neaktivního běžného followera', () => {
+    const missingLeader: CopyGroupConfig = {
+      id: 'g', name: 'Test', enabled: true, leaderAccountId: 1,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
+    };
+    expect(validateStoredCopyGroupForStartup(
+      missingLeader,
+      [{ id: 2, active: true, canTrade: true }],
+      [{ accountId: 1, state: 'breached' }],
+    ).valid).toBe(false);
+
+    expect(validateStoredCopyGroupForStartup(
+      missingLeader,
+      [
+        { id: 1, active: true, canTrade: true },
+        { id: 2, active: false, canTrade: false },
+      ],
+      [],
+    )).toMatchObject({
+      valid: false,
+      errors: ['Účet 2 z uložené copy group není aktivní pro execution.'],
+    });
   });
 
   it('odhalí stale člena skupiny a ručně ho nahradí bez ztráty nastavení', () => {

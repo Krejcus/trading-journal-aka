@@ -271,6 +271,45 @@ export function validateCopyGroup(
   return { valid: errors.length === 0, errors: [...new Set(errors)] };
 }
 
+/**
+ * Ověří durable skupinu při startu lokálního execution runtime.
+ *
+ * Účet, který zmizel z aktuálního OAuth snapshotu, běžně znamená chybnou
+ * topologii a worker musí fail-closed skončit. Jediná výjimka je follower,
+ * kterého durable eligibility už před restartem označila jako neaktivního
+ * (DLL/BREACHED/unverifiable). Takový účet runtime stejně nesmí dispatchovat,
+ * ale worker musí naběhnout DISARMED, aby ho uživatel mohl z UI bezpečně
+ * odebrat. Leader zůstává povinný vždy.
+ */
+export function validateStoredCopyGroupForStartup(
+  group: CopyGroupConfig,
+  accounts: ReadonlyArray<{ id: number; active: boolean; canTrade: boolean }>,
+  eligibility: ReadonlyArray<{ accountId: number; state: string }>,
+): CopyGroupValidation {
+  const available = new Set(accounts.map(account => account.id));
+  const knownIneligibleFollowers = new Set(
+    eligibility
+      .filter(entry => entry.state !== 'active')
+      .map(entry => entry.accountId)
+      .filter(accountId => group.followers.some(follower => follower.accountId === accountId)),
+  );
+  const validation = validateCopyGroup(group, [
+    ...available,
+    ...knownIneligibleFollowers,
+  ]);
+  const errors = [...validation.errors];
+  for (const accountId of [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]) {
+    if (accountId == null) continue;
+    const isLeader = accountId === group.leaderAccountId;
+    if (!isLeader && knownIneligibleFollowers.has(accountId)) continue;
+    const account = accounts.find(candidate => candidate.id === accountId);
+    if (account && (!account.active || !account.canTrade)) {
+      errors.push(`Účet ${accountId} z uložené copy group není aktivní pro execution.`);
+    }
+  }
+  return { valid: errors.length === 0, errors: [...new Set(errors)] };
+}
+
 export function normalizeMultiplier(value: number): number {
   if (!Number.isFinite(value)) return 1;
   return Math.min(100, Math.max(0.01, Math.round(value * 100) / 100));

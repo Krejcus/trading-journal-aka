@@ -32,7 +32,7 @@ import {
 } from '../../services/copierRunner';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
-  validateCopyGroup,
+  validateStoredCopyGroupForStartup,
   type CopyFollowerConfig,
   type CopyGroupConfig,
 } from '../../services/liveCopyTrading';
@@ -306,15 +306,15 @@ async function runLocalAgent(
   // leadera zpět na původní hodnotu.
   const group = persistedGroup ?? fallbackGroup;
   const broker = baseBroker;
-  const validation = validateCopyGroup(group, accounts.map(account => account.id));
+  const runtimeStore = createFileCopierStore(resolve(root, `${key}.snapshot.json`));
+  const durableSnapshot = await runtimeStore.load();
+  const validation = validateStoredCopyGroupForStartup(
+    group,
+    accounts,
+    durableSnapshot.safety?.accountEligibility ?? [],
+  );
   if (!validation.valid) {
     throw new Error(`Uložená copy group není bezpečně použitelná: ${validation.errors.join(' ')}`);
-  }
-  for (const accountId of [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]) {
-    const account = accounts.find(candidate => candidate.id === accountId);
-    if (!account?.active || !account.canTrade) {
-      throw new Error(`Účet ${accountId} z uložené copy group není aktivní pro execution`);
-    }
   }
   const releaseLock = await acquireProcessLock(resolve(root, `${key}.lock`));
   let auditTail = Promise.resolve();
@@ -359,7 +359,7 @@ async function runLocalAgent(
   try {
     controller = await bootstrapCopierRuntime({
       broker,
-      store: createFileCopierStore(resolve(root, `${key}.snapshot.json`)),
+      store: runtimeStore,
       group,
       metrics: createCopierMetrics(),
       // Všichni followeři musí odejít v JEDEN okamžik. Sériový dispatch
