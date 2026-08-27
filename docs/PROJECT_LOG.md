@@ -105,10 +105,11 @@ dialog s konkrétním důvodem a bez automatického Flatten či dalšího broker
 příkazu. Úspěšný výsledek zůstává viditelný jako stavový toast; chybu runtime
 nelze zaměnit za úspěch. Cílené LIVE testy: 27/27.
 Celkové lokální ověření: 193 souborů a 1546/1546 testů, TypeScript,
-produkční build a `git diff --check` čisté. Změna zatím nebyla pushnutá,
-nasazená ani nainstalovaná do Mac workeru; uživatel následně výslovně schválil
-produkční push. Během ověření neproběhl ARM, Flatten ani jiný brokerový side
-effect.
+produkční build a `git diff --check` čisté. Uživatel následně výslovně schválil
+produkční push. Implementační commit `c6b2ed4e` je na `origin/main` a Vercel
+production deployment `dpl_4rj1bSnEzRsrT8sYFV2tkL6z7rYP` je `READY`; build
+log potvrzuje commit `c6b2ed4` a hlavní alias vrací HTTP 200. Během rollout
+ověření neproběhl ARM, Flatten ani jiný brokerový side effect.
 
 ### 2026-08-27 (Codex, BREACHED se už neztratí po zmizení účtu z OAuth)
 Účet `62364058` byl durable označený jako `BREACHED`, ale po zmizení z
