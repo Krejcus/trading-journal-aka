@@ -701,6 +701,45 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('OCO události v DISARMED stavu se jen zablokují a nevytvoří falešný fail-closed', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'disarmed-entry', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'disarmed-entry-fill', tag: '', brokerOrderId: 'disarmed-entry', accountId: 100,
+      symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 30_000, filledAt: 101,
+    } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'disarmed-target', side: 'Sell', quantity: 1, orderType: 'Limit',
+      limitPrice: 30_100, sourceVersion: '1:Working',
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'disarmed-stop', side: 'Sell', quantity: 1, orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_950, sourceVersion: '1:Working',
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(broker.placedOcoRequests()).toHaveLength(0);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      shadowMode: true,
+      lastError: null,
+    });
+    controller.stop();
+  });
+
   it('čekající entry + SL + TP odešle followerovi jedním nativním OSO a uloží všechny vazby', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const store = createMemoryCopierStore();
@@ -1826,6 +1865,98 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     });
     controller.arm();
     expect(controller.status().armed).toBe(true);
+    controller.stop();
+  });
+
+  it('modify→filled nad autoritativně flat skupinou se po DISARM sám bezpečně dočistí', async () => {
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'working' }),
+      modifyBehavior: order => {
+        if (order) {
+          order.status = 'filled';
+          order.filledQuantity = order.quantity;
+        }
+        return 'success';
+      },
+    });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'terminal-fill-flat' }) });
+    await controller.waitForIdle();
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'terminal-fill-flat', sourceVersion: '2:Working', limitPrice: 29_501,
+    }) });
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      shadowMode: true,
+      reconciliationRequired: false,
+      divergentAccounts: [],
+      workingOrderAccounts: [],
+      stuckOutbox: false,
+      lastError: null,
+    });
+    expect((await store.load()).cancelOutbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operation: 'modify', status: 'waived', outcome: 'filled' }),
+    ]));
+    controller.stop();
+  });
+
+  it('modify→filled s autoritativní divergencí zůstane fail-closed a stuck', async () => {
+    const broker = createMockBroker({
+      behavior: request => request.tag === 'external-exposure'
+        ? { kind: 'fill', price: 29_500 }
+        : { kind: 'working' },
+      modifyBehavior: order => {
+        if (order) {
+          order.status = 'filled';
+          order.filledQuantity = order.quantity;
+        }
+        return 'success';
+      },
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: {
+        ...group,
+        safety: { ...DEFAULT_COPY_GROUP_SAFETY, armExpiryFlatten: 'off' },
+      },
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'terminal-fill-divergent' }) });
+    await controller.waitForIdle();
+    await broker.placeOrder({
+      tag: 'external-exposure', accountId: 200, symbol: 'MNQU6', side: 'Sell',
+      quantity: 1, orderType: 'Market',
+    });
+    await controller.waitForIdle();
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'terminal-fill-divergent', sourceVersion: '2:Working', limitPrice: 29_501,
+    }) });
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      shadowMode: true,
+      reconciliationRequired: true,
+      divergentAccounts: [200],
+      stuckOutbox: true,
+    });
+    expect(controller.status().lastError).toContain('objednávka skončila jako filled');
     controller.stop();
   });
 });

@@ -1247,13 +1247,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   const failClosed = (
     reason: unknown,
-    failure: { transportLost?: boolean; autoClose?: boolean } = {},
+    failure: {
+      transportLost?: boolean;
+      autoClose?: boolean;
+      reconcileAfterTerminalFill?: boolean;
+    } = {},
   ) => {
     const wasLiveArmed = gate.armed && !gate.shadowMode;
     lastError = errorOf(reason);
     gate = {
       ...gate,
       armed: false,
+      shadowMode: true,
       ...(failure.transportLost ? { connected: false } : {}),
     };
     // Interní nejistota odzbrojí copier a vynutí novou autoritativní kontrolu,
@@ -1267,7 +1272,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // leadera o 9 s později už byl blokovaný). Bez transportu zavřít nejde
     // a kill switch je explicitní freeze — obojí kryje jen notifikace.
     if (wasLiveArmed && !failure.transportLost && !gate.killSwitch && failure.autoClose !== false) {
-      scheduleAutoClose('fail-closed');
+      scheduleAutoClose('fail-closed', {
+        reconcileAfterTerminalFill: failure.reconcileAfterTerminalFill === true,
+      });
     }
     if (wasLiveArmed && failure.transportLost && hasFollowerExposure()) {
       // Bez transportu zavírat nejde — rozhodne se po reconnectu podle stavu.
@@ -1280,7 +1287,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * per epizoda: selhání zavření volá failClosed už odzbrojené (wasLiveArmed
    * = false), takže se smyčka nikdy neroztočí.
    */
-  const scheduleAutoClose = (trigger: 'fail-closed') => {
+  const scheduleAutoClose = (
+    trigger: 'fail-closed',
+    recovery: { reconcileAfterTerminalFill?: boolean } = {},
+  ) => {
     if (autoCloseInFlight || stopped) return;
     autoCloseInFlight = true;
     const seed = clock();
@@ -1288,6 +1298,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       .then(async () => {
         try {
           await autoFlattenCopies(trigger, seed);
+          if (recovery.reconcileAfterTerminalFill && gate.connected && !gate.killSwitch) {
+            try {
+              const reconciliation = await performReconciliation();
+              const clean = reconciliation.divergentAccounts.length === 0
+                && reconciliation.workingOrderAccounts.length === 0
+                && !hasStuckOutbox();
+              options.onAudit?.([{
+                at: clock(),
+                leaderEventId: `terminal-fill-reconciliation:${seed}`,
+                kind: clean ? 'recovered' : 'blocked',
+                reason: clean
+                  ? 'modify skončil filled; následná autoritativní reconciliation potvrdila synchronní flat/no-active stav'
+                  : 'modify skončil filled; následná autoritativní reconciliation nepotvrdila bezpečný synchronní stav',
+              }]);
+            } catch (error) {
+              options.onAudit?.([{
+                at: clock(),
+                leaderEventId: `terminal-fill-reconciliation:${seed}`,
+                kind: 'blocked',
+                reason: `modify skončil filled; následná autoritativní reconciliation selhala: ${errorOf(error).message}`,
+              }]);
+            }
+          }
         } finally {
           autoCloseInFlight = false;
         }
@@ -1427,11 +1460,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       || item.kind === 'blocked'
     ));
     if (!critical) return;
+    const lifecycle = critical.key
+      ? currentRuntime().cancelOutbox.get(critical.key)
+      : undefined;
+    const reconcileAfterTerminalFill = critical.kind === 'cancel-failed'
+      && lifecycle?.operation === 'modify'
+      && lifecycle.status === 'abandoned'
+      && lifecycle.outcome === 'filled';
     failClosed(new Error(
       critical.reason
         ? `Copier fail-closed: ${critical.reason}`
         : `Copier fail-closed: ${critical.kind}`,
-    ));
+    ), { reconcileAfterTerminalFill });
   };
 
   const flatten = async (accountIds: readonly number[], operationId: string) => {
@@ -1652,10 +1692,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         at: clock(), leaderEventId: pending.id, kind: 'blocked',
         reason: `oso-lone-leg: entry má ${loneLegCount} ochranný příkaz bez druhého do ${osoCorrelator.pendingWindowMs()} ms`,
       }]);
-      failClosed(new Error(
-        `Entry ${entryOrderId} dorazil jen s jedním ochranným příkazem (SL bez TP, nebo TP dorazil pozdě). `
-        + 'Entry nebyl zkopírován — zadej SL i TP společně.',
-      ));
+      if (gate.armed) {
+        failClosed(new Error(
+          `Entry ${entryOrderId} dorazil jen s jedním ochranným příkazem (SL bez TP, nebo TP dorazil pozdě). `
+          + 'Entry nebyl zkopírován — zadej SL i TP společně.',
+        ));
+      }
       settleOsoFlush(entryOrderId);
       return;
     }
@@ -2061,7 +2103,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               at: clock(), leaderEventId: leaderEvent.id, kind: 'blocked',
               reason: 'incomplete-bracket-pair',
             }]);
-            failClosed(new Error(`Bracket ${bracketEntryOrderId} nemá bezpečně spárovaný SL i TP`));
+            if (gate.armed) {
+              failClosed(new Error(`Bracket ${bracketEntryOrderId} nemá bezpečně spárovaný SL i TP`));
+            }
           }, bracketCorrelator.pendingTimeoutMs() + 250);
           pendingBracketTimers.set(bracketEntryOrderId, timer);
         }
@@ -2091,13 +2135,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
-      if (result.audit.some(item => (
+      const criticalBracketAudit = result.audit.some(item => (
         item.kind === 'unknown'
         || item.kind === 'abandoned'
         || item.kind === 'blocked'
         || item.kind === 'rejected'
-      ))) {
-        failClosed(new Error('OCO bracket nebyl bezpečně potvrzen brokerem'));
+      ));
+      if (criticalBracketAudit) {
+        failClosedOnCriticalAudit(result.audit);
       } else {
         rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
@@ -2125,7 +2170,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       options.onAudit?.([{
         at: now, leaderEventId: leaderEvent.id, kind: 'blocked', reason: osoObservation.reason,
       }]);
-      failClosed(new Error(osoObservation.reason));
+      if (gate.armed) failClosed(new Error(osoObservation.reason));
       return;
     }
     if (osoObservation.kind === 'entry') {
@@ -2194,11 +2239,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
-      if (result.audit.some(item => (
+      const criticalOsoAudit = result.audit.some(item => (
         item.kind === 'unknown' || item.kind === 'abandoned'
         || item.kind === 'blocked' || item.kind === 'rejected'
-      ))) {
-        failClosed(new Error('OSO nebyl bezpečně potvrzen brokerem'));
+      ));
+      if (criticalOsoAudit) {
+        failClosedOnCriticalAudit(result.audit);
       } else {
         rememberProtectiveLeg(pair.stopOrderId, pair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
@@ -2312,7 +2358,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   /** Autoritativní reconciliation — sdílí ji veřejné API i connection recovery. */
-  const performReconciliation = async (): Promise<{ divergentAccounts: number[]; workingOrderAccounts: number[] }> => {
+  async function performReconciliation(): Promise<{
+    divergentAccounts: number[];
+    workingOrderAccounts: number[];
+  }> {
       if (!gate.connected) {
         // Holé „bez broker spojení" mate: uživatel vidí v kartě Připojení
         // platné OAuth a myslí si, že spojení stojí. Padá ale živý WebSocket
@@ -2477,12 +2526,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (positionCheckComplete) {
         await acknowledgeTerminalRejectsAfterReconciliation();
         source.acknowledgeReconciliation();
+        lastError = null;
+        gate = { ...gate, shadowMode: true };
       }
       return {
         divergentAccounts: [...divergent],
         workingOrderAccounts: [...workingOrderAccounts],
       };
-  };
+  }
 
   const LEADER_EPOCH_READ_DEADLINE_MS = 2_500;
   const withLeaderEpochDeadline = async <T>(label: string, work: Promise<T>): Promise<T> => {
