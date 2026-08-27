@@ -274,6 +274,59 @@ interface PendingAction {
   blocked?: boolean;
 }
 
+export interface CopyGroupPowerBlockerInput {
+  powered: boolean;
+  candidateName: string;
+  candidateId: string;
+  currentGroupId: string | null;
+  candidateActivity: string | null;
+  currentActivity: string | null;
+  validationErrors: string[];
+}
+
+export interface CopyGroupPowerBlocker {
+  title: string;
+  detail: string;
+}
+
+/**
+ * Čistý ON/OFF nepotřebuje potvrzení. Dialog vzniká pouze tehdy, když
+ * autoritativní preflight zjistí konkrétní blokaci, kterou musí uživatel vidět.
+ */
+export function copyGroupPowerBlocker({
+  powered,
+  candidateName,
+  candidateId,
+  currentGroupId,
+  candidateActivity,
+  currentActivity,
+  validationErrors,
+}: CopyGroupPowerBlockerInput): CopyGroupPowerBlocker | null {
+  if (powered && candidateActivity) {
+    return {
+      title: 'Skupinu teď nelze vypnout',
+      detail: `Skupina ${candidateName} stále obsahuje ${candidateActivity}. Nejprve použij výslovné Flatten All a ověř, že jsou všechny účty flat a bez pracovních příkazů. Copier zůstává ZAPNUTÝ.`,
+    };
+  }
+  if (powered) return null;
+
+  if (validationErrors.length > 0) {
+    return {
+      title: 'Skupinu nelze zapnout',
+      detail: `${validationErrors.join(' ')} Oprav skupinu přes menu ⋮ → Edit group. Copier zůstává VYPNUTÝ.`,
+    };
+  }
+
+  if (currentActivity || candidateActivity) {
+    return {
+      title: 'Přepnutí skupiny je zablokované',
+      detail: `${currentActivity ? `Současná execution skupina obsahuje ${currentActivity}. ` : ''}${candidateActivity && candidateId !== currentGroupId ? `Cílová skupina obsahuje ${candidateActivity}. ` : ''}AlphaTrade nic nezavře ani nepřepne automaticky. Použij Flatten All, ověř flat stav a potom zapnutí zopakuj.`,
+    };
+  }
+
+  return null;
+}
+
 function loadDraftGroups(snapshot: LiveSnapshot): CopyGroupConfig[] {
   try {
     const raw = localStorage.getItem(GROUPS_STORAGE_KEY);
@@ -500,16 +553,20 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     try {
       await action();
       setToast(connecting
-        // Připojení znamená ostré odesílání příkazů brokerovi — potvrzení
-        // musí být stejně výrazné jako u odpojení, ne tiché.
+        // Připojení znamená ostré odesílání příkazů brokerovi, proto po
+        // úspěšném preflightu zůstává výsledek viditelný v jednoznačném toastu.
         ? { tone: 'success', text: 'Copier je připojený — příkazy leadera se kopírují naostro.' }
         : { tone: 'info', text: 'Copier je bezpečně odpojený.' });
     } catch (reason) {
-      setToast({
-        tone: 'error',
-        text: reason instanceof Error
-          ? reason.message
-          : connecting ? 'Copier se nepodařilo připojit.' : 'Copier se nepodařilo odpojit.',
+      const detail = reason instanceof Error
+        ? reason.message
+        : connecting ? 'Copier se nepodařilo připojit.' : 'Copier se nepodařilo odpojit.';
+      setPendingAction({
+        title: connecting ? 'Copier se nepodařilo zapnout' : 'Copier se nepodařilo vypnout',
+        detail: `${detail} AlphaTrade nebude pokračovat bez autoritativního potvrzení runtime. Zkontroluj aktuální stav skupiny a akci zopakuj až po ověření.`,
+        confirmLabel: 'Rozumím',
+        danger: true,
+        blocked: true,
       });
     } finally {
       const remainingAnimation = Math.max(0, 650 - (Date.now() - startedAt));
@@ -528,55 +585,55 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     const candidateActivity = groupActivityDetail(candidate);
     const currentActivity = currentGroup ? groupActivityDetail(currentGroup) : null;
 
-    if (powered) {
-      if (candidateActivity) {
-        setPendingAction({
-          title: 'Skupinu teď nelze vypnout',
-          detail: `Skupina ${candidate.name} stále obsahuje ${candidateActivity}. Nejprve použij výslovné Flatten All a ověř, že jsou všechny účty flat a bez pracovních příkazů. Copier zůstává ZAPNUTÝ.`,
-          confirmLabel: 'Rozumím',
-          danger: true,
-          blocked: true,
-        });
-        return;
-      }
-      if (!onDisarm) return;
+    const validationErrors = powered
+      ? []
+      : validateCopyGroup(candidate, snapshot.accounts.map(account => account.id)).errors;
+    const blocker = copyGroupPowerBlocker({
+      powered,
+      candidateName: candidate.name,
+      candidateId: candidate.id,
+      currentGroupId: currentGroup?.id ?? null,
+      candidateActivity,
+      currentActivity,
+      validationErrors,
+    });
+    if (blocker) {
       setPendingAction({
-        title: 'Vypnout kopírování?',
-        detail: `Skupina ${candidate.name} je flat a bez pracovních příkazů. Po potvrzení se nové příkazy leadera přestanou kopírovat.`,
-        confirmLabel: 'Vypnout',
-        run: () => runCopierTransition(candidate.id, false, onDisarm),
-        successText: `Skupina ${candidate.name} je VYPNUTÁ.`,
-      });
-      return;
-    }
-
-    const validation = validateCopyGroup(candidate, snapshot.accounts.map(account => account.id));
-    if (!validation.valid) {
-      setToast({ tone: 'error', text: `Zapnutí blokováno: ${validation.errors.join(' ')} Oprav skupinu přes menu ⋮ → Edit group.` });
-      return;
-    }
-    const activity = currentActivity || candidateActivity;
-    if (activity) {
-      setPendingAction({
-        title: 'Přepnutí skupiny je zablokované',
-        detail: `${currentActivity ? `Současná execution skupina obsahuje ${currentActivity}. ` : ''}${candidateActivity && candidate.id !== currentGroup?.id ? `Cílová skupina obsahuje ${candidateActivity}. ` : ''}AlphaTrade nic nezavře ani nepřepne automaticky. Použij Flatten All, ověř flat stav a potom zapnutí zopakuj.`,
+        ...blocker,
         confirmLabel: 'Rozumím',
         danger: true,
         blocked: true,
       });
       return;
     }
+
+    if (powered) {
+      if (!onDisarm) {
+        setPendingAction({
+          title: 'Copier nelze vypnout',
+          detail: 'Execution runtime není dostupný. AlphaTrade nemůže bezpečně potvrdit vypnutí copieru.',
+          confirmLabel: 'Rozumím',
+          danger: true,
+          blocked: true,
+        });
+        return;
+      }
+      void runCopierTransition(candidate.id, false, onDisarm);
+      return;
+    }
+
     const armAction = onSwitchAndArm ?? (candidate.id === executionGroupId ? onArmLive : undefined);
-    if (!armAction) return;
-    setPendingAction({
-      title: candidate.id === executionGroupId ? 'Zapnout kopírování?' : 'Přepnout a zapnout skupinu?',
-      detail: candidate.id === executionGroupId
-        ? `Skupina ${candidate.name} je flat a bez pracovních příkazů. Runtime znovu ověří všechny účty a teprve potom provede ARM LIVE.`
-        : `AlphaTrade nejprve DISARMuje současnou skupinu, autoritativně ověří starou i novou topologii jako flat a bez pracovních příkazů a potom zapne skupinu ${candidate.name}. Při jakékoli nejistotě zůstane vše VYPNUTÉ.`,
-      confirmLabel: 'Zapnout',
-      run: () => runCopierTransition(candidate.id, true, () => armAction(candidate)),
-      successText: `Skupina ${candidate.name} je ZAPNUTÁ.`,
-    });
+    if (!armAction) {
+      setPendingAction({
+        title: 'Copier nelze zapnout',
+        detail: 'Execution runtime není dostupný. AlphaTrade nemůže provést autoritativní preflight ani ARM LIVE.',
+        confirmLabel: 'Rozumím',
+        danger: true,
+        blocked: true,
+      });
+      return;
+    }
+    void runCopierTransition(candidate.id, true, () => armAction(candidate));
   };
 
   const triggerKillSwitch = onEmergencyStop ? async () => {

@@ -96,6 +96,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-27 (Codex, čisté ZAPNOUT/VYPNOUT už nevyžaduje potvrzení)
+Běžné zapnutí flat a validní skupiny i běžné vypnutí flat skupiny nyní běží
+rovnou na jedno kliknutí bez potvrzovacího dialogu. Bezpečnostní kontroly se
+nemění: otevřená pozice, pracovní entry/SL/TP, neplatná konfigurace,
+nedostupný runtime nebo odmítnutý autoritativní preflight zobrazí blokovací
+dialog s konkrétním důvodem a bez automatického Flatten či dalšího brokerového
+příkazu. Úspěšný výsledek zůstává viditelný jako stavový toast; chybu runtime
+nelze zaměnit za úspěch. Cílené LIVE testy: 27/27.
+Celkové lokální ověření: 193 souborů a 1546/1546 testů, TypeScript,
+produkční build a `git diff --check` čisté. Změna zatím nebyla pushnutá,
+nasazená ani nainstalovaná do Mac workeru; uživatel následně výslovně schválil
+produkční push. Během ověření neproběhl ARM, Flatten ani jiný brokerový side
+effect.
+
 ### 2026-08-27 (Codex, BREACHED se už neztratí po zmizení účtu z OAuth)
 Účet `62364058` byl durable označený jako `BREACHED`, ale po zmizení z
 aktuálního Tradovate OAuth snapshotu UI jeho závažnější stav přebilo obecným
