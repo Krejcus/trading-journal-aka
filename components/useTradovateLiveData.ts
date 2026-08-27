@@ -25,8 +25,10 @@ import {
 import {
   applyTradovateConnectionDataRefresh,
   buildTradovateConnectionSummaries,
+  readTradovateConnectionDataCache,
   readTradovateConnectionShell,
   type TradovateConnectionDataRefreshMode,
+  writeTradovateConnectionDataCache,
   writeTradovateConnectionShell,
 } from '../lib/tradovateLiveConnectionCache';
 import {
@@ -113,9 +115,16 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     () => readTradovateConnectionShell(userId, typeof window === 'undefined' ? undefined : window.sessionStorage),
     [userId],
   );
+  // Poslední čerstvý broker snapshot přežívá i reload stránky. Karta se tak
+  // vykreslí okamžitě a 2s P&L tick začne hned aktualizovat pozice, místo aby
+  // obojí čekalo na dokončení plného preflightu.
+  const persistedData = useMemo(
+    () => readTradovateConnectionDataCache(userId, typeof window === 'undefined' ? undefined : window.sessionStorage),
+    [userId],
+  );
   const cached = userId ? tradovateLiveCache.get(userId) : undefined;
   const [status, setStatus] = useState<TradovateOAuthStatus | null>(() => cached?.status ?? persisted?.status ?? null);
-  const [connectionData, setConnectionData] = useState<Record<string, TradovatePreflightResult>>(() => cached?.connectionData ?? {});
+  const [connectionData, setConnectionData] = useState<Record<string, TradovatePreflightResult>>(() => cached?.connectionData ?? persistedData ?? {});
   const [profiles, setProfiles] = useState<TradovateAccountProfile[]>(() => cached?.profiles ?? []);
   const [historySnapshots, setHistorySnapshots] = useState<Record<string, TradovateHistorySnapshot>>(() => cached?.historySnapshots ?? {});
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -138,13 +147,13 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     previousUserIdRef.current = userId;
     journalLinkAttemptsRef.current.clear();
     setStatus(cached?.status ?? persisted?.status ?? null);
-    setConnectionData(cached?.connectionData ?? {});
+    setConnectionData(cached?.connectionData ?? persistedData ?? {});
     setProfiles(cached?.profiles ?? []);
     setHistorySnapshots(cached?.historySnapshots ?? {});
     setHistoryError(null);
     setError(null);
     setProfileSetupOpen(false);
-  }, [cached, persisted, userId]);
+  }, [cached, persisted, persistedData, userId]);
 
   useEffect(() => {
     connectionDataRef.current = connectionData;
@@ -154,6 +163,17 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     if (!userId) return;
     tradovateLiveCache.set(userId, { status, connectionData, profiles, historySnapshots });
   }, [connectionData, historySnapshots, profiles, status, userId]);
+
+  // Zápis i prázdné mapy je záměr: po odpojení všech connections přepíše
+  // starý snapshot, takže se po reloadu nevrátí data odpojeného účtu.
+  useEffect(() => {
+    if (!userId) return;
+    writeTradovateConnectionDataCache(
+      userId,
+      connectionData,
+      typeof window === 'undefined' ? undefined : window.sessionStorage,
+    );
+  }, [connectionData, userId]);
 
   const data = useMemo(() => {
     const merged = mergePreflights(Object.values(connectionData));

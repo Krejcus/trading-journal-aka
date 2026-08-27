@@ -433,9 +433,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   useEffect(() => {
     setGroups(current => {
       const merged = mergeCopyGroups(current, snapshot);
-      return runtimeGroup
+      const next = runtimeGroup
         ? adoptRuntimeCopyGroup(merged, snapshot.accounts.map(account => account.id), runtimeGroup)
         : merged;
+      // Snapshot chodí s každým 2s P&L tikem. Beze změny obsahu musí zůstat
+      // stejná reference, jinak každý tik znovu zapisoval skupiny do
+      // localStorage a přes onGroupsChange překresloval celý desk.
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
     });
   }, [runtimeGroup, snapshot]);
 

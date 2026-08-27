@@ -269,6 +269,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
   // Na telefonu / bez workeru první pokus selže a napořád se přejde na
   // relay; na localhostu se zkouší vždy (dev worker může startovat později).
   const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
+  // Status poll běží každé 2 s a vrací pokaždé nový objekt i beze změny.
+  // Zachování předchozí reference při shodném obsahu ušetří kaskádu
+  // re-renderů a efektů (widget snapshot, notifikace, execution adaptér),
+  // které jinak běžely s každým tikem naprázdno.
+  const applyPolledAgentStatus = useCallback((next: LocalCopierAgentStatus | null) => {
+    setAgentStatus(previous => previous === next
+      || (previous != null && next != null && JSON.stringify(previous) === JSON.stringify(next))
+      ? previous
+      : next);
+  }, []);
   useEffect(() => {
     let stopped = false;
     let timer: number | undefined;
@@ -278,7 +288,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
           const next = await agentClient.status();
           if (!stopped) {
             directAgentProbe.current = 'available';
-            setAgentStatus(next);
+            applyPolledAgentStatus(next);
             setAgentStatusResolved(true);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
@@ -300,7 +310,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
         })));
         const active = candidates.find(candidate => candidate.remote?.connected) ?? null;
         if (!stopped) {
-          setAgentStatus(active?.remote?.status ?? null);
+          applyPolledAgentStatus(active?.remote?.status ?? null);
           setAgentTransport(active ? 'relay' : null);
           setRelayConnectionId(active?.connectionId ?? null);
         }
@@ -318,7 +328,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
       stopped = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [agentClient, connectedConnectionIds]);
+  }, [agentClient, applyPolledAgentStatus, connectedConnectionIds]);
 
   useEffect(() => {
     const prefix = '#copier-pair=';

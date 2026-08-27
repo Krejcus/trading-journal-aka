@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   applyTradovateConnectionDataRefresh,
   buildTradovateConnectionSummaries,
+  readTradovateConnectionDataCache,
   readTradovateConnectionShell,
+  TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS,
+  writeTradovateConnectionDataCache,
   writeTradovateConnectionShell,
 } from '../lib/tradovateLiveConnectionCache';
 import type { TradovateOAuthStatus, TradovatePreflightResult } from '../services/tradovateOAuthConnection';
@@ -101,5 +104,75 @@ describe('Tradovate LIVE connection shell cache', () => {
     }, [tradeify], 'replace');
 
     expect(refreshed).toEqual({ 'connection-tradeify': tradeify });
+  });
+});
+
+describe('Tradovate LIVE connection data cache', () => {
+  const now = Date.parse('2026-08-27T12:00:00.000Z');
+  const makeStorage = () => {
+    const values = new Map<string, string>();
+    return {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      values,
+    };
+  };
+  const dataset = (capturedAt: string): TradovatePreflightResult => ({
+    connectionId: 'connection-1',
+    environment: 'demo',
+    capturedAt,
+    accounts: [{ id: 1 }],
+    contracts: [],
+    coverage: {},
+    historicalSync: { status: 'available' },
+  } as unknown as TradovatePreflightResult);
+
+  it('restores a fresh snapshot for instant card rendering after reload', () => {
+    const storage = makeStorage();
+    const data = { 'connection-1': dataset('2026-08-27T11:59:00.000Z') };
+
+    writeTradovateConnectionDataCache('user-1', data, storage, now);
+    const restored = readTradovateConnectionDataCache('user-1', storage, now);
+
+    expect(restored).toEqual(data);
+  });
+
+  it('rejects a snapshot whose broker data is older than the reconciliation window', () => {
+    const storage = makeStorage();
+    const staleCapturedAt = new Date(now - TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS - 1_000).toISOString();
+    writeTradovateConnectionDataCache('user-1', { 'connection-1': dataset(staleCapturedAt) }, storage, now);
+
+    expect(readTradovateConnectionDataCache('user-1', storage, now)).toBeNull();
+  });
+
+  it('does not resurrect stale data through re-saved savedAt timestamps', () => {
+    const storage = makeStorage();
+    const capturedAt = new Date(now - TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS + 60_000).toISOString();
+    const data = { 'connection-1': dataset(capturedAt) };
+    writeTradovateConnectionDataCache('user-1', data, storage, now);
+    // Hydratace zapisuje tatáž data znovu s novým savedAt — freshness ale
+    // musí dál řídit capturedAt broker snapshotu.
+    writeTradovateConnectionDataCache('user-1', data, storage, now + 5 * 60_000);
+
+    expect(readTradovateConnectionDataCache('user-1', storage, now + 5 * 60_000)).toBeNull();
+  });
+
+  it('clears the snapshot when the last connection disconnects', () => {
+    const storage = makeStorage();
+    writeTradovateConnectionDataCache('user-1', { 'connection-1': dataset('2026-08-27T11:59:00.000Z') }, storage, now);
+    writeTradovateConnectionDataCache('user-1', {}, storage, now);
+
+    expect(readTradovateConnectionDataCache('user-1', storage, now)).toBeNull();
+  });
+
+  it('rejects malformed datasets and other users', () => {
+    const storage = makeStorage();
+    writeTradovateConnectionDataCache('user-1', {
+      'connection-1': { connectionId: 'connection-2' } as unknown as TradovatePreflightResult,
+    }, storage, now);
+
+    expect(readTradovateConnectionDataCache('user-1', storage, now)).toBeNull();
+    expect(readTradovateConnectionDataCache('user-2', storage, now)).toBeNull();
+    expect(readTradovateConnectionDataCache('user-1', undefined, now)).toBeNull();
   });
 });

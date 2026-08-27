@@ -100,6 +100,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-27 (Claude, rychlost LIVE UI kopírky — instant karta a klid mezi tiky)
+Tři čistě UI/datové změny, copier runtime nedotčen. (1) Poslední broker
+preflight se ukládá do sessionStorage (`tradovate-live-data:v1`, bez OAuth
+tokenů) a po reloadu stránky hydratuje kartu okamžitě — dřív visel spinner do
+dokončení plného preflightu; navíc 2s P&L tick díky hydrataci začne
+aktualizovat pozice už ~1 s po mountu, protože `connectionDataRef` není
+prázdná. Freshness řídí `capturedAt` datasetů (limit 10 min = plný
+reconciliation interval), ne `savedAt` zápisu — hydratace cache re-ukládá a
+savedAt by stará data držel naživu; prázdný zápis po odpojení cache čistí.
+(2) 2s poll copier agent statusu vracel pokaždé nový objekt i beze změny;
+`TradovateLiveDesk` teď při obsahové shodě drží předchozí referenci, takže
+každé 2 s zbytečně neběžely widget/notifikační sync efekty, přepočet
+execution adaptéru a re-render celého overview. (3) Merge skupin v
+`LiveCopyTradeOverview` při obsahově shodném výsledku vrací původní stav —
+konec zápisů draft skupin do localStorage a `onGroupsChange` kaskády na
+každý P&L tik. Polling intervaly (2 s aktivní / 5 s idle / 10 min plný) jsem
+záměrně neměnil — jsou to rozhodnutí o request budgetu brokera; skutečné
+zrychlení cen pod 2 s by chtělo Tradovate market-data websocket (samostatný
+projekt). Ověření: typecheck, 1570/1571 testů (jediný fail je známý
+sandbox `copierChartSnapshot` CDP timeout, padá i na čistém stromě), lint
+změněných souborů, produkční build.
+
 ### 2026-08-27 (Codex, falešný FAIL-CLOSED po pravidelném socket reconnectu)
 V `13:09:14Z` pravidelná obnova Tradovate socketu znovu přehrála dvě staré
 terminální objednávky `625378672326` a `625378701959`. Worker zůstal

@@ -23,8 +23,22 @@ interface SessionStorageLike {
 }
 
 const CACHE_PREFIX = 'alphatrade:tradovate-live-shell:v1:';
+const DATA_CACHE_PREFIX = 'alphatrade:tradovate-live-data:v1:';
+
+/**
+ * Snapshot starší než plný reconciliation interval už nemá na kartě co dělat —
+ * po vypršení se reload chová jako dřív (spinner do prvního preflightu).
+ */
+export const TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS = 10 * 60_000;
 
 const cacheKey = (userId: string) => `${CACHE_PREFIX}${userId}`;
+const dataCacheKey = (userId: string) => `${DATA_CACHE_PREFIX}${userId}`;
+
+interface PersistedTradovateConnectionData {
+  version: 1;
+  savedAt: number;
+  connectionData: Record<string, TradovatePreflightResult>;
+}
 
 const isEnvironment = (value: unknown): value is 'demo' | 'live' => value === 'demo' || value === 'live';
 
@@ -96,6 +110,63 @@ export const readTradovateConnectionShell = (
     };
   } catch {
     return null;
+  }
+};
+
+/**
+ * Poslední potvrzený broker read model pro okamžité vykreslení LIVE karty po
+ * reloadu stránky (in-memory cache přežívá jen SPA navigaci). Neobsahuje OAuth
+ * tokeny — jen stejná data, která UI už zobrazovalo. Freshness hlídá
+ * `TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS`; 2s P&L tick a plný preflight cache
+ * hned po mountu přepíšou, takže zastaralé hodnoty žijí nejvýš sekundy.
+ */
+export const readTradovateConnectionDataCache = (
+  userId: string,
+  storage?: SessionStorageLike,
+  now = Date.now(),
+): Record<string, TradovatePreflightResult> | null => {
+  if (!userId || !storage) return null;
+  try {
+    const parsed = JSON.parse(storage.getItem(dataCacheKey(userId)) ?? 'null') as Partial<PersistedTradovateConnectionData> | null;
+    if (!parsed || parsed.version !== 1) return null;
+    if (typeof parsed.savedAt !== 'number' || !Number.isFinite(parsed.savedAt)) return null;
+    if (now - parsed.savedAt > TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS || parsed.savedAt > now) return null;
+    const connectionData = parsed.connectionData;
+    if (!connectionData || typeof connectionData !== 'object' || Array.isArray(connectionData)) return null;
+    const entries = Object.entries(connectionData);
+    const valid = entries.every(([connectionId, dataset]) => dataset
+      && typeof dataset === 'object'
+      && dataset.connectionId === connectionId
+      && isEnvironment(dataset.environment)
+      && typeof dataset.capturedAt === 'string'
+      && Array.isArray(dataset.accounts)
+      && Array.isArray(dataset.contracts)
+      && dataset.coverage != null && typeof dataset.coverage === 'object');
+    if (!valid || entries.length === 0) return null;
+    // Freshness podle capturedAt datasetů, ne podle savedAt zápisu: hydratace
+    // zapisuje cache znovu, a savedAt by tak staré snapshoty držel naživu.
+    const newestCapturedAt = entries
+      .map(([, dataset]) => Date.parse(dataset.capturedAt))
+      .reduce((newest, value) => Number.isFinite(value) ? Math.max(newest, value) : newest, Number.NEGATIVE_INFINITY);
+    if (!Number.isFinite(newestCapturedAt) || now - newestCapturedAt > TRADOVATE_LIVE_DATA_CACHE_MAX_AGE_MS) return null;
+    return connectionData;
+  } catch {
+    return null;
+  }
+};
+
+export const writeTradovateConnectionDataCache = (
+  userId: string,
+  connectionData: Record<string, TradovatePreflightResult>,
+  storage?: SessionStorageLike,
+  now = Date.now(),
+): void => {
+  if (!userId || !storage) return;
+  try {
+    const payload: PersistedTradovateConnectionData = { version: 1, savedAt: now, connectionData };
+    storage.setItem(dataCacheKey(userId), JSON.stringify(payload));
+  } catch {
+    // Storage may be blocked or full. The in-memory cache remains the fallback.
   }
 };
 
