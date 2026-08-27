@@ -1878,7 +1878,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return;
       }
       // `null` = objednávka není naše; do cizích účtů kopírce nic není.
-      if (asserted != null && event.order.quantity > asserted) {
+      // Reconnect může znovu přehrát i terminální historii. Nafouknutý
+      // working/pending příkaz je okamžité riziko, ale filled/canceled/rejected
+      // už na venue nepracuje; případný dopad fillu zachytí position/fill
+      // větev a autoritativní reconciliation. Historický terminální order
+      // proto nesmí znovu otevírat stejný fail-closed incident po každé
+      // pravidelné obnově socketu.
+      if (
+        asserted != null
+        && isOpenOrderStatus(event.order.status)
+        && event.order.quantity > asserted
+      ) {
         failClosed(new Error(
           `Copier fail-closed: cizí navýšení množství u brokera — objednávka ${
             event.order.brokerOrderId} má ${event.order.quantity}, uplatnili jsme nejvýš ${asserted}`,

@@ -2310,3 +2310,106 @@ describe('kauzalita follower fill → position (incident 25.8.2026)', () => {
     controller.stop();
   });
 });
+
+describe('order-stream quantity guard po reconnectu', () => {
+  it('terminální oversized historie je bez poplachu, aktivní oversized noha dál fail-closed', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore({
+        ...emptySnapshot(),
+        lastSequence: 1,
+        links: [['leader-reconnect-stop', [{
+          key: 'oso:g1:leader-reconnect-entry:200',
+          accountId: 200,
+          brokerOrderId: 'reconnect-stop',
+          quantity: 13,
+          nativeOsoRole: 'stop',
+        }]]],
+      }),
+      group,
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    // Pravidelná obnova Tradovate socketu vyžaduje reconciliation a může
+    // znovu přehrát staré order entity. Vyplněná noha s historickým totalem
+    // 18 už nepracuje a nesmí přepsat lastError ani vyvolat cancel.
+    broker.setConnected(false);
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    broker.emitEvent({
+      type: 'order',
+      order: {
+        tag: 'reconnect-history',
+        brokerOrderId: 'reconnect-stop',
+        accountId: 200,
+        symbol: 'MNQU6',
+        side: 'Sell',
+        orderType: 'Stop',
+        quantity: 18,
+        filledQuantity: 18,
+        stopPrice: 29_200,
+        status: 'filled',
+        sourceVersion: '18:Filled',
+        updatedAt: 18,
+      },
+    });
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      lastError: null,
+    });
+    expect(broker.cancelRequestCount('reconnect-stop')).toBe(0);
+    controller.stop();
+
+    // Stejná odchylka v aktivním stavu je pořád nebezpečná: ochrana se
+    // nesmí oslabit jen kvůli potlačení terminální historie.
+    const activeBroker = createMockBroker();
+    const activeController = await bootstrapCopierRuntime({
+      broker: activeBroker,
+      store: createMemoryCopierStore({
+        ...emptySnapshot(),
+        lastSequence: 1,
+        links: [['leader-active-stop', [{
+          key: 'oso:g1:leader-active-entry:200',
+          accountId: 200,
+          brokerOrderId: 'active-stop',
+          quantity: 13,
+          nativeOsoRole: 'stop',
+        }]]],
+      }),
+      group,
+      clock: stepClock(),
+    });
+    activeBroker.setConnected(true);
+    await activeController.waitForIdle();
+    await activeController.reconcile();
+    activeBroker.emitEvent({
+      type: 'order',
+      order: {
+        tag: 'active-inflation',
+        brokerOrderId: 'active-stop',
+        accountId: 200,
+        symbol: 'MNQU6',
+        side: 'Sell',
+        orderType: 'Stop',
+        quantity: 18,
+        filledQuantity: 0,
+        stopPrice: 29_200,
+        status: 'working',
+        sourceVersion: '19:Working',
+        updatedAt: 19,
+      },
+    });
+    await activeController.waitForIdle();
+
+    expect(activeController.status().lastError).toContain('má 18, uplatnili jsme nejvýš 13');
+    expect(activeBroker.cancelRequestCount('active-stop')).toBe(1);
+    activeController.stop();
+  });
+});

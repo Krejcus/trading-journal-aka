@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1562 testů, typecheck, lint a build čisté.
+  Poslední úplné automatické ověření: 1563 testů, typecheck, lint a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -99,6 +99,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-27 (Codex, falešný FAIL-CLOSED po pravidelném socket reconnectu)
+V `13:09:14Z` pravidelná obnova Tradovate socketu znovu přehrála dvě staré
+terminální objednávky `625378672326` a `625378701959`. Worker zůstal
+DISARMED, všechny účty byly flat, bez pracovních příkazů, divergence nebo
+stuck operace, ale order-stream quantity guard porovnal historický total
+`11` s durable asserted maximem `6` ještě před kontrolou statusu. Starý
+`filled` order proto znovu otevřel falešný fail-closed incident a watchdog ho
+později doručil jako copier alert.
+
+Detektor cizího navýšení teď běží jen pro `isOpenOrderStatus`, tedy
+`working/pending`. `filled/canceled/rejected` historie už po reconnectu nový
+incident neotevře; skutečný dopad terminálního fillu dál hlídá fill/position
+větev a autoritativní reconciliation. Přesná regrese simuluje durable OSO
+link, socket reconnect a oversized `filled` replay bez poplachu, poté v
+odděleném runtime dokazuje, že stejná odchylka ve `working` stavu pořád
+fail-closed odzbrojí skupinu a spustí risk-redukční cancel.
+
+Ověření: cílených 131/131 safety testů, kompletních 1563/1563 testů,
+TypeScript, globální lint bez errorů, produkční Vite build a `git diff
+--check`. Během diagnostiky ani testů neproběhl ARM, Flatten ani brokerový
+příkaz; produkční worker zůstal DISARMED/flat.
 
 ### 2026-08-27 (Codex, úplný post-incident audit — serverless ESM a pending-order gate)
 Produkční runtime audit našel 65 odpovědí HTTP 500 v hodinovém okně: 59×
