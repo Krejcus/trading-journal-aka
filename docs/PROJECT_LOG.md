@@ -72,10 +72,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [ ] Incident 26. 8. „úspěšný flat zbytečně DISARMoval session“ — přesná
       příčina i lokální oprava jsou ověřené (zápis níže), ale změna zatím není
       commitnutá, pushnutá, nasazená ani nainstalovaná do Mac workeru.
-- [ ] Incident 27. 8. „dvě follower pozice bez SL + nefunkční Flatten All“ —
-      přesná příčina a lokální hardening jsou ověřené 1560 testy (zápis níže),
-      ale před dalším LIVE ARM chybí explicitní push, deploy/reinstall stejného
-      commitu a řízený DEMO test partial-fillu + emergency Flatten.
+- [x] Incident 27. 8. „dvě follower pozice bez SL + nefunkční Flatten All“ —
+      VYŘEŠENO: implementační commit `de93fd3a`, produkční Vercel READY,
+      worker reinstalovaný ze stejného stromu, přesná regrese `6 → 11` a
+      skutečný 1× MNQ DEMO emergency Flatten skončily flat/no-active.
 - [x] Incident 26. 8. „změna nativního OSO parentu relativně posunula follower
       SL/TP“ — VYŘEŠENO 26. 8. (zápis „řízený DEMO důkaz OSO parent cascade“):
       přesná oprava bez povinného `parentId` je nasazená a skutečný Tradovate
@@ -129,11 +129,22 @@ Po reconnectu se synchronní otevřené pozice pouze drží DISARMED; ani dřív
 spravovaná epizoda nedostane výjimku a ARM je blokovaný až do skutečného flat.
 
 Ověření: 194 souborů a 1560/1560 testů, `npx tsc --noEmit`, produkční build a
-`git diff --check` čisté. Změna je pouze lokální na
-`codex/ios-native-checkpoint-20260814`: nebyla commitnutá, pushnutá, nasazená
-ani nainstalovaná do Mac workeru. Nebyl proveden ARM, Flatten ani jiný broker
-side effect; copier musí do explicitně schváleného rollout + DEMO testu zůstat
-DISARMED.
+`git diff --check` čisté. Implementační commit `de93fd3a` je na `origin/main`;
+produkční deployment `dpl_4Rw8gXDhLCq3JTQ2gQ4p3iTd3DfP` je `READY`, hlavní
+alias vrací HTTP 200, správný commit a neautorizovaný lease POST je odmítnut
+401. Mac worker byl ze stejného stromu reinstalován, po restartu zůstal
+DISARMED a autoritativní reconciliation byla čistá.
+
+Externí gate proběhl pouze v Tradovate DEMO: read-only preflight, broker dry-run
+bez objednávky, krátký SHADOW a jeden minimální 1× MNQ vstup na účtu
+`62364057`. Nový workerový `flatten-account` operace
+`demo-emergency-7ca2f004-84e2-4266-a6b2-374d438e6ccc` odeslal právě jednu
+nativní closure a potvrdil `flat: true`, `remainingPositionAccounts=[]`,
+`workingOrderAccounts=[]`. Následná nezávislá kontrola i preflighty obou OAuth
+spojení potvrdily všech sedm účtů `positions=0`, bez working/pending orderů a
+worker nadále DISARMED. Přesný venue přechod `6 → 11` zůstal záměrně
+deterministickým incidentním testem; na broker se kvůli němu neposílalo 11
+kontraktů.
 
 ### 2026-08-27 (Codex, čisté ZAPNOUT/VYPNOUT už nevyžaduje potvrzení)
 Běžné zapnutí flat a validní skupiny i běžné vypnutí flat skupiny nyní běží
