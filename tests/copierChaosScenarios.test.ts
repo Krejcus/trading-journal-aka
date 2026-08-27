@@ -272,7 +272,7 @@ describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () =
     expect(broker.placedRequests().filter(request => request.accountId === 200)).toHaveLength(1);
   };
 
-  it('synchronní kopie po reconnectu DRŽÍ, nabídne ARM a nic neposílá', async () => {
+  it('synchronní kopie po reconnectu DRŽÍ DISARMED a nový ARM do flat odmítne', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
     const store = createMemoryCopierStore();
     const controller = await bootstrapCopierRuntime({
@@ -292,12 +292,11 @@ describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () =
 
     const status = controller.status();
     expect(broker.placedRequests()).toHaveLength(placedBefore);
-    expect(status.resumeOffer).not.toBeNull();
+    expect(status.resumeOffer).toBeNull();
     expect(status.autoClose).toBeNull();
     expect(status.armed).toBe(false);
-    // Recovery už udělalo autoritativní reconciliation — ARM je jeden klik.
-    expect(() => controller.arm()).not.toThrow();
-    expect(controller.status().resumeOffer).toBeNull();
+    expect(() => controller.arm()).toThrow('všechny zapojené účty flat');
+    expect(broker.placedRequests()).toHaveLength(placedBefore);
     controller.stop();
   });
 

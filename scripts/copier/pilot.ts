@@ -14,7 +14,7 @@ import { createFileCopierStore } from '../../services/fileCopierStore';
 import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
 import { createTradovateBroker, type TradovateBrokerPort } from '../../services/tradovateBroker';
 import { createBrokerRouter } from '../../services/brokerRouter';
-import type { BrokerPort } from '../../services/brokerPort';
+import { isOpenOrderStatus, type BrokerPort } from '../../services/brokerPort';
 import {
   refreshDynamicBrokerRoutes,
   resolveDynamicBrokerRoutes,
@@ -746,7 +746,9 @@ async function runPreflight(
     }
     for (const snapshot of snapshots) {
       if (snapshot.positions.some(item => item.netQuantity !== 0)) throw new Error(`Účet ${snapshot.accountId} není flat`);
-      if (snapshot.orders.some(item => item.status === 'working')) throw new Error(`Účet ${snapshot.accountId} má working order`);
+      if (snapshot.orders.some(item => isOpenOrderStatus(item.status))) {
+        throw new Error(`Účet ${snapshot.accountId} má aktivní working/pending order`);
+      }
     }
     console.log('PASS preflight: demo, OAuth execution permission, WS sync, flat, no working orders.');
   } finally {
@@ -850,7 +852,7 @@ async function runRuntime(
         })));
         const unsafe = final.filter(item =>
           item.positions.some(position => position.netQuantity !== 0)
-          || item.orders.some(order => order.status === 'working'));
+          || item.orders.some(order => isOpenOrderStatus(order.status)));
         if (unsafe.length > 0) {
           console.error(`MANUAL ACTION REQUIRED: po STOP nejsou flat/no-working účty ${unsafe.map(item => item.accountId).join(',')}`);
         } else {

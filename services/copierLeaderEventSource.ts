@@ -84,6 +84,12 @@ export class CopierLeaderEventSource {
     let kind: LeaderEventKind | null = null;
     if (order.status === 'canceled') kind = 'canceled';
     else if (order.status === 'rejected') kind = 'rejected';
+    else if (order.status === 'pending') {
+      // PendingNew/Suspended může být první viditelná část nativního OSO a
+      // musí založit korelaci entry+SL+TP. Další změny v pending stavu jsou
+      // ale venue tranzice (typicky partial-fill resize), nikdy replace.
+      if (previous == null) kind = 'submitted';
+    }
     else if (order.status === 'working') {
       // PendingNew -> Working často přinese novou broker revizi, ale žádnou
       // uživatelskou změnu objednávky. Modify posíláme jen při změně skutečných

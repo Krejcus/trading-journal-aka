@@ -29,6 +29,21 @@ describe('exposure capped broker', () => {
     });
   });
 
+  it('counts PendingNew/Suspended orders as potential exposure', async () => {
+    const base = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const broker = createExposureCappedBroker(base, () => 2);
+    await broker.placeOrder(request('Buy', 1));
+    const pending = base.orders()[0];
+    if (!pending) throw new Error('Test setup: první objednávka nevznikla');
+    pending.status = 'pending';
+
+    await expect(broker.placeOrder({ ...request('Buy', 2), tag: 'second-after-pending' }))
+      .resolves.toMatchObject({
+        accepted: false,
+        rejectReason: expect.stringContaining('pendingBuy=1'),
+      });
+  });
+
   it('always allows an order that only reduces the known position', async () => {
     const base = createMockBroker({ behavior: () => ({ kind: 'fill', price: 31_000 }) });
     const broker = createExposureCappedBroker(base, () => 2);

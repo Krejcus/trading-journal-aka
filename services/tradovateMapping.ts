@@ -250,11 +250,14 @@ export function fromPlaceOsoResult(result: TradovatePlaceOsoResult): BrokerOsoAc
 /**
  * Tradovate stavy objednávky → náš zjednodušený model.
  *
- * Neznámý stav mapujeme na `working`, ne na `filled`. Kdyby přišlo něco
- * neočekávaného, je bezpečnější tvrdit „ještě běží" než „hotovo".
+ * Pouze přesný broker stav `Working` smí být akční. `Suspended`, pending a
+ * neznámé přechodné stavy zůstávají `pending`: nesmějí předstírat aktivní
+ * ochranu ani vytvořit follower replace během venue-managed partial fillu.
  */
 export function toOrderStatus(tradovateStatus: string): OrderStatus {
   switch (tradovateStatus) {
+    case 'Working':
+      return 'working';
     case 'Filled':
     case 'Completed':
       return 'filled';
@@ -265,7 +268,7 @@ export function toOrderStatus(tradovateStatus: string): OrderStatus {
     case 'Rejected':
       return 'rejected';
     default:
-      return 'working';
+      return 'pending';
   }
 }
 

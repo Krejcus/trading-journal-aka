@@ -496,6 +496,56 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('ostrý ARM odmítne i PendingNew/Suspended objednávku jako stále aktivní', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    await broker.placeOrder({
+      tag: 'pending-before-arm', accountId: 200, symbol: 'MNQU6',
+      side: 'Buy', quantity: 1, orderType: 'Limit', limitPrice: 29_000,
+    });
+    const pending = broker.orders()[0];
+    if (!pending) throw new Error('Test setup: pending objednávka nevznikla');
+    pending.status = 'pending';
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconcile()).resolves.toEqual({
+      divergentAccounts: [], workingOrderAccounts: [200],
+    });
+    expect(() => controller.arm()).toThrow('bez pracovních příkazů');
+    controller.stop();
+  });
+
+  it('ostrý ARM odmítne i dokonale synchronní otevřený obchod a nic neadoptuje ani nedorovnává', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 29_500 }) });
+    await broker.placeOrder({
+      tag: 'aligned-open-leader', accountId: 100, symbol: 'MNQU6',
+      side: 'Buy', quantity: 2, orderType: 'Market',
+    });
+    await broker.placeOrder({
+      tag: 'aligned-open-follower', accountId: 200, symbol: 'MNQU6',
+      side: 'Buy', quantity: 2, orderType: 'Market',
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconcile()).resolves.toEqual({
+      divergentAccounts: [], workingOrderAccounts: [],
+    });
+    expect(() => controller.arm()).toThrow('všechny zapojené účty flat');
+    expect(controller.status().armed).toBe(false);
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'leader-after-blocked-arm' }) });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(2);
+    controller.stop();
+  });
+
   it('pilot pustí lifecycle první objednávky, ale druhou novou leader objednávku fail-closed zablokuje', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const audits: Array<{ kind: string; reason?: string }> = [];
@@ -1394,21 +1444,41 @@ describe('flatten vs stuck outbox', () => {
     controller.stop();
   });
 
-  it('unknown stuck položka Flatten dál blokuje — osud objednávky neznáme', async () => {
+  it('unknown stuck, kill switch ani shozený websocket neblokují stavový nouzový Flatten', async () => {
     const unknown = markUnknown(
       createOutboxEntry('cp:g1:e1:200', 'cpabc123', 'leader-1', stuckRequest, 1, false, 'e1', 1),
       'timeout',
       2,
     );
-    const broker = createMockBroker({ lookupCompleteness: 'eventual' });
+    const broker = createMockBroker({
+      lookupCompleteness: 'eventual',
+      behavior: () => ({ kind: 'fill', price: 30_000 }),
+      nativeLiquidate: true,
+    });
+    await broker.placeOrder({
+      tag: 'seed-open-before-emergency-flatten', accountId: 200, symbol: 'MNQU6',
+      side: 'Buy', quantity: 2, orderType: 'Market',
+    });
     const controller = await bootstrapCopierRuntime({
       broker, store: await storeWith(unknown), group, clock: stepClock(),
     });
     broker.setConnected(true);
     await controller.waitForIdle();
+    controller.engageKillSwitch('incident emergency stop');
+    // Runtime WS gate je down, ale autoritativní REST endpoint je dostupný.
+    broker.emitEvent({ type: 'connection', connected: false, at: stepClock()() });
+    await controller.waitForIdle();
 
     await expect(controller.flattenAccount(200, 'manual-flat-unknown-002'))
-      .rejects.toThrow('nejistým osudem');
+      .resolves.toMatchObject({ flat: true, submittedClosures: 1 });
+    expect(broker.liquidateRequests()).toEqual([
+      expect.objectContaining({ accountId: 200, symbol: 'MNQU6' }),
+    ]);
+    expect(await broker.listPositions(200)).toEqual([
+      expect.objectContaining({ netQuantity: 0 }),
+    ]);
+    // Incidentní historie se nemaže; dál blokuje nový ARM, ne nouzový close.
+    expect(controller.status().stuckOutbox).toBe(true);
     controller.stop();
   });
 });

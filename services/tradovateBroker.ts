@@ -882,6 +882,31 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       );
       return fromPlaceOrderResult(result ?? {});
     },
+    async liquidatePosition(requestBody) {
+      // ContractId vybíráme z čerstvé brokerové Position entity, ne ze stale
+      // lokální quantity. Pokud je účet už flat, jde o úspěšný stavový no-op
+      // a žádný opačný Market se nesmí vytvořit.
+      const entities = await listPositionEntities();
+      const accountPositions = (entities ?? []).filter(item => (
+        item.accountId === requestBody.accountId && item.netPos !== 0
+      ));
+      await hydrateContracts(accountPositions.map(item => item.contractId));
+      const position = accountPositions.find(item => contracts.get(item.contractId) === requestBody.symbol);
+      if (!position) {
+        return {
+          brokerOrderId: `already-flat:${requestBody.accountId}:${requestBody.symbol}`,
+          accepted: true,
+          definitive: true,
+        };
+      }
+      const result = await post<TradovatePlaceOrderResult>('/order/liquidateposition', {
+        accountId: requestBody.accountId,
+        contractId: position.contractId,
+        admin: false,
+        isAutomated: true,
+      });
+      return fromPlaceOrderResult(result ?? {});
+    },
     async placeOco(requestBody: BrokerOcoRequest) {
       const result = await post<TradovatePlaceOcoResult>(
         '/order/placeoco',

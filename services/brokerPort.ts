@@ -22,7 +22,12 @@ export type OrderSide = 'Buy' | 'Sell';
 
 export type OrderType = 'Market' | 'Limit' | 'Stop' | 'StopLimit';
 
-export type OrderStatus = 'working' | 'filled' | 'canceled' | 'rejected';
+export type OrderStatus = 'working' | 'pending' | 'filled' | 'canceled' | 'rejected';
+
+/** PendingNew/Suspended stále může přejít do Working nebo fillu. Pro risk,
+ * cancel a Flatten je proto aktivní; jako potvrzená ochrana se ale nepočítá. */
+export const isOpenOrderStatus = (status: OrderStatus): boolean =>
+  status === 'working' || status === 'pending';
 
 export interface BrokerOrderRequest {
   /**
@@ -121,6 +126,19 @@ export interface BrokerOrderAck {
   rejectReason?: string;
 }
 
+/**
+ * Stavový nouzový příkaz: zruš pracovní příkazy daného kontraktu a zavři
+ * skutečnou brokerovou pozici. Na rozdíl od obyčejného opačného Marketu
+ * nesmí vycházet ze stale lokální quantity — broker rozhoduje podle svého
+ * aktuálního position snapshotu.
+ */
+export interface BrokerLiquidateRequest {
+  /** Interní durable korelace; broker ji nemusí podporovat jako idempotency key. */
+  tag: string;
+  accountId: number;
+  symbol: string;
+}
+
 export interface BrokerOcoLeg {
   side: OrderSide;
   orderType: Extract<OrderType, 'Limit' | 'Stop' | 'StopLimit'>;
@@ -181,6 +199,11 @@ export interface BrokerPort {
    */
   setCriticalAccounts?(accountIds: readonly number[]): void;
   placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderAck>;
+  /**
+   * Preferovaná nouzová cesta pro Flatten. Chybějící implementace používá
+   * bezpečnější dostupný fallback cancel + přesný Market close.
+   */
+  liquidatePosition?(request: BrokerLiquidateRequest): Promise<BrokerOrderAck>;
   /** Nativní atomický OCO pár. Chybějící implementace znamená fail-closed. */
   placeOco?(request: BrokerOcoRequest): Promise<BrokerOcoAck>;
   /** Nativní atomický entry + bracket. Chybějící implementace znamená fail-closed. */

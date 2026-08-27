@@ -111,6 +111,11 @@ export function createBrokerRouter(
       for (const broker of next) criticalBrokers.add(broker);
     },
     placeOrder: request => brokerFor(request.accountId).placeOrder(request),
+    liquidatePosition: async request => {
+      const broker = brokerFor(request.accountId);
+      if (!broker.liquidatePosition) throw new Error('OAuth spojení nepodporuje nativní nouzové zploštění');
+      return broker.liquidatePosition(request);
+    },
     placeOco: async request => {
       const broker = brokerFor(request.accountId);
       if (!broker.placeOco) throw new Error('OAuth spojení nepodporuje nativní OCO');

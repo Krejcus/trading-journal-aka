@@ -1,4 +1,12 @@
-import type { BrokerEvent, BrokerOcoRequest, BrokerOrder, BrokerOrderRequest, BrokerOsoRequest, BrokerPort } from './brokerPort';
+import {
+  isOpenOrderStatus,
+  type BrokerEvent,
+  type BrokerOcoRequest,
+  type BrokerOrder,
+  type BrokerOrderRequest,
+  type BrokerOsoRequest,
+  type BrokerPort,
+} from './brokerPort';
 import {
   applyResolved,
   applyLeaderProgress,
@@ -168,7 +176,7 @@ export function observeBrokerEvent(metrics: CopierMetrics, event: BrokerEvent, o
   const current = metrics.lifecycleByTag.get(tag) ?? {};
   if (event.type === 'order') {
     current.orderAcceptedAt ??= observedAt;
-    if (event.order.status !== 'working') current.terminalAt ??= observedAt;
+    if (!isOpenOrderStatus(event.order.status)) current.terminalAt ??= observedAt;
   } else {
     current.firstFillAt ??= observedAt;
   }

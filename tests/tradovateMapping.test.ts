@@ -121,11 +121,14 @@ describe('mapping výsledků a entit', () => {
       .toMatchObject({ accepted: false, definitive: false });
   });
   it('mapuje stavy konzervativně', () => {
+    expect(toOrderStatus('Working')).toBe('working');
     expect(toOrderStatus('Filled')).toBe('filled');
     expect(toOrderStatus('Completed')).toBe('filled');
     expect(toOrderStatus('Canceled')).toBe('canceled');
     expect(toOrderStatus('Rejected')).toBe('rejected');
-    expect(toOrderStatus('SomethingNew')).toBe('working');
+    expect(toOrderStatus('Suspended')).toBe('pending');
+    expect(toOrderStatus('PendingNew')).toBe('pending');
+    expect(toOrderStatus('SomethingNew')).toBe('pending');
   });
   it('převede order entitu včetně partial fillu a cen', () => {
     expect(fromOrderEntity({

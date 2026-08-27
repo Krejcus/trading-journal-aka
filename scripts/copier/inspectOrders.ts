@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createTradovateBroker } from '../../services/tradovateBroker';
 import { createBrokerRouter } from '../../services/brokerRouter';
+import { isOpenOrderStatus } from '../../services/brokerPort';
 import {
   openTradovatePilotLease,
   type TradovatePilotLeaseEnvelope,
@@ -37,7 +38,7 @@ for (const accountId of accountIds) {
   console.log(JSON.stringify({
     accountId,
     positions: positions.filter(position => position.netQuantity !== 0),
-    workingOrders: orders.filter(order => order.status === 'working'),
+    activeOrders: orders.filter(order => isOpenOrderStatus(order.status)),
     latestOrders: orders
       .toSorted((left, right) => right.updatedAt - left.updatedAt)
       .slice(0, 5),

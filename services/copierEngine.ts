@@ -148,7 +148,7 @@ export interface CopierState {
      * Epoch, od kdy za ŽIVÉHO ARM existují otevřené follower kopie. Durable,
      * aby restart workeru po pádu poznal, že kopie nevznikly ručním „drž
      * pozice" DISARMem, a mohl spustit connection recovery (podle stavu:
-     * synchronní kopie držet + nabídnout ARM, osiřelé risk-redukčně zavřít).
+     * synchronní kopie držet DISARMED do flat, osiřelé risk-redukčně zavřít).
      * Maže se při zploštění skupiny, ručním DISARM a kill switchi.
      */
     liveCopyOpenSince?: number;
@@ -354,7 +354,18 @@ export function planModify(
   return links.flatMap(link => {
     const follower = group.followers.find(item => item.accountId === link.accountId);
     if (!follower || follower.mode !== 'on-submit') return [];
-    const quantity = followerQuantity(event.quantity, follower.multiplier);
+    const nativeProtective = link.nativeOsoRole === 'stop' || link.nativeOsoRole === 'target';
+    // Tradovate nativní OSO engine mění child qty při partial fillech sám na
+    // každém účtu. Leaderových přechodných 6→11 proto nikdy nesmí přepsat
+    // follower quantity. Přímý posun ceny dál kopírujeme, ale s durable
+    // follower qty; čistá quantity-only změna je venue šum a nemá side effect.
+    const nextLimitPrice = event.limitPrice;
+    const nextStopPrice = event.stopPrice;
+    const priceChanged = link.limitPrice !== nextLimitPrice || link.stopPrice !== nextStopPrice;
+    if (nativeProtective && !priceChanged) return [];
+    const quantity = nativeProtective
+      ? link.quantity
+      : followerQuantity(event.quantity, follower.multiplier);
     if (quantity <= 0) return [];
     return [{
       key: `mx:${link.key}:${event.id}`,

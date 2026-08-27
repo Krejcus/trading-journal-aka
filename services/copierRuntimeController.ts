@@ -1,8 +1,15 @@
-import type { BrokerEvent, BrokerFill, BrokerOrder, BrokerPort } from './brokerPort';
+import {
+  isOpenOrderStatus,
+  type BrokerEvent,
+  type BrokerFill,
+  type BrokerOrder,
+  type BrokerPort,
+} from './brokerPort';
 import { msUntilTradovateSessionEnd } from './copierArmSession';
 import { pointValueUsd } from './futuresContractSpecs';
 import {
   createCopierState,
+  updateFollowerLinkQuantity,
   type CopierAccountEligibility,
   type CopierClosedTrade,
   type CopierDailyStats,
@@ -744,7 +751,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const orders = await withSweepDeadline(broker.listOrders(accountId));
         workingOrderIds = new Set(
           orders
-            .filter(order => order.symbol === symbol && order.status === 'working')
+            .filter(order => order.symbol === symbol && isOpenOrderStatus(order.status))
             .map(order => order.brokerOrderId),
         );
       }
@@ -776,7 +783,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         await withSweepDeadline(broker.cancelOrder(accountId, brokerOrderId)).catch(() => undefined);
         const lookup = await withSweepDeadline(broker.findOrderById(accountId, brokerOrderId));
         const outcome = lookup.order?.status;
-        if (outcome === 'working') throw new Error('noha po cancellu stále working');
+        if (outcome != null && isOpenOrderStatus(outcome)) {
+          throw new Error(`noha po cancellu stále aktivní (${outcome})`);
+        }
         if (!lookup.order && lookup.completeness !== 'authoritative') {
           // Eventual prázdno není důkaz neexistence — nesmí se zapsat
           // jako zameteno (portová díra z review, bod 14).
@@ -840,7 +849,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const workingProtectiveIds = orders
         .filter(order => (
           order.symbol === symbol
-          && order.status === 'working'
+          && isOpenOrderStatus(order.status)
           && allProtectiveLegIds.has(order.brokerOrderId)
         ))
         .map(order => order.brokerOrderId);
@@ -856,7 +865,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const resolvedIds = new Set(episodeLegIds ?? cappedLegs);
       for (const brokerOrderId of allProtectiveLegIds) {
         const brokerOrder = orders.find(order => order.brokerOrderId === brokerOrderId);
-        if (!brokerOrder || brokerOrder.status !== 'working') sweptProtectiveLegs.add(brokerOrderId);
+        if (!brokerOrder || !isOpenOrderStatus(brokerOrder.status)) sweptProtectiveLegs.add(brokerOrderId);
       }
       // Po autoritativním důkazu flat + zero-working jsou pending cancel/modify
       // přesně těchto noh bezpředmětné. Durable historii nemažeme; jen ji
@@ -1428,20 +1437,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const flatten = async (accountIds: readonly number[], operationId: string) => {
     gate = { ...gate, armed: false };
     positionCheckComplete = false;
-    if (gate.killSwitch) throw new Error('Flatten nelze spustit: kill switch je aktivní');
-    if (!gate.connected) throw new Error('Flatten nelze spustit bez broker spojení');
-    if (hasBrokerUncertainOutbox()) {
-      throw new Error('Flatten nelze spustit: objednávka s nejistým osudem u brokera (sending/unknown) čeká na dohledání');
-    }
+    // Flatten je poslední risk-redukční brzda. Kill switch, shozený WS gate
+    // ani starý sending/unknown outbox nesmí zabránit ani pokusu o čerstvou
+    // autoritativní REST likvidaci. Skutečný transport/rate-limit/broker
+    // reject se projeví per-account výsledkem a nikdy se nevydává za flat.
     let result: ManualFlattenResult | null = null;
     try {
       await processor.mutate(async current => {
-        // Recheck UVNITŘ serializace: vnější kontrola mohla číst runtime
-        // před právě dobíhajícím modify, který mezitím skončil `unknown`
-        // (review, bod 13). Broker I/O nesmí startovat nad starým čtením.
-        if (brokerUncertainInRuntime(current)) {
-          throw new Error('Flatten nelze spustit: objednávka s nejistým osudem u brokera (sending/unknown) čeká na dohledání');
-        }
         const processed = await processManualFlatten({
           runtime: current,
           broker,
@@ -1572,10 +1574,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const leaderOpen = [...(positionsByAccount.get(group.leaderAccountId)?.values() ?? [])]
       .some(quantity => quantity !== 0);
     if (leaderOpen && reconciliation.divergentAccounts.length === 0) {
-      lastResumeOffer = { at: clock() };
+      lastResumeOffer = null;
       options.onAudit?.([{
         at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
-        reason: 'connection-recovery: kopie jsou synchronní s leaderem — drženy, čeká se na ruční ARM',
+        reason: 'connection-recovery: kopie jsou synchronní s leaderem — drženy DISARMED, ARM je blokovaný do flat',
       }]);
       return;
     }
@@ -1804,6 +1806,77 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (event.type === 'order' && event.order.accountId !== group.leaderAccountId) {
       const runtime = currentRuntime();
       const asserted = assertedFollowerQuantity(runtime.state, runtime.cancelOutbox, event.order.brokerOrderId);
+      const linked = [...runtime.state.links.values()]
+        .flat()
+        .find(link => link.brokerOrderId === event.order.brokerOrderId);
+      const nativeProtective = linked?.nativeOsoRole === 'stop' || linked?.nativeOsoRole === 'target';
+      const accountPositionSnapshot = positionsByAccount.get(event.order.accountId);
+      // Po autoritativním snapshotu znamená chybějící symbol flat. Bez
+      // snapshotu je stav neznámý a ochranný příkaz se nikdy naslepo neruší.
+      const knownNet = accountPositionSnapshot == null
+        ? undefined
+        : accountPositionSnapshot.get(event.order.symbol) ?? 0;
+      const venueManagedCoverage = nativeProtective
+        && linked != null
+        && knownNet != null
+        && knownNet !== 0
+        && event.order.status === 'working'
+        && event.order.quantity === Math.abs(knownNet);
+
+      // Tohle musí proběhnout i tehdy, když starý rozletěný modify dočasně
+      // zvedl `asserted` na stejnou hodnotu jako venue. Autoritou pro nativní
+      // OSO child není leaderův přechodný stav ani stará intence, ale přesná
+      // follower pozice + working coverage. Link se podle nich srovná oběma
+      // směry a nejasný modify se ukončí bez zrušení správného SL.
+      if (venueManagedCoverage && linked.quantity !== event.order.quantity) {
+        await processor.mutate(async current => {
+          const cancelOutbox = new Map(current.cancelOutbox);
+          for (const [key, entry] of cancelOutbox) {
+            if (
+              entry.operation === 'modify'
+              && entry.brokerOrderId === event.order.brokerOrderId
+              && (entry.status === 'sending' || entry.status === 'unknown')
+            ) {
+              cancelOutbox.set(key, waiveCancelEntry(
+                entry,
+                `venue-managed OSO coverage potvrzena podle pozice ${Math.abs(knownNet)}`,
+                now,
+              ));
+            }
+          }
+          const state = updateFollowerLinkQuantity(
+            current.state,
+            event.order.brokerOrderId,
+            event.order.quantity,
+          );
+          const committed = await options.store.commit(
+            toSnapshot(
+              state,
+              current.outbox.values(),
+              cancelOutbox.values(),
+              current.revision,
+              current.bracketOutbox.values(),
+              current.osoOutbox.values(),
+            ),
+            current.revision,
+          );
+          return {
+            ...current,
+            state,
+            cancelOutbox,
+            revision: committed.revision,
+          };
+        });
+        options.onAudit?.([{
+          at: now,
+          leaderEventId: `venue-oso-coverage-${event.order.accountId}-${event.order.brokerOrderId}`,
+          kind: 'recovered',
+          accountId: event.order.accountId,
+          brokerOrderId: event.order.brokerOrderId,
+          reason: `nativní OSO ochrana odpovídá skutečné pozici ${Math.abs(knownNet)}`,
+        }]);
+        return;
+      }
       // `null` = objednávka není naše; do cizích účtů kopírce nic není.
       if (asserted != null && event.order.quantity > asserted) {
         failClosed(new Error(
@@ -1815,7 +1888,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // její pozdější fill by otevřel protipozici už v DISARMED runtime.
         // Cancel cizím zásahem nafouknuté nohy je risk-redukující vždy.
         const { accountId, brokerOrderId } = event.order;
-        if (event.order.status === 'working') {
+        // Entry nebo orphan ochranu nad autoritativně flat účtem lze zrušit.
+        // Jediný working SL nad otevřenou či zatím neznámou pozicí se ale
+        // nikdy nemaže naslepo — nouzový native liquidate zavře celý kontrakt.
+        const safeDirectCancel = !nativeProtective || (knownNet != null && knownNet === 0);
+        if (isOpenOrderStatus(event.order.status) && safeDirectCancel) {
           try {
             await broker.cancelOrder(accountId, brokerOrderId);
             options.onAudit?.([{
@@ -2311,7 +2388,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       for (const [symbol, quantity] of reconciledLeaderPositions) leaderPositions.set(symbol, quantity);
       const divergent = new Set<number>();
       workingOrderAccounts = new Set(
-        snapshots.filter(item => item.orders.some(order => order.status === 'working')).map(item => item.accountId),
+        snapshots.filter(item => item.orders.some(order => isOpenOrderStatus(order.status))).map(item => item.accountId),
       );
       // Reaktivace eligibility: JEDINÉ místo, kde se DLL/unverifiable vrací
       // do 'active' — autoritativní snapshot účtu se povedl. Čas sám nikdy
@@ -2366,7 +2443,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const snapshot = byAccount.get(follower.accountId);
         if (!snapshot) continue;
         const workingIds = new Set(
-          snapshot.orders.filter(order => order.status === 'working').map(order => order.brokerOrderId),
+          snapshot.orders.filter(order => isOpenOrderStatus(order.status)).map(order => order.brokerOrderId),
         );
         if (workingIds.size === 0) continue;
         const flatSymbols = new Set<string>();
@@ -2511,7 +2588,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const nonFlat = snapshots.filter(snapshot =>
         snapshot.positions.some(position => position.netQuantity !== 0));
       const withWorkingOrders = snapshots.filter(snapshot =>
-        snapshot.orders.some(order => order.status === 'working'));
+        snapshot.orders.some(order => isOpenOrderStatus(order.status)));
       if (nonFlat.length > 0 || withWorkingOrders.length > 0) {
         const details = [
           nonFlat.length > 0 ? `nonFlat=${nonFlat.map(item => item.accountId).join(',')}` : '',
@@ -2613,11 +2690,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const remainingMin = Math.ceil((safety.entryCooldownUntil - now) / 60_000);
         throw new Error(`ARM blokován anti-revenge cooldownem ještě ${remainingMin} min`);
       }
-      if (!shadowMode && !positionCheckComplete) throw new Error('Před live dispatch je nutné potvrdit kontrolu pozic');
       if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
       if (gate.divergentAccounts.size > 0) throw new Error('Pozice leader/follower se rozcházejí');
       if (workingOrderAccounts.size > 0) throw new Error('Před ARM musí být všechny účty bez pracovních příkazů');
+      if (!shadowMode && !positionCheckComplete) throw new Error('Před live dispatch je nutné potvrdit kontrolu pozic');
       const ineligible = currentIneligibleAccounts();
+      if (!shadowMode) {
+        const armAccountIds = [
+          group.leaderAccountId,
+          ...group.followers
+            .filter(follower => !ineligible.has(follower.accountId))
+            .map(follower => follower.accountId),
+        ];
+        const allArmAccountsAuthoritativelyFlat = armAccountIds.every(accountId => {
+          const positions = positionsByAccount.get(accountId);
+          return positions != null && [...positions.values()].every(quantity => quantity === 0);
+        });
+        if (!allArmAccountsAuthoritativelyFlat) {
+          throw new Error(
+            'Před ARM musí být všechny zapojené účty flat; otevřený obchod se nikdy automaticky nepřebírá ani nedorovnává',
+          );
+        }
+      }
       const leaderReason = ineligible.get(group.leaderAccountId);
       if (leaderReason) throw new Error(`Leader účet není způsobilý pro nové vstupy: ${leaderReason}`);
       if (!shadowMode) {

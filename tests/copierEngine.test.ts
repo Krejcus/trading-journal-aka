@@ -227,6 +227,44 @@ describe('planModify', () => {
     );
     expect(commands[0]).toMatchObject({ brokerOrderId: 'mo-1', quantity: 1, limitPrice: 29_600 });
   });
+
+  it('ignoruje venue-managed quantity-only resize nativního OSO stopu', () => {
+    const state = createCopierState([], 1, [[
+      'leader-stop',
+      [{
+        key: 'oso:g1:e1:200:stop', accountId: 200, brokerOrderId: 'follower-stop',
+        quantity: 11, stopPrice: 29_552, nativeOsoRole: 'stop',
+      }],
+    ]]);
+    expect(planModify(
+      event({
+        orderId: 'leader-stop', id: 'partial-resize-6', kind: 'replaced',
+        quantity: 6, orderType: 'Stop', limitPrice: undefined, stopPrice: 29_552, sequence: 2,
+      }),
+      state,
+      group({ followers: [{ accountId: 200, mode: 'on-submit', multiplier: 1 }] }),
+    )).toEqual([]);
+  });
+
+  it('posun ceny nativního OSO stopu zachová follower quantity místo transient leader qty', () => {
+    const state = createCopierState([], 1, [[
+      'leader-stop',
+      [{
+        key: 'oso:g1:e1:200:stop', accountId: 200, brokerOrderId: 'follower-stop',
+        quantity: 11, stopPrice: 29_552, nativeOsoRole: 'stop',
+      }],
+    ]]);
+    expect(planModify(
+      event({
+        orderId: 'leader-stop', id: 'move-stop-during-partial', kind: 'replaced',
+        quantity: 6, orderType: 'Stop', limitPrice: undefined, stopPrice: 29_539, sequence: 2,
+      }),
+      state,
+      group({ followers: [{ accountId: 200, mode: 'on-submit', multiplier: 1 }] }),
+    )).toEqual([
+      expect.objectContaining({ brokerOrderId: 'follower-stop', quantity: 11, stopPrice: 29_539 }),
+    ]);
+  });
 });
 
 describe('applyResolved', () => {

@@ -1,4 +1,4 @@
-import type { BrokerOrderRequest, BrokerPort, OrderSide } from './brokerPort';
+import { isOpenOrderStatus, type BrokerOrderRequest, type BrokerPort, type OrderSide } from './brokerPort';
 
 /**
  * Poslední autoritativní ochrana celkové expozice přímo před side effectem.
@@ -26,7 +26,7 @@ export function createExposureCappedBroker(
     const pending = orders
       .filter(order => order.brokerOrderId !== excludeOrderId
         && order.symbol === request.symbol
-        && order.status === 'working')
+        && isOpenOrderStatus(order.status))
       .reduce((totals, order) => {
         totals[order.side] += Math.max(0, order.quantity - order.filledQuantity);
         return totals;
@@ -59,6 +59,9 @@ export function createExposureCappedBroker(
       }
       return broker.placeOrder(request);
     },
+    liquidatePosition: broker.liquidatePosition
+      ? request => broker.liquidatePosition!(request)
+      : undefined,
     async placeOco(request) {
       if (!broker.placeOco) throw new Error('Broker nepodporuje nativní OCO');
       try {

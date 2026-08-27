@@ -327,6 +327,11 @@ export function copyGroupPowerBlocker({
   return null;
 }
 
+/** Kill switch zastaví nové execution akce, ale nesmí odříznout poslední
+ * risk-redukční brzdu. Flatten účtu i skupiny proto zůstává průchozí. */
+export const commandBlockedByCopierKillSwitch = (command: LiveCopyTradingCommand) =>
+  command.type !== 'flatten-account' && command.type !== 'flatten-group';
+
 function loadDraftGroups(snapshot: LiveSnapshot): CopyGroupConfig[] {
   try {
     const raw = localStorage.getItem(GROUPS_STORAGE_KEY);
@@ -667,7 +672,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     if (busyCommand) return;
     setBusyCommand(key);
     try {
-      if (brokerWrite && copierKillSwitch) {
+      if (brokerWrite && copierKillSwitch && commandBlockedByCopierKillSwitch(command)) {
         setToast({ tone: 'error', text: 'Kill switch je aktivní. Brokerový příkaz byl zablokován.' });
         return;
       }
@@ -1529,13 +1534,22 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders }: {
       const positionQuantity = Math.abs(position.netPosition);
       const stopCoverage = stopOrders.reduce((total, order) => total + workingQuantity(order), 0);
       const targetCoverage = targetOrders.reduce((total, order) => total + workingQuantity(order), 0);
-      const stopCoverageComplete = stopCoverage >= positionQuantity;
-      const protectionComplete = stopCoverageComplete && targetCoverage >= positionQuantity;
+      // Ochrana musí být přesná. SL 6/11 je díra, ale SL 12/11 je také
+      // nebezpečný: po fillu by mohl účet otočit do protipozice.
+      const stopCoverageExact = stopCoverage === positionQuantity;
+      const targetCoverageExact = targetCoverage === positionQuantity;
+      const protectionComplete = stopCoverageExact && targetCoverageExact;
       const signedQuantity = `${position.netPosition > 0 ? '+' : '−'}${contractQuantity(position.netPosition)}`;
       const positionLabel = `${symbol} ${position.netPosition > 0 ? 'long' : 'short'} ${contractQuantity(position.netPosition)}`;
       const protectionLabel = protectionComplete
         ? 'working SL a target'
-        : !hasStop ? 'bez working SL' : stopCoverageComplete ? 'working SL' : 'working SL nepokrývá celou pozici';
+        : !hasStop
+          ? 'bez working SL'
+          : stopCoverageExact
+            ? 'working SL'
+            : stopCoverage < positionQuantity
+              ? `working SL kryje jen ${contractQuantity(stopCoverage)} z ${contractQuantity(positionQuantity)}`
+              : `working SL překrývá pozici ${contractQuantity(stopCoverage)}/${contractQuantity(positionQuantity)}`;
 
       return <span key={`${fullSymbolKey(position.symbol)}-${index}`} className="inline-flex items-center gap-1">
         <span
@@ -1552,6 +1566,11 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders }: {
           title={`${symbol}: pozice nemá working stop loss`}
           className="inline-flex items-center gap-0.5 rounded-md border border-amber-500/40 bg-amber-500/15 px-1.5 py-1 text-[9px] font-black leading-none text-amber-600"
         ><AlertTriangle aria-hidden="true" size={9} strokeWidth={2.8} className="shrink-0" />bez SL</span> : null}
+        {hasStop && !stopCoverageExact ? <span
+          aria-label={`${symbol} nebezpečné krytí stop lossem ${contractQuantity(stopCoverage)} z ${contractQuantity(positionQuantity)}`}
+          title={`${symbol}: working SL ${stopCoverage < positionQuantity ? 'nepokrývá celou pozici' : 'překrývá pozici a může ji otočit'}`}
+          className="inline-flex items-center gap-0.5 rounded-md border border-rose-500/45 bg-rose-500/15 px-1.5 py-1 text-[9px] font-black leading-none text-rose-600"
+        ><AlertTriangle aria-hidden="true" size={9} strokeWidth={2.8} className="shrink-0" />SL {contractQuantity(stopCoverage)}/{contractQuantity(positionQuantity)}</span> : null}
       </span>;
     })}
     {entryOrders.map(order => {

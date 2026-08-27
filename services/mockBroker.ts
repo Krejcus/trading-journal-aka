@@ -1,14 +1,16 @@
-import type {
-  BrokerEnvironment,
-  BrokerEvent,
-  BrokerOrder,
-  BrokerOrderAck,
-  BrokerOrderRequest,
-  BrokerOcoRequest,
-  BrokerOsoRequest,
-  BrokerPort,
-  BrokerPosition,
-  BrokerAccountCapability,
+import {
+  isOpenOrderStatus,
+  type BrokerAccountCapability,
+  type BrokerEnvironment,
+  type BrokerEvent,
+  type BrokerOrder,
+  type BrokerOrderAck,
+  type BrokerLiquidateRequest,
+  type BrokerOrderRequest,
+  type BrokerOcoRequest,
+  type BrokerOsoRequest,
+  type BrokerPort,
+  type BrokerPosition,
 } from './brokerPort';
 
 /**
@@ -61,6 +63,8 @@ export interface MockBrokerOptions {
   /** Simuluje Tradovate: změna ceny OSO parentu relativně posune i child SL/TP. */
   osoChildrenFollowParentReprice?: boolean;
   accountCapabilities?: readonly BrokerAccountCapability[];
+  /** Zapne stavovou broker-native likvidaci; default drží legacy fallback testy. */
+  nativeLiquidate?: boolean;
 }
 
 export class MockBrokerTimeoutError extends Error {
@@ -77,6 +81,7 @@ export interface MockBroker extends BrokerPort {
   emitEvent(event: BrokerEvent): void;
   /** Vše, co bylo skutečně odesláno — pro kontrolu duplicit v testech. */
   placedRequests(): readonly BrokerOrderRequest[];
+  liquidateRequests(): readonly BrokerLiquidateRequest[];
   placedOcoRequests(): readonly BrokerOcoRequest[];
   placedOsoRequests(): readonly BrokerOsoRequest[];
   modifyRequests(): readonly {
@@ -103,6 +108,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
   const ordersById = new Map<string, BrokerOrder>();
   const positions = new Map<string, BrokerPosition>();
   const placed: BrokerOrderRequest[] = [];
+  const liquidated: BrokerLiquidateRequest[] = [];
   const placedOco: BrokerOcoRequest[] = [];
   const placedOso: BrokerOsoRequest[] = [];
   const modified: Array<{
@@ -223,6 +229,36 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
       return { brokerOrderId: order.brokerOrderId, accepted: true, definitive: true };
     },
 
+    liquidatePosition: options.nativeLiquidate
+      ? async (request: BrokerLiquidateRequest): Promise<BrokerOrderAck> => {
+        if (!connected) throw new MockBrokerTimeoutError('mock broker: disconnected');
+        liquidated.push({ ...request });
+        for (const order of ordersById.values()) {
+          if (
+            order.accountId !== request.accountId
+            || order.symbol !== request.symbol
+            || !isOpenOrderStatus(order.status)
+          ) continue;
+          order.status = 'canceled';
+          order.updatedAt = clock();
+          emit({ type: 'order', order });
+        }
+        const key = positionKey(request.accountId, request.symbol);
+        const current = positions.get(key);
+        if (current?.netQuantity) {
+          const next = { ...current, netQuantity: 0 };
+          positions.set(key, next);
+          emit({ type: 'position', position: next });
+        }
+        orderSequence += 1;
+        return {
+          brokerOrderId: `liquidate-${orderSequence}`,
+          accepted: true,
+          definitive: true,
+        };
+      }
+      : undefined,
+
     async placeOco(request: BrokerOcoRequest) {
       if (!connected) throw new MockBrokerTimeoutError('mock broker: disconnected');
       placedOco.push(request);
@@ -302,7 +338,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
       if (outcome === 'timeout-before-cancel') {
         throw new MockBrokerTimeoutError('mock broker: cancel timed out before reaching broker');
       }
-      if (!order || order.status !== 'working') return;
+      if (!order || !isOpenOrderStatus(order.status)) return;
       order.status = 'canceled';
       order.updatedAt = clock();
       emit({ type: 'order', order });
@@ -400,6 +436,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
     emitEvent: emit,
 
     placedRequests: () => placed,
+    liquidateRequests: () => liquidated,
     placedOcoRequests: () => placedOco,
     placedOsoRequests: () => placedOso,
     modifyRequests: () => modified,

@@ -92,7 +92,7 @@ describe('Positions sloupec copy tradingu', () => {
     expect(markup).not.toContain('lucide-shield-check');
   });
 
-  it('štít vyžaduje množstevní pokrytí celé pozice a podporuje rozdělené ochranné nohy', () => {
+  it('štít vyžaduje přesné množstevní pokrytí a pod/nadkrytý SL ukáže nahlas', () => {
     const underCovered = renderCell({
       positions: [livePosition({ netPosition: 5 })],
       orders: [
@@ -109,11 +109,22 @@ describe('Positions sloupec copy tradingu', () => {
         liveOrder({ id: 40, orderType: 'Limit', quantity: 3 }),
       ],
     });
+    const overCovered = renderCell({
+      positions: [livePosition({ netPosition: 5 })],
+      orders: [
+        liveOrder({ id: 41, orderType: 'Stop', quantity: 6, stopPrice: 22_900 }),
+        liveOrder({ id: 42, orderType: 'Limit', quantity: 5 }),
+      ],
+    });
 
     expect(underCovered).not.toContain('lucide-shield-check');
-    expect(underCovered).toContain('working SL nepokrývá celou pozici');
+    expect(underCovered).toContain('working SL kryje jen 1 z 5');
+    expect(underCovered).toContain('SL 1/5');
     expect(underCovered).not.toContain('bez SL');
     expect(fullyCovered).toContain('lucide-shield-check');
+    expect(overCovered).not.toContain('lucide-shield-check');
+    expect(overCovered).toContain('SL 6/5');
+    expect(overCovered).toContain('překrývá pozici a může ji otočit');
   });
 
   it('flat účet ukáže jen working Limit/Stop entry a terminální či Market příkazy ignoruje', () => {

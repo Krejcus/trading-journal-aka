@@ -1,4 +1,4 @@
-import type { BrokerOrder, OrderType } from './brokerPort';
+import { isOpenOrderStatus, type BrokerOrder, type OrderType } from './brokerPort';
 
 export type CancelStatus = 'planned' | 'sending' | 'unknown' | 'confirmed' | 'abandoned' | 'waived';
 
@@ -89,7 +89,10 @@ export function resolveCancelLookup(
         reason: 'modify bezpředmětný — objednávka už je zrušená', updatedAt: now,
       };
     }
-    if (order.status !== 'working') {
+    if (order.status === 'pending') {
+      return markCancelUnknown(entry, entry.reason ?? 'modify čeká, objednávka je stále pending', now);
+    }
+    if (!isOpenOrderStatus(order.status)) {
       // `rejected` u Tradovate cancel-replace znamená, že objednávka ZEMŘELA
       // (cancel prošel, replace ne) — follower může být bez ochrany.
       // `filled` znamená změněnou pozici. Obojí je vážné a failuje zavřeně.

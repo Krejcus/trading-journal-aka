@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { copyGroupPowerBlocker } from '../components/LiveCopyTradeOverview';
+import {
+  commandBlockedByCopierKillSwitch,
+  copyGroupPowerBlocker,
+} from '../components/LiveCopyTradeOverview';
 
 const base = {
   powered: false,
@@ -49,5 +52,17 @@ describe('LIVE copy group ON/OFF dialog policy', () => {
 
     expect(blocker?.title).toBe('Skupinu teď nelze vypnout');
     expect(blocker?.detail).toContain('Copier zůstává ZAPNUTÝ');
+  });
+
+  it('kill switch nezablokuje Flatten účtu ani skupiny, ale dál blokuje jiný broker write', () => {
+    expect(commandBlockedByCopierKillSwitch({
+      type: 'flatten-account', groupId: 'group-main', accountId: 200, operationId: 'flatten-account-001',
+    })).toBe(false);
+    expect(commandBlockedByCopierKillSwitch({
+      type: 'flatten-group', groupId: 'group-main', operationId: 'flatten-group-001',
+    })).toBe(false);
+    expect(commandBlockedByCopierKillSwitch({
+      type: 'cancel-order', groupId: 'group-main', orderId: 123,
+    })).toBe(true);
   });
 });

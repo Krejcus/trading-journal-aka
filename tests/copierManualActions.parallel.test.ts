@@ -153,6 +153,17 @@ async function runFlatten(
 }
 
 describe('processManualFlatten paralelně po účtech', () => {
+  it('pending objednávku považuje za aktivní, zruší ji a teprve pak potvrdí flat', async () => {
+    const broker = fakeBroker({
+      orders: [{ ...workingOrder(9), status: 'pending' }],
+    });
+
+    const { result } = await runFlatten(broker, [9]);
+
+    expect(result).toMatchObject({ flat: true, canceledOrders: 1 });
+    expect(broker.canceled).toEqual([{ accountId: 9, brokerOrderId: 'order-9-1' }]);
+  });
+
   it('izoluje nepotvrzený cancel jednoho účtu a dokončí ostatní pipeline', async () => {
     const broker = fakeBroker({
       orders: [workingOrder(1), workingOrder(2), workingOrder(3)],

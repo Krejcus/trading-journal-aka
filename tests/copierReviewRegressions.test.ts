@@ -579,4 +579,134 @@ describe('copier regressions po review 25. 8.', () => {
       controller.stop();
     }
   });
+
+  it('7. nativní OSO partial fill 6→11 nikdy neposílá child qty modify; price move zachová qty 11', async () => {
+    const clock = stepClock();
+    const broker = createMockBroker({ clock, behavior: () => ({ kind: 'working' }) });
+    const opened = await processOsoPair({
+      pair: {
+        entryOrderId: 'incident-entry', stopOrderId: 'incident-stop', targetOrderId: 'incident-target',
+        accountId: 100, symbol: 'MNQU6', entrySide: 'Sell', quantity: 11,
+        entryOrderType: 'Limit', entryLimitPrice: 29_541.5,
+        stopPrice: 29_552, targetPrice: 29_470.5,
+        detectedAt: clock(), correlation: 'inferred-window',
+      },
+      event: leaderEvent({
+        id: 'incident-stop-submit', orderId: 'incident-stop', side: 'Buy',
+        quantity: 11, orderType: 'Stop', limitPrice: undefined, stopPrice: 29_552, sequence: 1,
+      }),
+      group,
+      runtime: createRuntime(createCopierState()),
+      context: liveGate(),
+      broker,
+      clock,
+    });
+    const mapped = [...opened.runtime.osoOutbox.values()][0];
+    expect(mapped?.firstBrokerOrderId).toBeTruthy();
+
+    const partial = await processLeaderEvent({
+      event: leaderEvent({
+        id: 'incident-stop-suspended-6', orderId: 'incident-stop', kind: 'replaced',
+        side: 'Buy', quantity: 6, orderType: 'Stop', limitPrice: undefined,
+        stopPrice: 29_552, sequence: 2,
+      }),
+      group, runtime: opened.runtime, context: liveGate(), broker, clock,
+    });
+    const restored = await processLeaderEvent({
+      event: leaderEvent({
+        id: 'incident-stop-working-11', orderId: 'incident-stop', kind: 'replaced',
+        side: 'Buy', quantity: 11, orderType: 'Stop', limitPrice: undefined,
+        stopPrice: 29_552, sequence: 3,
+      }),
+      group, runtime: partial.runtime, context: liveGate(), broker, clock,
+    });
+
+    expect(broker.modifyRequests()).toEqual([]);
+    expect(restored.runtime.state.links.get('incident-stop')?.[0]).toMatchObject({
+      quantity: 11, nativeOsoRole: 'stop',
+    });
+
+    const moved = await processLeaderEvent({
+      event: leaderEvent({
+        id: 'incident-stop-price-29539', orderId: 'incident-stop', kind: 'replaced',
+        side: 'Buy', quantity: 6, orderType: 'Stop', limitPrice: undefined,
+        stopPrice: 29_539, sequence: 4,
+      }),
+      group, runtime: restored.runtime, context: liveGate(), broker, clock,
+    });
+    expect(broker.modifyRequests()).toEqual([
+      expect.objectContaining({
+        brokerOrderId: mapped?.firstBrokerOrderId,
+        changes: expect.objectContaining({ quantity: 11, stopPrice: 29_539 }),
+      }),
+    ]);
+    expect(moved.runtime.state.links.get('incident-stop')?.[0]).toMatchObject({
+      quantity: 11, stopPrice: 29_539,
+    });
+  });
+
+  it('8. venue návrat nativního stopu na přesnou pozici se přijme a SL se nikdy nezruší', async () => {
+    const clock = stepClock();
+    const store = createMemoryCopierStore();
+    const broker = createMockBroker({ clock, behavior: () => ({ kind: 'working' }) });
+    const audits: Array<{ kind: string; reason?: string; brokerOrderId?: string }> = [];
+    const opened = await processOsoPair({
+      pair: {
+        entryOrderId: 'coverage-entry', stopOrderId: 'coverage-stop', targetOrderId: 'coverage-target',
+        accountId: 100, symbol: 'MNQU6', entrySide: 'Sell', quantity: 11,
+        entryOrderType: 'Limit', entryLimitPrice: 29_541.5,
+        stopPrice: 29_552, targetPrice: 29_470.5,
+        detectedAt: clock(), correlation: 'inferred-window',
+      },
+      event: leaderEvent({
+        id: 'coverage-stop-submit', orderId: 'coverage-stop', side: 'Buy',
+        quantity: 11, orderType: 'Stop', limitPrice: undefined, stopPrice: 29_552, sequence: 1,
+      }),
+      group,
+      runtime: createRuntime(createCopierState()),
+      context: liveGate(),
+      broker,
+      clock,
+      store,
+    });
+    const stopId = [...opened.runtime.osoOutbox.values()][0]?.firstBrokerOrderId;
+    if (!stopId) throw new Error('Test setup: follower stop nevznikl');
+    const snapshot = await store.load();
+    const staleLinks = snapshot.links.map(([leaderOrderId, links]) => [
+      leaderOrderId,
+      links.map(link => link.brokerOrderId === stopId ? { ...link, quantity: 6 } : link),
+    ] as typeof snapshot.links[number]);
+    await store.commit({ ...snapshot, links: staleLinks }, snapshot.revision);
+
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock, wait: async () => undefined,
+      onAudit: entries => audits.push(...entries),
+    });
+    try {
+      broker.setConnected(true);
+      await controller.waitForIdle();
+      broker.emitEvent({
+        type: 'position',
+        position: { accountId: 200, symbol: 'MNQU6', netQuantity: -11 },
+      });
+      const followerStop = broker.orders().find(order => order.brokerOrderId === stopId);
+      if (!followerStop) throw new Error('Test setup: follower stop není v broker snapshotu');
+      broker.emitEvent({
+        type: 'order',
+        order: { ...followerStop, quantity: 11, status: 'working', sourceVersion: 'venue-restored-11' },
+      });
+      await controller.waitForIdle();
+
+      expect(controller.status().lastError).toBeNull();
+      expect(broker.cancelRequestCount(stopId)).toBe(0);
+      expect(audits).toContainEqual(expect.objectContaining({
+        kind: 'recovered', brokerOrderId: stopId,
+      }));
+      expect((await store.load()).links
+        .find(([leaderOrderId]) => leaderOrderId === 'coverage-stop')?.[1][0])
+        .toMatchObject({ quantity: 11, nativeOsoRole: 'stop' });
+    } finally {
+      controller.stop();
+    }
+  });
 });

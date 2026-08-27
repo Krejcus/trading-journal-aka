@@ -38,6 +38,11 @@ describe('cancel resolution', () => {
     expect(resolveCancelLookup(cancelEntry(), order('filled'), 'authoritative', 9))
       .toMatchObject({ status: 'abandoned', outcome: 'filled' });
   });
+
+  it('pending stále není potvrzený cancel ani terminální stav', () => {
+    expect(resolveCancelLookup(cancelEntry(), order('pending'), 'authoritative', 9))
+      .toMatchObject({ status: 'unknown' });
+  });
 });
 
 describe('modify resolution', () => {
@@ -59,6 +64,11 @@ describe('modify resolution', () => {
   it('working se shodnými parametry = potvrzeno', () => {
     expect(resolveCancelLookup(modifyEntry(), order('working', { stopPrice: 20_000 }), 'authoritative', 9))
       .toMatchObject({ status: 'confirmed', outcome: 'working' });
+  });
+
+  it('pending modify zůstává nevyřešený a nikdy se nevydává za mrtvou objednávku', () => {
+    expect(resolveCancelLookup(modifyEntry(), order('pending', { stopPrice: 20_000 }), 'authoritative', 9))
+      .toMatchObject({ status: 'unknown' });
   });
 });
 

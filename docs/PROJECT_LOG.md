@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1542 testů, typecheck a build čisté.
+  Poslední úplné automatické ověření: 1560 testů, typecheck a build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -72,6 +72,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [ ] Incident 26. 8. „úspěšný flat zbytečně DISARMoval session“ — přesná
       příčina i lokální oprava jsou ověřené (zápis níže), ale změna zatím není
       commitnutá, pushnutá, nasazená ani nainstalovaná do Mac workeru.
+- [ ] Incident 27. 8. „dvě follower pozice bez SL + nefunkční Flatten All“ —
+      přesná příčina a lokální hardening jsou ověřené 1560 testy (zápis níže),
+      ale před dalším LIVE ARM chybí explicitní push, deploy/reinstall stejného
+      commitu a řízený DEMO test partial-fillu + emergency Flatten.
 - [x] Incident 26. 8. „změna nativního OSO parentu relativně posunula follower
       SL/TP“ — VYŘEŠENO 26. 8. (zápis „řízený DEMO důkaz OSO parent cascade“):
       přesná oprava bez povinného `parentId` je nasazená a skutečný Tradovate
@@ -95,6 +99,41 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-27 (Codex, fatal SL/Flatten incident — stavový emergency close a flat-first ARM)
+Incident vznikl při partial fillu nativního Tradovate OSO: broker přechodně
+měnil child SL/TP `11 → 6 → 11`. Runtime přechodný `Suspended/PendingNew`
+stav vydával za běžný `Working` replace, zkopíroval leader child quantity 6
+na followery a durable ji uložil. Když venue správně obnovilo follower SL na
+skutečnou expozici 11, detekce to mylně označila za cizí navýšení a na dvou
+účtech zrušila správný SL. Dvě rozletěné `unknown` modify položky následně
+zablokovaly ruční Flatten i auto-close. UI správně ukázalo chybějící SL a
+umožnilo incident včas odhalit.
+
+Nativní OSO child quantity se už nikdy nekopíruje z leaderovy přechodné
+hodnoty; price move zachová follower quantity a autoritou pro coverage je
+přesná brokerová follower pozice. `PendingNew`/`Suspended` nezakládá replace,
+ale zůstává aktivní pro ARM, exposure cap, cancel a Flatten. Venue návrat SL
+na přesnou pozici durable opraví link a waivne překonaný nejasný modify bez
+zrušení ochrany. LIVE UI vyžaduje přesné krytí: 6/11 i 12/11 zobrazí výrazný
+`SL x/y` alarm a štít se ukáže jen při přesném SL i TP.
+
+Ruční Flatten účtu i skupiny nyní nejdřív používá stavový Tradovate
+`liquidatePosition` nad čerstvou venue pozicí, potom dočistí všechny zbývající
+aktivní příkazy a úspěch hlásí teprve po autoritativním potvrzení flat + bez
+aktivních orderů. Starý `unknown` outbox, kill switch ani shozená WebSocket
+brána už nezablokují samotný REST pokus; skutečný broker/REST výpadek se dál
+poctivě vrátí jako neúspěch. Běžný live ARM nově vyžaduje všechny zapojené
+účty autoritativně flat a nikdy neadoptuje ani nedorovnává už otevřený obchod.
+Po reconnectu se synchronní otevřené pozice pouze drží DISARMED; ani dříve
+spravovaná epizoda nedostane výjimku a ARM je blokovaný až do skutečného flat.
+
+Ověření: 194 souborů a 1560/1560 testů, `npx tsc --noEmit`, produkční build a
+`git diff --check` čisté. Změna je pouze lokální na
+`codex/ios-native-checkpoint-20260814`: nebyla commitnutá, pushnutá, nasazená
+ani nainstalovaná do Mac workeru. Nebyl proveden ARM, Flatten ani jiný broker
+side effect; copier musí do explicitně schváleného rollout + DEMO testu zůstat
+DISARMED.
 
 ### 2026-08-27 (Codex, čisté ZAPNOUT/VYPNOUT už nevyžaduje potvrzení)
 Běžné zapnutí flat a validní skupiny i běžné vypnutí flat skupiny nyní běží

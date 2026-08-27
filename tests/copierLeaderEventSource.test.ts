@@ -39,7 +39,9 @@ describe('CopierLeaderEventSource', () => {
   it('PendingNew -> Working bez změny parametrů neposílá redundantní replace', () => {
     const source = new CopierLeaderEventSource();
     source.connection(true);
-    expect(source.observe({ type: 'order', order: order({ sourceVersion: 'v1:PendingNew' }) }, 100, 1, 10))
+    expect(source.observe({ type: 'order', order: order({
+      status: 'pending', sourceVersion: 'v1:PendingNew',
+    }) }, 100, 1, 10))
       .toMatchObject({ kind: 'submitted' });
     expect(source.observe({ type: 'order', order: order({ sourceVersion: 'v1:Working' }) }, 100, 2, 11))
       .toBeNull();
@@ -47,6 +49,26 @@ describe('CopierLeaderEventSource', () => {
       type: 'order',
       order: order({ sourceVersion: 'v2:Working', limitPrice: 29_500.25 }),
     }, 100, 2, 12)).toMatchObject({ kind: 'replaced', limitPrice: 29_500.25 });
+  });
+
+  it('Suspended quantity resize nevytvoří replace; až Working změna je pouze kandidát pro role-aware plán', () => {
+    const source = new CopierLeaderEventSource();
+    source.connection(true);
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'native-stop', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_552, quantity: 11,
+      status: 'pending', sourceVersion: '1:Suspended',
+    }) }, 100, 1, 10)).toMatchObject({ kind: 'submitted', quantity: 11 });
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'native-stop', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_552, quantity: 6,
+      status: 'pending', sourceVersion: '2:Suspended',
+    }) }, 100, 2, 11)).toBeNull();
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'native-stop', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_552, quantity: 11,
+      status: 'working', sourceVersion: '3:Working',
+    }) }, 100, 2, 12)).toMatchObject({ kind: 'replaced', quantity: 11 });
   });
 
   it('zachová parent/OCO/linked vazby bracket orderu', () => {
