@@ -10,6 +10,8 @@ export interface CopierSnapshotInput {
   at: number;
   symbol: string;
   png: Buffer;
+  /** Absolutní deadline pro jediný obrázkový APNs push; storage se uloží i po něm. */
+  notifyDeadlineAt?: number;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -23,10 +25,18 @@ export function validateCopierSnapshotPayload(value: unknown): CopierSnapshotInp
   const kind = typeof raw.kind === 'string' ? raw.kind : '';
   const symbol = typeof raw.symbol === 'string' ? raw.symbol.trim().toUpperCase() : '';
   const at = raw.at;
+  const notifyDeadlineAt = raw.notifyDeadlineAt;
   const encoded = typeof raw.png === 'string' ? raw.png : '';
   if (!UUID_PATTERN.test(episodeId)
     || !COPIER_SNAPSHOT_KINDS.includes(kind as CopierSnapshotKind)
     || typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0
+    || (notifyDeadlineAt !== undefined && (
+      kind === 'tv-alert'
+      || typeof notifyDeadlineAt !== 'number'
+      || !Number.isSafeInteger(notifyDeadlineAt)
+      || notifyDeadlineAt < at
+      || notifyDeadlineAt > at + 5_000
+    ))
     // TradingView tickery nesou '!' (kontinuální futures MNQ1!) a ':'
     // (prefix burzy CME_MINI:MNQ1!) — do storage cesty symbol nevstupuje.
     || !symbol || symbol.length > 32 || !/^[A-Z0-9._:!-]+$/.test(symbol)
@@ -42,7 +52,10 @@ export function validateCopierSnapshotPayload(value: unknown): CopierSnapshotInp
   if (png.length < PNG_MAGIC.length || !png.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
     throw new Error('invalid-snapshot-png');
   }
-  return { episodeId, kind: kind as CopierSnapshotKind, at, symbol, png };
+  return {
+    episodeId, kind: kind as CopierSnapshotKind, at, symbol, png,
+    ...(typeof notifyDeadlineAt === 'number' ? { notifyDeadlineAt } : {}),
+  };
 }
 
 export class CopierSnapshotRateLimiter {

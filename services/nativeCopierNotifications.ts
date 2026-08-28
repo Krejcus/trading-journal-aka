@@ -76,6 +76,7 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
       : null,
     copyEvents: (status.recentCopyEvents ?? []).map(event => ({
       id: event.id,
+      kind: event.kind,
       ...copyEventNotification(event),
     })),
   };

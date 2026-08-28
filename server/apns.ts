@@ -22,6 +22,8 @@ export interface ApnsNotification {
   /** Notification Service Extension downloads this URL before display. */
   imageUrl?: string;
   mutableContent?: boolean;
+  /** Bounded request budget for latency-sensitive best-effort notifications. */
+  timeoutMs?: number;
 }
 
 export interface ApnsLiveActivityContentState {
@@ -200,6 +202,7 @@ async function sendApnsRequest(options: {
   expiration: number;
   collapseId?: string;
   payload: Record<string, unknown>;
+  timeoutMs?: number;
 }): Promise<ApnsResult> {
   const config = readConfig();
   if (!config) return { status: 'failed', error: 'missing-apns-config' };
@@ -227,7 +230,7 @@ async function sendApnsRequest(options: {
     const timeout = setTimeout(() => {
       client.destroy();
       finish({ status: 'failed', error: 'apns-timeout' });
-    }, 7_000);
+    }, Math.min(7_000, Math.max(100, options.timeoutMs ?? 7_000)));
 
     client.once('error', error => finish({ status: 'failed', error: String(error).slice(0, 300) }));
     const collapseId = cleanCollapseId(options.collapseId);
@@ -285,6 +288,7 @@ export async function sendApnsNotification(
     expiration: Math.floor(Date.now() / 1_000) + 60 * 60,
     collapseId: notification.collapseId,
     payload: buildApnsPayload(notification),
+    timeoutMs: notification.timeoutMs,
   });
 }
 

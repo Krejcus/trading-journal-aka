@@ -91,6 +91,30 @@ describe('local copier execution agent', () => {
     }));
   });
 
+  it('publishes current snapshot health without coupling it to controller state', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      snapshotHealth: () => ({
+        enabled: true,
+        state: 'ready',
+        layoutName: 'AlphaTrade Snapshoty',
+        chartIdConfigured: true,
+        cdpReachable: true,
+        targetFound: true,
+        lastCheckedAt: 10,
+        lastAttemptAt: 20,
+        lastSuccessAt: 30,
+      }),
+    });
+    expect(running.status().snapshotHealth).toEqual(expect.objectContaining({
+      state: 'ready', layoutName: 'AlphaTrade Snapshoty', lastSuccessAt: 30,
+    }));
+    expect(runtime.status()).toMatchObject({ armed: false, connected: true });
+  });
+
   it('forwards only explicit Flatten and Flatten All commands with their stable operation id', async () => {
     const runtime = controller();
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });

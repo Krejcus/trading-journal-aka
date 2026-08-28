@@ -490,6 +490,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onC
               onRefreshOrders={async () => { await live.refreshData(); }}
               onAccount={account => setSelectedAccountId(account.id)}
               apiTelemetry={live.apiTelemetry}
+              snapshotHealth={agentStatus?.snapshotHealth}
               commandAdapter={commandAdapter}
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
               copierStatusPending={!copierUiDemo && (!agentStatusResolved || live.dataEnrichmentPending)}

@@ -13,6 +13,12 @@ export interface TradingViewDedicatedChartRef {
   targetId?: string;
 }
 
+export interface TradingViewSnapshotProbe {
+  cdpReachable: boolean;
+  targetFound: boolean;
+  resolved?: TradingViewDedicatedChartRef;
+}
+
 export interface TradingViewAlertSnapshotOptions extends CopierChartSnapshotOptions {
   symbol: string;
   timeframe?: string | null;
@@ -20,6 +26,21 @@ export interface TradingViewAlertSnapshotOptions extends CopierChartSnapshotOpti
   onDedicatedResolved?: (value: TradingViewDedicatedChartRef) => Promise<void> | void;
   sleepImpl?: (ms: number) => Promise<void>;
 }
+
+export interface TradingViewCopierSnapshotOptions extends CopierChartSnapshotOptions {
+  dedicated?: TradingViewDedicatedChartRef | null;
+  onDedicatedResolved?: (value: TradingViewDedicatedChartRef) => Promise<void> | void;
+  sleepImpl?: (ms: number) => Promise<void>;
+}
+
+const chartBoundsExpression = `(() => {
+  const el = document.querySelector('.chart-container.active')
+    || document.querySelector('.layout__area--center')
+    || document.querySelector('.chart-container');
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return r.width > 200 && r.height > 150 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+})()`;
 
 interface WebSocketLike {
   addEventListener(type: 'open' | 'message' | 'error' | 'close', listener: (event: any) => void, options?: { once?: boolean }): void;
@@ -131,6 +152,41 @@ const chartIdFromUrl = (url: string | undefined): string | undefined => {
   return match?.[1];
 };
 
+const dedicatedTarget = (
+  targets: CdpTarget[],
+  ref: TradingViewDedicatedChartRef,
+): CdpTarget | undefined => targets.find(candidate => (
+  candidate.type === 'page'
+  && typeof candidate.webSocketDebuggerUrl === 'string'
+  && ((ref.targetId && candidate.id === ref.targetId)
+    || (ref.chartId && chartIdFromUrl(candidate.url) === ref.chartId))
+));
+
+/** Lehký health probe; nic v TradingView nemění a neposílá žádný CDP příkaz. */
+export async function probeTradingViewSnapshotTarget(
+  options: CopierChartSnapshotOptions & { dedicated?: TradingViewDedicatedChartRef | null } = {},
+): Promise<TradingViewSnapshotProbe> {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const timeoutMs = Math.min(DEFAULT_TIMEOUT_MS, Math.max(1, options.timeoutMs ?? 1_500));
+  try {
+    const response = await fetchImpl(`${options.cdpOrigin ?? DEFAULT_CDP_ORIGIN}/json/list`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return { cdpReachable: false, targetFound: false };
+    const targets = await response.json() as CdpTarget[];
+    const target = Array.isArray(targets)
+      ? dedicatedTarget(targets, options.dedicated ?? {})
+      : undefined;
+    return {
+      cdpReachable: true,
+      targetFound: Boolean(target),
+      ...(target ? { resolved: { targetId: target.id, chartId: chartIdFromUrl(target.url) } } : {}),
+    };
+  } catch {
+    return { cdpReachable: false, targetFound: false };
+  }
+}
+
 /**
  * Dvojnásobné rozlišení na širokém panelu by přerostlo 2MB limit úložiště
  * snímků, takže se měřítko dopočítá na cílovou šířku ~3200 px.
@@ -176,7 +232,12 @@ function renderReadyExpression(budgetMs: number): string {
   })()`;
 }
 
-function evaluateExpression(symbol: string, timeframe: string): string {
+function evaluateExpression(symbol?: string, timeframe?: string): string {
+  const navigation = symbol && timeframe
+    ? `if (typeof chart.setSymbol !== 'function' || typeof chart.setResolution !== 'function') return false;
+    chart.setSymbol(${JSON.stringify(symbol)});
+    chart.setResolution(${JSON.stringify(timeframe)});`
+    : '';
   return `(() => {
     const api = globalThis.TradingViewApi;
     if (!api) return false;
@@ -197,9 +258,8 @@ function evaluateExpression(symbol: string, timeframe: string): string {
     // kam uživatel naposledy klikl.
     const chart = typeof api.chart === 'function' ? api.chart(0)
       : typeof api.activeChart === 'function' ? api.activeChart() : api;
-    if (!chart || typeof chart.setSymbol !== 'function' || typeof chart.setResolution !== 'function') return false;
-    chart.setSymbol(${JSON.stringify(symbol)});
-    chart.setResolution(${JSON.stringify(timeframe)});
+    if (!chart) return false;
+    ${navigation}
     // Reset view: vrátí odscrollovaný/odzoomovaný graf na výchozí pohled
     // (čas i cena, auto-scale); náš offset a bar spacing se nastaví až po něm.
     if (typeof chart.executeActionById === 'function') {
@@ -311,6 +371,141 @@ async function cdpRequest(options: {
 export async function captureTradingViewAlertSnapshot(
   options: TradingViewAlertSnapshotOptions,
 ): Promise<Buffer | null> {
+  return captureTradingViewDedicatedSnapshot(options, true);
+}
+
+/**
+ * Připraví vyhrazenou kartu jako „horkou kameru" ještě před obchodem. Tady
+ * probíhá reset, layout a čekání na plný render; při samotném ENTRY/EXIT už
+ * se nic z toho nesmí opakovat. Symbol ani timeframe neměníme — synchronizuje
+ * je TradingView z pracovní karty včetně kreseb a position boxu.
+ */
+export async function prepareTradingViewCopierSnapshot(
+  options: TradingViewCopierSnapshotOptions,
+): Promise<boolean> {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const webSocketFactory = options.webSocketFactory
+    ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
+  const sleepImpl = options.sleepImpl ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const totalMs = Math.min(12_000, Math.max(1, options.timeoutMs ?? 6_000));
+  const started = Date.now();
+  const remaining = () => Math.max(1, totalMs - (Date.now() - started));
+  const cdpOrigin = options.cdpOrigin ?? DEFAULT_CDP_ORIGIN;
+  try {
+    const listResponse = await fetchImpl(`${cdpOrigin}/json/list`, { signal: AbortSignal.timeout(remaining()) });
+    if (!listResponse.ok) throw new Error('snapshot-cdp-list-failed');
+    const targets = await listResponse.json() as CdpTarget[];
+    const target = Array.isArray(targets) ? dedicatedTarget(targets, options.dedicated ?? {}) : undefined;
+    if (!target?.webSocketDebuggerUrl || target.type !== 'page' || !target.url?.includes('tradingview.com/chart')) {
+      throw new Error('snapshot-cdp-dedicated-tab-missing');
+    }
+    await options.onDedicatedResolved?.({ targetId: target.id, chartId: chartIdFromUrl(target.url) });
+    const waitAfterReset = Math.min(4_500, Math.max(200, remaining() - 500));
+    await cdpRequest({
+      target,
+      timeoutMs: remaining(),
+      webSocketFactory,
+      optionalCommandIds: [10, 11, 12],
+      commands: [
+        { id: 10, method: 'Emulation.setFocusEmulationEnabled', params: { enabled: true } },
+        { id: 11, method: 'Page.enable' },
+        { id: 12, method: 'Page.setWebLifecycleState', params: { state: 'active' } },
+        { id: 1, method: 'Runtime.evaluate', params: { expression: evaluateExpression(), returnByValue: true } },
+        {
+          id: 4,
+          method: 'Runtime.evaluate',
+          params: { expression: renderReadyExpression(waitAfterReset), returnByValue: true, awaitPromise: true },
+        },
+      ],
+      onCommandResult: async (id, result) => {
+        if (id === 1) {
+          const evaluation = result.result as { value?: unknown } | undefined;
+          if (evaluation?.value !== true) throw new Error('snapshot-tv-render-navigation-failed');
+        }
+        if (id === 4) await sleepImpl(Math.min(250, Math.max(0, remaining() - 50)));
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ENTRY/EXIT hot capture: karta už je připravená, takže pouze vynutíme aktivní
+ * lifecycle, necháme doběhnout dva paint framy a sejmeme oříznutý graf v 1×.
+ * Neexistuje fallback na pracovní kartu a žádný příkaz nemění viewport.
+ */
+export async function captureTradingViewCopierSnapshot(
+  options: TradingViewCopierSnapshotOptions,
+): Promise<Buffer | null> {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const webSocketFactory = options.webSocketFactory
+    ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
+  const totalMs = Math.min(3_000, Math.max(1, options.timeoutMs ?? 1_500));
+  const started = Date.now();
+  const remaining = () => Math.max(1, totalMs - (Date.now() - started));
+  const cdpOrigin = options.cdpOrigin ?? DEFAULT_CDP_ORIGIN;
+  try {
+    const listResponse = await fetchImpl(`${cdpOrigin}/json/list`, { signal: AbortSignal.timeout(remaining()) });
+    if (!listResponse.ok) throw new Error('snapshot-cdp-list-failed');
+    const targets = await listResponse.json() as CdpTarget[];
+    const target = Array.isArray(targets) ? dedicatedTarget(targets, options.dedicated ?? {}) : undefined;
+    if (!target?.webSocketDebuggerUrl || target.type !== 'page' || !target.url?.includes('tradingview.com/chart')) {
+      throw new Error('snapshot-cdp-dedicated-tab-missing');
+    }
+    await options.onDedicatedResolved?.({ targetId: target.id, chartId: chartIdFromUrl(target.url) });
+    const captureCommand: { id: number; method: string; params: Record<string, unknown> } = {
+      id: 3, method: 'Page.captureScreenshot', params: { format: 'png', fromSurface: false },
+    };
+    const results = await cdpRequest({
+      target,
+      timeoutMs: remaining(),
+      webSocketFactory,
+      optionalCommandIds: [10, 11, 12],
+      commands: [
+        { id: 10, method: 'Emulation.setFocusEmulationEnabled', params: { enabled: true } },
+        { id: 11, method: 'Page.enable' },
+        { id: 12, method: 'Page.setWebLifecycleState', params: { state: 'active' } },
+        {
+          id: 2,
+          method: 'Runtime.evaluate',
+          params: {
+            expression: `(async () => {
+              await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              return ${chartBoundsExpression};
+            })()`,
+            returnByValue: true,
+            awaitPromise: true,
+          },
+        },
+        captureCommand,
+      ],
+      onCommandResult: (id, result) => {
+        if (id !== 2) return;
+        const bounds = (result.result as { value?: unknown } | undefined)?.value as
+          { x: number; y: number; width: number; height: number } | null | undefined;
+        if (bounds && [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
+          captureCommand.params = {
+            format: 'png', fromSurface: true,
+            clip: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: 1 },
+          };
+        }
+      },
+    });
+    const encoded = results.get(3)?.data;
+    if (typeof encoded !== 'string') throw new Error('snapshot-cdp-invalid-response');
+    const png = Buffer.from(encoded, 'base64');
+    return png.length > 0 ? png : null;
+  } catch {
+    return null;
+  }
+}
+
+async function captureTradingViewDedicatedSnapshot(
+  options: TradingViewAlertSnapshotOptions | TradingViewCopierSnapshotOptions,
+  fallbackToPassive: boolean,
+): Promise<Buffer | null> {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const webSocketFactory = options.webSocketFactory
     ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
@@ -329,12 +524,7 @@ export async function captureTradingViewAlertSnapshot(
     // Snapshoty" s unikátním ID — nikdy layout, který používá uživatel.
     // Electron CDP neumí /json/new, takže bez nalezené záložky se capture
     // vzdá (fallback pasivního snímku řeší catch níže).
-    const target = Array.isArray(targets) ? targets.find(candidate => (
-      candidate.type === 'page'
-      && typeof candidate.webSocketDebuggerUrl === 'string'
-      && ((ref.targetId && candidate.id === ref.targetId)
-        || (ref.chartId && chartIdFromUrl(candidate.url) === ref.chartId))
-    )) : undefined;
+    const target = Array.isArray(targets) ? dedicatedTarget(targets, ref) : undefined;
     if (!target) throw new Error('snapshot-cdp-dedicated-tab-missing');
     if (!target?.webSocketDebuggerUrl || target.type !== 'page' || !target.url?.includes('tradingview.com/chart')) {
       throw new Error('snapshot-cdp-invalid-dedicated-target');
@@ -348,14 +538,6 @@ export async function captureTradingViewAlertSnapshot(
     const captureCommand: { id: number; method: string; params?: Record<string, unknown> } = {
       id: 3, method: 'Page.captureScreenshot', params: { format: 'png', fromSurface: false },
     };
-    const boundsExpression = `(() => {
-      const el = document.querySelector('.chart-container.active')
-        || document.querySelector('.layout__area--center')
-        || document.querySelector('.chart-container');
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      return r.width > 200 && r.height > 150 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
-    })()`;
     const results = await cdpRequest({
       target,
       timeoutMs: remaining(),
@@ -367,7 +549,16 @@ export async function captureTradingViewAlertSnapshot(
         { id: 10, method: 'Emulation.setFocusEmulationEnabled', params: { enabled: true } },
         { id: 11, method: 'Page.enable' },
         { id: 12, method: 'Page.setWebLifecycleState', params: { state: 'active' } },
-        { id: 1, method: 'Runtime.evaluate', params: { expression: evaluateExpression(options.symbol, options.timeframe || '1'), returnByValue: true } },
+        {
+          id: 1,
+          method: 'Runtime.evaluate',
+          params: {
+            expression: 'symbol' in options
+              ? evaluateExpression(options.symbol, options.timeframe || '1')
+              : evaluateExpression(),
+            returnByValue: true,
+          },
+        },
         // Přepnutí na jeden panel je velký reflow; bez čekání na dokreslení
         // by polovina snímku zůstala bílá.
         {
@@ -375,7 +566,7 @@ export async function captureTradingViewAlertSnapshot(
           method: 'Runtime.evaluate',
           params: { expression: renderReadyExpression(waitAfterNavigation), returnByValue: true, awaitPromise: true },
         },
-        { id: 2, method: 'Runtime.evaluate', params: { expression: boundsExpression, returnByValue: true } },
+        { id: 2, method: 'Runtime.evaluate', params: { expression: chartBoundsExpression, returnByValue: true } },
         captureCommand,
       ],
       onCommandResult: async (id, result) => {
@@ -410,6 +601,7 @@ export async function captureTradingViewAlertSnapshot(
     if (png.length === 0) throw new Error('snapshot-cdp-invalid-response');
     return png;
   } catch {
+    if (!fallbackToPassive) return null;
     return captureTradingViewChartSnapshot({
       cdpOrigin,
       timeoutMs: Math.min(3_000, remaining()),

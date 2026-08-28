@@ -6,15 +6,15 @@ import {
   type LocalCopierAgentCommand,
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
-} from '../lib/localCopierAgentProtocol';
-import { msUntilTradovateSessionEnd } from '../services/copierArmSession';
-import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController';
+} from '../lib/localCopierAgentProtocol.js';
+import { msUntilTradovateSessionEnd } from '../services/copierArmSession.js';
+import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
   normalizeMultiplier,
   type CopyGroupConfig,
   type LiveCopyTradingCommand,
   type LiveCopyTradingCommandResult,
-} from '../services/liveCopyTrading';
+} from '../services/liveCopyTrading.js';
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   'https://alphatrade-mentor-15.vercel.app',
@@ -32,6 +32,7 @@ interface LocalCopierExecutionAgentOptions {
   startedAt?: string;
   device?: NonNullable<LocalCopierAgentStatus['device']>;
   devices?: NonNullable<LocalCopierAgentStatus['devices']>;
+  snapshotHealth?: () => NonNullable<LocalCopierAgentStatus['snapshotHealth']>;
   onDevicePaired?: (deviceId: string) => Promise<void>;
   /** Crash-safe persistence hook. A failed save rolls the runtime back DISARMED. */
   onGroupChanged?: (group: CopyGroupConfig) => Promise<void>;
@@ -168,6 +169,7 @@ export async function startLocalCopierExecutionAgent(
     startedAt,
     ...(devices[0] ? { device: structuredClone(devices[0]) } : {}),
     ...(devices.length > 0 ? { devices: structuredClone(devices) } : {}),
+    ...(options.snapshotHealth ? { snapshotHealth: structuredClone(options.snapshotHealth()) } : {}),
   });
 
   const configurationResult = (): LiveCopyTradingCommandResult => ({

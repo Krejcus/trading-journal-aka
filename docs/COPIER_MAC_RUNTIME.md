@@ -44,6 +44,8 @@ Instalátor:
 - vytvoří RSA klíče a secret v Keychainu,
 - nainstaluje `~/Library/LaunchAgents/com.alphatrade.copier.plist`,
 - spustí agenta přes `caffeinate`,
+- pokud TradingView neběží, spustí jej s lokálním CDP na `127.0.0.1:9222`;
+  už spuštěnou aplikaci bez CDP nikdy automaticky nezabíjí ani nerestartuje,
 - nechá runtime `DISARMED`.
 
 V LIVE Connections se pak u připojení objeví ikona klíče. Po explicitním
@@ -65,6 +67,21 @@ Logy:
 LIVE UI kontroluje lokální agent na `http://127.0.0.1:3211`. Teprve když je
 WebSocket připojený, oba účty jsou flat, bez pracovních příkazů a reconciliation
 je čistá, lze ručně zvolit `ARM LIVE`.
+
+### TradingView ENTRY/EXIT snímky
+
+- V TradingView musí být otevřený samostatný layout `AlphaTrade Snapshoty` a
+  jeho stabilní `chartId` musí být uložený v
+  `~/Library/Application Support/AlphaTrade/copier/chart-snapshot.json`.
+- Pracovní layout a `AlphaTrade Snapshoty` používají TradingView synchronizaci symbolu,
+  timeframe a globálních kreseb. Worker v `snapshot` layoutu symbol ani
+  timeframe nepřepíná; pouze resetuje viewport a pořídí čistý ořez grafu.
+- LIVE zobrazuje stav **TradingView snímky**. `CDP offline` znamená, že je
+  potřeba TradingView jednou ukončit a nechat znovu spustit AlphaTrade
+  workerem. `Chybějící layout` znamená, že karta `AlphaTrade Snapshoty` není otevřená nebo
+  nesedí uložený `chartId`.
+- Nedostupný snímek nikdy nezastaví ani nezpomalí brokerovou akci. Současně se
+  nikdy jako náhrada nevyfotí jiná pracovní karta.
 
 ## Co se stane při poruše
 

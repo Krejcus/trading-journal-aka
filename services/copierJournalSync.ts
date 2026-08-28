@@ -173,6 +173,7 @@ const candidateFromRow = (row: CopierLedgerRow, accountId: string, snapshots: Co
         path: snapshot.storage_path,
       })).filter(snapshot => Number.isFinite(snapshot.at)),
     } : {}),
+    ...(row.episode_id ? { copierEpisodeId: row.episode_id } : {}),
     needsReview: true,
     runUp: 0,
     drawdown: 0,
@@ -236,7 +237,28 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
   const firstCursor = new Date(deps.now() - FIRST_SYNC_DAYS * 24 * 60 * 60_000).toISOString();
   const after = storedCursor && Number.isFinite(Date.parse(storedCursor)) ? storedCursor : firstCursor;
   const rows = (await deps.loadRows(userId, after)).filter(validRow);
-  const episodeIds = [...new Set(rows.flatMap(row => row.episode_id ? [row.episode_id] : []))];
+  const existing = await deps.getTrades();
+  const healingCutoff = deps.now() - FIRST_SYNC_DAYS * 24 * 60 * 60_000;
+  const healingMasters = existing.filter(trade =>
+    trade.source === 'copier'
+    && trade.masterTradeId == null
+    && trade.timestamp >= healingCutoff
+    && rawTradeIdFromMaster(trade) != null);
+  // Jednorázový backfill vazby na episode pro mastery založené starší verzí.
+  // Po doplnění se další sync obejde bez historického ledger dotazu.
+  const unresolvedTradeIds = new Set(healingMasters
+    .filter(trade => !trade.copierEpisodeId)
+    .map(trade => rawTradeIdFromMaster(trade)!));
+  const historicalRows = unresolvedTradeIds.size > 0
+    ? (await deps.loadRows(userId, firstCursor)).filter(validRow)
+      .filter(candidate => unresolvedTradeIds.has(candidate.trade_id.trim()))
+    : [];
+  const rowsForSnapshots = [...new Map([...rows, ...historicalRows]
+    .map(candidate => [candidate.trade_id.trim(), candidate])).values()];
+  const episodeIds = [...new Set([
+    ...rowsForSnapshots.flatMap(candidate => candidate.episode_id ? [candidate.episode_id] : []),
+    ...healingMasters.flatMap(trade => trade.copierEpisodeId ? [trade.copierEpisodeId] : []),
+  ])];
   const snapshotRows = await deps.loadSnapshots(userId, episodeIds);
   const snapshotsByEpisode = new Map<string, CopierSnapshotRow[]>();
   for (const snapshot of snapshotRows) {
@@ -245,7 +267,6 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
     snapshotsByEpisode.set(snapshot.episode_id, list);
   }
 
-  const existing = await deps.getTrades();
   const existingIds = new Set(existing.flatMap(trade => [String(trade.id), trade.copierTradeId].filter(Boolean) as string[]));
   const created: Trade[] = [];
   const updated: Trade[] = [];
@@ -273,18 +294,24 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
 
   // Starší copier mastery za posledních 30 dní pouze doplníme o seskupení.
   // Reflexe ani jiná uživatelská pole se touto aktualizací nikdy nepřepisují.
-  const healingCutoff = deps.now() - FIRST_SYNC_DAYS * 24 * 60 * 60_000;
-  const healingMasters = existing.filter(trade =>
-    trade.source === 'copier'
-    && trade.masterTradeId == null
-    && trade.timestamp >= healingCutoff
-    && rawTradeIdFromMaster(trade) != null);
+  const rowByRawTradeId = new Map(rowsForSnapshots.map(candidate => [candidate.trade_id.trim(), candidate]));
   const healingCopies: Trade[] = [];
   for (const master of healingMasters) {
     const rawTradeId = rawTradeIdFromMaster(master)!;
     const healingUpdate: Partial<Trade> = {};
     if (!master.groupId) healingUpdate.groupId = copierGroupId(rawTradeId);
     if (master.isMaster == null) healingUpdate.isMaster = true;
+    const episodeId = master.copierEpisodeId ?? rowByRawTradeId.get(rawTradeId)?.episode_id ?? undefined;
+    if (!master.copierEpisodeId && episodeId) healingUpdate.copierEpisodeId = episodeId;
+    const episodeSnapshots = episodeId ? (snapshotsByEpisode.get(episodeId) ?? []) : [];
+    const nextSnapshots = episodeSnapshots.map(snapshot => ({
+      kind: snapshot.kind,
+      at: Date.parse(snapshot.at),
+      path: snapshot.storage_path,
+    })).filter(snapshot => Number.isFinite(snapshot.at));
+    if (nextSnapshots.length > 0 && JSON.stringify(master.copierSnapshots ?? []) !== JSON.stringify(nextSnapshots)) {
+      healingUpdate.copierSnapshots = nextSnapshots;
+    }
     const healedMaster = Object.keys(healingUpdate).length > 0 ? { ...master, ...healingUpdate } : master;
     if (Object.keys(healingUpdate).length > 0) {
       await deps.updateTrade(master.id, healingUpdate);

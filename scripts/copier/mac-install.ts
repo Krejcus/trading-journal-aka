@@ -270,7 +270,10 @@ async function install(): Promise<void> {
   <key>StandardOutPath</key><string>${xml(stdout)}</string>
   <key>StandardErrorPath</key><string>${xml(stderr)}</string>
   <key>ProcessType</key><string>Interactive</string>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>ALPHATRADE_TV_AUTO_LAUNCH</key><string>on</string>
+  </dict>
 </dict></plist>
 `;
   await writeFile(plistPath, plist, { mode: 0o600 });

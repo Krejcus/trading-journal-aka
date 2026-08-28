@@ -21,6 +21,27 @@ export interface LocalCopierAgentDevice {
   publicKey?: string;
 }
 
+export type CopierSnapshotHealthState =
+  | 'disabled'
+  | 'checking'
+  | 'ready'
+  | 'cdp-offline'
+  | 'layout-missing'
+  | 'capture-failed'
+  | 'upload-failed';
+
+export interface CopierSnapshotHealth {
+  enabled: boolean;
+  state: CopierSnapshotHealthState;
+  layoutName: string;
+  chartIdConfigured: boolean;
+  cdpReachable: boolean;
+  targetFound: boolean;
+  lastCheckedAt: number | null;
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+}
+
 export interface LocalCopierAgentStatus {
   version: 1;
   environment: 'demo';
@@ -32,6 +53,8 @@ export interface LocalCopierAgentStatus {
   device?: LocalCopierAgentDevice;
   /** Jedno odvolatelné zařízení pro každé samostatné OAuth připojení. */
   devices?: LocalCopierAgentDevice[];
+  /** Diagnostika obrázků je read-only a nikdy neblokuje broker execution. */
+  snapshotHealth?: CopierSnapshotHealth;
 }
 
 /**
