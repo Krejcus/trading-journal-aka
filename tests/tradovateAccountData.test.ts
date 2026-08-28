@@ -210,6 +210,53 @@ describe('Tradovate read-only account data', () => {
     expect(JSON.stringify(requests)).not.toContain('secret-token');
   });
 
+  it('bootstrap načte čerstvé pozice, příkazy a balance bez historie, fees a risk probe', async () => {
+    const paths: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      paths.push(path);
+      if (path.endsWith('/account/list')) return json([{ id: 10, name: 'FAST-10' }]);
+      if (path.endsWith('/position/list')) return json([{
+        id: 20, accountId: 10, contractId: 99, netPos: 2, netPrice: 20_000,
+      }]);
+      if (path.endsWith('/order/list')) return json([{
+        id: 30, accountId: 10, contractId: 99, action: 'Sell', ordStatus: 'Working',
+      }]);
+      if (path.endsWith('/orderVersion/list')) return json([{
+        id: 300, orderId: 30, orderType: 'Stop', orderQty: 2, stopPrice: 19_900,
+      }]);
+      if (path.endsWith('/contract/items')) return json([{ id: 99, name: 'MNQZ6' }]);
+      if (path.endsWith('/cashBalance/getcashbalancesnapshot')) return json({
+        totalCashValue: 50_100, netLiq: 50_140, openPnL: 40,
+      });
+      return json({ error: 'unexpected bootstrap request' }, 500);
+    }) as typeof fetch;
+
+    const result = await loadTradovateAccountData({
+      baseUrl: 'https://demo.tradovateapi.com/v1',
+      accessToken: 'token',
+      fetchImpl,
+      detail: 'bootstrap',
+    });
+
+    expect(result.accounts[0]).toMatchObject({
+      name: 'FAST-10',
+      netPositionCount: 1,
+      workingOrderCount: 1,
+      balance: { totalCashValue: 50_100, netLiq: 50_140, openPnL: 40 },
+      positions: [{ symbol: 'MNQZ6', netPosition: 2, averagePrice: 20_000 }],
+      orders: [{ id: 30, symbol: 'MNQZ6', orderType: 'Stop', quantity: 2, stopPrice: 19_900 }],
+      fills: [],
+      daily: [],
+      ledger: [],
+    });
+    expect(result.accounts[0].history.coverage.availability).toBe('unavailable');
+    expect(result.accounts[0].risk.statusCoverage.availability).toBe('unavailable');
+    expect(result.coverage.fills.availability).toBe('unavailable');
+    expect(paths).toHaveLength(6);
+    expect(paths.some(path => /fill|cashBalanceLog|RiskStatus|AutoLiq|cashBalance\/list/.test(path))).toBe(false);
+  });
+
   it('doplní working order z nejnovější orderVersion a Suspended nepočítá jako aktivní', async () => {
     const fetchImpl = (async (input: string | URL | Request) => {
       const path = new URL(String(input)).pathname;

@@ -6,7 +6,11 @@ import {
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
-import { loadTradovateLivePnlTick, TradovateLivePnlError } from '../../../server/tradovateLivePnl.js';
+import {
+  loadTradovateLivePnlAnchor,
+  loadTradovateLivePnlTick,
+  TradovateLivePnlError,
+} from '../../../server/tradovateLivePnl.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -27,6 +31,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       userId,
       connectionId,
     });
+    if (req.body?.mode === 'anchor') {
+      const accountId = Number(req.body?.accountId);
+      const contractId = Number(req.body?.contractId);
+      if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+        return res.status(400).json({ error: 'invalid-account-id' });
+      }
+      if (!Number.isSafeInteger(contractId) || contractId <= 0) {
+        return res.status(400).json({ error: 'invalid-contract-id' });
+      }
+      const anchor = await loadTradovateLivePnlAnchor({
+        baseUrl: tradovateApiBaseUrl(config.environment),
+        accessToken,
+        connectionId,
+        environment: config.environment,
+        accountId,
+        contractId,
+      });
+      return res.status(200).json(anchor);
+    }
     const tick = await loadTradovateLivePnlTick({
       baseUrl: tradovateApiBaseUrl(config.environment),
       accessToken,

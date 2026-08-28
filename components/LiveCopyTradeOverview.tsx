@@ -241,6 +241,8 @@ interface Props {
   copierObservingOnly?: boolean;
   /** Stav runtime ještě nebyl zjištěn — nesmí se vydávat za odpojený. */
   copierStatusPending?: boolean;
+  /** Bootstrap má čerstvé pozice a balance, ale denní ledger se ještě doplňuje. */
+  dailyPnlPending?: boolean;
   copierKillSwitch?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
   /** Atomicky vybere čistou skupinu, provede reconciliation a ARM LIVE. */
@@ -365,6 +367,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   copierArmed = false,
   copierObservingOnly = false,
   copierStatusPending = false,
+  dailyPnlPending = false,
   copierKillSwitch = false,
   apiTelemetry,
   onSwitchAndArm,
@@ -870,6 +873,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                     <React.Fragment key={group.id}>
                       <GroupRow
                         group={group} rows={rows} armed={armed}
+                        dailyPnlPending={dailyPnlPending}
                         reduceMotion={reduceMotion}
                         eligibility={group.followers
                           .filter(follower => follower.mode !== 'off')
@@ -918,6 +922,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           <div className={`grid overflow-hidden transition-all duration-300 ease-out ${expanded.has(group.id) ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0'}`}>
                             <div className="min-h-0 overflow-hidden"><GroupDetail
                               rows={rows} tab={tab} isLive={isLive} onAccount={onAccount}
+                              dailyPnlPending={dailyPnlPending}
                               columns={visibleColumns}
                               orders={orders}
                               eligibilityByAccount={eligibilityByAccount}
@@ -1310,9 +1315,10 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, armed, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns, reduceMotion }: {
+const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns, reduceMotion }: {
   group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
   reduceMotion: boolean;
+  dailyPnlPending: boolean;
   eligibility: (CopierAccountEligibility | undefined)[];
   observingOnly: boolean;
   statusPending: boolean;
@@ -1401,7 +1407,7 @@ const GroupRow = ({ group, rows, armed, eligibility, observingOnly, statusPendin
       {!hiddenGroupColumns.has('firm') && <td className="max-w-[150px] px-3 py-1.5 text-[11px] text-[var(--text-secondary)]">{firm ? <FirmMark firm={firm} withLabel /> : '—'}</td>}
       {!hiddenGroupColumns.has('followers') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>}
       {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{money.format(capital)}</td>}
-      {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(daily)}`}>{money.format(daily)}</td>}
+      {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${dailyPnlPending ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{dailyPnlPending ? '—' : money.format(daily)}</td>}
       {!hiddenGroupColumns.has('unreal') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
       <td className="px-3 py-0">
         <div className="flex items-center justify-end gap-1.5" onClick={event => event.stopPropagation()}>
@@ -1652,7 +1658,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -1665,6 +1671,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   onRefreshOrders?: () => Promise<void> | void;
   onVerifyEligibility?: (accountId: number) => void;
   verifyingAccountId: number | null;
+  dailyPnlPending: boolean;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlattenAccount: (accountId: number) => void;
   onCancelOrder: (orderId: number) => void;
@@ -1736,6 +1743,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
             {rows.map((row, i) => (
               <AccountRow
                 key={`${row.name}-${i}`} row={row} live={isLive(row.account)} onAccount={onAccount} columns={columns}
+                dailyPnlPending={dailyPnlPending}
                 orders={groupOrders}
                 eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
                 busyCommand={busyCommand}
@@ -1785,13 +1793,14 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, onMultiplier, onFlatten, redactNames, redaction }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, redactNames, redaction }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
   eligibility?: CopierAccountEligibility;
   busyCommand: string | null;
   onVerifyEligibility?: (accountId: number) => void;
   verifying: boolean;
+  dailyPnlPending: boolean;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlatten: (accountId: number) => void;
   redactNames: boolean;
@@ -1852,7 +1861,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} />
           : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
-        return <span className={`text-xs tabular-nums ${a ? pnlClass(a.realizedPnl) : ''}`}>{a ? money.format(a.realizedPnl) : '—'}</span>;
+        return <span className={`text-xs tabular-nums ${a && !dailyPnlPending ? pnlClass(a.realizedPnl) : 'text-[var(--text-secondary)]'}`}>{a && !dailyPnlPending ? money.format(a.realizedPnl) : '—'}</span>;
       case 'unreal':
         return a ? <span
           className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(a.unrealizedPnl)}`}

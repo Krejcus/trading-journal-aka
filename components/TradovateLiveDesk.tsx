@@ -97,6 +97,29 @@ const OrganizationBrand = ({ name }: { name: string }) => {
   );
 };
 
+const LiveDashboardSkeleton = () => (
+  <div className="space-y-4" aria-label="Načítání čerstvých dat LIVE dashboardu" aria-busy="true">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {[0, 1, 2].map(index => (
+        <div key={index} className="h-20 animate-pulse rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]">
+          <div className="m-4 h-3 w-20 rounded bg-[var(--border-subtle)]" />
+          <div className="mx-4 h-5 w-28 rounded bg-[var(--border-subtle)]" />
+        </div>
+      ))}
+    </div>
+    <div className="overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]">
+      <div className="h-10 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/60" />
+      {[0, 1, 2, 3].map(index => (
+        <div key={index} className="grid h-12 animate-pulse grid-cols-[2fr_1fr_1fr] items-center gap-6 border-b border-[var(--border-subtle)] px-4 last:border-b-0">
+          <div className="h-3 w-36 rounded bg-[var(--border-subtle)]" />
+          <div className="h-3 w-20 justify-self-end rounded bg-[var(--border-subtle)]" />
+          <div className="h-3 w-16 justify-self-end rounded bg-[var(--border-subtle)]" />
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJournalRefresh }) => {
   const [tab, setTab] = useState<LiveTab>('overview');
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
@@ -172,14 +195,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
     [live.data],
   );
   const effectiveAccountEligibility = useMemo(
-    () => copyTradeSnapshot
+    () => copyTradeSnapshot && !live.dataEnrichmentPending
       ? effectiveCopyTradeAccountEligibility(
           copyTradeSnapshot.accounts,
           live.profiles,
           agentStatus?.controller.accountEligibility ?? [],
         )
       : (agentStatus?.controller.accountEligibility ?? []),
-    [agentStatus?.controller.accountEligibility, copyTradeSnapshot, live.profiles],
+    [agentStatus?.controller.accountEligibility, copyTradeSnapshot, live.dataEnrichmentPending, live.profiles],
   );
   const accountEligibilityExclusions = useMemo(
     () => effectiveAccountEligibility
@@ -450,11 +473,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
           })}
         />
       ) : checkingConnection ? (
-        <div className="flex min-h-[45vh] items-center justify-center"><Loader2 size={30} className="animate-spin text-indigo-500" /></div>
+        <LiveDashboardSkeleton />
       ) : requiresConnection ? (
         <ConnectionRequired onConnect={() => setAddConnectionOpen(true)} />
       ) : !live.data ? (
-        <div className="flex min-h-[45vh] items-center justify-center"><Loader2 size={30} className="animate-spin text-indigo-500" /></div>
+        <LiveDashboardSkeleton />
       ) : (
         <>
           {tab === 'overview' && copyTradeSnapshot ? (
@@ -467,7 +490,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
               apiTelemetry={live.apiTelemetry}
               commandAdapter={commandAdapter}
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
-              copierStatusPending={!copierUiDemo && !agentStatusResolved}
+              copierStatusPending={!copierUiDemo && (!agentStatusResolved || live.dataEnrichmentPending)}
+              dailyPnlPending={live.dataEnrichmentPending}
               copierObservingOnly={!copierUiDemo && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}

@@ -167,6 +167,10 @@ interface Probe<T> {
   partial?: boolean;
 }
 
+export type TradovateAccountDataDetail = 'bootstrap' | 'full';
+
+const skippedProbe = <T>(): Probe<T> => ({ ok: false, value: null, status: null });
+
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
@@ -543,18 +547,20 @@ export async function loadTradovateAccountData(options: {
   accessToken: string;
   fetchImpl?: typeof fetch;
   now?: number;
+  detail?: TradovateAccountDataDetail;
 }): Promise<TradovateAccountDataResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const call = <T>(path: string) => request<T>({ ...options, path, fetchImpl });
+  const bootstrap = options.detail === 'bootstrap';
   const [accountsProbe, positionsProbe, ordersProbe, orderVersionsProbe, fillsProbe, fillPairsProbe, fillFeesProbe, cashBalancesProbe] = await Promise.all([
     call<AccountEntity[]>('/account/list'),
     call<PositionEntity[]>('/position/list'),
     call<OrderEntity[]>('/order/list'),
     call<TradovateOrderVersionEntity[]>('/orderVersion/list'),
-    call<FillEntity[]>('/fill/list'),
-    call<FillPairEntity[]>('/fillPair/list'),
-    call<FillFeeEntity[]>('/fillFee/list'),
-    call<CashBalanceEntity[]>('/cashBalance/list'),
+    bootstrap ? skippedProbe<FillEntity[]>() : call<FillEntity[]>('/fill/list'),
+    bootstrap ? skippedProbe<FillPairEntity[]>() : call<FillPairEntity[]>('/fillPair/list'),
+    bootstrap ? skippedProbe<FillFeeEntity[]>() : call<FillFeeEntity[]>('/fillFee/list'),
+    bootstrap ? skippedProbe<CashBalanceEntity[]>() : call<CashBalanceEntity[]>('/cashBalance/list'),
   ]);
 
   const accounts = requireList(accountsProbe);
@@ -602,9 +608,9 @@ export async function loadTradovateAccountData(options: {
         method: 'POST',
         body: { accountId },
       }),
-      call<CashBalanceLogEntity[]>(`/cashBalanceLog/deps?masterid=${encodedId}`),
-      call<AccountRiskStatus[]>(`/accountRiskStatus/deps?masterid=${encodedId}`),
-      call<UserAccountAutoLiq[]>(`/userAccountAutoLiq/deps?masterid=${encodedId}`),
+      bootstrap ? skippedProbe<CashBalanceLogEntity[]>() : call<CashBalanceLogEntity[]>(`/cashBalanceLog/deps?masterid=${encodedId}`),
+      bootstrap ? skippedProbe<AccountRiskStatus[]>() : call<AccountRiskStatus[]>(`/accountRiskStatus/deps?masterid=${encodedId}`),
+      bootstrap ? skippedProbe<UserAccountAutoLiq[]>() : call<UserAccountAutoLiq[]>(`/userAccountAutoLiq/deps?masterid=${encodedId}`),
     ]);
 
     const snapshot = snapshotProbe.ok && snapshotProbe.value && !snapshotProbe.value.errorText

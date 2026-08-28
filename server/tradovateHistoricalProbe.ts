@@ -130,6 +130,16 @@ const result = (options: {
   };
 };
 
+export const unavailableTradovateHistoricalSync = (options: {
+  environment: 'demo' | 'live';
+  now?: number;
+}): TradovateHistoricalSyncCapability => result({
+  status: 'unavailable',
+  httpStatus: null,
+  reportBaseUrl: tradovateReportBaseUrl(options.environment),
+  now: options.now,
+});
+
 /**
  * Read-only capability probe. It only requests report definitions and never
  * generates a report, places an order, or mutates the broker account.

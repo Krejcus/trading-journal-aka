@@ -91,6 +91,21 @@ const tableRows = (markup: string): string[] => markup.match(/<tr\b[^>]*>[\s\S]*
 const tableCells = (row: string): string[] => row.match(/<td\b[^>]*>[\s\S]*?<\/td>/g) ?? [];
 
 describe('GroupDetail Positions integrace', () => {
+  it('během fresh bootstrapu nevydává chybějící denní ledger za nulu', () => {
+    const bootstrapSnapshot = {
+      ...snapshot,
+      accounts: snapshot.accounts.map(account => ({ ...account, realizedPnl: 123 })),
+      totalRealizedPnl: 246,
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: bootstrapSnapshot,
+      dailyPnlPending: true,
+    }));
+
+    expect(markup).not.toContain('123');
+    expect(markup).toContain('—');
+  });
+
   it('propustí working limit přes group accountIds do pending pillu v leader řádku', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       snapshot,

@@ -2,13 +2,15 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import {
+  applyTradovateLivePnlAnchorTick,
   applyTradovateLivePnlTick,
   tradovateContractRoot,
+  tradovateLivePnlAnchorCandidates,
   tradovateLiveTickClosedLastPosition,
   tradovateValuePerPoint,
 } from '../lib/tradovateLivePnl';
 import type { TradovateLivePnlTick } from '../lib/tradovateLivePnlTypes';
-import { loadTradovateLivePnlTick } from '../server/tradovateLivePnl';
+import { loadTradovateLivePnlAnchor, loadTradovateLivePnlTick } from '../server/tradovateLivePnl';
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -50,6 +52,32 @@ describe('Tradovate lightweight live P&L reader', () => {
     expect(tick.anchor).toMatchObject({ accountId: 10, contractId: 7, openPnl: 20 });
     expect(tick.activeContractCount).toBe(1);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('loads a balance-only anchor with one broker request between full ticks', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toEqual({ accountId: 10 });
+      return json({ openPnL: 25, netLiq: 50_025, totalCashValue: 50_000 });
+    }) as unknown as typeof fetch;
+
+    const tick = await loadTradovateLivePnlAnchor({
+      baseUrl: 'https://demo.example.test/v1',
+      accessToken: 'token',
+      connectionId: 'connection',
+      environment: 'demo',
+      accountId: 10,
+      contractId: 7,
+      fetchImpl,
+      now: Date.parse('2026-08-27T20:00:00.000Z'),
+    });
+
+    expect(tick).toEqual({
+      connectionId: 'connection',
+      environment: 'demo',
+      capturedAt: '2026-08-27T20:00:00.000Z',
+      anchor: { accountId: 10, contractId: 7, openPnl: 25, netLiq: 50_025, totalCashValue: 50_000 },
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it('rotates contracts and never takes more than one snapshot per tick', async () => {
@@ -155,6 +183,66 @@ const dataset = {
 } as TradovateAccountDataResult;
 
 describe('Tradovate follower live P&L estimation', () => {
+  it('selects one safe balance anchor per supported open contract', () => {
+    expect(tradovateLivePnlAnchorCandidates(dataset)).toEqual([
+      { accountId: 10, contractId: 7 },
+    ]);
+
+    const ambiguous = {
+      ...dataset,
+      accounts: dataset.accounts.map((value, index) => index === 0 ? {
+        ...value,
+        positions: [
+          ...value.positions,
+          { ...value.positions[0], id: 99, contractId: 8, symbol: 'ESZ6' },
+        ],
+      } : value),
+    };
+
+    expect(tradovateLivePnlAnchorCandidates(ambiguous)).toEqual([
+      { accountId: 11, contractId: 7 },
+    ]);
+  });
+
+  it('applies a balance-only anchor without replacing positions or orders', () => {
+    const result = applyTradovateLivePnlAnchorTick(dataset, {
+      connectionId: 'c',
+      environment: 'demo',
+      capturedAt: '2026-08-27T20:00:01.000Z',
+      anchor: { accountId: 10, contractId: 7, openPnl: 20, netLiq: 50_020, totalCashValue: 50_000 },
+    });
+
+    expect(result.marks['7'].price).toBe(20_010);
+    expect(result.data.accounts.map(value => value.balance.openPnL)).toEqual([20, 19.5, 36]);
+    expect(result.data.accounts.map(value => value.balance.openPnlSource)).toEqual(['broker', 'estimated', 'estimated']);
+    expect(result.data.accounts[0].positions).toBe(dataset.accounts[0].positions);
+    expect(result.data.accounts[0].orders).toBe(dataset.accounts[0].orders);
+    expect(result.data.capturedAt).toBe('2026-08-27T20:00:01.000Z');
+  });
+
+  it('ignores a balance-only anchor when the cached position is no longer unambiguous', () => {
+    const ambiguous = {
+      ...dataset,
+      accounts: dataset.accounts.map((value, index) => index === 0 ? {
+        ...value,
+        positions: [
+          ...value.positions,
+          { ...value.positions[0], id: 99, contractId: 8, symbol: 'NQZ6' },
+        ],
+      } : value),
+    };
+    const marks = { '7': { contractId: 7, price: 20_010, valuePerPoint: 2, observedAt: dataset.capturedAt } };
+    const result = applyTradovateLivePnlAnchorTick(ambiguous, {
+      connectionId: 'c',
+      environment: 'demo',
+      capturedAt: '2026-08-27T20:00:01.000Z',
+      anchor: { accountId: 10, contractId: 7, openPnl: 20, netLiq: null, totalCashValue: null },
+    }, marks);
+
+    expect(result.data).toBe(ambiguous);
+    expect(result.marks).toBe(marks);
+  });
+
   it('detects only the first open to flat transition that needs a full refresh', () => {
     const flatTick: TradovateLivePnlTick = {
       connectionId: 'c', environment: 'demo', capturedAt: '2026-08-15T10:01:00.000Z',

@@ -1,5 +1,6 @@
 import type {
   TradovateLivePnlAnchor,
+  TradovateLivePnlAnchorTick,
   TradovateLiveOrder,
   TradovateLivePnlPosition,
   TradovateLivePnlTick,
@@ -23,6 +24,44 @@ interface SnapshotEntity {
   openPnL?: number;
   netLiq?: number;
   totalCashValue?: number;
+}
+
+export async function loadTradovateLivePnlAnchor(options: {
+  baseUrl: string;
+  accessToken: string;
+  connectionId: string;
+  environment: 'demo' | 'live';
+  accountId: number;
+  contractId: number;
+  fetchImpl?: typeof fetch;
+  now?: number;
+}): Promise<TradovateLivePnlAnchorTick> {
+  if (!Number.isSafeInteger(options.accountId) || options.accountId <= 0) {
+    throw new TradovateLivePnlError('Tradovate live P&L anchor has invalid accountId');
+  }
+  if (!Number.isSafeInteger(options.contractId) || options.contractId <= 0) {
+    throw new TradovateLivePnlError('Tradovate live P&L anchor has invalid contractId');
+  }
+  const snapshot = await tradovateRequest<SnapshotEntity>({
+    ...options,
+    path: '/cashBalance/getcashbalancesnapshot',
+    method: 'POST',
+    body: { accountId: options.accountId },
+    fetchImpl: options.fetchImpl ?? fetch,
+  });
+  const openPnl = finite(snapshot.openPnL);
+  return {
+    connectionId: options.connectionId,
+    environment: options.environment,
+    capturedAt: new Date(options.now ?? Date.now()).toISOString(),
+    anchor: snapshot.errorText || openPnl == null ? null : {
+      accountId: options.accountId,
+      contractId: options.contractId,
+      openPnl,
+      netLiq: finite(snapshot.netLiq),
+      totalCashValue: finite(snapshot.totalCashValue),
+    },
+  };
 }
 
 interface OrderEntity {

@@ -14,7 +14,10 @@ import type {
   TradovateHistorySnapshot,
   TradovateHistorySyncResult,
 } from '../lib/tradovateHistoricalTypes';
-import type { TradovateLivePnlTick } from '../lib/tradovateLivePnlTypes';
+import type {
+  TradovateLivePnlAnchorTick,
+  TradovateLivePnlTick,
+} from '../lib/tradovateLivePnlTypes';
 import {
   beginTradovateApiRequest,
   finishTradovateApiRequest,
@@ -173,11 +176,14 @@ export function disconnectTradovateOAuth(connectionId: string): Promise<{ connec
   return authenticatedRequest(`/api/tradovate/oauth/status?connectionId=${encodeURIComponent(connectionId)}`, { method: 'DELETE' });
 }
 
-export function runTradovateReadOnlyPreflight(connectionId: string): Promise<TradovatePreflightResult> {
+export function runTradovateReadOnlyPreflight(
+  connectionId: string,
+  mode: 'bootstrap' | 'full' = 'full',
+): Promise<TradovatePreflightResult> {
   return authenticatedRequest('/api/tradovate/oauth/preflight', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ connectionId }),
+    body: JSON.stringify({ connectionId, mode }),
   });
 }
 
@@ -260,6 +266,18 @@ export function runTradovateLivePnlTick(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ connectionId, contractCursor }),
+  });
+}
+
+export function runTradovateLivePnlAnchor(
+  connectionId: string,
+  accountId: number,
+  contractId: number,
+): Promise<TradovateLivePnlAnchorTick> {
+  return authenticatedRequest('/api/tradovate/oauth/live-pnl', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId, mode: 'anchor', accountId, contractId }),
   });
 }
 

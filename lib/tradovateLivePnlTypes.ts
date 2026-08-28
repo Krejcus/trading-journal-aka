@@ -15,6 +15,18 @@ export interface TradovateLivePnlAnchor {
   totalCashValue: number | null;
 }
 
+/**
+ * Levný mezitick mezi autoritativními position/order snapshoty. Obsahuje
+ * pouze brokerem vypočtené account P&L; klient ho smí použít k odvození marku
+ * jen tehdy, když stále vidí právě jednu odpovídající otevřenou pozici.
+ */
+export interface TradovateLivePnlAnchorTick {
+  connectionId: string;
+  environment: 'demo' | 'live';
+  capturedAt: string;
+  anchor: TradovateLivePnlAnchor | null;
+}
+
 export interface TradovateLiveOrder {
   id: number;
   accountId: number;

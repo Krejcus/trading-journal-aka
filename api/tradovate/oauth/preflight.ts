@@ -7,7 +7,10 @@ import {
 } from '../../../server/tradovateOAuthStore.js';
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
 import { loadTradovateAccountData } from '../../../server/tradovateAccountData.js';
-import { probeTradovateHistoricalSync } from '../../../server/tradovateHistoricalProbe.js';
+import {
+  probeTradovateHistoricalSync,
+  unavailableTradovateHistoricalSync,
+} from '../../../server/tradovateHistoricalProbe.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -20,6 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const config = readTradovateServerConfig();
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
     const connectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId : '';
+    const bootstrap = req.body?.mode === 'bootstrap';
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
     const { accessToken } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
@@ -29,8 +33,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     const baseUrl = tradovateApiBaseUrl(config.environment);
     const [result, historicalSync] = await Promise.all([
-      loadTradovateAccountData({ baseUrl, accessToken }),
-      probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
+      loadTradovateAccountData({
+        baseUrl,
+        accessToken,
+        detail: bootstrap ? 'bootstrap' : 'full',
+      }),
+      bootstrap
+        ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
+        : probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
     ]);
     return res.status(200).json({
       connectionId,
