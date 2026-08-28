@@ -5,6 +5,10 @@ const migration = readFileSync(
   new URL('../supabase/migrations/20260828174530_copy_groups_cloud_sync.sql', import.meta.url),
   'utf8',
 );
+const indexCleanup = readFileSync(
+  new URL('../supabase/migrations/20260828175900_drop_copy_groups_unused_index.sql', import.meta.url),
+  'utf8',
+);
 
 describe('copy groups Supabase migration', () => {
   it('vynucuje vlastnictví řádků ve všech CRUD RLS politikách', () => {
@@ -22,5 +26,9 @@ describe('copy groups Supabase migration', () => {
     expect(migration).toContain("config -> 'enabled' = 'false'::jsonb");
     expect(migration).toContain("not (config ? 'localOnly')");
     expect(migration).not.toMatch(/grant .*service_role/i);
+  });
+
+  it('odstraňuje nový index, který nepodporoval skutečný sort dotazu', () => {
+    expect(indexCleanup).toContain('drop index if exists public.copy_groups_user_updated_idx');
   });
 });
