@@ -75,13 +75,17 @@ je čistá, lze ručně zvolit `ARM LIVE`.
   `~/Library/Application Support/AlphaTrade/copier/chart-snapshot.json`.
 - Pracovní layout a `AlphaTrade Snapshoty` používají TradingView synchronizaci symbolu,
   timeframe a globálních kreseb. Worker v `snapshot` layoutu symbol ani
-  timeframe nepřepíná; pouze resetuje viewport a pořídí čistý ořez grafu.
+  timeframe nepřepíná. Viewport připravuje předem a periodicky; při skutečném
+  ENTRY/EXIT už jen pořídí rychlý čistý ořez grafu bez resetu nebo navigace.
 - LIVE zobrazuje stav **TradingView snímky**. `CDP offline` znamená, že je
   potřeba TradingView jednou ukončit a nechat znovu spustit AlphaTrade
   workerem. `Chybějící layout` znamená, že karta `AlphaTrade Snapshoty` není otevřená nebo
   nesedí uložený `chartId`.
 - Nedostupný snímek nikdy nezastaví ani nezpomalí brokerovou akci. Současně se
   nikdy jako náhrada nevyfotí jiná pracovní karta.
+- Při úspěchu přijde jediná notifikace už s obrázkem. Obrázková cesta má
+  deadline 1,5 s; pokud ho nestihne, v 1,8 s přijde jediná textová záloha a
+  pozdní obrázkový push už se nezačne odesílat.
 
 ## Co se stane při poruše
 

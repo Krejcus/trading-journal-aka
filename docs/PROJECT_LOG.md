@@ -100,6 +100,54 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-29 (Codex, bezpečný rollout hot-camera — nejdřív Mac worker)
+Po výslovném souhlasu uživatele proběhla před produkčním pushem serveru
+reinstalace Mac workeru z izolovaného release stromu. SHA-256 nainstalovaného
+`copier-agent.mjs` přesně odpovídá ověřenému release bundlu. Restart zachoval
+stejného leadera a všech šest followerů včetně multiplikátoru 2×; runtime je
+DISARMED, připojený, plochý, bez working orders, divergence, kill switch,
+stuck outboxu a `lastError`. Snapshot health je `ready`: CDP odpovídá a layout
+`AlphaTrade Snapshoty` byl nalezen. `reconciliationRequired` je po restartu
+očekávaně aktivní a další skutečné ověření patří až do řízeného DEMO testu.
+
+Nativní Capacitor sync v čistém release prošel, ale nový bundle zatím nebyl
+fyzicky nainstalován: iPhone byl nedostupný a generický unsigned Xcode build
+skončil pouze na zaplněném disku (`No space left on device`). Lock-screen /
+background obrázková APNs cesta používá už existující Notification Service
+Extension; přesné potlačení paralelní lokální ENTRY/EXIT notifikace v popředí
+vyžaduje pozdější instalaci nového nativního bundlu.
+
+### 2026-08-28 (Codex, ENTRY/EXIT hot-camera a jediná notifikace už s obrázkem)
+Vyhrazený TradingView layout `AlphaTrade Snapshoty` se nyní připravuje předem
+a periodicky na pozadí: jeden panel, `chartReset`, dynamická hustota svíček,
+28 % prostoru vpravo a skrytá plovoucí lišta. Při samotném ENTRY/EXIT už worker
+viewport nemění; pouze probudí lifecycle karty, počká na dva paint framy a
+pořídí oříznutý PNG v měřítku 1×. Pět read-only měření nad živým layoutem bez
+uploadu trvalo 136–199 ms (průměr 162 ms, přibližně 148 kB) proti původnímu
+průměru 1 252 ms a přibližně 545 kB.
+
+ENTRY/EXIT textový APNs se při zdravé snapshot pipeline nově na krátkou dobu
+odloží. Obrázková větev má absolutní deadline 1,5 s; pokud APNs obrázek přijme,
+atomicky posune společný copy-event marker a textový duplikát už nevznikne.
+Pokud capture, Storage nebo APNs deadline nestihne, worker v 1,8 s vyvolá
+stejným plannerem jedinou textovou zálohu. Server po deadline nový obrázkový
+push nezačne a broker dispatch/eventTail na žádnou z těchto větví nečeká.
+Zabalená nativní appka už pro ENTRY/EXIT nevyrábí paralelní lokální textovou
+notifikaci; ostatní order/risk eventy zůstávají beze změny.
+
+Součástí stejného release je stabilní vazba `copierEpisodeId`, která doplní
+pozdě nahraný ENTRY/EXIT obrázek k existujícímu journal masteru bez duplikace
+a bez přepsání reflexe. Worker umí TradingView bezpečně spustit s lokálním CDP,
+znovu najít layout podle stabilního `chartId` a do LIVE statusu publikuje
+zdraví snapshot cesty. Nevznikla žádná migrace ani změna RLS/bucketu.
+
+Izolovaný release nad čistým `origin/main` prošel 196 test soubory / 1 594
+testy (první sandboxový běh selhal pouze na zákazu `listen 127.0.0.1`, opakovaný
+běh mimo síťový sandbox je celý zelený), TypeScriptem po instalaci samostatného
+extension lockfile, produkčním Vite/PWA buildem, samostatným esbuild bundlem
+Mac workeru a `git diff --check`. Cílený ESLint má 0 chyb a jen dva existující
+warningy ve `storageService`.
+
 ### 2026-08-27 (Codex, falešný FAIL-CLOSED po pravidelném socket reconnectu)
 V `13:09:14Z` pravidelná obnova Tradovate socketu znovu přehrála dvě staré
 terminální objednávky `625378672326` a `625378701959`. Worker zůstal
