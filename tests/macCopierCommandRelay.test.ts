@@ -31,9 +31,30 @@ describe('Mac copier command relay', () => {
 
     await expect(relay.uploadSnapshot({
       episodeId: '11111111-1111-4111-8111-111111111111', kind: 'entry', at: 1,
-      symbol: 'MNQU6', png: 'iVBORw0KGgo=',
+      symbol: 'MNQU6', png: 'iVBORw0KGgo=', notifyDeadlineAt: 2_000,
     })).resolves.toBeUndefined();
     expect(snapshotRequests).toHaveLength(3);
+    expect(snapshotRequests).toEqual(Array(3).fill(expect.objectContaining({ notifyDeadlineAt: 2_000 })));
+    await relay.close();
+  });
+
+  it('po klientském deadline už snapshot request vůbec nezačne', async () => {
+    const snapshotRequests: unknown[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}'));
+      if (request.action === 'snapshot') snapshotRequests.push(request);
+      return Response.json(request.action === 'poll' ? { command: null } : { accepted: true });
+    });
+    const agent = { status, execute: vi.fn(), origin: '', close: vi.fn() } as unknown as LocalCopierExecutionAgent;
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://alpha.example', authorizationHeader: async () => 'Device id.secret',
+      agent, fetchImpl: fetchImpl as typeof fetch, pollMs: 60_000,
+    });
+    await expect(relay.uploadSnapshot({
+      episodeId: '11111111-1111-4111-8111-111111111111', kind: 'entry', at: 1,
+      symbol: 'MNQU6', png: 'iVBORw0KGgo=',
+    }, { deadlineAt: Date.now() - 1 })).rejects.toThrow('copier-snapshot-deadline');
+    expect(snapshotRequests).toEqual([]);
     await relay.close();
   });
 

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { captureScale, captureTradingViewAlertSnapshot, captureTradingViewChartSnapshot } from '../services/copierChartSnapshot';
+import {
+  captureScale,
+  captureTradingViewAlertSnapshot,
+  captureTradingViewChartSnapshot,
+  captureTradingViewCopierSnapshot,
+  prepareTradingViewCopierSnapshot,
+  probeTradingViewSnapshotTarget,
+} from '../services/copierChartSnapshot';
 
 class FakeSocket {
   listeners = new Map<string, Set<(event: any) => void>>();
@@ -78,6 +85,101 @@ describe('měřítko snímku', () => {
     expect(captureScale(3335)).toBe(1);
     expect(captureScale(2000)).toBeCloseTo(1.6, 2);
     expect(captureScale(0)).toBe(2);
+  });
+});
+
+describe('copier dedicated snapshot layout', () => {
+  it('najde výhradně nakonfigurovaný layout a health probe nic nenaviguje', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify([
+      { id: 'work', type: 'page', url: 'https://www.tradingview.com/chart/work/', webSocketDebuggerUrl: 'ws://work' },
+      { id: 'snapshot', type: 'page', url: 'https://www.tradingview.com/chart/alpha/', webSocketDebuggerUrl: 'ws://snapshot' },
+    ]), { status: 200 })) as typeof fetch;
+    await expect(probeTradingViewSnapshotTarget({
+      dedicated: { chartId: 'alpha' }, fetchImpl,
+    })).resolves.toEqual({
+      cdpReachable: true,
+      targetFound: true,
+      resolved: { targetId: 'snapshot', chartId: 'alpha' },
+    });
+  });
+
+  it('připraví čistý snapshot layout bez změny synchronizovaného symbolu a timeframe', async () => {
+    const socket = new FakeSocket();
+    const promise = prepareTradingViewCopierSnapshot({
+      dedicated: { chartId: 'alpha' },
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify([
+        { id: 'work', type: 'page', url: 'https://www.tradingview.com/chart/work/', webSocketDebuggerUrl: 'ws://work' },
+        { id: 'snapshot', type: 'page', url: 'https://www.tradingview.com/chart/alpha/', webSocketDebuggerUrl: 'ws://snapshot' },
+      ]), { status: 200 })) as typeof fetch,
+      webSocketFactory: url => {
+        expect(url).toBe('ws://snapshot');
+        return socket;
+      },
+      sleepImpl: async () => undefined,
+      timeoutMs: 500,
+    });
+    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 1_000 });
+    socket.emit('open');
+    for (const id of [10, 11, 12]) {
+      socket.emit('message', { data: JSON.stringify({ id, result: {} }) });
+      await vi.waitUntil(() => socket.sent.length >= (id === 10 ? 2 : id === 11 ? 3 : 4), { timeout: 1_000 });
+    }
+    const reset = JSON.parse(socket.sent[3]);
+    expect(reset.params.expression).toContain("executeActionById('chartReset')");
+    expect(reset.params.expression).toContain('setRightOffset(rightOffset)');
+    expect(reset.params.expression).not.toContain('setSymbol(');
+    expect(reset.params.expression).not.toContain('setResolution(');
+    socket.emit('message', { data: JSON.stringify({ id: 1, result: { result: { value: true } } }) });
+    await vi.waitUntil(() => socket.sent.length === 5, { timeout: 1_000 });
+    socket.emit('message', { data: JSON.stringify({ id: 4, result: { result: { value: true } } }) });
+    await expect(promise).resolves.toBe(true);
+    expect(socket.sent).toHaveLength(5);
+  });
+
+  it('hot capture nemění viewport a fotí oříznutý graf v 1× po dvou paint framech', async () => {
+    const socket = new FakeSocket();
+    const promise = captureTradingViewCopierSnapshot({
+      dedicated: { chartId: 'alpha' },
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify([{
+        id: 'snapshot', type: 'page', url: 'https://www.tradingview.com/chart/alpha/', webSocketDebuggerUrl: 'ws://snapshot',
+      }]), { status: 200 })) as typeof fetch,
+      webSocketFactory: () => socket,
+      timeoutMs: 500,
+    });
+    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 1_000 });
+    socket.emit('open');
+    for (const [id, count] of [[10, 2], [11, 3], [12, 4]] as const) {
+      socket.emit('message', { data: JSON.stringify({ id, result: {} }) });
+      await vi.waitUntil(() => socket.sent.length === count, { timeout: 1_000 });
+    }
+    const bounds = JSON.parse(socket.sent[3]);
+    expect(bounds).toMatchObject({ id: 2, method: 'Runtime.evaluate', params: { awaitPromise: true } });
+    expect(bounds.params.expression).toContain('requestAnimationFrame(() => requestAnimationFrame(resolve))');
+    expect(bounds.params.expression).not.toContain('chartReset');
+    expect(bounds.params.expression).not.toContain('setRightOffset');
+    socket.emit('message', { data: JSON.stringify({
+      id: 2, result: { result: { value: { x: 10, y: 20, width: 2730, height: 1406 } } },
+    }) });
+    await vi.waitUntil(() => socket.sent.length === 5, { timeout: 1_000 });
+    expect(JSON.parse(socket.sent[4])).toMatchObject({
+      id: 3,
+      method: 'Page.captureScreenshot',
+      params: { fromSurface: true, clip: { x: 10, y: 20, width: 2730, height: 1406, scale: 1 } },
+    });
+    socket.emit('message', { data: JSON.stringify({
+      id: 3, result: { data: Buffer.from('hot-snapshot').toString('base64') },
+    }) });
+    await expect(promise).resolves.toEqual(Buffer.from('hot-snapshot'));
+  });
+
+  it('při chybě dedicated layoutu nikdy nevyfotí pracovní kartu', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify([{
+      id: 'work', type: 'page', url: 'https://www.tradingview.com/chart/work/', webSocketDebuggerUrl: 'ws://work',
+    }]), { status: 200 })) as typeof fetch;
+    await expect(captureTradingViewCopierSnapshot({
+      dedicated: { chartId: 'missing' }, fetchImpl, timeoutMs: 100,
+    })).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 

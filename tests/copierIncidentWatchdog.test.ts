@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   copyEventNotification,
+  COPY_EVENT_IMAGE_GRACE_MS,
   planCopyEventNotifications,
   DEFAULT_STALE_AFTER_MS,
   evaluateCopierIncidents,
@@ -235,6 +236,88 @@ describe('trade notifikace (planCopyEventNotifications)', () => {
       'Copier: pozice navýšena',
       'Copier: částečný výstup',
     ]);
+  });
+
+  it('čerstvý ENTRY s aktivními snapshoty počká na obrázek a po grace odejde textem', () => {
+    const entry = {
+      ...copyEvent(NOW - 500),
+      episodeId: '11111111-1111-4111-8111-111111111111',
+    };
+    const waitingRuntime = runtime({
+      status: {
+        snapshotHealth: { enabled: true },
+        controller: { recentCopyEvents: [entry] },
+      },
+    });
+    const waiting = planEvents([waitingRuntime], [marker(String(NOW - 60_000))]);
+    expect(waiting.notifications).toEqual([]);
+    expect(waiting.markers).toEqual([]);
+
+    const afterGrace = planCopyEventNotifications({
+      runtimes: [waitingRuntime],
+      alertStates: [marker(String(NOW - 60_000))],
+      now: entry.at + COPY_EVENT_IMAGE_GRACE_MS,
+    });
+    expect(afterGrace.notifications).toEqual([expect.objectContaining({
+      eventId: entry.id,
+      title: 'Copier: vstup zkopírován',
+    })]);
+    expect(afterGrace.markers).toEqual([expect.objectContaining({
+      detail: String(entry.at), notified: true,
+    })]);
+  });
+
+  it('první živý ENTRY se neztratí ani když serverový marker ještě neexistuje', () => {
+    const entry = {
+      ...copyEvent(NOW - 500, 'first-entry'),
+      episodeId: '11111111-1111-4111-8111-111111111111',
+    };
+    const firstRuntime = runtime({
+      status: {
+        snapshotHealth: { enabled: true },
+        controller: { recentCopyEvents: [entry] },
+      },
+    });
+    const waiting = planEvents([firstRuntime]);
+    expect(waiting.notifications).toEqual([]);
+    expect(waiting.markers).toEqual([expect.objectContaining({ detail: '0', notified: false })]);
+
+    const fallback = planCopyEventNotifications({
+      runtimes: [firstRuntime],
+      alertStates: [marker('0')],
+      now: entry.at + COPY_EVENT_IMAGE_GRACE_MS,
+    });
+    expect(fallback.notifications).toEqual([expect.objectContaining({ eventId: 'first-entry' })]);
+  });
+
+  it('pozdější event nepřeskočí ENTRY čekající na obrázek', () => {
+    const entry = {
+      ...copyEvent(NOW - 500, 'entry-with-image'),
+      episodeId: '11111111-1111-4111-8111-111111111111',
+    };
+    const moved = { ...copyEvent(NOW - 200, 'sl-move'), kind: 'sl-moved' as const };
+    const result = planEvents([runtime({
+      status: {
+        snapshotHealth: { enabled: true },
+        controller: { recentCopyEvents: [entry, moved] },
+      },
+    })], [marker(String(NOW - 60_000))]);
+    expect(result.notifications).toEqual([]);
+    expect(result.markers).toEqual([]);
+  });
+
+  it('vypnutá snapshot pipeline ENTRY nezdržuje', () => {
+    const entry = {
+      ...copyEvent(NOW - 500),
+      episodeId: '11111111-1111-4111-8111-111111111111',
+    };
+    const result = planEvents([runtime({
+      status: {
+        snapshotHealth: { enabled: false },
+        controller: { recentCopyEvents: [entry] },
+      },
+    })], [marker(String(NOW - 60_000))]);
+    expect(result.notifications).toHaveLength(1);
   });
 });
 

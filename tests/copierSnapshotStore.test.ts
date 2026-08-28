@@ -46,9 +46,20 @@ describe('copier snapshot migration', () => {
 
 describe('copier relay snapshot validation', () => {
   it('přijme validní PNG a normalizuje symbol', () => {
-    expect(validateCopierSnapshotPayload(payload({ symbol: 'mnqu6' }))).toMatchObject({
+    expect(validateCopierSnapshotPayload(payload({
+      symbol: 'mnqu6', notifyDeadlineAt: 1_777_000_001_800,
+    }))).toMatchObject({
       kind: 'entry', symbol: 'MNQU6', at: 1_777_000_000_000,
+      notifyDeadlineAt: 1_777_000_001_800,
     });
+  });
+
+  it('odmítne neomezený nebo TV-alert notification deadline', () => {
+    expect(() => validateCopierSnapshotPayload(payload({ notifyDeadlineAt: 1_777_000_006_000 })))
+      .toThrow('invalid-snapshot-payload');
+    expect(() => validateCopierSnapshotPayload(payload({
+      kind: 'tv-alert', notifyDeadlineAt: 1_777_000_001_800,
+    }))).toThrow('invalid-snapshot-payload');
   });
 
   it('přijme tv-alert se stejnou přísnou PNG validací', () => {

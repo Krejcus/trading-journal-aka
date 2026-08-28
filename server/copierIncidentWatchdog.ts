@@ -83,6 +83,18 @@ const RESUME_OFFER_MARKER_KEY = 'state:resume-offer';
 /** Interní marker: `detail` nese `at` posledního odeslaného copy eventu. */
 export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
 
+/**
+ * ENTRY/EXIT dostane krátké okno pro jediný push už s obrázkem. Po vypršení
+ * okna stejný planner pošle textovou zálohu; obchodní cesta na nic nečeká.
+ */
+export const COPY_EVENT_IMAGE_GRACE_MS = 1_800;
+
+/** Nechá rezervu na zápis markeru dřív, než v 1,8 s vyběhne textový fallback. */
+export const COPY_EVENT_IMAGE_PUSH_DEADLINE_MS = 1_500;
+
+/** První čerstvý event po založení markeru není historie k replayi. */
+const COPY_EVENT_FIRST_RUN_WINDOW_MS = 5_000;
+
 export interface CopierCopyEventRow {
   id: string;
   at: number;
@@ -206,19 +218,41 @@ export function planCopyEventNotifications(options: {
     const lastSeen = Date.parse(runtime.last_seen_at);
     if (!Number.isFinite(lastSeen) || options.now - lastSeen > staleAfterMs) continue;
     const status = controllerStatus(runtime.status ?? {});
+    const snapshotHealth = runtime.status?.snapshotHealth;
+    const imagePipelineEnabled = Boolean(
+      snapshotHealth && typeof snapshotHealth === 'object' && !Array.isArray(snapshotHealth)
+      && (snapshotHealth as { enabled?: unknown }).enabled === true,
+    );
     const events = Array.isArray(status.recentCopyEvents)
       ? (status.recentCopyEvents as CopierCopyEventRow[])
       : [];
     if (events.length === 0) continue;
 
+    const chronological = events
+      .filter(event => Number.isFinite(event?.at))
+      .sort((left, right) => left.at - right.at);
+    if (chronological.length === 0) continue;
+
     const marker = markerFor.get(`${runtime.user_id}:${runtime.device_id}`);
-    // Bez markeru (první běh) nehlásíme historii — jen posuneme hranici,
-    // stejné pravidlo jako u incidentů: start nesmí přehrát minulost.
-    const lastNotifiedAt = marker ? Number(marker.detail ?? 0) : Number.POSITIVE_INFINITY;
-    const fresh = Number.isFinite(lastNotifiedAt)
-      ? events.filter(event => Number.isFinite(event?.at) && event.at > lastNotifiedAt)
-      : [];
+    const storedBoundary = marker ? Number(marker.detail ?? 0) : 0;
+    let nextBoundary = Number.isFinite(storedBoundary) ? storedBoundary : 0;
+    if (!marker) {
+      // Starou historii při prvním serverovém průchodu přeskočíme, ale event,
+      // který právě vyvolal worker nudge, nesmíme zahodit jen proto, že marker
+      // ještě neexistoval.
+      nextBoundary = chronological
+        .filter(event => event.at <= options.now - COPY_EVENT_FIRST_RUN_WINDOW_MS)
+        .reduce((latest, event) => Math.max(latest, event.at), 0);
+    }
+    const fresh = chronological.filter(event => event.at > nextBoundary);
+    const notificationStart = notifications.length;
     for (const event of fresh) {
+      const waitsForImage = imagePipelineEnabled && Boolean(event.episodeId)
+        && (event.kind === 'entry' || event.kind === 'exit')
+        && options.now < event.at + COPY_EVENT_IMAGE_GRACE_MS;
+      // Nepřeskakujeme přes čekající ENTRY/EXIT. Marker je jediná časová
+      // hranice, takže pozdější event smí ven až spolu s ním nebo po něm.
+      if (waitsForImage) break;
       const content = copyEventNotification(event);
       notifications.push({
         userId: runtime.user_id,
@@ -236,17 +270,20 @@ export function planCopyEventNotifications(options: {
         } : {}),
         ...content,
       });
+      nextBoundary = Math.max(nextBoundary, event.at);
     }
-    const maxAt = Math.max(...events.map(event => (Number.isFinite(event?.at) ? event.at : 0)));
-    const nextBoundary = marker ? Math.max(Number(marker.detail ?? 0), maxAt) : maxAt;
-    if (!marker || fresh.length > 0 || Number(marker.detail ?? 0) !== nextBoundary) {
+    // Pokud na prvním průchodu nebyl žádný čerstvý event, pouze založíme
+    // baseline na konci historie. U čekajícího obrázku zůstane před ním.
+    if (!marker && fresh.length === 0) nextBoundary = chronological.at(-1)?.at ?? nextBoundary;
+    const markerMoved = nextBoundary !== (Number.isFinite(storedBoundary) ? storedBoundary : 0);
+    if (!marker || markerMoved) {
       markers.push({
         userId: runtime.user_id,
         deviceId: runtime.device_id,
         incidentKey: COPY_EVENTS_MARKER_KEY,
         active: false,
         detail: String(nextBoundary),
-        notified: fresh.length > 0,
+        notified: notifications.length > notificationStart,
       });
     }
   }

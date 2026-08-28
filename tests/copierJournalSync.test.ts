@@ -107,6 +107,56 @@ describe('copier journal sync', () => {
     expect(saveTrades.mock.calls[1][0][0].copierSnapshots).toBeUndefined();
   });
 
+  it('doplní pozdě nahraný snapshot k existujícímu masteru bez duplikace obchodu', async () => {
+    const episodeId = '11111111-1111-4111-8111-111111111111';
+    const episodeRow = { ...row, episode_id: episodeId };
+    const stored: Trade[] = [];
+    let snapshotsReady = false;
+    const saveTrades = vi.fn(async (trades: Trade[]) => {
+      const saved = trades.map(trade => ({
+        ...trade,
+        id: trade.isMaster ? '22222222-2222-4222-8222-222222222222' : trade.id,
+      }));
+      stored.push(...saved);
+      return saved;
+    });
+    const updateTrade = vi.fn(async (id: string | number, updates: Partial<Trade>) => {
+      const index = stored.findIndex(trade => trade.id === id);
+      stored[index] = { ...stored[index], ...updates };
+    });
+    const options = {
+      userId: 'u1', leaderAccountId: 100, accounts: [account()], followers: [],
+      deps: {
+        loadRows: async () => [episodeRow],
+        loadSnapshots: async () => snapshotsReady ? [{
+          episode_id: episodeId,
+          kind: 'exit',
+          at: '2026-08-22T10:05:00.000Z',
+          storage_path: `u1/${episodeId}/exit-1.png`,
+        }] : [],
+        getTrades: async () => stored,
+        saveTrades,
+        updateTrade,
+        cursorStore: memoryStore(),
+        now: () => Date.parse('2026-08-22T12:00:00Z'),
+      },
+    };
+
+    await syncCopierJournal(options);
+    snapshotsReady = true;
+    const second = await syncCopierJournal(options);
+
+    expect(saveTrades).toHaveBeenCalledTimes(1);
+    expect(updateTrade).toHaveBeenCalledWith(stored[0].id, {
+      copierSnapshots: [{
+        kind: 'exit', at: Date.parse('2026-08-22T10:05:00.000Z'),
+        path: `u1/${episodeId}/exit-1.png`,
+      }],
+    });
+    expect(second.created).toEqual([]);
+    expect(second.updated[0].copierSnapshots).toHaveLength(1);
+  });
+
   it('je idempotentní a druhý běh nevytvoří master ani kopii znovu', async () => {
     const stored: Trade[] = [];
     const saveTrades = vi.fn(async (trades: Trade[]) => {

@@ -35,7 +35,12 @@ export interface CopierNotificationSnapshot {
     error?: string;
   } | null;
   /** Vstupy/exity leadera z runtime deníku (id, popisek). */
-  copyEvents: Array<{ id: string; title: string; body: string }>;
+  copyEvents: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    body: string;
+  }>;
 }
 
 export type CopierSlotKey = 'arm-expiry' | 'cooldown-end' | 'daylock-end';
@@ -249,7 +254,10 @@ export function planCopierNotifications(options: {
     // První sync (bez prev) historii nepřehrává — stejné pravidlo jako výše.
     const known = new Set(previous.copyEvents.map(event => event.id));
     for (const event of next.copyEvents) {
-      if (!known.has(event.id)) fireNow.push({ title: event.title, body: event.body, kind: 'trade' });
+      // ENTRY/EXIT vlastní serverová APNs větev: buď jediný push s obrázkem,
+      // nebo po krátkém grace textový fallback. Lokální kopie by ji duplikovala.
+      if ((event.kind === 'entry' || event.kind === 'exit') || known.has(event.id)) continue;
+      fireNow.push({ title: event.title, body: event.body, kind: 'trade' });
     }
   }
 

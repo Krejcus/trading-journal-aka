@@ -10,6 +10,7 @@ import {
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
+import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 import type { CopierAccountEligibility, CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
@@ -245,6 +246,7 @@ interface Props {
   dailyPnlPending?: boolean;
   copierKillSwitch?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
+  snapshotHealth?: CopierSnapshotHealth;
   /** Atomicky vybere čistou skupinu, provede reconciliation a ARM LIVE. */
   onSwitchAndArm?: (group: CopyGroupConfig) => Promise<void> | void;
   onArmLive?: () => Promise<void> | void;
@@ -334,6 +336,44 @@ export function copyGroupPowerBlocker({
 export const commandBlockedByCopierKillSwitch = (command: LiveCopyTradingCommand) =>
   command.type !== 'flatten-account' && command.type !== 'flatten-group';
 
+const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
+  if (!health.enabled || health.state === 'disabled') return 'Automatické snímky jsou vypnuté.';
+  if (health.state === 'checking') return 'Kontroluji TradingView a vyhrazený layout…';
+  if (health.state === 'cdp-offline') return 'TradingView není připojené přes CDP. Obchod proběhne, ale graf se neuloží.';
+  if (health.state === 'layout-missing') {
+    return health.chartIdConfigured
+      ? `Otevři v TradingView vyhrazený layout „${health.layoutName}“.`
+      : `Vyhrazený layout „${health.layoutName}“ ještě není spárovaný.`;
+  }
+  if (health.state === 'capture-failed') return 'Layout je dostupný, poslední pořízení snímku ale selhalo.';
+  if (health.state === 'upload-failed') return 'Graf se podařilo vyfotit, ale poslední nahrání selhalo.';
+  return `Layout „${health.layoutName}“ je připravený pro ENTRY/EXIT.`;
+};
+
+const SnapshotHealthBanner: React.FC<{ health: CopierSnapshotHealth }> = ({ health }) => {
+  const ready = health.state === 'ready';
+  const checking = health.state === 'checking';
+  const lastSuccess = health.lastSuccessAt
+    ? new Date(health.lastSuccessAt).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : null;
+  return (
+    <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
+      ready
+        ? 'border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-700'
+        : checking
+          ? 'border-slate-500/25 bg-slate-500/[0.06] text-[var(--text-secondary)]'
+          : 'border-amber-500/35 bg-amber-500/[0.08] text-amber-700'
+    }`}>
+      {ready ? <CheckCircle2 size={17} className="mt-0.5 shrink-0" /> : <AlertTriangle size={17} className="mt-0.5 shrink-0" />}
+      <div className="min-w-0">
+        <p className="text-xs font-black">TradingView snímky</p>
+        <p className="mt-0.5 text-[11px] font-semibold opacity-90">{snapshotHealthMessage(health)}</p>
+        {lastSuccess ? <p className="mt-1 text-[10px] opacity-70">Poslední uložený snímek: {lastSuccess}</p> : null}
+      </div>
+    </div>
+  );
+};
+
 const TERMINAL_LIVE_ORDER_STATUSES = new Set([
   'filled', 'canceled', 'cancelled', 'rejected', 'expired',
 ]);
@@ -370,6 +410,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   dailyPnlPending = false,
   copierKillSwitch = false,
   apiTelemetry,
+  snapshotHealth,
   onSwitchAndArm,
   onArmLive,
   onDisarm,
@@ -781,6 +822,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         onHelp={() => setHelpOpen(true)}
         telemetry={apiTelemetry}
       />
+
+      {snapshotHealth ? (
+        <SnapshotHealthBanner health={snapshotHealth} />
+      ) : null}
 
       {stuckOperations.length > 0 && commandAdapter ? (
         <StuckOperationsPanel

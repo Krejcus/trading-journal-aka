@@ -104,13 +104,25 @@ describe('okamžité incidenty', () => {
   });
 
   it('nový copy event vystřelí hned; známý ani historie po startu ne', () => {
-    const event = { id: 'e1', title: 'Copier: vstup zkopírován', body: 'Long 4 MNQU6 → 5 followerů.' };
+    const event = {
+      id: 'e1', kind: 'order-placed', title: 'Copier: obchod zadán', body: 'Long 4 MNQU6 → 5 followerů.',
+    };
     const fresh = plan(snapshot(), snapshot({ copyEvents: [event] }));
     expect(fresh.fireNow).toEqual([expect.objectContaining({ title: event.title })]);
     const steady = plan(snapshot({ copyEvents: [event] }), snapshot({ copyEvents: [event] }));
     expect(steady.fireNow).toEqual([]);
     const coldStart = plan(null, snapshot({ copyEvents: [event] }));
     expect(coldStart.fireNow).toEqual([]);
+  });
+
+  it('lokální appka neduplikuje ENTRY/EXIT vlastněný obrázkovým APNs tokem', () => {
+    const entry = {
+      id: 'entry-1', kind: 'entry', title: 'Copier: vstup zkopírován', body: 'Long 4 MNQU6 → 5 followerů.',
+    };
+    const exit = {
+      id: 'exit-1', kind: 'exit', title: 'Copier: výstup zkopírován', body: 'Long 4 MNQU6 → 5 followerů.',
+    };
+    expect(plan(snapshot(), snapshot({ copyEvents: [entry, exit] })).fireNow).toEqual([]);
   });
 
   it('pád i bezpečný návrat spojení hlásí', () => {

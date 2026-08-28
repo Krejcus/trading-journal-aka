@@ -11,6 +11,7 @@ export interface MacCopierCommandRelay {
     at: number;
     symbol: string;
     png: string;
+    notifyDeadlineAt?: number;
   }, options?: { deadlineAt?: number }): Promise<void>;
   close(): Promise<void>;
 }

@@ -43,7 +43,10 @@ import {
   type TradovatePilotLeaseEnvelope,
 } from '../../server/tradovatePilotLease';
 import { startLocalCopierExecutionAgent } from '../../server/localCopierExecutionAgent';
-import { LOCAL_COPIER_AGENT_PORT } from '../../lib/localCopierAgentProtocol';
+import {
+  LOCAL_COPIER_AGENT_PORT,
+  type CopierSnapshotHealth,
+} from '../../lib/localCopierAgentProtocol';
 import {
   createMacCopierDevice,
   createMacCopierDeviceTokenProvider,
@@ -52,12 +55,19 @@ import {
   markMacCopierDevicePaired,
 } from '../../server/macCopierDevice';
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
+import { ensureTradingViewCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
 import {
   captureTradingViewAlertSnapshot,
-  captureTradingViewChartSnapshot,
+  captureTradingViewCopierSnapshot,
+  prepareTradingViewCopierSnapshot,
+  probeTradingViewSnapshotTarget,
   type TradingViewDedicatedChartRef,
 } from '../../services/copierChartSnapshot';
+import {
+  COPY_EVENT_IMAGE_GRACE_MS,
+  COPY_EVENT_IMAGE_PUSH_DEADLINE_MS,
+} from '../../server/copierIncidentWatchdog';
 
 type Command = 'keygen' | 'mac-device-init' | 'accounts' | 'preflight' | 'dry-run' | 'shadow' | 'live' | 'agent';
 
@@ -330,6 +340,75 @@ async function runLocalAgent(
       console.warn(`${new Date().toISOString()} SNAPSHOT dedicated config ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  let snapshotHealth: CopierSnapshotHealth = {
+    enabled: snapshotsEnabled,
+    state: snapshotsEnabled ? 'checking' : 'disabled',
+    layoutName: 'AlphaTrade Snapshoty',
+    chartIdConfigured: Boolean(dedicatedChartRef.chartId),
+    cdpReachable: false,
+    targetFound: false,
+    lastCheckedAt: null,
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+  };
+  if (snapshotsEnabled) {
+    const lifecycle = await ensureTradingViewCdp(
+      process.env.ALPHATRADE_TV_AUTO_LAUNCH?.trim().toLowerCase() === 'on',
+    );
+    if (lifecycle === 'running-without-cdp') {
+      console.warn(`${new Date().toISOString()} SNAPSHOT TradingView už běží bez CDP; je potřeba jej jednou ukončit a znovu spustit přes AlphaTrade.`);
+    } else if (lifecycle === 'launched') {
+      console.log(`${new Date().toISOString()} SNAPSHOT TradingView spuštěno s lokálním CDP 127.0.0.1:9222.`);
+    } else if (lifecycle === 'launch-failed') {
+      console.warn(`${new Date().toISOString()} SNAPSHOT TradingView se nepodařilo automaticky spustit.`);
+    }
+  }
+  const persistResolvedChart = (resolved: TradingViewDedicatedChartRef) => {
+    dedicatedChartRef = { ...dedicatedChartRef, ...resolved };
+    snapshotHealth = {
+      ...snapshotHealth,
+      chartIdConfigured: Boolean(dedicatedChartRef.chartId),
+      targetFound: true,
+    };
+    void saveDedicatedChartRef(dedicatedChartRef).catch(error => {
+      console.warn(`${new Date().toISOString()} SNAPSHOT dedicated config ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+  let snapshotPreparation: Promise<boolean> | null = null;
+  const prepareSnapshotCamera = (): Promise<boolean> => {
+    if (snapshotPreparation) return snapshotPreparation;
+    const preparation = prepareTradingViewCopierSnapshot({
+      dedicated: dedicatedChartRef,
+      timeoutMs: 6_000,
+      onDedicatedResolved: persistResolvedChart,
+    });
+    const tracked = preparation.finally(() => {
+      if (snapshotPreparation === tracked) snapshotPreparation = null;
+    });
+    snapshotPreparation = tracked;
+    return tracked;
+  };
+  const refreshSnapshotHealth = async () => {
+    if (!snapshotsEnabled) return;
+    const probe = await probeTradingViewSnapshotTarget({ dedicated: dedicatedChartRef, timeoutMs: 1_500 });
+    if (probe.resolved) persistResolvedChart(probe.resolved);
+    const prepared = probe.targetFound ? await prepareSnapshotCamera() : false;
+    snapshotHealth = {
+      ...snapshotHealth,
+      state: !probe.cdpReachable
+        ? 'cdp-offline'
+        : !probe.targetFound ? 'layout-missing' : prepared ? 'ready' : 'capture-failed',
+      chartIdConfigured: Boolean(dedicatedChartRef.chartId),
+      cdpReachable: probe.cdpReachable,
+      targetFound: probe.targetFound,
+      lastCheckedAt: Date.now(),
+    };
+  };
+  if (snapshotsEnabled) await refreshSnapshotHealth();
+  const snapshotHealthTimer = snapshotsEnabled
+    ? setInterval(() => { void refreshSnapshotHealth(); }, 30_000)
+    : null;
+  snapshotHealthTimer?.unref();
   const tvSnapshotHandledUntil = new Map<string, number>();
   let stopPromise: Promise<void> | null = null;
   const writeAudit = async (entries: readonly CopierAuditEntry[]) => {
@@ -348,6 +427,7 @@ async function runLocalAgent(
       await auditTail;
       await agent?.close();
       controller?.stop();
+      if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
       await releaseLock();
       console.log(`STOP ${reason}; lokální execution agent je DISARMED a ukončen.`);
     })();
@@ -379,21 +459,54 @@ async function runLocalAgent(
         // vlastní akce — notifikace stačí textová a snímek by byl jen šum.
         if (event.kind !== 'entry' && event.kind !== 'exit') return;
         const snapshotRelay = relay;
+        const notifyDeadlineAt = event.at + COPY_EVENT_IMAGE_PUSH_DEADLINE_MS;
+        // Po grace worker vyvolá druhý průchod. Pokud obrázek uspěl, serverový
+        // marker z něj udělá no-op; jinak tentýž event odejde jako text.
+        const fallbackTimer = setTimeout(
+          () => snapshotRelay.nudgeCopyEvents(),
+          Math.max(0, event.at + COPY_EVENT_IMAGE_GRACE_MS + 25 - Date.now()),
+        );
+        fallbackTimer.unref();
         // Záměrně bez await: CDP ani síť nesmí vstoupit do dispatch/eventTail.
-        void captureTradingViewChartSnapshot().then(async png => {
-          if (!png) return;
+        snapshotHealth = { ...snapshotHealth, lastAttemptAt: Date.now() };
+        void (async () => {
+          // Vzácný souběh s periodickou přípravou nesmí vyfotit graf uprostřed
+          // resetu. V běžném stavu je kamera už horká a tato větev nečeká.
+          await snapshotPreparation;
+          const remaining = notifyDeadlineAt - Date.now();
+          if (remaining <= 0) return null;
+          return captureTradingViewCopierSnapshot({
+            dedicated: dedicatedChartRef,
+            timeoutMs: Math.min(1_200, remaining),
+            onDedicatedResolved: persistResolvedChart,
+          });
+        })().then(async png => {
+          if (!png) {
+            await refreshSnapshotHealth();
+            if (snapshotHealth.state === 'ready') snapshotHealth = { ...snapshotHealth, state: 'capture-failed' };
+            return;
+          }
           if (png.byteLength > 2 * 1024 * 1024) {
+            snapshotHealth = { ...snapshotHealth, state: 'capture-failed' };
             console.warn(`${new Date().toISOString()} SNAPSHOT PNG je větší než 2 MB; zahazuji ${event.symbol} ${event.kind}`);
             return;
           }
-          await snapshotRelay.uploadSnapshot({
-            episodeId: event.episodeId!,
-            kind: event.kind,
-            at: event.at,
-            symbol: event.symbol,
-            png: png.toString('base64'),
-          });
+          try {
+            await snapshotRelay.uploadSnapshot({
+              episodeId: event.episodeId!,
+              kind: event.kind,
+              at: event.at,
+              symbol: event.symbol,
+              png: png.toString('base64'),
+              notifyDeadlineAt,
+            }, { deadlineAt: notifyDeadlineAt });
+            snapshotHealth = { ...snapshotHealth, state: 'ready', lastSuccessAt: Date.now() };
+          } catch (error) {
+            snapshotHealth = { ...snapshotHealth, state: 'upload-failed' };
+            throw error;
+          }
         }).catch(error => {
+          if (snapshotHealth.state !== 'upload-failed') snapshotHealth = { ...snapshotHealth, state: 'capture-failed' };
           console.warn(`${new Date().toISOString()} SNAPSHOT ${error instanceof Error ? error.message : String(error)}`);
         });
       },
@@ -404,6 +517,7 @@ async function runLocalAgent(
       group,
       port: Number(portValue),
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
+      snapshotHealth: () => snapshotHealth,
       onDevicePaired: async deviceId => {
         const owner = contexts.find(candidate => candidate.device?.deviceId === deviceId);
         if (!owner?.onDevicePaired) throw new Error('Párované zařízení nemá vlastní OAuth pairing callback');
