@@ -33,7 +33,8 @@ const BacktestSessionsManager = React.lazy(() => import('./components/BacktestSe
 const BacktestWorkspace = React.lazy(() => import('./components/BacktestWorkspace'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
-const LiveDesk = React.lazy(() => import('./components/TradovateLiveDesk'));
+const loadLiveDesk = () => import('./components/TradovateLiveDesk');
+const LiveDesk = React.lazy(loadLiveDesk);
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const FileUpload = React.lazy(() => import('./components/FileUpload'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
@@ -1939,6 +1940,9 @@ const App: React.FC = () => {
     if (isInitialLoadDone) {
       // DailyJournal is frequently accessed - preload immediately
       import('./components/DailyJournal');
+      // LIVE has a latency-sensitive first interaction. Fetch its code while
+      // the initial dashboard is already usable, before the user clicks it.
+      void loadLiveDesk();
 
       // Screenshots now come with the RPC response — no separate prefetch needed
 
