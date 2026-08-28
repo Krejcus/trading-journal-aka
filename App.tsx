@@ -4388,6 +4388,7 @@ const App: React.FC = () => {
                   {activePage === 'live' && (
                     <LiveDesk
                       key={currentUser.id}
+                      userId={currentUser.id}
                       theme={theme}
                       live={tradovateLive}
                       onCopierJournalRefresh={handleCopierJournalRefresh}

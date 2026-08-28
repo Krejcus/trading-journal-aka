@@ -65,6 +65,7 @@ import {
 type LiveTab = 'connections' | 'overview' | 'accounts' | 'orders' | 'events';
 
 interface TradovateLiveDeskProps {
+  userId: string;
   theme: 'dark' | 'light' | 'oled';
   live: TradovateLiveData;
   onCopierJournalRefresh?: (group: CopyGroupConfig | null) => void;
@@ -120,7 +121,7 @@ const LiveDashboardSkeleton = () => (
   </div>
 );
 
-const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJournalRefresh }) => {
+const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onCopierJournalRefresh }) => {
   const [tab, setTab] = useState<LiveTab>('overview');
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -482,6 +483,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
         <>
           {tab === 'overview' && copyTradeSnapshot ? (
             <LiveCopyTradeOverview
+              userId={userId}
               snapshot={copyTradeSnapshot}
               accountProfiles={live.profiles}
               orders={copyTradeOrders}
