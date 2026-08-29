@@ -100,6 +100,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-29 (Codex, produkční rollout per-capture normalizace viewportu)
+Po explicitním pokynu uživatele `pushni to` proběhl worker-first rollout commitu
+`34369fd7`. Před restartem byl remote `main` přesně na rodiči `c0277326` a
+čerstvá autoritativní reconciliation potvrdila DEMO runtime `armed=false`,
+`groupFlat=true`, bez working orders, divergence, stuck outboxu/operací a bez
+`lastError`; snapshot layout `AlphaTrade Snapshoty` byl `ready`. Reconciliation
+byla pouze read-only a neposlala žádný broker příkaz.
+
+Mac worker byl přebalen z čistého release worktree stejného kanonického git
+repozitáře. SHA-256 očekávaného a nainstalovaného `copier-agent.mjs` se přesně
+shoduje (`47831c8c…27330a`). Restart zachoval leadera, šest followerů a jejich
+multipliery, runtime zůstal DISARMED a snapshot target `ready`. Druhá read-only
+reconciliation po restartu znovu potvrdila flat stav bez working orders,
+divergence i stuck operací a `reconciliationRequired=false`. Nebyl proveden
+ARM, Flatten, objednávka ani jiný broker write.
+
+GitHub `main` byl bez force fast-forwardnut `c0277326..34369fd7`. Produkční
+Vercel deployment `dpl_7WrC7MCJWQnFkWffx3Xbz3Vi1YDb` dosáhl `READY` pro přesný
+SHA `34369fd7`; hlavní alias vrací HTTP 200 a neautorizovaný POST na
+`/api/tradovate/oauth/pilot-lease` správně vrací 401 `missing-auth-token`.
+Error/fatal scan nového deploymentu je čistý a build skončil úspěšně. Jeden
+starší `BadWebPushTopic` z cron route patří předchozímu deploymentu `c0277326`
+a na novém deploymentu ani po tomto rolloutu nepřibyl.
+
 ### 2026-08-29 (Codex, viewport se srovná při každém ENTRY/EXIT snapshotu)
 Ruční test demo notifikace odhalil, že hot-camera předpokládala viewport
 připravený posledním 30s health cyklem. Když uživatel mezitím graf posunul nebo
