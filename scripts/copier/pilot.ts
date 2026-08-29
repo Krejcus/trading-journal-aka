@@ -375,6 +375,7 @@ async function runLocalAgent(
     });
   };
   let snapshotPreparation: Promise<boolean> | null = null;
+  let snapshotCapturesInFlight = 0;
   const prepareSnapshotCamera = (): Promise<boolean> => {
     if (snapshotPreparation) return snapshotPreparation;
     const preparation = prepareTradingViewCopierSnapshot({
@@ -388,10 +389,24 @@ async function runLocalAgent(
     snapshotPreparation = tracked;
     return tracked;
   };
+  const withSnapshotCamera = async <T>(capture: () => Promise<T>): Promise<T> => {
+    // Flag se nastaví synchronně ještě před prvním await. Periodický health
+    // refresh tak nemůže otevřít druhý CDP reset uprostřed ostrého capture.
+    snapshotCapturesInFlight += 1;
+    try {
+      await snapshotPreparation;
+      return await capture();
+    } finally {
+      snapshotCapturesInFlight -= 1;
+    }
+  };
   const refreshSnapshotHealth = async () => {
-    if (!snapshotsEnabled) return;
+    if (!snapshotsEnabled || snapshotCapturesInFlight > 0) return;
     const probe = await probeTradingViewSnapshotTarget({ dedicated: dedicatedChartRef, timeoutMs: 1_500 });
     if (probe.resolved) persistResolvedChart(probe.resolved);
+    // Capture mohl začít během síťového probe. V tom případě přípravu tento
+    // cyklus přeskočí; další health tick kameru zkontroluje za 30 sekund.
+    if (snapshotCapturesInFlight > 0) return;
     const prepared = probe.targetFound ? await prepareSnapshotCamera() : false;
     snapshotHealth = {
       ...snapshotHealth,
@@ -470,10 +485,7 @@ async function runLocalAgent(
         fallbackTimer.unref();
         // Záměrně bez await: CDP ani síť nesmí vstoupit do dispatch/eventTail.
         snapshotHealth = { ...snapshotHealth, lastAttemptAt: Date.now() };
-        void (async () => {
-          // Vzácný souběh s periodickou přípravou nesmí vyfotit graf uprostřed
-          // resetu. V běžném stavu je kamera už horká a tato větev nečeká.
-          await snapshotPreparation;
+        void withSnapshotCamera(async () => {
           const remaining = notifyDeadlineAt - Date.now();
           if (remaining <= 0) return null;
           return captureTradingViewCopierSnapshot({
@@ -481,7 +493,7 @@ async function runLocalAgent(
             timeoutMs: Math.min(1_200, remaining),
             onDedicatedResolved: persistResolvedChart,
           });
-        })().then(async png => {
+        }).then(async png => {
           if (!png) {
             await refreshSnapshotHealth();
             if (snapshotHealth.state === 'ready') snapshotHealth = { ...snapshotHealth, state: 'capture-failed' };
@@ -533,11 +545,11 @@ async function runLocalAgent(
           if (snapshotHealth.state !== 'ready') {
             throw new Error(`snapshot-test-camera-${snapshotHealth.state}`);
           }
-          const png = await captureTradingViewCopierSnapshot({
+          const png = await withSnapshotCamera(() => captureTradingViewCopierSnapshot({
             dedicated: dedicatedChartRef,
             timeoutMs: 3_000,
             onDedicatedResolved: persistResolvedChart,
-          });
+          }));
           if (!png) throw new Error('snapshot-test-capture-failed');
           if (png.byteLength > 2 * 1024 * 1024) throw new Error('snapshot-test-too-large');
           const push = await snapshotRelay.uploadSnapshotTest({

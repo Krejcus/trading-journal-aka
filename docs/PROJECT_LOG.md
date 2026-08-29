@@ -100,6 +100,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-29 (Codex, viewport se srovná při každém ENTRY/EXIT snapshotu)
+Ruční test demo notifikace odhalil, že hot-camera předpokládala viewport
+připravený posledním 30s health cyklem. Když uživatel mezitím graf posunul nebo
+změnil zoom, demo i ostrý ENTRY/EXIT capture vyfotily tento ruční stav. Lokální
+oprava proto v jediném CDP evaluate před každým snímkem vyžaduje jeden panel,
+`chartReset`, dynamický bar spacing a 28% pravý offset. Symbol ani timeframe se
+nemění, TradingView kresby a synchronizovaný position box zůstávají zachované.
+Po změně počtu panelů se nejprve čeká na reflow a šířka se počítá až z nového
+panelu. Před focením se navíc kontroluje, že canvas už skutečně přepsal bitmapu
+na plnou šířku; bez potvrzeného resetu, spacingu, offsetu, renderu nebo platných
+bounds capture fail-closed vrátí `null` a server zachová textovou notifikaci.
+
+Periodický health refresh nyní během capture nezačne druhý reset a po svém
+síťovém probe znovu kontroluje, zda focení mezitím nezačalo. Fyzický test na
+layoutu `AlphaTrade Snapshoty` záměrně rozhodil viewport z bar spacing/offset
+`10 / 38` na `40 / -130`; capture jej vrátil přesně na `10 / 38` za 165 ms.
+Pět dalších reálných měření bylo 210/142/160/135/137 ms, všechna s validním
+142667B PNG, tedy hluboko pod ostrým limitem 1,2 s. Prošlo 198 test souborů /
+1 609 testů (lokální HTTP suite byla kvůli sandbox `listen EPERM` ověřena
+samostatně), TypeScript, lint bez chyb, Vite/PWA build a Mac worker esbuild.
+Změna je zatím pouze v lokálním release worktree: nebyla pushnutá, nasazená ani
+nainstalovaná do běžícího workeru.
+
 ### 2026-08-29 (Codex, ruční end-to-end test TradingView snapshot notifikace)
 V Nastavení je připravené tlačítko `Poslat test snapshotu TradingView`, které
 funguje z webu i nativní appky. Autorizovaný endpoint vybere pouze čerstvý DEMO

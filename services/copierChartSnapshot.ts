@@ -238,22 +238,34 @@ function evaluateExpression(symbol?: string, timeframe?: string): string {
     chart.setSymbol(${JSON.stringify(symbol)});
     chart.setResolution(${JSON.stringify(timeframe)});`
     : '';
-  return `(() => {
+  return `(async () => {
     const api = globalThis.TradingViewApi;
     if (!api) return false;
     // Notifikace na telefonu je malá: jeden graf přes celou šířku má
     // dvojnásobné rozlišení oproti dvěma vedle sebe. Vyhrazený layout
     // existuje jen kvůli snímkům, takže ho srovnáme na jeden panel.
-    if (typeof api.setLayout === 'function') {
-      try {
-        if (api.layout() !== 's') {
+    let layoutChanged = false;
+    let singlePanelReady = false;
+    try {
+      if (typeof api.layout === 'function') {
+        singlePanelReady = api.layout() === 's';
+        if (!singlePanelReady && typeof api.setLayout === 'function') {
           api.setLayout('s');
+          layoutChanged = true;
           // Kompozitor po zvětšení panelu překreslí jen tu část, kde graf
           // byl; bez vynuceného resize zůstane zbytek snímku bílý.
           window.dispatchEvent(new Event('resize'));
         }
-      } catch (layoutError) {}
+      }
+    } catch (layoutError) {}
+    // Po změně počtu panelů má původní chart(0) i DOM ještě starou šířku.
+    // Dva framy zůstanou uvnitř stejného CDP evaluate: žádný síťový round-trip,
+    // ale spacing a pravý offset se počítají už z finálního jednoho panelu.
+    if (layoutChanged) {
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      try { singlePanelReady = api.layout() === 's'; } catch (layoutError) {}
     }
+    if (!singlePanelReady) return false;
     // Konkrétní panel, ne „ten aktivní" — jinak snímek závisí na tom,
     // kam uživatel naposledy klikl.
     const chart = typeof api.chart === 'function' ? api.chart(0)
@@ -262,9 +274,16 @@ function evaluateExpression(symbol?: string, timeframe?: string): string {
     ${navigation}
     // Reset view: vrátí odscrollovaný/odzoomovaný graf na výchozí pohled
     // (čas i cena, auto-scale); náš offset a bar spacing se nastaví až po něm.
+    let viewportReset = false;
     if (typeof chart.executeActionById === 'function') {
-      try { chart.executeActionById('chartReset'); } catch (resetError) {}
+      try {
+        chart.executeActionById('chartReset');
+        viewportReset = true;
+      } catch (resetError) {}
     }
+    // Bez potvrzeného resetu není viewport deterministický. Caller pak
+    // obrázek fail-closed přeskočí a ENTRY/EXIT nechá na textové záloze.
+    if (!viewportReset) return false;
     // Hustota svíček se počítá ze šířky panelu, ne natvrdo: 3 px platilo pro
     // poloviční panel a na roztaženém by se načtená historie (~550 svíček)
     // rozprostřela jen do půlky plochy a zbytek zůstal prázdný.
@@ -285,21 +304,51 @@ function evaluateExpression(symbol?: string, timeframe?: string): string {
     window.__alphatradeSnapshotHideTimer = setTimeout(() => { const el = document.getElementById(hideId); if (el) el.remove(); }, 30000);
     // Desktopový build vystavuje časovou osu jako getTimeScale(); timeScale()
     // na chart objektu není, takže se offset i hustota dřív tiše zahazovaly.
-    const scale = typeof chart.getTimeScale === 'function' ? chart.getTimeScale()
-      : typeof chart.timeScale === 'function' ? chart.timeScale() : null;
-    if (typeof chart.setBarSpacing === 'function') chart.setBarSpacing(barSpacing);
-    if (scale && typeof scale.setBarSpacing === 'function') scale.setBarSpacing(barSpacing);
+    let scale = null;
+    try {
+      scale = typeof chart.getTimeScale === 'function' ? chart.getTimeScale()
+        : typeof chart.timeScale === 'function' ? chart.timeScale() : null;
+    } catch (scaleError) {}
+    let barSpacingApplied = false;
+    if (typeof chart.setBarSpacing === 'function') {
+      try { chart.setBarSpacing(barSpacing); barSpacingApplied = true; } catch (spacingError) {}
+    }
+    if (scale && typeof scale.setBarSpacing === 'function') {
+      try { scale.setBarSpacing(barSpacing); barSpacingApplied = true; } catch (spacingError) {}
+    }
+    if (!barSpacingApplied) return false;
     // Volné místo vpravo, kam se vejde vykreslená pozice (entry, SL, TP
     // i s popisky) — počítá se z počtu viditelných svíček, ne natvrdo.
     const visibleBars = Math.max(20, Math.round(paneWidth / barSpacing));
     const rightOffset = Math.min(60, Math.max(12, Math.round(visibleBars * 0.28)));
-    if (typeof chart.setRightOffset === 'function') chart.setRightOffset(rightOffset);
-    if (scale && typeof scale.setRightOffset === 'function') scale.setRightOffset(rightOffset);
-    // Úspěch = graf se přepnul na požadovaný symbol a timeframe. Offset ani
-    // hustota svíček nejsou podmínkou: desktopový build TradingView nemá na
-    // chart objektu timeScale() ani setRightOffset(), takže dřívější kontrola
-    // vracela vždy false a celý snímek padal na nouzovou fotku bez ořezu.
+    let rightOffsetApplied = false;
+    if (typeof chart.setRightOffset === 'function') {
+      try { chart.setRightOffset(rightOffset); rightOffsetApplied = true; } catch (offsetError) {}
+    }
+    if (scale && typeof scale.setRightOffset === 'function') {
+      try { scale.setRightOffset(rightOffset); rightOffsetApplied = true; } catch (offsetError) {}
+    }
+    if (!rightOffsetApplied) return false;
+    // True znamená, že TradingView přijal celý deterministický viewport:
+    // jeden panel, reset, hustotu svíček i pravý offset. Hot capture pak ještě
+    // počká dva paint framy; při chybě se obrázek neposílá a zůstane text.
     return true;
+  })()`;
+}
+
+/**
+ * Každý hot capture znovu normalizuje viewport v témže Runtime.evaluate,
+ * ve kterém čeká na dva paint framy a měří clip. Nevzniká další CDP round-trip
+ * a kresby, position box, symbol ani timeframe zůstávají nedotčené.
+ */
+function normalizedChartBoundsExpression(): string {
+  return `(async () => {
+    if (await ${evaluateExpression()} !== true) return null;
+    // Stabilní jednopanelový graf projde hned a čeká jen dva paint framy.
+    // Po právě provedeném layout reflow dáme canvasu nejvýše 300 ms; raději
+    // textová notifikace než částečně bílý obrázek z ještě staré bitmapy.
+    if (await ${renderReadyExpression(300)} !== true) return null;
+    return ${chartBoundsExpression};
   })()`;
 }
 
@@ -410,7 +459,11 @@ export async function prepareTradingViewCopierSnapshot(
         { id: 10, method: 'Emulation.setFocusEmulationEnabled', params: { enabled: true } },
         { id: 11, method: 'Page.enable' },
         { id: 12, method: 'Page.setWebLifecycleState', params: { state: 'active' } },
-        { id: 1, method: 'Runtime.evaluate', params: { expression: evaluateExpression(), returnByValue: true } },
+        {
+          id: 1,
+          method: 'Runtime.evaluate',
+          params: { expression: evaluateExpression(), returnByValue: true, awaitPromise: true },
+        },
         {
           id: 4,
           method: 'Runtime.evaluate',
@@ -432,9 +485,9 @@ export async function prepareTradingViewCopierSnapshot(
 }
 
 /**
- * ENTRY/EXIT hot capture: karta už je připravená, takže pouze vynutíme aktivní
- * lifecycle, necháme doběhnout dva paint framy a sejmeme oříznutý graf v 1×.
- * Neexistuje fallback na pracovní kartu a žádný příkaz nemění viewport.
+ * ENTRY/EXIT hot capture: karta už je připravená, takže v jednom evaluate
+ * lehce znormalizujeme viewport, necháme doběhnout dva paint framy a sejmeme
+ * oříznutý graf v 1×. Neexistuje fallback na pracovní kartu.
  */
 export async function captureTradingViewCopierSnapshot(
   options: TradingViewCopierSnapshotOptions,
@@ -471,10 +524,7 @@ export async function captureTradingViewCopierSnapshot(
           id: 2,
           method: 'Runtime.evaluate',
           params: {
-            expression: `(async () => {
-              await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-              return ${chartBoundsExpression};
-            })()`,
+            expression: normalizedChartBoundsExpression(),
             returnByValue: true,
             awaitPromise: true,
           },
@@ -485,12 +535,16 @@ export async function captureTradingViewCopierSnapshot(
         if (id !== 2) return;
         const bounds = (result.result as { value?: unknown } | undefined)?.value as
           { x: number; y: number; width: number; height: number } | null | undefined;
-        if (bounds && [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) {
-          captureCommand.params = {
-            format: 'png', fromSurface: true,
-            clip: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: 1 },
-          };
+        if (!bounds
+          || ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+          || bounds.width <= 200
+          || bounds.height <= 150) {
+          throw new Error('snapshot-tv-capture-normalize-failed');
         }
+        captureCommand.params = {
+          format: 'png', fromSurface: true,
+          clip: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: 1 },
+        };
       },
     });
     const encoded = results.get(3)?.data;
@@ -557,6 +611,7 @@ async function captureTradingViewDedicatedSnapshot(
               ? evaluateExpression(options.symbol, options.timeframe || '1')
               : evaluateExpression(),
             returnByValue: true,
+            awaitPromise: true,
           },
         },
         // Přepnutí na jeden panel je velký reflow; bez čekání na dokreslení

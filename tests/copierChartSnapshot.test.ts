@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import {
   captureScale,
   captureTradingViewAlertSnapshot,
@@ -125,6 +126,7 @@ describe('copier dedicated snapshot layout', () => {
       await vi.waitUntil(() => socket.sent.length >= (id === 10 ? 2 : id === 11 ? 3 : 4), { timeout: 1_000 });
     }
     const reset = JSON.parse(socket.sent[3]);
+    expect(reset.params.awaitPromise).toBe(true);
     expect(reset.params.expression).toContain("executeActionById('chartReset')");
     expect(reset.params.expression).toContain('setRightOffset(rightOffset)');
     expect(reset.params.expression).not.toContain('setSymbol(');
@@ -136,7 +138,7 @@ describe('copier dedicated snapshot layout', () => {
     expect(socket.sent).toHaveLength(5);
   });
 
-  it('hot capture nemění viewport a fotí oříznutý graf v 1× po dvou paint framech', async () => {
+  it('hot capture vždy normalizuje viewport a fotí oříznutý graf v 1× po dvou paint framech', async () => {
     const socket = new FakeSocket();
     const promise = captureTradingViewCopierSnapshot({
       dedicated: { chartId: 'alpha' },
@@ -155,8 +157,73 @@ describe('copier dedicated snapshot layout', () => {
     const bounds = JSON.parse(socket.sent[3]);
     expect(bounds).toMatchObject({ id: 2, method: 'Runtime.evaluate', params: { awaitPromise: true } });
     expect(bounds.params.expression).toContain('requestAnimationFrame(() => requestAnimationFrame(resolve))');
-    expect(bounds.params.expression).not.toContain('chartReset');
-    expect(bounds.params.expression).not.toContain('setRightOffset');
+    expect(bounds.params.expression).toContain("executeActionById('chartReset')");
+    expect(bounds.params.expression).toContain('setBarSpacing(barSpacing)');
+    expect(bounds.params.expression).toContain('setRightOffset(rightOffset)');
+    expect(bounds.params.expression).toContain("api.setLayout('s')");
+    expect(bounds.params.expression).not.toContain('setSymbol(');
+    expect(bounds.params.expression).not.toContain('setResolution(');
+    const layoutIndex = bounds.params.expression.indexOf("api.setLayout('s')");
+    const layoutPaintIndex = bounds.params.expression.indexOf('await new Promise(resolve');
+    const chartIndex = bounds.params.expression.indexOf("const chart = typeof api.chart");
+    const resetIndex = bounds.params.expression.indexOf("executeActionById('chartReset')");
+    const spacingIndex = bounds.params.expression.indexOf('setBarSpacing(barSpacing)');
+    const finalPaintIndex = bounds.params.expression.lastIndexOf('await new Promise(r => requestAnimationFrame');
+    const boundsIndex = bounds.params.expression.lastIndexOf("document.querySelector('.chart-container.active')");
+    expect(layoutIndex).toBeLessThan(layoutPaintIndex);
+    expect(layoutPaintIndex).toBeLessThan(chartIndex);
+    expect(chartIndex).toBeLessThan(resetIndex);
+    expect(resetIndex).toBeLessThan(spacingIndex);
+    expect(spacingIndex).toBeLessThan(finalPaintIndex);
+    expect(finalPaintIndex).toBeLessThan(boundsIndex);
+    let layout = '2h';
+    let paneWidth = 700;
+    const calls: string[] = [];
+    const scale = {
+      setBarSpacing: vi.fn((value: number) => calls.push(`spacing:${value}`)),
+      setRightOffset: vi.fn((value: number) => calls.push(`offset:${value}`)),
+    };
+    const chart = {
+      executeActionById: vi.fn(() => calls.push('reset')),
+      setBarSpacing: vi.fn(),
+      getTimeScale: () => scale,
+    };
+    const canvas = {
+      get width() { return paneWidth; },
+      getBoundingClientRect: () => ({ width: paneWidth }),
+    };
+    const pane = {
+      getBoundingClientRect: () => ({ x: 10, y: 20, width: paneWidth, height: 1_000 }),
+      querySelectorAll: () => [canvas],
+    };
+    const expressionResult = await runInNewContext(bounds.params.expression, {
+      TradingViewApi: {
+        layout: () => layout,
+        setLayout: (value: string) => { calls.push(`layout:${value}`); layout = value; },
+        chart: () => { calls.push(`chart:${paneWidth}`); return chart; },
+      },
+      document: {
+        querySelector: () => pane,
+        getElementById: () => null,
+        createElement: () => ({}),
+        head: { appendChild: () => undefined },
+      },
+      window: {
+        dispatchEvent: () => calls.push('resize'),
+        setTimeout: () => 1,
+        clearTimeout: () => undefined,
+      },
+      Event: class {},
+      requestAnimationFrame: (callback: () => void) => { paneWidth = 2_800; callback(); },
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
+    expect(expressionResult).toEqual({ x: 10, y: 20, width: 2_800, height: 1_000 });
+    expect(calls).toContain('chart:2800');
+    expect(scale.setBarSpacing).toHaveBeenCalledWith(20);
+    expect(scale.setRightOffset).toHaveBeenCalledWith(39);
+    expect(calls.indexOf('layout:s')).toBeLessThan(calls.indexOf('chart:2800'));
+    expect(calls.indexOf('chart:2800')).toBeLessThan(calls.indexOf('reset'));
     socket.emit('message', { data: JSON.stringify({
       id: 2, result: { result: { value: { x: 10, y: 20, width: 2730, height: 1406 } } },
     }) });
@@ -170,6 +237,28 @@ describe('copier dedicated snapshot layout', () => {
       id: 3, result: { data: Buffer.from('hot-snapshot').toString('base64') },
     }) });
     await expect(promise).resolves.toEqual(Buffer.from('hot-snapshot'));
+  });
+
+  it('hot capture fail-closed nepošle screenshot bez potvrzeného resetu a bounds', async () => {
+    const socket = new FakeSocket();
+    const promise = captureTradingViewCopierSnapshot({
+      dedicated: { chartId: 'alpha' },
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify([{
+        id: 'snapshot', type: 'page', url: 'https://www.tradingview.com/chart/alpha/', webSocketDebuggerUrl: 'ws://snapshot',
+      }]), { status: 200 })) as typeof fetch,
+      webSocketFactory: () => socket,
+      timeoutMs: 500,
+    });
+    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 1_000 });
+    socket.emit('open');
+    for (const [id, count] of [[10, 2], [11, 3], [12, 4]] as const) {
+      socket.emit('message', { data: JSON.stringify({ id, result: {} }) });
+      await vi.waitUntil(() => socket.sent.length === count, { timeout: 1_000 });
+    }
+    socket.emit('message', { data: JSON.stringify({ id: 2, result: { result: { value: null } } }) });
+    await expect(promise).resolves.toBeNull();
+    expect(socket.sent).toHaveLength(4);
+    expect(socket.sent.some(value => JSON.parse(value).method === 'Page.captureScreenshot')).toBe(false);
   });
 
   it('při chybě dedicated layoutu nikdy nevyfotí pracovní kartu', async () => {
@@ -211,6 +300,7 @@ describe('TV alert dedicated chart navigation', () => {
     await vi.waitUntil(() => socket.sent.length === 4, { timeout: 1_000 });
     const navigation = JSON.parse(socket.sent[3]);
     expect(navigation.method).toBe('Runtime.evaluate');
+    expect(navigation.params.awaitPromise).toBe(true);
     expect(navigation.params.expression).toContain('TradingViewApi');
     expect(navigation.params.expression).toContain('setSymbol("MNQ1!")');
     expect(navigation.params.expression).toContain('setResolution("5")');
