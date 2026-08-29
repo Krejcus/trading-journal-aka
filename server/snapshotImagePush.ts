@@ -14,7 +14,16 @@ interface ImagePushContent {
   body: string;
   collapseId: string;
   threadId: string;
+  category?: 'ALPHATRADE_GENERAL' | 'ALPHATRADE_TRADE';
 }
+
+export const snapshotTestPushContent = (requestId: string): ImagePushContent => ({
+  title: '📸 Test snapshotu',
+  body: 'TradingView → AlphaTrade → APNs funguje.',
+  collapseId: `alpha-snapshot-test-${requestId}`,
+  threadId: 'alphatrade-test',
+  category: 'ALPHATRADE_GENERAL',
+});
 
 const controllerStatus = (status: Record<string, unknown>): Record<string, unknown> => {
   const nested = status.controller;
@@ -86,7 +95,7 @@ async function sendImagePushes(options: {
     body: options.content.body,
     route: 'live',
     threadId: options.content.threadId,
-    category: 'ALPHATRADE_TRADE',
+    category: options.content.category ?? 'ALPHATRADE_TRADE',
     interruptionLevel: 'time-sensitive',
     collapseId: options.content.collapseId,
     mutableContent: true,
@@ -167,6 +176,21 @@ export async function sendCopierSnapshotFollowUp(options: {
     });
   }
   return result;
+}
+
+/** Test celé obrázkové cesty bez trade eventu, markeru a journal zápisu. */
+export async function sendCopierSnapshotTestPush(options: {
+  db: SupabaseClient;
+  userId: string;
+  requestId: string;
+  storagePath: string;
+}): Promise<{ devices: number; sent: number }> {
+  return sendImagePushes({
+    db: options.db,
+    userId: options.userId,
+    storagePath: options.storagePath,
+    content: snapshotTestPushContent(options.requestId),
+  });
 }
 
 export async function sendTvAlertSnapshotFollowUp(options: {

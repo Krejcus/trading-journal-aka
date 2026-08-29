@@ -18,6 +18,23 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+export function validateCopierSnapshotPng(value: unknown): Buffer {
+  const encoded = typeof value === 'string' ? value : '';
+  if (!encoded || encoded.length % 4 !== 0 || !BASE64_PATTERN.test(encoded)) {
+    throw new Error('invalid-snapshot-payload');
+  }
+  // Base64 má max 4/3 overhead; odmítni přerostlý request ještě před decode.
+  if (encoded.length > Math.ceil(COPIER_SNAPSHOT_MAX_BYTES / 3) * 4) {
+    throw new Error('snapshot-too-large');
+  }
+  const png = Buffer.from(encoded, 'base64');
+  if (png.length > COPIER_SNAPSHOT_MAX_BYTES) throw new Error('snapshot-too-large');
+  if (png.length < PNG_MAGIC.length || !png.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
+    throw new Error('invalid-snapshot-png');
+  }
+  return png;
+}
+
 export function validateCopierSnapshotPayload(value: unknown): CopierSnapshotInput {
   if (!value || typeof value !== 'object') throw new Error('invalid-snapshot-payload');
   const raw = value as Record<string, unknown>;
@@ -26,7 +43,6 @@ export function validateCopierSnapshotPayload(value: unknown): CopierSnapshotInp
   const symbol = typeof raw.symbol === 'string' ? raw.symbol.trim().toUpperCase() : '';
   const at = raw.at;
   const notifyDeadlineAt = raw.notifyDeadlineAt;
-  const encoded = typeof raw.png === 'string' ? raw.png : '';
   if (!UUID_PATTERN.test(episodeId)
     || !COPIER_SNAPSHOT_KINDS.includes(kind as CopierSnapshotKind)
     || typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0
@@ -39,19 +55,10 @@ export function validateCopierSnapshotPayload(value: unknown): CopierSnapshotInp
     ))
     // TradingView tickery nesou '!' (kontinuální futures MNQ1!) a ':'
     // (prefix burzy CME_MINI:MNQ1!) — do storage cesty symbol nevstupuje.
-    || !symbol || symbol.length > 32 || !/^[A-Z0-9._:!-]+$/.test(symbol)
-    || !encoded || encoded.length % 4 !== 0 || !BASE64_PATTERN.test(encoded)) {
+    || !symbol || symbol.length > 32 || !/^[A-Z0-9._:!-]+$/.test(symbol)) {
     throw new Error('invalid-snapshot-payload');
   }
-  // Base64 má max 4/3 overhead; odmítni přerostlý request ještě před decode.
-  if (encoded.length > Math.ceil(COPIER_SNAPSHOT_MAX_BYTES / 3) * 4) {
-    throw new Error('snapshot-too-large');
-  }
-  const png = Buffer.from(encoded, 'base64');
-  if (png.length > COPIER_SNAPSHOT_MAX_BYTES) throw new Error('snapshot-too-large');
-  if (png.length < PNG_MAGIC.length || !png.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
-    throw new Error('invalid-snapshot-png');
-  }
+  const png = validateCopierSnapshotPng(raw.png);
   return {
     episodeId, kind: kind as CopierSnapshotKind, at, symbol, png,
     ...(typeof notifyDeadlineAt === 'number' ? { notifyDeadlineAt } : {}),
@@ -109,5 +116,40 @@ export async function storeCopierSnapshot(options: {
     storage_path: storagePath,
   }, { onConflict: 'user_id,episode_id,kind,at' });
   if (rowError) throw new Error(`copier-snapshot-row-upsert-failed: ${rowError.message}`);
+  return { storagePath };
+}
+
+/**
+ * Testovací obrázek nemá trade row ani episode. Každý request dostane novou
+ * Storage cestu (bez CDN stale obsahu); starší testy stejného workeru se potom
+ * best-effort smažou, takže testovací artefakty nerostou bez omezení.
+ */
+export async function storeCopierSnapshotTest(options: {
+  db: SupabaseClient;
+  userId: string;
+  deviceId: string;
+  requestId: string;
+  png: Buffer;
+}): Promise<{ storagePath: string }> {
+  const folder = `${options.userId}/tests/${options.deviceId}`;
+  const filename = `${options.requestId}.png`;
+  const storagePath = `${folder}/${filename}`;
+  const bucket = options.db.storage.from('copier-snapshots');
+  const { error: uploadError } = await bucket.upload(storagePath, options.png, {
+    contentType: 'image/png',
+    // Stejný request může opakovat pouze autentizovaný worker po síťové chybě.
+    upsert: true,
+  });
+  if (uploadError) throw new Error(`copier-snapshot-test-upload-failed: ${uploadError.message}`);
+
+  try {
+    const { data } = await bucket.list(folder, { limit: 100 });
+    const stalePaths = (data ?? [])
+      .filter(item => item.name.endsWith('.png') && item.name !== filename)
+      .map(item => `${folder}/${item.name}`);
+    if (stalePaths.length > 0) await bucket.remove(stalePaths);
+  } catch {
+    // Cleanup nikdy nesmí změnit doručení právě uložené testovací notifikace.
+  }
   return { storagePath };
 }

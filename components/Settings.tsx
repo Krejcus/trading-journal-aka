@@ -24,7 +24,10 @@ import ImportQueue from './ImportQueue';
 import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 import { enablePush, disablePush, listPushDevices, sendTestPush, type PushDevice } from '../services/pushSubscriptionService';
-import { sendNativeRemoteTestPush } from '../services/nativePushNotifications';
+import {
+  sendNativeRemoteTestPush,
+  sendNativeSnapshotTestPush,
+} from '../services/nativePushNotifications';
 import {
   mergeTradecopiaNotificationPreferences,
   type TradecopiaNotificationPreferences,
@@ -595,6 +598,18 @@ const Settings: React.FC<SettingsProps> = ({
         ? `Odesláno na ${result.sent} z ${result.devices} zařízení — zavři appku a čekej`
         : (result.message || 'Zkušební notifikaci se nepodařilo odeslat'));
       await refreshPushState();
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleSnapshotTestPush = async () => {
+    setPushBusy(true);
+    try {
+      const result = await sendNativeSnapshotTestPush();
+      showToast(result.ok
+        ? 'Mac worker fotí TradingView — čekej na jednu notifikaci s obrázkem'
+        : (result.message || 'Test snapshotu se nepodařilo spustit'));
     } finally {
       setPushBusy(false);
     }
@@ -1605,6 +1620,8 @@ const Settings: React.FC<SettingsProps> = ({
                 {/* Test lze spustit i z počítače bez vlastního odběru; endpoint
                     ho pošle na všechna registrovaná zařízení uživatele. */}
                 {(isNativeBuild || pushDevices.length > 0) && <button onClick={handleTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)]">{pushBusy ? 'Odesílám…' : (isNativeBuild ? 'Poslat APNs test ze serveru' : `Poslat zkušební notifikaci (${pushDevices.length})`)}</button>}
+                <button onClick={handleSnapshotTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-indigo-500/30 bg-indigo-500/5 text-[10px] font-black uppercase tracking-widest text-indigo-400 disabled:opacity-40">{pushBusy ? 'Čekám na worker…' : 'Poslat test snapshotu TradingView'}</button>
+                <p className="mt-2 text-[9px] leading-relaxed text-[var(--text-muted)]">Bez ARMu a bez obchodu: vyfotí pouze layout AlphaTrade Snapshoty, pošle obrázkový APNs test a nic nezapíše do journalu.</p>
                 {isNativeBuild && (
                   <div className="mt-4 rounded-xl border border-[var(--border-subtle)] p-3">
                     <div className="mb-2 flex items-center justify-between gap-3">

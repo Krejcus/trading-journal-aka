@@ -50,6 +50,37 @@ function claimDb(row: Record<string, unknown>): SupabaseClient {
 }
 
 describe('Tradovate copier command relay', () => {
+  it('snapshot-test ukládá prázdný neobchodní payload a při claimu dostane ID commandu', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      deviceId,
+      command: { type: 'snapshot-test' },
+      idempotencyKey: 'snapshot-test-request-1',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({
+      command_type: 'snapshot-test',
+      payload: {},
+      device_id: deviceId,
+    });
+
+    const requestId = '44444444-4444-4444-8444-444444444444';
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: requestId,
+        command_type: 'snapshot-test',
+        payload: {},
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'snapshot-test', requestId });
+  });
+
   it('přenese cílené read-only ověření účtu beze změny payloadu', async () => {
     const upsert = vi.fn();
     await enqueueTradovateCopierCommand({

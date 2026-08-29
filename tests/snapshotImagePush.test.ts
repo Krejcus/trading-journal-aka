@@ -8,6 +8,7 @@ import {
 import {
   findCopierSnapshotPushContent,
   markCopierSnapshotNotificationSent,
+  snapshotTestPushContent,
 } from '../server/snapshotImagePush';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -57,6 +58,16 @@ describe('image notification collapse correlation', () => {
     })).toMatchObject({
       aps: { alert: { title: 'same', body: 'same' }, 'mutable-content': 1 },
       imageUrl: 'https://example.test/signed.png',
+    });
+  });
+
+  it('test snapshot má vlastní collapse/thread a netváří se jako obchod', () => {
+    expect(snapshotTestPushContent('44444444-4444-4444-8444-444444444444')).toEqual({
+      title: '📸 Test snapshotu',
+      body: 'TradingView → AlphaTrade → APNs funguje.',
+      collapseId: 'alpha-snapshot-test-44444444-4444-4444-8444-444444444444',
+      threadId: 'alphatrade-test',
+      category: 'ALPHATRADE_GENERAL',
     });
   });
 

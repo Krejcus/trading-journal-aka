@@ -100,6 +100,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-08-29 (Codex, ruční end-to-end test TradingView snapshot notifikace)
+V Nastavení je připravené tlačítko `Poslat test snapshotu TradingView`, které
+funguje z webu i nativní appky. Autorizovaný endpoint vybere pouze čerstvý DEMO
+Mac worker se snapshot health `ready`, ověří aktivní nativní APNs token a přes
+stávající durable command relay pošle nový typ `snapshot-test`. Command pouze
+naplánuje fire-and-forget observability práci a okamžitě uvolní relay; nevolá
+ARM, DISARM, reconciliation, Flatten ani žádnou brokerovou metodu.
+
+Worker vyfotí vyhrazený layout `AlphaTrade Snapshoty` stejnou hot-camera cestou
+jako ENTRY/EXIT a nahraje validované PNG pod jedinečnou privátní Storage cestu.
+Server pošle mutable APNs v obecné testovací kategorii. Nevzniká copier event,
+trade episode ani `copier_trade_snapshots`/journal řádek; starší testovací PNG
+stejného workeru se best-effort uklidí. Test je omezen na jeden za 30 sekund a
+upload dál sdílí globální snapshot rate limit. Device upload je přijat jen jako
+pokračování čerstvého JWT-autorizovaného `snapshot-test` commandu.
+
+Lokálně prošlo 198 test souborů / 1 608 testů, TypeScript, scoped ESLint
+(0 chyb), produkční Vite/PWA build a Mac worker esbuild. Po výslovném souhlasu
+proběhl produkční rollout v pořadí databáze -> worker -> server: migrace
+`20260829050558_allow_copier_snapshot_test_command.sql` byla transakčně
+aplikovaná a ověřená podle constraintu i migrační historie; Mac worker ze
+stejného release stromu byl přeinstalovaný a zůstal DISARMED, připojený, flat,
+bez pracovních příkazů, divergence, stuck outboxu a chyby. Snapshot health je
+`ready` pro layout `AlphaTrade Snapshoty`. GitHub/Vercel push následoval až
+jako poslední krok, bez ARM, Flatten nebo jiné brokerové akce.
+
 ### 2026-08-29 (Codex, bezpečný rollout hot-camera — nejdřív Mac worker)
 Po výslovném souhlasu uživatele proběhla před produkčním pushem serveru
 reinstalace Mac workeru z izolovaného release stromu. SHA-256 nainstalovaného

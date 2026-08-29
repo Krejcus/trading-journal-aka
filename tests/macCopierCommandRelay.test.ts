@@ -10,6 +10,35 @@ const status = (): LocalCopierAgentStatus => ({
 });
 
 describe('Mac copier command relay', () => {
+  it('odešle testovací PNG jako samostatnou neobchodní relay akci', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      calls.push(request);
+      if (request.action === 'poll') return Response.json({ command: null });
+      if (request.action === 'snapshot-test') {
+        return Response.json({ accepted: true, devices: 1, sent: 1 }, { status: 202 });
+      }
+      return Response.json({ accepted: true });
+    });
+    const agent = { status, execute: vi.fn(), origin: '', close: vi.fn() } as unknown as LocalCopierExecutionAgent;
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://alpha.example', authorizationHeader: async () => 'Device id.secret',
+      agent, fetchImpl: fetchImpl as typeof fetch, pollMs: 60_000,
+    });
+
+    await expect(relay.uploadSnapshotTest({
+      requestId: '44444444-4444-4444-8444-444444444444',
+      png: 'iVBORw0KGgo=',
+    })).resolves.toEqual({ devices: 1, sent: 1 });
+    expect(calls).toContainEqual({
+      action: 'snapshot-test',
+      requestId: '44444444-4444-4444-8444-444444444444',
+      png: 'iVBORw0KGgo=',
+    });
+    await relay.close();
+  });
+
   it('snapshot upload retryne nejvýše dvakrát a pak skončí', async () => {
     const snapshotRequests: unknown[] = [];
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

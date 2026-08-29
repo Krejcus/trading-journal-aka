@@ -33,6 +33,8 @@ interface LocalCopierExecutionAgentOptions {
   device?: NonNullable<LocalCopierAgentStatus['device']>;
   devices?: NonNullable<LocalCopierAgentStatus['devices']>;
   snapshotHealth?: () => NonNullable<LocalCopierAgentStatus['snapshotHealth']>;
+  /** Naplánuje observability test mimo broker dispatch a okamžitě se vrátí. */
+  onSnapshotTest?: (requestId: string) => void;
   onDevicePaired?: (deviceId: string) => Promise<void>;
   /** Crash-safe persistence hook. A failed save rolls the runtime back DISARMED. */
   onGroupChanged?: (group: CopyGroupConfig) => Promise<void>;
@@ -97,6 +99,8 @@ const sameAccountTopology = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   const rightIds = [...copyGroupAccountIds(right)].sort((a, b) => a - b);
   return leftIds.length === rightIds.length && leftIds.every((value, index) => value === rightIds[index]);
 };
+
+const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const accountsRequiredForRoutingChange = (
   previous: CopyGroupConfig,
@@ -355,6 +359,15 @@ export async function startLocalCopierExecutionAgent(
         // capability + positions + orders kontrolu.
         await options.prepareGroupAccounts?.([command.accountId]);
         return options.controller.verifyAccountEligibility(command.accountId);
+      case 'snapshot-test':
+        if (!command.requestId || !SNAPSHOT_TEST_REQUEST_ID.test(command.requestId)) {
+          throw new Error('snapshot-test-invalid-request');
+        }
+        if (!options.onSnapshotTest) throw new Error('snapshot-test-unavailable');
+        // Callback pouze založí fire-and-forget práci. Command relay se hned
+        // uvolní pro DISARM/kill-switch a nikdy nečeká na CDP, Storage ani APNs.
+        options.onSnapshotTest(command.requestId);
+        return;
       case 'resolve-stuck-operation':
         await options.controller.waiveStuckOperation({
           kind: command.kind,

@@ -115,6 +115,37 @@ describe('local copier execution agent', () => {
     expect(runtime.status()).toMatchObject({ armed: false, connected: true });
   });
 
+  it('snapshot-test pouze naplánuje focení a nikdy nevolá broker/controller akci', async () => {
+    const runtime = controller();
+    const onSnapshotTest = vi.fn();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onSnapshotTest,
+    });
+    const requestId = '44444444-4444-4444-8444-444444444444';
+    const result = await running.execute({ type: 'snapshot-test', requestId });
+
+    expect(result.ok).toBe(true);
+    expect(onSnapshotTest).toHaveBeenCalledWith(requestId);
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.reconcile).not.toHaveBeenCalled();
+    expect(runtime.flattenAccount).not.toHaveBeenCalled();
+    expect(runtime.flattenGroup).not.toHaveBeenCalled();
+  });
+
+  it('snapshot-test odmítne chybějící request ID i worker bez camera callbacku', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    await expect(running.execute({ type: 'snapshot-test' })).rejects.toThrow('snapshot-test-invalid-request');
+    await expect(running.execute({
+      type: 'snapshot-test', requestId: '44444444-4444-4444-8444-444444444444',
+    })).rejects.toThrow('snapshot-test-unavailable');
+    expect(runtime.arm).not.toHaveBeenCalled();
+  });
+
   it('forwards only explicit Flatten and Flatten All commands with their stable operation id', async () => {
     const runtime = controller();
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });

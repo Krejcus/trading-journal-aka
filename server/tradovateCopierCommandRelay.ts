@@ -77,7 +77,7 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
 
 const allowed = new Set<LocalCopierAgentCommand['type']>([
   'copy-command', 'arm-live', 'activate-group', 'shadow', 'disarm', 'kill-switch',
-  'verify-account-eligibility',
+  'verify-account-eligibility', 'snapshot-test',
 ]);
 
 // The browser relay exists to synchronize the already configured group before
@@ -228,6 +228,9 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     }
     return { type: 'verify-account-eligibility', accountId };
   }
+  if (row.command_type === 'snapshot-test') {
+    return { type: 'snapshot-test', requestId: row.id };
+  }
   return { type: row.command_type } as LocalCopierAgentCommand;
 };
 
@@ -236,17 +239,21 @@ export async function enqueueTradovateCopierCommand(options: {
   userId: string;
   connectionId: string;
   command: LocalCopierAgentCommand;
+  /** Volitelně připne neobchodní požadavek na už ověřený aktivní worker. */
+  deviceId?: string;
   idempotencyKey?: string;
   now?: number;
 }): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
   const now = options.now ?? Date.now();
   const idempotencyKey = options.idempotencyKey?.trim() || randomUUID();
-  const { data: device, error: deviceError } = await options.db
+  let deviceQuery = options.db
     .from('tradovate_copier_devices')
     .select('id')
     .eq('user_id', options.userId)
     .eq('connection_id', options.connectionId)
-    .is('revoked_at', null)
+    .is('revoked_at', null);
+  if (options.deviceId) deviceQuery = deviceQuery.eq('id', options.deviceId);
+  const { data: device, error: deviceError } = await deviceQuery
     .order('last_used_at', { ascending: false, nullsFirst: false })
     .limit(1)
     .maybeSingle<{ id: string }>();

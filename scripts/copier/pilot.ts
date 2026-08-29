@@ -410,6 +410,7 @@ async function runLocalAgent(
     : null;
   snapshotHealthTimer?.unref();
   const tvSnapshotHandledUntil = new Map<string, number>();
+  let snapshotTestInFlight = false;
   let stopPromise: Promise<void> | null = null;
   const writeAudit = async (entries: readonly CopierAuditEntry[]) => {
     if (entries.length === 0) return;
@@ -518,6 +519,43 @@ async function runLocalAgent(
       port: Number(portValue),
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
       snapshotHealth: () => snapshotHealth,
+      onSnapshotTest: requestId => {
+        if (!snapshotsEnabled || !relay) throw new Error('snapshot-test-unavailable');
+        if (snapshotTestInFlight) throw new Error('snapshot-test-already-running');
+        const snapshotRelay = relay;
+        snapshotTestInFlight = true;
+        snapshotHealth = { ...snapshotHealth, lastAttemptAt: Date.now() };
+        // Žádný await do command relay/broker cesty: agent command se vrátí
+        // okamžitě a focení + APNs běží jako samostatný observability úkol.
+        void (async () => {
+          await snapshotPreparation;
+          if (snapshotHealth.state !== 'ready') await refreshSnapshotHealth();
+          if (snapshotHealth.state !== 'ready') {
+            throw new Error(`snapshot-test-camera-${snapshotHealth.state}`);
+          }
+          const png = await captureTradingViewCopierSnapshot({
+            dedicated: dedicatedChartRef,
+            timeoutMs: 3_000,
+            onDedicatedResolved: persistResolvedChart,
+          });
+          if (!png) throw new Error('snapshot-test-capture-failed');
+          if (png.byteLength > 2 * 1024 * 1024) throw new Error('snapshot-test-too-large');
+          const push = await snapshotRelay.uploadSnapshotTest({
+            requestId,
+            png: png.toString('base64'),
+          });
+          snapshotHealth = { ...snapshotHealth, state: 'ready', lastSuccessAt: Date.now() };
+          console.log(`${new Date().toISOString()} SNAPSHOT TEST ${requestId.slice(0, 8)} APNs ${push.sent}/${push.devices}`);
+        })().catch(error => {
+          snapshotHealth = {
+            ...snapshotHealth,
+            state: String(error).includes('capture') ? 'capture-failed' : 'upload-failed',
+          };
+          console.warn(`${new Date().toISOString()} SNAPSHOT TEST ${error instanceof Error ? error.message : String(error)}`);
+        }).finally(() => {
+          snapshotTestInFlight = false;
+        });
+      },
       onDevicePaired: async deviceId => {
         const owner = contexts.find(candidate => candidate.device?.deviceId === deviceId);
         if (!owner?.onDevicePaired) throw new Error('Párované zařízení nemá vlastní OAuth pairing callback');

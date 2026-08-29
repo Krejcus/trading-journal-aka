@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   COPIER_SNAPSHOT_MAX_BYTES,
   CopierSnapshotRateLimiter,
+  storeCopierSnapshotTest,
   validateCopierSnapshotPayload,
+  validateCopierSnapshotPng,
 } from '../server/copierSnapshotStore';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const png = (size = 8) => {
   const value = Buffer.alloc(size);
@@ -42,6 +45,12 @@ describe('copier snapshot migration', () => {
     expect(sql).toContain('for update;');
     expect(sql).toContain("check (kind in ('entry', 'exit', 'sl-moved', 'tv-alert'))");
   });
+
+  it('povolí pouze výslovně neobchodní snapshot-test command', () => {
+    const sql = readFileSync(new URL('../supabase/migrations/20260829050558_allow_copier_snapshot_test_command.sql', import.meta.url), 'utf8');
+    expect(sql).toContain("'snapshot-test'");
+    expect(sql).toContain('cannot ARM, reconcile, or submit a broker order');
+  });
 });
 
 describe('copier relay snapshot validation', () => {
@@ -74,6 +83,43 @@ describe('copier relay snapshot validation', () => {
   it('odmítne PNG nad 2 MB', () => {
     expect(() => validateCopierSnapshotPayload(payload({ png: png(COPIER_SNAPSHOT_MAX_BYTES + 1) })))
       .toThrow('snapshot-too-large');
+  });
+
+  it('samostatná testovací cesta používá stejnou PNG validaci', () => {
+    expect(validateCopierSnapshotPng(png())).toHaveLength(8);
+    expect(() => validateCopierSnapshotPng(Buffer.from('nope').toString('base64')))
+      .toThrow('invalid-snapshot-png');
+  });
+
+  it('uloží test pod jedinečnou cestu, uklidí starý test a nevytvoří journal row', async () => {
+    const upload = vi.fn(async () => ({ error: null }));
+    const list = vi.fn(async () => ({
+      data: [{ name: 'old.png' }, { name: '44444444-4444-4444-8444-444444444444.png' }],
+      error: null,
+    }));
+    const remove = vi.fn(async () => ({ error: null }));
+    const bucket = { upload, list, remove };
+    const db = {
+      storage: { from: vi.fn(() => bucket) },
+      from: vi.fn(() => { throw new Error('journal-row-must-not-be-created'); }),
+    } as unknown as SupabaseClient;
+
+    await expect(storeCopierSnapshotTest({
+      db,
+      userId: '11111111-1111-4111-8111-111111111111',
+      deviceId: '33333333-3333-4333-8333-333333333333',
+      requestId: '44444444-4444-4444-8444-444444444444',
+      png: Buffer.from(png(), 'base64'),
+    })).resolves.toEqual({
+      storagePath: '11111111-1111-4111-8111-111111111111/tests/33333333-3333-4333-8333-333333333333/44444444-4444-4444-8444-444444444444.png',
+    });
+    expect(upload).toHaveBeenCalledWith(expect.stringContaining('/44444444-4444-4444-8444-444444444444.png'), expect.any(Buffer), {
+      contentType: 'image/png', upsert: true,
+    });
+    expect(remove).toHaveBeenCalledWith([
+      '11111111-1111-4111-8111-111111111111/tests/33333333-3333-4333-8333-333333333333/old.png',
+    ]);
+    expect(db.from).not.toHaveBeenCalled();
   });
 
   it('povolí nejvýše 12 snapshotů za minutu na device', () => {

@@ -12,12 +12,19 @@ import {
   CopierSnapshotRateLimiter,
   consumeCopierSnapshotRateLimit,
   storeCopierSnapshot,
+  storeCopierSnapshotTest,
   validateCopierSnapshotPayload,
+  validateCopierSnapshotPng,
 } from '../../../server/copierSnapshotStore.js';
-import { sendCopierSnapshotFollowUp, sendTvAlertSnapshotFollowUp } from '../../../server/snapshotImagePush.js';
+import {
+  sendCopierSnapshotFollowUp,
+  sendCopierSnapshotTestPush,
+  sendTvAlertSnapshotFollowUp,
+} from '../../../server/snapshotImagePush.js';
 import { loadPendingTvAlertSnapshotRequests, loadTvAlertWebhookSettings } from '../../../server/tvAlertNotifications.js';
 
 const snapshotRateLimiter = new CopierSnapshotRateLimiter();
+const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -33,6 +40,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
       const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization });
       const action = String(req.body?.action ?? '');
+      if (action === 'snapshot-test') {
+        const requestId = typeof req.body?.requestId === 'string' ? req.body.requestId.trim() : '';
+        if (!SNAPSHOT_TEST_REQUEST_ID.test(requestId)) {
+          return res.status(400).json({ error: 'snapshot-test-invalid-request' });
+        }
+        const png = validateCopierSnapshotPng(req.body?.png);
+        // Device smí nahrát test jen jako pokračování čerstvého, uživatelovým
+        // JWT autorizovaného commandu. Samotný Device token tedy test nevyrábí.
+        const { data: command, error: commandError } = await db
+          .from('tradovate_copier_commands')
+          .select('id')
+          .eq('id', requestId)
+          .eq('user_id', device.userId)
+          .eq('device_id', device.id)
+          .eq('command_type', 'snapshot-test')
+          .in('status', ['claimed', 'succeeded'])
+          .gte('created_at', new Date(Date.now() - 60_000).toISOString())
+          .maybeSingle<{ id: string }>();
+        if (commandError) throw new Error(`snapshot-test-command-query-failed: ${commandError.message}`);
+        if (!command) throw new Error('snapshot-test-command-not-found');
+        if (!snapshotRateLimiter.consume(device.id)) {
+          return res.status(429).json({ error: 'snapshot-rate-limit' });
+        }
+        if (!await consumeCopierSnapshotRateLimit({ db, deviceId: device.id })) {
+          return res.status(429).json({ error: 'snapshot-rate-limit' });
+        }
+        const stored = await storeCopierSnapshotTest({
+          db, userId: device.userId, deviceId: device.id, requestId, png,
+        });
+        const push = await sendCopierSnapshotTestPush({
+          db, userId: device.userId, requestId, storagePath: stored.storagePath,
+        });
+        return res.status(202).json({
+          accepted: push.sent > 0,
+          path: stored.storagePath,
+          devices: push.devices,
+          sent: push.sent,
+        });
+      }
       if (action === 'snapshot') {
         const input = validateCopierSnapshotPayload(req.body);
         if (input.kind === 'tv-alert') {
@@ -179,6 +225,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(await readTradovateCopierDeviceRuntime({ db, userId, connectionId }));
     }
     if (req.method === 'POST') {
+      if (req.body?.command?.type === 'snapshot-test') {
+        return res.status(400).json({ error: 'snapshot-test-use-dedicated-endpoint' });
+      }
       const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: req.body?.command, idempotencyKey: req.body?.idempotencyKey });
       // Budíček pro worker: bez něj příkaz čeká na další poll (~750 ms).
       // Kick je jen optimalizace — selhání nesmí shodit enqueue.

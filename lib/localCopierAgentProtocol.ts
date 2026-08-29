@@ -87,6 +87,8 @@ export type LocalCopierAgentCommand =
   | { type: 'reconcile' }
   /** Cílená read-only kontrola jednoho účtu; nemění execution skupinu ani ARM. */
   | { type: 'verify-account-eligibility'; accountId: number }
+  /** Pouze naplánuje test TradingView -> APNs; nikdy nečeká v brokerové cestě. */
+  | { type: 'snapshot-test'; requestId?: string }
   | { type: 'resolve-stuck-operation'; kind: CopierStuckOperationKind; key: string; reason: string }
   | { type: 'lock-until-session-end'; reason: string }
   | { type: 'device-paired'; deviceId: string };

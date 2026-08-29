@@ -13,6 +13,10 @@ export interface MacCopierCommandRelay {
     png: string;
     notifyDeadlineAt?: number;
   }, options?: { deadlineAt?: number }): Promise<void>;
+  uploadSnapshotTest(snapshot: {
+    requestId: string;
+    png: string;
+  }): Promise<{ devices: number; sent: number }>;
   close(): Promise<void>;
 }
 
@@ -194,6 +198,23 @@ export function startMacCopierCommandRelay(options: {
           if (attempt < 2 && (uploadOptions?.deadlineAt == null || Date.now() + retryDelay < uploadOptions.deadlineAt)) {
             await new Promise(resolve => setTimeout(resolve, retryDelay));
           } else if (attempt < 2) break;
+        }
+      }
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    },
+    async uploadSnapshotTest(snapshot) {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const response = await request({ action: 'snapshot-test', ...snapshot }, 8_000);
+          if (response.accepted !== true) throw new Error('copier-snapshot-test-not-delivered');
+          return {
+            devices: Number(response.devices) || 0,
+            sent: Number(response.sent) || 0,
+          };
+        } catch (error) {
+          lastError = error;
+          if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
         }
       }
       throw lastError instanceof Error ? lastError : new Error(String(lastError));

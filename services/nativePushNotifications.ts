@@ -154,3 +154,51 @@ export async function sendNativeRemoteTestPush(): Promise<{
     };
   }
 }
+
+export async function sendNativeSnapshotTestPush(): Promise<{
+  ok: boolean;
+  queued: boolean;
+  message?: string;
+}> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { ok: false, queued: false, message: 'Nejsi přihlášen.' };
+  const idempotencyKey = globalThis.crypto?.randomUUID?.()
+    ?? `snapshot-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    const response = await fetch(apiUrl('/api/native-snapshot-test'), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ idempotencyKey }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const messages: Record<string, string> = {
+        'snapshot-test-no-native-device': 'iPhone nemá aktivní APNs registraci.',
+        'snapshot-test-worker-unavailable': 'Mac worker není právě dostupný.',
+        'snapshot-test-camera-not-ready': 'TradingView snapshot kamera není připravená.',
+        'snapshot-test-demo-only': 'Test snapshotu je povolený jen v DEMO prostředí.',
+        'snapshot-test-rate-limit': 'Další test můžeš poslat za 30 sekund.',
+      };
+      const error = typeof result?.error === 'string' ? result.error : '';
+      return {
+        ok: false,
+        queued: false,
+        message: messages[error] || result?.message || error || `Chyba ${response.status}`,
+      };
+    }
+    return {
+      ok: result?.queued === true,
+      queued: result?.queued === true,
+      message: result?.message,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      queued: false,
+      message: error instanceof Error ? error.message : 'Požadavek selhal.',
+    };
+  }
+}
