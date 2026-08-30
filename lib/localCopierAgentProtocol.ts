@@ -99,6 +99,21 @@ export interface LocalCopierAgentCommandResult {
   result?: LiveCopyTradingCommandResult;
 }
 
+/** A maintenance restart is allowed only from a freshly verified safe state. */
+export const canSafelyRestartLocalCopierAgent = (
+  status: CopierControllerStatus | null | undefined,
+): boolean => status != null
+  && status.started
+  && !status.armed
+  && !status.killSwitch
+  && status.connected
+  && !status.reconciliationRequired
+  && status.groupFlat === true
+  && status.divergentAccounts.length === 0
+  && status.workingOrderAccounts.length === 0
+  && !status.stuckOutbox
+  && status.stuckOperations.length === 0;
+
 export const copyGroupAccountIds = (group: CopyGroupConfig): number[] => {
   const leaderId = group.leaderAccountId;
   if (!Number.isSafeInteger(leaderId) || Number(leaderId) <= 0) return [];

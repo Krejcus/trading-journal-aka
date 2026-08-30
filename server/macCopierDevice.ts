@@ -13,6 +13,12 @@ import {
 
 const execFileAsync = promisify(execFile);
 const KEYCHAIN_SERVICE = 'com.alphatrade.copier-device';
+const KEYCHAIN_TIMEOUT_MS = 5_000;
+const KEYCHAIN_EXEC_OPTIONS = {
+  timeout: KEYCHAIN_TIMEOUT_MS,
+  killSignal: 'SIGKILL' as const,
+  maxBuffer: 64 * 1024,
+};
 
 export interface MacCopierDeviceConfig {
   version: 1;
@@ -43,7 +49,7 @@ export const macOsKeychainCopierSecretStore: MacCopierSecretStore = {
   async read(deviceId) {
     const { stdout } = await execFileAsync('/usr/bin/security', [
       'find-generic-password', '-a', deviceId, '-s', KEYCHAIN_SERVICE, '-w',
-    ]);
+    ], KEYCHAIN_EXEC_OPTIONS);
     const value = stdout.trim();
     if (!value) throw new Error('mac-copier-device-secret-missing');
     return value;
@@ -51,7 +57,7 @@ export const macOsKeychainCopierSecretStore: MacCopierSecretStore = {
   async write(deviceId, secret) {
     await execFileAsync('/usr/bin/security', [
       'add-generic-password', '-U', '-a', deviceId, '-s', KEYCHAIN_SERVICE, '-w', secret,
-    ]);
+    ], KEYCHAIN_EXEC_OPTIONS);
   },
 };
 
@@ -139,10 +145,12 @@ export function createMacCopierDeviceTokenProvider(options: {
   fetchImpl?: typeof fetch;
   clock?: () => number;
   minimumValidityMs?: number;
+  requestTimeoutMs?: number;
 }) {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const clock = options.clock ?? Date.now;
   const minimumValidityMs = Math.max(5 * 60_000, options.minimumValidityMs ?? 10 * 60_000);
+  const requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? 10_000);
   let payload: TradovatePilotLeasePayload | null = null;
   let renewal: Promise<TradovatePilotLeasePayload> | null = null;
 
@@ -151,22 +159,39 @@ export function createMacCopierDeviceTokenProvider(options: {
     renewal = (async () => {
       if (!fetchImpl) throw new Error('mac-copier-fetch-unavailable');
       const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
-      const response = await fetchImpl(`${options.config.apiOrigin}/api/tradovate/oauth/pilot-lease`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Device ${options.config.deviceId}.${secret}`,
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      });
-      const body = await response.json().catch(() => ({})) as { envelope?: TradovatePilotLeaseEnvelope; error?: string };
-      if (!response.ok || !body.envelope) throw new Error(body.error || `mac-copier-lease-http-${response.status}`);
-      const privateKey = await readFile(resolve(options.config.privateKeyPath), 'utf8');
-      const opened = openTradovatePilotLease(body.envelope, privateKey, clock());
-      if (opened.connectionId !== options.config.connectionId) throw new Error('mac-copier-lease-connection-mismatch');
-      payload = opened;
-      return opened;
+      const requestAbort = new AbortController();
+      const timeout = setTimeout(
+        () => requestAbort.abort(new Error('mac-copier-lease-timeout')),
+        requestTimeoutMs,
+      );
+      timeout.unref();
+      try {
+        const response = await fetchImpl(`${options.config.apiOrigin}/api/tradovate/oauth/pilot-lease`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Device ${options.config.deviceId}.${secret}`,
+            'Content-Type': 'application/json',
+          },
+          body: '{}',
+          signal: requestAbort.signal,
+        });
+        let body: { envelope?: TradovatePilotLeaseEnvelope; error?: string };
+        try {
+          body = await response.json() as typeof body;
+        } catch (error) {
+          if (requestAbort.signal.aborted) throw requestAbort.signal.reason ?? error;
+          body = {};
+        }
+        if (!response.ok || !body.envelope) throw new Error(body.error || `mac-copier-lease-http-${response.status}`);
+        const privateKey = await readFile(resolve(options.config.privateKeyPath), 'utf8');
+        const opened = openTradovatePilotLease(body.envelope, privateKey, clock());
+        if (opened.connectionId !== options.config.connectionId) throw new Error('mac-copier-lease-connection-mismatch');
+        payload = opened;
+        return opened;
+      } finally {
+        clearTimeout(timeout);
+      }
     })().finally(() => { renewal = null; });
     return renewal;
   };

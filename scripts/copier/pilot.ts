@@ -44,6 +44,7 @@ import {
 } from '../../server/tradovatePilotLease';
 import { startLocalCopierExecutionAgent } from '../../server/localCopierExecutionAgent';
 import {
+  canSafelyRestartLocalCopierAgent,
   LOCAL_COPIER_AGENT_PORT,
   type CopierSnapshotHealth,
 } from '../../lib/localCopierAgentProtocol';
@@ -68,6 +69,13 @@ import {
   COPY_EVENT_IMAGE_GRACE_MS,
   COPY_EVENT_IMAGE_PUSH_DEADLINE_MS,
 } from '../../server/copierIncidentWatchdog';
+import {
+  finishAgentCommand,
+  flushProcessOutput,
+  resolveAgentLifetime,
+  scheduleAgentRestart,
+  startAgentShutdownWatchdog,
+} from './agentLifecycle';
 
 type Command = 'keygen' | 'mac-device-init' | 'accounts' | 'preflight' | 'dry-run' | 'shadow' | 'live' | 'agent';
 
@@ -88,6 +96,8 @@ interface PilotContext {
   getAccessToken: () => Promise<string>;
   device?: NonNullable<Parameters<typeof startLocalCopierExecutionAgent>[0]['device']>;
   onDevicePaired?: (deviceId: string) => Promise<void>;
+  /** Read-only probe used when pairing was approved in the cloud/QR flow. */
+  refreshPairing?: () => Promise<boolean>;
   relay?: { apiOrigin: string; authorizationHeader: () => Promise<string> };
 }
 
@@ -133,7 +143,16 @@ if (!command || !['keygen', 'mac-device-init', 'accounts', 'preflight', 'dry-run
 } else {
   if (command === 'keygen') await generatePilotKeys();
   else if (command === 'mac-device-init') await generateMacDevice();
-  else await main(command);
+  else if (command === 'agent') {
+    await finishAgentCommand({
+      run: () => main(command),
+      // V tomto bodě doběhl celý graceful shutdown včetně DISARM, drainu,
+      // zavření loopbacku a release locku. Zbylé cizí socket handles nesmí
+      // držet launchd službu v half-dead stavu.
+      flush: () => flushProcessOutput(),
+      exit: code => process.exit(code),
+    });
+  } else await main(command);
 }
 
 async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
@@ -268,9 +287,15 @@ async function runLocalAgent(
   if (!Number.isSafeInteger(portValue) || Number(portValue) < 1024 || Number(portValue) > 65_535) {
     throw new Error('--port musí být celé číslo v rozsahu 1024–65535');
   }
-  if (!Number.isFinite(minutesValue) || Number(minutesValue) < 1 || Number(minutesValue) > 720) {
-    throw new Error('--minutes musí být v rozsahu 1–720');
-  }
+  const lifetime = resolveAgentLifetime({
+    requestedMinutes: Number(minutesValue),
+    serviceLifetime: stringFlag('service-lifetime', false),
+    contexts: contexts.map(candidate => ({
+      renewable: candidate.renewable,
+      paired: candidate.device?.state === 'paired',
+      relayAvailable: candidate.relay != null,
+    })),
+  });
   if (!Number.isFinite(multiplierValue) || Number(multiplierValue) <= 0 || Number(multiplierValue) > 100) {
     throw new Error('--multiplier musí být větší než 0 a nejvýše 100');
   }
@@ -281,8 +306,20 @@ async function runLocalAgent(
     ? parseFollowersFlag(followersFlag, leaderId)
     : [{ accountId: followerId, mode: 'on-submit', multiplier: Number(multiplierValue) }];
   for (const candidate of contexts) {
-    if (!candidate.renewable && candidate.expiresAt && Date.parse(candidate.expiresAt) - Date.now() <= (Number(minutesValue) + 5) * 60_000) {
-      throw new Error(`Pilot lease spojení ${candidate.connectionId} nevydrží celý ${minutesValue}min běh a 5min rezervu; stáhni nový lease`);
+    if (!candidate.renewable && candidate.expiresAt) {
+      // Nespárovaný device má jednorázový bootstrap token, ale po schválení
+      // umí přejít na obnovitelné device tokeny bez brokerového side effectu.
+      // Stačí mu bezpečné okno na dokončení párování; běžný statický lease
+      // musí stále vydržet celý deklarovaný běh.
+      const requiredMs = candidate.refreshPairing
+        ? 10 * 60_000
+        : (Number(minutesValue) + 5) * 60_000;
+      if (Date.parse(candidate.expiresAt) - Date.now() <= requiredMs) {
+        const requirement = candidate.refreshPairing
+          ? 'alespoň 10 minut pro dokončení párování'
+          : `celý ${minutesValue}min běh a 5min rezervu`;
+        throw new Error(`Pilot lease spojení ${candidate.connectionId} nevydrží ${requirement}; stáhni nový lease`);
+      }
     }
   }
 
@@ -427,6 +464,11 @@ async function runLocalAgent(
   const tvSnapshotHandledUntil = new Map<string, number>();
   let snapshotTestInFlight = false;
   let stopPromise: Promise<void> | null = null;
+  let pairingProbeTimer: ReturnType<typeof setInterval> | null = null;
+  let pairingProbeInFlight = false;
+  let pairingProbeTail: Promise<void> = Promise.resolve();
+  let pairingRestartPending = false;
+  let pairingRestartTimer: ReturnType<typeof setTimeout> | null = null;
   const writeAudit = async (entries: readonly CopierAuditEntry[]) => {
     if (entries.length === 0) return;
     await appendFile(auditPath, entries.map(entry => `${JSON.stringify(entry)}\n`).join(''), { mode: 0o600 });
@@ -436,22 +478,107 @@ async function runLocalAgent(
   };
   const stop = (reason: string): Promise<void> => {
     if (stopPromise) return stopPromise;
+    const runtimeShutdown = controller?.beginShutdown();
+    agent?.beginShutdown();
+    if (pairingProbeTimer) clearInterval(pairingProbeTimer);
+    if (pairingRestartTimer) clearTimeout(pairingRestartTimer);
+    if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
+    const cancelShutdownWatchdog = startAgentShutdownWatchdog({
+      timeoutMs: 20_000,
+      onTimeout: () => {
+        // Poslední fail-closed pojistka: žádný broker write ani Flatten.
+        // Durable sending outbox zůstane po restartu k lookup recovery.
+        controller?.stop();
+        console.error(`STOP TIMEOUT ${reason}; vynucuji ukončení DISARMED procesu.`);
+        process.exit(1);
+      },
+    });
     stopPromise = (async () => {
-      controller?.disarm();
-      await relay?.close();
-      await controller?.waitForIdle();
-      await auditTail;
-      await agent?.close();
-      controller?.stop();
-      if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
-      await releaseLock();
+      let firstFailure: unknown;
+      const attempt = async (cleanup: () => Promise<void> | void) => {
+        try {
+          await cleanup();
+        } catch (error) {
+          firstFailure ??= error;
+        }
+      };
+      await attempt(() => relay?.close());
+      await attempt(() => pairingProbeTail);
+      await attempt(() => runtimeShutdown);
+      // Drain broker/audit safety work before controller.stop() clears its
+      // pending bracket/OSO timers and subscriptions.
+      await attempt(() => controller?.waitForIdle());
+      await attempt(() => auditTail);
+      await attempt(() => agent?.close());
+      await attempt(() => controller?.stop());
+      await attempt(releaseLock);
+      cancelShutdownWatchdog();
+      if (firstFailure) throw firstFailure;
       console.log(`STOP ${reason}; lokální execution agent je DISARMED a ukončen.`);
     })();
     return stopPromise;
   };
-  const onSignal = () => { void stop('operator-signal'); };
+  let signalExitScheduled = false;
+  const onSignal = () => {
+    if (signalExitScheduled) return;
+    signalExitScheduled = true;
+    void stop('operator-signal')
+      .then(() => flushProcessOutput())
+      .then(() => process.exit(0))
+      .catch(async error => {
+        console.error(`STOP operator-signal selhal: ${error instanceof Error ? error.message : String(error)}`);
+        await flushProcessOutput();
+        process.exit(1);
+      });
+  };
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
+  const abortLateStartupIfStopping = async (): Promise<boolean> => {
+    if (!stopPromise) return false;
+    // SIGTERM mohl přijít během await, kdy resource ještě nebyl přiřazený a
+    // první stop() jej proto nemohl zavřít. Gates nastavujeme synchronně před
+    // prvním dalším yieldem, aby pozdní loopback/relay nikdy nepřijal command.
+    const runtimeShutdown = controller?.beginShutdown();
+    agent?.beginShutdown();
+    await Promise.allSettled([
+      agent?.close() ?? Promise.resolve(),
+      runtimeShutdown ?? Promise.resolve(),
+      controller?.waitForIdle() ?? Promise.resolve(),
+    ]);
+    controller?.stop();
+    return true;
+  };
+  const requestSafePairingRestart = () => {
+    if (pairingRestartPending) return;
+    pairingRestartPending = true;
+    const check = () => {
+      pairingRestartTimer = null;
+      if (stopPromise) return;
+      if (!canSafelyRestartLocalCopierAgent(controller?.status())) {
+        pairingRestartTimer = setTimeout(check, 1_000);
+        pairingRestartTimer.unref();
+        return;
+      }
+      // Odložení nechá právě běžící pairing HTTP odpověď bezpečně doběhnout.
+      scheduleAgentRestart({
+        delayMs: 750,
+        restart: () => {
+          if (stopPromise) return;
+          if (!canSafelyRestartLocalCopierAgent(controller?.status())) {
+            pairingRestartTimer = setTimeout(check, 1_000);
+            pairingRestartTimer.unref();
+            return;
+          }
+          // Bez await mezi poslední flat kontrolou, nevratným runtime gate a
+          // signalem: broker event ani UI command se sem nemohou vložit.
+          void controller?.beginShutdown();
+          agent?.beginShutdown();
+          process.kill(process.pid, 'SIGTERM');
+        },
+      });
+    };
+    check();
+  };
   try {
     controller = await bootstrapCopierRuntime({
       broker,
@@ -524,7 +651,13 @@ async function runLocalAgent(
         });
       },
     });
-    await waitUntil(() => controller?.status().connected === true, 15_000, 'WebSocket sync timeout');
+    if (await abortLateStartupIfStopping()) return;
+    await waitUntil(
+      () => stopPromise != null || controller?.status().connected === true,
+      15_000,
+      'WebSocket sync timeout',
+    );
+    if (await abortLateStartupIfStopping()) return;
     agent = await startLocalCopierExecutionAgent({
       controller,
       group,
@@ -573,11 +706,42 @@ async function runLocalAgent(
         if (!owner?.onDevicePaired) throw new Error('Párované zařízení nemá vlastní OAuth pairing callback');
         await owner.onDevicePaired(deviceId);
       },
+      onDevicePairingRestart: requestSafePairingRestart,
       onGroupChanged: async changed => {
         await groupStore.save(changed);
       },
       prepareGroupAccounts,
     });
+    if (await abortLateStartupIfStopping()) return;
+    const pendingPairingContexts = contexts.filter(candidate => (
+      candidate.device?.state === 'pairing-required' && candidate.refreshPairing
+    ));
+    if (pendingPairingContexts.length > 0) {
+      const probePairing = (): Promise<void> => {
+        if (pairingProbeInFlight || stopPromise || !agent) return pairingProbeTail;
+        pairingProbeInFlight = true;
+        const run = (async () => {
+          for (const candidate of pendingPairingContexts) {
+            if (!candidate.refreshPairing || candidate.device?.state !== 'pairing-required') continue;
+            if (!await candidate.refreshPairing()) continue;
+            try {
+              await agent.execute({ type: 'device-paired', deviceId: candidate.device.deviceId });
+              console.log(`${new Date().toISOString()} DEVICE PAIRED ${candidate.device.deviceId.slice(0, 8)}; čekám na bezpečný restart.`);
+            } catch {
+              // Schválení už je durable. Pokud runtime právě není bezpečně
+              // flat/reconciled, další read-only probe zkusí restart později.
+            }
+          }
+        })();
+        pairingProbeTail = run.finally(() => {
+          pairingProbeInFlight = false;
+        });
+        return pairingProbeTail;
+      };
+      pairingProbeTimer = setInterval(() => { void probePairing(); }, 5_000);
+      pairingProbeTimer.unref();
+      void probePairing();
+    }
     if (context.relay) {
       relay = startMacCopierCommandRelay({
         ...context.relay,
@@ -598,9 +762,12 @@ async function runLocalAgent(
               console.log(`${new Date().toISOString()} RELAY KICK aktivní (${config.topic})`);
             }
           });
-          return () => {
-            void client.removeChannel(channel);
-            void client.realtime.disconnect();
+          return async () => {
+            try {
+              await client.removeChannel(channel);
+            } finally {
+              await client.realtime.disconnect();
+            }
           };
         },
         onSnapshotRequests: requests => {
@@ -676,12 +843,24 @@ async function runLocalAgent(
         }
       }
     };
-    const deadline = Date.now() + Number(minutesValue) * 60_000;
-    while (Date.now() < deadline && !stopPromise) {
-      await delay(1_000);
-      maybeRenewSockets();
+    if (lifetime.kind === 'persistent') {
+      console.log('SERVICE LIFETIME persistent; plánovaný časový restart je vypnutý.');
+      while (!stopPromise) {
+        await delay(1_000);
+        maybeRenewSockets();
+      }
+      await stop('service-stop');
+    } else {
+      if (stringFlag('service-lifetime', false).trim().toLowerCase() === 'persistent') {
+        console.warn(`SERVICE LIFETIME čeká na plné spárování; tento běh zůstává omezený na ${lifetime.minutes} min.`);
+      }
+      const deadline = Date.now() + lifetime.minutes * 60_000;
+      while (Date.now() < deadline && !stopPromise) {
+        await delay(1_000);
+        maybeRenewSockets();
+      }
+      await stop('time-limit');
     }
-    await stop('time-limit');
   } finally {
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
@@ -759,12 +938,21 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
       return payload.accessToken;
     };
     const pairing = deviceConfig ? await macCopierDevicePairing({ config: deviceConfig }) : null;
+    const confirmPairing = async (deviceId: string): Promise<void> => {
+      if (!pairing || deviceId !== pairing.deviceId || !deviceConfigPath || !provider) {
+        throw new Error('Neplatné potvrzení Mac device párování');
+      }
+      if (paired) return;
+      await provider.refresh();
+      await markMacCopierDevicePaired(deviceConfigPath);
+      paired = true;
+    };
     return {
       environment: 'demo',
       connectionId: payload.connectionId,
       accountSpec: payload.accountSpec,
       expiresAt: payload.expiresAt,
-      renewable: Boolean(deviceConfig),
+      renewable: false,
       getAccessToken,
       ...(pairing ? {
         device: {
@@ -776,12 +964,15 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
           publicKey: pairing.publicKey,
         },
         onDevicePaired: async (deviceId: string) => {
-          if (deviceId !== pairing.deviceId || !deviceConfigPath || !provider) {
-            throw new Error('Neplatné potvrzení Mac device párování');
+          await confirmPairing(deviceId);
+        },
+        refreshPairing: async () => {
+          try {
+            await confirmPairing(pairing.deviceId);
+            return true;
+          } catch {
+            return false;
           }
-          await provider.refresh();
-          await markMacCopierDevicePaired(deviceConfigPath);
-          paired = true;
         },
       } : {}),
     };
@@ -1263,6 +1454,7 @@ Volitelné: --connection-id UUID, --account-spec USERNAME
 Lokální lease: --lease /cesta/k/pilot-lease.json [--private-key /cesta/pilot-private.pem]
 Spárovaný Mac: --device-config /cesta/mac-device.json (další starty už --lease nepotřebují)
 Více OAuth: manifest přiřadí každý accountId právě jednomu device-config; primární connection obsluhuje UI relay.
+LaunchAgent: --service-lifetime persistent běží bez časového limitu jen tehdy, když jsou všechna zařízení spárovaná a obnovitelná.
 Live příkaz se nesmí spustit bez bezprostředního potvrzení uživatele.
 Agent vždy startuje DISARMED, poslouchá pouze na 127.0.0.1 a brokerové akce přijímá až z potvrzeného LIVE UI.
 `);

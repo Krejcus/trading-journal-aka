@@ -171,6 +171,8 @@ export interface CopierRuntimeController {
    * `safety.armExpiryFlatten` risk-redukčně zavře otevřené kopie.
    */
   arm(options?: { shadowMode?: boolean; ttlMs?: number }): void;
+  /** Irreversibly freezes new ARM and durably clears restart-recovery exposure state. */
+  beginShutdown(): Promise<void>;
   disarm(): void;
   /** Jednosměrná nouzová západka pro aktuální runtime session. */
   engageKillSwitch(reason?: string): void;
@@ -571,6 +573,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
   let stopped = false;
+  let shutdownRequested = false;
+  let shutdownPromise: Promise<void> | null = null;
   let positionCheckComplete = false;
   let workingOrderAccounts = new Set<number>();
   let lastError: Error | null = null;
@@ -1066,16 +1070,35 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   /** Durable stopa „za živého ARM existují kopie" — podklad boot recovery. */
   const syncLiveCopyExposureFlag = async (reason: 'update' | 'clear') => {
-    const stored = currentRuntime().state.safety.liveCopyOpenSince;
-    if (reason === 'clear' || groupIsFlat()) {
-      if (stored == null) return;
-      const { liveCopyOpenSince: _cleared, ...rest } = currentRuntime().state.safety;
-      await persistSafety(rest);
-      return;
-    }
-    if (stored != null) return;
-    if (!(gate.armed && !gate.shadowMode && hasFollowerExposure())) return;
-    await persistSafety({ ...currentRuntime().state.safety, liveCopyOpenSince: clock() });
+    // Čtení i rozhodnutí musí proběhnout až uvnitř serial processoru. Kdyby
+    // clear četl stav před zařazením, mohl by minout právě commitovaný update
+    // a po clean shutdownu nechat stale boot-recovery marker.
+    await processor.mutate(async current => {
+      const stored = current.state.safety.liveCopyOpenSince;
+      let safety: CopierRuntime['state']['safety'];
+      if (reason === 'clear' || groupIsFlat()) {
+        if (stored == null) return current;
+        const { liveCopyOpenSince: _cleared, ...rest } = current.state.safety;
+        safety = rest;
+      } else {
+        if (stored != null) return current;
+        if (!(gate.armed && !gate.shadowMode && hasFollowerExposure())) return current;
+        safety = { ...current.state.safety, liveCopyOpenSince: clock() };
+      }
+      const state = { ...current.state, safety };
+      const committed = await options.store.commit(
+        toSnapshot(
+          state,
+          current.outbox.values(),
+          current.cancelOutbox.values(),
+          current.revision,
+          current.bracketOutbox.values(),
+          current.osoOutbox.values(),
+        ),
+        current.revision,
+      );
+      return { ...current, state, revision: committed.revision };
+    });
   };
 
   const maybeActivateCooldown = async (now: number, symbol: string) => {
@@ -2735,6 +2758,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   return {
     arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {
       if (stopped) throw new Error('Copier runtime is stopped');
+      if (shutdownRequested) throw new Error('Copier runtime se právě bezpečně ukončuje');
       if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
       if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
         throw new Error('ARM TTL musí být kladný počet milisekund');
@@ -2789,6 +2813,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Nová epizoda: ARM prošel všemi branami (flat, žádný stuck outbox),
       // takže počítadlo nouzových zavření začíná znovu.
       autoCloseEpisodeAttempts = 0;
+    },
+    beginShutdown() {
+      if (shutdownPromise) return shutdownPromise;
+      if (stopped) return Promise.resolve();
+      shutdownRequested = true;
+      gate = { ...gate, armed: false };
+      lastResumeOffer = null;
+      // Stejně jako DISARM: worker při shutdownu nesmí po restartu nabízet
+      // automatické převzetí expozice. Rozpracovaný outbox/bracket/OSO drain
+      // ale zůstává živý až do waitForIdle().
+      shutdownPromise = syncLiveCopyExposureFlag('clear');
+      // Pilot promise později autoritativně awaitne a případnou chybu vrátí;
+      // handler zde pouze zabrání mezitímnímu unhandled-rejection oknu.
+      void shutdownPromise.catch(() => undefined);
+      return shutdownPromise;
     },
     disarm() {
       gate = { ...gate, armed: false };
@@ -3090,9 +3129,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       while (true) {
         const observed = eventTail;
         await observed;
+        const observedShutdown = shutdownPromise;
+        if (observedShutdown) await observedShutdown;
         const pendingFlushes = [...pendingOsoFlushes.values()];
         if (pendingFlushes.length > 0) await Promise.all(pendingFlushes);
-        if (observed === eventTail && pendingOsoFlushes.size === 0) return;
+        if (
+          observed === eventTail
+          && observedShutdown === shutdownPromise
+          && pendingOsoFlushes.size === 0
+        ) return;
       }
     },
     stop() {

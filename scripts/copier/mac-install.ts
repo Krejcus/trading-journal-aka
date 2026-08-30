@@ -255,6 +255,7 @@ async function install(): Promise<void> {
     '--follower', String(follower),
     ...(followers ? ['--followers', followers] : ['--multiplier', flags.get('multiplier')?.trim() || '1']),
     '--minutes', '720',
+    '--service-lifetime', 'persistent',
     '--port', flags.get('port')?.trim() || '3211',
     ...connectionArguments,
   ];
@@ -267,6 +268,7 @@ async function install(): Promise<void> {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
+  <key>ExitTimeOut</key><integer>25</integer>
   <key>StandardOutPath</key><string>${xml(stdout)}</string>
   <key>StandardErrorPath</key><string>${xml(stderr)}</string>
   <key>ProcessType</key><string>Interactive</string>

@@ -248,6 +248,116 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('shutdown gate blokuje pozdní ARM bez zahození graceful runtime drainu', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm({ shadowMode: true });
+
+    await controller.beginShutdown();
+    expect(controller.status()).toMatchObject({ started: true, armed: false });
+    expect(() => controller.arm({ shadowMode: true })).toThrow('bezpečně ukončuje');
+    await expect(controller.waitForIdle()).resolves.toBeUndefined();
+    controller.stop();
+  });
+
+  it('shutdown i waitForIdle čekají na durable smazání restart-recovery exposure flagu', async () => {
+    const initial = emptySnapshot();
+    initial.safety = { ...initial.safety!, liveCopyOpenSince: 123 };
+    const durable = createMemoryCopierStore(initial);
+    let releaseCommit!: () => void;
+    let markCommitStarted!: () => void;
+    const commitGate = new Promise<void>(resolve => { releaseCommit = resolve; });
+    const commitStarted = new Promise<void>(resolve => { markCommitStarted = resolve; });
+    const store = {
+      load: () => durable.load(),
+      commit: async (snapshot: Parameters<typeof durable.commit>[0], expectedRevision: number) => {
+        if (snapshot.safety?.liveCopyOpenSince == null) {
+          markCommitStarted();
+          await commitGate;
+        }
+        return durable.commit(snapshot, expectedRevision);
+      },
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker: createMockBroker(),
+      store,
+      group,
+    });
+
+    const shutdown = controller.beginShutdown();
+    await commitStarted;
+    let shutdownSettled = false;
+    let idleSettled = false;
+    void shutdown.then(() => { shutdownSettled = true; });
+    const idle = controller.waitForIdle().then(() => { idleSettled = true; });
+    await Promise.resolve();
+    expect(shutdownSettled).toBe(false);
+    expect(idleSettled).toBe(false);
+
+    releaseCommit();
+    await Promise.all([shutdown, idle]);
+    expect((await durable.load()).safety).not.toHaveProperty('liveCopyOpenSince');
+    controller.stop();
+  });
+
+  it('shutdown clear se zařadí až za právě commitovaný exposure update', async () => {
+    const durable = createMemoryCopierStore();
+    let releaseUpdate!: () => void;
+    let markUpdateStarted!: () => void;
+    const updateGate = new Promise<void>(resolve => { releaseUpdate = resolve; });
+    const updateStarted = new Promise<void>(resolve => { markUpdateStarted = resolve; });
+    let updateBlocked = false;
+    let clearCommits = 0;
+    const store = {
+      load: () => durable.load(),
+      commit: async (snapshot: Parameters<typeof durable.commit>[0], expectedRevision: number) => {
+        const before = await durable.load();
+        if (!updateBlocked && before.safety?.liveCopyOpenSince == null && snapshot.safety?.liveCopyOpenSince != null) {
+          updateBlocked = true;
+          markUpdateStarted();
+          await updateGate;
+        }
+        if (before.safety?.liveCopyOpenSince != null && snapshot.safety?.liveCopyOpenSince == null) {
+          clearCommits += 1;
+        }
+        return durable.commit(snapshot, expectedRevision);
+      },
+    };
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store,
+      group,
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    broker.emitEvent({ type: 'order', order: leaderOrder({ orderType: 'Market', limitPrice: undefined }) });
+
+    await updateStarted;
+    const shutdown = controller.beginShutdown();
+    let shutdownSettled = false;
+    void shutdown.then(() => { shutdownSettled = true; });
+    await Promise.resolve();
+    expect(shutdownSettled).toBe(false);
+
+    releaseUpdate();
+    await Promise.all([shutdown, controller.waitForIdle()]);
+    expect(updateBlocked).toBe(true);
+    expect(clearCommits).toBe(1);
+    expect((await durable.load()).safety).not.toHaveProperty('liveCopyOpenSince');
+    controller.stop();
+  });
+
   it('změna konfigurace vždy disarmuje a neplatnou změnu vůbec nepřijme', async () => {
     const broker = createMockBroker();
     const controller = await bootstrapCopierRuntime({

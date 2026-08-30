@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
+  canSafelyRestartLocalCopierAgent,
   copyGroupAccountIds,
   type LocalCopierAgentCommand,
   type LocalCopierAgentCommandResult,
@@ -36,6 +37,8 @@ interface LocalCopierExecutionAgentOptions {
   /** Naplánuje observability test mimo broker dispatch a okamžitě se vrátí. */
   onSnapshotTest?: (requestId: string) => void;
   onDevicePaired?: (deviceId: string) => Promise<void>;
+  /** Requests a restart after pairing; the pilot performs the final safe-state gate. */
+  onDevicePairingRestart?: (deviceId: string) => void;
   /** Crash-safe persistence hook. A failed save rolls the runtime back DISARMED. */
   onGroupChanged?: (group: CopyGroupConfig) => Promise<void>;
   /**
@@ -50,6 +53,8 @@ export interface LocalCopierExecutionAgent {
   origin: string;
   status(): LocalCopierAgentStatus;
   execute(command: LocalCopierAgentCommand): Promise<LocalCopierAgentCommandResult>;
+  /** Synchronně odmítne nový/pending command ingress před graceful drainem. */
+  beginShutdown(): void;
   close(): Promise<void>;
 }
 
@@ -163,6 +168,9 @@ export async function startLocalCopierExecutionAgent(
     throw new Error('Lokální execution agent dostal více zařízení pro stejné OAuth připojení');
   }
   let tail = Promise.resolve();
+  let shuttingDown = false;
+  let serverClosePromise: Promise<void> | null = null;
+  const shutdownError = () => new Error('Lokální execution agent se právě bezpečně ukončuje');
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
@@ -387,6 +395,9 @@ export async function startLocalCopierExecutionAgent(
         if (!device || device.state !== 'pairing-required') {
           throw new Error('Lokální Mac zařízení nečeká na toto párování');
         }
+        if (!canSafelyRestartLocalCopierAgent(options.controller.status())) {
+          throw new Error('Mac worker lze po párování restartovat pouze připojený, reconciled, DISARMED, flat a bez pracovních příkazů');
+        }
         await options.onDevicePaired?.(command.deviceId);
         devices[index] = {
           state: 'paired',
@@ -394,6 +405,11 @@ export async function startLocalCopierExecutionAgent(
           connectionId: device.connectionId,
           deviceName: device.deviceName,
         };
+        // Stav se po await mohl změnit broker eventem. Ingress zde ještě
+        // nezmrazujeme: pokud mezitím vznikla pozice, DISARM/kill-switch/
+        // Flatten/reconcile musí zůstat dostupné. Pilot zmrazí runtime i
+        // agent synchronně až po druhé čerstvé flat kontrole.
+        options.onDevicePairingRestart?.(command.deviceId);
         return;
       }
     }
@@ -424,13 +440,20 @@ export async function startLocalCopierExecutionAgent(
       json(response, 404, { error: 'Neznámý endpoint lokálního execution agenta' });
       return;
     }
+    if (shuttingDown) {
+      json(response, 503, { error: shutdownError().message, status: status() });
+      return;
+    }
     if (request.headers['x-alphatrade-agent-nonce'] !== nonce) {
       json(response, 401, { error: 'Neplatný session nonce lokálního execution agenta' });
       return;
     }
     tail = tail.then(async () => {
       try {
-        const result = await execute(await body(request) as LocalCopierAgentCommand);
+        if (shuttingDown) throw shutdownError();
+        const command = await body(request) as LocalCopierAgentCommand;
+        if (shuttingDown) throw shutdownError();
+        const result = await execute(command);
         const payload: LocalCopierAgentCommandResult = {
           ok: true,
           status: status(),
@@ -451,10 +474,21 @@ export async function startLocalCopierExecutionAgent(
     });
   });
   const address = server.address() as AddressInfo;
+  const beginShutdown = () => {
+    if (shuttingDown && serverClosePromise) return;
+    shuttingDown = true;
+    if (!serverClosePromise) {
+      serverClosePromise = new Promise<void>((resolveClose, reject) => {
+        server.close(error => error ? reject(error) : resolveClose());
+      });
+      server.closeIdleConnections?.();
+    }
+  };
   return {
     origin: `http://${host}:${address.port}`,
     status,
     execute: async command => {
+      if (shuttingDown) throw shutdownError();
       let resolveResult!: (value: LocalCopierAgentCommandResult) => void;
       let rejectResult!: (reason: unknown) => void;
       const resultPromise = new Promise<LocalCopierAgentCommandResult>((resolve, reject) => {
@@ -463,6 +497,7 @@ export async function startLocalCopierExecutionAgent(
       });
       tail = tail.then(async () => {
         try {
+          if (shuttingDown) throw shutdownError();
           const result = await execute(command);
           resolveResult({ ok: true, status: status(), ...(result == null ? {} : { result: result as LiveCopyTradingCommandResult }) });
         } catch (error) {
@@ -471,9 +506,11 @@ export async function startLocalCopierExecutionAgent(
       });
       return resultPromise;
     },
+    beginShutdown,
     async close() {
+      beginShutdown();
       await tail;
-      await new Promise<void>((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));
+      await serverClosePromise;
     },
   };
 }

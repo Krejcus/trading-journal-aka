@@ -31,11 +31,13 @@ const controller = () => {
     lastError: null,
     revision: 1,
     lastSequence: 0,
+    groupFlat: true,
   };
   const value = {
     arm: vi.fn(({ shadowMode = false }: { shadowMode?: boolean } = {}) => {
       status = { ...status, armed: true, shadowMode };
     }),
+    beginShutdown: vi.fn(async () => { status = { ...status, armed: false }; }),
     disarm: vi.fn(() => { status = { ...status, armed: false }; }),
     engageKillSwitch: vi.fn(() => { status = { ...status, armed: false, killSwitch: true }; }),
     applyAccountEligibilityExclusions: vi.fn(async () => undefined),
@@ -144,6 +146,18 @@ describe('local copier execution agent', () => {
       type: 'snapshot-test', requestId: '44444444-4444-4444-8444-444444444444',
     })).rejects.toThrow('snapshot-test-unavailable');
     expect(runtime.arm).not.toHaveBeenCalled();
+  });
+
+  it('beginShutdown synchronně zmrazí nový command ingress před graceful drainem', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+    running.beginShutdown();
+    await expect(running.execute({ type: 'arm-live' })).rejects.toThrow('bezpečně ukončuje');
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(runtime.flattenAccount).not.toHaveBeenCalled();
+    expect(runtime.flattenGroup).not.toHaveBeenCalled();
+    await expect(running.close()).resolves.toBeUndefined();
   });
 
   it('forwards only explicit Flatten and Flatten All commands with their stable operation id', async () => {
@@ -568,6 +582,39 @@ describe('local copier execution agent', () => {
       connectionId: '00000000-0000-4000-8000-000000000002',
       deviceName: 'Filipův Mac',
     });
+    // Pairing confirmation alone must not freeze risk-reducing ingress while
+    // the pilot is waiting for its final fresh flat check.
+    await expect(running.execute({ type: 'disarm' })).resolves.toMatchObject({ ok: true });
+    expect(runtime.disarm).toHaveBeenCalled();
+  });
+
+  it('odmítne pairing restart bez čerstvého connected, reconciled a flat stavu', async () => {
+    const runtime = controller();
+    vi.mocked(runtime.status).mockReturnValue({
+      ...runtime.status(),
+      groupFlat: false,
+    });
+    const onDevicePaired = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      device: {
+        state: 'pairing-required',
+        deviceId: '00000000-0000-4000-8000-000000000001',
+        connectionId: '00000000-0000-4000-8000-000000000002',
+        deviceName: 'Filipův Mac',
+        deviceSecret: 'secret-only-before-pairing',
+        publicKey: 'public-key',
+      },
+      onDevicePaired,
+    });
+
+    await expect(running.execute({
+      type: 'device-paired',
+      deviceId: '00000000-0000-4000-8000-000000000001',
+    })).rejects.toThrow('připojený, reconciled, DISARMED, flat');
+    expect(onDevicePaired).not.toHaveBeenCalled();
   });
 
   it('pairs multiple OAuth devices independently and keeps the primary compatibility field', async () => {

@@ -20,7 +20,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1563 testů, typecheck, lint a build čisté.
+  Poslední úplné automatické ověření: 1633 testů, typecheck, lint bez chyb
+  a produkční build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -99,6 +100,39 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-08-30 (Codex, oprava lifecycle nedostupného Mac workeru)
+Příčinou hlášky „Mac worker není právě dostupný" nebyla delší nečinnost
+uživatele. LaunchAgent stále spouštěl pilot s limitem `--minutes 720`; po
+12 hodinách worker korektně zavřel loopback port i relay, ale kvůli zbývajícímu
+Node handle proces neskončil. Launchd jej proto dál považoval za běžící a
+KeepAlive neměl co restartovat, zatímco cloud heartbeat zestárl.
+
+Worker nyní v plně spárovaném režimu používá explicitní
+`--service-lifetime persistent`; časově omezený fallback zůstává jen pro stav,
+kdy nelze bezpečně obnovovat device token nebo není dostupný relay. Ukončení
+má synchronní ingress gate, abortovatelné síťové čekání, bounded Keychain/fetch
+operace, 20s watchdog a po dokončení bezpečnostního cleanupu explicitně ukončí
+proces, takže launchd může službu spolehlivě obnovit. Durable stopa otevřených
+kopií se při shutdownu čistí ve stejné serializované frontě jako její zápis,
+aby restart nemohl minout právě commitovaný stav. LaunchAgent má zároveň
+`ExitTimeOut=25`.
+
+Před reinstalací read-only reconciliation potvrdila DEMO runtime
+`armed=false`, `groupFlat=true`, `reconciliationRequired=false`, žádné working
+orders, divergence, stuck outbox/operace ani `lastError`; snapshot layout
+`AlphaTrade Snapshoty` byl `ready`. Nainstalovaný persistentní worker běží pod
+novým PID `65168`, vlastní listener `127.0.0.1:3211`, relay je aktivní a log
+potvrzuje vypnutý plánovaný časový restart. SHA-256 nainstalovaného bundle se
+přesně shoduje s bundlem z ověřeného zdroje
+(`c7de828a…185fb14`). Následná read-only reconciliation znovu nastavila
+`reconciliationRequired=false` a potvrdila stejný flat/DISARMED stav i
+snapshot health `ready`.
+
+Prošlo 199 test souborů / 1 633 testů, TypeScript, lint bez chyb,
+Vite/PWA build a samostatný Node 20 worker bundle. Nebyl proveden ARM, Flatten,
+objednávka ani jiný broker write. Změna je zatím jen na lokální větvi
+`codex/worker-lifecycle-fix`; nebyla pushnutá ani nasazená na Vercel.
 
 ### 2026-08-29 (Codex, produkční rollout per-capture normalizace viewportu)
 Po explicitním pokynu uživatele `pushni to` proběhl worker-first rollout commitu

@@ -47,7 +47,7 @@ export function startMacCopierCommandRelay(options: {
   createKickSubscription?: (
     config: MacCopierRealtimeKickConfig,
     onKick: () => void,
-  ) => () => void;
+  ) => () => Promise<void> | void;
   /** Fire-and-forget handoff; the relay poll never awaits chart capture. */
   onSnapshotRequests?: (requests: readonly MacTvAlertSnapshotRequest[]) => void;
 }): MacCopierCommandRelay {
@@ -60,8 +60,9 @@ export function startMacCopierCommandRelay(options: {
   let kickPending = false;
   /** Nové trade eventy čekají na okamžité odeslání serverem. */
   let copyEventsPending = false;
-  let unsubscribeKick: (() => void) | null = null;
+  let unsubscribeKick: (() => Promise<void> | void) | null = null;
   let kickTopic: string | null = null;
+  const loopAbort = new AbortController();
 
   const sleep = (ms: number) => new Promise<void>(resolve => {
     if (kickPending) {
@@ -81,11 +82,18 @@ export function startMacCopierCommandRelay(options: {
     };
   });
 
-  const maybeSubscribeKick = (realtime: unknown) => {
+  const clearKickSubscription = async () => {
+    const unsubscribe = unsubscribeKick;
+    unsubscribeKick = null;
+    kickTopic = null;
+    if (unsubscribe) await unsubscribe();
+  };
+
+  const maybeSubscribeKick = async (realtime: unknown) => {
     if (!options.createKickSubscription || stopped) return;
     const config = realtime as Partial<MacCopierRealtimeKickConfig> | null | undefined;
     if (!config?.url || !config.anonKey || !config.topic || config.topic === kickTopic) return;
-    unsubscribeKick?.();
+    await clearKickSubscription();
     kickTopic = config.topic;
     unsubscribeKick = options.createKickSubscription(
       { url: config.url, anonKey: config.anonKey, topic: config.topic },
@@ -96,15 +104,46 @@ export function startMacCopierCommandRelay(options: {
     );
   };
 
-  const request = async (payload: unknown, timeoutMs?: number) => {
-    const response = await fetchImpl(`${options.apiOrigin}/api/tradovate/oauth/copier-relay`, {
-      method: 'POST', headers: { Accept: 'application/json', Authorization: await options.authorizationHeader(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      ...(timeoutMs ? { signal: AbortSignal.timeout(Math.max(1, timeoutMs)) } : {}),
+  const abortable = <T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> => {
+    if (!signal) return pending;
+    if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
     });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error((body as { error?: string }).error || `copier-relay-http-${response.status}`);
-    return body as Record<string, unknown>;
+  };
+
+  const request = async (payload: unknown, timeoutMs?: number, externalSignal?: AbortSignal) => {
+    const requestAbort = timeoutMs || externalSignal ? new AbortController() : null;
+    const abortFromExternal = () => requestAbort?.abort(externalSignal?.reason);
+    if (externalSignal?.aborted) abortFromExternal();
+    else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
+    const timeout = timeoutMs ? setTimeout(
+      () => requestAbort?.abort(new Error('copier-relay-request-timeout')),
+      Math.max(1, timeoutMs),
+    ) : null;
+    timeout?.unref();
+    try {
+      const authorization = await abortable(options.authorizationHeader(), requestAbort?.signal);
+      const response = await fetchImpl(`${options.apiOrigin}/api/tradovate/oauth/copier-relay`, {
+        method: 'POST', headers: { Accept: 'application/json', Authorization: authorization, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        ...(requestAbort ? { signal: requestAbort.signal } : {}),
+      });
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch (error) {
+        if (requestAbort?.signal.aborted) throw requestAbort.signal.reason ?? error;
+        body = {};
+      }
+      if (!response.ok) throw new Error((body as { error?: string }).error || `copier-relay-http-${response.status}`);
+      return body as Record<string, unknown>;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', abortFromExternal);
+    }
   };
 
   const complete = async (commandId: string, result?: unknown, error?: string) => {
@@ -113,7 +152,7 @@ export function startMacCopierCommandRelay(options: {
     await request({
       action: 'complete', commandId, status: options.agent.status(),
       ...(error ? { error } : { result }),
-    });
+    }, 10_000, loopAbort.signal);
   };
 
   const loop = async () => {
@@ -125,10 +164,10 @@ export function startMacCopierCommandRelay(options: {
           action: 'poll',
           status: options.agent.status(),
           ...(notifyCopyEvents ? { copyEvents: true } : {}),
-        });
+        }, 10_000, loopAbort.signal);
         failures = 0;
         if (notifyCopyEvents) copyEventsPending = false;
-        maybeSubscribeKick(response.realtime);
+        await maybeSubscribeKick(response.realtime);
         if (Array.isArray(response.snapshotRequests) && options.onSnapshotRequests) {
           const requests = response.snapshotRequests.flatMap(value => {
             if (!value || typeof value !== 'object') return [];
@@ -155,19 +194,27 @@ export function startMacCopierCommandRelay(options: {
           if (!remote.expiresAt || Date.parse(remote.expiresAt) <= Date.now()) {
             await complete(remote.id, undefined, 'command-expired-before-execution');
           } else {
+            let result: unknown;
+            let executionError: string | undefined;
             try {
-              await complete(remote.id, await options.agent.execute(remote.command));
+              result = await options.agent.execute(remote.command);
             } catch (error) {
-              await complete(remote.id, undefined, error instanceof Error ? error.message : String(error));
+              executionError = error instanceof Error ? error.message : String(error);
             }
+            // ACK transport failure must never be rewritten as execution
+            // failure: the broker outcome may already be authoritative and
+            // must not be retried or falsely reported as unexecuted.
+            await complete(remote.id, result, executionError);
           }
         }
       } catch (error) {
+        if (stopped && loopAbort.signal.aborted) break;
         failures += 1;
         if (failures === 1 || failures % 20 === 0) {
           console.error(`${new Date().toISOString()} COPIER RELAY (${failures}. selhání v řadě) ${error instanceof Error ? error.message : String(error)}`);
         }
       }
+      if (stopped) break;
       await sleep(failures ? Math.min(5_000, pollMs * failures) : pollMs);
     }
   };
@@ -221,10 +268,10 @@ export function startMacCopierCommandRelay(options: {
     },
     async close() {
       stopped = true;
-      unsubscribeKick?.();
-      unsubscribeKick = null;
+      loopAbort.abort(new Error('copier-relay-close'));
       wake?.();
       await running;
+      await clearKickSubscription();
     },
   };
 }
