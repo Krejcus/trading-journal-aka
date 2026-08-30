@@ -136,9 +136,11 @@ live` byl `main` bez force fast-forwardnut `e0d8d6ff..366688dd`. Produkční
 Vercel deployment `dpl_CG7m1HcYrp3Qwzfd1EFWciQtAXVb` dosáhl `READY` pro přesný
 SHA `366688dd`; hlavní alias vrací HTTP 200 a neautorizovaný POST na
 `/api/tradovate/oauth/pilot-lease` správně 401 `missing-auth-token`. Build
-skončil úspěšně a nový deployment neměl při post-deploy scanu žádnou runtime
-chybu. Finální read-only reconciliation znovu potvrdila DISARMED/flat stav bez
-working orders, divergence, stuck položek a bez broker write.
+skončil úspěšně. První scan byl čistý; následný minutový cron zapsal na stderr
+jen dlouhodobý Node `DEP0169 url.parse()` deprecation warning (historie od
+června), ale request `/api/cron/send-alerts` skončil HTTP 200 a bez aplikačního
+selhání. Finální read-only reconciliation znovu potvrdila DISARMED/flat stav
+bez working orders, divergence, stuck položek a bez broker write.
 
 ### 2026-08-29 (Codex, produkční rollout per-capture normalizace viewportu)
 Po explicitním pokynu uživatele `pushni to` proběhl worker-first rollout commitu
