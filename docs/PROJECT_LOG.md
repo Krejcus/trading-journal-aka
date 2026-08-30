@@ -131,8 +131,14 @@ snapshot health `ready`.
 
 Prošlo 199 test souborů / 1 633 testů, TypeScript, lint bez chyb,
 Vite/PWA build a samostatný Node 20 worker bundle. Nebyl proveden ARM, Flatten,
-objednávka ani jiný broker write. Změna je zatím jen na lokální větvi
-`codex/worker-lifecycle-fix`; nebyla pushnutá ani nasazená na Vercel.
+objednávka ani jiný broker write. Po explicitním pokynu uživatele `pushni na
+live` byl `main` bez force fast-forwardnut `e0d8d6ff..366688dd`. Produkční
+Vercel deployment `dpl_CG7m1HcYrp3Qwzfd1EFWciQtAXVb` dosáhl `READY` pro přesný
+SHA `366688dd`; hlavní alias vrací HTTP 200 a neautorizovaný POST na
+`/api/tradovate/oauth/pilot-lease` správně 401 `missing-auth-token`. Build
+skončil úspěšně a nový deployment neměl při post-deploy scanu žádnou runtime
+chybu. Finální read-only reconciliation znovu potvrdila DISARMED/flat stav bez
+working orders, divergence, stuck položek a bez broker write.
 
 ### 2026-08-29 (Codex, produkční rollout per-capture normalizace viewportu)
 Po explicitním pokynu uživatele `pushni to` proběhl worker-first rollout commitu
