@@ -107,6 +107,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-01 (Codex, bezpečná UI obnova TradingView snímků po restartu Macu)
+
+Po restartu počítače se TradingView obnovilo dřív než Mac worker a běželo bez
+loopback CDP; copier execution zůstal zdravý, ale ENTRY/EXIT grafy by se
+neuložily. LIVE dashboard nyní při přesném stavu `cdp-offline` nabízí tlačítko
+„Obnovit snímky“. Po uživatelském potvrzení worker požádá TradingView o
+standardní ukončení, nikdy nepoužije násilný kill, počká na konec procesu a
+spustí aplikaci znovu s CDP pouze na `127.0.0.1:9222`. Pokud se aplikace
+neukončí nebo CDP nenaběhne, druhou instanci nespustí a chyba zůstane viditelná.
+
+Maintenance příkaz sdílí existující neobchodní `snapshot-test` relay typ, takže
+nepotřebuje novou DB migraci, ale nese explicitní `repairCamera:true`. Worker
+jej přijme jen v čerstvém bezpečném runtime stavu: connected, reconciled,
+DISARMED, group flat, bez working orders, divergence a stuck outboxu. Akce je
+fire-and-forget mimo broker dispatch frontu; nemůže ARMovat, Flattenovat ani
+odeslat objednávku a neblokuje nouzové ovládání. U běžícího CDP je idempotentní
+no-op. Kompletní sada prošla 203 soubory / 1710 testy, TypeScript, produkční
+Vite/PWA build, samostatný Node 20 worker bundle, lint s 0 errors / 352
+existujícími warnings a `git diff --check`.
+
+Změna je zatím pouze lokálně v integrační větvi. Mac worker nebyl znovu
+instalován, web nebyl pushnut ani nasazen a neproběhl ARM, Flatten ani jiný
+broker write.
+
 ### 2026-09-01 (Codex, instalace incidentní opravy a stavové uzavření legacy Flatten)
 
 Po ukončení uživatelova obchodu čerstvá read-only reconciliation potvrdila

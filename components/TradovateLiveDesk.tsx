@@ -489,6 +489,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
               onAccount={account => setSelectedAccountId(account.id)}
               apiTelemetry={live.apiTelemetry}
               snapshotHealth={agentStatus?.snapshotHealth}
+              onRepairSnapshots={async () => {
+                if (!(await confirmAction({
+                  title: 'Obnovit TradingView snímky',
+                  message: 'Ulož nejdřív případné změny v TradingView. AlphaTrade aplikaci standardně ukončí a znovu spustí s připojením pro ENTRY/EXIT snímky. Kopírka ani brokerové příkazy se nezmění.',
+                  confirmLabel: 'Ukončit a znovu spustit',
+                }))) return;
+                setAgentStatus((await executeAgent({
+                  type: 'snapshot-test',
+                  requestId: crypto.randomUUID(),
+                  repairCamera: true,
+                })).status);
+              }}
               commandAdapter={commandAdapter}
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
               copierStatusPending={!copierUiDemo && (!agentStatusResolved || live.dataEnrichmentPending)}

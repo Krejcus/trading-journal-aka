@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensureTradingViewCdp } from '../server/tradingViewCdpLifecycle';
+import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../server/tradingViewCdpLifecycle';
 
 describe('TradingView CDP lifecycle', () => {
   it('nedělá nic, když už CDP odpovídá', async () => {
@@ -32,5 +32,40 @@ describe('TradingView CDP lifecycle', () => {
       launch,
     })).resolves.toBe('launched');
     expect(launch).toHaveBeenCalledOnce();
+  });
+
+  it('výslovná UI oprava standardně ukončí běžící aplikaci a spustí ji s CDP', async () => {
+    let running = true;
+    let cdpReady = false;
+    const quit = vi.fn(async () => { running = false; });
+    const launch = vi.fn(async () => { running = true; cdpReady = true; });
+    await expect(restartTradingViewWithCdp({
+      fetchImpl: vi.fn(async () => cdpReady
+        ? new Response('{}', { status: 200 })
+        : Promise.reject(new TypeError('offline'))) as typeof fetch,
+      processRunning: async () => running,
+      quit,
+      launch,
+      sleep: async () => undefined,
+      pollIntervalMs: 10,
+      quitTimeoutMs: 500,
+      cdpTimeoutMs: 500,
+    })).resolves.toBe('restarted');
+    expect(quit).toHaveBeenCalledOnce();
+    expect(launch).toHaveBeenCalledOnce();
+  });
+
+  it('při odmítnutém ukončení nespustí druhou instanci TradingView', async () => {
+    const launch = vi.fn();
+    await expect(restartTradingViewWithCdp({
+      fetchImpl: vi.fn(async () => Promise.reject(new TypeError('offline'))) as typeof fetch,
+      processRunning: async () => true,
+      quit: async () => undefined,
+      launch,
+      sleep: async () => undefined,
+      pollIntervalMs: 10,
+      quitTimeoutMs: 500,
+    })).resolves.toBe('quit-timeout');
+    expect(launch).not.toHaveBeenCalled();
   });
 });

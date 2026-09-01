@@ -35,7 +35,7 @@ interface LocalCopierExecutionAgentOptions {
   devices?: NonNullable<LocalCopierAgentStatus['devices']>;
   snapshotHealth?: () => NonNullable<LocalCopierAgentStatus['snapshotHealth']>;
   /** Naplánuje observability test mimo broker dispatch a okamžitě se vrátí. */
-  onSnapshotTest?: (requestId: string) => void;
+  onSnapshotTest?: (requestId: string, options: { repairCamera: boolean }) => void;
   onDevicePaired?: (deviceId: string) => Promise<void>;
   /** Requests a restart after pairing; the pilot performs the final safe-state gate. */
   onDevicePairingRestart?: (deviceId: string) => void;
@@ -372,9 +372,12 @@ export async function startLocalCopierExecutionAgent(
           throw new Error('snapshot-test-invalid-request');
         }
         if (!options.onSnapshotTest) throw new Error('snapshot-test-unavailable');
+        if (command.repairCamera && !canSafelyRestartLocalCopierAgent(options.controller.status())) {
+          throw new Error('TradingView lze obnovit pouze při připojeném, reconciled, DISARMED a flat workeru bez pracovních příkazů.');
+        }
         // Callback pouze založí fire-and-forget práci. Command relay se hned
         // uvolní pro DISARM/kill-switch a nikdy nečeká na CDP, Storage ani APNs.
-        options.onSnapshotTest(command.requestId);
+        options.onSnapshotTest(command.requestId, { repairCamera: command.repairCamera === true });
         return;
       case 'resolve-stuck-operation':
         await options.controller.waiveStuckOperation({

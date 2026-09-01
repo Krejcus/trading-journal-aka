@@ -197,6 +197,9 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
     }
     return { accountId: command.accountId };
   }
+  if (command.type === 'snapshot-test') {
+    return command.repairCamera === true ? { repairCamera: true } : {};
+  }
   return {};
 };
 
@@ -229,7 +232,11 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     return { type: 'verify-account-eligibility', accountId };
   }
   if (row.command_type === 'snapshot-test') {
-    return { type: 'snapshot-test', requestId: row.id };
+    return {
+      type: 'snapshot-test',
+      requestId: row.id,
+      ...(row.payload?.repairCamera === true ? { repairCamera: true } : {}),
+    };
   }
   return { type: row.command_type } as LocalCopierAgentCommand;
 };

@@ -56,7 +56,7 @@ import {
   markMacCopierDevicePaired,
 } from '../../server/macCopierDevice';
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
-import { ensureTradingViewCdp } from '../../server/tradingViewCdpLifecycle';
+import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
 import {
   captureTradingViewAlertSnapshot,
@@ -413,6 +413,7 @@ async function runLocalAgent(
   };
   let snapshotPreparation: Promise<boolean> | null = null;
   let snapshotCapturesInFlight = 0;
+  let snapshotMaintenanceInFlight = false;
   const prepareSnapshotCamera = (): Promise<boolean> => {
     if (snapshotPreparation) return snapshotPreparation;
     const preparation = prepareTradingViewCopierSnapshot({
@@ -437,8 +438,12 @@ async function runLocalAgent(
       snapshotCapturesInFlight -= 1;
     }
   };
-  const refreshSnapshotHealth = async () => {
-    if (!snapshotsEnabled || snapshotCapturesInFlight > 0) return;
+  const refreshSnapshotHealth = async (duringMaintenance = false) => {
+    if (
+      !snapshotsEnabled
+      || snapshotCapturesInFlight > 0
+      || (snapshotMaintenanceInFlight && !duringMaintenance)
+    ) return;
     const probe = await probeTradingViewSnapshotTarget({ dedicated: dedicatedChartRef, timeoutMs: 1_500 });
     if (probe.resolved) persistResolvedChart(probe.resolved);
     // Capture mohl začít během síťového probe. V tom případě přípravu tento
@@ -664,12 +669,53 @@ async function runLocalAgent(
       port: Number(portValue),
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
       snapshotHealth: () => snapshotHealth,
-      onSnapshotTest: requestId => {
-        if (!snapshotsEnabled || !relay) throw new Error('snapshot-test-unavailable');
+      onSnapshotTest: (requestId, options) => {
+        if (!snapshotsEnabled) throw new Error('snapshot-test-unavailable');
         if (snapshotTestInFlight) throw new Error('snapshot-test-already-running');
-        const snapshotRelay = relay;
         snapshotTestInFlight = true;
         snapshotHealth = { ...snapshotHealth, lastAttemptAt: Date.now() };
+        if (options.repairCamera) {
+          snapshotMaintenanceInFlight = true;
+          snapshotHealth = {
+            ...snapshotHealth,
+            state: 'checking',
+            cdpReachable: false,
+            targetFound: false,
+          };
+          void (async () => {
+            const lifecycle = await restartTradingViewWithCdp();
+            if (lifecycle !== 'ready' && lifecycle !== 'restarted') {
+              throw new Error(`tradingview-restart-${lifecycle}`);
+            }
+            for (let attempt = 0; attempt < 4; attempt += 1) {
+              await refreshSnapshotHealth(true);
+              if (snapshotHealth.state === 'ready') break;
+              await delay(500);
+            }
+            if (snapshotHealth.state !== 'ready') {
+              throw new Error(`tradingview-restart-camera-${snapshotHealth.state}`);
+            }
+            console.log(`${new Date().toISOString()} SNAPSHOT TradingView bezpečně restartováno s CDP z LIVE UI.`);
+          })().catch(error => {
+            const cdpWasRecovered = snapshotHealth.cdpReachable;
+            snapshotHealth = {
+              ...snapshotHealth,
+              state: cdpWasRecovered ? snapshotHealth.state : 'cdp-offline',
+              ...(cdpWasRecovered ? {} : { cdpReachable: false, targetFound: false }),
+              lastCheckedAt: Date.now(),
+            };
+            console.warn(`${new Date().toISOString()} SNAPSHOT RESTART ${error instanceof Error ? error.message : String(error)}`);
+          }).finally(() => {
+            snapshotMaintenanceInFlight = false;
+            snapshotTestInFlight = false;
+          });
+          return;
+        }
+        if (!relay) {
+          snapshotTestInFlight = false;
+          throw new Error('snapshot-test-unavailable');
+        }
+        const snapshotRelay = relay;
         // Žádný await do command relay/broker cesty: agent command se vrátí
         // okamžitě a focení + APNs běží jako samostatný observability úkol.
         void (async () => {

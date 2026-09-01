@@ -225,7 +225,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(await readTradovateCopierDeviceRuntime({ db, userId, connectionId }));
     }
     if (req.method === 'POST') {
-      if (req.body?.command?.type === 'snapshot-test') {
+      if (req.body?.command?.type === 'snapshot-test' && req.body?.command?.repairCamera !== true) {
         return res.status(400).json({ error: 'snapshot-test-use-dedicated-endpoint' });
       }
       const queued = await enqueueTradovateCopierCommand({ db, userId, connectionId, command: req.body?.command, idempotencyKey: req.body?.idempotencyKey });

@@ -130,12 +130,37 @@ describe('local copier execution agent', () => {
     const result = await running.execute({ type: 'snapshot-test', requestId });
 
     expect(result.ok).toBe(true);
-    expect(onSnapshotTest).toHaveBeenCalledWith(requestId);
+    expect(onSnapshotTest).toHaveBeenCalledWith(requestId, { repairCamera: false });
     expect(runtime.arm).not.toHaveBeenCalled();
     expect(runtime.disarm).not.toHaveBeenCalled();
     expect(runtime.reconcile).not.toHaveBeenCalled();
     expect(runtime.flattenAccount).not.toHaveBeenCalled();
     expect(runtime.flattenGroup).not.toHaveBeenCalled();
+  });
+
+  it('repair snapshot kamery naplánuje jen v bezpečném DISARMED/flat stavu', async () => {
+    const runtime = controller();
+    const onSnapshotTest = vi.fn();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onSnapshotTest,
+    });
+    const requestId = '55555555-5555-4555-8555-555555555555';
+    await expect(running.execute({
+      type: 'snapshot-test', requestId, repairCamera: true,
+    })).resolves.toMatchObject({ ok: true });
+    expect(onSnapshotTest).toHaveBeenCalledWith(requestId, { repairCamera: true });
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(runtime.flattenAccount).not.toHaveBeenCalled();
+    expect(runtime.flattenGroup).not.toHaveBeenCalled();
+
+    runtime.arm();
+    await expect(running.execute({
+      type: 'snapshot-test', requestId, repairCamera: true,
+    })).rejects.toThrow('DISARMED');
+    expect(onSnapshotTest).toHaveBeenCalledTimes(1);
   });
 
   it('snapshot-test odmítne chybějící request ID i worker bez camera callbacku', async () => {

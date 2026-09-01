@@ -91,6 +91,40 @@ const tableRows = (markup: string): string[] => markup.match(/<tr\b[^>]*>[\s\S]*
 const tableCells = (row: string): string[] => row.match(/<td\b[^>]*>[\s\S]*?<\/td>/g) ?? [];
 
 describe('GroupDetail Positions integrace', () => {
+  it('nabídne bezpečnou opravu pouze když TradingView běží bez CDP', () => {
+    const health = {
+      enabled: true,
+      state: 'cdp-offline' as const,
+      layoutName: 'AlphaTrade Snapshoty',
+      chartIdConfigured: true,
+      cdpReachable: false,
+      targetFound: false,
+      lastCheckedAt: 1,
+      lastAttemptAt: null,
+      lastSuccessAt: null,
+    };
+    const offline = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot,
+      snapshotHealth: health,
+      onRepairSnapshots: () => undefined,
+    }));
+    expect(offline).toContain('Obnovit snímky');
+    expect(offline).toContain('Obchod proběhne, ale graf se neuloží.');
+
+    const ready = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot,
+      snapshotHealth: {
+        ...health,
+        state: 'ready',
+        cdpReachable: true,
+        targetFound: true,
+      },
+      onRepairSnapshots: () => undefined,
+    }));
+    expect(ready).not.toContain('Obnovit snímky');
+    expect(ready).toContain('je připravený pro ENTRY/EXIT');
+  });
+
   it('během fresh bootstrapu nevydává chybějící denní ledger za nulu', () => {
     const bootstrapSnapshot = {
       ...snapshot,

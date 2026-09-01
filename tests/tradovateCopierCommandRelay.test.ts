@@ -81,6 +81,36 @@ describe('Tradovate copier command relay', () => {
     expect(claimed?.command).toEqual({ type: 'snapshot-test', requestId });
   });
 
+  it('přenese výslovnou opravu snapshot kamery bez nového brokerového command typu', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      deviceId,
+      command: { type: 'snapshot-test', repairCamera: true },
+      idempotencyKey: 'snapshot-camera-repair-1',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({
+      command_type: 'snapshot-test',
+      payload: { repairCamera: true },
+    });
+
+    const requestId = '66666666-6666-4666-8666-666666666666';
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: requestId,
+        command_type: 'snapshot-test',
+        payload: { repairCamera: true },
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'snapshot-test', requestId, repairCamera: true });
+  });
+
   it('přenese cílené read-only ověření účtu beze změny payloadu', async () => {
     const upsert = vi.fn();
     await enqueueTradovateCopierCommand({
