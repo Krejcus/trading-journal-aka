@@ -135,8 +135,20 @@ parametry z běžícího agenta, brána zrcadlí `canSafelyRestartLocalCopierAge
 + `lastError` a bez čistého stavu neudělá nic. Reinstall spouští uživatel
 ručně (auto-mode klasifikátor Claude Code reinstall služby blokuje).
 
+Dokončení (23:55): reinstall s novým `--followers` skupinu NEZMĚNIL —
+durable `<conn>-<leader>.group.json` je po první UI změně autoritativní
+(pilot.ts, `persistedGroup ?? fallbackGroup`) a `validateStoredCopyGroupForStartup`
+worker se starým followerem shodila do crash-loopu (launchd runs=8). Jediná
+operátorská cesta: záloha + ruční nahrazení `accountId` v group.json
+(62364057 → 64310872, mode/multiplier zachovány), launchd worker sám
+nastartoval, TradingView CDP 9222 naběhlo automaticky (`snapshotHealth:
+ready`), read-only reconcile čistý (0 divergence, 0 working orders),
+`reconciliationRequired=false`, `lastError=null`. Skupina zůstává DISARMED.
+
 Otevřené: worker by měl umět odebrat/nahradit followera, kterého OAuth
-adresář už nevrací, i bez BREACH/DLL záznamu (viz otevřené otázky).
+adresář už nevrací, i bez BREACH/DLL záznamu (viz otevřené otázky);
+`mac-install.ts` by měl při rozdílu CLI `--followers` vs. durable skupiny
+zastavit s jasnou hláškou místo tichého ignorování parametru.
 Pozn. k review: pět „502" v konzoli mého tabu nebylo doloženo URL a Vercel
 od deploye 5xx neeviduje — pravděpodobně zbytky z doby před nasazením.
 
