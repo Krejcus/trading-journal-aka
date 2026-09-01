@@ -61,6 +61,36 @@ export function getNewTradovateAccountProfiles(
   return profiles.filter(profile => profile.status === 'active' && profile.onboardedAt === null);
 }
 
+/**
+ * True only for a detected prop account whose saved profile is not complete
+ * enough for a trustworthy risk fallback. A custom named plan is accepted as
+ * long as it includes the core drawdown fields; it need not be in our catalog.
+ */
+export function tradovateAccountProfileNeedsPlan(
+  profile: TradovateAccountProfile | undefined,
+  accountName: string,
+): boolean {
+  if (profile?.status === 'archived') return false;
+  const inferred = inferTradovatePropIdentity(accountName);
+  const propFirm = profile?.propFirm?.trim() || inferred?.propFirm || '';
+  if (!propFirm) return false;
+  if (!profile) return true;
+
+  const hasAccountSize = profile.accountSize != null
+    && Number.isFinite(profile.accountSize)
+    && profile.accountSize > 0;
+  const hasMaxLoss = profile.drawdownType === 'none' || (
+    profile.maxLoss != null && Number.isFinite(profile.maxLoss) && profile.maxLoss > 0
+  );
+  return !(
+    profile.planName?.trim()
+    && profile.accountType
+    && hasAccountSize
+    && profile.drawdownType
+    && hasMaxLoss
+  );
+}
+
 const defaultAccountType = (profile: Pick<TradovateAccountProfile, 'accountType' | 'accountName' | 'environment'>) => {
   if (profile.accountType) return profile.accountType;
   const inferred = inferTradovatePropIdentity(profile.accountName);

@@ -5,6 +5,7 @@ import type {
 } from './tradovateAccountDataTypes';
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
 import { isTradovateWorkingStatus } from './tradovateOrderReadModel';
+import { fundedTradovateTrailingDrawdownLimit } from './tradovatePropPlanCatalog';
 
 export interface TradovateLiveTotals {
   balance: number;
@@ -115,10 +116,22 @@ export const accountRiskPeak = (
   profile?: TradovateAccountProfile,
 ): number | null => {
   const accountSize = profile?.accountSize ?? null;
-  if (profile?.drawdownType === 'none') return null;
-  if (profile?.drawdownType === 'static' || profile?.drawdownType == null) return accountSize;
+  const brokerTrailingAmount = account.risk.trailingMaxDrawdown;
+  const brokerMode = account.risk.trailingMaxDrawdownMode?.trim().toLowerCase();
+  const brokerDrawdownType = brokerTrailingAmount != null
+    && Number.isFinite(brokerTrailingAmount)
+    && brokerTrailingAmount > 0
+    ? brokerMode === 'eod'
+      ? 'eod_trailing'
+      : brokerMode === 'realtime'
+        ? 'trailing'
+        : null
+    : null;
+  const drawdownType = brokerDrawdownType ?? profile?.drawdownType ?? null;
+  if (drawdownType === 'none') return null;
+  if (drawdownType === 'static' || drawdownType == null) return accountSize;
 
-  if (profile.drawdownType === 'eod_trailing') {
+  if (drawdownType === 'eod_trailing') {
     // Tradovate defines maxNetLiq as the account high-watermark. In EOD mode
     // the broker itself advances it only at the session close, so it is more
     // authoritative than rebuilding the watermark from an occasionally
@@ -153,10 +166,30 @@ export const accountRiskFloor = (
     && account.balance.autoLiqLevel > 0) {
     return account.balance.autoLiqLevel;
   }
-  const maxLoss = account.risk.trailingMaxDrawdown ?? profile?.maxLoss ?? null;
+  const brokerMaxLoss = account.risk.trailingMaxDrawdown != null
+    && Number.isFinite(account.risk.trailingMaxDrawdown)
+    && account.risk.trailingMaxDrawdown > 0
+    ? account.risk.trailingMaxDrawdown
+    : null;
+  const maxLoss = brokerMaxLoss ?? profile?.maxLoss ?? null;
   if (maxLoss == null) return null;
   const peak = accountRiskPeak(account, profile);
-  return peak == null ? null : peak - maxLoss;
+  if (peak == null) return null;
+
+  const reconstructedFloor = peak - maxLoss;
+  // Tradovate definuje trailingMaxDrawdownLimit jako equity, na které se
+  // trailing zastaví. Není to aktuální floor, ale jeho horní strop.
+  const brokerTrailingLimit = account.risk.trailingMaxDrawdownLimit;
+  if (
+    brokerTrailingLimit != null
+    && Number.isFinite(brokerTrailingLimit)
+    && brokerTrailingLimit > 0
+  ) return Math.min(reconstructedFloor, brokerTrailingLimit);
+
+  const catalogTrailingLimit = fundedTradovateTrailingDrawdownLimit(profile);
+  return catalogTrailingLimit == null
+    ? reconstructedFloor
+    : Math.min(reconstructedFloor, catalogTrailingLimit);
 };
 
 export const accountRiskCushion = (

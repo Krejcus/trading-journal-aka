@@ -52,6 +52,7 @@ import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
 import TradovateAddConnectionModal from './TradovateAddConnectionModal';
 import type { TradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
+import { tradovateAccountProfileNeedsPlan } from '../lib/tradovateAccountOnboarding';
 import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
@@ -186,6 +187,13 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
     [agentStatus],
   );
   const selectedAccount = live.data?.accounts.find(account => account.id === selectedAccountId) ?? null;
+  const accountsWithoutPlan = useMemo(() => {
+    if (!live.data) return [];
+    const profilesById = profileMap(live.profiles);
+    return live.data.accounts.filter(account => (
+      tradovateAccountProfileNeedsPlan(profilesById.get(String(account.id)), account.name)
+    ));
+  }, [live.data, live.profiles]);
   const copyTradeSnapshot = useMemo(
     () => live.data ? tradovateCopyTradeSnapshot(live.data, live.profiles) : null,
     [live.data, live.profiles],
@@ -421,6 +429,21 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
         <div className="flex items-center gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-amber-600">
           <Database size={16} className="shrink-0" />
           <span className="flex-1 text-xs font-semibold">Historický backfill čeká na dostupné úložiště: {live.historyError}</span>
+        </div>
+      )}
+
+      {accountsWithoutPlan.length > 0 && (
+        <div className="flex flex-col gap-3 rounded-lg border border-amber-500/35 bg-amber-500/10 p-4 text-amber-700 sm:flex-row sm:items-center dark:text-amber-400">
+          <ShieldAlert size={19} className="shrink-0" />
+          <div className="min-w-0 flex-1">
+            <b className="block text-sm">{accountsWithoutPlan.length === 1 ? '1 účet nemá dokončený plán' : `${accountsWithoutPlan.length} účtů nemá dokončený plán`}</b>
+            <span className="mt-0.5 block truncate text-xs font-semibold">
+              {accountsWithoutPlan.map(account => account.name).join(', ')} · záložní výpočet drawdownu a limitů bez plánu nemusí být úplný.
+            </span>
+          </div>
+          <button type="button" onClick={() => live.setProfileSetupOpen(true)} className="h-9 shrink-0 rounded-md bg-amber-500 px-4 text-xs font-black text-slate-950">
+            Přiřadit plán
+          </button>
         </div>
       )}
 

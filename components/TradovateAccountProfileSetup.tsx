@@ -162,7 +162,15 @@ const ProfileRow = ({
   const changeIdentity = (patch: Pick<Partial<FormProfile>, 'propFirm' | 'planName'>) => {
     const candidate = { ...profile, ...patch };
     const preset = findTradovatePropPlanPreset(candidate.propFirm, candidate.planName);
-    onChange(preset ? { ...patch, ...presetPatch(preset) } : patch);
+    if (!preset) {
+      onChange(patch);
+      return;
+    }
+    const filled = presetPatch(preset);
+    // Změna názvu plánu nesmí funded/live účet potichu vrátit do Evaluation.
+    // U dosud nezařazeného účtu zůstává bezpečný katalogový default.
+    if (profile.accountType != null) filled.accountType = profile.accountType;
+    onChange({ ...patch, ...filled });
   };
 
   return (

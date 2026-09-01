@@ -9,6 +9,7 @@ import {
   payoutRulesForOnboardingPlanPreset,
   planTradovateAccountOnboardingSave,
   tradovateOnboardingPlanPresetKey,
+  tradovateAccountProfileNeedsPlan,
 } from '../lib/tradovateAccountOnboarding';
 import { findTradovatePropPlanPreset } from '../lib/tradovatePropPlanCatalog';
 
@@ -93,6 +94,23 @@ describe('detekce nových Tradovate účtů', () => {
     expect(findTradovateOnboardingPlanPreset(draft.planPresetKey)).toMatchObject({
       propFirm: 'Tradeify', planName: 'Growth 50K', accountSize: 50_000,
     });
+  });
+
+  it('připomene neúplný Lucid plán a přijme kompletní katalogový i vlastní plán', () => {
+    expect(tradovateAccountProfileNeedsPlan(profile('lucid', {
+      propFirm: 'Lucid', planName: 'LucidFlex', onboardedAt: null,
+    }), 'LFE05066846490015')).toBe(true);
+
+    expect(tradovateAccountProfileNeedsPlan(profile('lucid', {
+      propFirm: 'Lucid', planName: 'LucidFlex 50K', accountType: 'funded',
+      accountSize: 50_000, drawdownType: 'eod_trailing', maxLoss: 2_000,
+    }), 'LFE05066846490015')).toBe(false);
+
+    expect(tradovateAccountProfileNeedsPlan(profile('custom', {
+      accountName: 'CUSTOM-PROP-1', propFirm: 'Vlastní firma', planName: 'Vlastní 50K',
+      accountType: 'funded', accountSize: 50_000, drawdownType: 'static', maxLoss: 2_000,
+    }), 'CUSTOM-PROP-1')).toBe(false);
+    expect(tradovateAccountProfileNeedsPlan(undefined, 'LIVE-123')).toBe(false);
   });
 });
 

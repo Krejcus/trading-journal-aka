@@ -1,4 +1,5 @@
 import type {
+  TradovateAccountProfile,
   TradovateProfileAccountType,
   TradovateProfileDrawdownType,
 } from './tradovateAccountProfileTypes';
@@ -193,6 +194,32 @@ export function findTradovatePropPlanPreset(
 
   const canonical = `${family} ${sizeMatch[1]}k`;
   return TRADOVATE_PROP_PLAN_PRESETS.find(preset => normalize(preset.planName) === canonical) ?? null;
+}
+
+/**
+ * Known Tradeify/Lucid simulated-funded plans stop trailing at $100 above the
+ * nominal starting balance. The broker-provided trailingMaxDrawdownLimit still
+ * has priority; this is only the catalog fallback when Tradovate omits it.
+ */
+export function fundedTradovateTrailingDrawdownLimit(
+  profile: Pick<TradovateAccountProfile,
+    'propFirm' | 'planName' | 'accountType' | 'accountSize' | 'drawdownType'> | undefined,
+): number | null {
+  const preset = profile
+    ? findTradovatePropPlanPreset(profile.propFirm, profile.planName)
+    : null;
+  if (
+    !profile
+    || profile.accountType !== 'funded'
+    || (profile.drawdownType !== 'trailing' && profile.drawdownType !== 'eod_trailing')
+    || profile.accountSize == null
+    || !Number.isFinite(profile.accountSize)
+    || profile.accountSize <= 0
+    || !preset
+    || preset.accountSize !== profile.accountSize
+  ) return null;
+
+  return profile.accountSize + 100;
 }
 
 export function inferTradovatePropIdentity(accountName: string): Pick<TradovatePropPlanPreset, 'propFirm'> & { planName: string | null } | null {

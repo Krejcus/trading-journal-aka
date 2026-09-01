@@ -113,6 +113,14 @@ describe('tradovate LIVE view model', () => {
     expect(accountRiskFloor(value, profile)).toBe(49_000);
   });
 
+  it('trailing amount 0 je také nenastavený broker limit a použije profil', () => {
+    const value = account();
+    value.risk.trailingMaxDrawdown = 0;
+    value.risk.maxNetLiq = 51_000;
+    const profile = { accountSize: 50_000, maxLoss: 2_000, drawdownType: 'eod_trailing' } as never;
+    expect(accountRiskFloor(value, profile)).toBe(49_000);
+  });
+
   it('moves an EOD trailing floor only when a historical ending balance made a new high', () => {
     const value = account();
     value.daily = [
@@ -137,6 +145,37 @@ describe('tradovate LIVE view model', () => {
     expect(accountRiskPeak(value, profile)).toBe(50_600);
     expect(accountRiskFloor(value, profile)).toBe(48_700);
     expect(accountRiskCushion(value, profile)).toBe(200);
+  });
+
+  it('stops the reconstructed floor at the broker trailing drawdown limit', () => {
+    const value = account();
+    value.balance.totalCashValue = 52_400;
+    value.balance.netLiq = 52_450;
+    value.risk.maxNetLiq = 52_600;
+    value.risk.trailingMaxDrawdown = 2_000;
+    value.risk.trailingMaxDrawdownLimit = 50_100;
+    value.risk.trailingMaxDrawdownMode = 'EOD';
+
+    expect(accountRiskPeak(value)).toBe(52_600);
+    expect(accountRiskFloor(value)).toBe(50_100);
+    expect(accountRiskCushion(value)).toBe(2_350);
+  });
+
+  it('uses the known funded plan lock when Tradovate omits its limit', () => {
+    const value = account();
+    value.balance.netLiq = 52_400;
+    value.risk.maxNetLiq = 52_600;
+    value.risk.trailingMaxDrawdown = 2_000;
+    const plan = {
+      propFirm: 'Tradeify', planName: 'Growth 50K', accountType: 'funded',
+      accountSize: 50_000, maxLoss: 2_000, drawdownType: 'eod_trailing',
+    } as const;
+    const funded = plan as never;
+    const evaluation = { ...plan, accountType: 'evaluation' } as never;
+
+    expect(accountRiskFloor(value, funded)).toBe(50_100);
+    expect(accountRiskCushion(value, funded)).toBe(2_300);
+    expect(accountRiskFloor(value, evaluation)).toBe(50_600);
   });
 
   it('classifies working orders and creates chronologically sorted activity', () => {
