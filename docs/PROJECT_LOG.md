@@ -107,6 +107,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-01 (Codex, volitelný DLL sloupec v LIVE tabulce)
+
+Do `Table Settings → Accounts columns` přibyl volitelný sloupec
+`DLL zbývá`. Používá stejný konzervativní základ jako existující DLL risk
+gate: potvrzený denní limit účtu plus dnešní realizovaný a otevřený P&L.
+Během nehotového denního enrichmentu a u účtu bez přiřazeného DLL ukazuje
+pomlčku; po dosažení hranice nikdy nezobrazuje záporný „zbývající“ prostor.
+Tooltip zachovává konkrétní limit i použitý denní P&L.
+
+V localhost LIVE UI byl sloupec i jeho checkbox ověřen na reálných read-only
+datech: Tradeify 1 250 USD, Lucid leader 1 200 USD a Lucid účet s denním
+P&L -220 USD zobrazil 980 USD. Cílené render/eligibility testy prošly 15/15,
+TypeScript a `git diff --check` jsou čisté. Mac worker nebyl restartován ani
+měněn a žádný brokerový příkaz nebyl odeslán.
+
 ### 2026-09-01 (Codex, kompatibilita opravy TradingView snímků)
 
 Lokální LIVE UI už nenabízí tlačítko `Obnovit snímky` workeru, který ještě

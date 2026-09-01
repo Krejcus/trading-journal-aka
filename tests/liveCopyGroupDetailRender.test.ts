@@ -1,7 +1,10 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { LiveCopyTradeOverview } from '../components/LiveCopyTradeOverview';
+import {
+  copyTradeDailyLossRemaining,
+  LiveCopyTradeOverview,
+} from '../components/LiveCopyTradeOverview';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
 
 const liveAccount = (id: number, name: string): LiveAccount => ({
@@ -91,6 +94,24 @@ const tableRows = (markup: string): string[] => markup.match(/<tr\b[^>]*>[\s\S]*
 const tableCells = (row: string): string[] => row.match(/<td\b[^>]*>[\s\S]*?<\/td>/g) ?? [];
 
 describe('GroupDetail Positions integrace', () => {
+  it('zobrazuje volitelný zbývající DLL ze stejného realized + unrealized základu jako risk gate', () => {
+    const accountWithDll = {
+      ...snapshot.accounts[0],
+      dailyLossLimit: 1_250,
+      realizedPnl: -200,
+      unrealizedPnl: -50,
+    };
+    expect(copyTradeDailyLossRemaining(accountWithDll)).toBe(1_000);
+    expect(copyTradeDailyLossRemaining({ ...accountWithDll, dailyLossLimit: null })).toBeNull();
+
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, accounts: [accountWithDll, snapshot.accounts[1]] },
+    }));
+    expect(markup).toContain('DLL zbývá');
+    expect(markup).toContain('DLL $1,250.00 · dnešní realizovaný + otevřený P&amp;L -$250.00');
+    expect(markup).toContain('>1,000<');
+  });
+
   it('nabídne bezpečnou opravu pouze když TradingView běží bez CDP', () => {
     const health = {
       enabled: true,

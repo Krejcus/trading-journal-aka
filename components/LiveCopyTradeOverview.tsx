@@ -67,7 +67,7 @@ export type ReplicationMode = CopyReplicationMode;
 
 export type AccountColumnKey =
   | 'account' | 'status' | 'broker' | 'firm' | 'balance' | 'positions'
-  | 'daily' | 'unreal' | 'distDd' | 'execLimit' | 'qtyMult' | 'actions';
+  | 'daily' | 'dllRemaining' | 'unreal' | 'distDd' | 'execLimit' | 'qtyMult' | 'actions';
 
 interface ColumnDef {
   key: AccountColumnKey;
@@ -97,6 +97,7 @@ const ACCOUNT_COLUMNS: ColumnDef[] = [
   { key: 'balance', label: 'Balance', align: 'right', widthPx: 112 },
   { key: 'positions', label: 'Positions', align: 'right', widthPx: 260 },
   { key: 'daily', label: 'Daily P&L', align: 'right', widthPx: 96 },
+  { key: 'dllRemaining', label: 'DLL zbývá', align: 'right', widthPx: 96 },
   { key: 'unreal', label: 'Unreal P&L', align: 'right', widthPx: 104 },
   { key: 'distDd', label: 'Dist DD', align: 'right', widthPx: 76 },
   { key: 'execLimit', label: 'Exec/Limit', align: 'right', widthPx: 88 },
@@ -1889,6 +1890,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
   const a = row.account;
   const accountId = row.accountId;
   const cushion = a?.cushion ?? null;
+  const dllRemaining = a ? copyTradeDailyLossRemaining(a) : null;
 
   const cell = (key: AccountColumnKey): React.ReactNode => {
     switch (key) {
@@ -1942,6 +1944,18 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
         return <span className={`text-xs tabular-nums ${a && !dailyPnlPending ? pnlClass(a.realizedPnl) : 'text-[var(--text-secondary)]'}`}>{a && !dailyPnlPending ? money.format(a.realizedPnl) : '—'}</span>;
+      case 'dllRemaining': {
+        if (!a || dailyPnlPending || dllRemaining == null) {
+          return <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
+        }
+        const currentDailyPnl = a.realizedPnl + a.unrealizedPnl;
+        return <span
+          className={`text-xs tabular-nums font-bold ${dllRemainingClass(dllRemaining, a.dailyLossLimit)}`}
+          title={`DLL ${money.format(a.dailyLossLimit as number)} · dnešní realizovaný + otevřený P&L ${money.format(currentDailyPnl)}`}
+        >
+          {plain.format(Math.max(0, dllRemaining))}
+        </span>;
+      }
       case 'unreal':
         return a ? <span
           className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(a.unrealizedPnl)}`}
@@ -2504,6 +2518,20 @@ const StatusToast = ({ tone, text }: { tone: 'success' | 'info' | 'error'; text:
 
 const pnlClass = (v: number) =>
   v > 0 ? 'text-emerald-500' : v < 0 ? 'text-rose-500' : 'text-[var(--text-secondary)]';
+
+/** Zbývající prostor k uživatelsky potvrzenému DLL, včetně otevřeného P&L. */
+export const copyTradeDailyLossRemaining = (account: Pick<LiveAccount, 'dailyLossLimit' | 'realizedPnl' | 'unrealizedPnl'>): number | null => {
+  const limit = account.dailyLossLimit;
+  if (limit == null || !Number.isFinite(limit) || limit <= 0) return null;
+  const currentDailyPnl = account.realizedPnl + account.unrealizedPnl;
+  return Number.isFinite(currentDailyPnl) ? limit + currentDailyPnl : null;
+};
+
+const dllRemainingClass = (remaining: number, limit: number | null | undefined) => {
+  if (remaining <= 0) return 'text-rose-500';
+  if (limit != null && Number.isFinite(limit) && remaining <= limit * 0.25) return 'text-amber-500';
+  return 'text-emerald-500/80';
+};
 
 /** Vzdálenost k drawdownu: nízká = blízko limitu, proto červená. */
 const cushionClass = (v: number | null) => {
