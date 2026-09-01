@@ -3,7 +3,7 @@ import type { BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
 import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
 import { createMockBroker } from '../services/mockBroker';
-import { createRuntime, processOsoPair } from '../services/copierRunner';
+import { createRuntime, processOsoPair, type CopierAuditEntry } from '../services/copierRunner';
 import { createCopierState } from '../services/copierEngine';
 import { createRiskGateContext } from '../services/copierRiskGate';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
@@ -300,12 +300,50 @@ describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () =
     controller.stop();
   });
 
-  it('osiřelé kopie (leader mezitím flat) se po reconnectu risk-redukčně zavřou', async () => {
+  it('armExpiryFlatten off stále provede povinnou read-only reconciliation po reconnectu', async () => {
+    const audit = vi.fn();
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: {
+        ...recoveryGroup,
+        safety: { ...DEFAULT_COPY_GROUP_SAFETY, armExpiryFlatten: 'off' },
+      },
+      clock: stepClock(),
+      osoCorrelationWindowMs: 5,
+      onAudit: audit,
+    });
+    await openCopy(broker, controller);
+    await broker.placeOrder({
+      tag: 'seed-leader-off', accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 2, orderType: 'Market',
+    });
+    const placedBefore = broker.placedRequests().length;
+
+    broker.setConnected(false);
+    await controller.waitForIdle();
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    const audits = audit.mock.calls.flatMap(call => call[0] as CopierAuditEntry[]);
+    expect(audits.some(item => (
+      item.leaderEventId === 'connection-recovery'
+      && item.reason?.includes('synchronní s leaderem')
+    ))).toBe(true);
+    expect(controller.status()).toMatchObject({ armed: false, autoClose: null });
+    expect(broker.placedRequests()).toHaveLength(placedBefore);
+    controller.stop();
+  });
+
+  it('orphan bez durable opening epochy je po reconnectu detect-only bez broker write', async () => {
+    const audit = vi.fn();
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group: recoveryGroup, clock: stepClock(), osoCorrelationWindowMs: 5,
+      onAudit: audit,
     });
     await openCopy(broker, controller);
+    const placedBefore = broker.placedRequests().length;
 
     broker.setConnected(false);
     await controller.waitForIdle();
@@ -313,14 +351,26 @@ describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () =
     await controller.waitForIdle();
 
     const status = controller.status();
-    expect(status.autoClose).toMatchObject({ trigger: 'reconnect', flat: true, submittedClosures: 1 });
+    expect(status).toMatchObject({
+      armed: false,
+      autoClose: null,
+      reconciliationRequired: true,
+      divergentAccounts: [200],
+    });
+    expect(status.lastError).toContain('bez opening ownership se automaticky nezavírá');
     expect(status.resumeOffer).toBeNull();
-    const close = broker.placedRequests().at(-1);
-    expect(close).toMatchObject({ accountId: 200, side: 'Sell', quantity: 2, orderType: 'Market' });
+    expect(broker.placedRequests()).toHaveLength(placedBefore);
+    expect(broker.liquidateRequests()).toEqual([]);
+    const audits = audit.mock.calls.flatMap(call => call[0] as CopierAuditEntry[]);
+    expect(audits).toEqual(expect.arrayContaining([expect.objectContaining({
+      leaderEventId: 'connection-recovery',
+      kind: 'blocked',
+      reason: expect.stringContaining('žádný broker write'),
+    })]));
     controller.stop();
   });
 
-  it('boot po pádu Macu: durable stopa spustí recovery a osiřelé kopie zavře bez ARM', async () => {
+  it('boot s liveCopyOpenSince bez epochy orphan pouze detekuje a durable stopu zachová', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
     // Kopie existuje u brokera, leader je flat — worker mezitím ležel.
     await broker.placeOrder({
@@ -330,6 +380,7 @@ describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () =
       ...emptySnapshot(),
       safety: { entryCooldownUntil: 0, dayLockUntil: 0, liveCopyOpenSince: 50 },
     });
+    const placedBefore = broker.placedRequests().length;
     const controller = await bootstrapCopierRuntime({
       broker, store, group: recoveryGroup, clock: stepClock(),
     });
@@ -337,9 +388,16 @@ describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () =
     await controller.waitForIdle();
 
     const status = controller.status();
-    expect(status.autoClose).toMatchObject({ trigger: 'reconnect', flat: true });
-    expect(broker.placedRequests().at(-1)).toMatchObject({ accountId: 200, side: 'Sell', quantity: 2 });
-    expect((await store.load()).safety?.liveCopyOpenSince).toBeUndefined();
+    expect(status).toMatchObject({
+      armed: false,
+      autoClose: null,
+      reconciliationRequired: true,
+      divergentAccounts: [200],
+    });
+    expect(status.lastError).toContain('bez opening ownership se automaticky nezavírá');
+    expect(broker.placedRequests()).toHaveLength(placedBefore);
+    expect(broker.liquidateRequests()).toEqual([]);
+    expect((await store.load()).safety?.liveCopyOpenSince).toBe(50);
     controller.stop();
   });
 

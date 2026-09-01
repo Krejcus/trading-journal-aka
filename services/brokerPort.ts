@@ -139,6 +139,20 @@ export interface BrokerLiquidateRequest {
   symbol: string;
 }
 
+/**
+ * Výsledek samotného odeslání stavového liquidate požadavku.
+ *
+ * Ani `submitted` ještě neznamená flat účet — definitivní úspěch potvrzuje
+ * až následný autoritativní Position snapshot. `indeterminate` zachovává
+ * rozdíl mezi chybějícím ACK a explicitním přijetím; v obou případech je
+ * zakázaný blind retry stejné operationId.
+ */
+export type BrokerLiquidateResult =
+  | { status: 'already-flat' }
+  | { status: 'submitted'; brokerOrderId?: string }
+  | { status: 'rejected'; reason: string }
+  | { status: 'indeterminate'; reason: string };
+
 export interface BrokerOcoLeg {
   side: OrderSide;
   orderType: Extract<OrderType, 'Limit' | 'Stop' | 'StopLimit'>;
@@ -203,7 +217,7 @@ export interface BrokerPort {
    * Preferovaná nouzová cesta pro Flatten. Chybějící implementace používá
    * bezpečnější dostupný fallback cancel + přesný Market close.
    */
-  liquidatePosition?(request: BrokerLiquidateRequest): Promise<BrokerOrderAck>;
+  liquidatePosition?(request: BrokerLiquidateRequest): Promise<BrokerLiquidateResult>;
   /** Nativní atomický OCO pár. Chybějící implementace znamená fail-closed. */
   placeOco?(request: BrokerOcoRequest): Promise<BrokerOcoAck>;
   /** Nativní atomický entry + bracket. Chybějící implementace znamená fail-closed. */

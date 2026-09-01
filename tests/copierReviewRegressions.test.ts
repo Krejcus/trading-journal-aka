@@ -234,11 +234,15 @@ describe('copier regressions po review 25. 8.', () => {
       const confirmedModify = persisted.cancelOutbox.find(entry => entry.operation === 'modify');
       expect(followerOrder.quantity).toBe(3);
       expect(persistedLink?.quantity).toBe(3);
-      expect(confirmedModify).toMatchObject({
-        status: 'confirmed',
-        outcome: 'working',
-        changes: { quantity: 3 },
-      });
+      // Replace přišel ještě v krátkém pre-link OSO inference okně, takže
+      // follower vznikl rovnou s quantity 3 a žádný mezikrok 5 -> 3 u
+      // brokera nebyl potřeba. Durable link je autoritativní asserted ceiling.
+      expect(confirmedModify).toBeUndefined();
+      expect(assertedFollowerQuantity(
+        runtimeFromSnapshot(persisted).state,
+        runtimeFromSnapshot(persisted).cancelOutbox,
+        followerOrder.brokerOrderId,
+      )).toBe(3);
       expect(controller.status().armed).toBe(true);
 
       const venueReturn: BrokerOrder = {
@@ -315,7 +319,10 @@ describe('copier regressions po review 25. 8.', () => {
   });
 
   it('4. preflight refused modify neblokuje Flatten, ale dál blokuje nový ARM', async () => {
-    vi.useFakeTimers();
+    // Test potřebuje deterministický wall clock, ale korelační a potvrzovací
+    // okna runtime musí dál skutečně doběhnout. Zamrazení setTimeout by
+    // zablokovalo waitForIdle ještě před samotným Flattenem.
+    vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-08-25T10:00:00.000Z'));
     const clock = () => Date.now();
     const store = createMemoryCopierStore();
@@ -336,6 +343,15 @@ describe('copier regressions po review 25. 8.', () => {
       await controller.reconcile();
       controller.arm();
 
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'leader-refused',
+        sourceVersion: '1:Working',
+        updatedAt: clock(),
+      }) });
+      await controller.waitForIdle();
+
+      const followerOrder = broker.orders().find(order => order.accountId === 200);
+      if (!followerOrder) throw new Error('Test setup: follower order pro refused modify nevznikl');
       const realFindOrderById = broker.findOrderById.bind(broker);
       let failNextLookup = true;
       broker.findOrderById = async (accountId, brokerOrderId) => {
@@ -348,19 +364,12 @@ describe('copier regressions po review 25. 8.', () => {
 
       broker.emitEvent({ type: 'order', order: leaderOrder({
         brokerOrderId: 'leader-refused',
-        sourceVersion: '1:Working',
-        updatedAt: clock(),
-      }) });
-      broker.emitEvent({ type: 'order', order: leaderOrder({
-        brokerOrderId: 'leader-refused',
         limitPrice: 30_001,
         sourceVersion: '2:Working',
         updatedAt: clock(),
       }) });
       await controller.waitForIdle();
 
-      const followerOrder = broker.orders().find(order => order.accountId === 200);
-      if (!followerOrder) throw new Error('Test setup: follower order pro refused modify nevznikl');
       const refused = (await store.load()).cancelOutbox.find(entry => entry.operation === 'modify');
       expect(refused).toMatchObject({
         operation: 'modify',

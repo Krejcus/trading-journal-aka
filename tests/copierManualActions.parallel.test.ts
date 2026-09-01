@@ -9,7 +9,6 @@ import { processManualFlatten } from '../services/copierManualActions';
 import { runtimeFromSnapshot } from '../services/copierRunner';
 import {
   createMemoryCopierStore,
-  emptySnapshot,
   type CopierSnapshot,
   type CopierStore,
 } from '../services/copierStore';

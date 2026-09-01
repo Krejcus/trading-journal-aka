@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1633 testů, typecheck, lint bez chyb
+  Poslední úplné automatické ověření: 1705 testů, typecheck, lint bez chyb
   a produkční build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
@@ -66,6 +66,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       neproklikaný na produkci.
 - [x] Multi-follower DEMO test — 18. 8. potvrzen OCO/SL lifecycle na čtyřech
       Tradeify followerech a jednom Lucid followerovi; všichni skončili flat.
+- [ ] Incident 31. 8. „pending SL 29379 → 29391 se followerům nepropsal,
+      leader skončil flat a šest kopií zůstalo otevřených; Flatten fyzicky
+      zavřel, ale UI hlásilo unknown" — lokální oprava je nainstalovaná v Mac
+      workeru a šest legacy unknown bylo 1. 9. autoritativně uzavřeno read-only
+      stavem. Kód zatím není pushnutý a před dalším ARM chybí řízený DEMO
+      conformance test nové pending-SL/leader-flat cesty.
 - [ ] Incident 25. 8. „validní follower vstup okamžitě zploštěn“ — lokální
       kauzální oprava a deterministické regrese jsou hotové (zápis níže), ale
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
@@ -100,6 +106,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-01 (Codex, instalace incidentní opravy a stavové uzavření legacy Flatten)
+
+Po ukončení uživatelova obchodu čerstvá read-only reconciliation potvrdila
+`armed=false`, všech sedm účtů flat, žádné working orders/divergence a
+`lastError=null`; jediným blockerem zůstalo šest `manual-flatten` položek ve
+stavu `unknown`. Incidentní změny byly bez konfliktu složeny nad aktuálním
+`origin/main` `7932c6ae`, aby reinstall zachoval opravený persistentní worker
+lifecycle. Cílená sada prošla 14 soubory / 313 testy; plná sada 203 soubory /
+1705 testy. TypeScript, lint s 0 errors, produkční Vite/PWA build, samostatný
+Node worker bundle a `git diff --check` prošly.
+
+Mac LaunchAgent byl po uživatelově výslovném pokynu reinstalován se stejným
+leaderem `62364553`, šesti followery a `--service-lifetime persistent`.
+Nainstalovaný bundle má SHA-256
+`4fdb3bbe756f0faf0615abdb53671a2fffb4fd7a34b91c74704f90c45681f8bd`, přesně
+shodný s předem ověřeným bundlem. Restart recovery všech šest starých položek
+uzavřel jako `confirmed-by-state` z důkazu `flat-no-active`, `netQuantity=0`,
+`workingOrders=0`, `causality=not-proven`; neposlal lookup retry ani nový
+liquidation POST. Závěrečná reconciliation potvrdila `connected=true`,
+`armed=false`, `groupFlat=true`, `reconciliationRequired=false`, prázdný stuck
+outbox, žádné working orders/divergence a `lastError=null`.
+
+Neproběhl ARM, Flatten ani jiný broker write a nebyl proveden Vercel deploy ani
+push. TradingView snapshot health zůstal samostatně `cdp-offline`; execution
+neblokuje. Před dalším ostrým ARM stále chybí řízený DEMO conformance důkaz
+nové pending-SL propagace a leader-flat guardu.
 
 ### 2026-08-30 (Codex, oprava lifecycle nedostupného Mac workeru)
 Příčinou hlášky „Mac worker není právě dostupný" nebyla delší nečinnost

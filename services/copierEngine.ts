@@ -1,5 +1,6 @@
 import type { BrokerOrderRequest, BrokerPosition, OrderSide, OrderType } from './brokerPort';
 import { brokerTag, replicationKey } from './copierKeys';
+import type { LeaderFlatEpoch } from './copierLeaderFlatGuard';
 import type { CopyGroupConfig, CopyReplicationMode } from './liveCopyTrading';
 
 /**
@@ -35,6 +36,11 @@ export interface LeaderEvent {
   orderType: OrderType;
   limitPrice?: number;
   stopPrice?: number;
+  /**
+   * U `replaced` rozlišuje skutečnou změnu ceny/typu od venue-managed změny
+   * quantity. Pre-link korelace i unmapped guard smějí reagovat jen na true.
+   */
+  executionShapeChanged?: boolean;
   /** Vazby nativní broker strategie; child order se nesmí kopírovat jako samostatný vstup. */
   parentOrderId?: string;
   ocoId?: string;
@@ -152,6 +158,12 @@ export interface CopierState {
      * Maže se při zploštění skupiny, ručním DISARM a kill switchi.
      */
     liveCopyOpenSince?: number;
+    /**
+     * Durable epochy leader expozice pro autoritativní open -> flat guard.
+     * Nejasný/sending close po restartu se pouze stavově dohledává; nikdy
+     * znovu neposílá stejný liquidation pokus.
+     */
+    leaderExposureEpochs?: LeaderFlatEpoch[];
     /** Durable eligibility západky účtů; chybějící položka znamená active. */
     accountEligibility?: CopierAccountEligibility[];
   };

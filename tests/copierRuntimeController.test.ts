@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrokerOrder } from '../services/brokerPort';
-import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
+import {
+  bootstrapCopierRuntime,
+  criticalAuditAllowsTerminalFillRecovery,
+} from '../services/copierRuntimeController';
 import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
 import { createOutboxEntry, markRejected, markUnknown } from '../services/copierOutbox';
 import { createModifyEntry, markCancelUnknown } from '../services/copierCancelOutbox';
+import type { CopierAuditEntry } from '../services/copierRunner';
 import { createOsoOutboxEntry, markOsoAcknowledged, markOsoRejected } from '../services/copierOsoOutbox';
 import { createMockBroker } from '../services/mockBroker';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
@@ -846,7 +850,9 @@ describe('bootstrapCopierRuntime', () => {
       armed: false,
       shadowMode: true,
       lastError: null,
+      reconciliationRequired: true,
     });
+    expect(() => controller.arm()).toThrow('kontrolu pozic');
     controller.stop();
   });
 
@@ -888,6 +894,64 @@ describe('bootstrapCopierRuntime', () => {
     expect(new Map(snapshot.links).get('oso-entry')).toHaveLength(1);
     expect(new Map(snapshot.links).get('oso-stop')).toHaveLength(1);
     expect(new Map(snapshot.links).get('oso-target')).toHaveLength(1);
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
+
+  it('incident 31. 8.: pending posun SL 29379→29391 se propíše všem ještě před entry fillem', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({
+      broker, store, group, clock: stepClock(), osoCorrelationWindowMs: 25,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'incident-entry', quantity: 5, limitPrice: 29_404,
+      status: 'pending', sourceVersion: '1:PendingNew',
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'incident-stop', parentOrderId: 'incident-entry', side: 'Sell',
+      quantity: 5, orderType: 'Stop', limitPrice: undefined, stopPrice: 29_379,
+      status: 'pending', sourceVersion: '1:Suspended',
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'incident-target', parentOrderId: 'incident-entry', side: 'Sell',
+      quantity: 5, orderType: 'Limit', limitPrice: 29_471.5,
+      status: 'pending', sourceVersion: '1:Suspended',
+    }) });
+    await controller.waitForIdle();
+
+    const followerStop = broker.orders().find(order => (
+      order.accountId === 200 && order.orderType === 'Stop' && order.stopPrice === 29_379
+    ));
+    expect(followerStop).toBeDefined();
+    // Přesná produkční hranice: child protective leg je až do entry fillu
+    // Suspended/Pending. Přijetí modify se proto nesmí vázat jen na Working.
+    followerStop!.status = 'pending';
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'incident-stop', parentOrderId: 'incident-entry', side: 'Sell',
+      quantity: 5, orderType: 'Stop', limitPrice: undefined, stopPrice: 29_391,
+      status: 'pending', sourceVersion: '2:Suspended',
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.modifyRequests()).toEqual([expect.objectContaining({
+      accountId: 200,
+      brokerOrderId: followerStop!.brokerOrderId,
+      changes: expect.objectContaining({ quantity: 5, stopPrice: 29_391 }),
+    })]);
+    expect(followerStop).toMatchObject({ status: 'pending', stopPrice: 29_391 });
+    expect((await store.load()).cancelOutbox).toEqual([expect.objectContaining({
+      operation: 'modify', status: 'confirmed', outcome: 'pending',
+    })]);
+    expect(new Map((await store.load()).links).get('incident-stop')).toEqual([
+      expect.objectContaining({ accountId: 200, stopPrice: 29_391 }),
+    ]);
     expect(controller.status()).toMatchObject({ armed: true, lastError: null });
     controller.stop();
   });
@@ -1226,7 +1290,7 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
-  it('explicitní Flatten účtu nejdřív zruší working order a potom durable zavře pozici', async () => {
+  it('explicitní Flatten účtu durable zavře pozici a potvrdí ji stavem', async () => {
     const broker = createMockBroker({
       behavior: request => request.tag === 'seed-position' || request.tag.startsWith('fl')
         ? { kind: 'fill', price: 30_000 }
@@ -1253,7 +1317,16 @@ describe('bootstrapCopierRuntime', () => {
     expect(await broker.listPositions(200)).toEqual([expect.objectContaining({ netQuantity: 0 })]);
     const saved = await store.load();
     expect(saved.cancelOutbox).toEqual([expect.objectContaining({ status: 'confirmed' })]);
-    expect(saved.outbox).toEqual([expect.objectContaining({ status: 'acknowledged' })]);
+    expect(saved.outbox).toEqual([expect.objectContaining({
+      operationKind: 'liquidate-position',
+      status: 'confirmed-by-state',
+      confirmationEvidence: expect.objectContaining({
+        accountId: 200,
+        symbol: 'MNQU6',
+        netQuantity: 0,
+        workingOrders: 0,
+      }),
+    })]);
     expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
     controller.stop();
   });
@@ -1950,6 +2023,179 @@ describe('auto day-lock z denní ztráty leadera', () => {
 });
 
 describe('reconciliation vs abandoned cancel/modify', () => {
+  it('plánovaný resync za LIVE ARM a flat účty skončí čistě DISARMED', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'connection', connected: true, resynced: true, at: 500 });
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: false,
+      divergentAccounts: [],
+      workingOrderAccounts: [],
+      autoClose: null,
+    });
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('plánovaný resync se synchronní otevřenou pozicí drží DISARMED bez auto-korekce', async () => {
+    const broker = createMockBroker();
+    broker.listPositions = async accountId => [{
+      accountId, symbol: 'MNQU6', netQuantity: 2,
+    }];
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    // ARM vyžaduje flat, proto nejdřív čistý preflight a teprve potom
+    // simulujeme synchronní live pozice před resyncem.
+    broker.listPositions = async () => [];
+    await controller.reconcile();
+    controller.arm();
+    broker.listPositions = async accountId => [{ accountId, symbol: 'MNQU6', netQuantity: 2 }];
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 2 } });
+    await controller.waitForIdle();
+
+    broker.emitEvent({ type: 'connection', connected: true, resynced: true, at: 600 });
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: false,
+      divergentAccounts: [],
+      autoClose: null,
+    });
+    expect(() => controller.arm()).toThrow('všechny zapojené účty flat');
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('ruční Kontrola pozic za LIVE ARM vždy skončí DISARMED', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    await controller.reconcile();
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: false,
+      lastError: null,
+    });
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('mixed critical dávku nikdy neoznačí jako bezpečnou terminal-fill recovery', () => {
+    const filled = {
+      ...createModifyEntry('filled', 'event', 1, 200, 'order-filled', {
+        quantity: 1, orderType: 'Stop', stopPrice: 29_000,
+      }, 1),
+      status: 'abandoned' as const,
+      outcome: 'filled' as const,
+    };
+    const outbox = new Map([[filled.key, filled]]);
+    const terminalAudit: CopierAuditEntry = {
+      at: 1, leaderEventId: 'event', kind: 'cancel-failed', key: filled.key,
+    };
+
+    expect(criticalAuditAllowsTerminalFillRecovery([terminalAudit], outbox)).toBe(true);
+    expect(criticalAuditAllowsTerminalFillRecovery([
+      terminalAudit,
+      { at: 2, leaderEventId: 'other-account', kind: 'unknown', key: 'unknown' },
+    ], outbox)).toBe(false);
+  });
+
+  it('kill switch uprostřed čisté reconciliation zachová západku i její důvod', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    let releasePositions!: () => void;
+    let signalPositionsStarted!: () => void;
+    const positionsStarted = new Promise<void>(resolve => { signalPositionsStarted = resolve; });
+    const positionsMayFinish = new Promise<void>(resolve => { releasePositions = resolve; });
+    const originalListPositions = broker.listPositions.bind(broker);
+    let signaled = false;
+    broker.listPositions = async accountId => {
+      if (!signaled) {
+        signaled = true;
+        signalPositionsStarted();
+      }
+      await positionsMayFinish;
+      return originalListPositions(accountId);
+    };
+
+    const reconciliation = controller.reconcile();
+    await positionsStarted;
+    controller.engageKillSwitch('race kill switch reason');
+    releasePositions();
+    await reconciliation;
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      killSwitch: true,
+      reconciliationRequired: true,
+      lastError: 'race kill switch reason',
+    });
+    expect(() => controller.arm()).toThrow('kill switch');
+    controller.stop();
+  });
+
+  it('serializuje všechny reconciliation call-sites do jedné fronty', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    const originalCapabilities = broker.listAccountCapabilities.bind(broker);
+    let calls = 0;
+    let releaseFirst!: () => void;
+    let signalFirstStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => { signalFirstStarted = resolve; });
+    const firstMayFinish = new Promise<void>(resolve => { releaseFirst = resolve; });
+    broker.listAccountCapabilities = async accountIds => {
+      calls += 1;
+      if (calls === 1) {
+        signalFirstStarted();
+        await firstMayFinish;
+      }
+      return originalCapabilities(accountIds);
+    };
+
+    const first = controller.reconcile();
+    await firstStarted;
+    const second = controller.reconcile();
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(calls).toBe(2);
+    controller.stop();
+  });
+
   it('čistá autoritativní reconciliation odblokuje terminální abandoned položky', async () => {
     const abandoned = {
       ...createModifyEntry('cm1', 'ev1', 1, 200, 'bo-1', { quantity: 2, orderType: 'Stop' as const, stopPrice: 20_000 }, 1),
@@ -2012,7 +2258,7 @@ describe('reconciliation vs abandoned cancel/modify', () => {
       divergentAccounts: [],
       workingOrderAccounts: [],
       stuckOutbox: false,
-      lastError: null,
+      lastError: expect.stringContaining('objednávka skončila jako filled'),
     });
     expect((await store.load()).cancelOutbox).toEqual(expect.arrayContaining([
       expect.objectContaining({ operation: 'modify', status: 'waived', outcome: 'filled' }),
@@ -2041,6 +2287,7 @@ describe('reconciliation vs abandoned cancel/modify', () => {
         safety: { ...DEFAULT_COPY_GROUP_SAFETY, armExpiryFlatten: 'off' },
       },
       clock: stepClock(),
+      followerTransitionCorrelationWindowMs: 20,
     });
     broker.setConnected(true);
     await controller.waitForIdle();
@@ -2058,6 +2305,8 @@ describe('reconciliation vs abandoned cancel/modify', () => {
       brokerOrderId: 'terminal-fill-divergent', sourceVersion: '2:Working', limitPrice: 29_501,
     }) });
     await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await controller.waitForIdle();
 
     expect(controller.status()).toMatchObject({
       armed: false,
@@ -2066,7 +2315,63 @@ describe('reconciliation vs abandoned cancel/modify', () => {
       divergentAccounts: [200],
       stuckOutbox: true,
     });
-    expect(controller.status().lastError).toContain('objednávka skončila jako filled');
+    expect(controller.status().lastError).toContain('má autoritativně pozici -1');
+    controller.stop();
+  });
+
+  it('po selhání auto-flattenu nikdy nespustí terminal-fill recovery ani recovered audit', async () => {
+    const audit = vi.fn();
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'working' }),
+      modifyBehavior: order => {
+        if (order) {
+          order.status = 'filled';
+          order.filledQuantity = order.quantity;
+        }
+        return 'success';
+      },
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      onAudit: audit,
+      followerTransitionCorrelationWindowMs: 10_000,
+      flattenConfirmationAttempts: 1,
+      flattenConfirmationPollMs: 0,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    let leaderNet = 1;
+    let followerNet = 1;
+    broker.listPositions = async accountId => {
+      const netQuantity = accountId === group.leaderAccountId ? leaderNet : followerNet;
+      return netQuantity === 0 ? [] : [{ accountId, symbol: 'MNQU6', netQuantity }];
+    };
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'terminal-fill-flatten-fails' }) });
+    await controller.waitForIdle();
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'terminal-fill-flatten-fails', sourceVersion: '2:Working', limitPrice: 29_501,
+    }) });
+    await controller.waitForIdle();
+
+    // Broker snapshot zůstává non-flat a mock closure zůstane Working, takže
+    // flatten nemá autoritativní důkaz úspěchu.
+    leaderNet = 1;
+    followerNet = 1;
+    expect(controller.status().lastError).toContain('Auto-close kopií');
+    const audits = audit.mock.calls.flatMap(call => call[0] as CopierAuditEntry[]);
+    expect(audits.some(item => (
+      item.kind === 'recovered'
+      && item.leaderEventId.startsWith('terminal-fill-reconciliation:')
+    ))).toBe(false);
     controller.stop();
   });
 });
@@ -2552,6 +2857,341 @@ describe('kauzalita follower fill → position (incident 25.8.2026)', () => {
   });
 });
 
+describe('autoritativní follower magnitude guard', () => {
+  const setup = async () => {
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore();
+    let leaderNet = 0;
+    let followerNet = 0;
+    broker.listPositions = async accountId => {
+      const netQuantity = accountId === group.leaderAccountId ? leaderNet : followerNet;
+      return netQuantity === 0 ? [] : [{ accountId, symbol: 'MNQU6', netQuantity }];
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store,
+      group,
+      clock: stepClock(),
+      followerTransitionCorrelationWindowMs: 20,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    const setNets = (nextLeader: number, nextFollower: number) => {
+      leaderNet = nextLeader;
+      followerNet = nextFollower;
+    };
+    return { broker, controller, setNets, store };
+  };
+
+  it('odhalí persistentní same-sign navýšení followera bez reconnectu', async () => {
+    const { broker, controller, setNets } = await setup();
+    setNets(2, 2);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 2 } });
+    await controller.waitForIdle();
+
+    setNets(2, 5);
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 5 } });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      divergentAccounts: [200],
+      reconciliationRequired: true,
+    });
+    expect(controller.status().lastError).toContain('očekáváno 2 podle leadera 2 × 1');
+    expect(controller.status().autoClose).toBeNull();
+    expect(broker.placedRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('nehlásí falešný drift, když follower scale-in event předběhne leader position event', async () => {
+    const { broker, controller, setNets, store } = await setup();
+    setNets(2, 2);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 2 } });
+    await controller.waitForIdle();
+
+    setNets(5, 5);
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 5 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 5 } });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({ armed: true, divergentAccounts: [], lastError: null });
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect((await store.load()).safety?.leaderExposureEpochs).toEqual([
+      expect.objectContaining({
+        symbol: 'MNQU6',
+        lastLeaderNet: 5,
+        phase: 'open',
+        followers: [expect.objectContaining({
+          accountId: 200,
+          eligibleAtOpen: false,
+          copyLineage: 'unproven',
+        })],
+      }),
+    ]);
+    expect((await store.load()).safety?.leaderExposureEpochs?.[0].followers[0])
+      .not.toHaveProperty('confirmedNetQuantity');
+    controller.stop();
+  });
+});
+
+describe('LeaderFlatGuard runtime integrace', () => {
+  const MNQ = 'MNQU6';
+  const NQ = 'NQU6';
+
+  const setupLeaderFlatGuard = async ({
+    autoCloseFollowerPositions,
+    graceMs,
+  }: {
+    autoCloseFollowerPositions: boolean;
+    graceMs: number;
+  }) => {
+    let now = 100;
+    const clock = () => now;
+    const broker = createMockBroker({
+      nativeLiquidate: true,
+      clock,
+      behavior: request => request.orderType === 'Market'
+        ? { kind: 'fill', price: 30_000 }
+        : { kind: 'working' },
+    });
+    const leaderEntry = await broker.placeOrder({
+      tag: 'guard-seed-leader-mnq', accountId: 100, symbol: MNQ,
+      side: 'Buy', quantity: 5, orderType: 'Market',
+    });
+    const followerEntry = await broker.placeOrder({
+      tag: 'guard-seed-follower-mnq', accountId: 200, symbol: MNQ,
+      side: 'Buy', quantity: 5, orderType: 'Market',
+    });
+    await broker.placeOrder({
+      tag: 'guard-seed-follower-nq', accountId: 200, symbol: NQ,
+      side: 'Buy', quantity: 2, orderType: 'Market',
+    });
+    const staleMnqStop = await broker.placeOrder({
+      tag: 'guard-stale-mnq-stop', accountId: 200, symbol: MNQ,
+      side: 'Sell', quantity: 5, orderType: 'Stop', stopPrice: 29_900,
+    });
+    const untouchedNqStop = await broker.placeOrder({
+      tag: 'guard-untouched-nq-stop', accountId: 200, symbol: NQ,
+      side: 'Sell', quantity: 2, orderType: 'Stop', stopPrice: 19_900,
+    });
+    const protectiveOso = acknowledgedFollowerOso({
+      key: 'oso:guard-owned-mnq',
+      tag: 'guard-owned-mnq',
+      side: 'Buy',
+      entryBrokerOrderId: followerEntry.brokerOrderId,
+      firstBrokerOrderId: staleMnqStop.brokerOrderId,
+      secondBrokerOrderId: 'guard-missing-target',
+      sequence: 1,
+    });
+    const initial = emptySnapshot();
+    const store = createMemoryCopierStore({
+      ...initial,
+      osoOutbox: [protectiveOso],
+      safety: {
+        ...initial.safety!,
+        liveCopyOpenSince: 90,
+        leaderExposureEpochs: [{
+          id: 'guard-owned-epoch',
+          groupId: group.id,
+          leaderAccountId: 100,
+          symbol: MNQ,
+          openedAt: 90,
+          lastLeaderNet: 5,
+          generation: 1,
+          phase: 'open',
+          followers: [{
+            accountId: 200,
+            replicationModeAtOpen: 'on-submit',
+            eligibleAtOpen: true,
+            copyLineage: 'confirmed',
+            confirmedNetQuantity: 5,
+          }],
+          leaderEntryOrderIds: [leaderEntry.brokerOrderId],
+          leaderExitOrderIds: [],
+        }],
+      },
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store,
+      group: {
+        ...group,
+        safety: { ...DEFAULT_COPY_GROUP_SAFETY, autoCloseFollowerPositions },
+      },
+      clock,
+      leaderFlatGraceMs: graceMs,
+      leaderFlatExitSettlementGraceMs: 0,
+      leaderFlatInflightRetryMs: 1,
+      flattenConfirmationAttempts: 2,
+      flattenConfirmationPollMs: 0,
+      followerTransitionCorrelationWindowMs: 1_000,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    const closeLeader = async () => {
+      await broker.placeOrder({
+        tag: 'guard-leader-exit', accountId: 100, symbol: MNQ,
+        side: 'Sell', quantity: 5, orderType: 'Market',
+      });
+      await controller.waitForIdle();
+    };
+    const settleGuard = async () => {
+      now += graceMs + 1;
+      await new Promise(resolve => setTimeout(resolve, graceMs + 20));
+      await controller.waitForIdle();
+    };
+
+    return {
+      broker,
+      controller,
+      store,
+      staleMnqStop,
+      untouchedNqStop,
+      closeLeader,
+      settleGuard,
+    };
+  };
+
+  it('copier-owned orphan se stale SL zavře native pouze pro MNQ a NQ zůstane nedotčené', async () => {
+    const {
+      broker, controller, store, staleMnqStop, untouchedNqStop, closeLeader, settleGuard,
+    } = await setupLeaderFlatGuard({ autoCloseFollowerPositions: true, graceMs: 0 });
+
+    await closeLeader();
+    await settleGuard();
+
+    expect(broker.liquidateRequests()).toEqual([
+      expect.objectContaining({ accountId: 200, symbol: MNQ }),
+    ]);
+    expect(await broker.listPositions(200)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ symbol: MNQ, netQuantity: 0 }),
+      expect.objectContaining({ symbol: NQ, netQuantity: 2 }),
+    ]));
+    expect((await broker.findOrderById(200, staleMnqStop.brokerOrderId)).order?.status)
+      .toBe('canceled');
+    expect((await broker.findOrderById(200, untouchedNqStop.brokerOrderId)).order)
+      .toMatchObject({ symbol: NQ, status: 'working', stopPrice: 19_900 });
+    expect((await store.load()).outbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        operationKind: 'liquidate-position',
+        status: 'confirmed-by-state',
+        request: expect.objectContaining({ accountId: 200, symbol: MNQ }),
+        confirmationEvidence: expect.objectContaining({
+          accountId: 200, symbol: MNQ, netQuantity: 0, workingOrders: 0,
+        }),
+      }),
+    ]));
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      divergentAccounts: [200],
+    });
+    controller.stop();
+  });
+
+  it('policy autoCloseFollowerPositions=false pouze detekuje a DISARMuje bez liquidate', async () => {
+    const { broker, controller, store, staleMnqStop, closeLeader, settleGuard } =
+      await setupLeaderFlatGuard({ autoCloseFollowerPositions: false, graceMs: 0 });
+
+    await closeLeader();
+    await settleGuard();
+
+    expect(broker.liquidateRequests()).toEqual([]);
+    expect(await broker.listPositions(200)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ symbol: MNQ, netQuantity: 5 }),
+      expect.objectContaining({ symbol: NQ, netQuantity: 2 }),
+    ]));
+    expect((await broker.findOrderById(200, staleMnqStop.brokerOrderId)).order?.status)
+      .toBe('working');
+    expect((await store.load()).outbox.filter(entry => entry.operationKind === 'liquidate-position'))
+      .toEqual([]);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      divergentAccounts: [200],
+    });
+    controller.stop();
+  });
+
+  it('follower, který se během grace sám zploští, už guard znovu nelikviduje', async () => {
+    const { broker, controller, store, closeLeader, settleGuard } =
+      await setupLeaderFlatGuard({ autoCloseFollowerPositions: true, graceMs: 40 });
+
+    await closeLeader();
+    await broker.placeOrder({
+      tag: 'guard-follower-self-flat', accountId: 200, symbol: MNQ,
+      side: 'Sell', quantity: 5, orderType: 'Market',
+    });
+    await controller.waitForIdle();
+    await settleGuard();
+
+    expect(broker.liquidateRequests()).toEqual([]);
+    expect(await broker.listPositions(200)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ symbol: MNQ, netQuantity: 0 }),
+      expect.objectContaining({ symbol: NQ, netQuantity: 2 }),
+    ]));
+    expect((await store.load()).outbox.filter(entry => entry.operationKind === 'liquidate-position'))
+      .toEqual([]);
+    expect((await store.load()).safety?.leaderExposureEpochs).toEqual([
+      expect.objectContaining({ id: 'guard-owned-epoch', phase: 'resolved' }),
+    ]);
+    expect(controller.status().armed).toBe(false);
+    controller.stop();
+  });
+
+  it('pozdní leader fill po Position=0 doplní exit lineage před guard verifikací', async () => {
+    const { broker, controller, store } = await setupLeaderFlatGuard({
+      autoCloseFollowerPositions: true,
+      graceMs: 60_000,
+    });
+
+    broker.emitEvent({
+      type: 'position',
+      position: { accountId: 100, symbol: MNQ, netQuantity: 0 },
+    });
+    await controller.waitForIdle();
+    expect((await store.load()).safety?.leaderExposureEpochs?.[0]).toMatchObject({
+      phase: 'grace',
+      leaderExitOrderIds: [],
+    });
+
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'late-leader-exit-fill',
+        tag: 'late-leader-exit',
+        brokerOrderId: 'late-leader-exit',
+        accountId: 100,
+        symbol: MNQ,
+        side: 'Sell',
+        quantity: 5,
+        price: 29_390.5,
+        filledAt: 101,
+      },
+    });
+    await controller.waitForIdle();
+
+    expect((await store.load()).safety?.leaderExposureEpochs?.[0]).toMatchObject({
+      phase: 'grace',
+      leaderExitOrderIds: ['late-leader-exit'],
+    });
+    expect(broker.liquidateRequests()).toEqual([]);
+    controller.stop();
+  });
+});
+
 describe('order-stream quantity guard po reconnectu', () => {
   it('terminální oversized historie je bez poplachu, aktivní oversized noha dál fail-closed', async () => {
     const broker = createMockBroker();
@@ -2598,6 +3238,27 @@ describe('order-stream quantity guard po reconnectu', () => {
         updatedAt: 18,
       },
     });
+    await controller.waitForIdle();
+
+    for (const status of ['canceled', 'rejected'] as const) {
+      broker.emitEvent({
+        type: 'order',
+        order: {
+          tag: `reconnect-${status}`,
+          brokerOrderId: 'reconnect-stop',
+          accountId: 200,
+          symbol: 'MNQU6',
+          side: 'Sell',
+          orderType: 'Stop',
+          quantity: 18,
+          filledQuantity: 0,
+          stopPrice: 29_200,
+          status,
+          sourceVersion: `19:${status}`,
+          updatedAt: 19,
+        },
+      });
+    }
     await controller.waitForIdle();
 
     expect(controller.status()).toMatchObject({

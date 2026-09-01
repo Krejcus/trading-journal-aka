@@ -102,7 +102,16 @@ function cloneSnapshot(snapshot: CopierSnapshot): CopierSnapshot {
     replicated: [...snapshot.replicated],
     revision: snapshot.revision,
     lastSequence: snapshot.lastSequence,
-    outbox: snapshot.outbox.map(entry => ({ ...entry, request: { ...entry.request } })),
+    outbox: snapshot.outbox.map(entry => ({
+      ...entry,
+      request: { ...entry.request },
+      ...(entry.liquidationAttempt
+        ? { liquidationAttempt: { ...entry.liquidationAttempt } }
+        : {}),
+      ...(entry.confirmationEvidence
+        ? { confirmationEvidence: { ...entry.confirmationEvidence } }
+        : {}),
+    })),
     bracketOutbox: (snapshot.bracketOutbox ?? []).map(entry => ({
       ...entry,
       request: {
@@ -132,8 +141,19 @@ function cloneSnapshot(snapshot: CopierSnapshot): CopierSnapshot {
 
 function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapshot['safety']> {
   const base = safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 };
+  const { leaderExposureEpochs, ...rest } = base;
   return {
-    ...base,
+    ...rest,
+    ...(leaderExposureEpochs
+      ? {
+        leaderExposureEpochs: leaderExposureEpochs.map(epoch => ({
+          ...epoch,
+          followers: epoch.followers.map(follower => ({ ...follower })),
+          leaderEntryOrderIds: [...epoch.leaderEntryOrderIds],
+          leaderExitOrderIds: [...epoch.leaderExitOrderIds],
+        })),
+      }
+      : {}),
     accountEligibility: base.accountEligibility?.map(entry => ({
       ...entry,
       ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),

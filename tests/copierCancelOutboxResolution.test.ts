@@ -66,8 +66,15 @@ describe('modify resolution', () => {
       .toMatchObject({ status: 'confirmed', outcome: 'working' });
   });
 
-  it('pending modify zůstává nevyřešený a nikdy se nevydává za mrtvou objednávku', () => {
+  it('autoritativní pending modify se shodným shape je potvrzená budoucí intence', () => {
     expect(resolveCancelLookup(modifyEntry(), order('pending', { stopPrice: 20_000 }), 'authoritative', 9))
+      .toMatchObject({ status: 'confirmed', outcome: 'pending' });
+  });
+
+  it('pending modify s jiným shape nebo eventual snapshotem zůstává nevyřešený', () => {
+    expect(resolveCancelLookup(modifyEntry(), order('pending', { stopPrice: 19_999 }), 'authoritative', 9))
+      .toMatchObject({ status: 'unknown' });
+    expect(resolveCancelLookup(modifyEntry(), order('pending', { stopPrice: 20_000 }), 'eventual', 9))
       .toMatchObject({ status: 'unknown' });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createCopierState, type LeaderEvent } from '../services/copierEngine';
 import { createRiskGateContext, type RiskGateContext } from '../services/copierRiskGate';
 import {
@@ -30,6 +30,11 @@ import {
   createModifyEntry,
   markCancelUnknown,
 } from '../services/copierCancelOutbox';
+import {
+  createOutboxEntry,
+  markSending,
+  markUnknown,
+} from '../services/copierOutbox';
 import { createMockBroker } from '../services/mockBroker';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 
@@ -1169,6 +1174,87 @@ describe('ostrý režim', () => {
 });
 
 describe('timeout a dohledání — broker není idempotentní', () => {
+  const legacyLiquidationEntry = () => createOutboxEntry(
+    'fl:legacy-operation:200:MNQU6',
+    'fllegacy200',
+    'manual-flatten:legacy-operation:MNQU6',
+    {
+      tag: 'fllegacy200', accountId: 200, symbol: 'MNQU6', side: 'Sell',
+      quantity: 1, orderType: 'Market',
+    },
+    10,
+    false,
+    'manual-flatten:legacy-operation',
+    0,
+  );
+
+  it.each(['unknown', 'sending'] as const)(
+    'restart obnoví legacy %s liquidate stavovým důkazem bez tag lookupu nebo broker write',
+    async status => {
+      const broker = createMockBroker({ nativeLiquidate: true });
+      const findOrdersByTag = vi.spyOn(broker, 'findOrdersByTag');
+      const liquidate = vi.spyOn(broker, 'liquidatePosition');
+      const place = vi.spyOn(broker, 'placeOrder');
+      const listPositions = vi.spyOn(broker, 'listPositions');
+      const listOrders = vi.spyOn(broker, 'listOrders');
+      const base = legacyLiquidationEntry();
+      const entry = status === 'unknown'
+        ? markUnknown(base, 'response bez orderId', 11)
+        : markSending(base, 11);
+
+      const recovered = await recoverOutbox({
+        runtime: createRuntime(createCopierState(), [entry]),
+        broker,
+        clock: stepClock(),
+      });
+
+      expect(recovered.runtime.outbox.get(entry.key)).toMatchObject({
+        status: 'confirmed-by-state',
+        operationKind: 'liquidate-position',
+        confirmationEvidence: {
+          kind: 'flat-no-active', source: 'restart-recovery', causality: 'not-proven',
+        },
+      });
+      expect(recovered.runtime.state.replicated.has(entry.key)).toBe(true);
+      expect(recovered.metrics.recovered).toBe(1);
+      expect(listPositions).toHaveBeenCalledTimes(2);
+      expect(listOrders).toHaveBeenCalledTimes(1);
+      expect(findOrdersByTag).not.toHaveBeenCalled();
+      expect(liquidate).not.toHaveBeenCalled();
+      expect(place).not.toHaveBeenCalled();
+    },
+  );
+
+  it('restart nechá neflat legacy liquidate unresolved a nikdy ho naslepo neopakuje', async () => {
+    const broker = createMockBroker({
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 30_000 }),
+    });
+    await broker.placeOrder({
+      tag: 'seed-open-before-recovery', accountId: 200, symbol: 'MNQU6',
+      side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    const findOrdersByTag = vi.spyOn(broker, 'findOrdersByTag');
+    const liquidate = vi.spyOn(broker, 'liquidatePosition');
+    const place = vi.spyOn(broker, 'placeOrder');
+    const entry = markUnknown(legacyLiquidationEntry(), 'timeout', 11);
+
+    const recovered = await recoverOutbox({
+      runtime: createRuntime(createCopierState(), [entry]),
+      broker,
+      clock: stepClock(),
+    });
+
+    expect(recovered.runtime.outbox.get(entry.key)).toMatchObject({
+      status: 'unknown', operationKind: 'liquidate-position',
+    });
+    expect(recovered.runtime.state.replicated.has(entry.key)).toBe(false);
+    expect(recovered.metrics.recovered).toBe(0);
+    expect(findOrdersByTag).not.toHaveBeenCalled();
+    expect(liquidate).not.toHaveBeenCalled();
+    expect(place).not.toHaveBeenCalled();
+  });
+
   it('timeout po přijetí objednávky nesmí vést k druhému odeslání', async () => {
     const broker = createMockBroker({
       behavior: (_request, attempt) =>
@@ -1907,6 +1993,124 @@ describe('zrušení objednávky u leadera', () => {
 });
 
 describe('změna pracovní objednávky', () => {
+  it('execution replace bez follower linku failuje zavřeně a neposune sekvenci', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const modified = await processLeaderEvent({
+      event: event({
+        kind: 'replaced', orderType: 'Stop', stopPrice: 29_539,
+        executionShapeChanged: true,
+      }),
+      group: soloGroup,
+      runtime: createRuntime(createCopierState()),
+      context: liveGate(),
+      broker,
+      clock: stepClock(),
+    });
+
+    expect(broker.modifyRequests()).toHaveLength(0);
+    expect(modified.audit).toContainEqual(expect.objectContaining({
+      kind: 'blocked', accountId: 200,
+      reason: expect.stringContaining('leader-replace-unmapped'),
+    }));
+    expect(modified.runtime.state.lastSequence).toBe(0);
+  });
+
+  it('transient qty nesmí skrýt chybějící link jediného aktivního followera', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const transientGroup = {
+      ...group,
+      followers: [
+        { accountId: 200, mode: 'on-submit' as const, multiplier: 1 },
+        { accountId: 300, mode: 'on-submit' as const, multiplier: 0.1 },
+      ],
+    };
+    const opened = await processLeaderEvent({
+      event: event({ quantity: 11, orderType: 'Limit', limitPrice: 29_500 }), group: transientGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    const mappedOnly = (opened.runtime.state.links.get('o1') ?? [])
+      .filter(link => link.accountId === 200);
+    const partialRuntime = {
+      ...opened.runtime,
+      state: {
+        ...opened.runtime.state,
+        links: new Map([['o1', mappedOnly]]),
+      },
+    };
+
+    const modified = await processLeaderEvent({
+      event: event({
+        id: 'e2', kind: 'replaced', sequence: 2, quantity: 6,
+        orderType: 'Limit', limitPrice: 29_600,
+        executionShapeChanged: true,
+      }),
+      group: transientGroup, runtime: partialRuntime, context: liveGate(), broker, clock,
+    });
+
+    expect(broker.modifyRequests()).toHaveLength(0);
+    expect(modified.audit.filter(item => item.kind === 'blocked')).toEqual([
+      expect.objectContaining({ accountId: 200, reason: expect.stringContaining('300') }),
+      expect.objectContaining({ accountId: 300, reason: expect.stringContaining('300') }),
+    ]);
+    expect(modified.runtime.state.lastSequence).toBe(1);
+  });
+
+  it('explicitně ineligible follower se do execution-replace coverage nepočítá', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    const mappedOnly = (opened.runtime.state.links.get('o1') ?? [])
+      .filter(link => link.accountId === 200);
+    const partialRuntime = {
+      ...opened.runtime,
+      state: {
+        ...opened.runtime.state,
+        links: new Map([['o1', mappedOnly]]),
+      },
+    };
+
+    const modified = await processLeaderEvent({
+      event: event({
+        id: 'e2', kind: 'replaced', sequence: 2, orderType: 'Limit', limitPrice: 29_600,
+        executionShapeChanged: true,
+      }),
+      group,
+      runtime: partialRuntime,
+      context: liveGate({ ineligibleAccounts: new Map([[300, 'dll-locked']]) }),
+      broker,
+      clock,
+    });
+
+    expect(broker.modifyRequests()).toEqual([
+      expect.objectContaining({ accountId: 200, changes: expect.objectContaining({ limitPrice: 29_600 }) }),
+    ]);
+    expect(modified.audit.some(item => item.reason?.includes('leader-replace-unmapped'))).toBe(false);
+    expect(modified.runtime.state.lastSequence).toBe(2);
+  });
+
+  it('quantity-only venue replace bez linku je bezpečný no-op, ne falešný fail-closed', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const modified = await processLeaderEvent({
+      event: event({
+        kind: 'replaced', orderType: 'Stop', stopPrice: 29_539,
+        executionShapeChanged: false,
+      }),
+      group: soloGroup,
+      runtime: createRuntime(createCopierState()),
+      context: liveGate(),
+      broker,
+      clock: stepClock(),
+    });
+
+    expect(broker.modifyRequests()).toHaveLength(0);
+    expect(modified.audit.some(item => item.reason?.includes('leader-replace-unmapped'))).toBe(false);
+    expect(modified.runtime.state.lastSequence).toBe(1);
+  });
+
   it('změní follower quantity/cenu a potvrdí změnu přes order stream', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const clock = stepClock();
@@ -1920,6 +2124,80 @@ describe('změna pracovní objednávky', () => {
     });
     expect(modified.audit.some(item => item.kind === 'modified')).toBe(true);
     expect(broker.orders()[0]).toMatchObject({ quantity: 3, limitPrice: 29_600 });
+  });
+
+  it('autoritativně potvrzený pending modify aktualizuje durable follower link', async () => {
+    const inner = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const broker = {
+      ...inner,
+      async modifyOrder(
+        accountId: number,
+        brokerOrderId: string,
+        changes: Parameters<typeof inner.modifyOrder>[2],
+      ): Promise<void> {
+        await inner.modifyOrder(accountId, brokerOrderId, changes);
+        const changed = inner.orders().find(order => order.brokerOrderId === brokerOrderId);
+        if (changed) changed.status = 'pending';
+      },
+    };
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    const modified = await processLeaderEvent({
+      event: event({
+        id: 'e2', kind: 'replaced', sequence: 2, orderType: 'Limit', limitPrice: 29_600,
+        executionShapeChanged: true,
+      }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(), broker, clock,
+    });
+
+    expect([...modified.runtime.cancelOutbox.values()]).toEqual([
+      expect.objectContaining({ status: 'confirmed', outcome: 'pending' }),
+    ]);
+    expect(modified.runtime.state.links.get('o1')?.[0]).toMatchObject({
+      quantity: 1, limitPrice: 29_600,
+    });
+    expect(modified.runtime.state.lastSequence).toBe(2);
+  });
+
+  it('restart recovery pending modify aktualizuje link a dokončí leader sekvenci', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    const follower = opened.runtime.state.links.get('o1')?.[0];
+    if (!follower) throw new Error('test follower link nebyl vytvořen');
+    await broker.modifyOrder(follower.accountId, follower.brokerOrderId, {
+      quantity: 1, orderType: 'Limit', limitPrice: 29_600,
+    });
+    const brokerOrder = broker.orders().find(order => order.brokerOrderId === follower.brokerOrderId);
+    if (!brokerOrder) throw new Error('test broker order nebyl vytvořen');
+    brokerOrder.status = 'pending';
+    const pendingModify = markCancelUnknown(createModifyEntry(
+      'mx:pending-recovery', 'e2', 2, follower.accountId, follower.brokerOrderId,
+      { quantity: 1, orderType: 'Limit', limitPrice: 29_600 }, clock(),
+    ), 'proces spadl před potvrzením pending shape', clock());
+
+    const recovered = await recoverOutbox({
+      runtime: {
+        ...opened.runtime,
+        cancelOutbox: new Map([[pendingModify.key, pendingModify]]),
+      },
+      broker,
+      clock,
+    });
+
+    expect(recovered.runtime.cancelOutbox.get(pendingModify.key)).toMatchObject({
+      status: 'confirmed', outcome: 'pending',
+    });
+    expect(recovered.runtime.state.links.get('o1')?.[0]).toMatchObject({
+      quantity: 1, limitPrice: 29_600,
+    });
+    expect(recovered.runtime.state.lastSequence).toBe(2);
   });
 
   it('změnu follower objednávky po DISARM neodešle', async () => {

@@ -29,11 +29,13 @@ import {
   markRejected,
   markSending,
   markUnknown,
+  needsLiquidationStateRecovery,
   nextAction,
   resolveLookup,
   stuckEntries,
   type OutboxEntry,
 } from './copierOutbox';
+import { recoverLiquidationEntryByState } from './copierLiquidationRecovery';
 import {
   createCancelEntry,
   createModifyEntry,
@@ -1185,6 +1187,36 @@ export async function processLeaderEvent(
     : state;
   const cancels = planCancel(event, planningState, group);
   const modifications = planModify(event, planningState, group);
+  if (event.kind === 'replaced' && event.executionShapeChanged === true && group.enabled) {
+    const linkedAccounts = new Set(
+      (planningState.links.get(event.orderId) ?? []).map(link => link.accountId),
+    );
+    const expectedAccounts = group.followers
+      .filter(follower => (
+        follower.accountId !== group.leaderAccountId
+        && follower.mode === 'on-submit'
+        && Number.isFinite(follower.multiplier)
+        && follower.multiplier > 0
+        && !context.ineligibleAccounts.has(follower.accountId)
+      ))
+      .map(follower => follower.accountId);
+    const missingAccounts = expectedAccounts.filter(accountId => !linkedAccounts.has(accountId));
+    if (missingAccounts.length > 0) {
+      const reason = `leader-replace-unmapped: ${event.orderId}; chybí follower link pro ${missingAccounts.join(',')}`;
+      for (const accountId of expectedAccounts) {
+        audit.push({
+          at: clock(), leaderEventId: event.id, kind: 'blocked', accountId, reason,
+        });
+      }
+      // All-or-none: ani follower se známým linkem nesmí dostat novou cenu,
+      // když jiný aktivní on-submit follower stejnou změnu nemá kam zapsat.
+      // Sekvence zůstává nevyřízená a controller přejde fail-closed.
+      return {
+        runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
+        plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
+      };
+    }
+  }
   const commands = [
     ...cancels.map(command => ({ ...command, operation: 'cancel' as const })),
     ...modifications.map(command => ({ ...command, operation: 'modify' as const })),
@@ -1447,7 +1479,11 @@ export async function processLeaderEvent(
         // Broker potvrdil novou hodnotu — link ji musí převzít, jinak by
         // detekce cizího zásahu navždy měřila proti množství/ceně z prvního
         // place. Přímý posun SL/TP proto zapisuje i potvrzenou novou cenu.
-        if (entry.operation === 'modify' && resolved.outcome === 'working' && entry.changes) {
+        if (
+          entry.operation === 'modify'
+          && (resolved.outcome === 'working' || resolved.outcome === 'pending')
+          && entry.changes
+        ) {
           state = updateFollowerLink(state, entry.brokerOrderId, entry.changes);
         }
         audit.push({
@@ -1760,6 +1796,42 @@ export async function recoverOutbox(options: RecoverOutboxOptions): Promise<Copi
   const resolvedKeys: string[] = [];
 
   for (const entry of [...outbox.values()]) {
+    if (needsLiquidationStateRecovery(entry)) {
+      // Nativní liquidate nemá bezpečně dohledatelný tag. Restart recovery
+      // proto smí pouze číst position -> orders -> position; nikdy nesmí
+      // provést tag lookup ani zopakovat POST s neznámým výsledkem.
+      const recovered = await recoverLiquidationEntryByState({ entry, broker, clock });
+      outbox.set(entry.key, recovered.entry);
+      const auditAt = clock();
+      if (recovered.resolution === 'confirmed-by-state') {
+        metrics.recovered += 1;
+        resolvedKeys.push(entry.key);
+        audit.push({
+          at: auditAt,
+          leaderEventId: recovered.entry.leaderEventId ?? '',
+          kind: 'recovered',
+          accountId: entry.request.accountId,
+          key: entry.key,
+          reason: 'liquidation confirmed-by-state after restart',
+        });
+      } else {
+        audit.push({
+          at: auditAt,
+          leaderEventId: recovered.entry.leaderEventId ?? '',
+          kind: 'unknown',
+          accountId: entry.request.accountId,
+          key: entry.key,
+          reason: recovered.error
+            ?? [
+              `liquidation recovery ${recovered.resolution}`,
+              recovered.netQuantity != null ? `net=${recovered.netQuantity}` : '',
+              recovered.workingOrders != null ? `working=${recovered.workingOrders}` : '',
+              recovered.entry.reason ?? '',
+            ].filter(Boolean).join('; '),
+        });
+      }
+      continue;
+    }
     const action = nextAction(entry);
     if (action.type !== 'lookup') continue;
 
@@ -2003,6 +2075,13 @@ export async function recoverOutbox(options: RecoverOutboxOptions): Promise<Copi
     cancelOutbox.set(entry.key, resolved);
     if (resolved.status === 'confirmed') {
       waiveSupersededModifications(cancelOutbox, resolved, clock);
+      if (
+        resolved.operation === 'modify'
+        && (resolved.outcome === 'working' || resolved.outcome === 'pending')
+        && resolved.changes
+      ) {
+        state = updateFollowerLink(state, resolved.brokerOrderId, resolved.changes);
+      }
       metrics.recovered += 1;
       audit.push({
         at,

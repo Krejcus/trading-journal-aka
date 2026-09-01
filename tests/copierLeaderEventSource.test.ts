@@ -51,6 +51,56 @@ describe('CopierLeaderEventSource', () => {
     }, 100, 2, 12)).toMatchObject({ kind: 'replaced', limitPrice: 29_500.25 });
   });
 
+  it('Suspended posun SL emituje replace ještě před entry fillem', () => {
+    const source = new CopierLeaderEventSource();
+    source.connection(true);
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'pending-stop-price', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_379, quantity: 5,
+      status: 'pending', sourceVersion: '1:Suspended',
+    }) }, 100, 1, 10)).toMatchObject({ kind: 'submitted', stopPrice: 29_379 });
+
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'pending-stop-price', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_391, quantity: 5,
+      status: 'pending', sourceVersion: '2:Suspended',
+    }) }, 100, 2, 11)).toMatchObject({
+      kind: 'replaced', stopPrice: 29_391, executionShapeChanged: true,
+    });
+
+    // Working potvrzení stejného execution shape už cenu neposílá podruhé.
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'pending-stop-price', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_391, quantity: 5,
+      status: 'working', sourceVersion: '3:Working',
+    }) }, 100, 3, 12)).toBeNull();
+  });
+
+  it('současný Suspended resize a posun ceny emituje jediný cenový replace', () => {
+    const source = new CopierLeaderEventSource();
+    source.connection(true);
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'pending-stop-price-and-qty', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_379, quantity: 11,
+      status: 'pending', sourceVersion: '1:Suspended',
+    }) }, 100, 1, 10)).toMatchObject({ kind: 'submitted' });
+
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'pending-stop-price-and-qty', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_391, quantity: 6,
+      status: 'pending', sourceVersion: '2:Suspended',
+    }) }, 100, 2, 11)).toMatchObject({
+      kind: 'replaced', stopPrice: 29_391, quantity: 6, executionShapeChanged: true,
+    });
+
+    // Návrat venue-managed quantity při stejné ceně je jen množstevní šum.
+    expect(source.observe({ type: 'order', order: order({
+      brokerOrderId: 'pending-stop-price-and-qty', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_391, quantity: 11,
+      status: 'pending', sourceVersion: '3:Suspended',
+    }) }, 100, 3, 12)).toBeNull();
+  });
+
   it('Suspended quantity resize nevytvoří replace; až Working změna je pouze kandidát pro role-aware plán', () => {
     const source = new CopierLeaderEventSource();
     source.connection(true);
@@ -68,7 +118,9 @@ describe('CopierLeaderEventSource', () => {
       brokerOrderId: 'native-stop', side: 'Sell', orderType: 'Stop',
       limitPrice: undefined, stopPrice: 29_552, quantity: 11,
       status: 'working', sourceVersion: '3:Working',
-    }) }, 100, 2, 12)).toMatchObject({ kind: 'replaced', quantity: 11 });
+    }) }, 100, 2, 12)).toMatchObject({
+      kind: 'replaced', quantity: 11, executionShapeChanged: false,
+    });
   });
 
   it('zachová parent/OCO/linked vazby bracket orderu', () => {

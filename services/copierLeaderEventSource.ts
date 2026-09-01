@@ -15,6 +15,15 @@ export class CopierLeaderEventSource {
   private reconciliationRequired = false;
   private readonly orderSignatures = new Map<string, string>();
   private readonly orderShapes = new Map<string, string>();
+  /**
+   * Parametry, jejichž změna skutečně mění exekuci objednávky.
+   *
+   * Tradovate u nativních OSO protective noh během partial fillu přepisuje
+   * pouze quantity ve stavu Suspended. Takový venue-managed resize nesmí
+   * založit follower modify. Posun SL/TP ale musí být replikován okamžitě i
+   * před entry fillem, proto ho sledujeme odděleně od plného shape.
+   */
+  private readonly orderExecutionShapes = new Map<string, string>();
   private readonly seenFillIds = new Set<string>();
   private readonly liveFillTotals = new Map<string, number>();
 
@@ -71,10 +80,17 @@ export class CopierLeaderEventSource {
       order.status,
       shape,
     ].join(':');
+    const executionShape = [
+      order.orderType,
+      order.limitPrice ?? '',
+      order.stopPrice ?? '',
+    ].join(':');
     const previous = this.orderSignatures.get(order.brokerOrderId);
     const previousShape = this.orderShapes.get(order.brokerOrderId);
+    const previousExecutionShape = this.orderExecutionShapes.get(order.brokerOrderId);
     this.orderSignatures.set(order.brokerOrderId, signature);
     this.orderShapes.set(order.brokerOrderId, shape);
+    this.orderExecutionShapes.set(order.brokerOrderId, executionShape);
     // Baseline držíme pro všechny účty v připojení, ne pouze pro právě
     // zvoleného leadera. Když se follower bezpečně povýší na leadera přes
     // UI, jeho historický working/fill event se tím nemůže vydávat za nový.
@@ -86,9 +102,11 @@ export class CopierLeaderEventSource {
     else if (order.status === 'rejected') kind = 'rejected';
     else if (order.status === 'pending') {
       // PendingNew/Suspended může být první viditelná část nativního OSO a
-      // musí založit korelaci entry+SL+TP. Další změny v pending stavu jsou
-      // ale venue tranzice (typicky partial-fill resize), nikdy replace.
+      // musí založit korelaci entry+SL+TP. Čistá změna quantity je venue
+      // tranzice (typicky partial-fill resize), ale cena/typ jsou skutečný
+      // replace a musí se propsat ještě před entry fillem.
       if (previous == null) kind = 'submitted';
+      else if (previousExecutionShape !== executionShape) kind = 'replaced';
     }
     else if (order.status === 'working') {
       // PendingNew -> Working často přinese novou broker revizi, ale žádnou
@@ -111,6 +129,9 @@ export class CopierLeaderEventSource {
       orderType: order.orderType,
       ...(order.limitPrice != null ? { limitPrice: order.limitPrice } : {}),
       ...(order.stopPrice != null ? { stopPrice: order.stopPrice } : {}),
+      ...(kind === 'replaced'
+        ? { executionShapeChanged: previousExecutionShape !== executionShape }
+        : {}),
       ...(order.parentOrderId ? { parentOrderId: order.parentOrderId } : {}),
       ...(order.ocoId ? { ocoId: order.ocoId } : {}),
       ...(order.linkedOrderId ? { linkedOrderId: order.linkedOrderId } : {}),
