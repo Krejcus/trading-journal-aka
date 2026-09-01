@@ -101,11 +101,44 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jako dev nástroj, nebo smazat (rozhodnutí uživatele).
 - [x] Test „Flatten při nejasném cancelu" už nepoužívá produkční čekání:
       deterministicky injektuje nulové čekání a dvě kontrolní iterace.
+- [ ] Zmizelý follower bez BREACH/DLL (zrušená challenge) blokuje Edit group
+      i read-only reconcile — `accountsRequiredForRoutingChange` má
+      followera odebíraného z topologie, kterého žádný OAuth adresář
+      nevrací, pouštět jako volitelného (leader vždy povinný). Viz zápis
+      2026-09-01 (Claude).
 - [ ] Chaos test recovery proti reálnému DEMO: běžný restart flat/DISARMED
       prošel 18. 8.; kill uprostřed odesílání a výpadek WS zůstávají ověřené
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-01 (Claude, nasazení názvů účtů + zaklesnutý worker na zrušené challenge)
+
+Web: Codexův commit `5b7f10c8` (jednotné názvy účtů, strukturované
+blokery) recenzován a fast-forward pushnut na `main`; Vercel READY ve
+23:10, ověřeno v přihlášeném LIVE. Push šel přes
+`ssh://git@ssh.github.com:443/…`, port 22 je v tomto prostředí blokovaný.
+
+Provozní nález: follower `62364057` (TDFYG50335049318) byla challenge,
+kterou uživatel prošel; Tradeify ji zrušila a vydala funded
+`64310872` (FTDFYG50511354175). Zrušený účet Tradovate už nevrací, ale
+NEMÁ eligibility záznam BREACH/DLL, takže `accountsRequiredForRoutingChange`
+ho při každé změně skupiny drží ve sjednocení topologií → dynamic routing
+odmítne („není viditelný v žádném připojeném OAuth") a stejně padá i
+read-only reconcile. Worker tak zůstal s `reconciliationRequired` +
+`divergentAccounts=[62364057]` (reálná divergence +1/−1 MNQU6 18:19–18:25
+UTC, fail-closed správně) a z UI se z toho nedá dostat. Rozhodnutí
+uživatele: nahradit `62364057@1` za `64310872@1` reinstallem workera z CLI
+(skupina se bere z parametrů), potom read-only reconcile, teprve pak
+„Obnovit snímky". Přidán `scripts/copier/mac-reinstall-safe.sh`: přebírá
+parametry z běžícího agenta, brána zrcadlí `canSafelyRestartLocalCopierAgent`
++ `lastError` a bez čistého stavu neudělá nic. Reinstall spouští uživatel
+ručně (auto-mode klasifikátor Claude Code reinstall služby blokuje).
+
+Otevřené: worker by měl umět odebrat/nahradit followera, kterého OAuth
+adresář už nevrací, i bez BREACH/DLL záznamu (viz otevřené otázky).
+Pozn. k review: pět „502" v konzoli mého tabu nebylo doloženo URL a Vercel
+od deploye 5xx neeviduje — pravděpodobně zbytky z doby před nasazením.
 
 ### 2026-09-01 (Codex, jednotné názvy účtů a strukturované LIVE blokery)
 
