@@ -379,6 +379,7 @@ async function runLocalAgent(
   }
   let snapshotHealth: CopierSnapshotHealth = {
     enabled: snapshotsEnabled,
+    repairSupported: true,
     state: snapshotsEnabled ? 'checking' : 'disabled',
     layoutName: 'AlphaTrade Snapshoty',
     chartIdConfigured: Boolean(dedicatedChartRef.chartId),

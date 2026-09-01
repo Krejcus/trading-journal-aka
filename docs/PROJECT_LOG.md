@@ -107,6 +107,22 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-01 (Codex, kompatibilita opravy TradingView snímků)
+
+Lokální LIVE UI už nenabízí tlačítko `Obnovit snímky` workeru, který ještě
+neumí bezpečný restart TradingView s CDP. Nový worker publikuje explicitní
+capability `snapshotHealth.repairSupported`; chybějící hodnota se kvůli
+zpětné kompatibilitě vyhodnotí jako starý bundle a UI místo nefunkční akce
+ukáže požadavek na aktualizaci Mac workeru. Po aktualizaci zůstane tlačítko
+dostupné pouze ve stavu `cdp-offline`.
+
+V reálném localhost UI byla potvrzena přesná diagnóza: web běží s novou
+opravnou cestou, ale nainstalovaný worker je starší a požadavek ignoroval.
+Regrese LIVE renderu a TradingView lifecycle prošly, workerová sada prošla
+33/33 mimo sandbox, TypeScript, produkční build a `git diff --check` jsou
+čisté. Worker nebyl bez výslovného souhlasu reinstalován; kopírka zůstala
+DISARMED a žádný brokerový příkaz nebyl odeslán.
+
 ### 2026-09-01 (Codex, bezpečná UI obnova TradingView snímků po restartu Macu)
 
 Po restartu počítače se TradingView obnovilo dřív než Mac worker a běželo bez

@@ -94,6 +94,7 @@ describe('GroupDetail Positions integrace', () => {
   it('nabídne bezpečnou opravu pouze když TradingView běží bez CDP', () => {
     const health = {
       enabled: true,
+      repairSupported: true,
       state: 'cdp-offline' as const,
       layoutName: 'AlphaTrade Snapshoty',
       chartIdConfigured: true,
@@ -123,6 +124,27 @@ describe('GroupDetail Positions integrace', () => {
     }));
     expect(ready).not.toContain('Obnovit snímky');
     expect(ready).toContain('je připravený pro ENTRY/EXIT');
+  });
+
+  it('u staršího workeru nevystaví nefunkční opravu snímků', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot,
+      snapshotHealth: {
+        enabled: true,
+        state: 'cdp-offline',
+        layoutName: 'AlphaTrade Snapshoty',
+        chartIdConfigured: true,
+        cdpReachable: false,
+        targetFound: false,
+        lastCheckedAt: 1,
+        lastAttemptAt: null,
+        lastSuccessAt: null,
+      },
+      onRepairSnapshots: () => undefined,
+    }));
+
+    expect(markup).not.toContain('Obnovit snímky');
+    expect(markup).toContain('Mac worker je starší a neumí automatickou opravu.');
   });
 
   it('během fresh bootstrapu nevydává chybějící denní ledger za nulu', () => {

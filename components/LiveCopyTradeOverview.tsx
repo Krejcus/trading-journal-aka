@@ -360,7 +360,11 @@ const SnapshotHealthBanner: React.FC<{
   const checking = health.state === 'checking';
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairError, setRepairError] = useState<string | null>(null);
-  const repairAvailable = health.state === 'cdp-offline' && onRepair;
+  const repairAvailable = health.state === 'cdp-offline'
+    && health.repairSupported === true
+    && onRepair;
+  const workerUpdateRequired = health.state === 'cdp-offline'
+    && health.repairSupported !== true;
   const lastSuccess = health.lastSuccessAt
     ? new Date(health.lastSuccessAt).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
     : null;
@@ -376,6 +380,11 @@ const SnapshotHealthBanner: React.FC<{
       <div className="min-w-0 flex-1">
         <p className="text-xs font-black">TradingView snímky</p>
         <p className="mt-0.5 text-[11px] font-semibold opacity-90">{snapshotHealthMessage(health)}</p>
+        {workerUpdateRequired ? (
+          <p className="mt-1 text-[10px] font-bold text-amber-800 dark:text-amber-300">
+            Mac worker je starší a neumí automatickou opravu. Je potřeba jej aktualizovat.
+          </p>
+        ) : null}
         {lastSuccess ? <p className="mt-1 text-[10px] opacity-70">Poslední uložený snímek: {lastSuccess}</p> : null}
         {repairError ? <p className="mt-1 text-[10px] font-bold text-rose-600">{repairError}</p> : null}
       </div>

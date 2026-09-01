@@ -32,6 +32,8 @@ export type CopierSnapshotHealthState =
 
 export interface CopierSnapshotHealth {
   enabled: boolean;
+  /** Novější worker umí bezpečně restartovat TradingView s lokálním CDP. */
+  repairSupported?: boolean;
   state: CopierSnapshotHealthState;
   layoutName: string;
   chartIdConfigured: boolean;
