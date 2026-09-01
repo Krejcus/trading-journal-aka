@@ -1160,7 +1160,15 @@ describe('bootstrapCopierRuntime', () => {
     broker.setConnected(true);
     await controller.waitForIdle();
     await expect(controller.reconcile()).rejects.toThrow('readOnlyFollowers=200');
-    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      oauthPreflight: {
+        missingAccounts: [],
+        inactiveAccounts: [],
+        readOnlyFollowerAccounts: [200],
+      },
+    });
     controller.stop();
   });
 

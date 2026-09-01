@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   adoptRuntimeCopyGroup,
   copyGroupsFromSnapshot,
+  copyGroupValidationMessages,
   createLocalCopyGroupId,
   mergeCopyGroups,
   DEFAULT_COPY_GROUP_SAFETY,
@@ -99,6 +100,39 @@ describe('liveCopyTrading', () => {
     };
     expect(validateCopyGroup(valid, [1, 2]).valid).toBe(true);
     expect(validateCopyGroup({ ...valid, followers: [{ accountId: 1, mode: 'on-fill', multiplier: 0 }] }, [1, 2]).errors).toHaveLength(2);
+  });
+
+  it('vrací legacy text i strukturované stale leader/follower issues a UI je přeloží názvem', () => {
+    const stale: CopyGroupConfig = {
+      id: 'g', name: 'Test', enabled: false, leaderAccountId: 11,
+      followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }],
+    };
+    const validation = validateCopyGroup(stale, []);
+
+    expect(validation.errors).toEqual([
+      'Vybraný leader účet není dostupný.',
+      'Follower účet 22 není dostupný.',
+    ]);
+    expect(validation.issues).toEqual([
+      { code: 'leader-unavailable', accountId: 11, message: 'Vybraný leader účet není dostupný.' },
+      { code: 'follower-unavailable', accountId: 22, message: 'Follower účet 22 není dostupný.' },
+    ]);
+    expect(copyGroupValidationMessages(validation, accountId => (
+      accountId === 11 ? 'Leader name (ID 11)' : 'Follower name (ID 22)'
+    ))).toEqual([
+      'Vybraný leader účet Leader name (ID 11) není dostupný.',
+      'Follower účet Follower name (ID 22) není dostupný.',
+    ]);
+  });
+
+  it('UI validační text zachová fallback Účet <id>, když název není znám', () => {
+    const stale: CopyGroupConfig = {
+      id: 'g', name: 'Test', enabled: false, leaderAccountId: 1,
+      followers: [{ accountId: 99, mode: 'on-submit', multiplier: 1 }],
+    };
+    const validation = validateCopyGroup(stale, [1]);
+    expect(copyGroupValidationMessages(validation, accountId => `Účet ${accountId}`))
+      .toEqual(['Follower Účet 99 není dostupný.']);
   });
 
   it('dovolí workeru naběhnout DISARMED se známým BREACHED followerem mimo OAuth snapshot', () => {

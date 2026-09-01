@@ -1,5 +1,7 @@
 import {
   LOCAL_COPIER_AGENT_BASE_URL,
+  LocalCopierAgentCommandError,
+  localCopierAgentErrorDetails,
   type LocalCopierAgentCommand,
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
@@ -31,7 +33,7 @@ export function createLocalCopierAgentClient(baseUrl = LOCAL_COPIER_AGENT_BASE_U
       const message = payload && typeof payload === 'object' && 'error' in payload
         ? String(payload.error)
         : `Lokální execution agent odpověděl ${response.status}`;
-      throw new Error(message);
+      throw new LocalCopierAgentCommandError(message, localCopierAgentErrorDetails(payload));
     }
     return payload;
   };

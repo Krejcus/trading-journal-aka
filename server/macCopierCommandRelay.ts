@@ -1,5 +1,8 @@
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
-import type { LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol.js';
+import {
+  localCopierAgentErrorDetails,
+  type LocalCopierAgentCommand,
+} from '../lib/localCopierAgentProtocol.js';
 
 export interface MacCopierCommandRelay {
   /** Okamžitě probudí poll s příznakem nových trade eventů — server pošle
@@ -151,7 +154,7 @@ export function startMacCopierCommandRelay(options: {
     // může okamžitě oznámit ARM/DISARM bez čekání na další poll heartbeat.
     await request({
       action: 'complete', commandId, status: options.agent.status(),
-      ...(error ? { error } : { result }),
+      ...(error ? { error, ...(result == null ? {} : { result }) } : { result }),
     }, 10_000, loopAbort.signal);
   };
 
@@ -200,6 +203,8 @@ export function startMacCopierCommandRelay(options: {
               result = await options.agent.execute(remote.command);
             } catch (error) {
               executionError = error instanceof Error ? error.message : String(error);
+              const errorDetails = localCopierAgentErrorDetails(error);
+              if (errorDetails) result = { errorDetails };
             }
             // ACK transport failure must never be rewritten as execution
             // failure: the broker outcome may already be authoritative and

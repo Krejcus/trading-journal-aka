@@ -4,6 +4,9 @@ import type { AddressInfo } from 'node:net';
 import {
   canSafelyRestartLocalCopierAgent,
   copyGroupAccountIds,
+  localCopierAgentErrorDetails,
+  localCopierAgentRestartBlockers,
+  LocalCopierAgentCommandError,
   type LocalCopierAgentCommand,
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
@@ -372,8 +375,22 @@ export async function startLocalCopierExecutionAgent(
           throw new Error('snapshot-test-invalid-request');
         }
         if (!options.onSnapshotTest) throw new Error('snapshot-test-unavailable');
-        if (command.repairCamera && !canSafelyRestartLocalCopierAgent(options.controller.status())) {
-          throw new Error('TradingView lze obnovit pouze při připojeném, reconciled, DISARMED a flat workeru bez pracovních příkazů.');
+        if (command.repairCamera) {
+          const controllerStatus = options.controller.status();
+          if (!canSafelyRestartLocalCopierAgent(controllerStatus)) {
+            throw new LocalCopierAgentCommandError(
+              'TradingView lze obnovit pouze při připojeném, reconciled, DISARMED a flat workeru bez pracovních příkazů.',
+              {
+                code: 'snapshot-repair-blocked',
+                blockers: localCopierAgentRestartBlockers(controllerStatus),
+                divergentAccounts: [...controllerStatus.divergentAccounts],
+                workingOrderAccounts: [...controllerStatus.workingOrderAccounts],
+                missingAccounts: [...(controllerStatus.oauthPreflight?.missingAccounts ?? [])],
+                inactiveAccounts: [...(controllerStatus.oauthPreflight?.inactiveAccounts ?? [])],
+                readOnlyFollowerAccounts: [...(controllerStatus.oauthPreflight?.readOnlyFollowerAccounts ?? [])],
+              },
+            );
+          }
         }
         // Callback pouze založí fire-and-forget práci. Command relay se hned
         // uvolní pro DISARM/kill-switch a nikdy nečeká na CDP, Storage ani APNs.
@@ -464,7 +481,11 @@ export async function startLocalCopierExecutionAgent(
         };
         json(response, 200, payload);
       } catch (reason) {
-        json(response, 409, { error: reason instanceof Error ? reason.message : String(reason), status: status() });
+        json(response, 409, {
+          error: reason instanceof Error ? reason.message : String(reason),
+          ...(localCopierAgentErrorDetails(reason) ? { issue: localCopierAgentErrorDetails(reason) } : {}),
+          status: status(),
+        });
       }
     });
   });

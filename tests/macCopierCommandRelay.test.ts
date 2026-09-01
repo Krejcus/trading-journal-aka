@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { startMacCopierCommandRelay } from '../server/macCopierCommandRelay';
 import type { LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
-import type { LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import {
+  LocalCopierAgentCommandError,
+  type LocalCopierAgentStatus,
+} from '../lib/localCopierAgentProtocol';
 
 const status = (): LocalCopierAgentStatus => ({
   version: 1, environment: 'demo', nonce: 'local-only', startedAt: '2026-08-17T08:00:00.000Z',
@@ -201,6 +204,56 @@ describe('Mac copier command relay', () => {
         controller: expect.objectContaining({ armed: false }),
       }),
     })), { timeout: 2_000 });
+    await relay.close();
+  });
+
+  it('přenese strukturovaný snapshot blocker vedle nezměněného error textu', async () => {
+    const completions: Array<Record<string, unknown>> = [];
+    let delivered = false;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      if (request.action === 'poll' && !delivered) {
+        delivered = true;
+        return Response.json({
+          command: {
+            id: 'snapshot-blocked',
+            command: { type: 'snapshot-test', requestId: '44444444-4444-4444-8444-444444444444', repairCamera: true },
+            expiresAt: new Date(Date.now() + 10_000).toISOString(),
+          },
+        });
+      }
+      if (request.action === 'complete') completions.push(request);
+      return Response.json(request.action === 'poll' ? { command: null } : { accepted: true });
+    });
+    const execute = vi.fn(async () => {
+      throw new LocalCopierAgentCommandError('legacy worker text', {
+        code: 'snapshot-repair-blocked',
+        blockers: ['reconciliation-required', 'divergent-accounts'],
+        divergentAccounts: [57],
+        workingOrderAccounts: [],
+        missingAccounts: [],
+        inactiveAccounts: [],
+        readOnlyFollowerAccounts: [],
+      });
+    });
+    const agent = { status, execute, origin: '', close: vi.fn() } as unknown as LocalCopierExecutionAgent;
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://alpha.example', authorizationHeader: async () => 'Device id.secret',
+      agent, fetchImpl: fetchImpl as typeof fetch, pollMs: 60_000,
+    });
+
+    await vi.waitFor(() => expect(completions).toHaveLength(1));
+    expect(completions[0]).toMatchObject({
+      action: 'complete',
+      commandId: 'snapshot-blocked',
+      error: 'legacy worker text',
+      result: {
+        errorDetails: {
+          code: 'snapshot-repair-blocked',
+          divergentAccounts: [57],
+        },
+      },
+    });
     await relay.close();
   });
 

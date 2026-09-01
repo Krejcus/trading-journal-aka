@@ -20,7 +20,7 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1705 testů, typecheck, lint bez chyb
+  Poslední úplné automatické ověření: 1729 testů, typecheck, lint bez chyb
   a produkční build čisté.
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
@@ -106,6 +106,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-01 (Codex, jednotné názvy účtů a strukturované LIVE blokery)
+
+LIVE copier nyní používá jednu read-only kaskádu názvu účtu pro
+tabulku, editor skupiny, dialogy a toasty: živý snapshot, profil, uložená
+source group a nakonec `Účet <id>`. Známý název se v blokerech zobrazuje
+jako `název (ID <id>)`. Doménové validační texty, workerové chyby, logy a
+audit zůstaly beze změny; nové `issues` a UI-only render překlad jsou
+aditivní a kompatibilní se staršími volajícími.
+
+Oprava TradingView snímků vrací při zamítnutí strukturovaný
+`snapshot-repair-blocked` s přesnými podmínkami, divergentními/working
+účty a posledním read-only OAuth preflightem. Diagnostická funkce přesně
+zrcadlí původní restart bránu; samotná brána ani její podmínky se
+nezměnily. Struktura se zachová přes loopback i command relay, zatímco starší
+worker bez struktury dál zobrazí původní obecný text.
+
+Kompletní sada prošla 205 soubory / 1729 testy, TypeScript, cílený lint
+upravených React/protokolových souborů, produkční Vite/PWA build a
+`git diff --check`. Závislosti nebyly instalovány. Neproběhl push, deploy,
+reinstall workeru, ARM, Flatten ani jiná brokerová akce.
 
 ### 2026-09-01 (Codex, volitelný DLL sloupec v LIVE tabulce)
 

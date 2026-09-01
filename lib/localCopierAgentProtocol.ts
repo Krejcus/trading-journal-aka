@@ -105,6 +105,116 @@ export interface LocalCopierAgentCommandResult {
   result?: LiveCopyTradingCommandResult;
 }
 
+export type LocalCopierAgentRestartBlocker =
+  | 'status-unavailable'
+  | 'not-started'
+  | 'armed'
+  | 'kill-switch'
+  | 'disconnected'
+  | 'reconciliation-required'
+  | 'group-not-flat'
+  | 'divergent-accounts'
+  | 'working-orders'
+  | 'stuck-outbox'
+  | 'stuck-operations'
+  | 'preflight-missing'
+  | 'preflight-inactive'
+  | 'preflight-read-only-followers';
+
+const LOCAL_COPIER_AGENT_RESTART_BLOCKERS = new Set<LocalCopierAgentRestartBlocker>([
+  'status-unavailable',
+  'not-started',
+  'armed',
+  'kill-switch',
+  'disconnected',
+  'reconciliation-required',
+  'group-not-flat',
+  'divergent-accounts',
+  'working-orders',
+  'stuck-outbox',
+  'stuck-operations',
+  'preflight-missing',
+  'preflight-inactive',
+  'preflight-read-only-followers',
+]);
+
+export interface SnapshotRepairBlockedIssue {
+  code: 'snapshot-repair-blocked';
+  blockers: LocalCopierAgentRestartBlocker[];
+  divergentAccounts: number[];
+  workingOrderAccounts: number[];
+  missingAccounts: number[];
+  inactiveAccounts: number[];
+  readOnlyFollowerAccounts: number[];
+}
+
+export type LocalCopierAgentErrorDetails = SnapshotRepairBlockedIssue;
+
+export class LocalCopierAgentCommandError extends Error {
+  readonly details?: LocalCopierAgentErrorDetails;
+
+  constructor(message: string, details?: LocalCopierAgentErrorDetails) {
+    super(message);
+    this.name = 'LocalCopierAgentCommandError';
+    this.details = details;
+  }
+}
+
+export const localCopierAgentErrorDetails = (reason: unknown): LocalCopierAgentErrorDetails | undefined => {
+  if (!reason || typeof reason !== 'object') return undefined;
+  const details = reason instanceof LocalCopierAgentCommandError
+    ? reason.details
+    : 'details' in reason ? (reason as { details?: unknown }).details
+      : 'issue' in reason ? (reason as { issue?: unknown }).issue
+        : undefined;
+  if (!details || typeof details !== 'object') return undefined;
+  const candidate = details as Partial<SnapshotRepairBlockedIssue>;
+  if (candidate.code !== 'snapshot-repair-blocked' || !Array.isArray(candidate.blockers)) return undefined;
+  const numberList = (value: unknown) => Array.isArray(value)
+    ? value.filter((item): item is number => Number.isSafeInteger(item) && item > 0)
+    : [];
+  return {
+    code: 'snapshot-repair-blocked',
+    blockers: candidate.blockers.filter((item): item is LocalCopierAgentRestartBlocker => (
+      typeof item === 'string'
+      && LOCAL_COPIER_AGENT_RESTART_BLOCKERS.has(item as LocalCopierAgentRestartBlocker)
+    )),
+    divergentAccounts: numberList(candidate.divergentAccounts),
+    workingOrderAccounts: numberList(candidate.workingOrderAccounts),
+    missingAccounts: numberList(candidate.missingAccounts),
+    inactiveAccounts: numberList(candidate.inactiveAccounts),
+    readOnlyFollowerAccounts: numberList(candidate.readOnlyFollowerAccounts),
+  };
+};
+
+/**
+ * Diagnostické zrcadlo restart brány. Doplňkové OAuth položky se přidávají
+ * jen k už zablokovanému stavu, takže `length === 0` zůstává přesně
+ * ekvivalentní nezměněné `canSafelyRestartLocalCopierAgent` bráně.
+ */
+export const localCopierAgentRestartBlockers = (
+  status: CopierControllerStatus | null | undefined,
+): LocalCopierAgentRestartBlocker[] => {
+  if (status == null) return ['status-unavailable'];
+  const blockers: LocalCopierAgentRestartBlocker[] = [];
+  if (!status.started) blockers.push('not-started');
+  if (status.armed) blockers.push('armed');
+  if (status.killSwitch) blockers.push('kill-switch');
+  if (!status.connected) blockers.push('disconnected');
+  if (status.reconciliationRequired) blockers.push('reconciliation-required');
+  if (status.groupFlat !== true) blockers.push('group-not-flat');
+  if (status.divergentAccounts.length > 0) blockers.push('divergent-accounts');
+  if (status.workingOrderAccounts.length > 0) blockers.push('working-orders');
+  if (status.stuckOutbox) blockers.push('stuck-outbox');
+  if (status.stuckOperations.length > 0) blockers.push('stuck-operations');
+  if (blockers.length > 0) {
+    if ((status.oauthPreflight?.missingAccounts.length ?? 0) > 0) blockers.push('preflight-missing');
+    if ((status.oauthPreflight?.inactiveAccounts.length ?? 0) > 0) blockers.push('preflight-inactive');
+    if ((status.oauthPreflight?.readOnlyFollowerAccounts.length ?? 0) > 0) blockers.push('preflight-read-only-followers');
+  }
+  return blockers;
+};
+
 /** A maintenance restart is allowed only from a freshly verified safe state. */
 export const canSafelyRestartLocalCopierAgent = (
   status: CopierControllerStatus | null | undefined,

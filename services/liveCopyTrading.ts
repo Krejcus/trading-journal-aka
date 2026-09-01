@@ -110,6 +110,25 @@ export interface LiveCopyTradingAdapter {
 export interface CopyGroupValidation {
   valid: boolean;
   errors: string[];
+  /** Strukturované UI podklady; `errors` zůstává kvůli starším volajícím. */
+  issues?: CopyGroupValidationIssue[];
+}
+
+export type CopyGroupValidationIssueCode =
+  | 'group-name-required'
+  | 'leader-required'
+  | 'leader-unavailable'
+  | 'followers-required'
+  | 'follower-unavailable'
+  | 'leader-is-follower'
+  | 'duplicate-follower'
+  | 'invalid-multiplier'
+  | 'invalid-max-contracts';
+
+export interface CopyGroupValidationIssue {
+  code: CopyGroupValidationIssueCode;
+  accountId?: number;
+  message: string;
 }
 
 export interface CopyGroupUnavailableAccounts {
@@ -249,26 +268,72 @@ export function validateCopyGroup(
   availableAccountIds: Iterable<number>,
 ): CopyGroupValidation {
   const available = new Set(availableAccountIds);
-  const errors: string[] = [];
-  if (!group.name.trim()) errors.push('Zadej název skupiny.');
-  if (group.leaderAccountId == null) errors.push('Vyber leader účet.');
-  else if (!available.has(group.leaderAccountId)) errors.push('Vybraný leader účet není dostupný.');
-  if (group.followers.length === 0) errors.push('Vyber alespoň jeden follower účet.');
+  const issues: CopyGroupValidationIssue[] = [];
+  const add = (issue: CopyGroupValidationIssue) => issues.push(issue);
+  if (!group.name.trim()) add({ code: 'group-name-required', message: 'Zadej název skupiny.' });
+  if (group.leaderAccountId == null) add({ code: 'leader-required', message: 'Vyber leader účet.' });
+  else if (!available.has(group.leaderAccountId)) {
+    add({
+      code: 'leader-unavailable',
+      accountId: group.leaderAccountId,
+      message: 'Vybraný leader účet není dostupný.',
+    });
+  }
+  if (group.followers.length === 0) add({ code: 'followers-required', message: 'Vyber alespoň jeden follower účet.' });
   const seen = new Set<number>();
   for (const follower of group.followers) {
-    if (!available.has(follower.accountId)) errors.push(`Follower účet ${follower.accountId} není dostupný.`);
-    if (follower.accountId === group.leaderAccountId) errors.push('Leader nemůže být zároveň follower.');
-    if (seen.has(follower.accountId)) errors.push('Follower účet je ve skupině vícekrát.');
+    if (!available.has(follower.accountId)) {
+      add({
+        code: 'follower-unavailable',
+        accountId: follower.accountId,
+        message: `Follower účet ${follower.accountId} není dostupný.`,
+      });
+    }
+    if (follower.accountId === group.leaderAccountId) {
+      add({ code: 'leader-is-follower', accountId: follower.accountId, message: 'Leader nemůže být zároveň follower.' });
+    }
+    if (seen.has(follower.accountId)) {
+      add({ code: 'duplicate-follower', accountId: follower.accountId, message: 'Follower účet je ve skupině vícekrát.' });
+    }
     seen.add(follower.accountId);
     if (!Number.isFinite(follower.multiplier) || follower.multiplier <= 0 || follower.multiplier > 100) {
-      errors.push('Multiplier musí být větší než 0 a nejvýše 100.');
+      add({ code: 'invalid-multiplier', accountId: follower.accountId, message: 'Multiplier musí být větší než 0 a nejvýše 100.' });
     }
     if (follower.maxContracts != null
       && (!Number.isSafeInteger(follower.maxContracts) || follower.maxContracts < 1)) {
-      errors.push('Max kontrakty musí být celé číslo alespoň 1.');
+      add({ code: 'invalid-max-contracts', accountId: follower.accountId, message: 'Max kontrakty musí být celé číslo alespoň 1.' });
     }
   }
-  return { valid: errors.length === 0, errors: [...new Set(errors)] };
+  const uniqueIssues = issues.filter((issue, index) => issues.findIndex(candidate => (
+    candidate.code === issue.code
+    && candidate.accountId === issue.accountId
+    && candidate.message === issue.message
+  )) === index);
+  const errors = [...new Set(uniqueIssues.map(issue => issue.message))];
+  return { valid: errors.length === 0, errors, issues: uniqueIssues };
+}
+
+/** UI text odvozený ze struktury; doménové legacy `errors` nijak nepřepisuje. */
+export function copyGroupValidationMessages(
+  validation: CopyGroupValidation,
+  accountLabel: (accountId: number) => string,
+): string[] {
+  if (!validation.issues) return validation.errors;
+  return validation.issues.map(issue => {
+    if (issue.code === 'leader-unavailable' && issue.accountId != null) {
+      const label = accountLabel(issue.accountId);
+      return label === `Účet ${issue.accountId}`
+        ? `Vybraný leader ${label} není dostupný.`
+        : `Vybraný leader účet ${label} není dostupný.`;
+    }
+    if (issue.code === 'follower-unavailable' && issue.accountId != null) {
+      const label = accountLabel(issue.accountId);
+      return label === `Účet ${issue.accountId}`
+        ? `Follower ${label} není dostupný.`
+        : `Follower účet ${label} není dostupný.`;
+    }
+    return issue.message;
+  }).filter((message, index, messages) => messages.indexOf(message) === index);
 }
 
 /**

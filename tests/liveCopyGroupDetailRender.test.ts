@@ -94,6 +94,15 @@ const tableRows = (markup: string): string[] => markup.match(/<tr\b[^>]*>[\s\S]*
 const tableCells = (row: string): string[] => row.match(/<td\b[^>]*>[\s\S]*?<\/td>/g) ?? [];
 
 describe('GroupDetail Positions integrace', () => {
+  it('groupRows používá společnou source-group kaskádu i pro účet mimo OAuth snapshot', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, accounts: [snapshot.accounts[0]] },
+    }));
+
+    expect(markup).toContain('Follower DEMO');
+    expect(markup).not.toContain(`Účet ${followerId}`);
+  });
+
   it('zobrazuje volitelný zbývající DLL ze stejného realized + unrealized základu jako risk gate', () => {
     const accountWithDll = {
       ...snapshot.accounts[0],

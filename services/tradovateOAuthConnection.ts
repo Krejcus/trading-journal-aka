@@ -22,7 +22,13 @@ import {
   beginTradovateApiRequest,
   finishTradovateApiRequest,
 } from '../lib/tradovateApiTelemetry';
-import type { LocalCopierAgentCommand, LocalCopierAgentCommandResult, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
+import {
+  LocalCopierAgentCommandError,
+  localCopierAgentErrorDetails,
+  type LocalCopierAgentCommand,
+  type LocalCopierAgentCommandResult,
+  type LocalCopierAgentStatus,
+} from '../lib/localCopierAgentProtocol';
 
 export interface TradovateOAuthConnectionStatus {
   id: string;
@@ -237,22 +243,37 @@ export async function executeTradovateCopierRelayCommand(
     id: string;
     expiresAt: string;
     /** Server long-poll: hotový výsledek už v enqueue odpovědi — bez dalších kol. */
-    resolution?: { status: string; result?: LocalCopierAgentCommandResult; error?: string };
+    resolution?: { status: string; result?: unknown; error?: string };
   }>('/api/tradovate/oauth/copier-relay', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ connectionId, command, idempotencyKey }),
   });
   if (queued.resolution) {
-    if (queued.resolution.status === 'succeeded' && queued.resolution.result) return queued.resolution.result;
-    throw new Error(queued.resolution.error || `Copier příkaz skončil stavem ${queued.resolution.status}`);
+    if (queued.resolution.status === 'succeeded' && queued.resolution.result) return queued.resolution.result as LocalCopierAgentCommandResult;
+    const details = localCopierAgentErrorDetails(
+      queued.resolution.result && typeof queued.resolution.result === 'object' && 'errorDetails' in queued.resolution.result
+        ? { details: queued.resolution.result.errorDetails }
+        : undefined,
+    );
+    throw new LocalCopierAgentCommandError(
+      queued.resolution.error || `Copier příkaz skončil stavem ${queued.resolution.status}`,
+      details,
+    );
   }
   const deadline = Math.min(Date.parse(queued.expiresAt) + 5_000, Date.now() + 35_000);
   while (Date.now() < deadline) {
-    const result = await authenticatedRequest<{ status: string; result?: LocalCopierAgentCommandResult; error?: string }>(
+    const result = await authenticatedRequest<{ status: string; result?: unknown; error?: string }>(
       `/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}&commandId=${encodeURIComponent(queued.id)}`,
     );
-    if (result.status === 'succeeded' && result.result) return result.result;
-    if (result.status === 'rejected' || result.status === 'expired') throw new Error(result.error || `Copier příkaz skončil stavem ${result.status}`);
+    if (result.status === 'succeeded' && result.result) return result.result as LocalCopierAgentCommandResult;
+    if (result.status === 'rejected' || result.status === 'expired') {
+      const details = localCopierAgentErrorDetails(
+        result.result && typeof result.result === 'object' && 'errorDetails' in result.result
+          ? { details: result.result.errorDetails }
+          : undefined,
+      );
+      throw new LocalCopierAgentCommandError(result.error || `Copier příkaz skončil stavem ${result.status}`, details);
+    }
     await new Promise(resolve => window.setTimeout(resolve, 400));
   }
   throw new Error('Mac worker příkaz včas nepotvrdil. Příkaz expiroval a nebude automaticky opakován.');

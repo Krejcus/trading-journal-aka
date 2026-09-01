@@ -120,6 +120,12 @@ export interface CopierControllerStatus {
   stuckOperations: CopierStuckOperation[];
   /** Odchylky způsobilosti účtů (active se nevykazuje). */
   accountEligibility?: CopierAccountEligibility[];
+  /** Poslední read-only OAuth/capability preflight; pouze diagnostika pro UI. */
+  oauthPreflight?: {
+    missingAccounts: number[];
+    inactiveAccounts: number[];
+    readOnlyFollowerAccounts: number[];
+  };
   lastError: string | null;
   revision: number;
   lastSequence: number;
@@ -628,6 +634,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let positionCheckComplete = false;
   let workingOrderAccounts = new Set<number>();
   let lastError: Error | null = null;
+  let lastOauthPreflight: NonNullable<CopierControllerStatus['oauthPreflight']> | undefined;
   /**
    * Monotónní verze bezpečnostního stavu. Reconciliation si ji zapamatuje
    * před broker I/O a čistý výsledek smí potvrdit pouze tehdy, když během
@@ -3324,6 +3331,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         follower => byCapability.get(follower.accountId)?.canTrade === false
           && !optionalFollowerIds.has(follower.accountId),
       ).map(follower => follower.accountId);
+      lastOauthPreflight = {
+        missingAccounts: [...missing],
+        inactiveAccounts: [...inactive],
+        readOnlyFollowerAccounts: [...readOnlyFollowers],
+      };
       if (missing.length > 0 || inactive.length > 0 || readOnlyFollowers.length > 0) {
         gate = { ...gate, armed: false };
         invalidateReconciliation();
@@ -4034,6 +4046,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             .filter(entry => entry.state !== 'active' || entry.lastExecution != null)
             .map(entry => ({ ...entry, lastExecution: entry.lastExecution ? { ...entry.lastExecution } : undefined }));
         })(),
+        ...(lastOauthPreflight ? {
+          oauthPreflight: {
+            missingAccounts: [...lastOauthPreflight.missingAccounts],
+            inactiveAccounts: [...lastOauthPreflight.inactiveAccounts],
+            readOnlyFollowerAccounts: [...lastOauthPreflight.readOnlyFollowerAccounts],
+          },
+        } : {}),
         lastError: lastError?.message ?? null,
         revision: current.revision,
         lastSequence: current.state.lastSequence,

@@ -12,13 +12,17 @@ import {
   scheduleAgentRestart,
   startAgentShutdownWatchdog,
 } from '../scripts/copier/agentLifecycle';
-import { canSafelyRestartLocalCopierAgent } from '../lib/localCopierAgentProtocol';
+import {
+  canSafelyRestartLocalCopierAgent,
+  localCopierAgentRestartBlockers,
+} from '../lib/localCopierAgentProtocol';
+import type { CopierControllerStatus } from '../services/copierRuntimeController';
 
 describe('Mac copier agent lifecycle', () => {
   afterEach(() => vi.useRealTimers());
 
   it('restarts only from a fresh connected, reconciled, DISARMED and flat status', () => {
-    const safe = {
+    const safe: CopierControllerStatus = {
       started: true,
       armed: false,
       killSwitch: false,
@@ -47,6 +51,51 @@ describe('Mac copier agent lifecycle', () => {
       ...safe,
       stuckOperations: [{ kind: 'oso' as const, key: 'x', status: 'unknown' as const, leaderSequence: 1, updatedAt: 1 }],
     })).toBe(false);
+
+    const cases: Array<[string, CopierControllerStatus | null]> = [
+      ['status-unavailable', null],
+      ['not-started', { ...safe, started: false }],
+      ['armed', { ...safe, armed: true }],
+      ['kill-switch', { ...safe, killSwitch: true }],
+      ['disconnected', { ...safe, connected: false }],
+      ['reconciliation-required', { ...safe, reconciliationRequired: true }],
+      ['group-not-flat', { ...safe, groupFlat: false }],
+      ['divergent-accounts', { ...safe, divergentAccounts: [1] }],
+      ['working-orders', { ...safe, workingOrderAccounts: [1] }],
+      ['stuck-outbox', { ...safe, stuckOutbox: true }],
+      ['stuck-operations', {
+        ...safe,
+        stuckOperations: [{ kind: 'oso', key: 'x', status: 'unknown', leaderSequence: 1, updatedAt: 1 }],
+      }],
+    ];
+    expect(localCopierAgentRestartBlockers(safe)).toEqual([]);
+    for (const [expected, candidate] of cases) {
+      expect(localCopierAgentRestartBlockers(candidate), expected).toContain(expected);
+      expect(localCopierAgentRestartBlockers(candidate).length === 0, expected)
+        .toBe(canSafelyRestartLocalCopierAgent(candidate));
+    }
+  });
+
+  it('přidá read-only OAuth preflight detaily bez změny ekvivalence bezpečnostní brány', () => {
+    const status: CopierControllerStatus = {
+      started: true, armed: false, killSwitch: false, shadowMode: false,
+      connected: true, reconciliationRequired: true, groupFlat: true,
+      divergentAccounts: [], workingOrderAccounts: [], stuckOutbox: false,
+      stuckOperations: [], lastError: null, revision: 1, lastSequence: 1,
+      oauthPreflight: {
+        missingAccounts: [11],
+        inactiveAccounts: [22],
+        readOnlyFollowerAccounts: [33],
+      },
+    };
+    expect(localCopierAgentRestartBlockers(status)).toEqual([
+      'reconciliation-required',
+      'preflight-missing',
+      'preflight-inactive',
+      'preflight-read-only-followers',
+    ]);
+    expect(localCopierAgentRestartBlockers(status).length === 0)
+      .toBe(canSafelyRestartLocalCopierAgent(status));
   });
 
   it('runs a fully paired renewable LaunchAgent without an arbitrary time limit', () => {

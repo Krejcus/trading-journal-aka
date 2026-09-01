@@ -16,7 +16,7 @@ const group = (): CopyGroupConfig => ({
   localOnly: true,
 });
 
-const controller = () => {
+const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
   let status: CopierControllerStatus = {
     started: true,
     armed: false,
@@ -32,6 +32,7 @@ const controller = () => {
     revision: 1,
     lastSequence: 0,
     groupFlat: true,
+    ...overrides,
   };
   const value = {
     arm: vi.fn(({ shadowMode = false }: { shadowMode?: boolean } = {}) => {
@@ -161,6 +162,46 @@ describe('local copier execution agent', () => {
       type: 'snapshot-test', requestId, repairCamera: true,
     })).rejects.toThrow('DISARMED');
     expect(onSnapshotTest).toHaveBeenCalledTimes(1);
+  });
+
+  it('repair snapshot vrátí strukturované restart blokery a account preflight detaily', async () => {
+    const runtime = controller({
+      reconciliationRequired: true,
+      divergentAccounts: [22],
+      oauthPreflight: {
+        missingAccounts: [33],
+        inactiveAccounts: [44],
+        readOnlyFollowerAccounts: [55],
+      },
+    });
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onSnapshotTest: vi.fn(),
+    });
+
+    await expect(running.execute({
+      type: 'snapshot-test',
+      requestId: '66666666-6666-4666-8666-666666666666',
+      repairCamera: true,
+    })).rejects.toMatchObject({
+      message: 'TradingView lze obnovit pouze při připojeném, reconciled, DISARMED a flat workeru bez pracovních příkazů.',
+      details: {
+        code: 'snapshot-repair-blocked',
+        blockers: expect.arrayContaining([
+          'reconciliation-required',
+          'divergent-accounts',
+          'preflight-missing',
+          'preflight-inactive',
+          'preflight-read-only-followers',
+        ]),
+        divergentAccounts: [22],
+        missingAccounts: [33],
+        inactiveAccounts: [44],
+        readOnlyFollowerAccounts: [55],
+      },
+    });
   });
 
   it('snapshot-test odmítne chybějící request ID i worker bez camera callbacku', async () => {

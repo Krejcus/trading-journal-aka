@@ -47,6 +47,10 @@ import {
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
+import {
+  createCopyTradeAccountLabelResolver,
+  formatKnownCopyTradeAccountIds,
+} from '../lib/copyTradeAccountLabels';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
 import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
 import TradovateAddConnectionModal from './TradovateAddConnectionModal';
@@ -198,6 +202,22 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
     () => live.data ? tradovateCopyTradeSnapshot(live.data, live.profiles) : null,
     [live.data, live.profiles],
   );
+  const accountLabel = useMemo(() => createCopyTradeAccountLabelResolver({
+    accountsById: new Map(copyTradeSnapshot?.accounts.map(account => [account.id, account]) ?? []),
+    profilesById: new Map(live.profiles.flatMap(profile => {
+      const accountId = Number(profile.externalAccountId);
+      return Number.isSafeInteger(accountId) ? [[accountId, profile] as const] : [];
+    })),
+    sourceGroupsById: new Map(copyTradeSnapshot?.groups.map(group => [group.id, group]) ?? []),
+  }), [copyTradeSnapshot, live.profiles]);
+  const knownCopierAccountIds = useMemo(() => [...new Set([
+    ...copyGroups.flatMap(group => [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]),
+    agentStatus?.group.leaderAccountId,
+    ...(agentStatus?.group.followers.map(follower => follower.accountId) ?? []),
+  ].filter((accountId): accountId is number => accountId != null))], [agentStatus?.group, copyGroups]);
+  const renderedLiveError = live.error
+    ? formatKnownCopyTradeAccountIds(live.error, knownCopierAccountIds, accountLabel)
+    : null;
   const copyTradeOrders = useMemo(
     () => live.data ? tradovateCopyTradeOrders(live.data) : [],
     [live.data],
@@ -412,9 +432,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ live, onCopierJou
         })}
       </nav>
 
-      {live.error && (
+      {renderedLiveError && (
         <div className="flex items-center gap-3 rounded-md border border-rose-500/30 bg-rose-500/10 p-4 text-rose-500">
-          <AlertTriangle size={18} className="shrink-0" /><span className="flex-1 text-sm font-semibold">{live.error}</span>
+          <AlertTriangle size={18} className="shrink-0" /><span className="flex-1 text-sm font-semibold">{renderedLiveError}</span>
           <button type="button" onClick={() => void live.refreshStatus()} className="text-xs font-black uppercase">Zkusit znovu</button>
         </div>
       )}

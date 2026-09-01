@@ -4,6 +4,11 @@ import {
   copyGroupPowerBlocker,
   liveOrderIsOpenForSafety,
 } from '../components/LiveCopyTradeOverview';
+import {
+  copyGroupValidationMessages,
+  validateCopyGroup,
+  type CopyGroupConfig,
+} from '../services/liveCopyTrading';
 
 const base = {
   powered: false,
@@ -42,6 +47,28 @@ describe('LIVE copy group ON/OFF dialog policy', () => {
     expect(blocker?.title).toBe('Skupinu nelze zapnout');
     expect(blocker?.detail).toContain('Skupina nemá leader účet.');
     expect(blocker?.detail).toContain('Copier zůstává VYPNUTÝ');
+  });
+
+  it('přeloží strukturovaný stale follower do jednotného account labelu v power dialogu', () => {
+    const group: CopyGroupConfig = {
+      id: 'group-main',
+      name: 'Hlavní',
+      enabled: false,
+      leaderAccountId: 62364058,
+      followers: [{ accountId: 62364057, mode: 'on-submit', multiplier: 1 }],
+    };
+    const validation = validateCopyGroup(group, [62364058]);
+    const blocker = copyGroupPowerBlocker({
+      ...base,
+      validationErrors: copyGroupValidationMessages(
+        validation,
+        accountId => accountId === 62364057
+          ? 'TDFYG50335049318 (ID 62364057)'
+          : `Účet ${accountId}`,
+      ),
+    });
+
+    expect(blocker?.detail).toContain('Follower účet TDFYG50335049318 (ID 62364057) není dostupný.');
   });
 
   it('zapnutou skupinu s pracovním příkazem nedovolí vypnout', () => {

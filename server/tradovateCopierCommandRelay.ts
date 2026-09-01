@@ -311,12 +311,12 @@ export async function claimTradovateCopierCommand(options: { db: SupabaseClient;
 }
 
 export async function completeTradovateCopierCommand(options: {
-  db: SupabaseClient; deviceId: string; commandId: string; result?: LocalCopierAgentCommandResult; error?: string;
+  db: SupabaseClient; deviceId: string; commandId: string; result?: unknown; error?: string;
 }): Promise<boolean> {
   const succeeded = !options.error;
   const { data, error } = await options.db.from('tradovate_copier_commands').update({
     status: succeeded ? 'succeeded' : 'rejected', completed_at: new Date().toISOString(),
-    result: succeeded ? (options.result ?? { ok: true }) : null,
+    result: succeeded ? (options.result ?? { ok: true }) : (options.result ?? null),
     error: options.error?.slice(0, 500) ?? null,
   }).eq('id', options.commandId).eq('device_id', options.deviceId).eq('status', 'claimed').select('id').maybeSingle<{ id: string }>();
   if (error) throw new Error(`copier-relay-complete-failed: ${error.message}`);
