@@ -38,18 +38,21 @@ if [[ -n "$BLOCKERS" ]]; then
   exit 3
 fi
 
-AGENT_PID="$(pgrep -f 'copier-agent.mjs agent' | head -1 || true)"
-if [[ -z "$AGENT_PID" ]]; then
-  echo "STOP: běžící copier-agent.mjs nenalezen, parametry nelze převzít" >&2
+PLIST="$HOME/Library/LaunchAgents/com.alphatrade.copier.plist"
+if [[ ! -f "$PLIST" ]]; then
+  echo "STOP: launchd plist ${PLIST} nenalezen, parametry nelze převzít" >&2
   exit 4
 fi
-ARGS=("${(@f)$(ps -o args= -p "$AGENT_PID" | python3 -c '
-import sys, shlex
-argv = shlex.split(sys.stdin.read())
+# Parametry se berou z launchd plistu (přesné řetězce), ne z `ps`, kde se
+# cesta s mezerou („Application Support") rozpadne na dva argumenty.
+ARGS=("${(@f)$(python3 - "$PLIST" <<'PY'
+import plistlib, sys
+argv = plistlib.load(open(sys.argv[1], 'rb'))['ProgramArguments']
 def flag(name):
     return argv[argv.index(name) + 1] if name in argv else ""
 print(flag("--leader")); print(flag("--followers")); print(flag("--connections-manifest")); print(flag("--port") or "3211")
-')}")
+PY
+)}")
 LEADER="${ARGS[1]}"; FOLLOWERS="${ARGS[2]}"; MANIFEST="${ARGS[3]}"; AGENT_PORT="${ARGS[4]}"
 if [[ -z "$LEADER" || -z "$FOLLOWERS" || -z "$MANIFEST" ]]; then
   echo "STOP: z běžícího agenta se nepodařilo přečíst --leader/--followers/--connections-manifest" >&2
