@@ -48,6 +48,11 @@ import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
 import LockedFeatureModal from './components/LockedFeatureModal';
 import { canAccess } from './utils/featureGating';
+import {
+  consumeMacCompanionPairingUrl,
+  isMacCompanionPairingSearch,
+  MAC_COMPANION_PAIRING_SESSION_KEY,
+} from './lib/macCompanionDeepLink';
 import FilterDropdown from './components/FilterDropdown';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
@@ -1049,7 +1054,17 @@ const App: React.FC = () => {
   const [activePage, setActivePage] = useState(() => {
     const requestedPage = new URLSearchParams(window.location.search).get('page');
     const supportedDeepLinks = new Set(['dashboard', 'history', 'journal', 'ai', 'lab', 'business', 'live', 'network', 'accounts', 'settings']);
+    if (isMacCompanionPairingSearch(window.location.search)) return 'live';
     return requestedPage && supportedDeepLinks.has(requestedPage) ? requestedPage : 'dashboard';
+  });
+  const [macCompanionPairingIntent, setMacCompanionPairingIntent] = useState(() => {
+    const requestedByUrl = isMacCompanionPairingSearch(window.location.search);
+    let requestedByLoginRoundTrip = false;
+    try {
+      requestedByLoginRoundTrip = sessionStorage.getItem(MAC_COMPANION_PAIRING_SESSION_KEY) === 'pending';
+      if (requestedByUrl) sessionStorage.setItem(MAC_COMPANION_PAIRING_SESSION_KEY, 'pending');
+    } catch { /* sessionStorage unavailable — URL still works */ }
+    return requestedByUrl || requestedByLoginRoundTrip;
   });
   const tradovateLiveEnabled = activePage === 'live'
     || (activePage === 'accounts' && dashboardMode !== 'backtesting');
@@ -1113,6 +1128,59 @@ const App: React.FC = () => {
     }
     setActivePage(page);
   }, [isAIStreaming, activePage]);
+
+  // External launches can reuse an already-running PWA window. Re-read the
+  // one-shot intent on focus/history changes and through Chromium's launchQueue.
+  useEffect(() => {
+    const captureIntent = (href = window.location.href) => {
+      let url: URL;
+      try {
+        url = new URL(href, window.location.origin);
+      } catch {
+        return;
+      }
+      if (!isMacCompanionPairingSearch(url.search)) return;
+      try { sessionStorage.setItem(MAC_COMPANION_PAIRING_SESSION_KEY, 'pending'); } catch { /* no-op */ }
+      setMacCompanionPairingIntent(true);
+    };
+
+    const captureCurrentIntent = () => captureIntent();
+    const captureVisibleIntent = () => {
+      if (document.visibilityState === 'visible') captureCurrentIntent();
+    };
+    window.addEventListener('focus', captureCurrentIntent);
+    window.addEventListener('pageshow', captureCurrentIntent);
+    window.addEventListener('popstate', captureCurrentIntent);
+    document.addEventListener('visibilitychange', captureVisibleIntent);
+
+    const launchQueue = (window as Window & {
+      launchQueue?: { setConsumer: (consumer: (params: { targetURL?: string }) => void) => void };
+    }).launchQueue;
+    launchQueue?.setConsumer(params => {
+      if (params.targetURL) captureIntent(params.targetURL);
+    });
+
+    return () => {
+      window.removeEventListener('focus', captureCurrentIntent);
+      window.removeEventListener('pageshow', captureCurrentIntent);
+      window.removeEventListener('popstate', captureCurrentIntent);
+      document.removeEventListener('visibilitychange', captureVisibleIntent);
+    };
+  }, []);
+
+  // Wait for the authoritative DB role. A temporary cached `friend` must not
+  // consume the intent and strand the owner on Dashboard.
+  useEffect(() => {
+    if (!macCompanionPairingIntent || !session || !isUserFromDb) return;
+    if (!canAccess('live', currentUser.role)) return;
+    setActivePage('live');
+  }, [currentUser.role, isUserFromDb, macCompanionPairingIntent, session]);
+
+  const handleMacCompanionPairingIntentHandled = useCallback(() => {
+    setMacCompanionPairingIntent(false);
+    try { sessionStorage.removeItem(MAC_COMPANION_PAIRING_SESSION_KEY); } catch { /* no-op */ }
+    window.history.replaceState(null, '', consumeMacCompanionPairingUrl(window.location.href));
+  }, []);
 
   // Defense-in-depth: kdyby se non-owner role pokusila dostat na uzamčenou page
   // přes přímou state mutaci nebo router redirect → přesměrovat na dashboard.
@@ -4391,6 +4459,8 @@ const App: React.FC = () => {
                       theme={theme}
                       live={tradovateLive}
                       onCopierJournalRefresh={handleCopierJournalRefresh}
+                      macCompanionPairingIntent={macCompanionPairingIntent}
+                      onMacCompanionPairingIntentHandled={handleMacCompanionPairingIntentHandled}
                     />
                   )}
 
