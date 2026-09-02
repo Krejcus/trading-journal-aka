@@ -112,6 +112,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-02 (Codex, fail-closed reinstall při rozdílu CLI a durable skupiny)
+
+Mac instalátor už nemůže tiše ignorovat opravené `--leader/--followers`.
+Pilot a instalátor sdílejí jediný helper pro stabilní
+`<connectionId>-<leader>` klíč a cestu ke `group.json`; ještě před prvním
+zápisem, buildem nebo restartem instalátor porovná leadera a follower
+`accountId`, `multiplier` a `maxContracts`. Rozdíl bez explicitní volby skončí
+nenulově a vypíše durable i CLI podobu. `--adopt-durable-group` zachová
+durable autoritu a CLI nechá jen jako bootstrap fallback.
+
+`--replace-durable-group` je pouze souborová operace: vyžaduje čerstvý
+loopback status `DISARMED`, `groupFlat=true`, nula working orders a nula stuck
+outboxu/operací. Před atomickým přepisem vznikne exkluzivní
+`.bak-<timestamp>`; metadata, safety a existující follower mode zůstávají
+zachované. Safe-reinstall skript volá install s explicitním
+`--adopt-durable-group`. Selhání startovní validace nově uvádí přesnou
+cestu k durable souboru a bezpečnou nápovědu pro replace nebo ruční opravu.
+
+Oveření: 206 test souborů / 1737 testů, `npm run typecheck`, produkční
+Vite/PWA build, samostatný Node 20 worker bundle, shell syntax safe-reinstallu,
+cílený lint a `git diff --check`. Neproběhl push, deploy, reinstall/restart
+workera, ARM, Flatten ani jiná brokerová akce.
+
 ### 2026-09-01 (Claude, nasazení názvů účtů + zaklesnutý worker na zrušené challenge)
 
 Web: Codexův commit `5b7f10c8` (jednotné názvy účtů, strukturované

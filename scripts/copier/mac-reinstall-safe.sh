@@ -63,7 +63,7 @@ echo "leader=${LEADER} followers=${FOLLOWERS} port=${AGENT_PORT}"
 echo "manifest=${MANIFEST}"
 
 cd "$REPO"
-npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT"
+npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group
 
 BUNDLE="$HOME/Library/Application Support/AlphaTrade/copier/copier-agent.mjs"
 echo "bundle sha256: $(shasum -a 256 "$BUNDLE" | cut -c1-16)…  commit: ${COMMIT}"

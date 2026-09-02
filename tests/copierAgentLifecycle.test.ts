@@ -236,9 +236,14 @@ describe('Mac copier agent lifecycle', () => {
 
   it('keeps the installed LaunchAgent persistent while retaining launchd restart safety', async () => {
     const installer = await readFile(new URL('../scripts/copier/mac-install.ts', import.meta.url), 'utf8');
+    const safeReinstall = await readFile(new URL('../scripts/copier/mac-reinstall-safe.sh', import.meta.url), 'utf8');
+    const pilot = await readFile(new URL('../scripts/copier/pilot.ts', import.meta.url), 'utf8');
     expect(installer).toContain("'--service-lifetime', 'persistent'");
     expect(installer).toContain('<key>KeepAlive</key><true/>');
     expect(installer).toContain('<key>ThrottleInterval</key><integer>10</integer>');
     expect(installer).toContain('<key>ExitTimeOut</key><integer>25</integer>');
+    expect(safeReinstall).toContain('--adopt-durable-group');
+    expect(pilot).toContain('Durable soubor: ${groupPath}');
+    expect(pilot).toContain('--replace-durable-group');
   });
 });
