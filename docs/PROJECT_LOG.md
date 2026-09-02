@@ -110,6 +110,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-02 (Claude, nasazení opravy 56f36ebf)
+
+Oprava „známý nezpůsobilý follower = skip, ne fail-closed“ byla přenesena
+z lokálního checkoutu na čistý worktree nad `origin/main` a pushnuta jako
+`56f36ebf` (fast-forward `main`); Vercel produkce READY. Důvod přenosu: hlavní
+checkout `Documents/trading-journal-aka` je 26 commitů za `origin/main`
+a jeho pracovní strom by commit vrátil dnešní dřívější opravy
+(`missingOptionalAccountIds`, `beginShutdown`, OAuth preflight). Při přenosu
+se to projevilo zastaralým hunkem v `copierAccountEligibility.test.ts`, který
+byl vrácen na verzi z `main`. Celá sada 218 souborů / 1803 testů a typecheck
+prošly. Reinstall Mac workera přes `scripts/copier/mac-reinstall-safe.sh`
+z tohoto commitu provádí uživatel ručně (klasifikátor Claude Code reinstall
+blokuje); brána byla v čase předání zelená (DISARMED, connected, flat, bez
+divergence, bez lastError). Dva účty zůstávají `breached` (62364058,
+63338752); po opravě smějí zůstat ve skupině a budou jen přeskakovány.
+V hlavním checkoutu zůstává necommitnutá práce Codexu (App.tsx `userId`,
+TradovateLiveDesk, macCopierDevice, nativeCopierNotificationPlan) — nezahozena,
+čeká na rozhodnutí uživatele.
+
 ### 2026-09-02 (Codex, předem známý nezpůsobilý follower už neodzbrojí kopírku)
 
 Runner nyní vykazuje `account-ineligible` jako `skipped` pouze tehdy, když byl
