@@ -3016,15 +3016,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
-      const criticalBracketAudit = result.audit.some(item => (
-        item.kind === 'unknown'
-        || item.kind === 'abandoned'
-        || item.kind === 'blocked'
-        || item.kind === 'rejected'
-      ));
-      if (criticalBracketAudit) {
-        failClosedOnCriticalAudit(result.audit);
-      } else {
+      failClosedOnCriticalAudit(result.audit);
+      if (!result.audit.some(isCriticalAuditEntry)) {
         rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
           const stopPotential = levelPnl(bracketPair.symbol, bracketPair.stopPrice);
@@ -3152,13 +3145,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
-      const criticalOsoAudit = result.audit.some(item => (
-        item.kind === 'unknown' || item.kind === 'abandoned'
-        || item.kind === 'blocked' || item.kind === 'rejected'
-      ));
-      if (criticalOsoAudit) {
-        failClosedOnCriticalAudit(result.audit);
-      } else {
+      failClosedOnCriticalAudit(result.audit);
+      if (!result.audit.some(isCriticalAuditEntry)) {
         rememberProtectiveLeg(pair.stopOrderId, pair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
           const entryPrice = pair.entryLimitPrice ?? pair.entryStopPrice;

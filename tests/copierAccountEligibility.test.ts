@@ -157,8 +157,13 @@ describe('account eligibility — DLL incident', () => {
       expect(followerOrdersFor(h.broker, accountId).length, `follower ${accountId}`).toBe(2);
     }
     expect(followerOrdersFor(h.broker, 205).length).toBe(1);
-    expect(h.audit.some(entry => entry.accountId === 205
-      && entry.reason?.includes('account-ineligible'))).toBe(true);
+    expect(h.audit.some(entry => entry.kind === 'skipped' && entry.accountId === 205
+      && entry.reason === 'account-ineligible')).toBe(true);
+    expect(h.controller.status()).toMatchObject({
+      armed: true,
+      lastError: null,
+      autoClose: null,
+    });
 
     // DLL účet zůstává členem skupiny — jen se neúčastní nových vstupů.
     expect(group.followers.some(follower => follower.accountId === 205)).toBe(true);

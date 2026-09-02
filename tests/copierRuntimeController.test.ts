@@ -593,6 +593,37 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('standardní Market quantity-limit zůstává kritický a fail-closed odzbrojí', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: {
+        ...group,
+        followers: [{ accountId: 200, mode: 'on-submit', multiplier: 2, maxContracts: 3 }],
+      },
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'market-quantity-limit', quantity: 4,
+      orderType: 'Market', limitPrice: undefined,
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      lastError: expect.stringContaining('maxContracts blokoval'),
+    });
+    controller.stop();
+  });
+
   it('reconciliation maxContracts neinterpretuje jako povolenou oříznutou pozici', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
     await broker.placeOrder({
@@ -863,6 +894,91 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('OCO přeskočí předem BREACHED followera, ale reject zdravého followera dál fail-closed odzbrojí', async () => {
+    const audit: CopierAuditEntry[] = [];
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const mixedGroup: CopyGroupConfig = {
+      ...group,
+      followers: [
+        { accountId: 200, mode: 'on-submit', multiplier: 1 },
+        { accountId: 300, mode: 'on-submit', multiplier: 1 },
+      ],
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: mixedGroup,
+      clock: stepClock(),
+      onAudit: entries => audit.push(...entries),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    await controller.applyAccountEligibilityExclusions([{
+      accountId: 300, state: 'breached', reason: 'známý BREACHED follower',
+    }]);
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'eligible-oco-entry', quantity: 1,
+      orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'eligible-oco-fill', tag: '', brokerOrderId: 'eligible-oco-entry',
+      accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 30_000, filledAt: 101,
+    } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'eligible-oco-target', parentOrderId: 'eligible-oco-entry',
+      side: 'Sell', quantity: 1,
+      orderType: 'Limit', limitPrice: 30_100,
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'eligible-oco-stop', parentOrderId: 'eligible-oco-entry',
+      side: 'Sell', quantity: 1,
+      orderType: 'Stop', limitPrice: undefined, stopPrice: 29_950,
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests().map(request => request.accountId)).toEqual([200]);
+    expect(broker.placedOcoRequests().map(request => request.accountId)).toEqual([200]);
+    expect(audit).toContainEqual(expect.objectContaining({
+      kind: 'skipped', accountId: 300, reason: 'account-ineligible',
+      key: expect.stringContaining('br:'),
+    }));
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null, autoClose: null });
+
+    broker.placeOco = async () => ({
+      firstBrokerOrderId: '', secondBrokerOrderId: '',
+      accepted: false, definitive: true, rejectReason: 'healthy OCO rejected',
+    });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'rejected-oco-entry', quantity: 1,
+      orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'rejected-oco-fill', tag: '', brokerOrderId: 'rejected-oco-entry',
+      accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 30_000, filledAt: 102,
+    } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'rejected-oco-target', parentOrderId: 'rejected-oco-entry',
+      side: 'Sell', quantity: 1,
+      orderType: 'Limit', limitPrice: 30_100,
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'rejected-oco-stop', parentOrderId: 'rejected-oco-entry',
+      side: 'Sell', quantity: 1,
+      orderType: 'Stop', limitPrice: undefined, stopPrice: 29_950,
+    }) });
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      lastError: expect.stringContaining('healthy OCO rejected'),
+    });
+    controller.stop();
+  });
+
   it('OCO události v DISARMED stavu se jen zablokují a nevytvoří falešný fail-closed', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({
@@ -943,6 +1059,71 @@ describe('bootstrapCopierRuntime', () => {
     expect(new Map(snapshot.links).get('oso-stop')).toHaveLength(1);
     expect(new Map(snapshot.links).get('oso-target')).toHaveLength(1);
     expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
+
+  it('OSO přeskočí předem BREACHED followera, ale reject zdravého followera dál fail-closed odzbrojí', async () => {
+    const audit: CopierAuditEntry[] = [];
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const mixedGroup: CopyGroupConfig = {
+      ...group,
+      followers: [
+        { accountId: 200, mode: 'on-submit', multiplier: 1 },
+        { accountId: 300, mode: 'on-submit', multiplier: 1 },
+      ],
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: mixedGroup,
+      clock: stepClock(),
+      osoCorrelationWindowMs: 5,
+      onAudit: entries => audit.push(...entries),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    await controller.applyAccountEligibilityExclusions([{
+      accountId: 300, state: 'breached', reason: 'známý BREACHED follower',
+    }]);
+    controller.arm();
+
+    const emitOso = (prefix: string) => {
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: `${prefix}-entry`, quantity: 1, limitPrice: 30_000,
+      }) });
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: `${prefix}-stop`, parentOrderId: `${prefix}-entry`, side: 'Sell',
+        quantity: 1, orderType: 'Stop', limitPrice: undefined, stopPrice: 29_950,
+      }) });
+      broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: `${prefix}-target`, parentOrderId: `${prefix}-entry`, side: 'Sell',
+        quantity: 1, orderType: 'Limit', limitPrice: 30_100,
+      }) });
+    };
+
+    emitOso('eligible-oso');
+    await controller.waitForIdle();
+
+    expect(broker.placedOsoRequests().map(request => request.accountId)).toEqual([200]);
+    expect(audit).toContainEqual(expect.objectContaining({
+      kind: 'skipped', accountId: 300, reason: 'account-ineligible',
+      key: expect.stringContaining('oso:'),
+    }));
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null, autoClose: null });
+
+    broker.placeOso = async () => ({
+      entryBrokerOrderId: '', firstBrokerOrderId: '', secondBrokerOrderId: '',
+      accepted: false, definitive: true, rejectReason: 'healthy OSO rejected',
+    });
+    emitOso('rejected-oso');
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      lastError: expect.stringContaining('healthy OSO rejected'),
+    });
     controller.stop();
   });
 

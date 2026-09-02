@@ -110,6 +110,54 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-02 (Codex, předem známý nezpůsobilý follower už neodzbrojí kopírku)
+
+Runner nyní vykazuje `account-ineligible` jako `skipped` pouze tehdy, když byl
+konkrétní follower už ve vstupním `context.ineligibleAccounts`. Risk gate ani
+globální halt logika se nezměnily a každý jiný `blocked`, stejně jako reject,
+unknown a rozbitá sekvence, zůstává kritický a fail-closed. Standardní,
+deferred, OCO i OSO controller větev používají jeden společný kritický filtr;
+duplicitní inline OCO/OSO filtry byly odstraněny. `leader-replace-unmapped`
+all-or-none dál vynechává pouze známé nezpůsobilé účty a jinak zůstává tvrdý
+`blocked`.
+
+Regrese pokrývají pokračující ARMED stav, prázdný `lastError`, nulový auto-close
+a žádný nový order pro DLL/BREACHED followera; OCO i OSO navíc prokazují, že
+následný reject zdravého followera skupinu stále odzbrojí. Zadaná sada prošla
+7/7 souborů a 217/217 testů; `npx tsc --noEmit -p .` prošel s 4GB Node heapem
+(výchozí přibližně 2GB běh skončil pouze OOM). Nic nebylo commitnuto, pushnuto,
+deploynuto ani spuštěno/reinstalováno; neproběhl broker příkaz, ARM ani Flatten.
+
+### 2026-09-02 (Claude, review incidentu „breached follower odzbrojil kopírku“)
+
+Ověření Codexovy diagnózy incidentu z 15:37/15:40 v kódu. Spouštěč souhlasí:
+Lucid účet byl `BREACHED`, risk gate ho správně vrátil jako `account-ineligible`
+a pět zdravých followerů dostalo OSO. Kořenová příčina je ale obecnější než
+„OSO cesta“: `isCriticalAuditEntry` v `copierRuntimeController.ts` považuje
+KAŽDÝ audit `kind: 'blocked'` za kritický a všechny čtyři cesty (standardní,
+deferred replay, bracket i OSO) mu předávají celý audit bez filtru. Předem
+známé vyřazení followera (`account-ineligible`) tak vyvolá `failClosed` stejně
+jako skutečné selhání. Reprodukováno na standardní cestě: stávající test
+„async DLL reject: 4 aktivní / 1 dll-locked … skupina jede dál“ po druhém
+leader vstupu ověřuje jen počty objednávek, ne `armed`; po dočasném doplnění
+aserce `status().armed === true` test padá (`armed: false`). Test má tedy díru
+a chování je shodné pro limit/market i OSO.
+
+Druhý důsledek: `failClosed` za živého ARM (bez transportLost/kill switche)
+volá `scheduleAutoClose('fail-closed')`, takže pouhé přeskočení breached účtu
+může zdravým followerům risk-redukčně zavřít právě otevřené kopie. To je horší
+než samotný DISARM a je to důvod, proč se incident opakuje při každém ARM se
+známým breached členem.
+
+Doporučená oprava (neimplementováno, jen review): blokace s důvodem
+`account-ineligible` pro follower účet, který je v `ineligibleAccounts` už při
+plánování, se má vykazovat jako `skipped` (nebo být z kritického filtru
+vyjmutá) ve všech čtyřech cestách; jakékoli jiné `blocked` (quantity-limit,
+symbol-not-allowed, divergence, halt) zůstává fail-closed. Doplnit regresi
+`armed` po skipu pro standardní i OSO cestu a scénář „ARM se známým breached
+followerem → dva leader vstupy → skupina zůstává ARMED, breached účet bez
+objednávky“. Kód, účty ani broker se při tomto review neměnily.
+
 ### 2026-09-02 (Claude, přenos companionu do `main` a náprava 404)
 
 Companion (API, migrace, Swift appka, PWA karta, spec, mockupy, testy) dosud

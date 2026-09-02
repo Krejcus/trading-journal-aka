@@ -120,6 +120,21 @@ export interface CopierAuditEntry {
   reason?: string;
 }
 
+/**
+ * Jen follower vyřazený už ve vstupním planning snapshotu je očekávaný
+ * account skip. Stejný text z jiné cesty ani žádný jiný gate block se tím
+ * nezměkčuje — zůstane `blocked` a controller jej musí řešit fail-closed.
+ */
+const blockedAuditKind = (
+  context: RiskGateContext,
+  accountId: number,
+  reason: string,
+): CopierAuditKind => (
+  reason === 'account-ineligible' && context.ineligibleAccounts.has(accountId)
+    ? 'skipped'
+    : 'blocked'
+);
+
 export interface LatencySample {
   key: string;
   tag: string;
@@ -791,9 +806,11 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
       stuckOutbox: hadUnsafeOutboxAtBatchStart,
     });
     if (decision.blocked.length > 0 || decision.allowed.length !== 2) {
+      const reason = decision.haltReason ?? decision.blocked[0]?.reason ?? 'oco-gate-blocked';
       audit.push({
-        at: clock(), leaderEventId: event.id, kind: 'blocked', accountId: job.follower.accountId,
-        key: job.key, reason: decision.haltReason ?? decision.blocked[0]?.reason ?? 'oco-gate-blocked',
+        at: clock(), leaderEventId: event.id,
+        kind: blockedAuditKind(context, job.follower.accountId, reason),
+        accountId: job.follower.accountId, key: job.key, reason,
       });
       continue;
     }
@@ -1037,9 +1054,11 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       stuckOutbox: hadUnsafeOutboxAtBatchStart,
     });
     if (decision.blocked.length > 0 || decision.allowed.length !== 3) {
+      const reason = decision.haltReason ?? decision.blocked[0]?.reason ?? 'oso-gate-blocked';
       audit.push({
-        at: clock(), leaderEventId: event.id, kind: 'blocked', accountId: follower.accountId,
-        key, reason: decision.haltReason ?? decision.blocked[0]?.reason ?? 'oso-gate-blocked',
+        at: clock(), leaderEventId: event.id,
+        kind: blockedAuditKind(context, follower.accountId, reason),
+        accountId: follower.accountId, key, reason,
       });
       continue;
     }
@@ -1548,7 +1567,7 @@ export async function processLeaderEvent(
     audit.push({
       at: clock(),
       leaderEventId: event.id,
-      kind: 'blocked',
+      kind: blockedAuditKind(context, item.request.accountId, item.reason),
       accountId: item.request.accountId,
       key: byTag.get(item.request.tag)?.key,
       reason: item.reason,
