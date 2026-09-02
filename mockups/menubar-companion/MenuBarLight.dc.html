@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    a { color: #4f46e5; } a:hover { color: #4338ca; }
+    .macbar { display: flex; align-items: center; justify-content: flex-end; gap: 18px; height: 30px; padding: 0 14px; border-radius: 7px; background: rgba(250, 250, 252, 0.98); border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(15,23,42,0.04); }
+    .macbar-sys { display: flex; align-items: center; gap: 14px; color: rgba(0,0,0,0.72); }
+    .at-item { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 7px; border-radius: 5px; font-size: 12px; font-weight: 600; color: rgba(0,0,0,0.82); letter-spacing: 0.01em; }
+    .strip-label { font-size: 12px; line-height: 17px; color: #475569; }
+    .strip-label b { color: #0f172a; font-weight: 700; }
+  </style>
+</helmet>
+<div style="display: flex; flex-direction: column; gap: 20px; width: 940px; min-height: 470px; box-sizing: border-box; background: #f1f5f9; padding: 24px 28px;">
+  <div style="display: flex; flex-direction: column; gap: 4px;">
+    <div style="font-size: 15px; font-weight: 900; color: #0f172a;">Horní lišta — stavy položky AlphaTrade (světlý režim)</div>
+    <div style="font-size: 12px; color: #475569;">Skutečné AT logo aplikace; stavová barva žije v pillu vedle, význam nese text. Zelená fajfka záměrně neexistuje.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <div class="macbar">
+      <span class="at-item">
+        <img src="at-logo.png" alt="AlphaTrade" style="height: 17px; width: auto; display: block;">
+      </span>
+      <span class="macbar-sys">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 6.5 C5.5 3.2 10.5 3.2 14 6.5"></path><path d="M4.2 8.8 C6.5 6.7 9.5 6.7 11.8 8.8"></path><circle cx="8" cy="11.5" r="1.1" fill="currentColor" stroke="none"></circle></svg>
+        <svg width="22" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="rgba(0,0,0,0.40)"></rect><rect x="2" y="2" width="14" height="8" rx="1.5" fill="rgba(0,0,0,0.70)"></rect><path d="M22.5 4 v4" stroke="rgba(0,0,0,0.40)" stroke-linecap="round"></path></svg>
+        <span style="font-size: 12px; font-weight: 600;">po 31. 8.&nbsp;&nbsp;12:53</span>
+      </span>
+    </div>
+    <div class="strip-label"><b>Neutrální</b> — DISARMED, žádný známý problém. Jen glyf, žádný text navíc.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <div class="macbar">
+      <span class="at-item" style="background: rgba(16,185,129,0.16);">
+        <img src="at-logo.png" alt="AlphaTrade" style="height: 17px; width: auto; display: block;">
+        <span style="color: #047857;">LIVE 42m</span>
+      </span>
+      <span class="macbar-sys">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 6.5 C5.5 3.2 10.5 3.2 14 6.5"></path><path d="M4.2 8.8 C6.5 6.7 9.5 6.7 11.8 8.8"></path><circle cx="8" cy="11.5" r="1.1" fill="currentColor" stroke="none"></circle></svg>
+        <svg width="22" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="rgba(0,0,0,0.40)"></rect><rect x="2" y="2" width="14" height="8" rx="1.5" fill="rgba(0,0,0,0.70)"></rect><path d="M22.5 4 v4" stroke="rgba(0,0,0,0.40)" stroke-linecap="round"></path></svg>
+        <span style="font-size: 12px; font-weight: 600;">po 31. 8.&nbsp;&nbsp;12:53</span>
+      </span>
+    </div>
+    <div class="strip-label"><b>LIVE</b> — kopírování běží, zbývá 42 minut do expirace session. Zelená = kopírování běží, ne „vše je bezpečné“.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <div class="macbar">
+      <span class="at-item" style="background: rgba(0,0,0,0.07);">
+        <img src="at-logo.png" alt="AlphaTrade" style="height: 17px; width: auto; display: block;">
+        <span>SHADOW</span>
+      </span>
+      <span class="macbar-sys">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 6.5 C5.5 3.2 10.5 3.2 14 6.5"></path><path d="M4.2 8.8 C6.5 6.7 9.5 6.7 11.8 8.8"></path><circle cx="8" cy="11.5" r="1.1" fill="currentColor" stroke="none"></circle></svg>
+        <svg width="22" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="rgba(0,0,0,0.40)"></rect><rect x="2" y="2" width="14" height="8" rx="1.5" fill="rgba(0,0,0,0.70)"></rect><path d="M22.5 4 v4" stroke="rgba(0,0,0,0.40)" stroke-linecap="round"></path></svg>
+        <span style="font-size: 12px; font-weight: 600;">po 31. 8.&nbsp;&nbsp;12:53</span>
+      </span>
+    </div>
+    <div class="strip-label"><b>Shadow režim</b> — copier sleduje, ale neposílá příkazy. Neutrální pill, aby nesplýval se zeleným LIVE.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <div class="macbar">
+      <span class="at-item" style="background: rgba(244,63,94,0.14);">
+        <img src="at-logo.png" alt="AlphaTrade" style="height: 17px; width: auto; display: block;">
+        <span style="color: #be123c;">!2</span>
+      </span>
+      <span class="macbar-sys">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 6.5 C5.5 3.2 10.5 3.2 14 6.5"></path><path d="M4.2 8.8 C6.5 6.7 9.5 6.7 11.8 8.8"></path><circle cx="8" cy="11.5" r="1.1" fill="currentColor" stroke="none"></circle></svg>
+        <svg width="22" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="rgba(0,0,0,0.40)"></rect><rect x="2" y="2" width="14" height="8" rx="1.5" fill="rgba(0,0,0,0.70)"></rect><path d="M22.5 4 v4" stroke="rgba(0,0,0,0.40)" stroke-linecap="round"></path></svg>
+        <span style="font-size: 12px; font-weight: 600;">po 31. 8.&nbsp;&nbsp;12:53</span>
+      </span>
+    </div>
+    <div class="strip-label"><b>Zásah nutný</b> — dva aktuální bezpečnostní problémy (divergence, stuck outbox…). Číslo říká kolik, popover říká co.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <div class="macbar">
+      <span class="at-item" style="background: rgba(217,119,6,0.14);">
+        <img src="at-logo.png" alt="AlphaTrade" style="height: 17px; width: auto; display: block;">
+        <span style="color: #92400e;">?</span>
+      </span>
+      <span class="macbar-sys">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 6.5 C5.5 3.2 10.5 3.2 14 6.5"></path><path d="M4.2 8.8 C6.5 6.7 9.5 6.7 11.8 8.8"></path><circle cx="8" cy="11.5" r="1.1" fill="currentColor" stroke="none"></circle></svg>
+        <svg width="22" height="12" viewBox="0 0 24 12" fill="none"><rect x="0.5" y="0.5" width="20" height="11" rx="2.5" stroke="rgba(0,0,0,0.40)"></rect><rect x="2" y="2" width="14" height="8" rx="1.5" fill="rgba(0,0,0,0.70)"></rect><path d="M22.5 4 v4" stroke="rgba(0,0,0,0.40)" stroke-linecap="round"></path></svg>
+        <span style="font-size: 12px; font-weight: 600;">po 31. 8.&nbsp;&nbsp;12:53</span>
+      </span>
+    </div>
+    <div class="strip-label"><b>Stav neznámý</b> — data nelze ověřit (síť, starý heartbeat). Nikdy neukazuje poslední známý stav jako platný.</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

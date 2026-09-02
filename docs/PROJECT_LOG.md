@@ -110,6 +110,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-02 (Claude, přenos companionu do `main` a náprava 404)
+
+Companion (API, migrace, Swift appka, PWA karta, spec, mockupy, testy) dosud
+existoval jen v pracovním stromu větve `codex/ios-native-checkpoint-20260814`
+(21 commitů za `origin/main`, tisíce řádků jiných rozdělaných copier změn).
+Produkční deploy 2026-09-01 byl promovaný z lokálního zdroje; ranní pushe do
+`main` (`7763bfcd`, `4b5ffada`) spustily automatický Vercel deploy, který
+companion API smazal — `/api/mac-companion/status` vracel 404, appka
+fail-closed ukazovala „STAV NEDOSTUPNÝ". Ověřeno curl (companion routy 404,
+`native-widget-snapshot` 401). Zároveň `launchctl print` nenašel službu
+`app.alphatrade.status.autostart` v aktivní uživatelské relaci.
+
+Postup: návratový archiv celého špinavého stromu vč. untracked
+(`~/Documents/AlphaTrade-backups/2026-09-02-133440-dirty-tree-before-companion-port.tar.gz`),
+čistý worktree z `origin/main`, přenos pouze companion souborů + tří
+integračních hunků (`App.tsx` deep link, `TradovateLiveDesk.tsx` karta a
+záložka, `vite.config.ts` `launch_handler`). Vizuál: patička „READ-ONLY ·
+ŽÁDNÉ OBCHODNÍ OVLÁDÁNÍ" odstraněna (uživatel ji z návrhu vyřadil už dřív),
+systémový modrý focus ring na tlačítkách vypnut `focusEffectDisabled()` na
+hostovaném kořeni (build 4 ho řešil jen u hlaviček sekcí); build 5. Docs:
+README a spec v1.3 uvádějí skutečný stav a poučení „companion musí být
+v mainu, jinak ho další deploy smaže". Žádný broker write, ARM/DISARM ani
+zásah do copier workeru.
+
 ### 2026-09-02 (Claude, rollout workera 7763bfcd)
 
 Mac worker reinstalován uživatelem přes `scripts/copier/mac-reinstall-safe.sh`
@@ -182,6 +206,280 @@ Oveření: 206 test souborů / 1737 testů, `npm run typecheck`, produkční
 Vite/PWA build, samostatný Node 20 worker bundle, shell syntax safe-reinstallu,
 cílený lint a `git diff --check`. Neproběhl push, deploy, reinstall/restart
 workera, ARM, Flatten ani jiná brokerová akce.
+
+### 2026-09-01 (Codex, AlphaTrade Status build 4 — bez modrého focus ringu)
+
+Systémový modrý focus ring na rozbalené sekci `DISARMED` byl odstraněn přes
+availability-gated SwiftUI `focusEffectDisabled()` (macOS 14+). Sekce zůstává
+nativní `Button`, takže kliknutí, animace, VoiceOver i klávesová focus
+sémantika zůstaly zachované; deployment target macOS 13 se nezvýšil. Release
+build 0.2.0 (4) pro arm64 prošel sestavením a strict codesign kontrolou a byl
+nainstalován do `/Users/filipkrejca/Applications/AlphaTrade Status.app`.
+Předchozí build 3 a LaunchAgent plist jsou v návratové záloze
+`mac-install-before-0.2-build4-2026-09-01-153247` uvnitř produkčního backup
+balíčku. Build 4 běží; plist automatického spuštění zůstal na místě a není
+disabled, ale okamžitý re-bootstrap této relace launchd odmítl oprávněním
+volajícího Codexu. Při příštím přihlášení jej má načíst macOS. Copier worker,
+broker ani ARM/DISARM stav se neměnily. Samostatný produkční regres status API
+(404 po pozdějším deployi) tímto čistě vizuálním buildem řešen nebyl.
+
+### 2026-09-01 (Codex + uživatel, produkční aktivace read-only companionu)
+
+Po výslovném souhlasu uživatele byla před změnou ověřena aktuální fyzická
+Supabase záloha a vytvořen lokální návratový balíček v
+`/Users/filipkrejca/Documents/AlphaTrade-backups/2026-09-01-121202-before-mac-companion-prod`.
+Additivní migrace `20260901101932_mac_companion_devices_v1` byla aplikována na
+projekt `kopinlpdvjfgmvxydohk`. Tabulka je server-only: RLS je zapnuté bez
+browser policies, `anon`/`authenticated` nemají práva a skutečné souběžné testy
+potvrdily atomické per-IP i globální limity. Testovací řádky byly uklizeny.
+
+První webový kandidát byl omylem sestaven lokálně přes `--prebuilt`, takže nový
+frontend neměl produkční `VITE_SUPABASE_*`. Hlavní doména byla okamžitě vrácena
+na známý zdravý deployment `dpl_7vSAKC4PaGwbF4h5LkA9qAiDjojY`; žádná databázová
+nebo brokerová změna z tohoto vadného bundle nevznikla. Opravený source build
+`dpl_CAJCKx5JcYXm89u9C6UTBmnS1y9Z` byl nejdřív ověřen jako staging a potom
+promován na `https://alphatrade-mentor-15.vercel.app`. Nový jednorázový marker
+`?open=mac-companion-pairing` přežije login, počká na autoritativní owner roli,
+otevře LIVE/Connections, posune a zaměří párovací formulář a po použití se z URL
+odstraní. Zůstává kompatibilní se starým odkazem a `launch_handler` řeší už
+otevřenou PWA. Čistý i přihlášený produkční browser tento tok potvrdily.
+
+Uživatel skutečně potvrdil pairing zařízení `MacBook Air`. Server po potvrzení
+vymazal pairing hash i expiraci, aktivní credential má pouze scope
+`copier.status.read` a `/api/mac-companion/status` od té doby opakovaně vrací
+HTTP 200. Žádný nový pending kód po aktualizaci nevznikl. Reálnou revokaci jsme
+záměrně neprovedli, aby funkční zařízení zůstalo připojené; endpoint i UI jsou
+kryté automatickými testy.
+
+Finální nativní `AlphaTrade Status` 0.2.0 build 3 byl arm64 Release, ad-hoc
+podepsán s hardened runtime a přesně dvěma oprávněními: App Sandbox a odchozí
+síť. Nainstalovaný executable má SHA-256
+`28727706a37856c33320b6419daa33664bf9e4607ce8ae27f881c8fd4f18fca7`.
+Předchozí build 2 i LaunchAgent jsou v návratovém balíčku. LaunchAgent nyní
+spouští build 3 z `/Users/filipkrejca/Applications/AlphaTrade Status.app`, bez
+fixture nebo secretu v prostředí; kontrolní `kickstart -k` změnil PID a aplikace
+po restartu dál načetla stejné párování z Keychainu. Databázové `last_used_at`
+i nové produkční status requesty 200 to potvrzují.
+
+Přesná kanonická web/server sada prošla 13 soubory / 56 testy, TypeScript a
+cílený lint s 0 chybami. Při nativním běhu prošlo 30/32 funkčních testů; dvě
+renderovací aserce původně selhaly pouze kvůli sandboxovanému zápisu testovacího
+PNG do `/tmp`, proto test harness používá cache adresář uživatele. Izolovaný
+retry obou dotčených sad se sestavil, ale Xcode zůstal na `waiting for workers
+to materialize` a byl ohraničeně ukončen ještě před spuštěním assertions (0
+skutečných test failures); produkční proces zůstal nedotčený. Žádný broker
+write, ARM, Flatten, worker reinstall ani zásah do copier runtime neproběhl.
+
+### 2026-09-01 (Codex, lokální read-only companion 0.2 — produkce HOLD)
+
+Po uživatelově výslovném schválení byla lokálně dokončena druhá verze
+`AlphaTrade Status`: AppKit `NSStatusItem` + animovaný `NSPopover`, světlý i
+tmavý vzhled, serverem korigovaný 10/90s freshness reducer, HTTPS klient s
+pevným AlphaTrade hostem, Keychain credential, jednorázový pairing a revokace.
+PWA má v LIVE Connections kartu pro potvrzení kódu, přejmenování a revokaci
+Maců. Nové `/api/mac-companion/status` čte jen cloudové runtime tabulky; nemá
+Tradovate/fetch/broker/command cestu a současnou expozici poctivě vrací jako
+neověřenou. Scope je pevně `copier.status.read`; databáze ukládá jen SHA-256
+digesty. Veřejný pairing start má atomický Postgres limit 10/10 min na HMAC IP
+bucket a 120/10 min globálně, se server-only RLS/granty a bounded cleanupem.
+
+Safety review doplnilo fail-closed zacházení s neplatnými runtime poli,
+neúplným follower ack, neověřenými working orders a probuzením Macu: po wake se
+před síťovým refreshem okamžitě zahodí časová důvěra, takže staré zelené LIVE
+nemůže přežít nefunkční síť. Cílená web/server sada prošla 12 soubory / 52
+testy, TypeScript a cílený lint jsou čisté; nativní sada prošla 29/29 XCTest a
+Release buildem. PWA karta i menu/popover prošly lokální vizuální kontrolou.
+
+**Nic nebylo nasazeno ani aplikováno na produkční databázi.** Kandidát 0.2
+nebyl spuštěn ani nainstalován, stávající mock 0.1 a jeho LaunchAgent zůstaly
+beze změny, stejně jako broker, worker a copier runtime. Před produkčním krokem
+je závazná záloha a další explicitní souhlas; lokální SQL test nenahrazuje
+skutečný souběžný test rate limitu a E2E pairing/revokace po migraci.
+
+### 2026-09-01 (Codex, trvalá instalace mock menu-bar companionu)
+
+Po uživatelově samostatném výslovném souhlasu byl mock-only prototyp
+`AlphaTrade Status` 0.1.0 sestaven v Release pro arm64, lokálně ad-hoc podepsán
+s hardened runtime a nainstalován do
+`/Users/filipkrejca/Applications/AlphaTrade Status.app`. `LSUIElement=true`
+zachovává provoz pouze v horní liště. Nainstalovaný executable má SHA-256
+`6b709d32f03b77c94cb7c40fb7ad2ff98ba39da2cc3965066a8b9b847108cfda` a
+`codesign --verify --deep --strict` prošel.
+
+Autostart zajišťuje uživatelský LaunchAgent
+`app.alphatrade.status.autostart` v `~/Library/LaunchAgents`; `RunAtLoad`
+spouští nainstalovaný executable v Aqua session s deterministickou fixture
+`live`. Kontrolní `kickstart -k` změnil PID a druhá instance zůstala ve stavu
+`running`, takže byl ověřen restart z trvalé cesty. Komponentová a renderovací
+sada znovu prošla **16/16**.
+
+Toto schválení se týkalo jen lokálního mock prototypu. Neproběhlo napojení na
+status endpoint, pairing, Keychain, Developer ID distribuce, síťové volání,
+Vercel deploy, broker příkaz, ARM/Flatten ani zásah do copier workeru.
+
+### 2026-09-01 (Codex, skutečný NSStatusItem + animovaný popover)
+
+Uživatelská kontrola potvrdila limit `MenuBarExtra`: SwiftUI label měnil část
+vzhledu, ale systém samostatně cacheoval obal a při kliknutí kreslil druhý
+vnější highlight. Negativní padding proto nemohl zaručit jediný pill ani
+spolehlivou změnu light/dark po startu v opačném režimu.
+
+App shell byl přepojen na skutečný `NSStatusItem` řízený AppKit delegate.
+Barevný stav je teď pozadí přímo `NSStatusBarButton`, jeho content má nativní
+3pt inset a výsledný button přesně `28 pt`; vestavěné `highlightsBy` a
+`showsStateBy` jsou vypnuté, takže kliknutí už nemá přidat druhou pilulku.
+KVO na `NSApplication.effectiveAppearance` podle doporučení AppKit překreslí
+současně background i text/logo a přenese nový appearance také do otevřeného
+`NSPopover`. Light podklad je pale emerald složený nad `#fafafc`, dark podklad
+nad `#121624`.
+
+Popover se při každém otevření vytvoří s novým SwiftUI rootem a má jemný
+180ms nástup (`scale 0.985 → 1`, `opacity 0.94 → 1`, `y -4 → 0`) společně
+s nativní NSPopover animací. První frame zůstává z 94 % viditelný, takže ani
+při selhání lifecycle callbacku nevznikne prázdný panel; Reduce Motion pohyb
+vypne. Komponentová/renderovací sada prošla **16/16** a kontroluje jediný
+system-sized button, zakázaný highlight, rozdílné light/dark barvy i layout
+produkční entrance wrapper cesty. Běží právě jedna čerstvá lokální LIVE fixture
+instance. Neproběhl deploy, podpis, instalace, síťové volání, broker příkaz ani
+změna workeru.
+
+### 2026-08-31 (Codex, systémový menu-bar pill a dynamický vzhled)
+
+Další kontrola na skutečné liště ukázala dvě nativní odchylky, které samotný
+Claude HTML mock nemohl zachytit: `MenuBarExtra` přidává kolem labelu vlastní
+3pt content inset, takže 22pt artwork vypadal při systémovém highlightu jako
+„pill v pillu“, a natvrdo zapečený light podklad nereagoval na změnu vzhledu.
+Artwork má proto nově 28pt vnější systémový tvar s radiusem 7 pt; SwiftUI
+label záporným 3pt insetem vyplní přesně status button a vlastní i macOS
+highlight se při kliknutí překryjí. Logo a text uvnitř zachovávají původní
+17pt / 12pt / 6pt rozměry.
+
+Label čte aktuální `colorScheme` a pro každý render volí samostatnou light/dark
+paletu z Claude mockupů. Light emerald `16 %` je složený nad `#fafafc`, aby
+zůstal skutečně světlý i nad barevným wallpaperem; dark emerald `22 %` je
+složený nad `#121624` a používá text `#a7f3d0`. Stejná pravidla platí pro
+SHADOW, warning a danger. Komponentová a renderovací sada prošla **16/16**
+a explicitně porovnává light/dark výstup i finální velikost po započtení
+systémového insetu. Běží právě jedna čerstvá lokální LIVE fixture instance;
+žádný deploy, síťové volání, broker příkaz ani změna workeru neproběhly.
+
+### 2026-08-31 (Codex, přesná korekce LIVE pillu podle Claude mockupu)
+
+Uživatelský screenshot odhalil, že první trvale viditelná varianta sice vyřešila
+mizení podkladu, ale nebyla vizuálně věrná: AppKit kreslil logo v převrácené
+souřadné soustavě, LIVE výplň míchal 22 % emerald s tmavým panelem, přidával
+neexistující obrys a používal 11pt mono-black písmo. Artwork nyní přebírá
+světlé tokeny přímo z `MenuBarLight.dc.html`: pill 22 pt, radius 5 pt, logo
+17 pt, mezera 6 pt, horizontální padding 7 pt, nativní SF Pro 12 semibold,
+text `#047857`, emerald 16 % nad světlým menu-bar podkladem a bez obrysu či
+stínu. Logo respektuje flipped AppKit kontext a celý label je na skutečné
+liště posunutý o 1 pt nahoru. Pale emerald se zapeče do non-template obrazu,
+aby barvu znovu nezměnil wallpaper-tinted macOS menu bar.
+
+Komponentová a renderovací sada prošla **16/16**; kontroluje rozměry, světlý
+emerald kontejner i všech 18 popover PNG. Stará Debug instance byla ukončena
+a spuštěn nový lokální LIVE fixture build. Neproběhl deploy, podpis, instalace,
+autostart, síťové volání, broker příkaz ani zásah do copier workeru.
+
+### 2026-08-31 (Codex, oprava skutečného menu-bar runtime po uživatelské kontrole)
+
+Uživatel při kontrole skutečné lišty viděl obří AT logo a po otevření prázdný
+panel. Předchozí závěr z offscreen PNG renderů byl nedostatečný: všechny render
+testy obcházely produkční `onAppear` větev parametrem `animateOnAppear:false`.
+Současně zůstala v systému běžet stará Debug instance z 19:33, zatímco novější
+bundle vznikl až později; rebuild běžící `LSUIElement` proces sám nenahradí.
+
+Kód je nyní fail-visible i v prvním frame. Celokořenový `opacity(0)` / scale /
+offset gate byl odstraněn; rozbalovací animace zůstaly lokální. Pro horní lištu
+vznikl samostatný AppKit obraz se skutečnou logickou velikostí přibližně
+`21,64 × 17 pt`, explicitním SwiftUI frame v obou osách a zachovanými barvami
+čistého skleněného loga. Nativní `NSStatusBarButton` regresní test hlídá, že se
+intrinsic velikost původního PNG `112 × 88 pt` už nemůže propsat do lišty.
+
+Vznikl také samostatný `AlphaTradeStatusUITests` target: má přes reálný
+Accessibility strom najít status item, ověřit jeho frame, otevřít panel,
+zkontrolovat LIVE obsah a tlačítko, rozbalit Bezpečnost, zavřít a znovu otevřít
+panel a přiložit screenshoty. Target i `build-for-testing` prošly. Runtime UI
+test ale na tomto hostu nebyl proveden: Xcode nevytvořil test worker a zůstal
+čekat na `waiting for workers to materialize`; běh byl po 144 s ukončen bez
+spuštěné assertion. Tento stav se výslovně **nepočítá jako PASS**.
+
+Komponentová sada po opravě prošla **15/15** a znovu vytvořila všech 18 light/
+dark PNG. Stará instance byla přesně ukončena a běží jediný čerstvý Debug build
+z opraveného stromu. Neproběhl deploy, podpis, instalace, autostart, síťové
+volání, broker příkaz, ARM, Flatten ani změna workeru; fáze 2/3 zůstávají HOLD.
+
+Následná uživatelská kontrola skutečného buildu potvrdila správnou velikost
+ikony i kompletní obsah panelu; poslední rozdíl proti mockupu byl příliš slabý
+LIVE podklad v liště. První oprava přes SwiftUI background nefungovala: uživatel
+ověřil, že zelená byla vidět jen během kliknutí, tedy jako systémový selected
+stav. Finální label proto není složený SwiftUI layout; logo, neprůhledná zelená
+výplň, stroke a `LIVE 42m` jsou zapečené do jediného barevného, non-template
+`NSImage` o výšce 22 pt. macOS tak nemůže klidový podklad zahodit. Pixelová
+regrese kontroluje přímo tento nativní artwork a komponentová sada zůstává
+**16/16**. Unit a nativní UI testy jsou oddělené do schémat `AlphaTradeStatus`
+a `AlphaTradeStatusUI`, aby blokovaný UI runner nebránil běžným testům.
+Uživatel následně screenshotem v 21:39 fyzicky potvrdil, že zelený zaoblený
+LIVE kontejner zůstává viditelný i v neaktivním stavu bez kliknutí.
+
+### 2026-08-31 (Codex, AlphaTrade Status fáze 1 — nativní mock prototyp)
+
+Vznikla izolovaná macOS aplikace `macos/AlphaTradeStatus`: skutečný SwiftUI
+`MenuBarExtra` ve window stylu, `LSUIElement` bez ikony v Docku a bez hlavního
+okna. Vzhled převádí Claude mockupy do nativních komponent a drží jejich
+hranatější karty, světlý režim, emerald CTA a čisté skleněné AT logo. Sekce jsou
+interaktivně rozbalovací, respektují Reduce Motion a problémový blok se ve
+výchozím stavu otevře sám.
+
+Prototyp má devět deterministických fixture stavů: LIVE, LIVE bez dostupného
+follower acku, SHADOW, DISARMED flat, DISARMED s expozicí, DISARMED bez
+ověření, VYŽADUJE ZÁSAH, STAV NEZNÁMÝ a WORKER OFFLINE. Doménová prezentace
+záměrně nesmí vyrobit nepravdivé `N/N`, tvrdit flat bez čerstvého ověření ani
+překrýt problém starou poslední známou hodnotou. SHADOW jasně říká, že nic
+neodeslalo; freshness je oddělená od safety stavu.
+
+**Safety hranice:** fáze 1 používá jen lokální mock data. Aplikace nemá síťové
+entitlementy ani implementaci pro API, Supabase, Tradovate, auth, pairing,
+Keychain, ServiceManagement, ARM nebo Flatten. Odkazy pouze otevírají existující
+PWA; refresh animuje lokální mock. Diagnostika kopíruje allowlistovaný text bez
+account aliasů a secretů. V panelu je trvale viditelné označení „FÁZE 1 ·
+UKÁZKOVÁ DATA“, takže render nelze vydávat za živý stav.
+
+**Ověření:** Debug i Release build prošly, celé XCTest schéma prošlo **14/14**.
+Testy pokrývají všech devět fixtures, stale precedence, flat/ack invariants,
+bezpečný diagnostický text, URL a light/dark layout; render test vytvořil 18 PNG
+náhledů (každý stav ve světlém i tmavém režimu). Nesignovaný Debug build byl
+lokálně spuštěn a zůstal stabilně běžet jako menu-bar-only proces. Neproběhl
+commit, deploy, podpis, instalace, autostart, síťové volání, broker příkaz, ARM,
+Flatten ani změna workeru. Fáze 2 a 3 zůstávají HOLD podle otevřené otázky výše.
+
+### 2026-08-31 (Claude + uživatel, návrh macOS menu-bar companionu „AlphaTrade Status")
+Revize dřívějšího zamítnutí menu-bar aplikace: zamítnutí platilo pro kokpit
+svázaný s dočasným Mac workerem; nová varianta je čistě read-only klient
+CLOUDOVÉHO stavu (vzor `/api/native-widget-snapshot`), takže přežije přesun
+na VPS beze změny — proto dává smysl. Vznikl kompletní interaktivní vizuální
+návrh (tmavý + světlý režim, 5 stavů ikony, 4 stavy popoveru s rozbalovacími
+sekcemi a animacemi) a předávací specifikace pro implementaci Codexem:
+`docs/MENUBAR_COMPANION_SPEC_20260831.md`; zdrojové mockupy
+v `mockups/menubar-companion/`. Klíčová rozhodnutí: stav ARM přejmenován na
+zelené LIVE (slovo ARM se v UI nepoužívá); stará data vždy přebijí poslední
+známý stav (STAV NEZNÁMÝ ≠ staré DISARMED); followeři se agregují (20/20)
+a jednotlivě se vypisuje jen selhavší účet; panel je read-only vynucený
+serverovým token scope (`copier.status.read`), žádné ovládání copieru.
+Nic se neimplementovalo — jen návrh a specifikace.
+
+Doplněk téhož dne: Codex udělal review specifikace (GO jen pro vizuální
+fázi) a Claude zapracoval **v1.1**: závazný freshness model sladěný s relay
+(≤10 s ověřeno / 10–90 s NEZNÁMÝ / >90 s WORKER OFFLINE; žádná 30min zelená),
+zákaz pollování `/api/native-widget-snapshot` (drahý broker snapshot) →
+nový levný `/api/mac-companion/status` + broker ověření jen na otevření
+panelu, verzovaný allowlist DTO s poctivými limity (followerAck může být
+null — dnešní runtime neumí per-follower ack; „flat" jen z `verifiedAt`,
+ne z groupFlat), Mac pairing s vlastním scope a revokací (iOS widget flow
+nelze převzít — vázaný na iOS bundle), doplněný SHADOW popover do mockupů
+a kontrastní korekce světlého režimu. Otevřené body pro uživatele: barva
+primárního tlačítka (emerald vs. indigo) a čitelnost skleněného loga na
+světlé liště.
 
 ### 2026-09-01 (Claude, nasazení názvů účtů + zaklesnutý worker na zrušené challenge)
 
