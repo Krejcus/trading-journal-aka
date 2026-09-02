@@ -1,0 +1,227 @@
+import Foundation
+import XCTest
+@testable import AlphaTradeStatus
+
+final class CompanionMockFixtureCatalogTests: XCTestCase {
+    func testCatalogContainsAllNineFixturesInStableOrder() {
+        XCTAssertEqual(CompanionMockFixtureCatalog.orderedIDs, [
+            .live,
+            .liveAckUnavailable,
+            .shadow,
+            .disarmed,
+            .disarmedExposure,
+            .disarmedUnverified,
+            .intervention,
+            .unknown,
+            .offline
+        ])
+        XCTAssertEqual(CompanionMockFixtureCatalog.all.map(\.fixtureID), CompanionMockFixtureCatalog.orderedIDs)
+        XCTAssertEqual(Set(CompanionMockFixtureCatalog.orderedIDs.map(\.rawValue)).count, 9)
+    }
+
+    func testEveryFixtureHasTheExpectedStateAndMenuBarPill() {
+        let expectations: [(
+            id: CompanionFixtureID,
+            state: CompanionDisplayState,
+            pill: String?,
+            tone: StatusTone,
+            heroTitle: String
+        )] = [
+            (.live, .live(minutesRemaining: 42), "LIVE 42m", .success, "LIVE"),
+            (.liveAckUnavailable, .live(minutesRemaining: 42), "LIVE 42m", .success, "LIVE"),
+            (.shadow, .shadow, "SHADOW", .muted, "SHADOW"),
+            (.disarmed, .disarmed, nil, .neutral, "DISARMED"),
+            (.disarmedExposure, .intervention(issueCount: 1), "!1", .danger, "ZÁSAH NUTNÝ"),
+            (.disarmedUnverified, .unknown, "?", .warning, "STAV NEZNÁMÝ"),
+            (.intervention, .intervention(issueCount: 2), "!2", .danger, "ZÁSAH NUTNÝ"),
+            (.unknown, .unknown, "?", .warning, "STAV NEZNÁMÝ"),
+            (.offline, .offline, "!1", .danger, "WORKER OFFLINE")
+        ]
+
+        for expectation in expectations {
+            let presentation = CompanionMockFixtureCatalog.presentation(for: expectation.id)
+            XCTAssertEqual(presentation.displayState, expectation.state, expectation.id.rawValue)
+            XCTAssertEqual(presentation.menuBar.pillText, expectation.pill, expectation.id.rawValue)
+            XCTAssertEqual(presentation.menuBar.tone, expectation.tone, expectation.id.rawValue)
+            XCTAssertEqual(presentation.hero.title, expectation.heroTitle, expectation.id.rawValue)
+        }
+    }
+
+    func testEveryProblemSectionIsInitiallyExpanded() {
+        let problemSections = CompanionMockFixtureCatalog.all.flatMap { presentation in
+            presentation.sections
+                .filter(\.hasProblem)
+                .map { (fixture: presentation.fixtureID, section: $0) }
+        }
+
+        XCTAssertFalse(problemSections.isEmpty)
+        for entry in problemSections {
+            XCTAssertTrue(
+                entry.section.isInitiallyExpanded,
+                "\(entry.fixture.rawValue)/\(entry.section.id) hides a problem by default"
+            )
+        }
+    }
+
+    func testUnavailableFollowerAcknowledgementsNeverRenderANumericRatio() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .liveAckUnavailable)
+        XCTAssertEqual(presentation.followerAcknowledgementEvidence, .unavailable)
+
+        let visibleText = presentation.allVisibleText.joined(separator: "\n")
+        let numericRatio = try NSRegularExpression(pattern: #"\b\d+\s*/\s*\d+\b"#)
+        let match = numericRatio.firstMatch(
+            in: visibleText,
+            range: NSRange(visibleText.startIndex..<visibleText.endIndex, in: visibleText)
+        )
+
+        XCTAssertNil(match, "Ack-unavailable UI must not manufacture an N/N confirmation")
+        XCTAssertTrue(visibleText.localizedCaseInsensitiveContains("potvrzení followerů nedostupné"))
+    }
+
+    func testOnlyVerifiedFlatEvidenceMakesAPositiveFlatClaim() {
+        let flatFixtureIDs = CompanionMockFixtureCatalog.all.compactMap { presentation in
+            presentation.exposureEvidence.mayClaimFlat ? presentation.fixtureID : nil
+        }
+        XCTAssertEqual(flatFixtureIDs, [.shadow, .disarmed])
+
+        let positiveFlatPhrases = [
+            "flat ověřen",
+            "ověřil nulové pozice i working orders"
+        ]
+        for presentation in CompanionMockFixtureCatalog.all {
+            let visibleText = presentation.allVisibleText.joined(separator: "\n").lowercased()
+            let hasPositiveFlatClaim = positiveFlatPhrases.contains { visibleText.contains($0) }
+            XCTAssertEqual(
+                hasPositiveFlatClaim,
+                presentation.exposureEvidence.mayClaimFlat,
+                presentation.fixtureID.rawValue
+            )
+        }
+    }
+
+    func testDisarmedExposureIsAnInterventionRatherThanAFlatDisarmedState() {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .disarmedExposure)
+
+        XCTAssertEqual(presentation.displayState, .intervention(issueCount: 1))
+        XCTAssertEqual(presentation.menuBar.pillText, "!1")
+        XCTAssertEqual(presentation.menuBar.tone, .danger)
+        XCTAssertEqual(presentation.exposureEvidence, .verifiedExposure(verifiedAt: "12:52:12"))
+        XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
+        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("disarmed"))
+        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("otevřenou expozici"))
+    }
+
+    func testDisarmedWithoutExposureVerificationIsUnknownRatherThanFlat() {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .disarmedUnverified)
+
+        XCTAssertEqual(presentation.displayState, .unknown)
+        XCTAssertEqual(presentation.menuBar.pillText, "?")
+        XCTAssertEqual(presentation.menuBar.tone, .warning)
+        XCTAssertEqual(presentation.exposureEvidence, .unverified)
+        XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
+        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("disarmed"))
+        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("nebyly brokerem ověřeny"))
+    }
+
+    func testUnknownAndOfflineOverrideTheLastKnownLiveState() {
+        let unknown = CompanionMockFixtureCatalog.presentation(for: .unknown)
+        XCTAssertEqual(unknown.displayState, .unknown)
+        XCTAssertEqual(unknown.menuBar.pillText, "?")
+        XCTAssertEqual(unknown.freshness.tone, .warning)
+        XCTAssertEqual(unknown.exposureEvidence, .unverified)
+        XCTAssertEqual(unknown.followerAcknowledgementEvidence, .unavailable)
+
+        let offline = CompanionMockFixtureCatalog.presentation(for: .offline)
+        XCTAssertEqual(offline.displayState, .offline)
+        XCTAssertEqual(offline.menuBar.pillText, "!1")
+        XCTAssertEqual(offline.freshness.tone, .danger)
+        XCTAssertEqual(offline.exposureEvidence, .unverified)
+        XCTAssertEqual(offline.followerAcknowledgementEvidence, .unavailable)
+
+        for presentation in [unknown, offline] {
+            XCTAssertNotEqual(presentation.menuBar.pillText, "LIVE 42m")
+            XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
+            XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("naposledy potvrzeno live"))
+        }
+    }
+
+    func testDiagnosticsUseTheSafeAllowlistForEveryFixture() {
+        let forbiddenFragments = [
+            "APEX-2",
+            "MNQ",
+            "MES",
+            "20/20",
+            "accountId",
+            "connectionId",
+            "Bearer ",
+            "Device ",
+            "token=",
+            "secret",
+            "https://"
+        ]
+
+        for presentation in CompanionMockFixtureCatalog.all {
+            let diagnostic = presentation.safeDiagnosticText
+            let lines = diagnostic.split(separator: "\n", omittingEmptySubsequences: false)
+            XCTAssertEqual(lines.count, 4, presentation.fixtureID.rawValue)
+            XCTAssertEqual(lines.first, "AlphaTrade Status", presentation.fixtureID.rawValue)
+            XCTAssertTrue(lines[1].hasPrefix("state="), presentation.fixtureID.rawValue)
+            XCTAssertEqual(lines[2], "source=phase-1-mock", presentation.fixtureID.rawValue)
+            XCTAssertTrue(lines[3].hasPrefix("freshness="), presentation.fixtureID.rawValue)
+
+            for forbidden in forbiddenFragments {
+                XCTAssertFalse(
+                    diagnostic.localizedCaseInsensitiveContains(forbidden),
+                    "\(presentation.fixtureID.rawValue) diagnostic leaked \(forbidden)"
+                )
+            }
+        }
+    }
+
+    func testFooterDestinationsUseTheCanonicalHTTPSLinks() {
+        XCTAssertEqual(CompanionDestination.live.url, AppLinks.live)
+        XCTAssertEqual(CompanionDestination.journal.url, AppLinks.journal)
+        XCTAssertEqual(AppLinks.live.scheme, "https")
+        XCTAssertEqual(AppLinks.live.host, "alphatrade-mentor-15.vercel.app")
+        XCTAssertEqual(AppLinks.journal.scheme, "https")
+        XCTAssertEqual(AppLinks.journal.host, "alphatrade-mentor-15.vercel.app")
+        XCTAssertEqual(AppLinks.companionPairing.scheme, "https")
+        XCTAssertEqual(AppLinks.companionPairing.host, "alphatrade-mentor-15.vercel.app")
+        XCTAssertEqual(AppLinks.companionPairing.query, "open=mac-companion-pairing")
+
+        for presentation in CompanionMockFixtureCatalog.all {
+            for action in presentation.footer.actions {
+                switch action.id {
+                case .openLive:
+                    XCTAssertEqual(action.destination, .live, presentation.fixtureID.rawValue)
+                case .openJournal:
+                    XCTAssertEqual(action.destination, .journal, presentation.fixtureID.rawValue)
+                case .refresh, .copyDiagnostics:
+                    XCTAssertNil(action.destination, presentation.fixtureID.rawValue)
+                }
+            }
+        }
+    }
+
+    func testNoFixtureContainsStandaloneARMUserInterfaceText() throws {
+        let standaloneARM = try NSRegularExpression(pattern: #"(?i)\bARM\b"#)
+
+        for presentation in CompanionMockFixtureCatalog.all {
+            let accessibilityText = [
+                presentation.menuBar.accessibilityLabel,
+                presentation.freshness.accessibilityLabel
+            ] + presentation.footer.actions.map(\.accessibilityLabel)
+            let allUserInterfaceText = (presentation.allVisibleText + accessibilityText)
+                .joined(separator: "\n")
+            let match = standaloneARM.firstMatch(
+                in: allUserInterfaceText,
+                range: NSRange(
+                    allUserInterfaceText.startIndex..<allUserInterfaceText.endIndex,
+                    in: allUserInterfaceText
+                )
+            )
+
+            XCTAssertNil(match, "\(presentation.fixtureID.rawValue) exposes standalone ARM text")
+        }
+    }
+}
