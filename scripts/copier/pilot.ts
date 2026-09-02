@@ -12,6 +12,11 @@ import {
 } from '../../server/tradovateOAuthStore';
 import { createFileCopierStore } from '../../services/fileCopierStore';
 import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
+import {
+  copierPilotGroupPath,
+  copierPilotStateKey,
+  parseCopierFollowersFlag,
+} from '../../services/copierPilotGroup';
 import { createTradovateBroker, type TradovateBrokerPort } from '../../services/tradovateBroker';
 import { createBrokerRouter } from '../../services/brokerRouter';
 import { isOpenOrderStatus, type BrokerPort } from '../../services/brokerPort';
@@ -313,7 +318,7 @@ async function runLocalAgent(
   // bez něj platí původní dvojice `--follower/--multiplier` (mac-install).
   const followersFlag = stringFlag('followers', false);
   const followers: CopyFollowerConfig[] = followersFlag
-    ? parseFollowersFlag(followersFlag, leaderId)
+    ? parseCopierFollowersFlag(followersFlag, leaderId)
     : [{ accountId: followerId, mode: 'on-submit', multiplier: Number(multiplierValue) }];
   for (const candidate of contexts) {
     if (!candidate.renewable && candidate.expiresAt) {
@@ -338,10 +343,11 @@ async function runLocalAgent(
   const followerIdsKey = followers.map(item => item.accountId).join('-');
   // Durable stav patří leaderovi/runtime, ne konkrétnímu seznamu followerů.
   // Jinak by pouhé přidání účtu založilo nový outbox a ztratilo recovery.
-  const key = `${context.connectionId}-${leaderId}`;
+  const key = copierPilotStateKey(context.connectionId, leaderId);
   await migrateLegacyPilotState(root, `${key}-${followerIdsKey}`, key);
   const auditPath = resolve(root, `${key}.audit.jsonl`);
-  const groupStore = createFileCopyGroupStore(resolve(root, `${key}.group.json`));
+  const groupPath = copierPilotGroupPath(root, context.connectionId, leaderId);
+  const groupStore = createFileCopyGroupStore(groupPath);
   const cooldownMinutes = numberFlag('cooldown-min', false) ?? 0;
   if (!Number.isFinite(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 720) {
     throw new Error('--cooldown-min musí být v rozsahu 0–720');
@@ -371,7 +377,11 @@ async function runLocalAgent(
     durableSnapshot.safety?.accountEligibility ?? [],
   );
   if (!validation.valid) {
-    throw new Error(`Uložená copy group není bezpečně použitelná: ${validation.errors.join(' ')}`);
+    throw new Error(
+      `Uložená copy group není bezpečně použitelná: ${validation.errors.join(' ')} `
+      + `Durable soubor: ${groupPath}. Oprav ho ručně (nejdřív vytvoř zálohu), nebo po bezpečné kontrole spusť `
+      + '`npm run copier:mac -- install ... --replace-durable-group`.',
+    );
   }
   const releaseLock = await acquireProcessLock(resolve(root, `${key}.lock`));
   let auditTail = Promise.resolve();
@@ -1089,42 +1099,6 @@ function validatePair<T extends ExecutionAccount>(
  * generuje); tenhle flag ji rozšiřuje na víc účtů s vlastními parametry.
  * Příklad: `--followers "61887493@1,61887495@0.5@3"`.
  */
-function parseFollowersFlag(
-  raw: string,
-  leaderId: number,
-): CopyFollowerConfig[] {
-  const followers = raw.split(',').map(part => part.trim()).filter(Boolean).map(part => {
-    const [idPart, multiplierPart, maxPart, ...rest] = part.split('@');
-    if (rest.length > 0) throw new Error(`--followers: nesrozumitelný zápis „${part}"`);
-    const accountId = Number(idPart);
-    if (!Number.isSafeInteger(accountId) || accountId <= 0) {
-      throw new Error(`--followers: „${idPart}" není platné ID účtu`);
-    }
-    const multiplier = multiplierPart == null ? 1 : Number(multiplierPart);
-    if (!Number.isFinite(multiplier) || multiplier <= 0 || multiplier > 100) {
-      throw new Error(`--followers: multiplier účtu ${accountId} musí být větší než 0 a nejvýše 100`);
-    }
-    const maxContracts = maxPart == null ? undefined : Number(maxPart);
-    if (maxContracts != null && (!Number.isSafeInteger(maxContracts) || maxContracts < 1)) {
-      throw new Error(`--followers: maxContracts účtu ${accountId} musí být celé číslo alespoň 1`);
-    }
-    return {
-      accountId,
-      mode: 'on-submit' as const,
-      multiplier,
-      ...(maxContracts != null ? { maxContracts } : {}),
-    };
-  });
-  if (followers.length === 0) throw new Error('--followers je prázdný');
-  const seen = new Set<number>();
-  for (const follower of followers) {
-    if (follower.accountId === leaderId) throw new Error('Leader nemůže být zároveň follower');
-    if (seen.has(follower.accountId)) throw new Error(`Follower ${follower.accountId} je uveden vícekrát`);
-    seen.add(follower.accountId);
-  }
-  return followers;
-}
-
 async function runPreflight(
   context: PilotContext,
   accounts: TradovateAccountDataAccount[],

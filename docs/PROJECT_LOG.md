@@ -134,8 +134,11 @@ záznamu se durable označí `unverifiable` s důvodem a zůstane vykázaný v
 `oauthPreflight.missingAccounts`, zatímco zdravé routované účty projdou
 autoritativní kontrolou. Tato varianta zachovává existující eligibility
 mechanismus a dovolí zdravý read-only reconcile, ale nezeslabuje leadera ani
-účet, který OAuth vrací. `canSafelyRestartLocalCopierAgent` se neměnil a
-vykázaný missing účet proto dál zůstává viditelným restart blockerem.
+účet, který OAuth vrací. `canSafelyRestartLocalCopierAgent` se neměnil; po čisté reconciliaci
+restart brána projde i s vykázaným missing účtem (ten nemá route a
+restart nic neobchoduje), `oauthPreflight.missingAccounts` zůstává
+viditelná diagnostika. ARM/SHADOW jsou pro missing followera dál
+fail-closed přes strict routing (oprava recenze Claude 2. 9.).
 
 Regrese pokrývají odebrání i náhradu zmizelého followera, povinného zmizelého
 leadera, followera ponechaného v nové topologii, strict preflight viditelného
@@ -143,6 +146,29 @@ odebíraného účtu a reconcile bez eligibility záznamu. `npm run typecheck`
 prošel; cíleně 143/143 a celá sada 205 souborů / 1737 testů. Závislosti nebyly
 instalovány. Neproběhl push, deploy, reinstall workeru, ARM, Flatten ani jiný
 broker side effect; aktivace v provozu čeká na samostatný schválený rollout.
+
+### 2026-09-02 (Codex, fail-closed reinstall při rozdílu CLI a durable skupiny)
+
+Mac instalátor už nemůže tiše ignorovat opravené `--leader/--followers`.
+Pilot a instalátor sdílejí jediný helper pro stabilní
+`<connectionId>-<leader>` klíč a cestu ke `group.json`; ještě před prvním
+zápisem, buildem nebo restartem instalátor porovná leadera a follower
+`accountId`, `multiplier` a `maxContracts`. Rozdíl bez explicitní volby skončí
+nenulově a vypíše durable i CLI podobu. `--adopt-durable-group` zachová
+durable autoritu a CLI nechá jen jako bootstrap fallback.
+
+`--replace-durable-group` je pouze souborová operace: vyžaduje čerstvý
+loopback status `DISARMED`, `groupFlat=true`, nula working orders a nula stuck
+outboxu/operací. Před atomickým přepisem vznikne exkluzivní
+`.bak-<timestamp>`; metadata, safety a existující follower mode zůstávají
+zachované. Safe-reinstall skript volá install s explicitním
+`--adopt-durable-group`. Selhání startovní validace nově uvádí přesnou
+cestu k durable souboru a bezpečnou nápovědu pro replace nebo ruční opravu.
+
+Oveření: 206 test souborů / 1737 testů, `npm run typecheck`, produkční
+Vite/PWA build, samostatný Node 20 worker bundle, shell syntax safe-reinstallu,
+cílený lint a `git diff --check`. Neproběhl push, deploy, reinstall/restart
+workera, ARM, Flatten ani jiná brokerová akce.
 
 ### 2026-09-01 (Claude, nasazení názvů účtů + zaklesnutý worker na zrušené challenge)
 

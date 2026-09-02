@@ -1,13 +1,24 @@
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
-import { access, chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { access, chmod, copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { createMacCopierDevice, loadMacCopierDevice } from '../../server/macCopierDevice';
 import {
   loadMacCopierConnectionManifest,
   upsertMacCopierConnectionManifest,
 } from '../../server/macCopierConnectionManifest';
+import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
+import {
+  compareDurableGroupWithCli,
+  copierPilotGroupPath,
+  decideDurableGroupInstall,
+  parseCopierFollowersFlag,
+  replaceDurableGroupWithBackup,
+  type DurableGroupInstallStrategy,
+  type DurableGroupReplacementStatus,
+} from '../../services/copierPilotGroup';
+import type { CopyFollowerConfig, CopyGroupConfig } from '../../services/liveCopyTrading';
 
 const execFileAsync = promisify(execFile);
 const LABEL = 'com.alphatrade.copier';
@@ -21,11 +32,16 @@ const connectionsManifestPath = resolve(pilotRoot, 'connections.json');
 const args = process.argv.slice(2);
 const action = args[0] ?? 'help';
 const flags = new Map<string, string>();
-for (let index = 1; index < args.length; index += 2) {
+for (let index = 1; index < args.length; index += 1) {
   const key = args[index];
+  if (!key?.startsWith('--')) throw new Error(`Neplatný argument ${key ?? ''}`);
   const value = args[index + 1];
-  if (!key?.startsWith('--') || !value) throw new Error(`Neplatný argument ${key ?? ''}`);
-  flags.set(key.slice(2), value);
+  if (!value || value.startsWith('--')) {
+    flags.set(key.slice(2), 'true');
+  } else {
+    flags.set(key.slice(2), value);
+    index += 1;
+  }
 }
 const required = (name: string) => {
   const value = flags.get(name)?.trim();
@@ -58,6 +74,7 @@ AlphaTrade Mac copier service
   npm run copier:mac -- add-connection --connection-id UUID --accounts "ID,ID" --lease /cesta/lease.json [--primary true]
   npm run copier:mac -- install --connection-id UUID --leader ID --follower ID --lease /cesta/lease.json
   npm run copier:mac -- install --connections-manifest /cesta/connections.json --leader ID --followers "ID@MULT,ID@MULT@MAX"
+    [--adopt-durable-group | --replace-durable-group]
   npm run copier:mac -- status
   npm run copier:mac -- reconcile
   npm run copier:mac -- resolve-stuck --kind cancel-or-modify --key KEY --reason "DŮVOD" --approval POTVRZUJI_RUCNI_RESOLUTION_BEZ_BROKER_PRIKAZU
@@ -67,8 +84,8 @@ nechá execution runtime DISARMED. ARM zůstává výhradně ruční akcí v LIV
 `);
 }
 
-async function localAgentStatus(): Promise<Record<string, unknown>> {
-  const response = await fetch('http://127.0.0.1:3211/v1/status', {
+async function localAgentStatus(port = '3211'): Promise<Record<string, unknown>> {
+  const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
     headers: { Origin: 'https://alphatrade-mentor-15.vercel.app' },
   });
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -182,18 +199,90 @@ async function addConnection(): Promise<void> {
 async function install(): Promise<void> {
   const leader = positiveInteger('leader');
   const followers = flags.get('followers')?.trim() || '';
-  const fallbackFollower = followers.split(',')[0]?.split('@')[0]?.trim() || '';
-  const follower = Number(flags.get('follower')?.trim() || fallbackFollower);
-  if (!Number.isSafeInteger(follower) || follower <= 0) throw new Error('Chybí platné --follower nebo --followers');
-  if (leader === follower) throw new Error('Leader a follower musí být různé účty');
+  let cliFollowers: CopyFollowerConfig[];
+  if (followers) {
+    cliFollowers = parseCopierFollowersFlag(followers, leader);
+  } else {
+    const follower = Number(flags.get('follower')?.trim());
+    if (!Number.isSafeInteger(follower) || follower <= 0) throw new Error('Chybí platné --follower nebo --followers');
+    if (leader === follower) throw new Error('Leader a follower musí být různé účty');
+    const multiplier = Number(flags.get('multiplier')?.trim() || '1');
+    if (!Number.isFinite(multiplier) || multiplier <= 0 || multiplier > 100) {
+      throw new Error('--multiplier musí být větší než 0 a nejvýše 100');
+    }
+    cliFollowers = [{ accountId: follower, mode: 'on-submit', multiplier }];
+  }
+  const follower = cliFollowers[0]!.accountId;
+  const sourceManifest = flags.get('connections-manifest')?.trim();
+  const manifest = sourceManifest ? await loadMacCopierConnectionManifest(sourceManifest) : null;
+  const connectionId = manifest?.primaryConnectionId ?? required('connection-id');
+  const adoptDurableGroup = flags.has('adopt-durable-group');
+  const replaceDurableGroup = flags.has('replace-durable-group');
+  if (adoptDurableGroup && replaceDurableGroup) {
+    throw new Error('--adopt-durable-group a --replace-durable-group nelze použít současně');
+  }
+  const strategy: DurableGroupInstallStrategy = replaceDurableGroup
+    ? 'replace'
+    : adoptDurableGroup ? 'adopt' : 'require-match';
+  const cliGroup = { leaderAccountId: leader, followers: cliFollowers };
+  const fallbackGroup: CopyGroupConfig = {
+    id: `agent-${leader}-${cliFollowers.map(item => item.accountId).join('-')}`,
+    name: 'Lokální DEMO agent',
+    enabled: true,
+    leaderAccountId: leader,
+    followers: cliFollowers,
+    localOnly: true,
+  };
+  const groupPath = copierPilotGroupPath(resolve(pilotRoot, '.copier-pilot'), connectionId, leader);
+  const durableGroup = await createFileCopyGroupStore(groupPath).load();
+  const comparison = durableGroup ? compareDurableGroupWithCli(durableGroup, cliGroup) : null;
+  if (comparison && !comparison.matches) {
+    printDurableGroupDifference(groupPath, comparison.durable, comparison.cli);
+  }
+  let replacementStatus: DurableGroupReplacementStatus | null = null;
+  if (comparison && !comparison.matches && strategy === 'replace') {
+    try {
+      const status = await localAgentStatus(flags.get('port')?.trim() || '3211');
+      replacementStatus = status.controller && typeof status.controller === 'object'
+        ? status.controller as DurableGroupReplacementStatus
+        : null;
+    } catch (error) {
+      console.error('Nic nebylo změněno.');
+      throw new Error(
+        `Durable skupinu nelze přepsat bez bezpečného statusu lokálního agenta: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  }
+  let decision;
+  try {
+    decision = decideDurableGroupInstall({
+      durableGroup,
+      cliGroup,
+      fallbackGroup,
+      strategy,
+      replacementStatus,
+    });
+  } catch (error) {
+    console.error('Nic nebylo změněno.');
+    throw error;
+  }
+  if (decision.action === 'adopt') {
+    console.warn('--adopt-durable-group: instalace pokračuje s autoritativní durable skupinou; CLI followeři zůstávají jen fallbackem.');
+  } else if (decision.action === 'replace') {
+    const backupPath = await replaceDurableGroupWithBackup({ path: groupPath, group: decision.group });
+    console.warn(`--replace-durable-group: durable skupina byla nahrazena; záloha: ${backupPath}`);
+  }
+
+  // Od tohoto bodu je rozdíl skupin explicitně vyřešen. Teprve nyní smí
+  // instalátor zapisovat bootstrap soubory, buildit bundle nebo restartovat launchd.
   await mkdir(pilotRoot, { recursive: true, mode: 0o700 });
   await mkdir(launchAgents, { recursive: true, mode: 0o700 });
   const runtimePath = resolve(pilotRoot, 'copier-agent.mjs');
-  const sourceManifest = flags.get('connections-manifest')?.trim();
   let device: Awaited<ReturnType<typeof loadMacCopierDevice>> | null = null;
   const connectionArguments: string[] = [];
-  if (sourceManifest) {
-    const manifest = await loadMacCopierConnectionManifest(sourceManifest);
+  if (sourceManifest && manifest) {
     await Promise.all(manifest.connections.flatMap(connection => [
       access(connection.deviceConfigPath),
       ...(connection.leasePath ? [access(connection.leasePath)] : []),
@@ -203,7 +292,6 @@ async function install(): Promise<void> {
     await chmod(connectionsManifestPath, 0o600);
     connectionArguments.push('--connections-manifest', connectionsManifestPath);
   } else {
-    const connectionId = required('connection-id');
     const sourceLease = resolve(required('lease'));
     await access(sourceLease);
     const stableLease = resolve(pilotRoot, 'bootstrap-lease.json');
@@ -291,6 +379,14 @@ async function install(): Promise<void> {
     : `Multi-OAuth manifest: ${connectionsManifestPath}`);
   console.log(`Logy: ${stdout} / ${stderr}`);
   console.log('Execution runtime je po startu DISARMED. ARM se neobnovuje automaticky.');
+}
+
+function printDurableGroupDifference(path: string, durable: string, cli: string): void {
+  console.error('ROZDÍL: CLI skupina se liší od durable skupiny.');
+  console.error(`Durable (autoritativní, ${path}): ${durable}`);
+  console.error(`CLI: ${cli}`);
+  console.error('Durable skupina je pro běžný start autoritativní. Použij explicitně --adopt-durable-group,');
+  console.error('nebo --replace-durable-group (jen DISARMED, groupFlat, bez working orders a stuck operací).');
 }
 
 async function status(): Promise<void> {
