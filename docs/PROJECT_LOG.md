@@ -56,6 +56,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] **Násobek 2× „sám“ přeskočil na funded účet při změně leadera** (2. 9.,
+      15:25–15:34 UTC): `changeCopyGroupLeader` dává předchozímu leaderovi
+      `{...promotedFollower, accountId: previousLeader}`, tedy zdědí násobek
+      povýšeného followera (63338592@2 → leader, Lucid 62364553 dostal @2).
+      Ten pak jako „nedostupný“ v Tradeify pohledu prošel náhradou
+      (`replaceCopyGroupFollowerAccount`), která násobek opět zdědila → funded
+      64310872 skončil @2, aniž by mu uživatel 2× kdy nastavil; ten účet pak
+      narazil na DLL 1 250. Fix: předchozí leader vždy `multiplier: 1`,
+      náhrada účtu nesmí tiše přenášet násobek >1 bez explicitního potvrzení,
+      a dialog musí zvýrazněně ukázat každý follower, kterému se násobek mění.
+      Regrese: promote follower@2 → nový follower (starý leader) má 1; replace
+      účtu s @2 vyžaduje potvrzení. Delegovat Codexu.
+- [ ] **Frekvence fail-closed při rychlém obchodování velkých velikostí**
+      (2. 9. odpoledne, 5× DISARM za 70 min): 16:01 divergence -2 vs -3 uprostřed
+      scale-in (pravděpodobně latence fillu followera), 16:30 „Flat sweep
+      nedokončen: postkontrola selhala: deadline 1500 ms“, 16:44 „modify nebyl
+      potvrzen; objednávka skončila jako filled“ (posun SL během fillu). Každý
+      důvod je z pohledu safety legitimní, ale dohromady byla kopírka při
+      17-kontraktových vstupech a SL posunech po pár sekundách nepoužitelná a
+      každý DISARM zanechal followery mimo synchron. Potřebuje samostatný
+      read-only review Codexu: která z těchto cest je race (a snese grace
+      window / opakovanou autoritativní kontrolu) a která je skutečná
+      divergence. Nikdy neopravovat obchodem.
 - [ ] **Replay starých rejectů při 50-min obnově WebSocketu** (nalezeno 2. 9.
       večer): po každém `SOCKET RENEWAL` leader event source znovu vydá
       `leader-reject-<orderId>` pro už dávno odmítnuté příkazy (645218030049
