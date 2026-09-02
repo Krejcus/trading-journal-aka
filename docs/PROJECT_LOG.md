@@ -131,8 +131,11 @@ záložka, `vite.config.ts` `launch_handler`). Vizuál: patička „READ-ONLY ·
 systémový modrý focus ring na tlačítkách vypnut `focusEffectDisabled()` na
 hostovaném kořeni (build 4 ho řešil jen u hlaviček sekcí); build 5. Docs:
 README a spec v1.3 uvádějí skutečný stav a poučení „companion musí být
-v mainu, jinak ho další deploy smaže". Žádný broker write, ARM/DISARM ani
-zásah do copier workeru.
+v mainu, jinak ho další deploy smaže". Po uživatelově „nasaď" byl `main`
+fast-forwardován na `d054fd30`; auto-deploy `dpl_DEtm6KKEQw44bFS7JZxwRYm92suq`
+obnovil companion API (status 401 bez credentialu, pairing/start 405 na GET,
+devices 401 — routy existují). Žádný broker write, ARM/DISARM ani zásah do
+copier workeru.
 
 ### 2026-09-02 (Claude, rollout workera 7763bfcd)
 
