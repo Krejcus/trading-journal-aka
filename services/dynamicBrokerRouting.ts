@@ -14,6 +14,13 @@ export interface DynamicRoutedAccount {
   connectionId: string;
 }
 
+export interface DynamicBrokerRoutingRequest {
+  /** Účty, jejichž absence nebo nejednoznačnost vždy zablokuje refresh. */
+  required: readonly number[];
+  /** Účty, které se smějí vynechat výhradně tehdy, když je nevrátí žádný OAuth adresář. */
+  optional: readonly number[];
+}
+
 interface AccountOwner {
   connection: DynamicOAuthConnection;
   account: TradovateVisibleAccount;
@@ -22,6 +29,12 @@ interface AccountOwner {
 export interface DynamicBrokerRouteResolution {
   routes: BrokerRoute[];
   accounts: DynamicRoutedAccount[];
+  missingOptional: number[];
+}
+
+export interface DynamicBrokerRouteRefresh {
+  accounts: DynamicRoutedAccount[];
+  missingOptional: number[];
 }
 
 /**
@@ -31,7 +44,7 @@ export interface DynamicBrokerRouteResolution {
 export function resolveDynamicBrokerRoutes(
   connections: readonly DynamicOAuthConnection[],
   snapshots: ReadonlyMap<string, readonly TradovateVisibleAccount[]>,
-  requestedAccountIds?: readonly number[],
+  request?: DynamicBrokerRoutingRequest,
 ): DynamicBrokerRouteResolution {
   if (connections.length === 0) throw new Error('Není nakonfigurované žádné OAuth spojení');
   const owners = new Map<number, AccountOwner[]>();
@@ -43,16 +56,29 @@ export function resolveDynamicBrokerRoutes(
     }
   }
 
-  const requested = requestedAccountIds == null
+  const required = request == null
     ? [...owners].filter(([, matches]) => matches.some(match => (
       match.account.active && match.account.canTrade && match.account.accountSpec != null
     ))).map(([accountId]) => accountId)
-    : [...new Set(requestedAccountIds)];
+    : [...new Set(request.required)];
+  const optional = request == null ? [] : [...new Set(request.optional)];
+  const requiredSet = new Set(required);
+  const overlap = optional.filter(accountId => requiredSet.has(accountId));
+  if (overlap.length > 0) {
+    throw new Error(`Účet nesmí být současně required i optional: ${overlap.join(',')}`);
+  }
+  const requested = [...required, ...optional];
+  const optionalSet = new Set(optional);
   const selected: AccountOwner[] = [];
+  const missingOptional: number[] = [];
   for (const accountId of requested) {
     if (!Number.isSafeInteger(accountId) || accountId <= 0) throw new Error(`Neplatné ID účtu ${accountId}`);
     const matches = owners.get(accountId) ?? [];
     if (matches.length === 0) {
+      if (optionalSet.has(accountId)) {
+        missingOptional.push(accountId);
+        continue;
+      }
       throw new Error(`Účet ${accountId} není viditelný v žádném připojeném OAuth. Připoj nebo obnov jeho prop firmu v Connections.`);
     }
     if (matches.length > 1) {
@@ -77,6 +103,7 @@ export function resolveDynamicBrokerRoutes(
       canTrade: account.canTrade,
       connectionId: connection.connectionId,
     })),
+    missingOptional,
   };
 }
 
@@ -84,12 +111,15 @@ export function resolveDynamicBrokerRoutes(
 export async function refreshDynamicBrokerRoutes(
   connections: readonly DynamicOAuthConnection[],
   router: BrokerRouterPort,
-  requestedAccountIds?: readonly number[],
-): Promise<DynamicRoutedAccount[]> {
+  request?: DynamicBrokerRoutingRequest,
+): Promise<DynamicBrokerRouteRefresh> {
   const refreshed = await Promise.all(connections.map(async connection => (
     [connection.connectionId, await connection.broker.refreshAccountDirectory()] as const
   )));
-  const resolution = resolveDynamicBrokerRoutes(connections, new Map(refreshed), requestedAccountIds);
+  const resolution = resolveDynamicBrokerRoutes(connections, new Map(refreshed), request);
   router.replaceRoutes(resolution.routes);
-  return resolution.accounts;
+  return {
+    accounts: resolution.accounts,
+    missingOptional: resolution.missingOptional,
+  };
 }

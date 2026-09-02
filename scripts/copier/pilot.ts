@@ -42,7 +42,11 @@ import {
   openTradovatePilotLease,
   type TradovatePilotLeaseEnvelope,
 } from '../../server/tradovatePilotLease';
-import { startLocalCopierExecutionAgent } from '../../server/localCopierExecutionAgent';
+import {
+  startLocalCopierExecutionAgent,
+  type PrepareGroupAccountsRequest,
+  type PrepareGroupAccountsResult,
+} from '../../server/localCopierExecutionAgent';
 import {
   canSafelyRestartLocalCopierAgent,
   LOCAL_COPIER_AGENT_PORT,
@@ -264,8 +268,14 @@ async function runMultiConnectionAgent(): Promise<void> {
   await runLocalAgent(
     loaded.map(item => item.context), leaderId, followerId, accounts, broker,
     loaded.map(item => ({ broker: item.broker, label: `conn:${item.context.connectionId.slice(0, 8)}` })),
-    async accountIds => {
-      await refreshDynamicBrokerRoutes(routingConnections, broker, accountIds);
+    async request => {
+      const refreshed = await refreshDynamicBrokerRoutes(routingConnections, broker, request);
+      for (const accountId of refreshed.missingOptional) {
+        console.warn(
+          `${new Date().toISOString()} ROUTING OPTIONAL SKIP účet=${accountId} důvod=účet není viditelný v žádném připojeném OAuth adresáři`,
+        );
+      }
+      return { missingOptional: refreshed.missingOptional };
     },
   );
 }
@@ -277,7 +287,7 @@ async function runLocalAgent(
   accounts: ExecutionAccount[],
   baseBroker: BrokerPort,
   renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string }> = [],
-  prepareGroupAccounts?: (accountIds: readonly number[]) => Promise<void>,
+  prepareGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>,
 ): Promise<void> {
   const context = contexts[0];
   if (!context) throw new Error('Lokální agent potřebuje alespoň jedno OAuth spojení');

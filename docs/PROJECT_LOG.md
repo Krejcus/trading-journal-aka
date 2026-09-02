@@ -101,16 +101,48 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jako dev nástroj, nebo smazat (rozhodnutí uživatele).
 - [x] Test „Flatten při nejasném cancelu" už nepoužívá produkční čekání:
       deterministicky injektuje nulové čekání a dvě kontrolní iterace.
-- [ ] Zmizelý follower bez BREACH/DLL (zrušená challenge) blokuje Edit group
-      i read-only reconcile — `accountsRequiredForRoutingChange` má
-      followera odebíraného z topologie, kterého žádný OAuth adresář
-      nevrací, pouštět jako volitelného (leader vždy povinný). Viz zápis
-      2026-09-01 (Claude).
+- [x] Zmizelý follower bez BREACH/DLL už neblokuje Edit group ani read-only
+      reconcile — vyřešeno explicitním required/optional OAuth kontraktem
+      a durable `unverifiable` klasifikací 2. 9. (zápis níže).
 - [ ] Chaos test recovery proti reálnému DEMO: běžný restart flat/DISARMED
       prošel 18. 8.; kill uprostřed odesílání a výpadek WS zůstávají ověřené
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-02 (Codex, bezpečné odebrání followera zmizelého z OAuth)
+
+Routing refresh má místo seznamu s implicitním polykáním chyb explicitní
+kontrakt `prepareGroupAccounts({ required, optional }) -> { missingOptional }`.
+Při změně topologie je optional pouze follower, který je ve staré skupině,
+není v nové a není starý ani nový leader. Všechny OAuth adresáře se vždy
+obnoví celé: pouze nulová viditelnost optional účtu dovolí route vynechat a
+pilot zapíše konkrétní `ROUTING OPTIONAL SKIP`; duplicita, inactive/read-only
+stav nebo chybějící Account.name dál selžou. Leader a každý účet nové
+topologie jsou vždy required. Žádné automatické párování ani náhrada ID
+nevznikly.
+
+Controller dostane jen validovaný seznam optional účtů skutečně chybějících
+v OAuth. `reconfigureGroup`/`activateGroup` smí přeskočit pouze takového
+odebíraného followera bez route. Pokud OAuth starý účet vrátí, controller dál
+načte capability, pozice i working orders a změnu při expozici nebo příkazu
+fail-closed odmítne; účet v nové topologii ani leader nelze výjimkou označit.
+
+Samostatný reconcile používá leadera jako required a followery jako optional
+pouze pro OAuth discovery. Chybějící follower bez dosavadního eligibility
+záznamu se durable označí `unverifiable` s důvodem a zůstane vykázaný v
+`oauthPreflight.missingAccounts`, zatímco zdravé routované účty projdou
+autoritativní kontrolou. Tato varianta zachovává existující eligibility
+mechanismus a dovolí zdravý read-only reconcile, ale nezeslabuje leadera ani
+účet, který OAuth vrací. `canSafelyRestartLocalCopierAgent` se neměnil a
+vykázaný missing účet proto dál zůstává viditelným restart blockerem.
+
+Regrese pokrývají odebrání i náhradu zmizelého followera, povinného zmizelého
+leadera, followera ponechaného v nové topologii, strict preflight viditelného
+odebíraného účtu a reconcile bez eligibility záznamu. `npm run typecheck`
+prošel; cíleně 143/143 a celá sada 205 souborů / 1737 testů. Závislosti nebyly
+instalovány. Neproběhl push, deploy, reinstall workeru, ARM, Flatten ani jiný
+broker side effect; aktivace v provozu čeká na samostatný schválený rollout.
 
 ### 2026-09-01 (Claude, nasazení názvů účtů + zaklesnutý worker na zrušené challenge)
 

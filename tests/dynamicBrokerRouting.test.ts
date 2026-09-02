@@ -35,11 +35,15 @@ describe('dynamic account -> OAuth routing', () => {
       { broker: lucid.broker, accountIds: [22] },
     ]);
 
-    await expect(refreshDynamicBrokerRoutes([tradeify, lucid], router, [11, 63338592]))
-      .resolves.toEqual([
+    await expect(refreshDynamicBrokerRoutes([tradeify, lucid], router, {
+      required: [11, 63338592], optional: [],
+    })).resolves.toEqual({
+      accounts: [
         expect.objectContaining({ id: 11, connectionId: 'tradeify' }),
         expect.objectContaining({ id: 63338592, connectionId: 'lucid' }),
-      ]);
+      ],
+      missingOptional: [],
+    });
     await router.placeOrder({
       tag: 'dynamic', accountId: 63338592, symbol: 'MNQ', side: 'Buy', quantity: 1, orderType: 'Market',
     });
@@ -54,12 +58,42 @@ describe('dynamic account -> OAuth routing', () => {
       ['first', [account(11), account(44, { canTrade: false })]],
       ['second', [account(11)]],
     ]);
-    expect(() => resolveDynamicBrokerRoutes([first, second], snapshots, [999]))
+    expect(() => resolveDynamicBrokerRoutes([first, second], snapshots, { required: [999], optional: [] }))
       .toThrow('není viditelný v žádném připojeném OAuth');
-    expect(() => resolveDynamicBrokerRoutes([first, second], snapshots, [11]))
+    expect(() => resolveDynamicBrokerRoutes([first, second], snapshots, { required: [11], optional: [] }))
       .toThrow('ve více OAuth spojeních');
-    expect(() => resolveDynamicBrokerRoutes([first, second], snapshots, [44]))
+    expect(() => resolveDynamicBrokerRoutes([first, second], snapshots, { required: [44], optional: [] }))
       .toThrow('nemá execution oprávnění');
+  });
+
+  it('vynechá jen chybějící optional účet; viditelný optional účet dál routuje a validuje přísně', async () => {
+    const first = connection('first', [account(11), account(22)]);
+    const second = connection('second', [account(33), account(44, { canTrade: false })]);
+    const router = createBrokerRouter([
+      { broker: first.broker, accountIds: [11] },
+      { broker: second.broker, accountIds: [33] },
+    ]);
+
+    const refreshed = await refreshDynamicBrokerRoutes([first, second], router, {
+      required: [11, 33], optional: [22, 999],
+    });
+    expect(refreshed).toEqual({
+      accounts: [
+        expect.objectContaining({ id: 11, connectionId: 'first' }),
+        expect.objectContaining({ id: 33, connectionId: 'second' }),
+        expect.objectContaining({ id: 22, connectionId: 'first' }),
+      ],
+      missingOptional: [999],
+    });
+    await router.placeOrder({
+      tag: 'visible-optional', accountId: 22, symbol: 'MNQ', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    expect((first.broker as unknown as ReturnType<typeof createMockBroker>).placedRequests())
+      .toEqual([expect.objectContaining({ accountId: 22 })]);
+
+    await expect(refreshDynamicBrokerRoutes([first, second], router, {
+      required: [11], optional: [44],
+    })).rejects.toThrow('nemá execution oprávnění');
   });
 
   it('selhání refresh jednoho OAuth nechá původní router beze změny', async () => {
@@ -71,7 +105,9 @@ describe('dynamic account -> OAuth routing', () => {
       { broker: second.broker, accountIds: [22] },
     ]);
 
-    await expect(refreshDynamicBrokerRoutes([first, second], router, [11, 33])).rejects.toThrow('oauth-down');
+    await expect(refreshDynamicBrokerRoutes([first, second], router, {
+      required: [11, 33], optional: [],
+    })).rejects.toThrow('oauth-down');
     await router.placeOrder({
       tag: 'old-route', accountId: 22, symbol: 'MNQ', side: 'Buy', quantity: 1, orderType: 'Market',
     });

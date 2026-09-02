@@ -169,6 +169,23 @@ export interface CopierAccountEligibilityExclusion {
   reason: string;
 }
 
+export interface CopierReconciliationOptions {
+  /**
+   * Followeři, jejichž nepřítomnost právě potvrdil úplný refresh všech
+   * připojených OAuth adresářů. Leader zde nikdy nesmí být.
+   */
+  missingOptionalAccountIds?: readonly number[];
+}
+
+export interface CopierGroupReconfigurationOptions {
+  /**
+   * Odebíraní followeři, které právě nevrátil žádný připojený OAuth.
+   * Účet přítomný v OAuth se touto výjimkou označit nesmí a dál podléhá
+   * capability + flat + no-working preflightu.
+   */
+  missingOptionalAccountIds?: readonly number[];
+}
+
 export interface CopierAutoClose {
   at: number;
   operationId: string;
@@ -234,7 +251,10 @@ export interface CopierRuntimeController {
    */
   applyAccountEligibilityExclusions(exclusions: readonly CopierAccountEligibilityExclusion[]): Promise<void>;
   /** Autoritativně porovná pozice a ověří, že nikde nezůstaly working orders. */
-  reconcile(): Promise<{ divergentAccounts: number[]; workingOrderAccounts: number[] }>;
+  reconcile(options?: CopierReconciliationOptions): Promise<{
+    divergentAccounts: number[];
+    workingOrderAccounts: number[];
+  }>;
   /**
    * Autoritativně ověří jediný účet u brokera bez změny execution skupiny.
    * Je to čistě read-only cesta pro ruční reaktivaci po skončené DLL session.
@@ -242,18 +262,19 @@ export interface CopierRuntimeController {
   verifyAccountEligibility(accountId: number): Promise<CopierAccountEligibility>;
   /**
    * Bezpečně změní leader epochu. Vyžaduje flat + bez working příkazů na
-   * všech routovatelných účtech sjednocené staré a nové topologie. Známý
-   * vyřazený follower (BREACHED/DLL/unverifiable), který už není v OAuth,
-   * smí být pouze odpojen; leader a aktivní účty zůstávají vždy povinné.
+   * všech routovatelných účtech sjednocené staré a nové topologie. Pouze
+   * odebíraný follower, jehož absenci právě prokázal úplný OAuth refresh,
+   * smí být odpojen bez route; leader i každý člen nové topologie zůstává
+   * vždy povinný.
    * Zahodí pouze order-lifecycle stav předchozího leadera a nikdy neposílá
    * brokerový příkaz.
    */
-  reconfigureGroup(group: CopyGroupConfig): Promise<void>;
+  reconfigureGroup(group: CopyGroupConfig, options?: CopierGroupReconfigurationOptions): Promise<void>;
   /**
    * Bezpečně vybere jinou uloženou skupinu jako jedinou execution skupinu.
    * Vždy založí novou durable epochu a končí DISARMED.
    */
-  activateGroup(group: CopyGroupConfig): Promise<void>;
+  activateGroup(group: CopyGroupConfig, options?: CopierGroupReconfigurationOptions): Promise<void>;
   /** Synchronní změna follower/risk konfigurace při nezměněném leaderovi. */
   updateGroup(group: CopyGroupConfig): void;
   /** Explicitní ruční Flatten jednoho účtu. Nikdy se nespouští automaticky. */
@@ -3280,7 +3301,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * poslední a přepsat novější bezpečnostní stav.
    */
   async function performReconciliation(
-    reconciliationOptions: { clearLastError?: boolean } = {},
+    reconciliationOptions: CopierReconciliationOptions & { clearLastError?: boolean } = {},
   ): Promise<ReconciliationResult> {
     const requestedGeneration = safetyGeneration;
     const run = reconciliationTail.then(() => runReconciliation(
@@ -3293,7 +3314,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   /** Autoritativní reconciliation — sdílí ji veřejné API i connection recovery. */
   async function runReconciliation(
-    reconciliationOptions: { clearLastError?: boolean },
+    reconciliationOptions: CopierReconciliationOptions & { clearLastError?: boolean },
     requestedGeneration: number,
   ): Promise<ReconciliationResult> {
       const generationAtStart = safetyGeneration;
@@ -3311,6 +3332,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');
       const accountIds = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
       const eligibilityNow = clock();
+      const followerIds = new Set(group.followers.map(item => item.accountId));
+      const missingOptionalAccountIds = new Set(reconciliationOptions.missingOptionalAccountIds ?? []);
+      for (const accountId of missingOptionalAccountIds) {
+        if (!Number.isSafeInteger(accountId) || !followerIds.has(accountId)) {
+          throw new Error(`Reconciliation dostala neplatný optional follower účet ${accountId}`);
+        }
+      }
+      let missingEligibilityChanged = false;
+      for (const accountId of missingOptionalAccountIds) {
+        const current = accountEligibility.get(accountId);
+        if (current && current.state !== 'active') continue;
+        setEligibility(accountId, {
+          ...(current ?? {}),
+          accountId,
+          state: 'unverifiable',
+          reason: 'účet není viditelný v žádném připojeném OAuth při read-only reconciliaci',
+          at: eligibilityNow,
+        });
+        missingEligibilityChanged = true;
+      }
+      if (missingEligibilityChanged) await persistEligibility();
       const eligibilityByAccount = new Map<number, CopierAccountEligibility>();
       for (const [accountId, stored] of accountEligibility) {
         eligibilityByAccount.set(accountId, eligibilityAt(stored, eligibilityNow));
@@ -3322,10 +3364,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const optionalFollowerIds = new Set(group.followers
         .filter(follower => (eligibilityByAccount.get(follower.accountId)?.state ?? 'active') !== 'active')
         .map(follower => follower.accountId));
-      const capabilities = await broker.listAccountCapabilities(accountIds);
+      const routedAccountIds = accountIds.filter(accountId => !missingOptionalAccountIds.has(accountId));
+      const capabilities = await broker.listAccountCapabilities(routedAccountIds);
       const byCapability = new Map(capabilities.map(item => [item.accountId, item]));
-      const missing = accountIds.filter(accountId => !byCapability.has(accountId) && !optionalFollowerIds.has(accountId));
-      const inactive = accountIds.filter(accountId =>
+      const missingRequired = routedAccountIds.filter(
+        accountId => !byCapability.has(accountId) && !optionalFollowerIds.has(accountId),
+      );
+      const missing = [...new Set([...missingOptionalAccountIds, ...missingRequired])];
+      const inactive = routedAccountIds.filter(accountId =>
         byCapability.get(accountId)?.active === false && !optionalFollowerIds.has(accountId));
       const readOnlyFollowers = group.followers.filter(
         follower => byCapability.get(follower.accountId)?.canTrade === false
@@ -3336,11 +3382,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         inactiveAccounts: [...inactive],
         readOnlyFollowerAccounts: [...readOnlyFollowers],
       };
-      if (missing.length > 0 || inactive.length > 0 || readOnlyFollowers.length > 0) {
+      if (missingRequired.length > 0 || inactive.length > 0 || readOnlyFollowers.length > 0) {
         gate = { ...gate, armed: false };
         invalidateReconciliation();
         const details = [
-          missing.length > 0 ? `missing=${missing.join(',')}` : '',
+          missingRequired.length > 0 ? `missing=${missingRequired.join(',')}` : '',
           inactive.length > 0 ? `inactive=${inactive.join(',')}` : '',
           readOnlyFollowers.length > 0 ? `readOnlyFollowers=${readOnlyFollowers.join(',')}` : '',
         ].filter(Boolean).join(' ');
@@ -3513,7 +3559,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    */
   const reconfigureLeaderEpoch = async (
     nextGroup: CopyGroupConfig,
-    switchOptions: { allowGroupChange?: boolean; forceEpoch?: boolean } = {},
+    switchOptions: CopierGroupReconfigurationOptions & {
+      allowGroupChange?: boolean;
+      forceEpoch?: boolean;
+    } = {},
   ): Promise<void> => {
     const operation = switchOptions.forceEpoch ? 'Aktivaci skupiny' : 'Změnu leadera';
     const run = eventTail.then(async () => {
@@ -3573,12 +3622,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...nextGroup.followers.map(item => item.accountId),
       ])];
       const leaderIds = new Set([group.leaderAccountId, nextGroup.leaderAccountId]);
-      const eligibilityNow = clock();
-      const optionalFollowerIds = new Set(accountIds.filter(accountId => {
-        if (leaderIds.has(accountId)) return false;
-        const stored = accountEligibility.get(accountId);
-        return stored != null && eligibilityAt(stored, eligibilityNow).state !== 'active';
-      }));
+      const nextAccountIds = new Set([
+        nextGroup.leaderAccountId,
+        ...nextGroup.followers.map(item => item.accountId),
+      ]);
+      const removableFollowerIds = new Set(group.followers
+        .map(item => item.accountId)
+        .filter(accountId => !nextAccountIds.has(accountId) && !leaderIds.has(accountId)));
+      const optionalFollowerIds = new Set(switchOptions.missingOptionalAccountIds ?? []);
+      for (const accountId of optionalFollowerIds) {
+        if (!Number.isSafeInteger(accountId) || !removableFollowerIds.has(accountId)) {
+          throw new Error(`${operation} dostala neplatný chybějící optional follower účet ${accountId}`);
+        }
+      }
       const requiredAccountIds = accountIds.filter(accountId => !optionalFollowerIds.has(accountId));
       const capabilities = await withLeaderEpochDeadline(
         'leader capability preflight',
@@ -3865,11 +3921,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (changed) await persistEligibility();
     },
-    async reconcile() {
+    async reconcile(reconciliationOptions = {}) {
       // Veřejná Kontrola pozic je explicitní uživatelská recovery akce.
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
-      return performReconciliation({ clearLastError: true });
+      return performReconciliation({ ...reconciliationOptions, clearLastError: true });
     },
     async verifyAccountEligibility(accountId) {
       if (!Number.isSafeInteger(accountId) || accountId <= 0) {
@@ -3926,18 +3982,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }]);
       return verified;
     },
-    async reconfigureGroup(nextGroup) {
+    async reconfigureGroup(nextGroup, reconfigurationOptions = {}) {
       // UI dostane okamžitě fail-safe DISARM ještě před čekáním na eventTail.
       gate = { ...gate, armed: false };
       invalidateReconciliation();
-      await reconfigureLeaderEpoch(nextGroup);
+      await reconfigureLeaderEpoch(nextGroup, reconfigurationOptions);
     },
-    async activateGroup(nextGroup) {
+    async activateGroup(nextGroup, reconfigurationOptions = {}) {
       // Aktivace není ARM. Nejprve fail-safe DISARM, potom plný preflight
       // staré i nové topologie a nová durable epocha.
       gate = { ...gate, armed: false };
       invalidateReconciliation();
-      await reconfigureLeaderEpoch(nextGroup, { allowGroupChange: true, forceEpoch: true });
+      await reconfigureLeaderEpoch(nextGroup, {
+        ...reconfigurationOptions,
+        allowGroupChange: true,
+        forceEpoch: true,
+      });
     },
     updateGroup(nextGroup) {
       // Jakýkoli pokus o změnu konfigurace nejdřív zavře live dispatch.

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { startLocalCopierExecutionAgent, type LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
+import {
+  startLocalCopierExecutionAgent,
+  type LocalCopierExecutionAgent,
+  type PrepareGroupAccountsRequest,
+} from '../server/localCopierExecutionAgent';
 import type { CopierRuntimeController, CopierControllerStatus } from '../services/copierRuntimeController';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { createMockBroker } from '../services/mockBroker';
@@ -287,7 +291,7 @@ describe('local copier execution agent', () => {
   it('mění follower topologii přes DISARM, dynamický routing a bezpečnou epochu', async () => {
     const runtime = controller();
     const onGroupChanged = vi.fn(async () => undefined);
-    const prepareGroupAccounts = vi.fn(async () => undefined);
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
     runtime.arm({ shadowMode: false });
     running = await startLocalCopierExecutionAgent({
       controller: runtime, group: group(), port: 0, onGroupChanged, prepareGroupAccounts,
@@ -305,11 +309,11 @@ describe('local copier execution agent', () => {
     });
     expect(response.status).toBe(200);
     expect(runtime.disarm).toHaveBeenCalled();
-    expect(prepareGroupAccounts).toHaveBeenCalledWith([11, 22, 33]);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith({ required: [11, 22, 33], optional: [] });
     expect(runtime.reconfigureGroup).toHaveBeenCalledWith(expect.objectContaining({
       leaderAccountId: 11,
       followers: expect.arrayContaining([expect.objectContaining({ accountId: 33 })]),
-    }));
+    }), { missingOptionalAccountIds: [] });
     expect(runtime.updateGroup).not.toHaveBeenCalled();
     expect(vi.mocked(runtime.disarm).mock.invocationCallOrder[0])
       .toBeLessThan(prepareGroupAccounts.mock.invocationCallOrder[0]);
@@ -352,18 +356,9 @@ describe('local copier execution agent', () => {
     expect(running.status().group.followers).toHaveLength(1);
   });
 
-  it('dovolí odebrat známý BREACHED follower, i když už zmizel z OAuth routingu', async () => {
+  it('dovolí odebrat followera bez eligibility záznamu, kterého OAuth už nevrací', async () => {
     const runtime = controller();
-    vi.mocked(runtime.status).mockReturnValue({
-      ...runtime.status(),
-      accountEligibility: [{
-        accountId: 22,
-        state: 'breached',
-        reason: 'account disabled after breach',
-        at: 123,
-      }],
-    });
-    const prepareGroupAccounts = vi.fn(async () => undefined);
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [22] }));
     running = await startLocalCopierExecutionAgent({
       controller: runtime,
       group: group(),
@@ -371,23 +366,115 @@ describe('local copier execution agent', () => {
       prepareGroupAccounts,
     });
 
-    const replacement = {
+    const withoutFollower = {
       ...group(),
-      followers: [{ accountId: 33, mode: 'on-submit' as const, multiplier: 1 }],
+      followers: [],
     };
     const response = await post(running, running.status().nonce, {
       type: 'copy-command',
-      command: { type: 'update-group', group: replacement },
+      command: { type: 'update-group', group: withoutFollower },
     });
 
     expect(response.status).toBe(200);
-    expect(prepareGroupAccounts).toHaveBeenCalledWith([11, 33]);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith({ required: [11], optional: [22] });
+    expect(runtime.reconfigureGroup).toHaveBeenCalledWith(expect.objectContaining({
+      followers: [],
+    }), { missingOptionalAccountIds: [22] });
+    expect(running.status().group.followers).toEqual([]);
+  });
+
+  it('dovolí nahradit zmizelého followera, ale nový follower zůstává required', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => {
+      expect(request).toEqual({ required: [11, 33], optional: [22] });
+      return { missingOptional: [22] };
+    });
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: { ...group(), followers: [{ accountId: 33, mode: 'on-submit', multiplier: 1 }] },
+      },
+    });
+
+    expect(response.status).toBe(200);
     expect(runtime.reconfigureGroup).toHaveBeenCalledWith(expect.objectContaining({
       followers: [expect.objectContaining({ accountId: 33 })],
-    }));
-    expect(running.status().group.followers).toEqual([
-      expect.objectContaining({ accountId: 33 }),
-    ]);
+    }), { missingOptionalAccountIds: [22] });
+  });
+
+  it('odmítne routing výsledek, který by označil required účet jako chybějící optional', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [11] }));
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: { type: 'update-group', group: { ...group(), followers: [] } },
+    });
+
+    expect(response.status).toBe(409);
+    expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
+  });
+
+  it('zmizelý leader zůstává při routing change povinný', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => {
+      expect(request.required).toContain(11);
+      throw new Error('Účet 11 není viditelný v žádném připojeném OAuth');
+    });
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: {
+          ...group(),
+          leaderAccountId: 33,
+          followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }],
+        },
+      },
+    });
+
+    expect(response.status).toBe(409);
+    expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
+  });
+
+  it('zmizelý follower, který v next zůstává, není optional', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => {
+      expect(request).toEqual({ required: [11, 22, 33], optional: [] });
+      throw new Error('Účet 22 není viditelný v žádném připojeném OAuth');
+    });
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: {
+          ...group(),
+          followers: [
+            ...group().followers,
+            { accountId: 33, mode: 'on-submit', multiplier: 1 },
+          ],
+        },
+      },
+    });
+
+    expect(response.status).toBe(409);
+    expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
   });
 
   it('changes the leader from UI through the safe epoch transition', async () => {
@@ -410,7 +497,7 @@ describe('local copier execution agent', () => {
       id: 'runtime-test',
       leaderAccountId: 22,
       followers: [expect.objectContaining({ accountId: 11 })],
-    }));
+    }), { missingOptionalAccountIds: [] });
     expect(runtime.updateGroup).not.toHaveBeenCalled();
     expect(running.status().group).toMatchObject({ leaderAccountId: 22 });
     expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({ leaderAccountId: 22 }));
@@ -419,7 +506,7 @@ describe('local copier execution agent', () => {
   it('aktivuje jiný uložený profil přes samostatný fail-closed příkaz a zůstane DISARMED', async () => {
     const runtime = controller();
     const onGroupChanged = vi.fn(async () => undefined);
-    const prepareGroupAccounts = vi.fn(async () => undefined);
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
     running = await startLocalCopierExecutionAgent({
       controller: runtime,
       group: group(),
@@ -440,7 +527,7 @@ describe('local copier execution agent', () => {
 
     expect(result.ok).toBe(true);
     expect(runtime.disarm).toHaveBeenCalled();
-    expect(prepareGroupAccounts).toHaveBeenCalledWith([11, 22, 33, 44]);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith({ required: [11, 33, 44], optional: [22] });
     expect(vi.mocked(runtime.disarm).mock.invocationCallOrder[0])
       .toBeLessThan(prepareGroupAccounts.mock.invocationCallOrder[0]);
     expect(prepareGroupAccounts.mock.invocationCallOrder[0])
@@ -449,7 +536,7 @@ describe('local copier execution agent', () => {
       ...next,
       enabled: true,
       localOnly: true,
-    });
+    }, { missingOptionalAccountIds: [] });
     expect(runtime.arm).not.toHaveBeenCalled();
     expect(running.status().controller.armed).toBe(false);
     expect(running.status().group).toMatchObject({ id: 'lucid-profile', enabled: true });
@@ -500,7 +587,11 @@ describe('local copier execution agent', () => {
 
     expect(response.status).toBe(409);
     expect(running.status().group.leaderAccountId).toBe(11);
-    expect(runtime.reconfigureGroup).toHaveBeenNthCalledWith(1, expect.objectContaining({ leaderAccountId: 22 }));
+    expect(runtime.reconfigureGroup).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ leaderAccountId: 22 }),
+      { missingOptionalAccountIds: [] },
+    );
     expect(runtime.reconfigureGroup).toHaveBeenNthCalledWith(2, expect.objectContaining({ leaderAccountId: 11 }));
   });
 
@@ -515,14 +606,14 @@ describe('local copier execution agent', () => {
 
   it('před každým ARM obnoví routing a až potom provede reconciliation', async () => {
     const runtime = controller();
-    const prepareGroupAccounts = vi.fn(async () => undefined);
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
     running = await startLocalCopierExecutionAgent({
       controller: runtime, group: group(), port: 0, prepareGroupAccounts,
     });
 
     const response = await post(running, running.status().nonce, { type: 'arm-live' });
     expect(response.status).toBe(200);
-    expect(prepareGroupAccounts).toHaveBeenCalledWith([11, 22]);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith({ required: [11, 22], optional: [] });
     expect(prepareGroupAccounts.mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(runtime.reconcile).mock.invocationCallOrder[0]);
     expect(vi.mocked(runtime.reconcile).mock.invocationCallOrder[0])
@@ -531,7 +622,7 @@ describe('local copier execution agent', () => {
 
   it('cíleně ověří účet bez změny execution skupiny nebo ARM', async () => {
     const runtime = controller();
-    const prepareGroupAccounts = vi.fn(async () => undefined);
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
     running = await startLocalCopierExecutionAgent({
       controller: runtime, group: group(), port: 0, prepareGroupAccounts,
     });
@@ -539,7 +630,7 @@ describe('local copier execution agent', () => {
     const result = await running.execute({ type: 'verify-account-eligibility', accountId: 63338752 });
 
     expect(result.ok).toBe(true);
-    expect(prepareGroupAccounts).toHaveBeenCalledWith([63338752]);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith({ required: [63338752], optional: [] });
     expect(prepareGroupAccounts.mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(runtime.verifyAccountEligibility).mock.invocationCallOrder[0]);
     expect(runtime.verifyAccountEligibility).toHaveBeenCalledWith(63338752);
@@ -559,16 +650,17 @@ describe('local copier execution agent', () => {
 
   it('exposes read-only reconciliation and audited stuck resolution as separate commands', async () => {
     const runtime = controller();
-    const prepareGroupAccounts = vi.fn(async () => undefined);
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [22] }));
     running = await startLocalCopierExecutionAgent({
       controller: runtime, group: group(), port: 0, prepareGroupAccounts,
     });
 
     expect((await post(running, running.status().nonce, { type: 'reconcile' })).status).toBe(200);
-    expect(prepareGroupAccounts).toHaveBeenCalledWith([11, 22]);
+    expect(prepareGroupAccounts).toHaveBeenCalledWith({ required: [11], optional: [22] });
     expect(prepareGroupAccounts.mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(runtime.reconcile).mock.invocationCallOrder[0]);
     expect(runtime.reconcile).toHaveBeenCalledTimes(1);
+    expect(runtime.reconcile).toHaveBeenCalledWith({ missingOptionalAccountIds: [22] });
 
     expect((await post(running, running.status().nonce, {
       type: 'resolve-stuck-operation',
@@ -871,7 +963,7 @@ describe('atomický arm-live s konfigurací', () => {
       expect(runtime.disarm).toHaveBeenCalled();
       expect(runtime.activateGroup).toHaveBeenCalledWith(expect.objectContaining({
         id: 'jiny-profil', enabled: true,
-      }));
+      }), { missingOptionalAccountIds: [] });
       expect(runtime.activateGroup.mock.invocationCallOrder[0])
         .toBeLessThan(runtime.reconcile.mock.invocationCallOrder[0]);
       expect(runtime.reconcile.mock.invocationCallOrder[0])

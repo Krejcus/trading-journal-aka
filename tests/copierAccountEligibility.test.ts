@@ -321,7 +321,9 @@ describe('account eligibility — DLL incident', () => {
     broker.setConnected(true);
     await controller.waitForIdle();
 
-    await expect(controller.reconfigureGroup(nextGroup)).resolves.toBeUndefined();
+    await expect(controller.reconfigureGroup(nextGroup, {
+      missingOptionalAccountIds: [205],
+    })).resolves.toBeUndefined();
     expect(controller.status()).toMatchObject({
       armed: false,
       reconciliationRequired: true,

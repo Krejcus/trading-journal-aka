@@ -12,7 +12,7 @@ import {
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol.js';
 import { msUntilTradovateSessionEnd } from '../services/copierArmSession.js';
-import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
+import type { CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
   normalizeMultiplier,
   type CopyGroupConfig,
@@ -26,6 +26,16 @@ const DEFAULT_ALLOWED_ORIGINS = new Set([
   'http://127.0.0.1:3000',
   'http://127.0.0.1:3011',
 ]);
+
+export interface PrepareGroupAccountsRequest {
+  required: readonly number[];
+  optional: readonly number[];
+}
+
+export interface PrepareGroupAccountsResult {
+  /** Optional účty, které nevrátil žádný z právě obnovených OAuth adresářů. */
+  missingOptional: readonly number[];
+}
 
 interface LocalCopierExecutionAgentOptions {
   controller: CopierRuntimeController;
@@ -49,7 +59,7 @@ interface LocalCopierExecutionAgentOptions {
    * pouze číst broker adresáře a atomicky přepnout lokální router; žádný
    * broker order side effect. Chyba musí nechat runtime DISARMED.
    */
-  prepareGroupAccounts?: (accountIds: readonly number[]) => Promise<void>;
+  prepareGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>;
 }
 
 export interface LocalCopierExecutionAgent {
@@ -110,23 +120,25 @@ const sameAccountTopology = (left: CopyGroupConfig, right: CopyGroupConfig): boo
 
 const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const accountsRequiredForRoutingChange = (
+const accountsForRoutingChange = (
   previous: CopyGroupConfig,
   next: CopyGroupConfig,
-  status: CopierControllerStatus,
-): number[] => {
+): PrepareGroupAccountsRequest => {
   const leaderIds = new Set([previous.leaderAccountId, next.leaderAccountId]);
-  const ineligible = new Set(
-    (status.accountEligibility ?? [])
-      .filter(entry => entry.state !== 'active')
-      .map(entry => entry.accountId),
-  );
-  return [...new Set([...copyGroupAccountIds(previous), ...copyGroupAccountIds(next)])]
-    // Vyřazený follower může po BREACH/DLL zmizet z OAuth adresáře. Takový
-    // účet už není routovatelný a nesmí navždy zablokovat jeho odebrání.
-    // Leader zůstává vždy povinný a aktivní follower se dál ověřuje přísně.
-    .filter(accountId => leaderIds.has(accountId) || !ineligible.has(accountId));
+  const nextAccountIds = new Set(copyGroupAccountIds(next));
+  const optional = previous.followers
+    .map(follower => follower.accountId)
+    .filter(accountId => !nextAccountIds.has(accountId) && !leaderIds.has(accountId));
+  const optionalSet = new Set(optional);
+  const required = [...new Set([...copyGroupAccountIds(previous), ...copyGroupAccountIds(next)])]
+    .filter(accountId => !optionalSet.has(accountId));
+  return { required, optional };
 };
+
+const allAccountsRequired = (accountIds: readonly number[]): PrepareGroupAccountsRequest => ({
+  required: [...new Set(accountIds)],
+  optional: [],
+});
 
 const validatedAccountEligibilityExclusions = (value: unknown) => {
   if (value == null) return [];
@@ -174,6 +186,19 @@ export async function startLocalCopierExecutionAgent(
   let shuttingDown = false;
   let serverClosePromise: Promise<void> | null = null;
   const shutdownError = () => new Error('Lokální execution agent se právě bezpečně ukončuje');
+  const prepareAccounts = async (
+    request: PrepareGroupAccountsRequest,
+  ): Promise<PrepareGroupAccountsResult> => {
+    const prepared = await options.prepareGroupAccounts?.(request);
+    const optional = new Set(request.optional);
+    const missingOptional = [...new Set(prepared?.missingOptional ?? [])];
+    for (const accountId of missingOptional) {
+      if (!Number.isSafeInteger(accountId) || !optional.has(accountId)) {
+        throw new Error(`Routing refresh vrátil neplatný missing optional účet ${accountId}`);
+      }
+    }
+    return { missingOptional };
+  };
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
@@ -201,17 +226,22 @@ export async function startLocalCopierExecutionAgent(
     const topologyChanged = !sameAccountTopology(previous, next);
     let runtimeChanged = false;
     try {
+      let missingOptionalAccountIds: readonly number[] = [];
       if (mode === 'activate' || topologyChanged) {
         // Routing se nikdy nemění za běžícího ARM. Nejdřív odzbrojit, potom
         // read-only discovery; teprve controller provede flat/no-working
         // preflight nad sjednocením staré a nové topologie.
         options.controller.disarm();
-        await options.prepareGroupAccounts?.(
-          accountsRequiredForRoutingChange(previous, next, options.controller.status()),
-        );
+        const prepared = await prepareAccounts(accountsForRoutingChange(previous, next));
+        missingOptionalAccountIds = prepared.missingOptional;
       }
-      if (mode === 'activate') await options.controller.activateGroup(next);
-      else if (leaderChanged || topologyChanged) await options.controller.reconfigureGroup(next);
+      const reconfigurationOptions = {
+        missingOptionalAccountIds: [...missingOptionalAccountIds],
+      };
+      if (mode === 'activate') await options.controller.activateGroup(next, reconfigurationOptions);
+      else if (leaderChanged || topologyChanged) {
+        await options.controller.reconfigureGroup(next, reconfigurationOptions);
+      }
       else options.controller.updateGroup(next);
       runtimeChanged = true;
       await options.onGroupChanged?.(structuredClone(next));
@@ -328,7 +358,9 @@ export async function startLocalCopierExecutionAgent(
         await options.controller.applyAccountEligibilityExclusions(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
-        if (!routingPrepared) await options.prepareGroupAccounts?.(copyGroupAccountIds(group));
+        if (!routingPrepared) {
+          await prepareAccounts(allAccountsRequired(copyGroupAccountIds(group)));
+        }
         const reconciliation = await options.controller.reconcile();
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
@@ -344,7 +376,7 @@ export async function startLocalCopierExecutionAgent(
         await options.controller.applyAccountEligibilityExclusions(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
-        await options.prepareGroupAccounts?.(copyGroupAccountIds(group));
+        await prepareAccounts(allAccountsRequired(copyGroupAccountIds(group)));
         const reconciliation = await options.controller.reconcile();
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('SHADOW odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
@@ -362,13 +394,20 @@ export async function startLocalCopierExecutionAgent(
         // Samostatná read-only kontrola musí obnovit stejné multi-OAuth
         // routování jako ARM/SHADOW. Jinak účet z druhého připojení zůstane
         // po nové session navždy `unverifiable`, i když je u brokera zdravý.
-        await options.prepareGroupAccounts?.(copyGroupAccountIds(group));
-        return options.controller.reconcile();
+        {
+          const prepared = await prepareAccounts({
+            required: [group.leaderAccountId],
+            optional: group.followers.map(follower => follower.accountId),
+          });
+          return options.controller.reconcile({
+            missingOptionalAccountIds: [...prepared.missingOptional],
+          });
+        }
       case 'verify-account-eligibility':
         // Cílené ověření nesmí kvůli účtu z jiné uložené skupiny měnit
         // execution skupinu. Připraví jen jeho OAuth route a provede read-only
         // capability + positions + orders kontrolu.
-        await options.prepareGroupAccounts?.([command.accountId]);
+        await prepareAccounts(allAccountsRequired([command.accountId]));
         return options.controller.verifyAccountEligibility(command.accountId);
       case 'snapshot-test':
         if (!command.requestId || !SNAPSHOT_TEST_REQUEST_ID.test(command.requestId)) {

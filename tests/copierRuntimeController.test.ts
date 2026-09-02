@@ -10,6 +10,7 @@ import { createModifyEntry, markCancelUnknown } from '../services/copierCancelOu
 import type { CopierAuditEntry } from '../services/copierRunner';
 import { createOsoOutboxEntry, markOsoAcknowledged, markOsoRejected } from '../services/copierOsoOutbox';
 import { createMockBroker } from '../services/mockBroker';
+import { createBrokerRouter } from '../services/brokerRouter';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 
 const group: CopyGroupConfig = {
@@ -430,6 +431,53 @@ describe('bootstrapCopierRuntime', () => {
     expect(broker.placedRequests()).toEqual([
       expect.objectContaining({ accountId: 100, quantity: 2 }),
     ]);
+    controller.stop();
+  });
+
+  it('reconfigure vynechá pouze odebíraného followera potvrzeně chybějícího v OAuth routingu', async () => {
+    const connection = createMockBroker();
+    const listPositions = vi.spyOn(connection, 'listPositions');
+    const router = createBrokerRouter([{ broker: connection, accountIds: [100, 300] }]);
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    connection.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconfigureGroup({
+      ...group,
+      followers: [{ accountId: 300, mode: 'on-submit', multiplier: 1 }],
+    }, { missingOptionalAccountIds: [200] })).resolves.toBeUndefined();
+
+    expect(listPositions).toHaveBeenCalledWith(100);
+    expect(listPositions).toHaveBeenCalledWith(300);
+    expect(listPositions).not.toHaveBeenCalledWith(200);
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    controller.stop();
+  });
+
+  it('reconfigure dál přísně kontroluje odebíraného followera, kterého OAuth vrací', async () => {
+    const connection = createMockBroker({ behavior: () => ({ kind: 'fill', price: 29_500 }) });
+    await connection.placeOrder({
+      tag: 'existing-removed-follower-position',
+      accountId: 200,
+      symbol: 'MNQU6',
+      side: 'Buy',
+      quantity: 1,
+      orderType: 'Market',
+    });
+    const router = createBrokerRouter([{ broker: connection, accountIds: [100, 200, 300] }]);
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    connection.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconfigureGroup({
+      ...group,
+      followers: [{ accountId: 300, mode: 'on-submit', multiplier: 1 }],
+    })).rejects.toThrow('nonFlat=200');
+    expect(controller.status()).toMatchObject({ armed: false });
     controller.stop();
   });
 
@@ -1169,6 +1217,41 @@ describe('bootstrapCopierRuntime', () => {
         readOnlyFollowerAccounts: [200],
       },
     });
+    controller.stop();
+  });
+
+  it('reconciliation vykáže followera chybějícího v OAuth jako unverifiable a ověří zdravé účty', async () => {
+    const connection = createMockBroker();
+    const listPositions = vi.spyOn(connection, 'listPositions');
+    const listOrders = vi.spyOn(connection, 'listOrders');
+    const router = createBrokerRouter([{ broker: connection, accountIds: [100] }]);
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    connection.setConnected(true);
+    await controller.waitForIdle();
+
+    await expect(controller.reconcile({ missingOptionalAccountIds: [200] })).resolves.toEqual({
+      divergentAccounts: [], workingOrderAccounts: [],
+    });
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: false,
+      oauthPreflight: {
+        missingAccounts: [200],
+        inactiveAccounts: [],
+        readOnlyFollowerAccounts: [],
+      },
+      accountEligibility: [expect.objectContaining({
+        accountId: 200,
+        state: 'unverifiable',
+        reason: expect.stringContaining('není viditelný v žádném připojeném OAuth'),
+      })],
+    });
+    expect(listPositions).toHaveBeenCalledWith(100);
+    expect(listOrders).toHaveBeenCalledWith(100);
+    expect(listPositions).not.toHaveBeenCalledWith(200);
+    expect(listOrders).not.toHaveBeenCalledWith(200);
     controller.stop();
   });
 
