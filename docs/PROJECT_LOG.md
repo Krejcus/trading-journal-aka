@@ -60,10 +60,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       15:25–15:34 UTC): `changeCopyGroupLeader` dává předchozímu leaderovi
       `{...promotedFollower, accountId: previousLeader}`, tedy zdědí násobek
       povýšeného followera (63338592@2 → leader, Lucid 62364553 dostal @2).
-      Ten pak jako „nedostupný“ v Tradeify pohledu prošel náhradou
-      (`replaceCopyGroupFollowerAccount`), která násobek opět zdědila → funded
-      64310872 skončil @2, aniž by mu uživatel 2× kdy nastavil; ten účet pak
-      narazil na DLL 1 250. Fix: předchozí leader vždy `multiplier: 1`,
+      Výsledná skupina měla funded 64310872@2, aniž by mu uživatel 2× kdy
+      nastavil; přesný poslední krok (tři copy-command edity 15:25–15:34) se
+      bez payloadů z `tradovate_copier_commands` nedá dovodit —
+      `replaceCopyGroupFollowerAccount` sice násobek dědí, ale existujícího
+      followera odmítne. Ten účet pak narazil na DLL 1 250. Fix: předchozí leader vždy `multiplier: 1`,
       náhrada účtu nesmí tiše přenášet násobek >1 bez explicitního potvrzení,
       a dialog musí zvýrazněně ukázat každý follower, kterému se násobek mění.
       Regrese: promote follower@2 → nový follower (starý leader) má 1; replace
