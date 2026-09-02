@@ -110,6 +110,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-02 (Claude, první živý běh opravy 56f36ebf a incident „stop mimo cenový limit“)
+
+Worker reinstalován uživatelem z `56f36ebf` (start 15:24 UTC, jediný start, bundle
+obsahuje nový skip helper i markery z `main`). Uživatel změnil leadera na
+`63338592` a v 15:35:52 UTC otevřel Short 1 MNQ. Oprava se poprvé potvrdila
+živě: breached `63338752` byl v auditu `skipped account-ineligible`, skupina
+zůstala ARMED a vstup se zkopíroval na 4 followery.
+
+Nová chyba nebyla v copieru: leader zadal ochranný Buy Stop 29189.75 až ve
+chvíli, kdy trh už byl na 29190 — leader byl fill/flat v 15:36:02.79, copier
+stop událost zpracoval v 15:36:02.88 a follower Stop příkazy broker odmítl
+(„current price is outside the price limits“, cena už byla za stopem). Followeři
+tak drželi short bez ochrany při flat leaderovi; fail-closed „leader je
+autoritativně flat, follower stav se neshoduje“ zafungoval a leader-flat guard
+do 4 s cíleně zploštil všechny 4 kopie. Uživatel v 15:36:55 udělal Kontrolu
+pozic (4 rejecty waived) a re-ARM. Druhý obchod (Short 10 Limit + nativní OCO,
+tři posuny SL, výstup na SL, cancel targetů, guard potvrdil vše flat) proběhl
+bez jediné anomálie. Stav při zápisu: ARMED, clean, revize 794.
+
+Závěr: kód beze změny. Provozně platí, že SL zadaný „do trhu“ se nedá
+zreplikovat (latence ≈100–250 ms) — bracket/OSO při vstupu je bezpečná cesta,
+což druhý obchod potvrdil. Kosmetika k pozdějšímu řešení: exit leadera přes
+vlastní stop, jehož order event dorazil po fillu, se v denním přehledu
+klasifikoval jako `manual`.
+
 ### 2026-09-02 (Claude, nasazení opravy 56f36ebf)
 
 Oprava „známý nezpůsobilý follower = skip, ne fail-closed“ byla přenesena
