@@ -110,6 +110,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-02 (Claude, rollout workera 7763bfcd)
+
+Mac worker reinstalován uživatelem přes `scripts/copier/mac-reinstall-safe.sh`
+z `main` `7763bfcd` (obsahuje vanished-follower kontrakt i install guard).
+První pokus selhal, protože skript četl parametry z `ps` a cesta
+„Application Support" se rozpadla na mezeře → instalátor manifest nenašel,
+nic se nezměnilo; opraveno čtením `ProgramArguments` z launchd plistu.
+Po reinstallu: jediný čistý start 06:55 UTC (žádný crash-loop), bundle
+s novými markery, read-only reconcile 0 divergence / 0 working orders,
+`reconciliationRequired=false`, `lastError=null`, snímky `ready`.
+Skupina zůstává DISARMED; DLL zámek LFE…016 vypršel s novou session
+(autoritativně reaktivován 06:52 UTC), trvá jen BREACH 62364058.
+
 ### 2026-09-02 (Codex, bezpečné odebrání followera zmizelého z OAuth)
 
 Routing refresh má místo seznamu s implicitním polykáním chyb explicitní
