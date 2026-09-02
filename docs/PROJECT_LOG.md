@@ -56,6 +56,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] **Replay starých rejectů při 50-min obnově WebSocketu** (nalezeno 2. 9.
+      večer): po každém `SOCKET RENEWAL` leader event source znovu vydá
+      `leader-reject-<orderId>` pro už dávno odmítnuté příkazy (645218030049
+      z 17:36 a 645218030433 „InvalidPrice“), controller je znovu zapíše do
+      `lastExecution` s novým časem a UI ukáže „Příkaz odmítnut · InvalidPrice ·
+      21:34“ na účtech, kde nikdo neobchodoval. Bez broker side effectu, ale
+      matoucí a zahlcuje audit. Fix: dedupe rejectů podle `brokerOrderId`
+      (durable seen set) při resyncu; nezapisovat `lastExecution` starší než
+      už uložený. Delegovat Codexu s regresí „renewal nesmí vytvořit nový
+      audit/eligibility zápis pro známý reject“.
 - [x] iOS 26 WidgetKit APNs registrace — VYŘEŠENO 21. 8. (zápis „widgety a
       notifikace dokončeny"): příčinou byl Postgres regex limit v CHECK
       constraintu; registrace, push i push-triggered reload fyzicky ověřeny.
@@ -109,6 +119,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-02 (Claude, večerní review dne — skutečná čísla a replay bug)
+
+Read-only stažení `/fill/list` + `/fillPair/list` + `/cashBalance/list` přes
+device tokeny workeru (skript mimo repo, žádný zápis) dalo skutečný den napříč
+7 účty: realizováno **−4 590,80 USD**, z toho **−1 274,80 USD poplatky**
+(1 376 zobchodovaných kontraktů, ≈0,95 USD/kontrakt). Denní statistika workeru
+(leader-only, jen copier obchody) ukazovala 0,00 — je to metrika kopírky, ne
+účtů, a takto se nesmí prezentovat. Rozpad: Lucid leader dopoledne +455;
+Lucid follower −640 → BREACHED (ruční 10-kontraktové longy mimo copier 15:35,
+druhý pár do breachu); Tradeify leader odpoledne −787, tři 1× followeři ≈ −786
+až −795, 2× follower −1 252,50 = přesně DLL 1 250 → lock do konce session.
+Followeři přišli o dopolední +412 (11× Long se vyplnil jen na leaderovi, copier
+byl po incidentu DISARMED) a dostali všechny odpolední ztráty včetně 5 flipů
+18:26–18:44 a eskalace velikosti po ztrátě (8 → 17 → 16). Pojistky
+`dailyLossLimitUsd`, `dailyMaxLosingTrades`, `entryCooldownMinutes` jsou ve
+skupině vypnuté (0). Zjištěn replay bug rejectů při socket renewal (viz Otevřené
+otázky). Kód, účty ani broker se neměnily.
 
 ### 2026-09-02 (Codex, srozumitelný reject a autoritativní výsledek pozice)
 
