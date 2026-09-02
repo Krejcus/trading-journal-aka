@@ -3271,6 +3271,21 @@ describe('LeaderFlatGuard runtime integrace', () => {
       safety: {
         ...initial.safety!,
         liveCopyOpenSince: 90,
+        accountEligibility: [{
+          accountId: 200,
+          state: 'active',
+          at: 95,
+          lastExecution: {
+            kind: 'rejected',
+            reason: 'The current price is outside the price limits set for this product.',
+            symbol: MNQ,
+            brokerOrderId: 'guard-rejected-stop',
+            orderType: 'Stop',
+            side: 'Sell',
+            stopPrice: 29_900,
+            at: 95,
+          },
+        }],
         leaderExposureEpochs: [{
           id: 'guard-owned-epoch',
           groupId: group.id,
@@ -3365,6 +3380,14 @@ describe('LeaderFlatGuard runtime integrace', () => {
         }),
       }),
     ]));
+    expect(controller.status().accountEligibility?.find(entry => entry.accountId === 200)
+      ?.lastExecution?.resolution).toMatchObject({
+      kind: 'guard-flattened',
+      at: 101,
+      detail: 'leader-flat guard cíleně zploštil kopii a potvrdil flat stav',
+    });
+    expect((await store.load()).safety?.accountEligibility?.find(entry => entry.accountId === 200)
+      ?.lastExecution?.resolution).toMatchObject({ kind: 'guard-flattened', at: 101 });
     expect(controller.status()).toMatchObject({
       armed: false,
       reconciliationRequired: true,

@@ -388,6 +388,73 @@ describe('account eligibility — DLL incident', () => {
     restarted.stop();
   });
 
+  it('po rejectu reconciliation durable označí autoritativně flat followera', async () => {
+    const h = await harness();
+    await emitLeaderEntry(h, 'leader-price-through', '1:Working');
+    const [copied] = followerOrdersFor(h.broker, 201);
+    expect(copied).toBeDefined();
+    copied.status = 'rejected';
+    copied.rejectReason = 'Please check the order price. The current price is outside the price limits set for this product.';
+    copied.sourceVersion = 'price-through-reject';
+    copied.orderType = 'Stop';
+    copied.side = 'Buy';
+    copied.limitPrice = undefined;
+    copied.stopPrice = 29_189.75;
+    h.broker.emitEvent({ type: 'order', order: { ...copied } });
+    await h.controller.waitForIdle();
+
+    const rejected = h.controller.status().accountEligibility
+      ?.find(entry => entry.accountId === 201)?.lastExecution;
+    expect(rejected).toMatchObject({
+      kind: 'rejected',
+      orderType: 'Stop',
+      side: 'Buy',
+      stopPrice: 29_189.75,
+    });
+    expect(rejected?.resolution).toBeUndefined();
+
+    await h.controller.reconcile();
+    const resolved = h.controller.status().accountEligibility
+      ?.find(entry => entry.accountId === 201)?.lastExecution?.resolution;
+    expect(resolved).toMatchObject({
+      kind: 'follower-flat',
+      detail: 'autoritativní reconciliation potvrdila followera flat',
+    });
+    expect(resolved?.at).toBeGreaterThan(rejected?.at ?? 0);
+    expect((await h.store.load()).safety?.accountEligibility
+      ?.find(entry => entry.accountId === 201)?.lastExecution?.resolution)
+      .toEqual(resolved);
+    h.controller.stop();
+  });
+
+  it('starý durable snapshot bez resolution načte beze změny', async () => {
+    const initial = emptySnapshot();
+    initial.safety = {
+      entryCooldownUntil: 0,
+      dayLockUntil: 0,
+      accountEligibility: [{
+        accountId: 201,
+        state: 'active',
+        at: 900,
+        lastExecution: {
+          kind: 'rejected',
+          reason: 'legacy reject',
+          symbol: 'MNQU6',
+          brokerOrderId: 'legacy-order',
+          at: 850,
+        },
+      }],
+    };
+    const h = await harness(initial, true);
+    const restored = h.controller.status().accountEligibility
+      ?.find(entry => entry.accountId === 201)?.lastExecution;
+    expect(restored).toEqual(initial.safety.accountEligibility?.[0]?.lastExecution);
+    expect(restored?.resolution).toBeUndefined();
+    expect((await h.store.load()).safety?.accountEligibility?.[0]?.lastExecution)
+      .toEqual(initial.safety.accountEligibility?.[0]?.lastExecution);
+    h.controller.stop();
+  });
+
   it('DLL reject leadera vyřadí leader účet a ARM selže nahlas', async () => {
     const h = await harness();
     h.controller.disarm();

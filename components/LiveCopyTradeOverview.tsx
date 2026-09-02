@@ -20,6 +20,7 @@ import {
   type CopyTradeAccountRole,
 } from '../lib/copyTradeAccountLabels';
 import { formatSnapshotRepairError } from '../lib/copierBlockerMessages';
+import { translateCopierRejectReason } from '../lib/copierRejectReason';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
@@ -1755,6 +1756,52 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders }: {
 };
 
 const timeLabel = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+const timeWithSecondsLabel = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', {
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+
+type RejectedExecution = NonNullable<CopierAccountEligibility['lastExecution']>;
+
+const rejectedOrderLabel = (execution: RejectedExecution): string | null => {
+  const type = execution.orderType === 'Stop' || execution.orderType === 'StopLimit'
+    ? 'SL'
+    : execution.orderType ?? null;
+  const price = execution.stopPrice ?? execution.limitPrice;
+  const parts = [type, execution.side, price != null ? `@ ${price}` : null].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : null;
+};
+
+export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat }: {
+  execution: RejectedExecution;
+  accountAuthoritativelyFlat: boolean;
+}) => {
+  const translated = translateCopierRejectReason(execution.reason);
+  const order = rejectedOrderLabel(execution);
+  const resolution = execution.resolution;
+  const dangerous = (!resolution || resolution.kind === 'unresolved') && !accountAuthoritativelyFlat;
+  const rejection = translated.category === 'price-through' && order
+    ? `${order} odmítnut: cena už byla za zadanou úrovní`
+    : [order, translated.message].filter(Boolean).join(' · ');
+  const resolutionLabel = resolution?.kind === 'guard-flattened'
+    ? `kopie zavřena guardem ${timeWithSecondsLabel(resolution.at)}`
+    : resolution?.kind === 'auto-closed'
+      ? `kopie automaticky zavřena ${timeWithSecondsLabel(resolution.at)}`
+      : resolution?.kind === 'follower-flat'
+        ? `follower je flat ${timeWithSecondsLabel(resolution.at)}`
+        : accountAuthoritativelyFlat
+          ? 'follower je nyní flat'
+          : null;
+  return (
+    <span
+      title={`Původní broker důvod: ${translated.original}`}
+      className={`block pl-3.5 text-[10px] leading-tight ${dangerous
+        ? 'text-rose-500/90'
+        : 'text-[var(--text-muted)]'}`}
+    >
+      {rejection} · {resolutionLabel ?? timeLabel(execution.at)}
+    </span>
+  );
+};
 
 /**
  * Eligibility pill. Connection status (tečka), způsobilost účtu (pill)
@@ -1976,9 +2023,11 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
             {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
             </span>
             {eligibility?.lastExecution ? (
-              <span className="block pl-3.5 text-[10px] leading-tight text-rose-500/90">
-                Příkaz odmítnut · {eligibility.lastExecution.reason ?? 'bez důvodu'} · {timeLabel(eligibility.lastExecution.at)}
-              </span>
+              <RejectedExecutionStatus
+                execution={eligibility.lastExecution}
+                accountAuthoritativelyFlat={live && a != null
+                  && a.positions.every(position => position.netPosition === 0)}
+              />
             ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
               <span className="block pl-3.5 text-[10px] leading-tight text-[var(--text-muted)]">
                 {eligibility.reason}{!a ? ' · účet není v aktuálním OAuth snapshotu' : ''}

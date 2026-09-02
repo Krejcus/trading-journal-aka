@@ -156,7 +156,14 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
       : {}),
     accountEligibility: base.accountEligibility?.map(entry => ({
       ...entry,
-      ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),
+      ...(entry.lastExecution ? {
+        lastExecution: {
+          ...entry.lastExecution,
+          ...(entry.lastExecution.resolution
+            ? { resolution: { ...entry.lastExecution.resolution } }
+            : {}),
+        },
+      } : {}),
     })) ?? [],
     ...(base.dailyStats
       ? {

@@ -110,6 +110,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-02 (Codex, srozumitelný reject a autoritativní výsledek pozice)
+
+Poslední broker reject na kartě účtu už není jen syrový alarm. Čistý překladač
+rozlišuje price-through, DLL, interní Tag50/customTag a neznámý důvod; UI vždy
+zachová celý původní broker text v tooltipu. `lastExecution` additivně nese
+typ/side/cenu příkazu a volitelné durable `resolution`. Controller zapisuje
+`guard-flattened` pouze po úspěšné finální kontrole cílené leader-flat
+likvidace, `auto-closed` pouze po potvrzeném auto-close a konzervativní
+`follower-flat` po autoritativní reconciliation nebo guard snapshotu, který
+našel followera už flat. Selhání persistence tohoto reportingového doplňku
+nemění safety výsledek ani pořadí execution operací.
+
+LIVE řádek je rose jen tehdy, když resolution chybí/je unresolved a současný
+živý účet není autoritativně flat. Potvrzené uzavření nebo aktuální flat stav
+se vykreslí muted s výsledkem a sekundovým časem; stop reject ukáže také
+například `SL Buy @ 29189.75`. Staré snapshoty bez nových polí zůstávají
+platné a beze změny se načtou. Controller regrese pokrývají reconciliation i
+skutečnou leader-flat guard likvidaci a durable zápis; render regrese rose,
+muted i tooltip s originálem.
+
+Ověření: cíleně 6 souborů / 141 testů, kompletní sada 220 souborů / 1814 testů,
+strict TypeScript, scoped ESLint změněných souborů bez výstupu, `git diff
+--check` a lokální produkční Vite/PWA build prošly. První sandboxovaný celý
+běh měl pouze očekávané `listen EPERM 127.0.0.1` u 38 lokálních HTTP testů;
+opakování stejného příkazu s povoleným loopbackem prošlo celé. Nic nebylo
+commitnuto, pushnuto ani deploynuto; žádný reálný worker/broker, ARM, DISARM
+ani Flatten se nespouštěl a sémantika `nativeCopierNotificationPlan.ts` se
+neměnila.
+
 ### 2026-09-02 (Claude, první živý běh opravy 56f36ebf a incident „stop mimo cenový limit“)
 
 Worker reinstalován uživatelem z `56f36ebf` (start 15:24 UTC, jediný start, bundle

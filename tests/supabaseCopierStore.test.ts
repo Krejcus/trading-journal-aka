@@ -64,6 +64,40 @@ describe('createSupabaseCopierStore', () => {
     await expect(store.load()).rejects.toThrow('Invalid copier snapshot');
   });
 
+  it('načte nové reject metadata a resolution, ale zachová kompatibilitu volitelných polí', async () => {
+    const snapshot = emptySnapshot();
+    snapshot.safety = {
+      entryCooldownUntil: 0,
+      dayLockUntil: 0,
+      accountEligibility: [{
+        accountId: 201,
+        state: 'active',
+        at: 100,
+        lastExecution: {
+          kind: 'rejected',
+          reason: 'price outside the price limits',
+          symbol: 'MNQU6',
+          brokerOrderId: 'stop-1',
+          orderType: 'Stop',
+          side: 'Buy',
+          stopPrice: 29_189.75,
+          at: 101,
+          resolution: {
+            kind: 'guard-flattened',
+            at: 106,
+            detail: 'guard potvrdil flat',
+          },
+        },
+      }],
+    };
+    const store = createSupabaseCopierStore(fakeClient({
+      row: { revision: 4, snapshot },
+    }), crypto.randomUUID(), () => 1);
+    await expect(store.load()).resolves.toMatchObject({
+      safety: { accountEligibility: snapshot.safety.accountEligibility },
+    });
+  });
+
   it('přeloží databázový CAS konflikt na doménovou chybu', async () => {
     const store = createSupabaseCopierStore(fakeClient({
       rpcError: { message: 'COPIER_REVISION_CONFLICT expected=2 actual=3' },

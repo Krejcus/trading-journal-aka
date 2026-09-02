@@ -104,19 +104,38 @@ export interface FollowerOrderLink {
  */
 export type CopierAccountEligibilityState = 'active' | 'dll-locked' | 'breached' | 'unverifiable';
 
+export type CopierExecutionResolutionKind =
+  | 'guard-flattened'
+  | 'auto-closed'
+  | 'follower-flat'
+  | 'unresolved';
+
+export interface CopierExecutionResolution {
+  kind: CopierExecutionResolutionKind;
+  at: number;
+  detail?: string;
+}
+
+export interface CopierRejectedExecution {
+  kind: 'rejected';
+  reason?: string;
+  symbol?: string;
+  brokerOrderId?: string;
+  orderType?: OrderType;
+  side?: OrderSide;
+  limitPrice?: number;
+  stopPrice?: number;
+  at: number;
+  resolution?: CopierExecutionResolution;
+}
+
 export interface CopierAccountEligibility {
   accountId: number;
   state: CopierAccountEligibilityState;
   reason?: string;
   at: number;
   lockSessionEndAt?: number;
-  lastExecution?: {
-    kind: 'rejected';
-    reason?: string;
-    symbol?: string;
-    brokerOrderId?: string;
-    at: number;
-  };
+  lastExecution?: CopierRejectedExecution;
 }
 
 export interface CopierState {

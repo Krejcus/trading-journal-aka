@@ -152,6 +152,28 @@ function validLeaderExposureEpoch(value: unknown): boolean {
     && optionalString(value.terminalReason);
 }
 
+function validRejectedExecution(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const validResolution = value.resolution == null || (
+    isRecord(value.resolution)
+    && ['guard-flattened', 'auto-closed', 'follower-flat', 'unresolved']
+      .includes(String(value.resolution.kind))
+    && finite(value.resolution.at)
+    && optionalString(value.resolution.detail)
+  );
+  return value.kind === 'rejected'
+    && finite(value.at)
+    && optionalString(value.reason)
+    && optionalString(value.symbol)
+    && optionalString(value.brokerOrderId)
+    && (value.orderType == null
+      || ['Market', 'Limit', 'Stop', 'StopLimit'].includes(String(value.orderType)))
+    && (value.side == null || value.side === 'Buy' || value.side === 'Sell')
+    && (value.limitPrice == null || finite(value.limitPrice))
+    && (value.stopPrice == null || finite(value.stopPrice))
+    && validResolution;
+}
+
 function validSafety(value: unknown): boolean {
   return value == null || (isRecord(value)
     && finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
@@ -166,12 +188,7 @@ function validSafety(value: unknown): boolean {
           || entry.state === 'breached' || entry.state === 'unverifiable')
         && finite(entry.at) && optionalString(entry.reason)
         && (entry.lockSessionEndAt == null || finite(entry.lockSessionEndAt))
-        && (entry.lastExecution == null || (isRecord(entry.lastExecution)
-          && entry.lastExecution.kind === 'rejected'
-          && finite(entry.lastExecution.at)
-          && optionalString(entry.lastExecution.reason)
-          && optionalString(entry.lastExecution.symbol)
-          && optionalString(entry.lastExecution.brokerOrderId)))))));
+        && (entry.lastExecution == null || validRejectedExecution(entry.lastExecution))))));
 }
 
 const unique = (values: readonly string[]) => new Set(values).size === values.length;

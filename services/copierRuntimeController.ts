@@ -13,6 +13,8 @@ import {
   type CopierAccountEligibility,
   type CopierClosedTrade,
   type CopierDailyStats,
+  type CopierExecutionResolutionKind,
+  type CopierRejectedExecution,
 } from './copierEngine';
 import { CopierLeaderEventSource } from './copierLeaderEventSource';
 import {
@@ -93,6 +95,11 @@ export function criticalAuditAllowsTerminalFillRecovery(
  * 'disconnected' tu záměrně není — odpojení je vlastnost spojení, ne účtu.
  */
 export type { CopierAccountEligibility, CopierAccountEligibilityState } from './copierEngine';
+
+const cloneRejectedExecution = (execution: CopierRejectedExecution): CopierRejectedExecution => ({
+  ...execution,
+  ...(execution.resolution ? { resolution: { ...execution.resolution } } : {}),
+});
 
 export interface CopierStuckOperation {
   kind: CopierStuckOperationKind;
@@ -426,7 +433,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const accountEligibility = new Map<number, CopierAccountEligibility>(
     (runtime.state.safety.accountEligibility ?? []).map(entry => [entry.accountId, {
       ...entry,
-      ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),
+      ...(entry.lastExecution ? { lastExecution: cloneRejectedExecution(entry.lastExecution) } : {}),
     }]),
   );
   let persistEligibility = async (): Promise<void> => undefined;
@@ -442,7 +449,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const recordAccountRejection = async (order: BrokerOrder, at: number) => {
     const reason = order.rejectReason?.trim() || 'broker odmítl příkaz';
     const lastExecution = {
-      kind: 'rejected' as const, reason, symbol: order.symbol, brokerOrderId: order.brokerOrderId, at,
+      kind: 'rejected' as const,
+      reason,
+      symbol: order.symbol,
+      brokerOrderId: order.brokerOrderId,
+      orderType: order.orderType,
+      side: order.side,
+      ...(order.limitPrice != null ? { limitPrice: order.limitPrice } : {}),
+      ...(order.stopPrice != null ? { stopPrice: order.stopPrice } : {}),
+      at,
     };
     const current = accountEligibility.get(order.accountId);
     if (BREACH_REASON_PATTERN.test(reason)) {
@@ -1152,9 +1167,50 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ...currentRuntime().state.safety,
       accountEligibility: [...accountEligibility.values()].map(entry => ({
         ...entry,
-        ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),
+        ...(entry.lastExecution ? { lastExecution: cloneRejectedExecution(entry.lastExecution) } : {}),
       })),
     });
+  };
+
+  /**
+   * Additivní reporting nad už autoritativně potvrzeným flat stavem. Selhání
+   * jeho persistence nesmí změnit výsledek guardu, reconciliation ani close.
+   */
+  const resolveRejectedExecutions = async ({
+    accountIds,
+    kind,
+    at,
+    symbol,
+    detail,
+  }: {
+    accountIds: readonly number[];
+    kind: Exclude<CopierExecutionResolutionKind, 'unresolved'>;
+    at: number;
+    symbol?: string;
+    detail?: string;
+  }): Promise<void> => {
+    const previous = new Map<number, CopierAccountEligibility>();
+    for (const accountId of accountIds) {
+      const current = accountEligibility.get(accountId);
+      const execution = current?.lastExecution;
+      if (!current || !execution) continue;
+      if (symbol != null && execution.symbol !== symbol) continue;
+      if (execution.resolution && execution.resolution.kind !== 'unresolved') continue;
+      previous.set(accountId, current);
+      accountEligibility.set(accountId, {
+        ...current,
+        lastExecution: {
+          ...execution,
+          resolution: { kind, at, ...(detail ? { detail } : {}) },
+        },
+      });
+    }
+    if (previous.size === 0) return;
+    try {
+      await persistEligibility();
+    } catch {
+      for (const [accountId, entry] of previous) accountEligibility.set(accountId, entry);
+    }
   };
 
   const leaderExposureEpoch = (symbol: string): LeaderFlatEpoch | null =>
@@ -2047,6 +2103,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         reason: 'leader-flat guard: leader i všichni účastníci jsou autoritativně flat',
       }]);
       await syncLiveCopyExposureFlag('clear');
+      await resolveRejectedExecutions({
+        accountIds: epoch.followers.map(follower => follower.accountId),
+        kind: 'follower-flat',
+        at: clock(),
+        symbol: epoch.symbol,
+        detail: 'leader-flat guard autoritativně potvrdil followera flat',
+      });
       return;
     }
 
@@ -2164,6 +2227,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ? `leader-flat guard cíleně zploštil ${evaluation.targets.length} account/symbol expozic; runtime zůstává DISARMED`
         : `leader-flat guard zploštil ${evaluation.targets.length} bezpečně vlastněných expozic, ale neověřený zbytek vyžaduje ruční reconciliation`,
     }]);
+    await resolveRejectedExecutions({
+      accountIds: evaluation.targets.map(target => target.accountId),
+      kind: 'guard-flattened',
+      at: clock(),
+      symbol: epoch.symbol,
+      detail: 'leader-flat guard cíleně zploštil kopii a potvrdil flat stav',
+    });
   }
 
   /**
@@ -2211,6 +2281,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (result.flat) {
         autoCloseEpisodeAttempts = 0;
         await syncLiveCopyExposureFlag('clear');
+        await resolveRejectedExecutions({
+          accountIds: group.followers
+            .map(follower => follower.accountId)
+            .filter(accountId => accountIds.includes(accountId)),
+          kind: 'auto-closed',
+          at: clock(),
+          detail: `auto-close (${trigger}) autoritativně potvrdil followera flat`,
+        });
       }
       return result.flat;
     } catch (error) {
@@ -3515,6 +3593,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ) lastError = null;
         }
       }
+      await resolveRejectedExecutions({
+        accountIds: group.followers
+          .filter(follower => {
+            const snapshot = byAccount.get(follower.accountId);
+            return snapshot != null
+              && snapshot.positions.every(position => position.netQuantity === 0);
+          })
+          .map(follower => follower.accountId),
+        kind: 'follower-flat',
+        at: clock(),
+        detail: 'autoritativní reconciliation potvrdila followera flat',
+      });
       return {
         divergentAccounts: [...divergent],
         workingOrderAccounts: [...workingOrderAccounts],
@@ -4092,7 +4182,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return [...accountEligibility.values()]
             .map(entry => eligibilityAt(entry, now))
             .filter(entry => entry.state !== 'active' || entry.lastExecution != null)
-            .map(entry => ({ ...entry, lastExecution: entry.lastExecution ? { ...entry.lastExecution } : undefined }));
+            .map(entry => ({
+              ...entry,
+              lastExecution: entry.lastExecution
+                ? cloneRejectedExecution(entry.lastExecution)
+                : undefined,
+            }));
         })(),
         ...(lastOauthPreflight ? {
           oauthPreflight: {
