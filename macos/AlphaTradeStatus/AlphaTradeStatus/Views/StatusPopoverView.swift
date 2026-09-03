@@ -2,30 +2,42 @@ import SwiftUI
 
 struct StatusPopoverView: View {
     @Environment(\.alphaTradeTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let presentation: CompanionPresentation
+    let settings: CompanionSettings?
+    let transitionEvent: CompanionTransitionEvent?
     let onAction: (FooterActionPresentation) -> Void
+    let onHoverChanged: (Bool) -> Void
 
     @State private var expandedSectionIDs: Set<String>
+    @State private var highlightedRowID: String?
+    @State private var highlightCategory: CompanionTransitionCategory?
 
     init(
         presentation: CompanionPresentation,
-        onAction: @escaping (FooterActionPresentation) -> Void = { _ in }
+        settings: CompanionSettings? = nil,
+        transitionEvent: CompanionTransitionEvent? = nil,
+        onAction: @escaping (FooterActionPresentation) -> Void = { _ in },
+        onHoverChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.presentation = presentation
+        self.settings = settings
+        self.transitionEvent = transitionEvent
         self.onAction = onAction
+        self.onHoverChanged = onHoverChanged
+        let targetSection = transitionEvent?.transition.sectionID
         _expandedSectionIDs = State(
-            initialValue: Set(
-                presentation.sections
-                    .filter(\.isInitiallyExpanded)
-                    .map(\.id)
-            )
+            initialValue: targetSection.map { Set([$0]) }
+                ?? Set(presentation.sections.filter(\.isInitiallyExpanded).map(\.id))
         )
+        _highlightedRowID = State(initialValue: nil)
+        _highlightCategory = State(initialValue: nil)
     }
 
     var body: some View {
         VStack(spacing: AlphaTradeMetrics.sectionSpacing) {
-            StatusHeader(freshness: presentation.freshness)
+            StatusHeader(freshness: presentation.freshness, settings: settings)
             HeroStatusCard(hero: presentation.hero)
 
             if let banner = presentation.banner,
@@ -36,7 +48,13 @@ struct StatusPopoverView: View {
             ForEach(presentation.sections) { section in
                 CollapsibleStatusSection(
                     section: section,
-                    isExpanded: binding(for: section.id)
+                    isExpanded: binding(for: section.id),
+                    highlightedRowID: transitionEvent?.transition.sectionID == section.id
+                        ? highlightedRowID
+                        : nil,
+                    highlightCategory: transitionEvent?.transition.sectionID == section.id
+                        ? highlightCategory
+                        : nil
                 )
             }
 
@@ -60,12 +78,24 @@ struct StatusPopoverView: View {
         // entrance wrapper below never starts from a blank state either.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("alphaTrade.status.popover")
+        .onHover(perform: onHoverChanged)
+        .onAppear(perform: applyTransition)
         .onChange(of: presentation.fixtureID) { _ in
-            expandedSectionIDs = Set(
-                presentation.sections
-                    .filter(\.isInitiallyExpanded)
-                    .map(\.id)
-            )
+            guard transitionEvent == nil else { return }
+            expandedSectionIDs = Set(presentation.sections.filter(\.isInitiallyExpanded).map(\.id))
+        }
+        .onChange(of: transitionEvent?.sequence) { _ in
+            applyTransition()
+        }
+        .task(id: transitionEvent?.sequence) {
+            guard transitionEvent != nil,
+                  CompanionTransitionMotionPolicy.highlightsChangedRow(
+                      reduceMotion: reduceMotion
+                  ) else { return }
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard !Task.isCancelled else { return }
+            highlightedRowID = nil
+            highlightCategory = nil
         }
     }
 
@@ -90,20 +120,54 @@ struct StatusPopoverView: View {
             }
         )
     }
+
+    private func applyTransition() {
+        guard let transition = transitionEvent?.transition else { return }
+        expandedSectionIDs = [transition.sectionID]
+        guard CompanionTransitionMotionPolicy.highlightsChangedRow(
+            reduceMotion: reduceMotion
+        ) else {
+            highlightedRowID = nil
+            highlightCategory = nil
+            return
+        }
+        highlightedRowID = transition.rowID
+        highlightCategory = transition.category
+    }
 }
 
 struct StatusPopoverEntranceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let presentation: CompanionPresentation
+    let settings: CompanionSettings?
+    let transitionEvent: CompanionTransitionEvent?
     let onAction: (FooterActionPresentation) -> Void
+    let onHoverChanged: (Bool) -> Void
+
+    init(
+        presentation: CompanionPresentation,
+        settings: CompanionSettings? = nil,
+        transitionEvent: CompanionTransitionEvent? = nil,
+        onAction: @escaping (FooterActionPresentation) -> Void,
+        onHoverChanged: @escaping (Bool) -> Void = { _ in }
+    ) {
+        self.presentation = presentation
+        self.settings = settings
+        self.transitionEvent = transitionEvent
+        self.onAction = onAction
+        self.onHoverChanged = onHoverChanged
+    }
 
     @State private var isSettled = false
 
     var body: some View {
         StatusPopoverView(
             presentation: presentation,
-            onAction: onAction
+            settings: settings,
+            transitionEvent: transitionEvent,
+            onAction: onAction,
+            onHoverChanged: onHoverChanged
         )
         .scaleEffect(isVisible ? 1 : 0.985, anchor: .top)
         .opacity(isVisible ? 1 : 0.94)

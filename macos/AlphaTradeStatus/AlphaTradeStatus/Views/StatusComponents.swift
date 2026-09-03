@@ -17,6 +17,12 @@ struct StatusHeader: View {
     @Environment(\.alphaTradeTheme) private var theme
 
     let freshness: FreshnessPresentation
+    let settings: CompanionSettings?
+
+    init(freshness: FreshnessPresentation, settings: CompanionSettings? = nil) {
+        self.freshness = freshness
+        self.settings = settings
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -31,6 +37,10 @@ struct StatusHeader: View {
             }
 
             Spacer(minLength: 8)
+
+            if let settings {
+                CompanionSettingsMenu(settings: settings)
+            }
 
             HStack(spacing: 6) {
                 StatusDot(tone: freshness.tone)
@@ -53,6 +63,33 @@ struct StatusHeader: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(freshness.accessibilityLabel)
         }
+    }
+}
+
+private struct CompanionSettingsMenu: View {
+    @Environment(\.alphaTradeTheme) private var theme
+    @ObservedObject var settings: CompanionSettings
+
+    var body: some View {
+        Menu {
+            Toggle("Auto-otevřít při změně stavu", isOn: $settings.autoOpen)
+            Toggle("I při zlepšení", isOn: $settings.includeImprovements)
+            Divider()
+            Toggle("Nativní notifikace", isOn: $settings.nativeNotifications)
+            Toggle("Zvuk při zhoršení", isOn: $settings.worseningSound)
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(theme.secondaryText)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Nastavení upozornění")
+        .accessibilityLabel("Nastavení upozornění")
+        .accessibilityIdentifier("alphaTrade.status.settings")
     }
 }
 
@@ -163,6 +200,8 @@ struct CollapsibleStatusSection: View {
 
     let section: StatusSectionPresentation
     @Binding var isExpanded: Bool
+    let highlightedRowID: String?
+    let highlightCategory: CompanionTransitionCategory?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -192,8 +231,16 @@ struct CollapsibleStatusSection: View {
                         switch row {
                         case .keyValue(let presentation):
                             KeyValueStatusRow(row: presentation)
+                                .modifier(TransitionRowHighlightModifier(
+                                    isHighlighted: highlightedRowID == row.id,
+                                    category: highlightCategory
+                                ))
                         case .position(let presentation):
                             PositionStatusRow(row: presentation)
+                                .modifier(TransitionRowHighlightModifier(
+                                    isHighlighted: highlightedRowID == row.id,
+                                    category: highlightCategory
+                                ))
                         }
                     }
                 }
@@ -204,7 +251,7 @@ struct CollapsibleStatusSection: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .background(
-            theme.card,
+            sectionBackground,
             in: RoundedRectangle(cornerRadius: AlphaTradeMetrics.cardRadius, style: .continuous)
         )
         .overlay {
@@ -290,6 +337,42 @@ struct CollapsibleStatusSection: View {
             return theme.accent(for: section.summaryTone).opacity(0.25)
         }
         return theme.stroke
+    }
+
+    private var sectionBackground: Color {
+        guard highlightedRowID == nil, let highlightCategory else {
+            return theme.card
+        }
+        return theme.softBackground(for: highlightCategory.statusTone).opacity(0.72)
+    }
+}
+
+private struct TransitionRowHighlightModifier: ViewModifier {
+    @Environment(\.alphaTradeTheme) private var theme
+
+    let isHighlighted: Bool
+    let category: CompanionTransitionCategory?
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if isHighlighted, let category {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(theme.softBackground(for: category.statusTone).opacity(0.95))
+                        .padding(.horizontal, -6)
+                        .padding(.vertical, -4)
+                }
+            }
+    }
+}
+
+private extension CompanionTransitionCategory {
+    var statusTone: StatusTone {
+        switch self {
+        case .worsening: return .danger
+        case .improvement: return .success
+        case .mode: return .warning
+        }
     }
 }
 

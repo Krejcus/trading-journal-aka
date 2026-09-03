@@ -2,15 +2,23 @@ import SwiftUI
 
 struct CompanionRootView: View {
     @ObservedObject var store: CompanionStore
+    @ObservedObject var settings: CompanionSettings
 
     let onAction: (FooterActionPresentation) -> Void
     let onOpenPairing: () -> Void
     let onCopyPairingCode: (String) -> Void
+    let onHoverChanged: (Bool) -> Void
 
     var body: some View {
         switch store.state {
         case .connected(let presentation):
-            StatusPopoverView(presentation: presentation, onAction: onAction)
+            StatusPopoverView(
+                presentation: presentation,
+                settings: settings,
+                transitionEvent: store.transitionEvent,
+                onAction: onAction,
+                onHoverChanged: onHoverChanged
+            )
         case .starting:
             CompanionMessagePanel(
                 freshness: .init(
@@ -25,14 +33,16 @@ struct CompanionRootView: View {
                 primaryTitle: nil,
                 primaryAction: nil,
                 secondaryTitle: nil,
-                secondaryAction: nil
+                secondaryAction: nil,
+                settings: settings
             )
         case .pairing(let pairing):
             CompanionPairingView(
                 pairing: pairing,
                 onOpenPairing: onOpenPairing,
                 onCopyPairingCode: onCopyPairingCode,
-                onRetry: store.pairAgain
+                onRetry: store.pairAgain,
+                settings: settings
             )
         case .revoked:
             CompanionMessagePanel(
@@ -48,7 +58,8 @@ struct CompanionRootView: View {
                 primaryTitle: "Spárovat znovu",
                 primaryAction: store.pairAgain,
                 secondaryTitle: "Otevřít AlphaTrade",
-                secondaryAction: onOpenPairing
+                secondaryAction: onOpenPairing,
+                settings: settings
             )
         case .localFailure(let message):
             CompanionMessagePanel(
@@ -64,7 +75,8 @@ struct CompanionRootView: View {
                 primaryTitle: "Zkusit znovu",
                 primaryAction: store.requestManualRefresh,
                 secondaryTitle: "Otevřít AlphaTrade",
-                secondaryAction: onOpenPairing
+                secondaryAction: onOpenPairing,
+                settings: settings
             )
         }
     }
@@ -74,18 +86,22 @@ struct CompanionRootEntranceView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @ObservedObject var store: CompanionStore
+    @ObservedObject var settings: CompanionSettings
     let onAction: (FooterActionPresentation) -> Void
     let onOpenPairing: () -> Void
     let onCopyPairingCode: (String) -> Void
+    let onHoverChanged: (Bool) -> Void
 
     @State private var isSettled = false
 
     var body: some View {
         CompanionRootView(
             store: store,
+            settings: settings,
             onAction: onAction,
             onOpenPairing: onOpenPairing,
-            onCopyPairingCode: onCopyPairingCode
+            onCopyPairingCode: onCopyPairingCode,
+            onHoverChanged: onHoverChanged
         )
         .scaleEffect(isVisible ? 1 : 0.985, anchor: .top)
         .opacity(isVisible ? 1 : 0.94)
@@ -115,6 +131,7 @@ private struct CompanionPairingView: View {
     let onOpenPairing: () -> Void
     let onCopyPairingCode: (String) -> Void
     let onRetry: () -> Void
+    @ObservedObject var settings: CompanionSettings
 
     var body: some View {
         VStack(spacing: AlphaTradeMetrics.sectionSpacing) {
@@ -122,7 +139,7 @@ private struct CompanionPairingView: View {
                 text: pairingHeaderText,
                 tone: .warning,
                 accessibilityLabel: pairingHeaderAccessibilityLabel
-            ))
+            ), settings: settings)
 
             HeroStatusCard(hero: .init(
                 symbolName: "key.fill",
@@ -234,10 +251,11 @@ private struct CompanionMessagePanel: View {
     let primaryAction: (() -> Void)?
     let secondaryTitle: String?
     let secondaryAction: (() -> Void)?
+    @ObservedObject var settings: CompanionSettings
 
     var body: some View {
         VStack(spacing: AlphaTradeMetrics.sectionSpacing) {
-            StatusHeader(freshness: freshness)
+            StatusHeader(freshness: freshness, settings: settings)
             HeroStatusCard(hero: .init(
                 symbolName: symbolName,
                 title: title,

@@ -1,35 +1,46 @@
 import AppKit
 import Combine
 import SwiftUI
+@preconcurrency import UserNotifications
 
 @MainActor
-final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate,
+    UNUserNotificationCenterDelegate {
     private enum Runtime {
         case fixture(CompanionPresentation)
         case cloud(CompanionStore)
     }
 
     private let runtime: Runtime
+    private let settings: CompanionSettings
     private let popover = NSPopover()
 
     private var statusItem: NSStatusItem?
     private var appearanceObservation: NSKeyValueObservation?
     private var menuBarCancellable: AnyCancellable?
+    private var transitionCancellable: AnyCancellable?
     private var wakeObserver: NSObjectProtocol?
+    private var autoCloseTimer: Timer?
+    private var autoCloseDeadline: Date?
+    private var autoCloseRemaining: TimeInterval?
+    private var isPointerInsidePopover = false
+    private var isAutoPresented = false
 
     override init() {
+        let settings = CompanionSettings()
+        self.settings = settings
 #if DEBUG
         if let fixtureValue = ProcessInfo.processInfo.environment["ALPHATRADE_STATUS_FIXTURE"] {
             let fixtureID = CompanionFixtureID(environmentValue: fixtureValue)
             runtime = .fixture(CompanionMockFixtureCatalog.presentation(for: fixtureID))
         } else {
-            runtime = .cloud(CompanionStore())
+            runtime = .cloud(CompanionStore(settings: settings))
         }
 #else
         // Release builds always use the read-only cloud client. Environment
         // fixtures are intentionally ignored so an old LaunchAgent cannot pin
         // a production installation to illustrative LIVE data.
-        runtime = .cloud(CompanionStore())
+        runtime = .cloud(CompanionStore(settings: settings))
 #endif
         super.init()
     }
@@ -48,6 +59,7 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
 
         popover.behavior = .transient
         popover.delegate = self
+        UNUserNotificationCenter.current().delegate = self
 
         if case .cloud(let store) = runtime {
             menuBarCancellable = store.$menuBarPresentation
@@ -55,6 +67,14 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
                 .sink { [weak self] _ in
                     guard let self else { return }
                     self.applyAppearance(NSApp.effectiveAppearance)
+                }
+            transitionCancellable = store.$transitionEvent
+                .compactMap { $0 }
+                .removeDuplicates(by: { $0.sequence == $1.sequence })
+                .sink { [weak self] event in
+                    DispatchQueue.main.async {
+                        self?.presentTransition(event)
+                    }
                 }
             store.start()
 
@@ -82,6 +102,8 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
     func applicationWillTerminate(_ notification: Notification) {
         appearanceObservation?.invalidate()
         menuBarCancellable?.cancel()
+        transitionCancellable?.cancel()
+        cancelAutoCloseTimer()
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
@@ -99,20 +121,24 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         }
     }
 
+    func popoverDidClose(_ notification: Notification) {
+        cancelAutoCloseTimer()
+        isAutoPresented = false
+        isPointerInsidePopover = false
+        if case .cloud(let store) = runtime {
+            store.clearTransitionPresentation()
+        }
+    }
+
     @objc
     private func togglePopover(_ sender: NSStatusBarButton) {
         if popover.isShown {
             popover.performClose(sender)
             return
         }
-
-        installPopoverContent()
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        popover.show(
-            relativeTo: sender.bounds,
-            of: sender,
-            preferredEdge: .minY
-        )
+        isAutoPresented = false
+        cancelAutoCloseTimer()
+        showPopover(relativeTo: sender)
     }
 
     private func applyAppearance(_ effectiveAppearance: NSAppearance) {
@@ -144,7 +170,9 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         case .fixture(let presentation):
             let rootView = StatusPopoverEntranceView(
                 presentation: presentation,
-                onAction: perform
+                settings: settings,
+                onAction: perform,
+                onHoverChanged: handlePopoverHover
             )
             .alphaTradeTheme()
             .alphaTradeFocusEffectDisabled()
@@ -154,9 +182,11 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         case .cloud(let store):
             let rootView = CompanionRootEntranceView(
                 store: store,
+                settings: settings,
                 onAction: perform,
                 onOpenPairing: openPairingPage,
-                onCopyPairingCode: copyPairingCode
+                onCopyPairingCode: copyPairingCode,
+                onHoverChanged: handlePopoverHover
             )
             .alphaTradeTheme()
             .alphaTradeFocusEffectDisabled()
@@ -169,6 +199,196 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         controller.preferredContentSize = fittingSize
         popover.contentViewController = controller
         popover.contentSize = fittingSize
+    }
+
+    func presentTransition(_ event: CompanionTransitionEvent) {
+        deliverNotificationIfEnabled(for: event.transition)
+
+        if popover.isShown {
+            installPopoverContent()
+            if isAutoPresented {
+                scheduleAutoClose(for: event.transition.category)
+            }
+            return
+        }
+
+        guard event.allowsAutoOpen,
+              let button = statusItem?.button else {
+            if case .cloud(let store) = runtime {
+                store.clearTransitionPresentation()
+            }
+            return
+        }
+        isAutoPresented = true
+        installPopoverContent()
+        showPopover(relativeTo: button, installContent: false)
+        pulseStatusPill()
+        scheduleAutoClose(for: event.transition.category)
+    }
+
+    private func showPopover(
+        relativeTo button: NSStatusBarButton,
+        installContent: Bool = true
+    ) {
+        if installContent {
+            installPopoverContent()
+        }
+        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        // Deliberately do not call NSApp.activate: focus remains in the user's
+        // current TradingView/terminal window.
+        popover.show(
+            relativeTo: button.bounds,
+            of: button,
+            preferredEdge: .minY
+        )
+    }
+
+    private func pulseStatusPill() {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let pulseCount = CompanionTransitionMotionPolicy.pulseCount(
+            reduceMotion: reduceMotion
+        )
+        guard pulseCount > 0,
+              let layer = statusItem?.button?.layer else { return }
+
+        let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+        pulse.values = [1.0, 1.07, 1.0]
+        pulse.keyTimes = [0, 0.5, 1]
+        pulse.duration = 0.42
+        pulse.repeatCount = Float(pulseCount)
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(pulse, forKey: "alphaTrade.transitionPulse")
+    }
+
+    private func scheduleAutoClose(for category: CompanionTransitionCategory) {
+        let duration: TimeInterval = category == .worsening ? 60 : 8
+        cancelAutoCloseTimer()
+        autoCloseRemaining = duration
+        guard !isPointerInsidePopover else { return }
+        resumeAutoCloseTimer()
+    }
+
+    private func handlePopoverHover(_ isInside: Bool) {
+        guard isAutoPresented else { return }
+        isPointerInsidePopover = isInside
+        if isInside {
+            pauseAutoCloseTimer()
+        } else {
+            resumeAutoCloseTimer()
+        }
+    }
+
+    private func pauseAutoCloseTimer() {
+        if let deadline = autoCloseDeadline {
+            autoCloseRemaining = max(0, deadline.timeIntervalSinceNow)
+        }
+        autoCloseTimer?.invalidate()
+        autoCloseTimer = nil
+        autoCloseDeadline = nil
+    }
+
+    private func resumeAutoCloseTimer() {
+        guard isAutoPresented,
+              popover.isShown,
+              !isPointerInsidePopover,
+              let remaining = autoCloseRemaining,
+              remaining > 0 else { return }
+        autoCloseDeadline = Date().addingTimeInterval(remaining)
+        autoCloseTimer?.invalidate()
+        autoCloseTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) {
+            [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isAutoPresented else { return }
+                self.popover.performClose(nil)
+            }
+        }
+    }
+
+    private func cancelAutoCloseTimer() {
+        autoCloseTimer?.invalidate()
+        autoCloseTimer = nil
+        autoCloseDeadline = nil
+        autoCloseRemaining = nil
+    }
+
+    private func deliverNotificationIfEnabled(for transition: CompanionTransition) {
+        guard settings.nativeNotifications,
+              (transition.category == .worsening || transition.category == .mode) else {
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { [weak self] notificationSettings in
+            guard let self else { return }
+            switch notificationSettings.authorizationStatus {
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    guard granted else { return }
+                    self.enqueueNotification(transition)
+                }
+            case .authorized, .provisional, .ephemeral:
+                self.enqueueNotification(transition)
+            case .denied:
+                break
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    nonisolated private func enqueueNotification(
+        _ transition: CompanionTransition
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self, self.settings.nativeNotifications else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "AlphaTrade Status · \(self.currentStatusHeadline)"
+            content.body = transition.reason
+            if transition.category == .worsening, self.settings.worseningSound {
+                content.sound = .default
+            }
+            try? await UNUserNotificationCenter.current().add(
+                UNNotificationRequest(
+                    identifier: "companion-transition-\(UUID().uuidString)",
+                    content: content,
+                    trigger: nil
+                )
+            )
+        }
+    }
+
+    private var currentStatusHeadline: String {
+        switch runtime {
+        case .fixture(let presentation):
+            return presentation.displayState.stateName
+        case .cloud(let store):
+            if case .connected(let presentation) = store.state {
+                return presentation.displayState.stateName
+            }
+            return "STAV NEZNÁMÝ"
+        }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        Task { @MainActor [weak self] in
+            defer { completionHandler() }
+            guard let self, let button = self.statusItem?.button else { return }
+            self.isAutoPresented = false
+            self.cancelAutoCloseTimer()
+            self.showPopover(relativeTo: button)
+        }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 
     private func perform(_ action: FooterActionPresentation) {
