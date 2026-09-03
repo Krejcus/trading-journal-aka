@@ -143,6 +143,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, orchestrace šesti Codex agentů — sloučeno do main)
+
+Paralelně v šesti worktree nad `origin/main`, každý výsledek recenzován
+Claudem a znovu ověřen celou sadou + tsc před sloučením (pořadí a61667fb →
+1b349ef3/f25d4d01 → eee8ab36 → c1bdccfb → 4b1a1ea9): (A) násobek při změně
+leadera, (B) dedupe replaye rejectů, (C) forenzní review pěti fail-closed
+(`docs/REVIEW_FAILCLOSED_20260903.md`), (D) panel odzbrojení s kódem důvodu,
+výsledkem kopií a dalším krokem, (E) leader-only popisky denní statistiky +
+klasifikace stop výstupu, (H+I) review a oprava reconnect automatu
+(`docs/REVIEW_RECONNECT_20260903.md`). Web nasazen automaticky. Mac worker
+stále běží ze `56f36ebf` (restart 05:02 UTC po nočním výpadku přes
+`launchctl kickstart`, DISARMED); B, D, E a I v něm začnou platit až po
+reinstallu na výslovné „nasaď“ — dnes je obchodní den. iOS widget/Live Activity
+část E vyžaduje rebuild nativní appky. Otevřené: opravy race z review C
+(P0 partial-fill-aware guard, P1 settling okna) zatím neimplementovány; čtyři
+opuštěné modify operace z 2. 9. čekají na ruční „Označit za vyřešené“; hlavní
+checkout v Documents zůstává 26 commitů za main a dirty (rozhodnutí uživatele).
+
 ### 2026-09-03 (Codex, konečný Tradovate WebSocket reconnect automat)
 
 Tradovate broker má explicitní socket stavy a jediný idempotentní plánovač
