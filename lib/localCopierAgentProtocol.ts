@@ -82,7 +82,11 @@ export type LocalCopierAgentCommand =
       accountEligibilityExclusions?: LocalCopierAccountExclusion[];
     }
   /** Bezpečně vybere jedinou execution skupinu; vždy zůstane DISARMED. */
-  | { type: 'activate-group'; group: CopyGroupConfig }
+  | {
+    type: 'activate-group';
+    group: CopyGroupConfig;
+    waiveUnverifiableFollowerOwnership?: true;
+  }
   | { type: 'shadow'; accountEligibilityExclusions?: LocalCopierAccountExclusion[] }
   | { type: 'disarm' }
   | { type: 'kill-switch' }

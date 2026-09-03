@@ -43,6 +43,7 @@ const state = (overrides: Partial<PendingUnavailableFollowerRemoval> = {}): Pend
   leaderUnavailableAccountId: null,
   error: null,
   savedSuccessfully: false,
+  ownershipWaiverStep: false,
   ...overrides,
 });
 
@@ -144,5 +145,26 @@ describe('nedostupný follower — potvrzení přímo z blokujícího místa', (
     expect(markup).toContain('Zapnutí je vždy samostatný krok');
     expect(markup).toContain('>Zapnout</button>');
     expect(onArm).not.toHaveBeenCalled();
+  });
+
+  it('lineage participant dostane samostatné druhé potvrzení ownership waiveru', () => {
+    const riskyPlan = unavailableFollowerRemovalPlan(
+      saved,
+      [leaderId, healthyFollowerId],
+      undefined,
+      [{ accountId: unavailableFollowerId, epochIds: ['epoch-risk-1'] }],
+    );
+    if (!riskyPlan) throw new Error('Test musí vytvořit risky removal plan');
+
+    const firstMarkup = renderToStaticMarkup(dialog(state({ plan: riskyPlan })));
+    expect(firstMarkup).not.toContain('může držet neověřenou kopii z epochy');
+
+    const waiverMarkup = renderToStaticMarkup(dialog(state({
+      plan: riskyPlan,
+      ownershipWaiverStep: true,
+    })));
+    expect(waiverMarkup).toContain(`Účet ${unavailableFollowerId} může držet neověřenou kopii z epochy epoch-risk-1; potvrď převzetí odpovědnosti.`);
+    expect(waiverMarkup).toContain('Přebírám odpovědnost a odebírám');
+    expect(waiverMarkup).toContain('AlphaTrade neodešle žádný obchod');
   });
 });

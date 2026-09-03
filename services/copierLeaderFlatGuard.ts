@@ -597,7 +597,12 @@ export function evaluateLeaderFlatBatch(
   for (const follower of epoch.followers) {
     const account = byAccount.get(follower.accountId);
     if (!account || !account.ok) {
-      blocked.push(follower.accountId);
+      // `copyLineage` má v tomto schématu jen confirmed/unproven. Follower,
+      // který byl při open nezpůsobilý a nemá potvrzenou lineage, kopii
+      // dostat nemohl; jeho pozdější OAuth absence proto batch neblokuje.
+      if (follower.eligibleAtOpen || follower.copyLineage === 'confirmed') {
+        blocked.push(follower.accountId);
+      }
       continue;
     }
     const followerNet = accountNet(account, epoch.symbol);

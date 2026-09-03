@@ -367,6 +367,7 @@ describe('account eligibility — DLL incident', () => {
 
     await expect(controller.reconcile()).resolves.toEqual({
       divergentAccounts: [], workingOrderAccounts: [],
+      authoritativelyClean: true, missingAccounts: [204],
     });
     expect(controller.status().accountEligibility).toEqual(expect.arrayContaining([
       expect.objectContaining({ accountId: 204, state: 'breached' }),

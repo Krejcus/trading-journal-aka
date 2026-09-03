@@ -19,10 +19,27 @@ export interface CopierRuntimeCommandAdapterOptions {
 export function createCopierRuntimeCommandAdapter(
   options: CopierRuntimeCommandAdapterOptions,
 ): LiveCopyTradingAdapter {
-  const applyGroup = async (next: CopyGroupConfig) => {
+  const applyGroup = async (
+    next: CopyGroupConfig,
+    request: { waiveUnverifiableFollowerOwnership?: true } = {},
+  ) => {
     const current = options.getGroup();
-    if (current.leaderAccountId !== next.leaderAccountId) {
-      await options.controller.reconfigureGroup(next);
+    const currentAccounts = new Set([
+      current.leaderAccountId,
+      ...current.followers.map(follower => follower.accountId),
+    ]);
+    const nextAccounts = new Set([
+      next.leaderAccountId,
+      ...next.followers.map(follower => follower.accountId),
+    ]);
+    const topologyChanged = currentAccounts.size !== nextAccounts.size
+      || [...currentAccounts].some(accountId => !nextAccounts.has(accountId));
+    if (current.leaderAccountId !== next.leaderAccountId || topologyChanged) {
+      await options.controller.reconfigureGroup(next, {
+        ...(request.waiveUnverifiableFollowerOwnership === true
+          ? { waiveUnverifiableFollowerOwnership: true }
+          : {}),
+      });
     } else {
       options.controller.updateGroup(next);
     }
@@ -42,7 +59,11 @@ export function createCopierRuntimeCommandAdapter(
       }
       switch (command.type) {
         case 'update-group':
-          await applyGroup(command.group);
+          await applyGroup(command.group, {
+            ...(command.waiveUnverifiableFollowerOwnership === true
+              ? { waiveUnverifiableFollowerOwnership: true }
+              : {}),
+          });
           return { type: 'configuration', group: command.group };
         case 'set-group-enabled':
           await update(group => ({ ...group, enabled: command.enabled }));
