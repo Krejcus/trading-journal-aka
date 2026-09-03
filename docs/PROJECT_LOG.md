@@ -152,6 +152,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, companion build 13 — návrat k contentSize animaci, buildy 10–12 zahozeny)
+
+Build 12 (autoresizing hosting view během animace rámu okna) vytvořil
+měřicí smyčku: view hlásilo SwiftUI novou velikost → koordinátor znovu
+animoval okno → dokola; popover zůstal s prázdnou plochou dole a aplikace
+zamrzla. Uživateli byl okamžitě vrácen build 11 ze zálohy. Poučení: rám okna
+NSPopoveru neanimovat ručně — obsahové view mění jen NSPopover při změně
+`contentSize`. Build 13 = Codexova původní implicitní animace
+`popover.contentSize` (build 8, uživatelem potvrzená jako plynulá) + přišpendlení
+obsahu k hornímu okraji (build 11), které samo o sobě řeší „ujetí od shora"
+způsobené vertikálním centrováním. Okenní úpravy z buildů 10 a 12 odstraněny.
+Release build 13 a build-for-testing prošly, build 11 zálohován, appka
+vyměněna, autostart znovu bootstrapován.
+
 ### 2026-09-03 (Claude, companion build 12 — obsah sleduje rám okna během rozbalení)
 
 Po buildu 11 zůstalo „ujetí od shora" jen při rozbalení. Příčina: NSPopover
