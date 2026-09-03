@@ -34,12 +34,24 @@ const harness = async (initial?: CopierSnapshot, skipInitialReconcile = false) =
   const clock = () => ++now;
   const broker = createMockBroker({ clock, behavior: () => ({ kind: 'working' }) });
   const store = createMemoryCopierStore(initial);
-  const audit: { kind: string; accountId?: number; reason?: string }[] = [];
+  const audit: {
+    kind: string;
+    accountId?: number;
+    brokerOrderId?: string;
+    leaderEventId?: string;
+    key?: string;
+    reason?: string;
+  }[] = [];
   const controller = await bootstrapCopierRuntime({
     broker, store, group, clock,
     wait: async () => undefined,
     onAudit: entries => audit.push(...entries.map(entry => ({
-      kind: entry.kind, accountId: entry.accountId, reason: entry.reason,
+      kind: entry.kind,
+      accountId: entry.accountId,
+      brokerOrderId: entry.brokerOrderId,
+      leaderEventId: entry.leaderEventId,
+      key: entry.key,
+      reason: entry.reason,
     }))),
   });
   broker.setConnected(true);
@@ -168,6 +180,115 @@ describe('account eligibility — DLL incident', () => {
     // DLL účet zůstává členem skupiny — jen se neúčastní nových vstupů.
     expect(group.followers.some(follower => follower.accountId === 205)).toBe(true);
 
+    h.controller.stop();
+  });
+
+  it('stejný async reject 3× včetně restartu změní audit, lastExecution a outbox jen jednou', async () => {
+    const h = await harness();
+    await emitLeaderEntry(h, 'leader-replayed-reject', '1:Working');
+    const [order] = followerOrdersFor(h.broker, 205);
+    expect(order).toBeDefined();
+    const replayedReject: BrokerOrder = {
+      ...order,
+      status: 'rejected',
+      rejectReason: 'Violation: daily loss limit reached',
+      sourceVersion: '42:Rejected',
+      updatedAt: 50_000,
+    };
+
+    h.broker.emitEvent({ type: 'order', order: replayedReject });
+    await h.controller.waitForIdle();
+    const firstExecution = h.controller.status().accountEligibility
+      ?.find(entry => entry.accountId === 205)?.lastExecution;
+    const firstSnapshot = await h.store.load();
+    const firstOutbox = firstSnapshot.outbox.find(entry => entry.brokerOrderId === order.brokerOrderId);
+    const firstRevision = firstSnapshot.revision;
+    expect(firstExecution).toMatchObject({
+      brokerOrderId: order.brokerOrderId,
+      at: 50_000,
+    });
+    expect(firstOutbox?.status).toBe('waived');
+    expect(firstSnapshot.safety?.seenTerminalRejects).toEqual([
+      { accountId: 205, brokerOrderId: order.brokerOrderId, at: 50_000 },
+    ]);
+
+    h.broker.emitEvent({ type: 'order', order: { ...replayedReject } });
+    await h.controller.waitForIdle();
+    expect(h.controller.status().accountEligibility
+      ?.find(entry => entry.accountId === 205)?.lastExecution).toEqual(firstExecution);
+    expect(await h.store.load()).toMatchObject({
+      revision: firstRevision,
+      outbox: expect.arrayContaining([firstOutbox]),
+    });
+    h.controller.stop();
+
+    const restartAudit: typeof h.audit = [];
+    const restarted = await bootstrapCopierRuntime({
+      broker: h.broker,
+      store: h.store,
+      group,
+      clock: h.clock,
+      wait: async () => undefined,
+      onAudit: entries => restartAudit.push(...entries.map(entry => ({
+        kind: entry.kind,
+        accountId: entry.accountId,
+        brokerOrderId: entry.brokerOrderId,
+        leaderEventId: entry.leaderEventId,
+        key: entry.key,
+        reason: entry.reason,
+      }))),
+    });
+    h.broker.setConnected(true);
+    await restarted.waitForIdle();
+    const afterBootstrap = await h.store.load();
+    h.broker.emitEvent({ type: 'order', order: { ...replayedReject } });
+    await restarted.waitForIdle();
+
+    const finalSnapshot = await h.store.load();
+    expect(restarted.status().accountEligibility
+      ?.find(entry => entry.accountId === 205)?.lastExecution).toEqual(firstExecution);
+    expect(finalSnapshot.revision).toBe(afterBootstrap.revision);
+    expect(finalSnapshot.outbox.find(entry => entry.brokerOrderId === order.brokerOrderId))
+      .toEqual(afterBootstrap.outbox.find(entry => entry.brokerOrderId === order.brokerOrderId));
+    expect(finalSnapshot.outbox.find(entry => entry.brokerOrderId === order.brokerOrderId))
+      .toEqual(firstOutbox);
+    expect([...h.audit, ...restartAudit].filter(entry => (
+      entry.kind === 'rejected' && entry.brokerOrderId === order.brokerOrderId
+    ))).toHaveLength(1);
+    restarted.stop();
+  });
+
+  it('starší jiný reject nepřepíše lastExecution, novější brokerOrderId ano', async () => {
+    const h = await harness();
+    const reject = (brokerOrderId: string, updatedAt: number): BrokerOrder => leaderOrder({
+      brokerOrderId,
+      status: 'rejected',
+      rejectReason: 'InvalidPrice',
+      sourceVersion: `${brokerOrderId}:Rejected`,
+      updatedAt,
+    });
+
+    h.broker.emitEvent({ type: 'order', order: reject('reject-current', 50_000) });
+    await h.controller.waitForIdle();
+    const current = h.controller.status().accountEligibility
+      ?.find(entry => entry.accountId === 100)?.lastExecution;
+    expect(current).toMatchObject({ brokerOrderId: 'reject-current', at: 50_000 });
+
+    h.broker.emitEvent({ type: 'order', order: reject('reject-older', 40_000) });
+    await h.controller.waitForIdle();
+    expect(h.controller.status().accountEligibility
+      ?.find(entry => entry.accountId === 100)?.lastExecution).toEqual(current);
+
+    h.broker.emitEvent({ type: 'order', order: reject('reject-new', 60_000) });
+    await h.controller.waitForIdle();
+    expect(h.controller.status().accountEligibility
+      ?.find(entry => entry.accountId === 100)?.lastExecution)
+      .toMatchObject({ brokerOrderId: 'reject-new', at: 60_000 });
+    expect((await h.store.load()).safety?.seenTerminalRejects).toEqual([
+      { accountId: 100, brokerOrderId: 'reject-current', at: 50_000 },
+      { accountId: 100, brokerOrderId: 'reject-older', at: 40_000 },
+      { accountId: 100, brokerOrderId: 'reject-new', at: 60_000 },
+    ]);
     h.controller.stop();
   });
 
@@ -452,6 +573,22 @@ describe('account eligibility — DLL incident', () => {
     expect(restored?.resolution).toBeUndefined();
     expect((await h.store.load()).safety?.accountEligibility?.[0]?.lastExecution)
       .toEqual(initial.safety.accountEligibility?.[0]?.lastExecution);
+
+    const revision = (await h.store.load()).revision;
+    h.broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        accountId: 201,
+        brokerOrderId: 'legacy-order',
+        status: 'rejected',
+        rejectReason: 'legacy reject',
+        sourceVersion: 'legacy:Rejected',
+        updatedAt: 850,
+      }),
+    });
+    await h.controller.waitForIdle();
+    expect((await h.store.load()).revision).toBe(revision);
+    expect(h.audit.filter(entry => entry.kind === 'rejected')).toHaveLength(0);
     h.controller.stop();
   });
 

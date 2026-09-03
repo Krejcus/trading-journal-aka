@@ -138,6 +138,20 @@ export interface CopierAccountEligibility {
   lastExecution?: CopierRejectedExecution;
 }
 
+/**
+ * Durable potvrzení, že controller už jednou zpracoval terminální reject.
+ *
+ * Nejde o broker příkaz ani o povolení něco retrynout. Je to pouze ochrana
+ * reportingové/eligibility větve před historickými order entitami, které
+ * Tradovate znovu přehraje při syncrequestu nebo po restartu workeru.
+ */
+export interface CopierSeenTerminalReject {
+  accountId: number;
+  brokerOrderId: string;
+  /** Broker timestamp rejectu (fallback je čas prvního přijetí). */
+  at: number;
+}
+
 export interface CopierState {
   /**
    * Klíče replikací, které jsou u brokera vyřízené (potvrzené nebo
@@ -185,6 +199,8 @@ export interface CopierState {
     leaderExposureEpochs?: LeaderFlatEpoch[];
     /** Durable eligibility západky účtů; chybějící položka znamená active. */
     accountEligibility?: CopierAccountEligibility[];
+    /** Bounded durable dedupe přímé controller větve pro async/leader rejecty. */
+    seenTerminalRejects?: CopierSeenTerminalReject[];
   };
 }
 
@@ -257,6 +273,9 @@ export function createCopierState(
         ...entry,
         ...(entry.lastExecution ? { lastExecution: { ...entry.lastExecution } } : {}),
       })) ?? [],
+      ...(safety.seenTerminalRejects
+        ? { seenTerminalRejects: safety.seenTerminalRejects.map(entry => ({ ...entry })) }
+        : {}),
       ...(safety.dailyStats
         ? {
           dailyStats: {

@@ -81,16 +81,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       read-only review Codexu: která z těchto cest je race (a snese grace
       window / opakovanou autoritativní kontrolu) a která je skutečná
       divergence. Nikdy neopravovat obchodem.
-- [ ] **Replay starých rejectů při 50-min obnově WebSocketu** (nalezeno 2. 9.
-      večer): po každém `SOCKET RENEWAL` leader event source znovu vydá
+- [x] **Replay starých rejectů při 50-min obnově WebSocketu** — VYŘEŠENO
+      3. 9. (zápis „durable dedupe replayovaných rejectů“ níže). Původní nález
+      z 2. 9. večer: po každém `SOCKET RENEWAL` leader event source znovu vydal
       `leader-reject-<orderId>` pro už dávno odmítnuté příkazy (645218030049
       z 17:36 a 645218030433 „InvalidPrice“), controller je znovu zapíše do
       `lastExecution` s novým časem a UI ukáže „Příkaz odmítnut · InvalidPrice ·
       21:34“ na účtech, kde nikdo neobchodoval. Bez broker side effectu, ale
-      matoucí a zahlcuje audit. Fix: dedupe rejectů podle `brokerOrderId`
-      (durable seen set) při resyncu; nezapisovat `lastExecution` starší než
-      už uložený. Delegovat Codexu s regresí „renewal nesmí vytvořit nový
-      audit/eligibility zápis pro známý reject“.
+      matoucí a zahlcoval audit.
 - [x] iOS 26 WidgetKit APNs registrace — VYŘEŠENO 21. 8. (zápis „widgety a
       notifikace dokončeny"): příčinou byl Postgres regex limit v CHECK
       constraintu; registrace, push i push-triggered reload fyzicky ověřeny.
@@ -174,6 +172,30 @@ Celá sada prošla 221 souborů / 1817 testů, strict TypeScript, cílený ESLin
 produkční build a `git diff --check`. Beze změny zůstal runtime/controller i
 formát `CopyGroupConfig`; nic nebylo commitnuto, pushnuto, deploynuto ani
 spuštěno na workeru/brokeru.
+### 2026-09-03 (Codex, durable dedupe replayovaných rejectů)
+
+Příčina nebyla v chybějícím porovnání `sourceVersion` uvnitř leader event
+source: controller zpracovával každý `rejected` order přímo ještě před
+`source.observe()`, takže při syncrequest replayi znovu měnil eligibility,
+`lastExecution`, async outbox a přímý `leader-reject-*` audit, i když event
+source stejnou signaturu následně zahodil. Přímá reject větev nyní ve stejném
+CAS commitu jako eligibility/outbox ukládá bounded ledger posledních 2048
+`accountId + brokerOrderId`; známý reject je v této větvi no-op i po restartu.
+Starý snapshot bez ledgeru zůstává validní a jako migrační dedupe použije
+alespoň brokerOrderId dosavadního `lastExecution`. Brokerový `updatedAt`
+brání staršímu nebo stejně starému rejectu přepsat novější kartu; nový orderId
+s novějším časem se zapíše normálně. První async DLL reject dál klasifikuje
+účet, waivne vysvětlený acknowledged outbox a audituje stejně jako dřív.
+
+Regrese pokrývá trojí doručení téhož async rejectu včetně restartu, jediný
+audit a beze změny `lastExecution`/outboxu, nový i starší jiný orderId,
+legacy snapshot a Supabase validaci tvaru, unikátnosti a limitu ledgeru.
+Cíleně prošlo 4 soubory / 44 testů a controller sada 2 soubory / 108 testů.
+Finální kompletní běh prošel 220/220 souborů a 1818/1818 testů; strict
+TypeScript prošel bez výstupu. Jeden předchozí full run měl pouze známý
+zátěžový 1s timeout mock CDP testu, který izolovaně prošel 11/11 a následný
+celý běh byl zelený. Nic nebylo commitnuto, pushnuto, deploynuto ani
+instalováno; worker/broker, ARM, DISARM ani Flatten se nespouštěly.
 
 ### 2026-09-02 (Claude, večerní review dne — skutečná čísla a replay bug)
 

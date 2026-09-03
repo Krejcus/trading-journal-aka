@@ -15,6 +15,7 @@ import {
   type CopierDailyStats,
   type CopierExecutionResolutionKind,
   type CopierRejectedExecution,
+  type CopierSeenTerminalReject,
 } from './copierEngine';
 import { CopierLeaderEventSource } from './copierLeaderEventSource';
 import {
@@ -34,7 +35,12 @@ import { CopierBracketCorrelator, type LeaderBracketPair } from './copierBracket
 import { CopierOsoCorrelator } from './copierOsoCorrelator';
 import { stuckCancelEntries, type CancelOutboxEntry } from './copierCancelOutbox';
 import { waiveCancelEntry } from './copierCancelOutbox';
-import { markRejected as markOutboxRejected, stuckEntries, waiveOutboxEntry } from './copierOutbox';
+import {
+  markRejected as markOutboxRejected,
+  stuckEntries,
+  waiveOutboxEntry,
+  type OutboxEntry,
+} from './copierOutbox';
 import { stuckBracketEntries, waiveBracketOutboxEntry } from './copierBracketOutbox';
 import { stuckOsoEntries, waiveOsoOutboxEntry } from './copierOsoOutbox';
 import { applyResolved, type LeaderEvent } from './copierEngine';
@@ -51,7 +57,7 @@ import {
   assertedFollowerQuantity,
 } from './copierRunner';
 import type { CopierStore } from './copierStore';
-import { toSnapshot } from './copierStore';
+import { COPIER_SEEN_TERMINAL_REJECT_LIMIT, toSnapshot } from './copierStore';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from './liveCopyTrading';
 import {
   processManualFlatten,
@@ -439,15 +445,40 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let persistEligibility = async (): Promise<void> => undefined;
   const DLL_REASON_PATTERN = /daily\s*loss|loss\s*limit|\bdll\b/i;
   const BREACH_REASON_PATTERN = /breach|trailing\s*(max\s*)?drawdown|account\s*(disabled|locked|suspended)/i;
-  const setEligibility = (accountId: number, next: CopierAccountEligibility) => {
+  const setEligibilityIn = (
+    entries: Map<number, CopierAccountEligibility>,
+    accountId: number,
+    next: CopierAccountEligibility,
+  ) => {
     // Breach je trvalý a nesmí ho přepsat slabší klasifikace téhož streamu;
     // odemyká ho jedině autoritativní reaktivace v reconciliaci.
-    const current = accountEligibility.get(accountId);
+    const current = entries.get(accountId);
     if (current?.state === 'breached' && next.state !== 'breached' && next.state !== 'active') return;
-    accountEligibility.set(accountId, next);
+    entries.set(accountId, next);
   };
-  const recordAccountRejection = async (order: BrokerOrder, at: number) => {
+  const setEligibility = (accountId: number, next: CopierAccountEligibility) =>
+    setEligibilityIn(accountEligibility, accountId, next);
+  const terminalRejectKey = (accountId: number, brokerOrderId: string) =>
+    `${accountId}:${brokerOrderId}`;
+  const hasSeenTerminalReject = (
+    safety: CopierRuntime['state']['safety'],
+    accountId: number,
+    brokerOrderId: string,
+  ) => (
+    safety.seenTerminalRejects?.some(entry => (
+      entry.accountId === accountId && entry.brokerOrderId === brokerOrderId
+    )) === true
+    // Kompatibilita se snapshotem před durable ledgerem: alespoň poslední
+    // už zapsaný reject nesmí po upgradu při prvním syncrequestu ožít znovu.
+    || safety.accountEligibility?.some(entry => (
+      entry.accountId === accountId && entry.lastExecution?.brokerOrderId === brokerOrderId
+    )) === true
+  );
+  const recordAccountRejection = async (order: BrokerOrder, receivedAt: number) => {
     const reason = order.rejectReason?.trim() || 'broker odmítl příkaz';
+    const at = Number.isFinite(order.updatedAt) && order.updatedAt > 0
+      ? order.updatedAt
+      : receivedAt;
     const lastExecution = {
       kind: 'rejected' as const,
       reason,
@@ -459,36 +490,124 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ...(order.stopPrice != null ? { stopPrice: order.stopPrice } : {}),
       at,
     };
-    const current = accountEligibility.get(order.accountId);
-    if (BREACH_REASON_PATTERN.test(reason)) {
-      setEligibility(order.accountId, {
-        accountId: order.accountId, state: 'breached', reason, at, lastExecution,
-      });
-      await persistEligibility();
-      return;
-    }
-    if (DLL_REASON_PATTERN.test(reason)) {
-      setEligibility(order.accountId, {
-        accountId: order.accountId, state: 'dll-locked', reason, at, lastExecution,
-        // Hranice obchodní session v době locku: po jejím přejetí se stav
-        // NEuvolní časem, jen přejde do 'unverifiable' a čeká na ověření.
-        // Bez denních statistik se hranice odvodí ze session kalendáře.
-        lockSessionEndAt: currentRuntime().state.safety.dailyStats?.sessionEndAt
-          ?? (at + msUntilTradovateSessionEnd(at)),
-      });
-      await persistEligibility();
-      return;
-    }
-    // Neurčitý reject: jen execution událost, eligibility se nemění.
-    setEligibility(order.accountId, {
-      accountId: order.accountId,
-      state: current?.state ?? 'active',
-      reason: current?.reason,
-      at: current?.at ?? at,
-      lockSessionEndAt: current?.lockSessionEndAt,
-      lastExecution,
+    let result: {
+      processed: boolean;
+      acknowledged?: OutboxEntry;
+      auditReason: string;
+    } = { processed: false, auditReason: reason };
+
+    await processor.mutate(async currentRuntimeValue => {
+      if (hasSeenTerminalReject(
+        currentRuntimeValue.state.safety,
+        order.accountId,
+        order.brokerOrderId,
+      )) return currentRuntimeValue;
+
+      const nextEligibility = new Map(accountEligibility);
+      const current = nextEligibility.get(order.accountId);
+      // `updatedAt` je brokerový čas terminální entity. Historický reject s
+      // jiným ID se stále zpracuje pro safety/outbox, ale nesmí přepsat novější
+      // kartu `lastExecution` jen proto, že dorazil při pozdějším syncrequestu.
+      const effectiveLastExecution = current?.lastExecution && current.lastExecution.at >= at
+        ? cloneRejectedExecution(current.lastExecution)
+        : lastExecution;
+      const eligibilityAt = Math.max(current?.at ?? 0, at);
+      if (BREACH_REASON_PATTERN.test(reason)) {
+        setEligibilityIn(nextEligibility, order.accountId, {
+          accountId: order.accountId,
+          state: 'breached',
+          reason,
+          at: eligibilityAt,
+          lastExecution: effectiveLastExecution,
+        });
+      } else if (DLL_REASON_PATTERN.test(reason)) {
+        setEligibilityIn(nextEligibility, order.accountId, {
+          accountId: order.accountId,
+          state: 'dll-locked',
+          reason,
+          at: eligibilityAt,
+          lastExecution: effectiveLastExecution,
+          // Hranice obchodní session v době locku: po jejím přejetí se stav
+          // NEuvolní časem, jen přejde do 'unverifiable' a čeká na ověření.
+          // Bez denních statistik se hranice odvodí ze session kalendáře.
+          lockSessionEndAt: currentRuntimeValue.state.safety.dailyStats?.sessionEndAt
+            ?? (at + msUntilTradovateSessionEnd(at)),
+        });
+      } else {
+        // Neurčitý reject: jen execution událost, eligibility se nemění.
+        setEligibilityIn(nextEligibility, order.accountId, {
+          accountId: order.accountId,
+          state: current?.state ?? 'active',
+          reason: current?.reason,
+          at: current?.at ?? at,
+          lockSessionEndAt: current?.lockSessionEndAt,
+          lastExecution: effectiveLastExecution,
+        });
+      }
+
+      const classified = nextEligibility.get(order.accountId)?.state;
+      const explained = classified === 'dll-locked' || classified === 'breached';
+      const acknowledged = [...currentRuntimeValue.outbox.values()].find(entry =>
+        entry.brokerOrderId === order.brokerOrderId && entry.status === 'acknowledged');
+      const outbox = new Map(currentRuntimeValue.outbox);
+      const auditReason = order.rejectReason?.trim() || 'broker odmítl příkaz (async reject)';
+      if (acknowledged) {
+        const entry = outbox.get(acknowledged.key);
+        if (entry?.status === 'acknowledged') {
+          outbox.set(entry.key, explained
+            ? waiveOutboxEntry(
+                markOutboxRejected(entry, auditReason, receivedAt),
+                `${auditReason} — účet vyřazen z nových vstupů (${classified})`,
+                receivedAt,
+              )
+            : markOutboxRejected(entry, auditReason, receivedAt));
+        }
+      }
+
+      const receipt: CopierSeenTerminalReject = {
+        accountId: order.accountId,
+        brokerOrderId: order.brokerOrderId,
+        at,
+      };
+      const receiptKey = terminalRejectKey(receipt.accountId, receipt.brokerOrderId);
+      const seenTerminalRejects = [
+        ...(currentRuntimeValue.state.safety.seenTerminalRejects ?? [])
+          .filter(entry => terminalRejectKey(entry.accountId, entry.brokerOrderId) !== receiptKey),
+        receipt,
+      ].slice(-COPIER_SEEN_TERMINAL_REJECT_LIMIT);
+      const safety = {
+        ...currentRuntimeValue.state.safety,
+        accountEligibility: [...nextEligibility.values()].map(entry => ({
+          ...entry,
+          ...(entry.lastExecution
+            ? { lastExecution: cloneRejectedExecution(entry.lastExecution) }
+            : {}),
+        })),
+        seenTerminalRejects,
+      };
+      const state = { ...currentRuntimeValue.state, safety };
+      const committed = await options.store.commit(
+        toSnapshot(
+          state,
+          outbox.values(),
+          currentRuntimeValue.cancelOutbox.values(),
+          currentRuntimeValue.revision,
+          currentRuntimeValue.bracketOutbox.values(),
+          currentRuntimeValue.osoOutbox.values(),
+        ),
+        currentRuntimeValue.revision,
+      );
+      accountEligibility.clear();
+      for (const [accountId, entry] of nextEligibility) accountEligibility.set(accountId, entry);
+      result = { processed: true, acknowledged, auditReason };
+      return {
+        ...currentRuntimeValue,
+        state,
+        outbox,
+        revision: committed.revision,
+      };
     });
-    await persistEligibility();
+    return result;
   };
   /** DLL po začátku nové session nesmí zůstat odemčený ani zamčený „časem“. */
   const rollEligibilityToNewSession = (now: number): boolean => {
@@ -2690,44 +2809,30 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       && [group.leaderAccountId, ...group.followers.map(item => item.accountId)]
         .includes(event.order.accountId)) {
       const order = event.order;
-      await recordAccountRejection(order, now);
-      // Leader reject se musí propsat do eligibility stejně jako follower
-      // reject, ale nemá follower outbox položku, kterou by bylo co waivnout.
-      if (order.accountId === group.leaderAccountId) {
-        options.onAudit?.([{
-          at: now, leaderEventId: `leader-reject-${order.brokerOrderId}`,
-          kind: 'rejected', accountId: order.accountId,
-          brokerOrderId: order.brokerOrderId,
-          reason: order.rejectReason?.trim() || 'broker odmítl leader příkaz',
-        }]);
+      const rejection = await recordAccountRejection(order, now);
+      if (rejection.processed) {
+        // Leader reject se musí propsat do eligibility stejně jako follower
+        // reject, ale nemá follower outbox položku, kterou by bylo co waivnout.
+        if (order.accountId === group.leaderAccountId) {
+          options.onAudit?.([{
+            at: now, leaderEventId: `leader-reject-${order.brokerOrderId}`,
+            kind: 'rejected', accountId: order.accountId,
+            brokerOrderId: order.brokerOrderId,
+            reason: order.rejectReason?.trim() || 'broker odmítl leader příkaz',
+          }]);
+        }
+        const acknowledged = rejection.acknowledged;
+        if (acknowledged) {
+          options.onAudit?.([{
+            at: now, leaderEventId: acknowledged.leaderEventId ?? `async-reject-${order.brokerOrderId}`,
+            kind: 'rejected', accountId: order.accountId, key: acknowledged.key,
+            brokerOrderId: order.brokerOrderId, reason: rejection.auditReason,
+          }]);
+        }
       }
-      const acknowledged = [...currentRuntime().outbox.values()].find(entry =>
-        entry.brokerOrderId === order.brokerOrderId && entry.status === 'acknowledged');
-      if (acknowledged) {
-        const reason = order.rejectReason?.trim() || 'broker odmítl příkaz (async reject)';
-        // Vysvětlený reject (DLL/breach) NESMÍ přes stuck-outbox zastavit
-        // zdravé followery: účet už vyřadila eligibility, položka se
-        // waivne s důvodem. Nevysvětlený reject zůstává 'rejected', tedy
-        // fail-closed pro celou skupinu — leader a follower se rozešli
-        // z neznámé příčiny.
-        const classified = accountEligibility.get(order.accountId)?.state;
-        const explained = classified === 'dll-locked' || classified === 'breached';
-        await processor.mutate(async current => {
-          const outbox = new Map(current.outbox);
-          const entry = outbox.get(acknowledged.key);
-          if (entry && entry.status === 'acknowledged') {
-            outbox.set(entry.key, explained
-              ? waiveOutboxEntry(markOutboxRejected(entry, reason, now), `${reason} — účet vyřazen z nových vstupů (${classified})`, now)
-              : markOutboxRejected(entry, reason, now));
-          }
-          return { ...current, outbox };
-        }).catch(() => undefined);
-        options.onAudit?.([{
-          at: now, leaderEventId: acknowledged.leaderEventId ?? `async-reject-${order.brokerOrderId}`,
-          kind: 'rejected', accountId: order.accountId, key: acknowledged.key,
-          brokerOrderId: order.brokerOrderId, reason,
-        }]);
-      }
+      // Source musí i duplicitní událost dostat: u leadera může jeho vlastní
+      // durable lifecycle cesta dokončit cancel po pádu mezi dvěma commity.
+      // Přeskakuje se jen už hotová přímá reject/eligibility/outbox větev.
     }
     // Cizí zásah se musí poznat z order streamu sám. Čekat, až ho odhalí
     // náš příští modify, znamená čekat na náhodu — 24. 8. žádný další modify

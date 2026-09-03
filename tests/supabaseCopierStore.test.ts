@@ -69,6 +69,7 @@ describe('createSupabaseCopierStore', () => {
     snapshot.safety = {
       entryCooldownUntil: 0,
       dayLockUntil: 0,
+      seenTerminalRejects: [{ accountId: 201, brokerOrderId: 'stop-1', at: 101 }],
       accountEligibility: [{
         accountId: 201,
         state: 'active',
@@ -94,8 +95,40 @@ describe('createSupabaseCopierStore', () => {
       row: { revision: 4, snapshot },
     }), crypto.randomUUID(), () => 1);
     await expect(store.load()).resolves.toMatchObject({
-      safety: { accountEligibility: snapshot.safety.accountEligibility },
+      safety: {
+        accountEligibility: snapshot.safety.accountEligibility,
+        seenTerminalRejects: snapshot.safety.seenTerminalRejects,
+      },
     });
+  });
+
+  it('seen terminal rejects validuje tvar, unikátnost i bounded velikost', async () => {
+    const duplicate = emptySnapshot();
+    duplicate.safety = {
+      ...duplicate.safety!,
+      seenTerminalRejects: [
+        { accountId: 201, brokerOrderId: 'same', at: 1 },
+        { accountId: 201, brokerOrderId: 'same', at: 2 },
+      ],
+    };
+    const duplicateStore = createSupabaseCopierStore(fakeClient({
+      row: { revision: 4, snapshot: duplicate },
+    }), crypto.randomUUID(), () => 1);
+    await expect(duplicateStore.load()).rejects.toThrow('Invalid copier snapshot');
+
+    const oversized = emptySnapshot();
+    oversized.safety = {
+      ...oversized.safety!,
+      seenTerminalRejects: Array.from({ length: 2_049 }, (_, index) => ({
+        accountId: 201,
+        brokerOrderId: `reject-${index}`,
+        at: index,
+      })),
+    };
+    const oversizedStore = createSupabaseCopierStore(fakeClient({
+      row: { revision: 4, snapshot: oversized },
+    }), crypto.randomUUID(), () => 1);
+    await expect(oversizedStore.load()).rejects.toThrow('Invalid copier snapshot');
   });
 
   it('přeloží databázový CAS konflikt na doménovou chybu', async () => {

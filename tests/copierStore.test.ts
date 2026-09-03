@@ -72,6 +72,23 @@ describe('createMemoryCopierStore', () => {
       .toEqual({ quantity: 2, orderType: 'Limit', limitPrice: 29_500 });
   });
 
+  it('hluboce kopíruje durable seen reject ledger', async () => {
+    const store = createMemoryCopierStore();
+    const snapshot = emptySnapshot();
+    snapshot.safety = {
+      ...snapshot.safety!,
+      seenTerminalRejects: [{ accountId: 200, brokerOrderId: 'reject-1', at: 10 }],
+    };
+    await store.commit(snapshot, 0);
+
+    const loaded = await store.load();
+    loaded.safety!.seenTerminalRejects![0].brokerOrderId = 'mutated';
+    snapshot.safety.seenTerminalRejects![0].at = 99;
+
+    expect((await store.load()).safety?.seenTerminalRejects)
+      .toEqual([{ accountId: 200, brokerOrderId: 'reject-1', at: 10 }]);
+  });
+
   it('odmítne stale snapshot místo přepsání novějšího stavu', async () => {
     const store = createMemoryCopierStore();
     const base = emptySnapshot();

@@ -4,6 +4,9 @@ import type { BracketOutboxEntry } from './copierBracketOutbox';
 import type { OsoOutboxEntry } from './copierOsoOutbox';
 import { createCopierState, type CopierState, type FollowerOrderLink } from './copierEngine';
 
+/** Poslední rejecty stačí držet podle počtu; časové TTL by starý replay znovu pustilo. */
+export const COPIER_SEEN_TERMINAL_REJECT_LIMIT = 2_048;
+
 /**
  * Trvalé uložení stavu copieru.
  *
@@ -165,6 +168,9 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
         },
       } : {}),
     })) ?? [],
+    ...(base.seenTerminalRejects
+      ? { seenTerminalRejects: base.seenTerminalRejects.map(entry => ({ ...entry })) }
+      : {}),
     ...(base.dailyStats
       ? {
         dailyStats: {

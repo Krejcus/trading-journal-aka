@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
+  COPIER_SEEN_TERMINAL_REJECT_LIMIT,
   CopierStoreConflictError,
   emptySnapshot,
   type CopierSnapshot,
@@ -174,21 +175,42 @@ function validRejectedExecution(value: unknown): boolean {
     && validResolution;
 }
 
+function validSeenTerminalReject(value: unknown): boolean {
+  return isRecord(value)
+    && integer(value.accountId) && Number(value.accountId) > 0
+    && string(value.brokerOrderId) && value.brokerOrderId.length > 0
+    && finite(value.at) && Number(value.at) >= 0;
+}
+
 function validSafety(value: unknown): boolean {
-  return value == null || (isRecord(value)
-    && finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
+  if (value == null) return true;
+  if (!isRecord(value)) return false;
+  const validEligibility = value.accountEligibility == null || (
+    Array.isArray(value.accountEligibility)
+    && value.accountEligibility.every(entry => isRecord(entry)
+      && integer(entry.accountId) && Number(entry.accountId) > 0
+      && (entry.state === 'active' || entry.state === 'dll-locked'
+        || entry.state === 'breached' || entry.state === 'unverifiable')
+      && finite(entry.at) && optionalString(entry.reason)
+      && (entry.lockSessionEndAt == null || finite(entry.lockSessionEndAt))
+      && (entry.lastExecution == null || validRejectedExecution(entry.lastExecution)))
+  );
+  const validSeenRejects = value.seenTerminalRejects == null || (
+    Array.isArray(value.seenTerminalRejects)
+    && value.seenTerminalRejects.length <= COPIER_SEEN_TERMINAL_REJECT_LIMIT
+    && value.seenTerminalRejects.every(validSeenTerminalReject)
+    && unique(value.seenTerminalRejects.map(entry => {
+      const receipt = entry as { accountId: number; brokerOrderId: string };
+      return `${receipt.accountId}:${receipt.brokerOrderId}`;
+    }))
+  );
+  return finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
     && finite(value.dayLockUntil) && Number(value.dayLockUntil) >= 0
     && optionalString(value.dayLockReason)
     && (value.leaderExposureEpochs == null || (Array.isArray(value.leaderExposureEpochs)
       && value.leaderExposureEpochs.every(validLeaderExposureEpoch)))
-    && (value.accountEligibility == null || (Array.isArray(value.accountEligibility)
-      && value.accountEligibility.every(entry => isRecord(entry)
-        && integer(entry.accountId) && Number(entry.accountId) > 0
-        && (entry.state === 'active' || entry.state === 'dll-locked'
-          || entry.state === 'breached' || entry.state === 'unverifiable')
-        && finite(entry.at) && optionalString(entry.reason)
-        && (entry.lockSessionEndAt == null || finite(entry.lockSessionEndAt))
-        && (entry.lastExecution == null || validRejectedExecution(entry.lastExecution))))));
+    && validEligibility
+    && validSeenRejects;
 }
 
 const unique = (values: readonly string[]) => new Set(values).size === values.length;
