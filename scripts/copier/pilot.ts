@@ -632,6 +632,14 @@ async function runLocalAgent(
         auditTail = auditTail.then(() => writeAudit(entries));
       },
       onError: logControllerError,
+      // Post-connect recovery musí vidět stejný optional-skip jako ruční
+      // Kontrola pozic, jinak zmizelý breached follower shodí recovery.
+      resolveMissingOptionalAccountIds: prepareGroupAccounts
+        ? async current => (await prepareGroupAccounts({
+          required: [current.leaderAccountId],
+          optional: current.followers.map(follower => follower.accountId),
+        })).missingOptional
+        : undefined,
       // Trade event -> okamžitý poll s příznakem -> server pushne hned.
       onCopyEvent: event => {
         relay?.nudgeCopyEvents();

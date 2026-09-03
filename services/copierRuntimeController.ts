@@ -356,6 +356,14 @@ export interface BootstrapCopierOptions {
   flattenAccountConcurrency?: number;
   wait?: (ms: number) => Promise<void>;
   /**
+   * Read-only zdroj „followeři právě neviditelní v žádném připojeném OAuth
+   * adresáři“ pro automatickou post-connect recovery. Stejný vstup dostává
+   * CLI/UI Kontrola pozic; bez něj broker router pro zmizelý (typicky
+   * breached) follower vyhodí chybu a recovery skončí fail-closed, i když je
+   * jeho vynechání legitimní. Vrácené ID se filtrují na followery skupiny.
+   */
+  resolveMissingOptionalAccountIds?: (group: CopyGroupConfig) => Promise<readonly number[]>;
+  /**
    * Bounded okno pro spárování follower position 0→nonzero s konkrétním
    * broker fill eventem. Po vypršení následuje autoritativní read-only
    * kontrola; nikdy nejde o autorizaci k automatickému zavření nejasné pozice.
@@ -2681,6 +2689,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     const wait = options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+    // Stejný optional-skip vstup jako ruční Kontrola pozic: follower, který
+    // právě není v žádném OAuth adresáři, se nesmí routovat (router by hodil
+    // chybu), ale jeho absence je pro breached/DLL účet legitimní.
+    let missingOptionalAccountIds: readonly number[] = [];
+    if (options.resolveMissingOptionalAccountIds) {
+      try {
+        const followerIds = new Set(group.followers.map(follower => follower.accountId));
+        missingOptionalAccountIds = [...new Set(await options.resolveMissingOptionalAccountIds(group))]
+          .filter(accountId => followerIds.has(accountId) && accountId !== group.leaderAccountId);
+      } catch {
+        missingOptionalAccountIds = [];
+      }
+    }
     let reconciliation: { divergentAccounts: number[]; workingOrderAccounts: number[] } | null = null;
     for (let attempt = 0; attempt < 5 && !stopped; attempt += 1) {
       if (attempt > 0) await wait(2_000);
@@ -2689,7 +2710,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return;
       }
       try {
-        reconciliation = await performReconciliation();
+        reconciliation = await performReconciliation({
+          missingOptionalAccountIds: [...missingOptionalAccountIds],
+        });
         break;
       } catch {
         // Spojení je čerstvé — pár pokusů, pak poctivé přiznání níže.
@@ -4296,7 +4319,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Veřejná Kontrola pozic je explicitní uživatelská recovery akce.
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
-      return performReconciliation({ ...reconciliationOptions, clearLastError: true });
+      const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
+      if (result.divergentAccounts.length === 0 && result.workingOrderAccounts.length === 0) {
+        // Autoritativně čistý stav je přesně to, co čekající recovery vlna
+        // hledala; jinak by příznak po neúspěšné automatické vlně blokoval
+        // změnu skupiny („rozpracovaný lifecycle: connection recovery“) až do
+        // dalšího connection eventu. Při divergenci zůstává pending.
+        pendingConnectionRecovery = false;
+      }
+      return result;
     },
     async verifyAccountEligibility(accountId) {
       if (!Number.isSafeInteger(accountId) || accountId <= 0) {
