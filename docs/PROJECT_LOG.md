@@ -144,6 +144,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude + uživatel, návrh auto-otevření companionu při změně stavu)
+
+Companion po merge do `main` běží a ukazuje skutečný stav (ZÁSAH NUTNÝ:
+reconciliation vyžaduje kontrolu, 4 příkazy stuck). Uživatel chce, aby se
+popover při změně stavu (connect/disconnect, problém, LIVE start/konec) sám
+ukázal s rozbalenou sekcí. Návrh je ve specu §11 (v1.4) a zadání pro Codex
+v `docs/MENUBAR_COMPANION_AUTOOPEN_BRIEF_20260903.md`: spouštějí jen
+přechody z freshness reduceru, STAV NEZNÁMÝ do 90 s nikdy; anti-flap 3 s,
+max jedno otevření za 30 s; popover bez krádeže fokusu s auto-zavřením;
+nativní notifikace pro fullscreen; čtyři přepínače v nastavení. Bez
+ovládání copieru, bez nových endpointů. Nic neimplementováno.
+
 ### 2026-09-02 (Claude, večerní review dne — skutečná čísla a replay bug)
 
 Read-only stažení `/fill/list` + `/fillPair/list` + `/cashBalance/list` přes

@@ -351,3 +351,66 @@ Akceptace (minimálně):
       pairing/status/revokaci a zamítnutí revokovaného credentialu E2E.
 - [ ] Teprve po úspěšném E2E podepsat/nainstalovat 0.2 a odstranit fixture ze
       stávajícího LaunchAgentu.
+
+## 11. Auto-otevření při změně stavu (návrh v1.4, 2026-09-03)
+
+Cíl: když se stav copieru změní, popover se **sám ukáže s rozbalenou sekcí,
+která změnu způsobila**, a zase zmizí. Je to ohlášení, ne kokpit — nic
+neovládá, nekrade fokus a nikdy neohlásí zlepšení ze starých dat.
+
+### 11.1 Spouštěče (přechody mezi vyhodnocenými stavy, ne stavy samotné)
+
+| přechod | kategorie | chování |
+|---|---|---|
+| ověřený stav → ZÁSAH NUTNÝ; nový problém v `problems[]` (divergence, stuck outbox, reconciliation); `brokerConnected` true → false; → WORKER OFFLINE; LIVE session vypršela nebo vyprší za ≤ 5 min | **zhoršení** | auto-otevřít, sekce s problémem rozbalená, zůstane až do zavření (max 60 s), + nativní notifikace, volitelný zvuk, pill 3× zapulzuje |
+| problém zmizel; broker reconnect; OFFLINE → ověřeno | **zlepšení** | auto-otevřít jako toast na 8 s (jen když je zapnuto „i zlepšení"), bez notifikace |
+| DISARMED/SHADOW → LIVE, LIVE → DISARMED/SHADOW | **režim** | toast 8 s + notifikace bez zvuku |
+| ověřeno → STAV NEZNÁMÝ (10–90 s) a zpět | — | **nikdy** (síťové zaškobrtnutí) |
+| start aplikace, wake z spánku, ruční refresh | — | nikdy; první snapshot po startu jen nastaví výchozí bod |
+
+Změna se vyhodnocuje výhradně z výstupu freshness reduceru (§3) porovnáním
+předchozí a nové prezentace; přechod se počítá až po **3 s stabilního**
+nového stavu (anti-flap) a **nejvýš jedno auto-otevření za 30 s**; další
+změny v tom okně se jen zapíší do už otevřeného popoveru. Snapshot s nižší
+`revision` nikdy přechod nevyvolá.
+
+### 11.2 Chování popoveru
+
+- Zobrazit přes `popover.show(relativeTo:)` bez `NSApp.activate` — appka
+  nezíská fokus, klávesnice zůstává v TradingView/terminálu. `behavior =
+  .transient`: klik mimo nebo Esc zavře hned.
+- Auto-zavření timerem (60 s zhoršení, 8 s toast); timer se pozastaví,
+  dokud je kurzor nad popoverem.
+- Rozbalená je jen sekce spouštěče, změněný řádek má 1,2 s highlight
+  (tón podle kategorie); ostatní sekce podle běžných pravidel §5.
+- Když je popover už otevřený ručně, nic nevyskakuje — obsah se jen
+  aktualizuje a změněný řádek dostane highlight.
+- Reduce Motion: bez pulzu a highlightu, jen zobrazení.
+
+### 11.3 Nativní notifikace
+
+`UNUserNotificationCenter` s jednorázovým souhlasem (sandbox je v pořádku).
+Posílá se jen pro kategorii zhoršení a režim, s textem hlavního stavu a
+jednou větou důvodu, bez čísel účtů a bez P&L. Klik na notifikaci otevře
+popover (ne LIVE — rozhodnutí zůstává na uživateli). Notifikace řeší
+fullscreen TradingView, kde je lišta skrytá; respektuje Focus režimy macOS.
+
+### 11.4 Nastavení (v popoveru, ikona ozubeného kola v hlavičce)
+
+- Auto-otevřít při změně stavu — výchozí **zap**
+- I při zlepšení — výchozí **vyp**
+- Nativní notifikace — výchozí **zap** (po udělení souhlasu)
+- Zvuk při zhoršení — výchozí **vyp**
+
+Uloženo v `UserDefaults`; nic z toho neovlivňuje čtení stavu ani bezpečnost.
+
+### 11.5 Implementační poznámky
+
+- `CompanionStore` drží předchozí prezentaci; nová komponenta
+  `CompanionTransitionDetector` (čistá funkce `(previous, next, now) →
+  Transition?`) vrací kategorii + id sekce + id řádku. Testovatelné bez UI.
+- `AppDelegate.presentTransition(_:)` řídí zobrazení, timer, pulz pillu a
+  notifikaci; respektuje nastavení a rate limit.
+- Testy: matice přechodů z 11.1 (včetně „nikdy" případů), anti-flap 3 s,
+  rate limit 30 s, rollback revize, wake bez auto-otevření, Reduce Motion.
+- Odhad: 1–2 dny (Codex).
