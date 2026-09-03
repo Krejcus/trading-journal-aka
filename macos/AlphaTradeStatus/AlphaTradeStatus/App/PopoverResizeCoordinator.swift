@@ -9,19 +9,34 @@ struct PopoverSectionResizeRequest: Equatable {
 /// Pure state machine between SwiftUI geometry and `NSPopover`.
 ///
 /// A section reports its final height delta before SwiftUI starts animating.
-/// The coordinator emits exactly one AppKit target for that transition and
-/// coalesces the intermediate geometry samples produced during the animation.
+/// Expansion reserves the final popover height immediately, then SwiftUI
+/// reveals the details into that space. Collapse keeps the old height while
+/// SwiftUI hides the details and shrinks the popover only at completion.
+/// Intermediate SwiftUI measurements are coalesced in both directions.
 struct PopoverResizeCoordinator {
     static let sectionAnimationDuration: TimeInterval = 0.25
 
     enum Mutation: Equatable {
         case setImmediately(CGSize)
-        case animate(CGSize, duration: TimeInterval)
+        case expandImmediately(CGSize, duration: TimeInterval)
+        case collapseAfterContentAnimation(CGSize, duration: TimeInterval)
 
         var size: CGSize {
             switch self {
-            case .setImmediately(let size), .animate(let size, _):
+            case .setImmediately(let size),
+                 .expandImmediately(let size, _),
+                 .collapseAfterContentAnimation(let size, _):
                 return size
+            }
+        }
+
+        var transitionDuration: TimeInterval? {
+            switch self {
+            case .setImmediately:
+                return nil
+            case .expandImmediately(_, let duration),
+                 .collapseAfterContentAnimation(_, let duration):
+                return duration
             }
         }
     }
@@ -29,12 +44,14 @@ struct PopoverResizeCoordinator {
     private(set) var targetSize: CGSize?
     private(set) var isCoalescingSectionMeasurements = false
     private var latestCoalescedMeasurement: CGSize?
+    private var isWaitingToCollapse = false
 
     mutating func reset(initialSize: CGSize) -> Mutation {
         let size = normalized(initialSize)
         targetSize = size
         isCoalescingSectionMeasurements = false
         latestCoalescedMeasurement = nil
+        isWaitingToCollapse = false
         return .setImmediately(size)
     }
 
@@ -59,16 +76,25 @@ struct PopoverResizeCoordinator {
         }
 
         self.targetSize = size
-        if isPopoverVisible && !reduceMotion {
-            return .animate(size, duration: Self.sectionAnimationDuration)
-        }
         return .setImmediately(size)
     }
 
     mutating func beginSectionTransition(
         _ request: PopoverSectionResizeRequest,
+        currentContentSize: CGSize? = nil,
         isPopoverVisible: Bool
     ) -> Mutation? {
+        // NSHostingController can report a 1 pt fitting height before its first
+        // displayed layout even though the real hosted view already has its
+        // full height. Always prefer that current frame at interaction time so
+        // the first expansion cannot target `1 + detailsHeight` for one frame.
+        if let currentContentSize, !isCoalescingSectionMeasurements {
+            targetSize = normalized(currentContentSize)
+            isCoalescingSectionMeasurements = false
+            latestCoalescedMeasurement = nil
+            isWaitingToCollapse = false
+        }
+
         guard let targetSize,
               abs(request.heightDelta) > Self.measurementTolerance else {
             return nil
@@ -80,6 +106,7 @@ struct PopoverResizeCoordinator {
         ))
         self.targetSize = nextSize
         latestCoalescedMeasurement = nil
+        isWaitingToCollapse = false
 
         guard isPopoverVisible, !request.reduceMotion else {
             isCoalescingSectionMeasurements = false
@@ -87,30 +114,50 @@ struct PopoverResizeCoordinator {
         }
 
         isCoalescingSectionMeasurements = true
-        return .animate(nextSize, duration: Self.sectionAnimationDuration)
+        if request.heightDelta > 0 {
+            return .expandImmediately(
+                nextSize,
+                duration: Self.sectionAnimationDuration
+            )
+        }
+        isWaitingToCollapse = true
+        return .collapseAfterContentAnimation(
+            nextSize,
+            duration: Self.sectionAnimationDuration
+        )
     }
 
-    /// Called just after the shared 0.25 s content/window animation. Normally
-    /// the final measurement equals the predicted target and no mutation is
-    /// emitted. A genuine concurrent content change is reconciled once here.
+    /// Called just after the 0.25 s SwiftUI content animation. Expansion has
+    /// already reserved its window height; collapse applies its smaller target
+    /// here. A genuine concurrent content change is reconciled once.
     mutating func completeSectionTransition(
-        isPopoverVisible: Bool,
-        reduceMotion: Bool
+        isPopoverVisible _: Bool,
+        reduceMotion _: Bool
     ) -> Mutation? {
         guard isCoalescingSectionMeasurements else { return nil }
         isCoalescingSectionMeasurements = false
 
-        guard let measuredSize = latestCoalescedMeasurement else { return nil }
+        let wasWaitingToCollapse = isWaitingToCollapse
+        isWaitingToCollapse = false
+
+        let measuredSize = latestCoalescedMeasurement
         latestCoalescedMeasurement = nil
+
+        if wasWaitingToCollapse, let targetSize {
+            if let measuredSize, !approximatelyEqual(measuredSize, targetSize) {
+                self.targetSize = measuredSize
+                return .setImmediately(measuredSize)
+            }
+            return .setImmediately(targetSize)
+        }
+
+        guard let measuredSize else { return nil }
         guard let targetSize,
               !approximatelyEqual(measuredSize, targetSize) else {
             return nil
         }
 
         self.targetSize = measuredSize
-        if isPopoverVisible && !reduceMotion {
-            return .animate(measuredSize, duration: Self.sectionAnimationDuration)
-        }
         return .setImmediately(measuredSize)
     }
 

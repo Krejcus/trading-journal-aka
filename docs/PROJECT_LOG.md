@@ -152,6 +152,58 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, companion build 15 — změřená stabilní hlavička popoveru)
+
+Nový AppKit XCTest `PopoverAnimationProbeTests` otevírá skutečný `NSPopover`
+s LIVE fixture, vyvolá rozbalení i sbalení sekce Bezpečnost a po 8 ms po dobu
+0,4 s tiskne `window.frame.maxY`, rám hosting view v okně a obrazovkovou pozici
+kotvy vložené přímo přes title `alphaTrade.status.title`. Baseline buildu 14
+ukázala, že kotva popoveru se nehýbe, ale hosting view se při rozbalení
+přechodně smrští a SwiftUI obsah se v něm přepočítá:
+
+| Fáze | t [ms] | window.maxY | content height | header.maxY |
+| --- | ---: | ---: | ---: | ---: |
+| build 14 expand | 0 | 700,000 | 485 | 671,000 |
+| build 14 expand | ~150 | 700,000 | ~261 | ~815,9 |
+| build 14 expand | ~250 | 700,000 | ~132 | ~910,5 |
+| build 14 expand | ~270 | 700,000 | 615 | 671,000 |
+| build 14 collapse | 0–400 | 700,000 | 615 → 485 | 671,000 |
+
+Naměřený span buildu 14 byl při rozbalení `window.maxY = 0,000 pt`, ale
+`header.maxY ≈ 241,582 pt`; při sbalení byly oba spany 0. Příčinou tedy není
+posun okna vůči arrow/kotvě. Cold-start diagnostika navíc ukázala
+`NSHostingController.fittingSize = 0–1 pt`, i když jeho skutečný zobrazený
+`view.bounds.height` už byl 487 pt. První target se proto mohl na jeden snímek
+spočítat jako `1 + 130 = 131 pt`. Jde o nesoulad hosting view a SwiftUI obsahu
+při souběhu implicitní animace `NSPopover.contentSize` s `withAnimation`
+(kandidát c, s fázovým přesahem kandidáta a). `.move(edge: .top)` pohyb ještě
+zbytečně propagoval do layoutu, ale nebyl zdrojem pohybu `window.maxY`.
+
+Build 15 používá deterministický fallback bez ruční animace rámu a bez
+autoresizing hosting view: rozbalení nejdřív okamžitě rezervuje finální
+`contentSize`, vloží detail bez layoutové animace a až další průchod run loopu
+animuje jen opacity/offset/y-scale; sbalení detail nejdřív vizuálně skryje a
+teprve po 0,25 s bez animace zmenší layout i `contentSize`. Hlavička je
+layoutově izolovaná v top-aligned overlay a rezervovaný prostor je vyplněný
+barvou panelu. Každý přechod bere jako výchozí velikost aktuální
+`contentViewController.view.bounds`, takže není závislý na cold fitting size.
+Koordinátor mezilehlá měření dál slučuje, ale žádný AppKit rám ručně neanimuje.
+
+Finální sonda měla po všech vzorcích rozbalení `window.maxY = 700,000`,
+`content height = 617,000`, `header.maxY = 671,000`; při sbalení zůstal obsah
+617 pt do konce vizuální animace a potom přešel na 487 pt, zatímco
+`window.maxY` i `header.maxY` byly konstantní. Span hlavičky i horní hrany je
+v obou směrech `0,000 pt`, tedy pod limitem 0,5 pt.
+
+Build číslo bylo zvýšeno na 15. Runner-independent probe prošel 91 kontrolami,
+celý XCTest target 54/54 testy včetně AppKit sondy a light/dark renderů a
+samostatný Debug `build-for-testing` prošel. Release 0.2.0 (15) prošel jako
+thin arm64; po explicitním ad-hoc přepodpisu má hardened runtime a pouze app
+sandbox + network client entitlement, `codesign --verify --deep --strict`
+prošel. SHA-256 Release executable je
+`b332d63b81e6c8a1e540052b6d607d4006937a725cb2bc1e2fa01a9613a81131`.
+Nic nebylo instalováno ani spuštěno přes LaunchAgent.
+
 ### 2026-09-03 (Codex, companion build 14 — samostatný stav VYPNUTO)
 
 Čerstvý (≤ 10 s), bezpečnostně čistý `copierState: disarmed` bez

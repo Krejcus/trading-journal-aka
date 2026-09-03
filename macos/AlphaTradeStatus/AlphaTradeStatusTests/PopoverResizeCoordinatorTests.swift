@@ -3,7 +3,46 @@ import XCTest
 @testable import AlphaTradeStatus
 
 final class PopoverResizeCoordinatorTests: XCTestCase {
-    func testExpansionCoalescesIntermediateMeasurementsIntoOneAnimatedTarget() {
+    func testExpansionUsesCurrentHostedHeightInsteadOfColdFittingSize() {
+        var coordinator = PopoverResizeCoordinator()
+        _ = coordinator.reset(initialSize: CGSize(width: 360, height: 1))
+
+        XCTAssertEqual(
+            coordinator.beginSectionTransition(
+                .init(heightDelta: 130, reduceMotion: false),
+                currentContentSize: CGSize(width: 360, height: 487),
+                isPopoverVisible: true
+            ),
+            .expandImmediately(
+                CGSize(width: 360, height: 617),
+                duration: 0.25
+            )
+        )
+    }
+
+    func testRapidReversalKeepsThePendingTargetAsItsBase() {
+        var coordinator = PopoverResizeCoordinator()
+        _ = coordinator.reset(initialSize: CGSize(width: 360, height: 487))
+
+        _ = coordinator.beginSectionTransition(
+            .init(heightDelta: -130, reduceMotion: false),
+            currentContentSize: CGSize(width: 360, height: 617),
+            isPopoverVisible: true
+        )
+        XCTAssertEqual(
+            coordinator.beginSectionTransition(
+                .init(heightDelta: 130, reduceMotion: false),
+                currentContentSize: CGSize(width: 360, height: 617),
+                isPopoverVisible: true
+            ),
+            .expandImmediately(
+                CGSize(width: 360, height: 617),
+                duration: 0.25
+            )
+        )
+    }
+
+    func testExpansionReservesFinalHeightBeforeContentAnimation() {
         var coordinator = PopoverResizeCoordinator()
         XCTAssertEqual(
             coordinator.reset(initialSize: CGSize(width: 360, height: 300)),
@@ -14,7 +53,7 @@ final class PopoverResizeCoordinatorTests: XCTestCase {
             .init(heightDelta: 100, reduceMotion: false),
             isPopoverVisible: true
         )
-        XCTAssertEqual(target, .animate(
+        XCTAssertEqual(target, .expandImmediately(
             CGSize(width: 360, height: 400),
             duration: 0.25
         ))
@@ -41,7 +80,7 @@ final class PopoverResizeCoordinatorTests: XCTestCase {
             .init(heightDelta: -100, reduceMotion: false),
             isPopoverVisible: true
         )
-        XCTAssertEqual(target, .animate(
+        XCTAssertEqual(target, .collapseAfterContentAnimation(
             CGSize(width: 360, height: 300),
             duration: 0.25
         ))
@@ -55,10 +94,13 @@ final class PopoverResizeCoordinatorTests: XCTestCase {
             XCTAssertNil(mutation, "Intermediate collapse geometry must not clip the content")
         }
         XCTAssertTrue(coordinator.isCoalescingSectionMeasurements)
-        XCTAssertNil(coordinator.completeSectionTransition(
-            isPopoverVisible: true,
-            reduceMotion: false
-        ))
+        XCTAssertEqual(
+            coordinator.completeSectionTransition(
+                isPopoverVisible: true,
+                reduceMotion: false
+            ),
+            .setImmediately(CGSize(width: 360, height: 300))
+        )
         XCTAssertFalse(coordinator.isCoalescingSectionMeasurements)
     }
 

@@ -19,10 +19,16 @@ struct StatusHeader: View {
 
     let freshness: FreshnessPresentation
     let settings: CompanionSettings?
+    let onHeaderAnchorResolved: ((NSView) -> Void)?
 
-    init(freshness: FreshnessPresentation, settings: CompanionSettings? = nil) {
+    init(
+        freshness: FreshnessPresentation,
+        settings: CompanionSettings? = nil,
+        onHeaderAnchorResolved: ((NSView) -> Void)? = nil
+    ) {
         self.freshness = freshness
         self.settings = settings
+        self.onHeaderAnchorResolved = onHeaderAnchorResolved
     }
 
     var body: some View {
@@ -35,6 +41,11 @@ struct StatusHeader: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                     .accessibilityIdentifier("alphaTrade.status.title")
+                    .overlay {
+                        if let onHeaderAnchorResolved {
+                            PopoverHeaderProbeAnchor(onResolve: onHeaderAnchorResolved)
+                        }
+                    }
             }
 
             Spacer(minLength: 8)
@@ -64,6 +75,21 @@ struct StatusHeader: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(freshness.accessibilityLabel)
         }
+    }
+}
+
+private struct PopoverHeaderProbeAnchor: NSViewRepresentable {
+    let onResolve: (NSView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.identifier = NSUserInterfaceItemIdentifier("alphaTrade.status.title.probe")
+        onResolve(view)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        onResolve(view)
     }
 }
 
@@ -246,6 +272,7 @@ struct CollapsibleStatusSection: View {
 
     let section: StatusSectionPresentation
     let isExpanded: Bool
+    let isDetailsVisible: Bool
     let highlightedRowID: String?
     let highlightCategory: CompanionTransitionCategory?
     let onToggle: () -> Void
@@ -262,13 +289,15 @@ struct CollapsibleStatusSection: View {
             .alphaTradeFocusEffectDisabled()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(section.title), \(section.summary)")
-            .accessibilityValue(isExpanded ? "rozbaleno" : "sbaleno")
-            .accessibilityHint(isExpanded ? "Sbalí podrobnosti" : "Rozbalí podrobnosti")
+            .accessibilityValue(isDetailsVisible ? "rozbaleno" : "sbaleno")
+            .accessibilityHint(isDetailsVisible ? "Sbalí podrobnosti" : "Rozbalí podrobnosti")
             .accessibilityIdentifier("alphaTrade.status.section.\(section.id)")
 
             if isExpanded {
                 sectionDetails(highlightsEnabled: true)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                    .opacity(isDetailsVisible ? 1 : 0)
+                    .offset(y: isDetailsVisible ? 0 : -10)
+                    .scaleEffect(y: isDetailsVisible ? 1 : 0.96, anchor: .top)
             }
         }
         .padding(.horizontal, 14)
@@ -373,10 +402,10 @@ struct CollapsibleStatusSection: View {
         Image(systemName: "chevron.down")
             .font(.system(size: 10, weight: .bold))
             .foregroundStyle(theme.sectionText)
-            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            .rotationEffect(.degrees(isDetailsVisible ? 180 : 0))
             .animation(
                 reduceMotion ? nil : .easeInOut(duration: 0.22),
-                value: isExpanded
+                value: isDetailsVisible
             )
             .accessibilityHidden(true)
     }

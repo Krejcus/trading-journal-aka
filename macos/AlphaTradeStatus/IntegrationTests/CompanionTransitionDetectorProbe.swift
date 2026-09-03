@@ -315,8 +315,8 @@ struct CompanionTransitionDetectorProbe {
             expansionResize.beginSectionTransition(
                 .init(heightDelta: 100, reduceMotion: false),
                 isPopoverVisible: true
-            ) == .animate(CGSize(width: 360, height: 400), duration: 0.25),
-            "section expansion must emit one 0.25 second target"
+            ) == .expandImmediately(CGSize(width: 360, height: 400), duration: 0.25),
+            "section expansion must reserve its final height immediately"
         )
         for height in [318.0, 351.5, 383.0, 399.5] {
             expect(
@@ -342,8 +342,8 @@ struct CompanionTransitionDetectorProbe {
             collapseResize.beginSectionTransition(
                 .init(heightDelta: -100, reduceMotion: false),
                 isPopoverVisible: true
-            ) == .animate(CGSize(width: 360, height: 300), duration: 0.25),
-            "collapse must animate instead of clipping immediately"
+            ) == .collapseAfterContentAnimation(CGSize(width: 360, height: 300), duration: 0.25),
+            "collapse must defer the smaller height until content is hidden"
         )
         for height in [389.0, 366.0, 332.0, 300.4] {
             expect(
@@ -360,8 +360,8 @@ struct CompanionTransitionDetectorProbe {
             collapseResize.completeSectionTransition(
                 isPopoverVisible: true,
                 reduceMotion: false
-            ) == nil,
-            "completed collapse must not add a second resize"
+            ) == .setImmediately(CGSize(width: 360, height: 300)),
+            "completed collapse must apply its smaller height once"
         )
 
         var reducedMotionResize = PopoverResizeCoordinator()

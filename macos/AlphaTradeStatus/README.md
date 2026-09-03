@@ -11,12 +11,20 @@ Version 0.2.0 (build 13) is the currently installed client (2026-09-03).
 It preserves the native `NSPopover.contentSize` animation and pins content to
 the top edge. The popover window frame is never animated manually.
 
-Version 0.2.0 (build 14) is prepared on its feature branch but not installed.
+Version 0.2.0 (build 15) is prepared on its feature branch but not installed.
 It presents a fresh, safety-clean DISARMED status without broker exposure
 evidence as `VYPNUTO`: a rose `power` pill and a navigation-only „Zapnout v
 LIVE" action to `?page=live&tab=overview`. It explicitly says exposure is not
 broker-verified and never claims flat. The companion still cannot ARM,
 DISARM, Flatten, or send any copier command.
+
+Build 15 also uses a deterministic section-resize fallback. Expansion reserves
+the final `NSPopover.contentSize` immediately and then reveals the section
+details into the panel-painted space. Collapse hides the details first and
+shrinks `contentSize` after the 0.25-second content animation. It never animates
+the popover window frame and never enables hosting-view autoresizing. The
+AppKit probe `PopoverAnimationProbeTests` samples the real popover every 8 ms
+and requires both the window top edge and the header to stay within 0.5 pt.
 
 Operational lesson (2026-09-02): the companion API must live in `origin/main`.
 A production deployment promoted from a local source tree is replaced by the

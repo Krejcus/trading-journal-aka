@@ -1,4 +1,10 @@
+import AppKit
 import SwiftUI
+
+struct PopoverAnimationProbeHooks {
+    let registerSectionToggle: (@escaping (String) -> Void) -> Void
+    let registerHeaderAnchor: (NSView) -> Void
+}
 
 enum CompanionSectionExpansionPolicy {
     static func initialSectionIDs(
@@ -39,11 +45,14 @@ struct StatusPopoverView: View {
     let onAction: (FooterActionPresentation) -> Void
     let onHoverChanged: (Bool) -> Void
     let onSectionResize: (PopoverSectionResizeRequest) -> Void
+    let animationProbeHooks: PopoverAnimationProbeHooks?
 
     @State private var expandedSectionIDs: Set<String>
+    @State private var revealedSectionIDs: Set<String>
     @State private var highlightedRowID: String?
     @State private var highlightCategory: CompanionTransitionCategory?
     @State private var sectionDetailsHeights: [String: CGFloat] = [:]
+    @State private var sectionAnimationGeneration = 0
 
     init(
         presentation: CompanionPresentation,
@@ -51,7 +60,8 @@ struct StatusPopoverView: View {
         transitionEvent: CompanionTransitionEvent? = nil,
         onAction: @escaping (FooterActionPresentation) -> Void = { _ in },
         onHoverChanged: @escaping (Bool) -> Void = { _ in },
-        onSectionResize: @escaping (PopoverSectionResizeRequest) -> Void = { _ in }
+        onSectionResize: @escaping (PopoverSectionResizeRequest) -> Void = { _ in },
+        animationProbeHooks: PopoverAnimationProbeHooks? = nil
     ) {
         self.presentation = presentation
         self.settings = settings
@@ -59,57 +69,71 @@ struct StatusPopoverView: View {
         self.onAction = onAction
         self.onHoverChanged = onHoverChanged
         self.onSectionResize = onSectionResize
-        _expandedSectionIDs = State(
-            initialValue: CompanionSectionExpansionPolicy.initialSectionIDs(
-                in: presentation,
-                transition: transitionEvent?.transition
-            )
+        self.animationProbeHooks = animationProbeHooks
+        let initialSectionIDs = CompanionSectionExpansionPolicy.initialSectionIDs(
+            in: presentation,
+            transition: transitionEvent?.transition
         )
+        _expandedSectionIDs = State(initialValue: initialSectionIDs)
+        _revealedSectionIDs = State(initialValue: initialSectionIDs)
         _highlightedRowID = State(initialValue: nil)
         _highlightCategory = State(initialValue: nil)
     }
 
     var body: some View {
-        VStack(spacing: AlphaTradeMetrics.sectionSpacing) {
-            StatusHeader(freshness: presentation.freshness, settings: settings)
-            HeroStatusCard(hero: presentation.hero)
+        ZStack(alignment: .top) {
+            VStack(spacing: AlphaTradeMetrics.sectionSpacing) {
+                Color.clear
+                    .frame(height: 22)
+                    .accessibilityHidden(true)
 
-            if let supportingText = presentation.hero.supportingText {
-                Text(supportingText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.secondaryText)
-                    .lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 2)
-                    .accessibilityIdentifier("alphaTrade.status.hero.supportingText")
+                HeroStatusCard(hero: presentation.hero)
+
+                if let supportingText = presentation.hero.supportingText {
+                    Text(supportingText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(theme.secondaryText)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 2)
+                        .accessibilityIdentifier("alphaTrade.status.hero.supportingText")
+                }
+
+                if let banner = presentation.banner,
+                   presentation.displayState == .unknown || presentation.displayState == .offline {
+                    StatusBanner(banner: banner)
+                }
+
+                ForEach(presentation.sections) { section in
+                    CollapsibleStatusSection(
+                        section: section,
+                        isExpanded: expandedSectionIDs.contains(section.id),
+                        isDetailsVisible: revealedSectionIDs.contains(section.id),
+                        highlightedRowID: transitionEvent?.transition.sectionID == section.id
+                            ? highlightedRowID
+                            : nil,
+                        highlightCategory: transitionEvent?.transition.sectionID == section.id
+                            ? highlightCategory
+                            : nil,
+                        onToggle: { toggle(section.id) }
+                    )
+                }
+
+                if let banner = presentation.banner,
+                   presentation.displayState != .unknown && presentation.displayState != .offline {
+                    StatusBanner(banner: banner)
+                }
+
+                FooterActionBar(footer: presentation.footer, onAction: onAction)
             }
 
-            if let banner = presentation.banner,
-               presentation.displayState == .unknown || presentation.displayState == .offline {
-                StatusBanner(banner: banner)
-            }
-
-            ForEach(presentation.sections) { section in
-                CollapsibleStatusSection(
-                    section: section,
-                    isExpanded: expandedSectionIDs.contains(section.id),
-                    highlightedRowID: transitionEvent?.transition.sectionID == section.id
-                        ? highlightedRowID
-                        : nil,
-                    highlightCategory: transitionEvent?.transition.sectionID == section.id
-                        ? highlightCategory
-                        : nil,
-                    onToggle: { toggle(section.id) }
-                )
-            }
-
-            if let banner = presentation.banner,
-               presentation.displayState != .unknown && presentation.displayState != .offline {
-                StatusBanner(banner: banner)
-            }
-
-            FooterActionBar(footer: presentation.footer, onAction: onAction)
+            StatusHeader(
+                freshness: presentation.freshness,
+                settings: settings,
+                onHeaderAnchorResolved: animationProbeHooks?.registerHeaderAnchor
+            )
+                .frame(height: 22, alignment: .top)
         }
         .padding(AlphaTradeMetrics.panelPadding)
         .frame(width: AlphaTradeMetrics.popoverWidth)
@@ -128,7 +152,12 @@ struct StatusPopoverView: View {
         .onPreferenceChange(StatusSectionDetailsHeightPreferenceKey.self) {
             sectionDetailsHeights = $0
         }
-        .onAppear(perform: applyTransition)
+        .onAppear {
+            animationProbeHooks?.registerSectionToggle { sectionID in
+                toggle(sectionID)
+            }
+            applyTransition()
+        }
         .onChange(of: presentation.fixtureID) { _ in
             guard transitionEvent == nil else { return }
             updateExpandedSections(
@@ -164,7 +193,7 @@ struct StatusPopoverView: View {
     }
 
     private func toggle(_ sectionID: String) {
-        var next = expandedSectionIDs
+        var next = revealedSectionIDs
         if next.contains(sectionID) {
             next.remove(sectionID)
         } else {
@@ -174,10 +203,10 @@ struct StatusPopoverView: View {
     }
 
     private func updateExpandedSections(_ next: Set<String>, animated: Bool) {
-        guard next != expandedSectionIDs else { return }
+        guard next != revealedSectionIDs else { return }
 
-        let opening = next.subtracting(expandedSectionIDs)
-        let closing = expandedSectionIDs.subtracting(next)
+        let opening = next.subtracting(revealedSectionIDs)
+        let closing = revealedSectionIDs.subtracting(next)
         let delta = opening.reduce(CGFloat.zero) {
             $0 + (sectionDetailsHeights[$1] ?? 0)
         } - closing.reduce(CGFloat.zero) {
@@ -192,11 +221,34 @@ struct StatusPopoverView: View {
         }
 
         if animated && !reduceMotion {
-            withAnimation(.easeInOut(duration: PopoverResizeCoordinator.sectionAnimationDuration)) {
-                expandedSectionIDs = next
+            sectionAnimationGeneration += 1
+            let generation = sectionAnimationGeneration
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                expandedSectionIDs.formUnion(opening)
+            }
+            DispatchQueue.main.async {
+                guard sectionAnimationGeneration == generation else { return }
+                withAnimation(.easeInOut(duration: PopoverResizeCoordinator.sectionAnimationDuration)) {
+                    revealedSectionIDs = next
+                }
+            }
+            guard !closing.isEmpty else { return }
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + PopoverResizeCoordinator.sectionAnimationDuration
+            ) {
+                guard sectionAnimationGeneration == generation else { return }
+                var completionTransaction = Transaction()
+                completionTransaction.disablesAnimations = true
+                withTransaction(completionTransaction) {
+                    expandedSectionIDs.subtract(closing)
+                }
             }
         } else {
+            sectionAnimationGeneration += 1
             expandedSectionIDs = next
+            revealedSectionIDs = next
         }
     }
 
@@ -204,7 +256,7 @@ struct StatusPopoverView: View {
         guard let transition = transitionEvent?.transition else { return }
         let next = CompanionSectionExpansionPolicy.applying(
             transition,
-            to: expandedSectionIDs,
+            to: revealedSectionIDs,
             in: presentation
         )
         updateExpandedSections(next, animated: true)
@@ -221,6 +273,7 @@ struct StatusPopoverView: View {
 }
 
 struct StatusPopoverEntranceView: View {
+    @Environment(\.alphaTradeTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let presentation: CompanionPresentation
@@ -229,6 +282,7 @@ struct StatusPopoverEntranceView: View {
     let onAction: (FooterActionPresentation) -> Void
     let onHoverChanged: (Bool) -> Void
     let onSectionResize: (PopoverSectionResizeRequest) -> Void
+    let animationProbeHooks: PopoverAnimationProbeHooks?
 
     init(
         presentation: CompanionPresentation,
@@ -236,7 +290,8 @@ struct StatusPopoverEntranceView: View {
         transitionEvent: CompanionTransitionEvent? = nil,
         onAction: @escaping (FooterActionPresentation) -> Void,
         onHoverChanged: @escaping (Bool) -> Void = { _ in },
-        onSectionResize: @escaping (PopoverSectionResizeRequest) -> Void = { _ in }
+        onSectionResize: @escaping (PopoverSectionResizeRequest) -> Void = { _ in },
+        animationProbeHooks: PopoverAnimationProbeHooks? = nil
     ) {
         self.presentation = presentation
         self.settings = settings
@@ -244,6 +299,7 @@ struct StatusPopoverEntranceView: View {
         self.onAction = onAction
         self.onHoverChanged = onHoverChanged
         self.onSectionResize = onSectionResize
+        self.animationProbeHooks = animationProbeHooks
     }
 
     @State private var isSettled = false
@@ -255,16 +311,17 @@ struct StatusPopoverEntranceView: View {
             transitionEvent: transitionEvent,
             onAction: onAction,
             onHoverChanged: onHoverChanged,
-            onSectionResize: onSectionResize
+            onSectionResize: onSectionResize,
+            animationProbeHooks: animationProbeHooks
         )
         .scaleEffect(isVisible ? 1 : 0.985, anchor: .top)
         .opacity(isVisible ? 1 : 0.94)
         .offset(y: isVisible ? 0 : -4)
-        // While the popover window and the content animate to a new height,
-        // the hosting view is briefly taller than the content. Without an
-        // explicit top alignment SwiftUI centres the content vertically, so
-        // the header appears to slide away from the menu bar and back.
+        // Expansion reserves the final host height before the details animate.
+        // Keep the old-height content pinned to the top and paint the entire
+        // reserved area so the native popover never exposes a bare container.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(theme.panel)
         .onAppear(perform: animateEntrance)
     }
 

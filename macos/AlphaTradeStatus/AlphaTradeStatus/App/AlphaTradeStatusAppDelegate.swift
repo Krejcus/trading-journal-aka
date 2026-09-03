@@ -228,11 +228,12 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         sectionResizeCompletion?.cancel()
         guard let mutation = popoverResizeCoordinator.beginSectionTransition(
             request,
+            currentContentSize: popover.contentViewController?.view.bounds.size,
             isPopoverVisible: popover.isShown
         ) else { return }
         applyPopoverResize(mutation)
 
-        guard case .animate(_, let duration) = mutation else { return }
+        guard let duration = mutation.transitionDuration else { return }
         let completion = DispatchWorkItem { [weak self] in
             guard let self,
                   let correction = self.popoverResizeCoordinator.completeSectionTransition(
@@ -251,23 +252,24 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
     private func applyPopoverResize(_ mutation: PopoverResizeCoordinator.Mutation) {
         switch mutation {
         case .setImmediately(let size):
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0
-                context.allowsImplicitAnimation = false
-                popover.contentSize = size
-            }
-        case .animate(let size, let duration):
-            // Let NSPopover drive the resize: it keeps the window anchored
-            // under the status item and resizes its content view continuously.
-            // (Animating the window frame ourselves either detached the
-            // hosting view from the window or, with autoresizing, created a
-            // measurement feedback loop that froze the app — builds 10–12.)
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = duration
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                context.allowsImplicitAnimation = true
-                popover.contentSize = size
-            }
+            setPopoverContentSizeImmediately(size)
+        case .expandImmediately(let size, _):
+            // Reserve the final space before SwiftUI starts revealing details.
+            // This avoids NSPopover's implicit contentSize animation shrinking
+            // the hosting view to its transient intrinsic height.
+            setPopoverContentSizeImmediately(size)
+        case .collapseAfterContentAnimation:
+            // Keep the full panel while SwiftUI hides the details. Completion
+            // applies the final smaller size in one anchored AppKit update.
+            break
+        }
+    }
+
+    private func setPopoverContentSizeImmediately(_ size: CGSize) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            popover.contentSize = size
         }
     }
 

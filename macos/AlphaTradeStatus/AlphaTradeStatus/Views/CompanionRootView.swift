@@ -85,6 +85,7 @@ struct CompanionRootView: View {
 }
 
 struct CompanionRootEntranceView: View {
+    @Environment(\.alphaTradeTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @ObservedObject var store: CompanionStore
@@ -110,11 +111,10 @@ struct CompanionRootEntranceView: View {
         .scaleEffect(isVisible ? 1 : 0.985, anchor: .top)
         .opacity(isVisible ? 1 : 0.94)
         .offset(y: isVisible ? 0 : -4)
-        // While the popover window and the content animate to a new height,
-        // the hosting view is briefly taller than the content. Without an
-        // explicit top alignment SwiftUI centres the content vertically, so
-        // the header appears to slide away from the menu bar and back.
+        // Section expansion reserves the final host height first. Pin content
+        // to the top and paint the reserved area with the panel background.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(theme.panel)
         .onAppear(perform: animateEntrance)
     }
 
