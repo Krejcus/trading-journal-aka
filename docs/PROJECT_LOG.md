@@ -56,6 +56,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] **Zápis venue risk limitů / skutečný broker-side day lock** — fáze 1
+      read-only sondy dokončena 3. 9. (zápis níže a
+      `docs/TRADOVATE_RISK_LIMITS_CAPABILITY_20260903.md`). Oba DEMO OAuth
+      tokeny čtou AutoLiq/risk status; user-level position-limit deps jsou pro
+      všech 6 účtů prázdné a `changesLocked` broker neposlal. Read právo je
+      prokázané, write právo ani okamžitý day-lock ne. Fáze 2 vyžaduje nové
+      explicitní schválení a disposable osobní DEMO účet nebo písemné potvrzení
+      Tradovate/prop firmy; pro tyto prop účty se žádný write nepřipravoval.
 - [ ] **Automatická post-connect recovery a follower chybějící v OAuth** —
       optional-skip i konkrétní blocked audit jsou hotové v `5154856d`/`30a48144`.
       Lokálně 3. 9. doplněno zbývající hardening z obou cross-review: partial
@@ -150,6 +158,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-03 (Codex, read-only Tradovate risk-limit capability probe)
+
+Nová ručně spouštěná sonda má tvrdý GET allowlist, odmítá všechny jiné cesty
+před `fetch`, tokeny/PII redukuje z výstupu a vyžaduje buď `--dry-run`, nebo
+explicitní `--confirm-read-only`. Dry-run odeslal 0 requestů. Schválený skutečný
+DEMO běh přes dvě existující paired-device OAuth identity provedl jen sekvenční
+čtení s pauzami: Tradeify token vidí 5 účtů, Lucid 1; `/auth/me`, `/account/list`,
+`accountRiskStatus`, `userAccountAutoLiq`, `tradingPermission`, `userPlugin`,
+`user/list` a `marketDataSubscription/list` vrátily 200. Všech 6 account-specific
+`/userAccountPositionLimit/deps` vrátilo 200 a prázdný seznam; globální
+position-limit/risk-parameter `/list` a obecný `/permission/list` vrátily 404.
+`changesLocked` nebylo v žádné AutoLiq odpovědi přítomné, tedy stav je neznámý,
+ne `false`. Každý účet má riskCategory, takže prázdný user override nedokazuje
+absenci category-level pre-trade limitů.
+
+Verdikt: čtecí přístup je prokázaný, ale z 200 na GET, `Approved` trading
+permission ani existence dokumentovaných POST endpointů nelze odvodit write
+právo. AutoLiq je post-trade likvidace/lock po threshold; není to okamžitý
+pre-trade „Zamknout den“. Fáze 2 nebyla provedena ani připravena jako
+spustitelný write kód. Unit test allowlistu prošel 4/4 a celá sada 228/228
+souborů, 1893/1893 testů; ESLint skončil s 0 chybami a 353 existujícími
+warningy. Typecheck hlásí pouze předem známé `extension/` chyby kvůli
+chybějícím Chrome typům a `@crxjs/vite-plugin`. Závislosti nebyly instalovány.
 
 ### 2026-09-03 (Claude, „Zamknout den" z produkční PWA — relay příkaz nepropouštěl)
 
