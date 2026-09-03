@@ -95,6 +95,56 @@ describe('remote closed-trade P&L alerts', () => {
     expect(result.notifications).toEqual([]);
     expect(JSON.parse(result.markers[0].detail)).toEqual(['trade-1']);
   });
+
+  it('incident 2.–3. 9.: obchody vypadlé z okna 40 ID se nikdy neoznamují znovu, čerstvý close ano', () => {
+    // 45 obchodů uzavřených během včerejšího odpoledne; marker zná jen 40 nejnovějších.
+    const history = Array.from({ length: 45 }, (_, index) => trade({
+      trade_id: `old-${index}`,
+      closed_at: new Date(NOW - 20 * 3_600_000 + index * 60_000).toISOString(),
+      created_at: new Date(NOW - 20 * 3_600_000 + index * 60_000 + 500).toISOString(),
+    }));
+    const newest40 = history.slice(-40).map(item => item.trade_id);
+    const replay = planClosedTradePnlNotifications({
+      trades: history,
+      alertStates: [marker(CLOSED_TRADE_MARKER_KEY, JSON.stringify(newest40))],
+      now: NOW,
+    });
+    expect(replay.notifications).toEqual([]);
+    expect(replay.markers).toEqual([]);
+
+    // Skutečně nový close (před 5 s) projde právě jednou a zůstane v markeru.
+    const fresh = trade({ trade_id: 'fresh-1' });
+    const first = planClosedTradePnlNotifications({
+      trades: [...history, fresh],
+      alertStates: [marker(CLOSED_TRADE_MARKER_KEY, JSON.stringify(newest40))],
+      now: NOW,
+    });
+    expect(first.notifications.map(item => item.key)).toEqual(['closed-pnl:fresh-1']);
+    const seen = JSON.parse(first.markers[0].detail) as string[];
+    expect(seen).toContain('fresh-1');
+    expect(seen.length).toBeLessThanOrEqual(40);
+    const second = planClosedTradePnlNotifications({
+      trades: [...history, fresh],
+      alertStates: [marker(CLOSED_TRADE_MARKER_KEY, first.markers[0].detail)],
+      now: NOW + 60_000,
+    });
+    expect(second.notifications).toEqual([]);
+  });
+
+  it('close starší než 30 minut se neoznámí, ani když ho marker nezná', () => {
+    const stale = trade({
+      trade_id: 'stale-1',
+      closed_at: new Date(NOW - 45 * 60_000).toISOString(),
+      created_at: new Date(NOW - 44 * 60_000).toISOString(),
+    });
+    const withMarker = planClosedTradePnlNotifications({
+      trades: [stale],
+      alertStates: [marker(CLOSED_TRADE_MARKER_KEY, '["other"]')],
+      now: NOW,
+    });
+    expect(withMarker.notifications).toEqual([]);
+    expect(JSON.parse(withMarker.markers[0].detail)).toContain('stale-1');
+  });
 });
 
 describe('remote broker account lock alerts', () => {

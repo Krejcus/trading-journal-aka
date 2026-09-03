@@ -151,6 +151,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, opakované push notifikace včerejších obchodů)
+
+Uživatel od 2. 9. večera dostával pořád dokola notifikace včerejších obchodů.
+Vercel log `/api/cron/send-alerts`: každou minutu „36 copier alerts“ (12
+notifikací × 3 zařízení), přes 1 200 běhů. Příčina v
+`server/nativeFinancialAlertPlanner.ts::planClosedTradePnlNotifications`:
+marker `state:closed-trade-pnl` drží jen 40 nejnovějších `trade_id`, ale cron
+načítá až 500 řádků `tradovate_copier_trades`; jakmile počet obchodů zařízení
+přesáhl 40 (včerejších 13 obchodů), starší vypadly z okna a byly „čerstvé“
+navždy. Oprava: obchod uzavřený před více než 30 minutami se nikdy neoznamuje
+(jen se zapíše do markeru) a právě oznámená ID v markeru vždy zůstávají.
+Regrese: 45 obchodů + marker 40 → 0 notifikací; čerstvý close projde právě
+jednou; stale close bez markeru se neoznámí. Sada 1884/1884, tsc čistý.
+Nasazeno pushem na main (cron běží na Vercelu, worker se nemění).
+
 ### 2026-09-03 (Claude, rollout 1bb55621 — recovery hardening)
 
 Codex K (zpevnění recovery podle cross-review R1+R2) zrecenzován Claudem a

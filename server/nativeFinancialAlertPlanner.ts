@@ -49,6 +49,14 @@ export interface NativeFinancialMarker {
 
 const MAX_SEEN_TRADE_IDS = 40;
 const BOOTSTRAP_RECENT_MS = 90_000;
+/**
+ * Push o uzavřeném obchodu je časově citlivá informace, ne historie. Obchod
+ * starší než toto okno se už nikdy neoznamuje — ani když není v markeru.
+ * Incident 2.–3. 9. 2026: marker drží jen 40 nejnovějších ID, dotaz vrací až
+ * 500 řádků; po překročení 40 obchodů vypadly starší z okna a cron je posílal
+ * znovu každou minutu (36 alertů/min, celou noc).
+ */
+const MAX_NOTIFY_AGE_MS = 30 * 60_000;
 
 const signedUsd = (value: number): string =>
   `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}`;
@@ -116,6 +124,11 @@ export function planClosedTradePnlNotifications(options: {
     const ordered = [...rows].sort((left, right) => Date.parse(left.closed_at) - Date.parse(right.closed_at));
     const fresh = ordered.filter(trade => {
       if (seenIds.has(trade.trade_id)) return false;
+      const closedAt = Date.parse(trade.closed_at);
+      // Nikdy nereplayovat historii: co je starší než okno, se jen zaznamená
+      // do markeru (níže), ale neoznámí. Bez tohoto limitu by obchod, který
+      // vypadl z okna posledních 40 ID, byl „čerstvý“ navždy.
+      if (!Number.isFinite(closedAt) || options.now - closedAt > MAX_NOTIFY_AGE_MS) return false;
       if (marker) return true;
       const createdAt = Date.parse(trade.created_at);
       return Number.isFinite(createdAt) && options.now - createdAt <= BOOTSTRAP_RECENT_MS;
@@ -136,7 +149,12 @@ export function planClosedTradePnlNotifications(options: {
         kind: 'trade',
       });
     }
-    const nextIds = ordered.map(trade => trade.trade_id).slice(-MAX_SEEN_TRADE_IDS);
+    // Právě oznámené ID musí v markeru zůstat i kdyby se do okna 40 nevešly.
+    const notifiedIds = new Set(fresh.map(trade => trade.trade_id));
+    const nextIds = [...new Set([
+      ...ordered.map(trade => trade.trade_id).filter(id => !notifiedIds.has(id)).slice(-(MAX_SEEN_TRADE_IDS - Math.min(notifiedIds.size, MAX_SEEN_TRADE_IDS))),
+      ...ordered.map(trade => trade.trade_id).filter(id => notifiedIds.has(id)),
+    ])].slice(-MAX_SEEN_TRADE_IDS);
     const nextDetail = JSON.stringify(nextIds);
     if (!marker || marker.detail !== nextDetail) {
       markers.push({
