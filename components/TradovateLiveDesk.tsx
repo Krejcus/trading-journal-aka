@@ -73,6 +73,8 @@ interface TradovateLiveDeskProps {
   theme: 'dark' | 'light' | 'oled';
   live: TradovateLiveData;
   onCopierJournalRefresh?: (group: CopyGroupConfig | null) => void;
+  requestedTab?: TradovateLiveTab | null;
+  onRequestedTabHandled?: () => void;
   macCompanionPairingIntent?: boolean;
   onMacCompanionPairingIntentHandled?: () => void;
 }
@@ -130,11 +132,15 @@ const LiveDashboardSkeleton = () => (
 const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   live,
   onCopierJournalRefresh,
+  requestedTab = null,
+  onRequestedTabHandled,
   macCompanionPairingIntent = false,
   onMacCompanionPairingIntentHandled,
 }) => {
-  const [tab, setTab] = useState<TradovateLiveTab>(() => tradovateLiveTabFromSearch(
-    typeof window === 'undefined' ? '' : window.location.search,
+  const [tab, setTab] = useState<TradovateLiveTab>(() => (
+    requestedTab ?? tradovateLiveTabFromSearch(
+      typeof window === 'undefined' ? '' : window.location.search,
+    )
   ));
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
@@ -180,6 +186,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
   const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!requestedTab) return;
+    setTab(requestedTab);
+    onRequestedTabHandled?.();
+  }, [onRequestedTabHandled, requestedTab]);
 
   useEffect(() => {
     if (!macCompanionPairingIntent) return;

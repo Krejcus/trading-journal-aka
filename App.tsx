@@ -49,10 +49,14 @@ import BottomNav from './components/BottomNav';
 import LockedFeatureModal from './components/LockedFeatureModal';
 import { canAccess } from './utils/featureGating';
 import {
+  appDeepLinkIntentFromSearch,
+  consumeAppDeepLinkUrl,
   consumeMacCompanionPairingUrl,
   isMacCompanionPairingSearch,
   MAC_COMPANION_PAIRING_SESSION_KEY,
+  type AppDeepLinkIntent,
 } from './lib/macCompanionDeepLink';
+import type { TradovateLiveTab } from './lib/tradovateLiveTab';
 import FilterDropdown from './components/FilterDropdown';
 import Auth from './components/Auth';
 import QuantumLoader from './components/QuantumLoader';
@@ -1051,12 +1055,11 @@ const App: React.FC = () => {
     ...(networkNotifications ? { networkNotifications } : {}),
   });
 
-  const [activePage, setActivePage] = useState(() => {
-    const requestedPage = new URLSearchParams(window.location.search).get('page');
-    const supportedDeepLinks = new Set(['dashboard', 'history', 'journal', 'ai', 'lab', 'business', 'live', 'network', 'accounts', 'settings']);
-    if (isMacCompanionPairingSearch(window.location.search)) return 'live';
-    return requestedPage && supportedDeepLinks.has(requestedPage) ? requestedPage : 'dashboard';
-  });
+  const [pendingDeepLink, setPendingDeepLink] = useState<AppDeepLinkIntent | null>(() => (
+    appDeepLinkIntentFromSearch(window.location.search)
+  ));
+  const [activePage, setActivePage] = useState<string>(() => pendingDeepLink?.page ?? 'dashboard');
+  const [requestedLiveTab, setRequestedLiveTab] = useState<TradovateLiveTab | null>(null);
   const [macCompanionPairingIntent, setMacCompanionPairingIntent] = useState(() => {
     const requestedByUrl = isMacCompanionPairingSearch(window.location.search);
     let requestedByLoginRoundTrip = false;
@@ -1129,8 +1132,8 @@ const App: React.FC = () => {
     setActivePage(page);
   }, [isAIStreaming, activePage]);
 
-  // External launches can reuse an already-running PWA window. Re-read the
-  // one-shot intent on focus/history changes and through Chromium's launchQueue.
+  // External launches can reuse an already-running PWA window. Re-read page
+  // and pairing intents on focus/history changes and through Chromium's launchQueue.
   useEffect(() => {
     const captureIntent = (href = window.location.href) => {
       let url: URL;
@@ -1139,9 +1142,13 @@ const App: React.FC = () => {
       } catch {
         return;
       }
-      if (!isMacCompanionPairingSearch(url.search)) return;
-      try { sessionStorage.setItem(MAC_COMPANION_PAIRING_SESSION_KEY, 'pending'); } catch { /* no-op */ }
-      setMacCompanionPairingIntent(true);
+      const nextDeepLink = appDeepLinkIntentFromSearch(url.search);
+      if (nextDeepLink) setPendingDeepLink(nextDeepLink);
+
+      if (isMacCompanionPairingSearch(url.search)) {
+        try { sessionStorage.setItem(MAC_COMPANION_PAIRING_SESSION_KEY, 'pending'); } catch { /* no-op */ }
+        setMacCompanionPairingIntent(true);
+      }
     };
 
     const captureCurrentIntent = () => captureIntent();
@@ -1168,6 +1175,24 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Consume a supported page intent only after the authoritative role is
+  // available. Denied pages retain the existing dashboard fallback.
+  useEffect(() => {
+    if (!pendingDeepLink || !session || !isUserFromDb) return;
+
+    if (canAccess(pendingDeepLink.page, currentUser.role)) {
+      setActivePage(pendingDeepLink.page);
+      if (pendingDeepLink.page === 'live' && pendingDeepLink.tab) {
+        setRequestedLiveTab(pendingDeepLink.tab);
+      }
+    } else {
+      setActivePage('dashboard');
+    }
+
+    setPendingDeepLink(null);
+    window.history.replaceState(null, '', consumeAppDeepLinkUrl(window.location.href));
+  }, [currentUser.role, isUserFromDb, pendingDeepLink, session]);
+
   // Wait for the authoritative DB role. A temporary cached `friend` must not
   // consume the intent and strand the owner on Dashboard.
   useEffect(() => {
@@ -1180,6 +1205,10 @@ const App: React.FC = () => {
     setMacCompanionPairingIntent(false);
     try { sessionStorage.removeItem(MAC_COMPANION_PAIRING_SESSION_KEY); } catch { /* no-op */ }
     window.history.replaceState(null, '', consumeMacCompanionPairingUrl(window.location.href));
+  }, []);
+
+  const handleRequestedLiveTabHandled = useCallback(() => {
+    setRequestedLiveTab(null);
   }, []);
 
   // Defense-in-depth: kdyby se non-owner role pokusila dostat na uzamčenou page
@@ -4459,6 +4488,8 @@ const App: React.FC = () => {
                       theme={theme}
                       live={tradovateLive}
                       onCopierJournalRefresh={handleCopierJournalRefresh}
+                      requestedTab={requestedLiveTab}
+                      onRequestedTabHandled={handleRequestedLiveTabHandled}
                       macCompanionPairingIntent={macCompanionPairingIntent}
                       onMacCompanionPairingIntentHandled={handleMacCompanionPairingIntentHandled}
                     />

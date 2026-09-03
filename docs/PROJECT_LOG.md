@@ -151,6 +151,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, page deep link funguje i v už otevřené PWA)
+
+Externí `page` intent se už nečte jen při prvním mountu. PWA jej zachytí při
+`focus`, `pageshow`, `popstate`, návratu do viditelného stavu i přes
+`launchQueue`, přijme pouze podporovanou stránku, počká na autoritativní DB
+roli a teprve potom naviguje; zakázaná stránka dál skončí na Dashboardu.
+Zpracované `page`/`tab` se jednorázově odstraní přes `replaceState`, takže
+další focus navigaci neopakuje. Pairing marker, legacy LIVE/Connections odkaz
+i sessionStorage round-trip přes login zůstaly zachované.
+
+LIVE dostává validovaný jednorázový `requestedTab` z App; již připojený
+`TradovateLiveDesk` proto umí přepnout na `overview` bez remountu. Právě tato
+záložka obsahuje `LiveCopyTradeOverview` s ovládáním copieru. Současný Swift
+odkaz zůstává podle zadání beze změny jako `?page=live`; chybějící nebo neznámý
+LIVE tab bezpečně končí na `overview`, explicitní `?page=live&tab=overview`
+funguje stejně.
+
+Ověření: cílené Vitest testy deep linku a LIVE tabů prošly 2 soubory / 9 testů,
+produkční Vite/PWA build prošel a scoped ESLint má 0 chyb (26 předexistujících
+warningů v `App.tsx`). Root `npm run typecheck` hlásí pouze předem známé chyby
+v `extension/` kvůli chybějícím Chrome typům a `@crxjs/vite-plugin`, žádnou
+chybu v dotčených souborech. Závislosti nebyly instalovány a Swift, worker,
+broker, ARM/DISARM, Flatten, produkční konfigurace ani `main` se neměnily.
+
 ### 2026-09-03 (Claude, opakované push notifikace včerejších obchodů)
 
 Uživatel od 2. 9. večera dostával pořád dokola notifikace včerejších obchodů.
