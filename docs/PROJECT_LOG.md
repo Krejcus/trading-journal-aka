@@ -152,6 +152,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, companion build 12 — obsah sleduje rám okna během rozbalení)
+
+Po buildu 11 zůstalo „ujetí od shora" jen při rozbalení. Příčina: NSPopover
+mění velikost svého content view až při změně `contentSize`; během animace
+rámu okna si hosting view drželo starou velikost ukotvenou vlevo dole,
+sjelo s rostoucím oknem dolů a při závěrečné synchronizaci skočilo zpět.
+Při sbalení se okno zmenšuje až na konci, proto asymetrie. Oprava
+v `animatePopoverWindow`: `autoresizingMask = [.width, .height]` +
+`autoresizesSubviews` na kontejneru a srovnání rámu před animací, takže
+obsah sleduje okno po celou dobu. Release build 12 (sestavený uživatelem
+v terminálu během výpadku klasifikátoru) a build-for-testing prošly,
+build 11 zálohován, appka vyměněna, autostart znovu bootstrapován.
+
 ### 2026-09-03 (Claude, companion build 11 — obsah přišpendlený k hornímu okraji)
 
 Build 10 (pevná horní hrana okna) „ujíždění od shora" nevyřešil. Skutečná

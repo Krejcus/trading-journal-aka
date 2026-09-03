@@ -290,6 +290,19 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         target.size.width += widthDelta
         target.origin.y -= heightDelta
 
+        // NSPopover only resizes its content view when `contentSize` changes.
+        // While the window frame animates, the hosting view would otherwise
+        // keep its old size anchored at the bottom-left corner of the growing
+        // content area, slide downward with it and jump back on the final
+        // `contentSize` sync. Make it track the window frame for the whole
+        // animation instead.
+        if let contentView = popover.contentViewController?.view,
+           let container = contentView.superview {
+            container.autoresizesSubviews = true
+            contentView.autoresizingMask = [.width, .height]
+            contentView.frame = container.bounds
+        }
+
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
