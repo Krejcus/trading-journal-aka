@@ -18,6 +18,7 @@ enum MenuBarStatusArtwork {
     private static let contentHeight: CGFloat = 22
     private static let outerHorizontalPadding: CGFloat = 7
     private static let logoTextSpacing: CGFloat = 6
+    private static let symbolTextSpacing: CGFloat = 4
     private static let textTracking: CGFloat = 0.12
 
     static func contentImage(
@@ -36,15 +37,22 @@ enum MenuBarStatusArtwork {
             .kern: textTracking
         ]
         let pillText = presentation.pillText
+        let symbol = presentation.symbolName.flatMap {
+            tintedSymbol(named: $0, color: textColor)
+        }
         let textSize = pillText.map {
             ($0 as NSString).size(withAttributes: attributes)
         } ?? .zero
+        let statusContentWidth = (symbol.map(\.size.width) ?? 0)
+            + (symbol != nil && pillText != nil ? symbolTextSpacing : 0)
+            + textSize.width
+        let hasStatusContent = symbol != nil || pillText != nil
         let innerHorizontalPadding = outerHorizontalPadding - systemContentInset
         let artworkSize = NSSize(
             width: ceil(
                 innerHorizontalPadding
                     + logo.size.width
-                    + (pillText == nil ? 0 : logoTextSpacing + textSize.width)
+                    + (hasStatusContent ? logoTextSpacing + statusContentWidth : 0)
                     + innerHorizontalPadding
             ),
             height: contentHeight
@@ -68,9 +76,21 @@ enum MenuBarStatusArtwork {
                 hints: [.interpolation: NSImageInterpolation.high]
             )
 
+            var statusX = logoRect.maxX + logoTextSpacing
+            if let symbol {
+                let symbolRect = NSRect(
+                    x: statusX,
+                    y: floor((contentHeight - symbol.size.height) / 2),
+                    width: symbol.size.width,
+                    height: symbol.size.height
+                )
+                symbol.draw(in: symbolRect)
+                statusX = symbolRect.maxX + (pillText == nil ? 0 : symbolTextSpacing)
+            }
+
             if let pillText {
                 let textRect = NSRect(
-                    x: logoRect.maxX + logoTextSpacing,
+                    x: statusX,
                     y: floor((contentHeight - textSize.height) / 2),
                     width: ceil(textSize.width),
                     height: ceil(textSize.height)
@@ -87,7 +107,7 @@ enum MenuBarStatusArtwork {
         for presentation: MenuBarStatusPresentation,
         appearance: Appearance
     ) -> NSColor? {
-        guard presentation.pillText != nil else {
+        guard presentation.pillText != nil || presentation.symbolName != nil else {
             return nil
         }
         let token = token(for: presentation.tone, appearance: appearance)
@@ -102,6 +122,27 @@ enum MenuBarStatusArtwork {
         let fill: NSColor
         let opacity: CGFloat
         let text: NSColor
+    }
+
+    private static func tintedSymbol(named name: String, color: NSColor) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        guard let source = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) else {
+            return nil
+        }
+        let image = NSImage(size: source.size, flipped: true) { rect in
+            source.draw(in: rect)
+            let previousOperation = NSGraphicsContext.current?.compositingOperation
+            NSGraphicsContext.current?.compositingOperation = .sourceIn
+            color.setFill()
+            rect.fill()
+            if let previousOperation {
+                NSGraphicsContext.current?.compositingOperation = previousOperation
+            }
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 
     private static func token(

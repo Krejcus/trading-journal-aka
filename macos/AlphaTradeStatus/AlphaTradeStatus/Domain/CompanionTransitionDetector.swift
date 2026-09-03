@@ -116,7 +116,7 @@ enum CompanionTransitionDetector {
             )
         }
 
-        if let mode = modeTransition(previous.status.copierState, next.status.copierState) {
+        if let mode = modeTransition(previous, next) {
             return mode
         }
 
@@ -442,11 +442,13 @@ private extension CompanionTransitionDetector {
     }
 
     static func modeTransition(
-        _ previous: MacCompanionStatusDTO.CopierState,
-        _ next: MacCompanionStatusDTO.CopierState
+        _ previous: ReducedCompanionStatus,
+        _ next: ReducedCompanionStatus
     ) -> CompanionTransition? {
-        guard previous != next else { return nil }
-        switch (previous, next) {
+        let previousMode = previous.status.copierState
+        let nextMode = next.status.copierState
+        guard previousMode != nextMode else { return nil }
+        switch (previousMode, nextMode) {
         case (.disarmed, .live), (.shadow, .live):
             return .init(
                 category: .mode,
@@ -459,7 +461,9 @@ private extension CompanionTransitionDetector {
                 category: .mode,
                 sectionID: "safety",
                 rowID: "reconciliation",
-                reason: "Copier přešel do režimu DISARMED."
+                reason: isDisarmedUnverified(next.displayState)
+                    ? "Copier přešel do režimu VYPNUTO."
+                    : "Copier přešel do režimu DISARMED."
             )
         case (.live, .shadow):
             return .init(
@@ -468,8 +472,22 @@ private extension CompanionTransitionDetector {
                 rowID: "shadow-mode",
                 reason: "Copier přešel do režimu SHADOW."
             )
-        case (.disarmed, .shadow), (.shadow, .disarmed):
-            return nil
+        case (.disarmed, .shadow):
+            guard isDisarmedUnverified(previous.displayState) else { return nil }
+            return .init(
+                category: .mode,
+                sectionID: "leader-tracking",
+                rowID: "shadow-mode",
+                reason: "Copier přešel z VYPNUTO do režimu SHADOW."
+            )
+        case (.shadow, .disarmed):
+            guard isDisarmedUnverified(next.displayState) else { return nil }
+            return .init(
+                category: .mode,
+                sectionID: "safety",
+                rowID: "reconciliation",
+                reason: "Copier přešel do režimu VYPNUTO."
+            )
         default:
             return nil
         }
@@ -549,6 +567,11 @@ private extension CompanionTransitionDetector {
                 || (status.exposure.accountsWithWorkingOrders ?? 0) > 0)
     }
 
+    static func isDisarmedUnverified(_ state: CompanionDisplayState) -> Bool {
+        if case .disarmedUnverified = state { return true }
+        return false
+    }
+
     static func freshnessKey(_ freshness: CompanionFreshness) -> String {
         switch freshness {
         case .verified: return "verified"
@@ -562,6 +585,7 @@ private extension CompanionTransitionDetector {
         case .live(let minutes): return minutes <= 5 ? "live-urgent" : "live"
         case .shadow: return "shadow"
         case .disarmed: return "disarmed"
+        case .disarmedUnverified: return "disarmed-unverified"
         case .intervention: return "intervention"
         case .unknown: return "unknown"
         case .offline: return "offline"

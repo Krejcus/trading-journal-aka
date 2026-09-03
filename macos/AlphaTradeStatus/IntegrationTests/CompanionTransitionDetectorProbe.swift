@@ -20,6 +20,59 @@ struct CompanionTransitionDetectorProbe {
         }
 
         let clean = reduced(status(revision: 1))
+        let disarmedUnverified = reduced(status(revision: 2, exposureVerified: false))
+        expect(
+            disarmedUnverified.displayState == .disarmedUnverified,
+            "fresh clean DISARMED without exposure evidence must be VYPNUTO"
+        )
+        expect(!disarmedUnverified.exposureEvidence.mayClaimFlat, "VYPNUTO must never claim flat")
+        let disarmedPresentation = CompanionRemotePresentationFactory.make(
+            from: disarmedUnverified,
+            now: reference
+        )
+        expect(disarmedPresentation.menuBar.pillText == "VYPNUTO", "VYPNUTO pill text")
+        expect(disarmedPresentation.menuBar.symbolName == "power", "VYPNUTO power symbol")
+        expect(disarmedPresentation.hero.title == "VYPNUTO", "VYPNUTO hero title")
+        expect(
+            disarmedPresentation.hero.supportingText == "Expozice není brokerem ověřena — flat nelze tvrdit",
+            "VYPNUTO must disclose missing exposure evidence"
+        )
+        expect(disarmedPresentation.banner == nil, "VYPNUTO must not use a large warning banner")
+        expect(
+            disarmedPresentation.sections.allSatisfy { !$0.isInitiallyExpanded },
+            "VYPNUTO sections must start collapsed"
+        )
+        expect(
+            disarmedPresentation.footer.actions.map(\.id)
+                == [.openLive, .openJournal, .refresh, .copyDiagnostics],
+            "VYPNUTO footer actions"
+        )
+        expect(
+            disarmedPresentation.footer.actions.first?.title == "Zapnout v LIVE",
+            "VYPNUTO primary action must navigate to LIVE"
+        )
+        expect(
+            disarmedPresentation.footer.actions.first?.symbolName == nil,
+            "VYPNUTO primary action must not show an ARM icon"
+        )
+        expect(
+            CompanionDestination.liveOverview.url?.query == "page=live&tab=overview",
+            "LIVE destination must target the overview copier controls"
+        )
+
+        let staleDisarmed = reduced(
+            status(revision: 2, exposureVerified: false),
+            now: reference.addingTimeInterval(11)
+        )
+        expect(staleDisarmed.displayState == .unknown, "stale DISARMED must remain UNKNOWN")
+        expect(
+            CompanionTransitionDetector.detect(
+                previous: clean,
+                next: disarmedUnverified,
+                now: reference
+            ) == nil,
+            "verified DISARMED to VYPNUTO must not worsen"
+        )
         let divergence = reduced(status(
             revision: 2,
             divergences: [.init(symbol: "MNQ", account: "redacted", detail: "qty")]
@@ -65,6 +118,10 @@ struct CompanionTransitionDetectorProbe {
             CompanionTransitionDetector.detect(previous: clean, next: live, now: reference)?.category == .mode,
             "DISARMED to LIVE must be a mode transition"
         )
+        expect(
+            CompanionTransitionDetector.detect(previous: disarmedUnverified, next: live, now: reference)?.category == .mode,
+            "VYPNUTO to LIVE must be a mode transition"
+        )
         let shadow = reduced(status(revision: 4, copierState: .shadow))
         expect(
             CompanionTransitionDetector.detect(previous: shadow, next: live, now: reference)?.category == .mode,
@@ -75,12 +132,24 @@ struct CompanionTransitionDetectorProbe {
             "LIVE to DISARMED must be a mode transition"
         )
         expect(
+            CompanionTransitionDetector.detect(previous: live, next: disarmedUnverified, now: reference)?.category == .mode,
+            "LIVE to VYPNUTO must be a mode transition"
+        )
+        expect(
             CompanionTransitionDetector.detect(previous: live, next: shadow, now: reference)?.category == .mode,
             "LIVE to SHADOW must be a mode transition"
         )
         expect(
             CompanionTransitionDetector.detect(previous: clean, next: shadow, now: reference) == nil,
             "DISARMED to SHADOW must stay silent"
+        )
+        expect(
+            CompanionTransitionDetector.detect(previous: disarmedUnverified, next: shadow, now: reference)?.category == .mode,
+            "VYPNUTO to SHADOW must be a mode transition"
+        )
+        expect(
+            CompanionTransitionDetector.detect(previous: shadow, next: disarmedUnverified, now: reference)?.category == .mode,
+            "SHADOW to VYPNUTO must be a mode transition"
         )
 
         let expiry = reference.addingTimeInterval(301)
@@ -341,7 +410,8 @@ struct CompanionTransitionDetectorProbe {
         reconciliation: MacCompanionStatusDTO.ReconciliationDTO.Status = .clean,
         divergences: [MacCompanionStatusDTO.DivergenceDTO] = [],
         stuckOutboxCount: Int = 0,
-        killSwitchTripped: Bool = false
+        killSwitchTripped: Bool = false,
+        exposureVerified: Bool = true
     ) -> MacCompanionStatusDTO {
         .init(
             contractVersion: 1,
@@ -365,12 +435,12 @@ struct CompanionTransitionDetectorProbe {
                 killSwitchTripped: killSwitchTripped
             ),
             exposure: .init(
-                verifiedAt: reference,
+                verifiedAt: exposureVerified ? reference : nil,
                 positions: [],
                 followerAck: copierState == .live
                     ? .init(confirmed: 1, total: 1, failing: [])
                     : nil,
-                accountsWithWorkingOrders: 0
+                accountsWithWorkingOrders: exposureVerified ? 0 : nil
             ),
             snapshots: .init(cdpReady: true, lastEntryAt: nil, lastExitAt: nil),
             problems: []

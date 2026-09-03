@@ -384,7 +384,7 @@ extension CompanionStore {
         switch reduced.displayState {
         case .live, .intervention, .unknown, .offline:
             baseInterval = 5
-        case .shadow, .disarmed:
+        case .shadow, .disarmed, .disarmedUnverified:
             baseInterval = 8
         }
 

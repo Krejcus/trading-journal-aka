@@ -139,20 +139,95 @@ final class MacCompanionFunctionalTests: XCTestCase {
         )
     }
 
-    func testFreshDisarmedWithoutBrokerExposureIsUnknownButNotStale() {
+    func testFreshCleanDisarmedWithoutExposureUsesVypnutoWithoutClaimingFlat() throws {
         let status = makeStatus(copierState: .disarmed)
         let reduced = CompanionFreshnessReducer.reduce(status, now: referenceDate)
         let presentation = CompanionRemotePresentationFactory.make(from: reduced, now: referenceDate)
         let visibleText = presentation.allVisibleText.joined(separator: "\n").lowercased()
 
         XCTAssertEqual(reduced.freshness, .verified(ageSeconds: 0))
-        XCTAssertEqual(reduced.displayState, .unknown)
+        XCTAssertEqual(reduced.displayState, .disarmedUnverified)
         XCTAssertEqual(presentation.fixtureID, .disarmedUnverified)
-        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("DISARMED"))
-        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("nejsou brokerem ověřeny"))
+        XCTAssertEqual(presentation.menuBar.pillText, "VYPNUTO")
+        XCTAssertEqual(presentation.menuBar.symbolName, "power")
+        XCTAssertEqual(presentation.menuBar.tone, .danger)
+        XCTAssertEqual(presentation.menuBar.accessibilityLabel, "AlphaTrade, copier vypnutý")
+        XCTAssertEqual(presentation.hero.symbolName, "power")
+        XCTAssertEqual(presentation.hero.title, "VYPNUTO")
+        XCTAssertEqual(
+            presentation.hero.detail,
+            "Copier je DISARMED · neposílá příkazy · potvrzeno před 0 s"
+        )
+        XCTAssertEqual(
+            presentation.hero.supportingText,
+            "Expozice není brokerem ověřena — flat nelze tvrdit"
+        )
+        XCTAssertNil(presentation.banner)
+        XCTAssertEqual(presentation.sections.map(\.id), ["safety", "exposure", "runtime", "snapshots"])
+        XCTAssertTrue(presentation.sections.allSatisfy { !$0.isInitiallyExpanded })
+
+        let actions = presentation.footer.actions
+        XCTAssertEqual(actions.map(\.id), [.openLive, .openJournal, .refresh, .copyDiagnostics])
+        let liveAction = try XCTUnwrap(actions.first)
+        XCTAssertEqual(liveAction.title, "Zapnout v LIVE")
+        XCTAssertNil(liveAction.symbolName)
+        XCTAssertEqual(liveAction.style, .primary)
+        XCTAssertEqual(liveAction.tone, .danger)
+        XCTAssertEqual(liveAction.destination?.url, AppLinks.liveOverview)
+        XCTAssertEqual(AppLinks.liveOverview.query, "page=live&tab=overview")
+        let userInterfaceText = presentation.allVisibleText.joined(separator: "\n")
+        let standaloneARM = try NSRegularExpression(pattern: #"(?i)\bARM\b"#)
+        XCTAssertNil(standaloneARM.firstMatch(
+            in: userInterfaceText,
+            range: NSRange(userInterfaceText.startIndex..<userInterfaceText.endIndex, in: userInterfaceText)
+        ))
         XCTAssertFalse(visibleText.contains("poslední znám"))
         XCTAssertFalse(visibleText.contains("neaktuáln"))
+        XCTAssertFalse(visibleText.contains("flat ověřen"))
         XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
+    }
+
+    func testDisarmedReducerSeparatesVerifiedFlatIncompleteAndStaleEvidence() {
+        let verifiedFlat = makeStatus(copierState: .disarmed, exposure: .init(
+            verifiedAt: referenceDate,
+            positions: [],
+            followerAck: nil,
+            accountsWithWorkingOrders: 0
+        ))
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(verifiedFlat, now: referenceDate).displayState,
+            .disarmed
+        )
+
+        let incomplete = makeStatus(copierState: .disarmed, exposure: .init(
+            verifiedAt: referenceDate,
+            positions: [],
+            followerAck: nil,
+            accountsWithWorkingOrders: nil
+        ))
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(incomplete, now: referenceDate).displayState,
+            .unknown
+        )
+
+        let unverified = makeStatus(copierState: .disarmed)
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                unverified,
+                now: referenceDate.addingTimeInterval(11)
+            ).displayState,
+            .unknown
+        )
+        XCTAssertEqual(
+            CompanionRemotePresentationFactory.make(
+                from: CompanionFreshnessReducer.reduce(
+                    unverified,
+                    now: referenceDate.addingTimeInterval(11)
+                ),
+                now: referenceDate.addingTimeInterval(11)
+            ).menuBar.pillText,
+            "?"
+        )
     }
 
     func testProblemProjectionDoesNotDoubleCountStructuredDivergence() {

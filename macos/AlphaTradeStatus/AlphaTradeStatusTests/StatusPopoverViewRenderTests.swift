@@ -135,8 +135,40 @@ final class StatusPopoverViewRenderTests: XCTestCase {
         )
     }
 
+    func testVypnutoMenuBarPillRendersRosePowerSymbolAndText() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .disarmedUnverified)
+        XCTAssertEqual(presentation.menuBar.symbolName, "power")
+
+        let button = NSStatusBarButton(frame: .zero)
+        let size = MenuBarStatusButtonStyle.apply(
+            to: button,
+            presentation: presentation.menuBar,
+            appearance: .light
+        )
+        XCTAssertEqual(size.height, 28, accuracy: 0.01)
+        XCTAssertGreaterThan(size.width, 85)
+        XCTAssertLessThan(size.width, 160)
+
+        let withoutSymbol = MenuBarStatusPresentation(
+            pillText: "VYPNUTO",
+            tone: .danger,
+            accessibilityLabel: "test"
+        )
+        let imageWithSymbol = try XCTUnwrap(button.image)
+        let imageWithoutSymbol = try XCTUnwrap(MenuBarStatusArtwork.contentImage(
+            for: withoutSymbol,
+            appearance: .light
+        ))
+        XCTAssertGreaterThan(imageWithSymbol.size.width, imageWithoutSymbol.size.width)
+
+        let background = try XCTUnwrap(button.layer?.backgroundColor)
+        let color = try XCTUnwrap(NSColor(cgColor: background)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(color.redComponent, color.greenComponent + 0.05)
+        XCTAssertGreaterThan(color.redComponent, color.blueComponent + 0.04)
+    }
+
     func testStatusPopoverCompletesLayoutInLightAndDarkModes() {
-        let fixtures: [CompanionFixtureID] = [.live, .intervention]
+        let fixtures: [CompanionFixtureID] = [.live, .disarmedUnverified, .intervention]
         let schemes: [(name: String, value: ColorScheme)] = [
             ("light", .light),
             ("dark", .dark)
@@ -150,6 +182,14 @@ final class StatusPopoverViewRenderTests: XCTestCase {
                     context: "\(fixtureID.rawValue)-\(scheme.name)"
                 )
             }
+        }
+    }
+
+    func testVypnutoPopoverRendersInLightAndDarkModes() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .disarmedUnverified)
+        for scheme in [ColorScheme.light, .dark] {
+            let data = try renderPNG(presentation: presentation, colorScheme: scheme)
+            XCTAssertGreaterThan(data.count, 15_000)
         }
     }
 

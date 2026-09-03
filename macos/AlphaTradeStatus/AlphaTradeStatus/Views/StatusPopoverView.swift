@@ -74,6 +74,17 @@ struct StatusPopoverView: View {
             StatusHeader(freshness: presentation.freshness, settings: settings)
             HeroStatusCard(hero: presentation.hero)
 
+            if let supportingText = presentation.hero.supportingText {
+                Text(supportingText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.secondaryText)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 2)
+                    .accessibilityIdentifier("alphaTrade.status.hero.supportingText")
+            }
+
             if let banner = presentation.banner,
                presentation.displayState == .unknown || presentation.displayState == .offline {
                 StatusBanner(banner: banner)
@@ -141,6 +152,9 @@ struct StatusPopoverView: View {
     }
 
     private var panelStroke: Color {
+        if presentation.displayState == .disarmedUnverified {
+            return theme.stroke
+        }
         switch presentation.hero.tone {
         case .danger, .warning:
             return theme.accent(for: presentation.hero.tone).opacity(0.34)

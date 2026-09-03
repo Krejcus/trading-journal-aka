@@ -118,8 +118,11 @@ private extension CompanionFreshnessReducer {
             return .shadow
         case .disarmed:
             // DISARMED is a command state, not proof that every account is flat.
-            // Until a broker-authoritative exposure snapshot exists, keep the
-            // global presentation amber rather than manufacturing reassurance.
+            // A missing snapshot gets its own explicit command-state presentation;
+            // it says only that no commands are sent and never manufactures flat.
+            if status.exposure.verifiedAt == nil {
+                return .disarmedUnverified
+            }
             guard exposureEvidence.mayClaimFlat else {
                 return .unknown
             }
